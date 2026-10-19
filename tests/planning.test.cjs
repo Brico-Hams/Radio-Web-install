@@ -299,3 +299,64 @@ test("provider API does not accept arbitrary URLs, secrets, duplicate params or 
     assert.equal((await fetch(base + path)).status, 404);
   }
 });
+
+function referenceRecord(name, line1, line2, rx) {
+  // Independent transcription of the OpenGD77 CPS buildSatelliteRecords layout.
+  const LUT = "0123456789. +-*";
+  const pack = text => { const out = []; for (let i = 0; i < text.length; i += 2) out.push(LUT.indexOf(text[i]) << 4 | LUT.indexOf(text[i + 1])); return out; };
+  const record = new Uint8Array(100);
+  for (let j = 0; j < name.length; j++) record[j] = name.charCodeAt(j);
+  record.set(pack(line1.substring(18, 20) + line1.substring(20, 32) + line1.substring(33, 43)), 8);
+  record.set(pack(line2.substring(8, 16) + line2.substring(17, 25) + line2.substring(26, 33) + line2.substring(34, 42) +
+    line2.substring(43, 51) + line2.substring(52, 63) + line2.substring(63, 68) + " "), 20);
+  const hz = Math.round(rx * 1e6);
+  record.set([hz & 255, hz >>> 8 & 255, hz >>> 16 & 255, hz >>> 24 & 255], 48);
+  return record;
+}
+const satellite = { name: "ISS", tle1: orbital.tle1, tle2: orbital.tle2, rx: 145.8 };
+test("OpenGD77 SAT list initialises erased custom data with byte-exact type-3 block and RX-only records", () => {
+  const original = blankCodeplug();
+  const snapshot = original.slice();
+  assert.deepEqual(R.readSatellites(original), []);
+  const result = R.writeSatellites(original, [satellite]);
+  assert.deepEqual(original, snapshot);
+  assert.equal(result.added, 1); assert.equal(result.total, 1);
+  const base = 0x1ee60;
+  assert.equal(new TextDecoder().decode(result.image.subarray(base, base + 8)), "OpenGD77");
+  assert.deepEqual([...result.image.subarray(base + 8, base + 20)], [0, 0, 0, 0, 3, 0, 0, 0, 2520 & 255, 2520 >> 8, 0, 0]);
+  assert.deepEqual(result.image.subarray(base + 20, base + 120), referenceRecord("ISS", orbital.tle1, orbital.tle2, 145.8));
+  assert.ok(result.image.subarray(base + 20 + 2520, base + 0x11a0).every(byte => byte === 255));
+  assert.deepEqual(result.image.subarray(0, base), original.subarray(0, base));
+  const [decoded] = R.readSatellites(result.image);
+  assert.equal(decoded.name, "ISS"); assert.equal(decoded.rx1, 145.8); assert.equal(decoded.tx1, 0); assert.equal(decoded.txCtcss, 0);
+  assert.equal(decoded.tleFields.line1, "26291.78980200 .00007771");
+  assert.equal(decoded.tleFields.line2, " 51.6325 48.43390006764280.4294 79.593215.4892944259091 ");
+});
+test("OpenGD77 SAT list preserves other custom blocks and existing satellites, sorts and replaces by name", () => {
+  const image = blankCodeplug();
+  const base = 0x1ee60;
+  image.set(new TextEncoder().encode("OpenGD77"), base); image.fill(0, base + 8, base + 12);
+  image.set([1, 0, 0, 0, 16, 0, 0, 0], base + 12); image.fill(0xaa, base + 20, base + 36);
+  const first = R.writeSatellites(image, [{ ...satellite, name: "ZZ-SAT" }]);
+  assert.deepEqual(first.image.subarray(base + 12, base + 36), image.subarray(base + 12, base + 36));
+  const second = R.writeSatellites(first.image, [satellite, { ...satellite, name: "ZZ-SAT", rx: 436.795 }]);
+  assert.equal(second.added, 1); assert.equal(second.replaced, 1);
+  assert.deepEqual(R.readSatellites(second.image).map(sat => [sat.name, sat.rx1]), [["ISS", 145.8], ["ZZ-SAT", 436.795]]);
+  assert.deepEqual(second.image.subarray(base + 12, base + 36), image.subarray(base + 12, base + 36));
+});
+test("OpenGD77 SAT list rejects corrupt/unknown regions, invalid TLE, out-of-band frequency and >25 satellites atomically", () => {
+  const unknown = blankCodeplug(); unknown[0x1ee60 + 100] = 1;
+  assert.throws(() => R.writeSatellites(unknown, [satellite]), /no vacia/);
+  const corrupt = blankCodeplug();
+  corrupt.set(new TextEncoder().encode("OpenGD77"), 0x1ee60); corrupt.fill(0, 0x1ee68, 0x1ee6c);
+  corrupt.set([1, 0, 0, 0, 0xff, 0xff, 0, 0], 0x1ee6c);
+  assert.throws(() => R.writeSatellites(corrupt, [satellite]), /corrupta/);
+  const image = blankCodeplug();
+  const snapshot = image.slice();
+  assert.throws(() => R.writeSatellites(image, [{ ...satellite, tle1: orbital.tle1.slice(0, -1) + "0" }]), /TLE/);
+  assert.throws(() => R.writeSatellites(image, [{ ...satellite, rx: 2400 }]), /VHF/);
+  assert.throws(() => R.writeSatellites(image, Array.from({ length: 26 }, (_, i) => ({ ...satellite, name: `S${i}` }))), /25/);
+  let full = R.writeSatellites(image, Array.from({ length: 25 }, (_, i) => ({ ...satellite, name: `S${i}` }))).image;
+  assert.throws(() => R.writeSatellites(full, [{ ...satellite, name: "EXTRA" }]), /25/);
+  assert.deepEqual(image, snapshot);
+});

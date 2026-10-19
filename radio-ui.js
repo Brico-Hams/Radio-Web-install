@@ -275,6 +275,17 @@
         image = result.image;
         renderCodeplug();
         return result;
+      },
+      importSatellites(satellites) {
+        R.assert(page === "opengd77" && image, "Abre o lee primero un codeplug estandar OpenGD77 de 128 KiB.");
+        const result = R.writeSatellites(image, satellites);
+        image = result.image;
+        renderCodeplug();
+        return { ...result, satellites: R.readSatellites(image) };
+      },
+      readSatellites() {
+        R.assert(page === "opengd77" && image, "Abre o lee primero un codeplug estandar OpenGD77 de 128 KiB.");
+        return R.readSatellites(image);
       }
     });
     R.mountFirmwareCatalog({

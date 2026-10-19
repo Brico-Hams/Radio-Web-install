@@ -1,7 +1,7 @@
 (function (root) {
   "use strict";
   const R = root.RadioWorkspace;
-  function mountPlanningUI({ page, model, action, download, log, importChannels, importContacts, templates }) {
+  function mountPlanningUI({ page, model, action, download, log, importChannels, importContacts, importSatellites, readSatellites, templates }) {
     const panel = document.createElement("section");
     panel.id = "planning-panel";
     panel.className = "panel operations planning-panel";
@@ -9,7 +9,7 @@
       <p>Consulta proveedores solo al pulsar un boton. Los datos se preparan localmente; no se envian copias ni codeplugs. Todos los canales importados empiezan <strong>solo recepcion</strong>. Comprueba bandas, permisos, tonos y parametros antes de transmitir.</p>
       <p class="card-note">${page === "quansheng"
         ? "Quansheng es analogico: no admite contactos DMR. Se exportan canales FM en CSV CHIRP para revisar en una herramienta compatible con tu firmware. No hay escritura remota de canales ni formato nativo SAT verificado en este conector."
-        : "Anade contactos privados (max. 1024 en total) y canales a tu binario estandar abierto. No es la base masiva de indicativos DMR. Se preservan los registros existentes. Escribir en la radio sigue bloqueado sin respaldo MCU completo; SAT nativo se exporta como TLE/plan, no se instala."}</p>
+        : "Anade contactos privados (max. 1024 en total), canales y satelites (lista SAT, max. 25) a tu binario estandar abierto. No es la base masiva de indicativos DMR. Se preservan los registros existentes. Escribir en la radio sigue bloqueado sin respaldo MCU completo."}</p>
       <fieldset id="plan-controls" class="planning-controls">
       <div class="guide-tabs" role="group" aria-label="Tipo de datos">
         <button type="button" class="guide-tab" data-plan-tab="repeaters" aria-pressed="true">Repetidores</button>
@@ -54,7 +54,8 @@
         <p id="plan-tle-info" role="status">Sin elementos orbitales.</p>
         <label for="plan-tx">Frecuencia puntual FM de recepcion (solo VHF/UHF)</label><select id="plan-tx"><option value="">Consulta las frecuencias</option></select>
         <p id="plan-tx-info" role="status">No se han consultado frecuencias.</p>
-        <div class="operation-buttons"><button id="plan-sat-stage" type="button" class="button secondary">Preparar canal SAT FM solo RX</button></div>
+        <div class="operation-buttons"><button id="plan-sat-stage" type="button" class="button secondary">Preparar canal SAT FM solo RX</button>${page !== "quansheng" ? '<button id="plan-sat-codeplug" type="button" class="button primary">Cargar satelite en lista SAT del codeplug local</button><button id="plan-sat-list" type="button" class="button secondary">Ver satelites del codeplug</button>' : ""}</div>
+        ${page !== "quansheng" ? '<p id="plan-sat-codeplug-info" role="status">Lista SAT OpenGD77 (max. 25, bloque de datos personalizados tipo 3). Solo RX: sin subida, tonos ni APRS. Se conservan los satelites existentes y el resto de bloques (imagen de arranque, melodia, tema).</p>' : ""}
         <div class="planning-filters">
           <div><label for="plan-lat">Latitud (-90 a 90)</label><input id="plan-lat" type="number" step="any" min="-90" max="90"></div>
           <div><label for="plan-lon">Longitud (-180 a 180)</label><input id="plan-lon" type="number" step="any" min="-180" max="180"></div>
@@ -328,6 +329,21 @@
       requireOrbit();
       const entry = transmitters.find(item => item.id === $("plan-tx").value);
       stage([R.satelliteChannel(orbital, entry)]);
+    });
+    function describeSatellites(list) {
+      return list.length ? list.map(sat => `${sat.name} RX ${sat.rx1.toFixed(5)}${sat.tx1 ? ` / TX ${sat.tx1.toFixed(5)}` : " (solo RX)"}`).join("; ") : "ninguno";
+    }
+    if ($("plan-sat-codeplug")) attach("plan-sat-codeplug", "Cargar satelite en codeplug local", async () => {
+      requireOrbit();
+      const entry = transmitters.find(item => item.id === $("plan-tx").value);
+      const channel = R.satelliteChannel(orbital, entry);
+      const result = importSatellites([{ name: orbital.name.replace(/\s*\(.*?\)\s*/g, " ").trim() || orbital.name, tle1: orbital.tle1, tle2: orbital.tle2, rx: Number(channel.rx) }]);
+      $("plan-sat-codeplug-info").textContent = `Satelites en el codeplug local (${result.total}/25): ${describeSatellites(result.satellites)}.`;
+      notify(`${result.added} satelite anadido, ${result.replaced} actualizado. Guarda el binario; la escritura en la radio sigue protegida por el respaldo verificado.`);
+    });
+    if ($("plan-sat-list")) attach("plan-sat-list", "Leer lista SAT del codeplug", async () => {
+      const list = readSatellites();
+      $("plan-sat-codeplug-info").textContent = `Satelites en el codeplug local (${list.length}/25): ${describeSatellites(list)}.`;
     });
     function consentLocation() { R.assert($("plan-location-consent").checked, "Autoriza expresamente el uso local de tu posicion."); }
     attach("plan-gps", "Obtener posicion con consentimiento", async () => {

@@ -146,6 +146,131 @@
     }
     return { image: result, added, duplicates };
   }
-  Object.assign(R, { readChannels, updateChannel, appendChannels, readContacts, appendContacts, encodeFrequency, decodeFrequency: frequency });
+  // OpenGD77 custom data region (flash 0x0 / 0x20000) mapped at codeplug offset 0x1EE60.
+  const CUSTOM_BASE = 0x1ee60;
+  const CUSTOM_SIZE = 0x11a0;
+  const SAT_TYPE = 3;
+  const SAT_RECORD = 100;
+  const SAT_MAX = 25;
+  const SAT_BLOCK = 2520;
+  const TLE_LUT = "0123456789. +-*";
+  const u32 = (data, offset) => (data[offset] | data[offset + 1] << 8 | data[offset + 2] << 16 | data[offset + 3] << 24) >>> 0;
+  function customBlocks(region) {
+    const blocks = [];
+    let offset = 12;
+    while (offset + 8 <= region.length) {
+      const type = region[offset];
+      const size = u32(region, offset + 4);
+      if (type === 255 || type === 0 || size === 0) return { blocks, free: type === 255 ? offset : -1 };
+      R.assert(size <= CUSTOM_SIZE && offset + 8 + size <= region.length, "Cadena de datos personalizados OpenGD77 corrupta. Archivo original intacto.");
+      blocks.push({ type, offset, size });
+      offset += 8 + size;
+    }
+    return { blocks, free: -1 };
+  }
+  function customRegion(image) {
+    R.bytes(image, 0x20000);
+    const region = image.subarray(CUSTOM_BASE, CUSTOM_BASE + CUSTOM_SIZE);
+    return { region, initialised: R.text(region.subarray(0, 8)) === "OpenGD77" };
+  }
+  function unpackTLE(data) {
+    let text = "";
+    for (const byte of data) text += TLE_LUT[byte >> 4] + TLE_LUT[byte & 15];
+    return text;
+  }
+  function packTLE(text) {
+    const result = new Uint8Array(text.length / 2);
+    for (let index = 0; index < text.length; index++) {
+      const value = TLE_LUT.indexOf(text[index]);
+      R.assert(value >= 0, `TLE con caracter no representable en OpenGD77: ${JSON.stringify(text[index])}.`);
+      result[index >> 1] |= index % 2 ? value : value << 4;
+    }
+    return result;
+  }
+  function tleChecksum(line) {
+    let sum = 0;
+    for (const char of line.slice(0, 68)) sum += char === "-" ? 1 : /\d/.test(char) ? Number(char) : 0;
+    return sum % 10 === Number(line[68]);
+  }
+  function satelliteRecords(region, block) {
+    const records = [];
+    const count = Math.min(SAT_MAX, Math.floor(block.size / SAT_RECORD));
+    for (let index = 0; index < count; index++) {
+      const raw = region.subarray(block.offset + 8 + index * SAT_RECORD, block.offset + 8 + (index + 1) * SAT_RECORD);
+      if (raw[0] === 0 || raw[0] === 255) break;
+      records.push(raw);
+    }
+    return records;
+  }
+  function decodeSatellite(raw) {
+    const zeroText = data => R.text(data.subarray(0, data.indexOf(0) < 0 ? data.length : data.indexOf(0)));
+    return {
+      name: zeroText(raw.subarray(0, 8)),
+      tleFields: { line1: unpackTLE(raw.subarray(8, 20)), line2: unpackTLE(raw.subarray(20, 48)) },
+      rx1: u32(raw, 48) / 1e6, tx1: u32(raw, 52) / 1e6, txCtcss: (raw[56] | raw[57] << 8) / 10, armCtcss: (raw[58] | raw[59] << 8) / 10,
+      rx2: u32(raw, 60) / 1e6, tx2: u32(raw, 64) / 1e6, rx3: u32(raw, 68) / 1e6, tx3: u32(raw, 72) / 1e6,
+      additional: zeroText(raw.subarray(76, 100))
+    };
+  }
+  function readSatellites(image) {
+    const { region, initialised } = customRegion(image);
+    if (!initialised) return [];
+    const block = customBlocks(region).blocks.find(item => item.type === SAT_TYPE);
+    return block ? satelliteRecords(region, block).map(decodeSatellite) : [];
+  }
+  function encodeSatellite(satellite) {
+    const name = String(satellite.name || "").normalize("NFD").replace(/[^\x20-\x7e]/g, "").trim().slice(0, 8);
+    R.assert(name.length > 0, "Nombre de satelite sin caracteres ASCII.");
+    const line1 = String(satellite.tle1 || "");
+    const line2 = String(satellite.tle2 || "");
+    R.assert(line1.length === 69 && line2.length === 69 && line1[0] === "1" && line2[0] === "2" && tleChecksum(line1) && tleChecksum(line2) &&
+      line1.slice(2, 7) === line2.slice(2, 7), "TLE no valido (longitud, numero de linea, NORAD o checksum).");
+    const rx = Number(satellite.rx);
+    R.assert(Number.isFinite(rx) && ((rx >= 136 && rx <= 174) || (rx >= 400 && rx <= 470)), "Frecuencia SAT fuera de VHF 136-174 / UHF 400-470 MHz.");
+    const raw = new Uint8Array(SAT_RECORD);
+    raw.set(new TextEncoder().encode(name), 0);
+    raw.set(packTLE(line1.slice(18, 20) + line1.slice(20, 32) + line1.slice(33, 43)), 8);
+    raw.set(packTLE(line2.slice(8, 16) + line2.slice(17, 25) + line2.slice(26, 33) + line2.slice(34, 42) +
+      line2.slice(43, 51) + line2.slice(52, 63) + line2.slice(63, 68) + " "), 20);
+    const hz = Math.round(rx * 1e6);
+    raw.set([hz & 255, hz >>> 8 & 255, hz >>> 16 & 255, hz >>> 24 & 255], 48);
+    // TX, tones and APRS stay zero: imported satellites are receive-only and no uplink is fabricated.
+    return { name, raw };
+  }
+  function writeSatellites(image, satellites) {
+    R.assert(Array.isArray(satellites) && satellites.length > 0 && satellites.length <= SAT_MAX, `Selecciona 1-${SAT_MAX} satelites.`);
+    const result = image.slice();
+    const { region, initialised } = customRegion(result);
+    if (!initialised) {
+      R.assert(region.every(byte => byte === 255), "Zona de datos personalizados sin cabecera OpenGD77 y no vacia. Archivo original intacto.");
+      region.set(new TextEncoder().encode("OpenGD77"), 0);
+      region.fill(0, 8, 12);
+    }
+    const chain = customBlocks(region);
+    let block = chain.blocks.find(item => item.type === SAT_TYPE);
+    const records = new Map();
+    if (block) {
+      R.assert(block.size === SAT_BLOCK, "Bloque SAT OpenGD77 con tamano inesperado. Archivo original intacto.");
+      for (const raw of satelliteRecords(region, block)) records.set(decodeSatellite(raw).name, raw.slice());
+    } else {
+      R.assert(chain.free >= 0 && chain.free + 8 + SAT_BLOCK <= region.length, "Sin espacio para el bloque SAT en los datos personalizados. Archivo original intacto.");
+      block = { offset: chain.free, size: SAT_BLOCK };
+    }
+    let added = 0;
+    let replaced = 0;
+    for (const satellite of satellites) {
+      const { name, raw } = encodeSatellite(satellite);
+      if (records.has(name)) replaced++; else added++;
+      records.set(name, raw);
+    }
+    R.assert(records.size <= SAT_MAX, `OpenGD77 admite ${SAT_MAX} satelites. Archivo original intacto.`);
+    region.set([SAT_TYPE, 0, 0, 0, SAT_BLOCK & 255, SAT_BLOCK >> 8, 0, 0], block.offset);
+    region.fill(0, block.offset + 8, block.offset + 8 + SAT_BLOCK);
+    [...records.keys()].sort((a, b) => a.localeCompare(b)).forEach((name, index) =>
+      region.set(records.get(name), block.offset + 8 + index * SAT_RECORD));
+    return { image: result, added, replaced, total: records.size };
+  }
+  Object.assign(R, { readChannels, updateChannel, appendChannels, readContacts, appendContacts, readSatellites, writeSatellites,
+    encodeFrequency, decodeFrequency: frequency });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);
