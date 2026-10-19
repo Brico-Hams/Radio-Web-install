@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Ayuda, preguntas frecuentes, controladores y soporte de Bricohams Radio Workspace.">
+  <title>Ayuda y soporte | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body data-page="ayuda">
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <div id="app"></div>
+  <template id="help-content">
+    <a class="back" href="index.html">&larr; Volver a los espacios</a>
+    <section class="detail-hero"><span class="eyebrow accent">CENTRO DE AYUDA</span><h1>Ayuda y soporte<span>Bricohams Radio Workspace</span></h1>
+      <p>Cómo funciona la aplicación, cómo resolver errores, qué controladores USB necesitas y cómo pedir ayuda. Los controladores de esta guía son <strong>soporte no oficial de la comunidad</strong>: los fabricantes y los proyectos de firmware no los respaldan a través de esta aplicación.</p></section>
+    <div class="help-search"><label for="help-filter">Buscar en la ayuda</label><input id="help-filter" type="search" placeholder="Ej.: WinUSB, CRC, RepeaterBook, TLE" maxlength="60" autocomplete="off"><p id="help-filter-status" role="status" class="card-note"></p></div>
+    <nav class="help-toc panel" aria-label="Índice de la ayuda"><h2>Índice</h2><ol>
+      <li><a href="#inicio">Inicio rápido</a></li><li><a href="#funcionamiento">Cómo funciona</a></li><li><a href="#opengd77">OpenGD77</a></li>
+      <li><a href="#quansheng">Quansheng F4HWN</a></li><li><a href="#codeplug">Contactos, repetidores y satélites</a></li><li><a href="#firmware">Firmware oficial</a></li>
+      <li><a href="#copias">Copias y recuperación</a></li><li><a href="#drivers">Controladores (no oficial)</a></li><li><a href="#errores">Solución de errores</a></li>
+      <li><a href="#faq">Preguntas frecuentes</a></li><li><a href="#soporte">Soporte</a></li><li><a href="#creditos">Créditos y licencia</a></li></ol></nav>
+
+    <section id="inicio" class="panel help-section" data-help><h2>1. Inicio rápido</h2>
+      <ol class="guide-steps">
+        <li>Instala <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">Node.js 22 o posterior</a>.</li>
+        <li>En la carpeta del proyecto ejecuta <code>npm ci --ignore-scripts</code> y después <code>npm start</code>.</li>
+        <li>Abre <code>http://127.0.0.1:8787</code> en <strong>Chrome, Edge o Brave de escritorio</strong>. Usa exactamente esa dirección: <code>localhost</code> u otra IP se rechazan por seguridad y cambiarían el almacenamiento de las copias.</li>
+        <li>Elige tu familia (OpenGD77 o Quansheng), el modelo exacto, marca la confirmación y pulsa <strong>Conectar y respaldar</strong>.</li>
+        <li>Espera a que termine la copia automática y exporta el archivo <code>.rwb.json</code>. Sin copia verificada no se habilita ninguna escritura.</li>
+      </ol>
+      <p class="card-note">Firefox y Safari no ofrecen WebUSB/Web Serial. Las ventanas privadas pueden borrar las copias al cerrarse.</p>
+    </section>
+
+    <section id="funcionamiento" class="panel help-section" data-help><h2>2. Cómo funciona</h2>
+      <p>La aplicación tiene dos partes que se ejecutan en tu ordenador:</p>
+      <ul class="feature-list">
+        <li><strong>Navegador</strong>: habla con la radio por USB (WebUSB) o puerto serie (Web Serial), guarda las copias en IndexedDB y edita los archivos localmente.</li>
+        <li><strong>Servidor Node local</strong> (solo <code>127.0.0.1</code>): sirve la web y hace de intermediario controlado hacia fuentes oficiales (firmware, RadioID, RepeaterBook, SatNOGS, CelesTrak). Nunca recibe tus copias, calibración ni codeplugs.</li>
+      </ul>
+      <p>Flujo de protección: <strong>conectar &rarr; identificar &rarr; copia automática &rarr; verificación SHA-256 &rarr; permiso de escritura ligado a esa conexión</strong>. Antes de cada operación destructiva se vuelve a leer y comprobar la copia. Desconectar, cambiar de radio o borrar la copia revoca el permiso.</p>
+    </section>
+
+    <section id="opengd77" class="panel help-section" data-help><h2>3. OpenGD77</h2>
+      <ul class="feature-list">
+        <li><strong>MK22</strong> (GD-77, DM-1801, RD-5R) y <strong>STM32</strong> (MD-UV380, MD-9600, MD-2017, DM-1701): WebUSB. En Windows requieren WinUSB (ver <a href="#drivers">controladores</a>).</li>
+        <li><strong>DM-32 / UV008</strong>: Web Serial a 115200 baudios, sin controlador adicional en Windows 10/11.</li>
+        <li>Lee identificación, calibración y codeplug estándar de 128 KiB. Edita canales, añade canales por plantilla, contactos RadioID y la lista SAT (máx. 25).</li>
+        <li><strong>La escritura a la radio está bloqueada</strong> porque no existe un método verificado para copiar el firmware completo del microcontrolador. Guarda el binario y escríbelo con la CPS oficial si lo decides tú.</li>
+      </ul>
+    </section>
+
+    <section id="quansheng" class="panel help-section" data-help><h2>4. Quansheng UV-K1 / UV-K5 V3 con F4HWN</h2>
+      <ul class="feature-list">
+        <li>Solo PY32F071 con F4HWN v6 o posterior y Multiboot. No sirve para UV-K5 antiguos ni firmware de fábrica.</li>
+        <li>Web Serial a 38400 baudios mediante USB-C de datos o cable de programación USB-serie.</li>
+        <li>Copia automática: calibración, Flash externa completa de 2 MiB (requiere <strong>Labs v6.1+</strong> con CRC físico) e imagen <code>Main</code>. La copia de 2 MiB puede tardar 10-20 minutos.</li>
+        <li>Con copia verificada: instalar/borrar slots 1-4 y restablecer bancos CFG 1-4. <code>Main</code> nunca es destino.</li>
+        <li>Cambiar de slot se hace en la radio: enciende manteniendo <kbd>M</kbd> (no PTT), elige el slot y confirma dos veces.</li>
+      </ul>
+    </section>
+
+    <section id="codeplug" class="panel help-section" data-help><h2>5. Contactos, repetidores y satélites</h2>
+      <ul class="feature-list">
+        <li><strong>Contactos RadioID</strong> (solo OpenGD77): busca por país y estado, pagina, selecciona y añade al codeplug abierto. Se omiten duplicados.</li>
+        <li><strong>Repetidores RepeaterBook</strong>: requiere que RepeaterBook apruebe esta aplicación y te dé un token individual <code>rbuapp_</code>, configurado solo en el servidor. Alternativa: importar una exportación JSON autorizada. Todos los canales nuevos quedan <strong>solo RX</strong>.</li>
+        <li><strong>Satélites</strong>: elige un NORAD, actualiza el TLE (SatNOGS o CelesTrak), consulta frecuencias FM y calcula pases localmente con tu posición (con consentimiento). En OpenGD77 puedes cargarlo en la lista SAT nativa; en Quansheng se exporta CSV CHIRP y TLE.</li>
+      </ul>
+    </section>
+
+    <section id="firmware" class="panel help-section" data-help><h2>6. Firmware oficial</h2>
+      <p>Solo se descargan versiones estables desde <a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases" target="_blank" rel="noopener noreferrer">GitHub de Armel (F4HWN)</a>, con SHA-256 del publicador, y desde <a href="https://www.opengd77.com/downloads/" target="_blank" rel="noopener noreferrer">opengd77.com</a> (sin hash publicado: se calcula localmente). Descargar no instala nada y no desbloquea escrituras. Comprueba siempre modelo y revisión de hardware.</p>
+    </section>
+
+    <section id="copias" class="panel help-section" data-help><h2>7. Copias y recuperación</h2>
+      <ul class="feature-list">
+        <li>Las copias viven en IndexedDB de este navegador y de <code>http://127.0.0.1:8787</code>. Borrar datos del sitio las elimina: <strong>exporta siempre</strong> el <code>.rwb.json</code>.</li>
+        <li>El <code>.rwb.json</code> contiene un manifiesto, los archivos en Base64 y sus SHA-256. Guárdalo en un lugar privado: incluye datos personales y la calibración única de tu radio.</li>
+        <li>Esta aplicación no restaura calibración automáticamente. Para una recuperación usa las herramientas oficiales de cada proyecto con estos archivos.</li>
+      </ul>
+    </section>
+
+    <section id="drivers" class="panel help-section" data-help><h2>8. Controladores USB (soporte no oficial)</h2>
+      <p class="notice-inline"><strong>Aviso:</strong> esta sección es orientación comunitaria, no soporte del fabricante. Descarga controladores solo desde las webs oficiales enlazadas. Cambiar un controlador puede impedir que otro programa vea la radio; todo es reversible desde el Administrador de dispositivos.</p>
+      <div class="table-scroll"><table><thead><tr><th>Equipo / cable</th><th>Windows 10/11</th><th>Linux</th><th>macOS</th></tr></thead><tbody>
+        <tr><td>OpenGD77 MK22 / STM32 (USB <code>1FC9:0094</code>)</td><td>WinUSB con <a href="https://zadig.akeo.ie/" target="_blank" rel="noopener noreferrer">Zadig</a></td><td>Regla udev (abajo)</td><td>Sin validar</td></tr>
+        <tr><td>DM-32 / UV008 (serie USB)</td><td>Incluido (usbser)</td><td>Incluido (cdc_acm) + grupo <code>dialout</code></td><td>Incluido</td></tr>
+        <tr><td>UV-K1 / UV-K5 V3 por USB-C</td><td>Incluido (usbser)</td><td>Incluido + <code>dialout</code></td><td>Incluido</td></tr>
+        <tr><td>Cable Kenwood K1 con CH340/CH341</td><td><a href="https://www.wch-ic.com/downloads/CH341SER_EXE.html" target="_blank" rel="noopener noreferrer">WCH CH341SER</a></td><td>Incluido (ch341)</td><td>Normalmente incluido; si no, WCH</td></tr>
+        <tr><td>Cable con CP210x</td><td><a href="https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers" target="_blank" rel="noopener noreferrer">Silicon Labs VCP</a></td><td>Incluido (cp210x)</td><td>Silicon Labs VCP</td></tr>
+        <tr><td>Cable con PL2303</td><td><a href="https://www.prolific.com.tw/US/ShowProduct.aspx?p_id=225" target="_blank" rel="noopener noreferrer">Prolific</a> (chips falsificados no funcionan)</td><td>Incluido (pl2303)</td><td>Prolific</td></tr>
+      </tbody></table></div>
+      <h3>Windows: WinUSB para OpenGD77 (MK22/STM32)</h3>
+      <ol class="guide-steps">
+        <li>Enciende la radio con OpenGD77 en modo normal (no bootloader) y conéctala.</li>
+        <li>Abre Zadig, menú <em>Options &rarr; List All Devices</em> y elige el dispositivo con USB ID <code>1FC9 0094</code>. Comprueba el ID antes de continuar: elegir otro dispositivo puede dejar sin teclado, ratón o disco.</li>
+        <li>Selecciona <strong>WinUSB</strong> y pulsa <em>Replace Driver</em>. Desconecta y vuelve a conectar la radio.</li>
+        <li><strong>Revertir</strong>: Administrador de dispositivos &rarr; dispositivo &rarr; <em>Desinstalar el dispositivo</em> marcando eliminar el controlador &rarr; reconectar. Hazlo si la CPS de escritorio deja de ver el puerto COM.</li>
+      </ol>
+      <h3>Linux: permisos</h3>
+      <p>Crea <code>/etc/udev/rules.d/70-opengd77.rules</code> con:</p>
+      <pre class="help-code">SUBSYSTEM=="usb", ATTRS{idVendor}=="1fc9", ATTRS{idProduct}=="0094", MODE="0660", TAG+="uaccess"</pre>
+      <p>Después <code>sudo udevadm control --reload-rules</code> y reconecta. Para puertos serie añade tu usuario a <code>dialout</code> (Debian/Ubuntu) o <code>uucp</code> (Arch) y cierra sesión. Si WebUSB informa que no puede reclamar la interfaz, el controlador <code>cdc_acm</code> del kernel la está usando; esta combinación no está validada por el proyecto.</p>
+      <h3>Comprobar el cable</h3>
+      <p>Muchos cables USB-C solo cargan. Si no aparece ningún puerto nuevo al conectar, prueba otro cable de datos y otro puerto USB directo (sin hub).</p>
+    </section>
+
+    <section id="errores" class="panel help-section" data-help><h2>9. Solución de errores</h2>
+      <div class="table-scroll"><table><thead><tr><th>Mensaje en pantalla o síntoma</th><th>Causa probable</th><th>Qué hacer</th></tr></thead><tbody>
+        <tr><td><samp>Solo se permite el origen local.</samp></td><td>Abriste <code>localhost</code>, otra IP o un proxy.</td><td>Usa exactamente <code>http://127.0.0.1:8787</code>.</td></tr>
+        <tr><td><samp>WebUSB no disponible.</samp> <samp>Web Serial no disponible.</samp></td><td>Navegador no compatible, ventana privada o archivo abierto como <code>file://</code>.</td><td>Chrome/Edge/Brave de escritorio a través del servidor local.</td></tr>
+        <tr><td><em>La radio no aparece en el selector del navegador.</em></td><td>Cable solo de carga, radio apagada, controlador ausente u otro programa con el puerto abierto.</td><td>Cierra CPS/CHIRP/UV Studio, revisa los <a href="#drivers">controladores</a> y el cable.</td></tr>
+        <tr><td><samp>No se encontro una interfaz CDC OpenGD77 normal.</samp></td><td>Radio en bootloader/DFU o firmware que no es OpenGD77.</td><td>Reinicia la radio en modo normal.</td></tr>
+        <tr><td><samp>Error al configurar CDC. Comprueba el controlador USB.</samp></td><td>Windows sin WinUSB para <code>1FC9:0094</code>.</td><td>Instala WinUSB con Zadig.</td></tr>
+        <tr><td><samp>Cable USB desconectado.</samp> <samp>Cable serie desconectado.</samp> <samp>La radio cerro el puerto.</samp></td><td>Conector flojo, ahorro de energía USB o radio apagada.</td><td>Reconecta y repite; se exigirá una copia nueva.</td></tr>
+        <tr><td><samp>CRC UART incorrecto.</samp> <samp>Trama UART demasiado corta.</samp></td><td>Ruido en el cable, baudios distintos o firmware no F4HWN.</td><td>Prueba otro cable o puerto; confirma F4HWN v6+.</td></tr>
+        <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Error de transmisión o firmware sin CRC físico (no Labs v6.1+).</td><td>Repite. Para la copia completa usa Labs v6.1+. Las escrituras siguen bloqueadas.</td></tr>
+        <tr><td><samp>Main no inicializado o cabecera no compatible.</samp></td><td>La radio no tiene una imagen Main válida.</td><td>No se habilitará la escritura. Consulta la documentación de F4HWN.</td></tr>
+        <tr><td><samp>IndexedDB no disponible</samp> <samp>La copia no se pudo confirmar en disco.</samp></td><td>Ventana privada, disco lleno o almacenamiento bloqueado.</td><td>Usa una ventana normal, libera espacio y permite el almacenamiento del sitio.</td></tr>
+        <tr><td><samp>Base de copias bloqueada por otra pestana.</samp></td><td>Otra pestaña de la aplicación está abierta.</td><td>Cierra las demás pestañas y recarga.</td></tr>
+        <tr><td><samp>El archivo debe tener exactamente 131072 bytes.</samp></td><td>Abriste un JSON de la CPS, un firmware o un binario extendido.</td><td>Abre un codeplug binario estándar de 128 KiB.</td></tr>
+        <tr><td><samp>RepeaterBook no configurado</samp></td><td>Falta la aprobación o el token individual en el servidor.</td><td>Solicita la aprobación (ver <a href="#codeplug">codeplug</a>) o importa un JSON autorizado.</td></tr>
+        <tr><td><samp>RepeaterBook limito el acceso: espera al menos 15 minutos</samp></td><td>El proveedor devolvió HTTP 429 (límite de peticiones).</td><td>Espera al menos 15 minutos; no hay reintentos automáticos.</td></tr>
+        <tr><td><samp>TLE caducado (&gt;7 dias) o con epoca futura</samp></td><td>Elementos orbitales antiguos.</td><td>Actualiza los elementos orbitales o cambia de proveedor.</td></tr>
+        <tr><td><samp>La fuente oficial respondio HTTP</samp></td><td>GitHub u opengd77.com no disponibles o limitando peticiones.</td><td>Reintenta más tarde; no se usan espejos.</td></tr>
+        <tr><td><em>La descarga automática de la copia no aparece.</em></td><td>El navegador bloqueó descargas múltiples.</td><td>Permite las descargas para el sitio y repite desde el historial.</td></tr>
+      </tbody></table></div>
+      <p>Los mensajes aparecen tal cual en pantalla (sin tildes). Los síntomas en cursiva no muestran un mensaje concreto.</p>
+    </section>
+
+    <section id="faq" class="panel help-section" data-help><h2>10. Preguntas frecuentes</h2>
+      <details><summary>¿Por qué no puedo escribir el codeplug en mi radio OpenGD77?</summary><p>Porque la política de la aplicación exige una copia completa y verificada del firmware antes de cualquier escritura, y OpenGD77 no ofrece por este protocolo una extracción completa del microcontrolador. Puedes editar y guardar el binario y escribirlo con la CPS oficial bajo tu responsabilidad.</p></details>
+      <details><summary>¿Se envían mis datos a algún servidor?</summary><p>No. Copias, calibración y codeplugs se quedan en tu navegador. Solo salen las consultas que lanzas tú (país/zona, NORAD, modelo de firmware) hacia los proveedores oficiales, a través del servidor local.</p></details>
+      <details><summary>¿Puedo usarlo desde el móvil o publicarlo en Internet?</summary><p>No de serie. El servidor solo escucha en <code>127.0.0.1</code>. Android Chrome no ofrece Web Serial de forma general. Publicarlo exige HTTPS, control de acceso y cambios deliberados: consulta <code>docs/DEPLOYMENT.md</code>.</p></details>
+      <details><summary>¿Funciona con GitHub Pages?</summary><p>Solo las páginas estáticas. Catálogo de firmware, RadioID, RepeaterBook y SatNOGS necesitan el servidor Node.</p></details>
+      <details><summary>¿Cuánto tarda la copia de Quansheng?</summary><p>La Flash externa de 2 MiB a 38400 baudios tarda entre 10 y 20 minutos o más. No desconectes ni suspendas el equipo.</p></details>
+      <details><summary>¿Puedo instalar firmware de fábrica o de otra radio?</summary><p>No. Solo se aceptan imágenes F4HWN v6.x estables en slots 1-4. No se flashea OpenGD77 ni firmware de fábrica.</p></details>
+      <details><summary>¿Por qué los canales importados no transmiten?</summary><p>Se crean solo RX y sin tonos para evitar transmisiones no autorizadas. Revisa frecuencias, tonos, Color Code, Time Slot y tu licencia antes de habilitar TX con la CPS.</p></details>
+      <details><summary>¿Cómo cargo satélites en OpenGD77?</summary><p>Abre o lee el codeplug, ve a SAT / pases, actualiza el TLE, consulta frecuencias, elige una FM y pulsa Cargar satélite en lista SAT. Guarda el binario.</p></details>
+      <details><summary>¿Necesito licencia de radioaficionado?</summary><p>Para transmitir en bandas de radioaficionado, sí, según la normativa de tu país. Escuchar y programar no transmite.</p></details>
+      <details><summary>¿Qué pasa si se corta la luz durante una escritura de slot?</summary><p>El slot puede quedar inválido; Main no se toca. Arranca en Main y repite la instalación. Ningún software garantiza recuperación ante fallos eléctricos.</p></details>
+      <details><summary>¿Está afiliada a OpenGD77, grid.radio, F4HWN o Quansheng?</summary><p>No. Es un proyecto independiente de Bricohams que interopera con sus formatos públicos.</p></details>
+    </section>
+
+    <section id="soporte" class="panel help-section" data-help><h2>11. Soporte</h2>
+      <p>Soporte comunitario, sin garantía, en <a href="https://github.com/anatolbricoham/Radio-Web-install/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>. Incluye:</p>
+      <ul class="feature-list"><li>Sistema operativo, navegador y versión, versión de Node.</li><li>Modelo exacto de radio, revisión y firmware.</li><li>Pasos para reproducir y el texto del Registro de operaciones.</li></ul>
+      <p><strong>Nunca publiques</strong> tokens RepeaterBook, archivos <code>.rwb.json</code>, calibración, codeplugs con datos personales ni tu ubicación. Para vulnerabilidades sigue <code>SECURITY.md</code> y no abras una incidencia pública.</p>
+    </section>
+
+    <section id="creditos" class="panel help-section" data-help><h2>12. Créditos y licencia</h2>
+      <p>&copy; 2026 Anatol-Emilio Lopez-Maitchovcow (Bricohams). Código bajo <a href="https://github.com/anatolbricoham/Radio-Web-install/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GPL-3.0-or-later</a>, sin garantía. Autores en <a href="https://github.com/anatolbricoham/Radio-Web-install/blob/main/AUTHORS.md" target="_blank" rel="noopener noreferrer">AUTHORS.md</a>; fuentes, licencias de terceros y reconocimientos en <a href="https://github.com/anatolbricoham/Radio-Web-install/blob/main/ACKNOWLEDGEMENTS.md" target="_blank" rel="noopener noreferrer">ACKNOWLEDGEMENTS.md</a>.</p>
+      <p>Gracias a OpenGD77, grid.radio, F4HWN/Armel, egzumer, DualTachyon, RadioID, RepeaterBook, SatNOGS/Libre Space Foundation, CelesTrak y satellite.js. Data courtesy of RepeaterBook.com.</p>
+    </section>
+  </template>
+  <noscript>Activa JavaScript para usar el buscador. La ayuda también está en <a href="https://github.com/anatolbricoham/Radio-Web-install" target="_blank" rel="noopener noreferrer">el repositorio</a>.</noscript>
+</body>
+</html>

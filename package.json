@@ -1,11 +1,21 @@
 {
-  "name": "radio-workspace",
-  "version": "0.2.0",
+  "name": "bricohams-radio-workspace",
+  "version": "0.3.0",
   "private": true,
-  "description": "Conectores locales OpenGD77 y F4HWN con copias previas verificadas",
+  "description": "Bricohams Radio Workspace: conectores locales OpenGD77 y F4HWN con copias previas verificadas",
+  "license": "GPL-3.0-or-later",
+  "author": "Anatol-Emilio Lopez-Maitchovcow (Bricohams)",
+  "homepage": "https://github.com/anatolbricoham/Radio-Web-install#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anatolbricoham/Radio-Web-install.git"
+  },
+  "bugs": {
+    "url": "https://github.com/anatolbricoham/Radio-Web-install/issues"
+  },
   "scripts": {
     "start": "node server.cjs",
-    "test": "node --test tests\\connectors.test.cjs tests\\firmware.test.cjs tests\\planning.test.cjs",
+    "test": "node --test tests\\connectors.test.cjs tests\\firmware.test.cjs tests\\planning.test.cjs tests\\site.test.cjs",
     "check": "node --check app.js && node --check radio-ui.js && node --check transports.js && node --check gd77-connector.js && node --check quansheng-connector.js && node --check backup-store.js && node --check codeplug-editor.js && node --check radio-core.js && node --check firmware-catalog.js && node --check firmware-service.cjs && node --check data-service.cjs && node --check planning-core.js && node --check planning-ui.js && node --check server.cjs"
   },
   "engines": {

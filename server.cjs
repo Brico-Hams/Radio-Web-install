@@ -4,7 +4,7 @@ const path = require("node:path");
 const { FirmwareService, TARGETS } = require("./firmware-service.cjs");
 const { DataService } = require("./data-service.cjs");
 const allowed = new Set([
-  "index.html", "opengd77.html", "quansheng.html", "styles.css", "app.js", "radio-core.js",
+  "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "bricohams-logo.svg", "styles.css", "app.js", "radio-core.js",
   "transports.js", "quansheng-connector.js", "gd77-connector.js", "backup-store.js",
   "codeplug-editor.js", "radio-ui.js", "firmware-catalog.js", "planning-core.js", "planning-ui.js", "satellite.min.js"
 ]);
@@ -106,7 +106,7 @@ return http.createServer(async (request, response) => {
       ? path.join(path.dirname(require.resolve("satellite.js/package.json")), "dist", "satellite.min.js")
       : path.join(__dirname, name);
     const body = await fs.readFile(filename);
-    const type = name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript";
+    const type = name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : name.endsWith(".svg") ? "image/svg+xml" : "text/javascript";
     response.writeHead(200, { "Content-Type": `${type}; charset=utf-8`, "Content-Length": body.length });
     response.end(request.method === "HEAD" ? undefined : body);
   } catch (error) {
@@ -122,6 +122,6 @@ server.on("error", error => {
   console.error(`Error de servidor: ${error.message}`);
   process.exitCode = 1;
 });
-server.listen(8787, "127.0.0.1", () => console.log("Radio Workspace: http://127.0.0.1:8787 (solo equipo local)"));
+server.listen(8787, "127.0.0.1", () => console.log("Bricohams Radio Workspace: http://127.0.0.1:8787 (solo equipo local)"));
 }
 module.exports = { createServer };

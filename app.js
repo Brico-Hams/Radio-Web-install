@@ -79,8 +79,10 @@ const tools = {
   }
 };
 
+const BRAND = { name: "Bricohams", product: "Radio Workspace", repository: "https://github.com/anatolbricoham/Radio-Web-install" };
 const page = document.body.dataset.page;
 const current = tools[page];
+const helpTemplate = document.getElementById("help-content");
 const external = 'target="_blank" rel="noopener noreferrer"';
 const nav = (key, label, mark) => `<a href="${key === "home" ? "index" : key}.html" ${page === key ? 'aria-current="page"' : ""}><span class="nav-icon" aria-hidden="true">${mark}</span>${label}</a>`;
 
@@ -98,7 +100,7 @@ function card(key, tool) {
 function home() {
   return `<section class="hero"><span class="eyebrow accent">TU RADIO. TU CONFIGURACION.</span>
     <h1>Dos ecosistemas.<br><span>Un punto de partida.</span></h1>
-    <p>Elige tu familia y conecta desde este navegador.<br class="desktop"> Copias automaticas antes de escribir, sin mezclar compatibilidades.</p>
+    <p>Elige tu familia y conecta desde este navegador.<br class="desktop"> Copias automaticas antes de escribir, sin mezclar compatibilidades.</p><a class="button secondary help-link" href="ayuda.html">Primeros pasos, controladores y preguntas frecuentes</a>
   </section>
   <section class="cards" aria-label="Familias de radio">${Object.entries(tools).map(([key, tool]) => card(key, tool)).join("")}</section>
   <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Parecidas por fuera. Diferentes por dentro.</h2><p>OpenGD77 y F4HWN no son firmware intercambiables. Confirma el modelo, la revision de hardware y el firmware antes de conectar o escribir.</p></div></aside>
@@ -137,18 +139,43 @@ function detail(tool) {
     <section class="panel backups-panel"><h2>Copias locales de esta web</h2><p class="muted">Se guardan en IndexedDB en este navegador y origen. Exportalas: borrar datos del navegador elimina las copias locales. Incluyen canales y otros datos privados; no las publiques.</p><button id="refresh-backups" class="button secondary" type="button">Actualizar historial</button><ul id="backup-list"></ul></section>
     <section class="panel"><h2>Registro de operaciones</h2><pre id="radio-log" role="log" aria-label="Registro local"></pre></section>
     <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Antes de escribir, verifica.</h2><p>Conectores en validacion: pruebas automatizadas con transportes simulados, sin certificacion con hardware fisico. No se afirma paridad completa con las referencias. La seleccion de modelo Quansheng es manual. No cierres ni desconectes durante una operacion.</p></div></aside>
-    <section class="sources"><h2>Documentacion de referencia</h2><a href="${tool.url}" ${external}>${tool.action} &nearr;</a>${page === "quansheng" ? `<a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/Multiboot-and-Multiconfig" ${external}>Multiboot y Multiconfig &nearr;</a><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/UV-Studio" ${external}>Guia de UV Studio &nearr;</a>` : ""}</section>`;
+    <section class="sources"><h2>Documentacion de referencia</h2><a href="ayuda.html#drivers">Controladores USB y solucion de errores</a><a href="${tool.url}" ${external}>${tool.action} &nearr;</a>${page === "quansheng" ? `<a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/Multiboot-and-Multiconfig" ${external}>Multiboot y Multiconfig &nearr;</a><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/UV-Studio" ${external}>Guia de UV Studio &nearr;</a>` : ""}</section>`;
 }
 
 document.getElementById("app").innerHTML = `
   <aside class="sidebar">
-    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">R<span></span></span><span>RADIO<small>WORKSPACE</small></span></a>
-    <p class="nav-label">TU ESTACION</p><nav aria-label="Navegacion principal">${nav("home", "Vista general", "&#9638;")}${nav("opengd77", "OpenGD77", "GD")}${nav("quansheng", "Quansheng", "UV")}</nav>
+    <a class="brand" href="index.html"><img class="brand-logo" src="bricohams-logo.svg" alt="" width="40" height="40"><span>${BRAND.name.toUpperCase()}<small>${BRAND.product.toUpperCase()}</small></span></a>
+    <p class="nav-label">TU ESTACION</p><nav aria-label="Navegacion principal">${nav("home", "Vista general", "&#9638;")}${nav("opengd77", "OpenGD77", "GD")}${nav("quansheng", "Quansheng", "UV")}${nav("ayuda", "Ayuda y soporte", "?")}</nav>
     <div class="sidebar-bottom"><span class="local-dot"></span> USB / Serial local<p>Sin envio de datos a servidores.<br>Copias antes de escribir.</p></div>
   </aside>
-  <div class="workspace"><header class="topbar"><span>Workspace <span class="breadcrumb">/ ${current ? current.name : "Vista general"}</span></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span></header>
-  <main id="main">${current ? detail(current) : home()}</main>
-  <footer><span>Radio Workspace <span class="muted">/ Conectores independientes</span></span><span>No afiliado a grid.radio ni a F4HWN.</span></footer></div>`;
+  <div class="workspace"><header class="topbar"><span>${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : helpTemplate ? "Ayuda y soporte" : "Vista general"}</span></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span></header>
+  <main id="main">${current ? detail(current) : helpTemplate ? "" : home()}</main>
+  <footer><span>&copy; 2026 ${BRAND.name} ${BRAND.product} <span class="muted">/ GPL-3.0-or-later / Sin garantia</span></span><span><a href="ayuda.html">Ayuda y soporte</a> &middot; <a href="${BRAND.repository}" target="_blank" rel="noopener noreferrer">Codigo fuente</a> &middot; No afiliado a OpenGD77, grid.radio, F4HWN ni Quansheng.</span></footer></div>`;
+
+if (helpTemplate) {
+  document.getElementById("main").append(helpTemplate.content.cloneNode(true));
+  if (location.hash.length > 1) document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+  const filter = document.getElementById("help-filter");
+  const status = document.getElementById("help-filter-status");
+  const fold = value => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  filter.addEventListener("input", () => {
+    const query = fold(filter.value.trim());
+    let visible = 0;
+    document.querySelectorAll("[data-help]").forEach(section => {
+      const items = section.querySelectorAll("details, tbody tr");
+      let match = !query || fold(section.querySelector("h2").textContent).includes(query);
+      items.forEach(item => {
+        const hit = !query || match || fold(item.textContent).includes(query);
+        item.hidden = !hit;
+        if (hit && query && item.tagName === "DETAILS") item.open = true;
+      });
+      match = match || !query || fold(section.textContent).includes(query);
+      section.hidden = !match;
+      if (match) visible++;
+    });
+    status.textContent = query ? `${visible} secciones coinciden con "${filter.value.trim()}".` : "";
+  });
+}
 
 if (current) {
   const model = document.getElementById("model");

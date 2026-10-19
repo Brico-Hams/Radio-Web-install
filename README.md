@@ -1,6 +1,21 @@
-# Radio Workspace
+<img src="bricohams-logo.svg" alt="Bricohams" width="64" height="64">
+
+# Bricohams Radio Workspace
 
 Dos espacios con conectores propios WebUSB/Web Serial, operaciones locales y respaldo automatico antes de habilitar escrituras.
+
+## Documentacion
+
+| Documento | Contenido |
+| --- | --- |
+| [Ayuda y soporte](ayuda.html) (en la app: <http://127.0.0.1:8787/ayuda.html>) | Primeros pasos, controladores USB (soporte no oficial), errores frecuentes y preguntas frecuentes |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Componentes, flujo de datos, modulos y capas de seguridad |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Decisiones de arquitectura y por que se eligio cada tecnologia |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Instalacion, configuracion, actualizacion y despliegues no soportados |
+| [docs/BRANDING.md](docs/BRANDING.md) | Marca Bricohams: logotipo, paleta, tipografia y tono |
+| [AUTHORS.md](AUTHORS.md) | Autores |
+| [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | Reconocimientos, fuentes y licencias de terceros |
+| [SUPPORT.md](SUPPORT.md) / [SECURITY.md](SECURITY.md) | Soporte y reporte privado de vulnerabilidades |
 
 ## Arranque
 
@@ -133,6 +148,8 @@ Las pruebas de `tests/connectors.test.cjs` emplean dispositivos simulados: fragm
 
 `tests/planning.test.cjs` verifica importacion atomica de canales/contactos y limites, bloque SAT OpenGD77 tipo 3 byte a byte frente al formato del CPS (inicializacion, preservacion de bloques, reemplazo, rechazo de zonas corruptas/no vacias, TLE invalidos y mas de 25 satelites), preservacion de bytes, IDs BCD, deduplicacion, filtros, CSV solo RX, rechazo de modos satelitales incompatibles, checksum/edad TLE, propagacion SGP4 contra un vector independiente de Vallado, ventanas/cruces de elevacion, paginacion RadioID, credenciales server-only RepeaterBook, enfriamiento por HTTP 429 y aislamiento de las API. Ningun test usa credenciales reales, escribe radios ni consulta RepeaterBook.
 
+`tests/site.test.cjs` verifica la marca, el favicon y la ausencia de scripts/estilos en linea en todas las paginas; que el servidor sirve la ayuda y el logotipo con su tipo y cabeceras; las anclas y enlaces locales de la ayuda; que cada mensaje de la tabla de errores existe literalmente en el codigo; los enlaces relativos de toda la documentacion; la licencia, la autoria y los metadatos del paquete; y la ausencia de correos, secretos y caracteres corruptos.
+
 Tambien se comprueban en navegador la interfaz de escritorio/movil, los estados deshabilitados y el almacenamiento IndexedDB. **No hay radio fisica disponible en esta sesion.** No se certifica compatibilidad de campo ni funcionamiento del 100% de los equipos. Antes de usar escrituras en un equipo valioso se necesita validar con hardware de prueba y un procedimiento de recuperacion conocido.
 
 ## Referencias de interoperabilidad
@@ -146,3 +163,11 @@ Implementacion independiente a partir de los formatos de protocolo inspeccionado
 - [Multiboot y Multiconfig](https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/Multiboot-and-Multiconfig).
 
 Consulta realizada el 18 de octubre de 2026. Firmware y protocolos pueden cambiar; se falla de forma explicita ante formatos desconocidos.
+
+## Licencia
+
+Copyright (C) 2026 Anatol-Emilio Lopez-Maitchovcow (Bricohams).
+
+Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo los terminos de la [GNU General Public License](LICENSE) version 3 o (a tu eleccion) cualquier version posterior (GPL-3.0-or-later). Se distribuye **sin ninguna garantia**. Las dependencias y fuentes de terceros mantienen sus propias licencias: ver [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+
+Bricohams no esta afiliado a OpenGD77, grid.radio, F4HWN, Quansheng, RadioID, RepeaterBook, SatNOGS ni CelesTrak. Las marcas pertenecen a sus propietarios.

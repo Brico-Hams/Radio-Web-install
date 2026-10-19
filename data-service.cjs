@@ -39,7 +39,7 @@ class DataService {
     try {
       const response = await this.fetcher(url, {
         redirect: "manual", signal: AbortSignal.timeout(30000),
-        headers: { Accept: raw ? "text/plain" : "application/json", "User-Agent": "RadioWorkspace/0.2", ...headers }
+        headers: { Accept: raw ? "text/plain" : "application/json", "User-Agent": "BricohamsRadioWorkspace/0.3 (+https://github.com/anatolbricoham/Radio-Web-install)", ...headers }
       });
       if (!response.ok) {
         if (response.body) await response.body.cancel();
