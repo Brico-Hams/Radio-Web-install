@@ -1,0 +1,16 @@
+node_modules/
+.vscode/
+.env
+.env.*
+*.log
+*.bin
+*.g77
+*.rwb.json
+*.provenance.json
+*-passes.json
+*.tle
+sat-*.source.json
+radioid-contact-selection.json
+radio-channel-project.json
+quansheng-rx-channels.csv
+coverage/

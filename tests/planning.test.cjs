@@ -1,0 +1,301 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { once } = require("node:events");
+const S = require("satellite.js");
+const R = require("..\\radio-core.js");
+require("..\\codeplug-editor.js");
+require("..\\planning-core.js");
+const { DataService } = require("..\\data-service.cjs");
+const { createServer } = require("..\\server.cjs");
+const orbital = {
+  name: "ISS", norad: 25544, source: "https://db.satnogs.org/api/tle/?norad_cat_id=25544",
+  tle1: "1 25544U 98067A   26291.78980200  .00007771  00000-0  14938-3 0  9994",
+  tle2: "2 25544  51.6325  48.4339 0006764 280.4294  79.5932 15.48929442590914"
+};
+const start = Date.parse("2026-10-19T06:00:00Z");
+const observer = { latitude: 40.4168, longitude: -3.7038, height: 0.667 };
+function blankCodeplug() {
+  const image = new Uint8Array(0x20000).fill(255);
+  for (let bank = 0; bank < 8; bank++) {
+    const base = bank === 0 ? 0x3780 : 0xb1b0 + (bank - 1) * (16 + 56 * 128);
+    image.fill(0, base, base + 16);
+  }
+  image[0x3780] = 1;
+  image.fill(0, 0x3790, 0x3790 + 56);
+  image.set(new TextEncoder().encode("TEMPLATE"), 0x3790);
+  image.set(R.encodeFrequency("145.50000"), 0x3790 + 16);
+  image.set(R.encodeFrequency("145.50000"), 0x3790 + 20);
+  return image;
+}
+function repeater(patch = {}) {
+  return { Callsign: "EA4TEST", Frequency: "145.60000", "Input Freq": "145.00000", "FM Analog": "Yes", DMR: "No",
+    Country: "Spain", State: "Madrid", "Nearest City": "Madrid", PL: "88.5", "Operational Status": "On-air", ...patch };
+}
+const channel = { name: "EA4TEST", rx: "145.60000", tx: "145.00000", mode: 0, colorCode: 0, timeslot: 1 };
+test("append channels clones explicit template, sets free bitmap, preserves all original records and forces RX-only", () => {
+  const original = blankCodeplug();
+  const snapshot = original.slice();
+  const result = R.appendChannels(original, [channel], 1);
+  assert.deepEqual(original, snapshot);
+  assert.equal(result.added, 1);
+  const channels = R.readChannels(result.image);
+  assert.equal(channels.length, 2);
+  assert.equal(channels[1].number, 2);
+  assert.equal(channels[1].rxOnly, true);
+  assert.equal(channels[1].tx, "145.00000");
+  assert.ok(result.image.subarray(0x3790 + 56 + 32, 0x3790 + 56 + 36).every(byte => byte === 255));
+  for (let index = 0; index < original.length; index++) {
+    if (index === 0x3780 || (index >= 0x3790 + 56 && index < 0x3790 + 112)) continue;
+    assert.equal(result.image[index], original[index], `unrelated offset ${index}`);
+  }
+  assert.equal(R.appendChannels(result.image, [channel], 1).duplicates, 1);
+});
+test("append channels fails atomically for invalid template, mixed modes, bad names and full codeplug", () => {
+  const original = blankCodeplug();
+  for (const [rows, template] of [[[channel], 2], [[{ ...channel, mode: 1 }], 1],
+    [[{ ...channel, name: "Bad\u0000" }], 1], [[], 1], [[{ ...channel, rx: "145.000001" }], 1]]) {
+    const snapshot = original.slice();
+    assert.throws(() => R.appendChannels(original, rows, template));
+    assert.deepEqual(original, snapshot);
+  }
+  const full = blankCodeplug();
+  for (let bank = 0; bank < 8; bank++) {
+    const base = bank === 0 ? 0x3780 : 0xb1b0 + (bank - 1) * (16 + 56 * 128);
+    full.fill(255, base, base + 16);
+  }
+  assert.throws(() => R.appendChannels(full, [channel], 1), /espacio/);
+});
+test("DMR channel import preserves template parameters and imports CC without activating TX", () => {
+  const image = blankCodeplug();
+  image[0x3790 + 24] = 1;
+  image[0x3790 + 49] = 64;
+  image[0x3790 + 46] = 5;
+  const result = R.appendChannels(image, [{ ...channel, mode: 1, timeslot: undefined, colorCode: 7 }], 1);
+  const entry = R.readChannels(result.image)[1];
+  assert.equal(entry.timeslot, 2);
+  assert.equal(entry.colorCode, 7);
+  assert.equal(entry.contact, 5);
+  assert.equal(entry.rxOnly, true);
+});
+test("repeaters sharing frequencies are not discarded when callsign, CC or TS differs", () => {
+  const image = blankCodeplug();
+  image[0x3790 + 24] = 1;
+  const rows = [{ ...channel, mode: 1 }, { ...channel, mode: 1, colorCode: 2 },
+    { ...channel, mode: 1, timeslot: 2 }, { ...channel, mode: 1, name: "OTHER" }];
+  const result = R.appendChannels(image, rows, 1);
+  assert.equal(result.added, 4); assert.equal(result.duplicates, 0);
+  assert.equal(R.appendChannels(result.image, rows, 1).duplicates, 4);
+});
+test("contact imports encode known big-endian BCD and private-call flags, preserve indices and deduplicate", () => {
+  const image = blankCodeplug();
+  const snapshot = image.slice();
+  const result = R.appendContacts(image, [{ id: 2140001, callsign: "EA4TEST" }, { id: 2140001, callsign: "EA4TEST" }]);
+  assert.equal(result.added, 1); assert.equal(result.duplicates, 1);
+  assert.deepEqual(image, snapshot);
+  assert.deepEqual(Array.from(result.image.subarray(0x17630, 0x17638)), [0x02, 0x14, 0x00, 0x01, 1, 0, 0, 1]);
+  assert.deepEqual(R.readContacts(result.image), [{ number: 1, id: 2140001, name: "EA4TEST", type: 1 }]);
+  const second = R.appendContacts(result.image, [{ id: 2140002, callsign: "EA4NEXT" }]);
+  assert.equal(R.readContacts(second.image)[1].number, 2);
+  for (let index = 0; index < image.length; index++) {
+    if (index >= 0x17620 && index < 0x17638) continue;
+    assert.equal(result.image[index], image[index]);
+  }
+});
+test("contact errors and capacity never mutate source codeplug or overwrite existing contacts", () => {
+  for (const contact of [{ id: 0, callsign: "X" }, { id: 0x1000000, callsign: "X" }, { id: 1, callsign: "A".repeat(17) }]) {
+    const image = blankCodeplug(); const snapshot = image.slice();
+    assert.throws(() => R.appendContacts(image, [contact]));
+    assert.deepEqual(image, snapshot);
+  }
+  const image = blankCodeplug();
+  const contacts = Array.from({ length: 1024 }, (_, index) => ({ id: index + 1, callsign: `C${index}` }));
+  const full = R.appendContacts(image, contacts).image;
+  assert.equal(R.readContacts(full).length, 1024);
+  assert.throws(() => R.appendContacts(full, [{ id: 5000, callsign: "NEW" }]), /espacio/);
+});
+test("RepeaterBook normalization reports unsupported, invalid and duplicate entries instead of silently accepting", () => {
+  const result = R.normalizeRepeaters({ results: [repeater(), repeater(), repeater({ Frequency: "1296.0" }),
+    repeater({ "Input Freq": "" }), repeater({ "Operational Status": "Off-air" }), repeater({ "FM Analog": "No" })] }, "FM");
+  assert.equal(result.entries.length, 1); assert.equal(result.rejected.length, 5);
+  assert.equal(result.entries[0].rxOnly, true);
+  assert.equal(result.entries[0].tone, "88.5");
+  assert.throws(() => R.normalizeRepeaters([], "FM"));
+  assert.equal(R.normalizeRepeaters({ results: [repeater({ DMR: "Yes", "DMR Color Code": "15" })] }, "DMR").entries[0].colorCode, 15);
+  assert.equal(R.normalizeRepeaters({ results: [repeater({ DMR: "Yes" })] }, "DMR").rejected.length, 1);
+});
+test("geographic/text/band filters normalize accents and CHIRP CSV is FM RX-only and formula-safe", () => {
+  const entries = R.normalizeRepeaters({ results: [repeater({ State: "Málaga" }), repeater({ Callsign: "UHF", Frequency: "438.5", "Input Freq": "430.9" })] }, "FM").entries;
+  assert.equal(R.filterRecords(entries, { country: "Spain", region: "malaga", band: "vhf" }).length, 1);
+  assert.equal(R.filterRecords(entries, { query: "uhf", band: "uhf" }).length, 1);
+  const csv = R.channelCSV(entries);
+  assert.match(csv, /"off","0.000000"/);
+  assert.match(csv, /RX ONLY/);
+  assert.equal(csv.split("\r\n").length, 4);
+  assert.equal(R.csvCell('=CMD("x")'), '"\'=CMD(""x"")"');
+  assert.throws(() => R.channelCSV([{ ...entries[0], mode: 1 }]), /DMR/);
+});
+test("TLE checksums, satellite identity and age are validated without stale fallback", () => {
+  assert.ok(R.validateTLE(orbital, start).record);
+  assert.throws(() => R.validateTLE({ ...orbital, tle1: orbital.tle1.slice(0, -1) + "0" }, start), /Checksum/);
+  assert.throws(() => R.validateTLE({ ...orbital, norad: 1 }, start), /NORAD/);
+  assert.throws(() => R.validateTLE(orbital, start + 8 * 86400000), /caducado/);
+  assert.throws(() => R.validateTLE(orbital, start - 3 * 86400000), /futura/);
+});
+test("SGP4 dependency matches independent Vallado verification vector at epoch", () => {
+  const record = S.twoline2satrec(
+    "1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753",
+    "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667");
+  const state = S.sgp4(record, 0);
+  for (const [axis, expected] of Object.entries({ x: 7022.46529266, y: -1400.08296755, z: 0.03995155 })) {
+    assert.ok(Math.abs(state.position[axis] - expected) < 0.001, axis);
+  }
+});
+test("passes meet actual elevation threshold, UTC window and crossing accuracy for specified observer", () => {
+  const result = R.predictPasses(orbital, observer, { start, hours: 24, minimum: 10 });
+  assert.ok(result.passes.length >= 2);
+  const record = S.twoline2satrec(orbital.tle1, orbital.tle2);
+  const location = { latitude: observer.latitude * Math.PI / 180, longitude: observer.longitude * Math.PI / 180, height: observer.height };
+  for (const pass of result.passes) {
+    assert.ok(pass.aos.time < pass.maximum.time && pass.maximum.time < pass.los.time);
+    assert.ok(pass.maximum.elevation >= 10 && pass.maximum.elevation <= 90);
+    assert.ok(pass.aos.time >= start && pass.los.time <= start + 86400000);
+    for (const crossing of [pass.aos, pass.los]) {
+      if (pass.partialStart || pass.partialEnd) continue;
+      const date = new Date(crossing.time);
+      const state = S.propagate(record, date);
+      const look = S.ecfToLookAngles(location, S.eciToEcf(state.position, S.gstime(date)));
+      assert.ok(Math.abs(look.elevation * 180 / Math.PI - 10) < 0.1);
+    }
+  }
+  assert.equal(result.observer.longitude, observer.longitude);
+  assert.equal(result.sampleSeconds, 5);
+});
+test("pass validation rejects missing/out-of-range position, excessive window, invalid elevation and stale end", () => {
+  for (const position of [{ ...observer, latitude: 91 }, { ...observer, longitude: NaN }, { ...observer, height: 10 }]) {
+    assert.throws(() => R.predictPasses(orbital, position, { start }));
+  }
+  for (const options of [{ hours: 49 }, { hours: 0 }, { minimum: 61 }, { minimum: NaN }]) {
+    assert.throws(() => R.predictPasses(orbital, observer, { start, ...options }));
+  }
+  assert.throws(() => R.predictPasses(orbital, observer, { start: start + 6 * 86400000, hours: 48 }), /validez/);
+});
+test("SAT channels only support narrow/punctual FM and start RX-only without fabricated uplink", () => {
+  const tx = { id: "test", mode: "FM", downlink: 145800000, uplink: 144490000, source: "https://db.satnogs.org" };
+  const entry = R.satelliteChannel(orbital, tx);
+  assert.equal(entry.rx, "145.80000"); assert.equal(entry.tx, entry.rx); assert.equal(entry.rxOnly, true);
+  for (const patch of [{ mode: "AFSK" }, { mode: "USB" }, { downlinkHigh: 145900000 }, { downlink: 2400000000 }, { downlink: null }]) {
+    assert.throws(() => R.satelliteChannel(orbital, { ...tx, ...patch }));
+  }
+});
+test("RadioID query uses fixed HTTPS origin, escaped country/region and explicit pagination with minimized records", async () => {
+  let requested;
+  const service = new DataService(async url => {
+    requested = url;
+    return new Response(JSON.stringify({ count: 201, pages: 2, page: 2, results: [{ radio_id: 2140001, callsign: "EA4TEST", country: "Spain",
+      state: "Madrid", city: "Madrid", fname: "Test", has_valid_email: true, lastheard: "private metadata not needed" }] }));
+  });
+  const result = await service.contacts({ country: "Spain", region: "Madrid", page: "2" });
+  assert.equal(new URL(requested).searchParams.get("state"), "Madrid");
+  assert.equal(new URL(requested).origin, "https://radioid.net");
+  assert.equal(result.entries.length, 1); assert.equal(result.page, 2);
+  assert.equal(result.entries[0].lastheard, undefined); assert.equal(result.entries[0].has_valid_email, undefined);
+  for (const params of [{ country: "", page: "1" }, { country: "Spain", page: "0" }, { country: "Spain", page: "1e2" }, { country: "\nsecret" }]) {
+    await assert.rejects(service.contacts(params));
+  }
+});
+test("malformed/pagination-mismatched RadioID results fail explicitly", async () => {
+  for (const data of [{ results: [] }, { count: 1, pages: 1, page: 2, results: [] },
+    { count: 1, pages: 1, page: 1, results: [{ id: 99999999, callsign: "BAD" }] }]) {
+    await assert.rejects(new DataService(async () => new Response(JSON.stringify(data))).contacts({ country: "Spain" }));
+  }
+});
+const env = { RB_APPROVED: "yes", RB_USER_TOKEN: "rbuapp_unit_test_only", RB_APPROVED_USER_AGENT: "RadioWorkspace/0.2 (test@example.invalid)" };
+test("RepeaterBook requires app approval and individual token before any outbound request", async () => {
+  let calls = 0;
+  for (const config of [{}, { ...env, RB_APPROVED: "no" }, { ...env, RB_USER_TOKEN: "app_not_for_distributed_clients" }]) {
+    const service = new DataService(async () => { calls++; }, config);
+    await assert.rejects(service.repeaters({ country: "Spain" }), /aprobacion/);
+    assert.equal(service.status().repeaterbookConfigured, false);
+  }
+  assert.equal(calls, 0);
+});
+test("RepeaterBook headers remain server-only, region endpoints are scoped and 429 stops retries", async () => {
+  const requests = [];
+  let now = 1000;
+  const service = new DataService(async (url, options) => {
+    requests.push({ url, options });
+    return new Response(JSON.stringify({ results: [repeater()] }));
+  }, env, () => now);
+  const result = await service.repeaters({ country: "Spain", region: "Madrid", mode: "FM" });
+  assert.match(requests[0].url, /exportROW\.php/);
+  assert.equal(requests[0].options.headers["X-RB-App-Token"], env.RB_USER_TOKEN);
+  assert.equal(requests[0].url.includes(env.RB_USER_TOKEN), false);
+  assert.equal(JSON.stringify(result).includes(env.RB_USER_TOKEN), false);
+  await service.repeaters({ country: "United States", stateId: "51", mode: "DMR" });
+  assert.match(requests[1].url, /export\.php/);
+  await assert.rejects(service.repeaters({ country: "United States" }), /ID estatal/);
+  let calls = 0;
+  const limited = new DataService(async () => { calls++; return new Response(null, { status: 429 }); }, env, () => now);
+  await assert.rejects(limited.repeaters({ country: "Spain" }), /HTTP 429/);
+  await assert.rejects(limited.repeaters({ country: "Spain" }), /15 minutos/);
+  assert.equal(calls, 1);
+  now += 900001;
+  await assert.rejects(limited.repeaters({ country: "Spain" }), /HTTP 429/);
+  assert.equal(calls, 2);
+});
+test("provider fetches enforce byte limits, no redirects, HTTPS, bounded concurrency and sanitized network errors", async () => {
+  const url = "https://radioid.net/api/dmr/user/";
+  for (const response of [new Response("abcd"), new Response("a", { headers: { "content-length": "100" } })]) {
+    await assert.rejects(new DataService(async () => response).get(url, 3), /grande/);
+  }
+  await assert.rejects(new DataService(async () => new Response(null, { status: 302, headers: { location: "http://127.0.0.1" } })).get(url), /HTTP 302/);
+  await assert.rejects(new DataService().get("http://radioid.net/api"), /autorizado/);
+  await assert.rejects(new DataService().get("https://evil.test/api"), /autorizado/);
+  const service = new DataService(async () => { throw new Error(`credential=${env.RB_USER_TOKEN}`); }, env);
+  await assert.rejects(service.get(url), error => !error.message.includes(env.RB_USER_TOKEN) && /red/.test(error.message));
+  assert.equal(service.active, 0);
+  service.active = 4;
+  await assert.rejects(service.get(url), error => error.status === 429);
+});
+test("satellite API keeps requested NORAD and separates orbital data from transmitter failures", async () => {
+  const urls = [];
+  const service = new DataService(async url => {
+    urls.push(url);
+    return new Response(JSON.stringify([{ norad_cat_id: 25544, tle0: "0 ISS", tle1: orbital.tle1, tle2: orbital.tle2 }]));
+  });
+  assert.equal((await service.satellite({ norad: "25544", provider: "satnogs" })).name, "ISS");
+  assert.equal(new URL(urls[0]).searchParams.get("norad_cat_id"), "25544");
+  await assert.rejects(service.satellite({ norad: "1", provider: "satnogs" }), /TLE/);
+  await assert.rejects(service.satellite({ norad: "25544", provider: "untrusted" }), /Proveedor/);
+  const direct = new DataService(async () => new Response(`ISS\n${orbital.tle1}\n${orbital.tle2}\n`));
+  assert.equal((await direct.satellite({ norad: "25544", provider: "celestrak" })).norad, 25544);
+});
+test("transmitters filter other satellites, inactive, unconfirmed and frequency violations", async () => {
+  const item = { norad_cat_id: 25544, uuid: "test", alive: true, status: "active", description: "FM voice", mode: "FM", downlink_low: 145800000 };
+  const service = new DataService(async () => new Response(JSON.stringify([item, { ...item, norad_cat_id: 1 },
+    { ...item, alive: false }, { ...item, unconfirmed: true }, { ...item, frequency_violation: true }, { ...item, status: "inactive" }])));
+  const result = await service.transmitters({ norad: "25544" });
+  assert.equal(result.entries.length, 1); assert.equal(result.entries[0].downlink, 145800000);
+});
+test("provider API does not accept arbitrary URLs, secrets, duplicate params or location; dependency serves only fixed bundle", async t => {
+  const service = new DataService(async () => new Response(JSON.stringify({ count: 0, page: 1, pages: 0, results: [] })), {});
+  const server = createServer(undefined, service);
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  for (const path of ["/api/data/contacts?country=Spain&country=France", "/api/data/satellite?url=https://evil.test",
+    "/api/data/contacts?country=Spain&latitude=40", "/api/data/status?token=secret", "/api/data/unknown"]) {
+    assert.equal((await fetch(base + path)).status, 400);
+  }
+  const status = await (await fetch(`${base}/api/data/status`)).json();
+  assert.equal(status.repeaterbookConfigured, false);
+  assert.equal((await fetch(`${base}/api/data/repeaters?country=Spain`)).status, 503);
+  assert.equal((await fetch(`${base}/api/data/contacts?country=Spain`)).status, 200);
+  const script = await fetch(`${base}/satellite.min.js`);
+  assert.equal(script.status, 200);
+  assert.match(script.headers.get("content-type"), /javascript/);
+  assert.match(script.headers.get("permissions-policy"), /geolocation=\(self\)/);
+  for (const path of ["/data-service.cjs", "/node_modules/satellite.js/package.json", "/.env", "/package-lock.json"]) {
+    assert.equal((await fetch(base + path)).status, 404);
+  }
+});

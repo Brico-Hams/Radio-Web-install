@@ -1,0 +1,17 @@
+{
+  "name": "radio-workspace",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Conectores locales OpenGD77 y F4HWN con copias previas verificadas",
+  "scripts": {
+    "start": "node server.cjs",
+    "test": "node --test tests\\connectors.test.cjs tests\\firmware.test.cjs tests\\planning.test.cjs",
+    "check": "node --check app.js && node --check radio-ui.js && node --check transports.js && node --check gd77-connector.js && node --check quansheng-connector.js && node --check backup-store.js && node --check codeplug-editor.js && node --check radio-core.js && node --check firmware-catalog.js && node --check firmware-service.cjs && node --check data-service.cjs && node --check planning-core.js && node --check planning-ui.js && node --check server.cjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "satellite.js": "6.0.1"
+  }
+}
