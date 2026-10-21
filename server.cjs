@@ -6,7 +6,7 @@ const { DataService } = require("./data-service.cjs");
 const allowed = new Set([
   "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "bricohams-logo.svg", "styles.css", "app.js", "radio-core.js",
   "transports.js", "quansheng-connector.js", "gd77-connector.js", "backup-store.js",
-  "codeplug-editor.js", "radio-ui.js", "firmware-catalog.js", "planning-core.js", "planning-ui.js", "satellite.min.js"
+  "codeplug-editor.js", "radio-ui.js", "firmware-catalog.js", "planning-core.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js"
 ]);
 function createServer(firmware = new FirmwareService(), providers = new DataService()) {
 return http.createServer(async (request, response) => {
@@ -93,6 +93,12 @@ return http.createServer(async (request, response) => {
       response.writeHead(error.status || 502, { "Content-Type": "application/json; charset=utf-8" });
       response.end(JSON.stringify({ error: error.message }));
     }
+    return;
+  }
+  if (url.pathname === "/runtime.json") {
+    const body = Buffer.from(JSON.stringify({ mode: "local" }));
+    response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length });
+    response.end(request.method === "HEAD" ? undefined : body);
     return;
   }
   const name = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
