@@ -39,7 +39,15 @@
     </section>
 
     <section id="funcionamiento" class="panel help-section" data-help><h2>2. Cómo funciona</h2>
-      <p>La aplicación tiene dos partes que se ejecutan en tu ordenador:</p>
+      <p><strong>Dos modos.</strong> La insignia superior indica «Web · GitHub Pages» (sitio estático, sin servidor) o «Local · instalado» (servidor Node en tu equipo). En ambos la radio, las copias y las ediciones se quedan en tu navegador. Diferencias del modo web:</p>
+      <ul class="feature-list">
+        <li><strong>Firmware</strong>: descargas el archivo en la fuente oficial (el botón te lleva allí) y lo cargas con <em>Cargar el archivo descargado</em>. F4HWN se verifica por tamaño y SHA-256 publicado; OpenGD77 se comprueba por nombre y formato ZIP, y su SHA-256 se calcula solo localmente porque el editor no publica hash.</li>
+        <li><strong>Contactos RadioID</strong>: descarga <code>user.csv</code> desde radioid.net y cárgalo en la aplicación (máx. 100 MiB). Se filtra por el país y la zona elegidos y se muestran como máximo 5000 contactos; afina la zona si hay más. Un archivo que no sea de RadioID se rechaza.</li>
+        <li><strong>Perfil opcional</strong>: indicativo e ID DMR de 7 dígitos, guardados solo en este navegador; tu entrada aparece marcada «(tú)». Puedes borrarlo cuando quieras.</li>
+        <li><strong>RepeaterBook</strong>: no está disponible; solo en la versión instalada, próximamente en paquetes.</li>
+        <li><strong>Satélites</strong>: vienen de una lista diaria generada desde SatNOGS (ISS 25544, SO-50 27607, AO-91 43017, PO-101 43678). Si tiene más de 7 días verás un aviso. Datos: SatNOGS DB / Libre Space Foundation, <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>.</li>
+      </ul>
+      <p>La aplicación tiene dos partes que se ejecutan en tu ordenador (modo local):</p>
       <ul class="feature-list">
         <li><strong>Navegador</strong>: habla con la radio por USB (WebUSB) o puerto serie (Web Serial), guarda las copias en IndexedDB y edita los archivos localmente.</li>
         <li><strong>Servidor Node local</strong> (solo <code>127.0.0.1</code>): sirve la web y hace de intermediario controlado hacia fuentes oficiales (firmware, RadioID, RepeaterBook, SatNOGS, CelesTrak). Nunca recibe tus copias, calibración ni codeplugs.</li>
@@ -137,8 +145,8 @@
     <section id="faq" class="panel help-section" data-help><h2>10. Preguntas frecuentes</h2>
       <details><summary>¿Por qué no puedo escribir el codeplug en mi radio OpenGD77?</summary><p>Porque la política de la aplicación exige una copia completa y verificada del firmware antes de cualquier escritura, y OpenGD77 no ofrece por este protocolo una extracción completa del microcontrolador. Puedes editar y guardar el binario y escribirlo con la CPS oficial bajo tu responsabilidad.</p></details>
       <details><summary>¿Se envían mis datos a algún servidor?</summary><p>No. Copias, calibración y codeplugs se quedan en tu navegador. Solo salen las consultas que lanzas tú (país/zona, NORAD, modelo de firmware) hacia los proveedores oficiales, a través del servidor local.</p></details>
-      <details><summary>¿Puedo usarlo desde el móvil o publicarlo en Internet?</summary><p>No de serie. El servidor solo escucha en <code>127.0.0.1</code>. Android Chrome no ofrece Web Serial de forma general. Publicarlo exige HTTPS, control de acceso y cambios deliberados: consulta <code>docs/DEPLOYMENT.md</code>.</p></details>
-      <details><summary>¿Funciona con GitHub Pages?</summary><p>Solo las páginas estáticas. Catálogo de firmware, RadioID, RepeaterBook y SatNOGS necesitan el servidor Node.</p></details>
+      <details><summary>¿Puedo usarlo desde el móvil o publicarlo en Internet?</summary><p>El servidor local solo escucha en <code>127.0.0.1</code>; no lo expongas en una red. Para usarlo sin instalar nada existe el modo web en GitHub Pages (ver <a href="#funcionamiento">Cómo funciona</a>). Android Chrome no ofrece Web Serial de forma general.</p></details>
+      <details><summary>¿Funciona con GitHub Pages?</summary><p>Sí, en modo web: radio, copias y edición funcionan igual; el firmware y el <code>user.csv</code> de RadioID se cargan a mano, los satélites vienen de una lista diaria y RepeaterBook no está disponible. Ver <a href="#funcionamiento">Cómo funciona</a>.</p></details>
       <details><summary>¿Cuánto tarda la copia de Quansheng?</summary><p>La Flash externa de 2 MiB a 38400 baudios tarda entre 10 y 20 minutos o más. No desconectes ni suspendas el equipo.</p></details>
       <details><summary>¿Puedo instalar firmware de fábrica o de otra radio?</summary><p>No. Solo se aceptan imágenes F4HWN v6.x estables en slots 1-4. No se flashea OpenGD77 ni firmware de fábrica.</p></details>
       <details><summary>¿Por qué los canales importados no transmiten?</summary><p>Se crean solo RX y sin tonos para evitar transmisiones no autorizadas. Revisa frecuencias, tonos, Color Code, Time Slot y tu licencia antes de habilitar TX con la CPS.</p></details>
