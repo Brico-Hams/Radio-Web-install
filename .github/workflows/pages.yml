@@ -17,7 +17,7 @@ concurrency:
 jobs:
   build:
     # Only the dedicated <org>/<org>.github.io repo may deploy (own origin, ADR-013).
-    if: github.repository == format('{0}/{0}.github.io', github.repository_owner)
+    if: github.repository == format('{0}/{0}.github.io', github.repository_owner) || vars.PAGES_SHARED_ORIGIN_ACCEPTED == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -241,7 +241,7 @@ test("pages workflow pins actions by SHA and keeps minimal permissions", () => {
   assert.match(top, /contents: read/);
   assert.doesNotMatch(top, /pages: write|id-token: write/);
   assert.match(jobs, /pages: write/); assert.match(jobs, /id-token: write/);
-  assert.ok(wf.includes("if: github.repository == format('{0}/{0}.github.io', github.repository_owner)"));
+  assert.ok(wf.includes("if: github.repository == format('{0}/{0}.github.io', github.repository_owner) || vars.PAGES_SHARED_ORIGIN_ACCEPTED == 'true'"));
   assert.doesNotMatch(wf, /run:.*\$\{\{/);
   assert.doesNotMatch(wf, /secrets\./);
 });

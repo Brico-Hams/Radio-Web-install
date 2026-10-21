@@ -103,6 +103,7 @@ IndexedDB (copias de la radio) y `localStorage` (perfil) se aíslan por origen. 
 3. En *Settings › Pages*, elegir «GitHub Actions» como origen y activar «Enforce HTTPS».
 4. Crear la variable de Actions `PAGES_ORIGIN` con `https://<org>.github.io` (sin barra final). El workflow la usa para recuperar el `data/satellites.json` anterior.
    El workflow solo se ejecuta en el repositorio `<org>/<org>.github.io` (guarda `if: github.repository == ...`): en cualquier otro repositorio se omite, para no publicar bajo un origen compartido que expondría las copias y el perfil (IndexedDB) a otras páginas.
+   Excepción consciente: si el autor acepta compartir origen, crea la variable `PAGES_SHARED_ORIGIN_ACCEPTED` con el valor `true` en el repositorio. Las variables no se copian a los forks, así que un fork sigue protegido. El sitio oficial actual usa esta excepción en `https://anatolbricoham.github.io/Radio-Web-install/` (ver ADR-014).
    El primer push puede ejecutarse antes de definir `PAGES_ORIGIN`: es inofensivo, se omite la recuperación de datos anteriores y se emite un aviso.
 5. Ejecutar el workflow manualmente la primera vez (*Actions › Pages › Run workflow*).
 

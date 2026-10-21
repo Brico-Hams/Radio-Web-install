@@ -77,3 +77,10 @@ Cada decisión indica el contexto, lo decidido, las alternativas descartadas y s
 - **Decisión:** publicar un sitio estático en GitHub Pages, en la raíz de una cuenta u organización dedicada (`https://<org>.github.io/`), no en una subruta de `bricohams.github.io` (donde vive Bricohams Studio). La aplicación detecta el modo con `runtime.json` (web si falta), usa solo rutas relativas y declara la CSP en `<meta>`. Los satélites se generan a diario con un workflow y las funciones que requieren servidor o credenciales (RepeaterBook, descarga de firmware, API de RadioID) se sustituyen por carga manual de archivos o quedan solo en la versión local.
 - **Alternativas descartadas:** subruta de `bricohams.github.io` (comparte origen y almacenamiento con otros proyectos); un proxy público (haría pasar datos y credenciales por un tercero); replicar RadioID (volumen y licencia).
 - **Consecuencias:** la web tiene menos funciones que la local, y el autor debe crear la cuenta u organización y configurar Pages. Los paquetes instalables llegarán próximamente.
+
+## ADR-014 · Publicación aceptada en origen compartido
+
+- **Contexto:** el autor decidió publicar la web en `https://anatolbricoham.github.io/Radio-Web-install/`, sin crear una cuenta dedicada.
+- **Decisión:** permitir el despliegue fuera de `<org>/<org>.github.io` solo si existe la variable de repositorio `PAGES_SHARED_ORIGIN_ACCEPTED=true`. Supera parcialmente ADR-013.
+- **Riesgo aceptado:** `anatolbricoham.github.io` es un origen compartido con las otras páginas de proyecto de esa cuenta (por ejemplo `Ham-Clock`, `antenaSatCommrotor`, `Fox_Hunt_Beacon`). Cualquiera de ellas, si se modificara, podría leer las copias de la radio y el perfil guardados por la web. Recomendación a los usuarios: exportar las copias `.rwb.json` y no depender del almacenamiento del navegador.
+- **Salida:** crear una cuenta u organización dedicada y mover la web a su raíz, borrando la variable.
