@@ -172,7 +172,7 @@
     }
     function renderContacts() {
       $("plan-contact-results").replaceChildren();
-      const profile = R.profile.get();
+      const profile = web && R.profile ? R.profile.get() : null;
       for (const entry of visibleContacts()) {
         const row = document.createElement("tr");
         const checkbox = document.createElement("input");
@@ -425,13 +425,15 @@
     });
     function webMode() {
       web = true;
-      for (const id of ["plan-contacts-query", "plan-contacts-prev", "plan-contacts-next"]) $(id).hidden = true;
-      $("plan-web-contacts").hidden = false;
       for (const id of ["plan-rb-query", "plan-rb-status", "plan-rb-file", "plan-rb-consent"]) $(id).disabled = true;
       $("plan-rb-web-notice").hidden = false;
       $("plan-orbit-source").value = "satnogs"; $("plan-orbit-source").disabled = true;
       const repository = typeof BRAND !== "undefined" ? BRAND.repository : "";
       if (repository) { $("plan-rb-release").href = `${repository}/releases/latest`; $("plan-rb-release").hidden = false; }
+      // Quansheng has no DMR contacts, and its page does not load radioid-csv.js.
+      if (page === "quansheng" || !R.profile) return;
+      for (const id of ["plan-contacts-query", "plan-contacts-prev", "plan-contacts-next"]) $(id).hidden = true;
+      $("plan-web-contacts").hidden = false;
       const profile = R.profile.get();
       if (profile) { $("plan-profile-call").value = profile.callsign; $("plan-profile-id").value = profile.dmrId; }
       $("plan-contacts-csv").addEventListener("change", () => perform("Cargar user.csv de RadioID", async () => {

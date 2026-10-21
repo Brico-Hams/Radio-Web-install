@@ -235,3 +235,14 @@ test("pages workflow pins actions by SHA and keeps minimal permissions", () => {
   assert.match(wf, /contents: read/); assert.match(wf, /pages: write/); assert.match(wf, /id-token: write/);
   assert.doesNotMatch(wf, /secrets\./);
 });
+
+test("planning-ui: every R.profile access is guarded (quansheng.html does not load radioid-csv.js)", () => {
+  const lines = require("node:fs").readFileSync(require("node:path").join(__dirname, "../planning-ui.js"), "utf8").split("\n");
+  const start = lines.findIndex(line => line.includes("function webMode()"));
+  const guard = lines.findIndex((line, i) => i > start && line.includes('!R.profile) return;'));
+  assert.ok(start > 0 && guard > start);
+  const bad = lines.map((line, i) => ({ line, n: i })).filter(({ line, n }) => /R\.profile\.(get|set|clear)/.test(line) &&
+    !(n > guard) && !/web && R\.profile \?/.test(line));
+  assert.deepEqual(bad, []);
+  assert.doesNotMatch(require("node:fs").readFileSync(require("node:path").join(__dirname, "../quansheng.html"), "utf8"), /radioid-csv/);
+});
