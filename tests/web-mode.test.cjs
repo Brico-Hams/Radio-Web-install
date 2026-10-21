@@ -95,3 +95,41 @@ test("web firmware: every firmware-download access is guarded in web mode", () =
   const unguarded = lines.filter(line => /\$\("firmware-download"\)/.test(line) && !/if \(!?(web|\$\("firmware-download"\))\)/.test(line) && !line.includes('<button id="firmware-download"'));
   assert.deepEqual(unguarded, []);
 });
+
+require("../planning-core.js");
+require("../radioid-csv.js");
+const header = "RADIO_ID,CALLSIGN,FIRST_NAME,LAST_NAME,CITY,STATE,COUNTRY\n";
+test("RadioID CSV: filters by country/region and keeps provider shape", () => {
+  const csv = header + "2141234,EA4ABC,Ana,Lopez,Madrid,Madrid,Spain\n3101234,K1ABC,Bob,Smith,Boston,Massachusetts,United States\n";
+  const { entries } = R.parseRadioIdCSV(csv, { country: "Spain" });
+  assert.deepEqual(entries, [{ id: 2141234, callsign: "EA4ABC", name: "Ana Lopez", country: "Spain", region: "Madrid", city: "Madrid", source: "https://radioid.net", kind: "private" }]);
+  assert.equal(R.parseRadioIdCSV(csv, { country: "spain", region: "madrid" }).entries.length, 1);
+  assert.equal(R.parseRadioIdCSV(csv, { country: "spain", region: "Sevilla" }).entries.length, 0);
+});
+test("RadioID CSV: handles quoted commas and skips invalid ids", () => {
+  const csv = header + '2141234,EA4ABC,"Ana, Maria",Lopez,Madrid,Madrid,Spain\n99999999,EA4BAD,X,Y,C,D,Spain\n0,EA4ZERO,X,Y,C,D,Spain\n';
+  const { entries, total } = R.parseRadioIdCSV(csv, { country: "Spain" });
+  assert.equal(total, 1);
+  assert.equal(entries[0].name, "Ana, Maria Lopez");
+});
+test("RadioID CSV: rejects foreign CSV, oversize text, and caps rows", () => {
+  assert.throws(() => R.parseRadioIdCSV("a,b,c\n1,2,3\n", { country: "Spain" }), /RadioID/);
+  assert.throws(() => R.parseRadioIdCSV("", { country: "Spain" }), /RadioID/);
+  assert.throws(() => R.parseRadioIdCSV({ length: 100 * 1024 * 1024 + 1 }, { country: "Spain" }), /100 MiB/);
+  const many = header + Array.from({ length: 5001 }, (_, i) => `${2140000 + i},EA${i},A,B,C,D,Spain`).join("\n");
+  const result = R.parseRadioIdCSV(many, { country: "Spain" });
+  assert.equal(result.entries.length, 5000); assert.equal(result.truncated, true); assert.equal(result.total, 5001);
+});
+test("profile validates callsign and 7-digit DMR id, and tolerates missing storage", () => {
+  assert.throws(() => R.profile.set({ callsign: "e4", dmrId: "2141234" }), /indicativo/i);
+  assert.throws(() => R.profile.set({ callsign: "EA4ABC", dmrId: "214123" }), /ID DMR/);
+  assert.equal(R.profile.get(), null);
+  const store = {};
+  globalThis.localStorage = { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: k => { delete store[k]; } };
+  try {
+    assert.deepEqual(R.profile.set({ callsign: "ea4abc", dmrId: "2141234" }), { callsign: "EA4ABC", dmrId: "2141234" });
+    assert.deepEqual(R.profile.get(), { callsign: "EA4ABC", dmrId: "2141234" });
+    R.profile.clear();
+    assert.equal(R.profile.get(), null);
+  } finally { delete globalThis.localStorage; }
+});

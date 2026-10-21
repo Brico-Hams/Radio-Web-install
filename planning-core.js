@@ -141,6 +141,6 @@
       attribution: transmitter.attribution || "SatNOGS DB / Libre Space Foundation (CC BY-SA 4.0).",
       license: transmitter.license || "https://creativecommons.org/licenses/by-sa/4.0/" };
   }
-  Object.assign(R, { asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, predictPasses, satelliteChannel, csvCell });
+  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, predictPasses, satelliteChannel, csvCell });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

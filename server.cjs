@@ -6,7 +6,7 @@ const { DataService } = require("./data-service.cjs");
 const allowed = new Set([
   "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "bricohams-logo.svg", "styles.css", "app.js", "radio-core.js",
   "transports.js", "quansheng-connector.js", "gd77-connector.js", "backup-store.js",
-  "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js"
+  "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js"
 ]);
 function createServer(firmware = new FirmwareService(), providers = new DataService()) {
 return http.createServer(async (request, response) => {
