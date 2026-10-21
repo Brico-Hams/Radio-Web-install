@@ -252,6 +252,20 @@ test("local API returns verified firmware and preserves CSP, origin controls and
     }).on("error", reject);
   });
   assert.equal(foreignHostStatus, 403);
+  const localhostRedirect = await new Promise((resolve, reject) => {
+    http.get(`${base}/opengd77.html`, { headers: { Host: `localhost:${server.address().port}` } }, response => {
+      response.resume();
+      resolve([response.statusCode, response.headers.location]);
+    }).on("error", reject);
+  });
+  assert.deepEqual(localhostRedirect, [307, `${base}/opengd77.html`]);
+  const localhostApiWithOrigin = await new Promise((resolve, reject) => {
+    http.get(`${base}/api/firmware/targets`, { headers: { Host: "localhost", Origin: "http://localhost" } }, response => {
+      response.resume();
+      resolve(response.statusCode);
+    }).on("error", reject);
+  });
+  assert.equal(localhostApiWithOrigin, 403);
   assert.equal((await fetch(`${base}/api/firmware/targets`, { headers: { Origin: "https://evil.test" } })).status, 403);
   assert.equal((await fetch(`${base}/api/firmware/targets`, { method: "HEAD" })).status, 405);
   assert.equal((await fetch(`${base}/api/firmware/targets`, { method: "POST" })).status, 405);
