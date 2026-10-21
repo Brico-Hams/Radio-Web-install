@@ -79,3 +79,19 @@ test("firmware-core is shared: service and browser parse the same release identi
   assert.deepEqual(R.firmwareCore.parseF4Release(fakeRelease(), "UV-K1"), require("../firmware-service.cjs").parseF4Release(fakeRelease(), "UV-K1"));
   assert.throws(() => R.firmwareCore.parseF4Release({ ...fakeRelease(), prerelease: true }, "UV-K1"), { status: 502 });
 });
+
+test("web firmware: OpenGD77 manual file checks name, model and ZIP signature", async () => {
+  const zip = new Uint8Array(2048);
+  zip.set([0x50, 0x4b, 3, 4]);
+  const ok = await R.verifyLocalFirmware(gd77ManualEntry, zip, "OpenGD77.zip");
+  assert.equal(ok.manifest.publisherHashVerified, false);
+  await assert.rejects(R.verifyLocalFirmware(gd77ManualEntry, zip, "random.zip"), /nombre/);
+  await assert.rejects(R.verifyLocalFirmware(gd77ManualEntry, zip, "OpenGD77S.zip"), /nombre/);
+  await assert.rejects(R.verifyLocalFirmware(gd77ManualEntry, new Uint8Array(2048), "OpenGD77.zip"), /ZIP/);
+  await assert.rejects(R.verifyLocalFirmware(gd77ManualEntry, new Uint8Array(4 * 1024 * 1024 + 1), "OpenGD77.zip"), /4 MiB/);
+});
+test("web firmware: every firmware-download access is guarded in web mode", () => {
+  const lines = require("node:fs").readFileSync(require("node:path").join(__dirname, "../firmware-catalog.js"), "utf8").split("\n");
+  const unguarded = lines.filter(line => /\$\("firmware-download"\)/.test(line) && !/if \(!?(web|\$\("firmware-download"\))\)/.test(line) && !line.includes('<button id="firmware-download"'));
+  assert.deepEqual(unguarded, []);
+});

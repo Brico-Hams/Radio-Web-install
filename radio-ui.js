@@ -296,7 +296,7 @@
         $("slot-name").value = edition;
         log(data ? "Imagen oficial preparada para slot; no se ha modificado la radio." : "Modelo cambiado: imagen de slot eliminada de la seleccion.");
       }
-    });
+    }).catch(error => log(`ERROR: catalogo de firmware no disponible: ${error.message}`));
     attach("radio-connect", "Conectar y crear respaldo automatico", async () => {
       permit = null;
       await stored();

@@ -36,8 +36,12 @@
   }
   const MAX_FILE = 4 * 1024 * 1024;
   // Web mode: the user downloads the file at the official source and loads it here; same size/SHA-256 guarantees.
-  async function verifyLocalFirmware(entry, data) {
+  async function verifyLocalFirmware(entry, data, fileName) {
     R.assert(data instanceof Uint8Array && data.length > 0 && data.length <= MAX_FILE, "El archivo debe tener entre 1 B y 4 MiB.");
+    if (fileName !== undefined && entry.format === "zip" && !entry.expectedSHA256) {
+      R.assert(R.firmwareCore.TARGETS[entry.target]?.pattern?.test(fileName), "El nombre del archivo no corresponde al modelo seleccionado.");
+      R.assert(data[0] === 0x50 && data[1] === 0x4b && data[2] === 3 && data[3] === 4, "El archivo no es un ZIP.");
+    }
     R.assert(entry.size == null || data.length === entry.size, "Tamano distinto al publicado. Archivo rechazado.");
     const sha256 = await R.sha256(data);
     if (entry.expectedSHA256) R.assert(sha256 === entry.expectedSHA256, "SHA-256 distinto al publicado por el editor. Archivo rechazado.");
@@ -70,7 +74,7 @@
       <label for="firmware-entry">Firmware / variante</label><select id="firmware-entry" disabled><option value="">Sin catalogo</option></select>
       <p id="firmware-metadata" class="card-note"></p>
       <label class="check"><input id="firmware-confirm" type="checkbox"><span>He comprobado el modelo, la revision y la variante. La descarga no demuestra compatibilidad con mi unidad.</span></label>
-      <div class="operation-buttons">${web ? '<a id="firmware-source" class="button secondary" target="_blank" rel="noopener noreferrer" hidden>Descargar en la fuente oficial ↗</a><label for="firmware-file">Cargar el archivo descargado</label><input id="firmware-file" type="file" disabled>' : '<button id="firmware-download" class="button primary" type="button" disabled>Descargar y verificar</button>'}<button id="firmware-manifest" class="button secondary" type="button" disabled>Guardar manifiesto SHA-256</button>${page === "quansheng" ? '<button id="firmware-use" class="button secondary" type="button" disabled>Preparar imagen para slot (sin escribir)</button>' : ""}</div>`;
+      <div class="operation-buttons">${web ? '<a id="firmware-source" class="button secondary" target="_blank" rel="noopener noreferrer" hidden>Descargar en la fuente oficial ↗</a><label for="firmware-file">Cargar el archivo descargado</label><input id="firmware-file" type="file" accept=".bin,.zip" disabled>' : '<button id="firmware-download" class="button primary" type="button" disabled>Descargar y verificar</button>'}<button id="firmware-manifest" class="button secondary" type="button" disabled>Guardar manifiesto SHA-256</button>${page === "quansheng" ? '<button id="firmware-use" class="button secondary" type="button" disabled>Preparar imagen para slot (sin escribir)</button>' : ""}</div>`;
     document.getElementById("radio-operations").before(panel);
     const $ = id => document.getElementById(id);
     let catalog = null;
@@ -161,6 +165,7 @@
     $("firmware-entry").addEventListener("change", () => {
       loaded = null;
       $("firmware-confirm").checked = false;
+      if ($("firmware-file")) $("firmware-file").value = "";
       const entry = selected();
       const metadata = $("firmware-metadata");
       metadata.replaceChildren();
@@ -185,7 +190,7 @@
       refreshState();
     });
     $("firmware-confirm").addEventListener("change", refreshState);
-    $("firmware-download").addEventListener("click", () => perform("Descargar firmware oficial", async () => {
+    if (!web) $("firmware-download").addEventListener("click", () => perform("Descargar firmware oficial", async () => {
       const entry = selected();
       loaded = null;
       R.assert(entry && $("firmware-confirm").checked, "Confirma modelo y variante.");
@@ -204,11 +209,9 @@
       const data = new Uint8Array(await file.arrayBuffer());
       let checked = entry;
       if (entry.size == null) {
-        R.assert(TARGETS[entry.target].pattern.test(file.name), "El nombre del archivo no corresponde al modelo seleccionado.");
-        R.assert(data[0] === 0x50 && data[1] === 0x4b && data[2] === 3 && data[3] === 4, "El archivo no es un ZIP.");
         checked = { ...entry, name: file.name };
       }
-      loaded = await verifyLocalFirmware(checked, data);
+      loaded = await verifyLocalFirmware(checked, data, file.name);
       refreshState();
       $("firmware-status").textContent = `${checked.name}: verificado. SHA-256 ${loaded.manifest.sha256}. ${loaded.manifest.warning}`;
       log(`Firmware cargado: ${checked.name}; SHA-256 ${loaded.manifest.sha256}. No se ha escrito en la radio.`);
