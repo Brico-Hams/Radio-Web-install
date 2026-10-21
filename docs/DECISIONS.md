@@ -27,7 +27,7 @@ Cada decisión indica el contexto, lo decidido, las alternativas descartadas y s
 
 - **Decisión:** escuchar en `127.0.0.1:8787`, validar `Host`, servir solo los archivos enumerados y enviar una CSP sin `unsafe-inline`.
 - **Motivo:** mitigar DNS rebinding, la lectura de archivos arbitrarios y XSS.
-- **Consecuencia:** `localhost` se rechaza a propósito. Publicar la aplicación en red requeriría un rediseño (HTTPS y autenticación) y no está soportado.
+- **Consecuencia:** `localhost` no se sirve: las navegaciones GET/HEAD se redirigen (307) a `127.0.0.1` para mantener un único origen de IndexedDB; con cabecera `Origin` se rechaza. Publicar la aplicación en red requeriría un rediseño (HTTPS y autenticación) y no está soportado.
 
 ## ADR-005 · Copia automática obligatoria antes de escribir
 

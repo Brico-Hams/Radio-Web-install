@@ -18,7 +18,7 @@ npm ci --ignore-scripts
 npm start
 ```
 
-Abre <http://127.0.0.1:8787>. **No uses `localhost`**: el servidor valida el encabezado `Host` y lo rechaza. Usa siempre el mismo origen para conservar el historial de IndexedDB.
+Abre <http://127.0.0.1:8787>. Si abres `localhost`, el servidor te redirige a `127.0.0.1`: valida el encabezado `Host` y solo sirve ese origen. Usa siempre el mismo origen para conservar el historial de IndexedDB.
 
 `--ignore-scripts` evita que se ejecuten scripts de instalación de terceros. La versión de `satellite.js` está fijada en `package-lock.json`.
 

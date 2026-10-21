@@ -16,6 +16,12 @@ return http.createServer(async (request, response) => {
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("Cache-Control", "no-store");
+  // Send localhost navigations to the single supported origin so IndexedDB backups never split.
+  if (/^localhost(?::\d+)?$/i.test(request.headers.host || "") && !request.headers.origin && ["GET", "HEAD"].includes(request.method)) {
+    response.writeHead(307, { Location: `http://127.0.0.1:${request.socket.localPort}${request.url}` });
+    response.end();
+    return;
+  }
   if (!/^127\.0\.0\.1(?::\d+)?$/.test(request.headers.host || "") ||
     (request.headers.origin && request.headers.origin !== `http://${request.headers.host}`)) {
     response.writeHead(403);

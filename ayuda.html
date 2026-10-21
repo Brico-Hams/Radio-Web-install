@@ -31,7 +31,7 @@
       <ol class="guide-steps">
         <li>Instala <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">Node.js 22 o posterior</a>.</li>
         <li>En la carpeta del proyecto ejecuta <code>npm ci --ignore-scripts</code> y después <code>npm start</code>.</li>
-        <li>Abre <code>http://127.0.0.1:8787</code> en <strong>Chrome, Edge o Brave de escritorio</strong>. Usa exactamente esa dirección: <code>localhost</code> u otra IP se rechazan por seguridad y cambiarían el almacenamiento de las copias.</li>
+        <li>Abre <code>http://127.0.0.1:8787</code> en <strong>Chrome, Edge o Brave de escritorio</strong>. Si escribes <code>localhost</code>, el servidor te redirige a esa dirección para no separar el almacenamiento de las copias; otras IP se rechazan por seguridad.</li>
         <li>Elige tu familia (OpenGD77 o Quansheng), el modelo exacto, marca la confirmación y pulsa <strong>Conectar y respaldar</strong>.</li>
         <li>Espera a que termine la copia automática y exporta el archivo <code>.rwb.json</code>. Sin copia verificada no se habilita ninguna escritura.</li>
       </ol>
@@ -121,7 +121,7 @@
 
     <section id="errores" class="panel help-section" data-help><h2>9. Solución de errores</h2>
       <div class="table-scroll"><table><thead><tr><th>Mensaje en pantalla o síntoma</th><th>Causa probable</th><th>Qué hacer</th></tr></thead><tbody>
-        <tr><td><samp>Solo se permite el origen local.</samp></td><td>Abriste <code>localhost</code>, otra IP o un proxy.</td><td>Usa exactamente <code>http://127.0.0.1:8787</code>.</td></tr>
+        <tr><td><samp>Solo se permite el origen local.</samp></td><td>Abriste otra IP, un proxy o una petición con origen distinto.</td><td>Usa exactamente <code>http://127.0.0.1:8787</code>.</td></tr>
         <tr><td><samp>WebUSB no disponible.</samp> <samp>Web Serial no disponible.</samp></td><td>Navegador no compatible, ventana privada o archivo abierto como <code>file://</code>.</td><td>Chrome/Edge/Brave de escritorio a través del servidor local.</td></tr>
         <tr><td><em>La radio no aparece en el selector del navegador.</em></td><td>Cable solo de carga, radio apagada, controlador ausente u otro programa con el puerto abierto.</td><td>Cierra CPS/CHIRP/UV Studio, revisa los <a href="#drivers">controladores</a> y el cable.</td></tr>
         <tr><td><samp>No se encontro una interfaz CDC OpenGD77 normal.</samp></td><td>Radio en bootloader/DFU o firmware que no es OpenGD77.</td><td>Reinicia la radio en modo normal.</td></tr>
