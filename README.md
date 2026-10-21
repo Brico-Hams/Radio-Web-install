@@ -26,7 +26,23 @@ npm ci --ignore-scripts
 npm start
 ```
 
-Abre <http://127.0.0.1:8787>. Usa siempre el mismo origen para conservar el historial IndexedDB. Chrome o Edge de escritorio recomendados. Abrir los HTML como archivos permite consultar las guias, pero el almacenamiento y las APIs pueden variar por navegador. El catalogo de firmware necesita este servidor Node local; un alojamiento exclusivamente estatico no ofrece esa funcion. El servidor rechaza otros Host/origenes: publicarlo exige adaptar deliberadamente el despliegue HTTPS y sus controles de acceso.
+Abre <http://127.0.0.1:8787>. Usa siempre el mismo origen para conservar el historial IndexedDB. Chrome o Edge de escritorio recomendados. Abrir los HTML como archivos permite consultar las guias, pero el almacenamiento y las APIs pueden variar por navegador. La descarga automatica de firmware necesita este servidor Node local; en un alojamiento estatico se usa el modo web (ver abajo). El servidor rechaza otros Host/origenes: publicarlo exige adaptar deliberadamente el despliegue HTTPS y sus controles de acceso.
+
+## Modo web (GitHub Pages) y modo local
+
+La misma aplicacion se puede usar de dos formas. Al arrancar lee `runtime.json`: si falta o no es valido, funciona en **modo web**; el servidor local lo sirve con `{"mode":"local"}`. La insignia superior muestra «Web · GitHub Pages» o «Local · instalado».
+
+| Funcion | Web (sitio estatico) | Local (`npm start`) |
+| --- | --- | --- |
+| Conexion a la radio, copias, edicion de codeplug | Si | Si |
+| Firmware F4HWN | Catalogo desde `api.github.com`; descargas el archivo en la fuente oficial y lo cargas: se verifica tamano y SHA-256 publicado | Descarga verificada por el servidor |
+| Firmware OpenGD77 | ZIP cargado a mano (nombre y formato ZIP comprobados; el editor no publica hash, SHA-256 solo local) | Descarga por el servidor |
+| Contactos RadioID | Cargas `user.csv` de radioid.net (max. 100 MiB, filtro por pais/zona, max. 5000 mostrados) | Consulta a la API a traves del servidor |
+| Perfil (indicativo + ID DMR) | Opcional, solo en tu navegador; marca «(tú)» | No aplica |
+| RepeaterBook | No disponible (solo version instalada) | Si, con tu token aprobado |
+| Satelites | `data/satellites.json` generado a diario desde SatNOGS | TLE en directo |
+
+Los datos de satelites cubren NORAD 25544, 27607, 43017 y 43678 (SatNOGS DB / Libre Space Foundation, CC BY-SA 4.0); se avisa si tienen mas de 7 dias. Para publicar tu propia copia en GitHub Pages, ver [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Los paquetes instalables y los ajustes locales llegaran proximamente.
 
 ## Estado real del soporte
 

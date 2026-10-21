@@ -31,13 +31,26 @@
         <label class="check"><input id="plan-rb-consent" type="checkbox"><span>Tengo autorizacion para usar estos datos de RepeaterBook en la programacion personal de mi radio.</span></label>
         <div class="operation-buttons"><button id="plan-rb-query" type="button" class="button secondary">Consultar RepeaterBook autorizado</button><button id="plan-rb-status" type="button" class="button secondary">Comprobar configuracion de acceso</button></div>
         <label for="plan-rb-file">O importar una exportacion JSON RepeaterBook obtenida con autorizacion (max. 8 MiB)</label><input id="plan-rb-file" type="file" accept=".json,application/json">
+        <p id="plan-rb-web-notice" role="status" hidden>RepeaterBook solo est&aacute; disponible en la versi&oacute;n instalada (requiere tu clave aprobada). <a id="plan-rb-release" href="#" target="_blank" rel="noopener noreferrer" hidden>Descargar la versi&oacute;n instalada</a></p>
         <p id="plan-rb-info" role="status">Sin consultas. El token individual se configura solo en el entorno del servidor.</p>
         <div class="operation-buttons"><button id="plan-rb-select" type="button" class="button secondary">Seleccionar visibles</button><button id="plan-rb-stage" type="button" class="button primary">Anadir seleccion a canales preparados</button></div>
         <div class="table-scroll"><table><thead><tr><th>Elegir</th><th>Nombre</th><th>RX / TX MHz</th><th>Zona</th><th>Modo / tono</th></tr></thead><tbody id="plan-rb-results"></tbody></table></div>
       </div>
       <div id="plan-contacts" hidden>
-        <p>RadioID: busqueda paginada por pais y estado. La zona/ciudad adicional y el texto se filtran en la pagina actual. Selecciona paginas conscientemente; no se descarga toda la base automaticamente. Se anaden contactos privados, no grupos de conversacion.</p>
+        <p id="plan-contacts-help">RadioID: busqueda paginada por pais y estado. La zona/ciudad adicional y el texto se filtran en la pagina actual. Selecciona paginas conscientemente; no se descarga toda la base automaticamente. Se anaden contactos privados, no grupos de conversacion.</p>
         <div class="operation-buttons"><button id="plan-contacts-query" type="button" class="button secondary">Buscar contactos RadioID</button><button id="plan-contacts-prev" type="button" class="button secondary">Pagina anterior</button><button id="plan-contacts-next" type="button" class="button secondary">Pagina siguiente</button><button id="plan-contacts-select" type="button" class="button secondary">Seleccionar pagina visible</button></div>
+        <div id="plan-web-contacts" hidden>
+          <p><a href="https://radioid.net/static/user.csv" target="_blank" rel="noopener noreferrer">Descargar user.csv en radioid.net &#8599;</a></p>
+          <label for="plan-contacts-csv">Cargar user.csv (max. 100 MiB; se filtra por el pais y la zona de arriba, max. 5000 contactos)</label><input id="plan-contacts-csv" type="file" accept=".csv,text/csv">
+          <fieldset><legend>Mi perfil (solo en este navegador, nunca se env&iacute;a)</legend>
+            <div class="planning-filters">
+              <div><label for="plan-profile-call">Indicativo</label><input id="plan-profile-call" maxlength="10" autocomplete="off"></div>
+              <div><label for="plan-profile-id">ID DMR (7 digitos)</label><input id="plan-profile-id" inputmode="numeric" maxlength="7" autocomplete="off"></div>
+            </div>
+            <div class="operation-buttons"><button id="plan-profile-save" type="button" class="button secondary">Guardar perfil</button><button id="plan-profile-clear" type="button" class="button secondary">Borrar perfil</button></div>
+            <p id="plan-profile-status" role="status"></p>
+          </fieldset>
+        </div>
         <p id="plan-contacts-info" role="status">Sin consulta.</p>
         <div class="table-scroll"><table><thead><tr><th>Elegir</th><th>ID</th><th>Indicativo</th><th>Nombre</th><th>Pais / zona</th></tr></thead><tbody id="plan-contact-results"></tbody></table></div>
         <div class="operation-buttons"><button id="plan-contacts-add" type="button" class="button primary">Anadir seleccion al codeplug local abierto</button><button id="plan-contacts-save" type="button" class="button secondary">Guardar seleccion de contactos JSON</button><button id="plan-contacts-clear" type="button" class="button secondary">Vaciar seleccion de contactos</button></div>
@@ -78,6 +91,7 @@
     document.getElementById("radio-operations").before(panel);
     const $ = id => document.getElementById(id);
     let busy = false;
+    let web = false;
     let currentTab = "repeaters";
     let repeaters = [];
     let rbRejected = [];
@@ -90,9 +104,27 @@
     const chosenContacts = new Map();
     const staged = new Map();
     function notify(message) { $("plan-status").textContent = message; log(message); }
+    let satFile = null;
+    function loadSatFile() {
+      satFile = satFile || fetch("data/satellites.json", { credentials: "omit", cache: "no-cache", signal: AbortSignal.timeout(30000) })
+        .then(async response => {
+          R.assert(response.ok, `Lista diaria de satelites no disponible (HTTP ${response.status}).`);
+          return R.validateSatellitesFile(await response.json());
+        });
+      satFile.catch(() => { satFile = null; }); // allow a retry after a failure
+      return satFile;
+    }
+    async function webSatellite(endpoint, params) {
+      R.assert(params.provider === undefined || params.provider === "satnogs", "En la web solo esta disponible SatNOGS.");
+      const file = await loadSatFile();
+      const sat = R.pickSatellite(file, params.norad);
+      return endpoint === "satellite" ? { ...sat, fromFile: true }
+        : { norad: sat.norad, source: sat.source, attribution: file.attribution, fetchedAt: sat.fetchedAt, entries: sat.transmitters };
+    }
     async function request(endpoint, params = {}) {
+      if ((endpoint === "satellite" || endpoint === "transmitters") && (await R.runtime).mode === "web") return webSatellite(endpoint, params);
       R.assert(root.location.protocol !== "file:", "Los proveedores requieren npm start y el servidor local.");
-      const response = await fetch(`/api/data/${endpoint}?${new URLSearchParams(params)}`, {
+      const response = await fetch(`api/data/${endpoint}?${new URLSearchParams(params)}`, {
         credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(40000)
       });
       R.assert((response.headers.get("content-type") || "").includes("application/json"), "API de proveedores no disponible. Reinicia npm start.");
@@ -140,6 +172,7 @@
     }
     function renderContacts() {
       $("plan-contact-results").replaceChildren();
+      const profile = web && R.profile ? R.profile.get() : null;
       for (const entry of visibleContacts()) {
         const row = document.createElement("tr");
         const checkbox = document.createElement("input");
@@ -151,10 +184,13 @@
           $("plan-contacts-count").textContent = `${chosenContacts.size} contactos seleccionados (se conservan entre paginas).`;
         });
         cell(row, "").append(checkbox);
-        for (const value of [entry.id, entry.callsign, entry.name, `${entry.country} / ${entry.region} / ${entry.city}`]) cell(row, value);
+        const mine = web && profile && String(entry.id) === profile.dmrId;
+        for (const value of [entry.id, mine ? `${entry.callsign} (t\u00fa)` : entry.callsign, entry.name, `${entry.country} / ${entry.region} / ${entry.city}`]) cell(row, value);
         $("plan-contact-results").append(row);
       }
-      $("plan-contacts-info").textContent = contactResult
+      $("plan-contacts-info").textContent = contactResult?.csv
+        ? `user.csv: ${contactResult.total} contactos coinciden${contactResult.truncated ? ` (se muestran los primeros ${contactResult.entries.length})` : ""}; ${visibleContacts().length} visibles.`
+        : contactResult
         ? `RadioID: pagina ${contactResult.page}/${contactResult.pages}; ${contactResult.total} contactos en la busqueda; ${visibleContacts().length} visibles. ${contactResult.fetchedAt}`
         : "Sin consulta. Los filtros modificados requieren una nueva busqueda.";
       $("plan-contacts-count").textContent = `${chosenContacts.size} contactos seleccionados (se conservan entre paginas).`;
@@ -302,7 +338,8 @@
       const result = await request("satellite", { norad: $("plan-norad").value, provider: $("plan-orbit-source").value });
       const { epoch } = R.validateTLE(result);
       orbital = result;
-      $("plan-tle-info").textContent = `${result.name} / NORAD ${result.norad}. Epoca UTC ${new Date(epoch).toISOString()}. ${result.source}. SatNOGS puede distribuir TLE de terceros; no son una garantia de disponibilidad operativa.`;
+      const warning = result.fromFile ? R.satelliteAgeWarning({ fetchedAt: result.fetchedAt }) : null;
+      $("plan-tle-info").textContent = `${warning ? `${warning} ` : ""}${result.name} / NORAD ${result.norad}. Epoca UTC ${new Date(epoch).toISOString()}. ${result.source}${result.stale ? " (dato del ultimo despliegue correcto)" : ""}. SatNOGS puede distribuir TLE de terceros; no son una garantia de disponibilidad operativa.`;
     }
     attach("plan-tle-load", "Actualizar TLE oficial", loadOrbit);
     $("plan-sat-preset").addEventListener("change", () => {
@@ -386,6 +423,54 @@
       download(`sat-${orbital.norad}.source.json`, JSON.stringify(orbital, null, 2), "application/json");
       notify("TLE y procedencia/licencia solicitados para descarga. Comprueba que el navegador haya guardado ambos archivos; no se ha instalado en la radio.");
     });
+    function webMode() {
+      web = true;
+      for (const id of ["plan-rb-query", "plan-rb-status", "plan-rb-file", "plan-rb-consent"]) $(id).disabled = true;
+      $("plan-rb-web-notice").hidden = false;
+      $("plan-orbit-source").value = "satnogs"; $("plan-orbit-source").disabled = true;
+      const repository = typeof BRAND !== "undefined" ? BRAND.repository : "";
+      if (repository) { $("plan-rb-release").href = `${repository}/releases/latest`; $("plan-rb-release").hidden = false; }
+      // Quansheng has no DMR contacts, and its page does not load radioid-csv.js.
+      if (page === "quansheng" || !R.profile) return;
+      for (const id of ["plan-contacts-query", "plan-contacts-prev", "plan-contacts-next"]) $(id).hidden = true;
+      $("plan-web-contacts").hidden = false;
+      $("plan-contacts-help").hidden = true;
+      const profile = R.profile.get();
+      if (profile) { $("plan-profile-call").value = profile.callsign; $("plan-profile-id").value = profile.dmrId; }
+      $("plan-contacts-csv").addEventListener("change", () => perform("Cargar user.csv de RadioID", async () => {
+        const file = $("plan-contacts-csv").files[0];
+        R.assert(file && file.size > 0 && file.size <= 100 * 1024 * 1024, "Archivo CSV: 1 byte a 100 MiB.");
+        const text = await file.text();
+        let country = $("plan-country").value;
+        const mine = R.profile.get();
+        if (!country.trim() && mine) {
+          const at = text.indexOf(`\n${mine.dmrId},`);
+          const end = at < 0 ? -1 : text.indexOf("\n", at + 1);
+          const found = at < 0 ? "" : text.slice(at + 1, end < 0 ? undefined : end).trim().split(",").pop().replace(/"/g, "");
+          if (found) { country = found; $("plan-country").value = found; }
+        }
+        const result = R.parseRadioIdCSV(text, { country, region: $("plan-region").value });
+        contactResult = { ...result, csv: true };
+        renderContacts();
+        notify(`user.csv: ${result.total} contactos coinciden${result.truncated ? "; se muestran los primeros 5000, afina la zona" : ""}.`);
+      }).catch(() => {}).finally(() => { $("plan-contacts-csv").value = ""; }));
+      $("plan-profile-save").addEventListener("click", () => {
+        try {
+          const saved = R.profile.set({ callsign: $("plan-profile-call").value, dmrId: $("plan-profile-id").value });
+          $("plan-profile-call").value = saved.callsign;
+          $("plan-profile-status").textContent = "Perfil guardado solo en este navegador.";
+          renderContacts();
+        } catch (error) { $("plan-profile-status").textContent = `ERROR: ${error.message}`; }
+      });
+      $("plan-profile-clear").addEventListener("click", () => {
+        R.profile.clear();
+        $("plan-profile-call").value = ""; $("plan-profile-id").value = "";
+        $("plan-profile-status").textContent = "Perfil borrado.";
+        renderContacts();
+      });
+    }
+    R.runtime.then(runtime => { if (runtime.mode === "web") webMode(); })
+      .catch(error => { $("plan-status").textContent = `ERROR: ${error.message}`; });
     model.addEventListener("change", () => {
       staged.clear(); chosenRepeaters.clear(); chosenContacts.clear();
       renderStaged(); renderContacts(); refreshTemplates();

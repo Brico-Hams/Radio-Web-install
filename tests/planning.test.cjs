@@ -2,11 +2,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { once } = require("node:events");
 const S = require("satellite.js");
-const R = require("..\\radio-core.js");
-require("..\\codeplug-editor.js");
-require("..\\planning-core.js");
-const { DataService } = require("..\\data-service.cjs");
-const { createServer } = require("..\\server.cjs");
+const R = require("../radio-core.js");
+require("../codeplug-editor.js");
+require("../planning-core.js");
+const { DataService } = require("../data-service.cjs");
+const { createServer } = require("../server.cjs");
 const orbital = {
   name: "ISS", norad: 25544, source: "https://db.satnogs.org/api/tle/?norad_cat_id=25544",
   tle1: "1 25544U 98067A   26291.78980200  .00007771  00000-0  14938-3 0  9994",

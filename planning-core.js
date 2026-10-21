@@ -79,6 +79,31 @@
     R.assert(now - epoch <= 7 * 86400000 && epoch - now <= 86400000, "TLE caducado (>7 dias) o con epoca futura (>24 h). Actualiza los elementos.");
     return { record, epoch };
   }
+  function validateSatellitesFile(json) {
+    R.assert(json && json.format === "radio-workspace-satellites" && json.version === 1 && Array.isArray(json.satellites) &&
+      typeof json.attribution === "string" && typeof json.license === "string" && Number.isFinite(Date.parse(json.fetchedAt)),
+    "Archivo de satelites: formato o version no reconocidos.");
+    return json;
+  }
+  function validateSatelliteEntry(entry, now = Date.now()) {
+    R.assert(entry && Number.isInteger(entry.norad) && entry.norad > 0 && entry.norad < 100000 && typeof entry.name === "string" &&
+      typeof entry.source === "string" && typeof entry.stale === "boolean" && Array.isArray(entry.transmitters) &&
+      Number.isFinite(Date.parse(entry.fetchedAt)), "registro de satelite no valido.");
+    return validateTLE(entry, now);
+  }
+  // Client-facing lookup: only the requested satellite must be valid, so one bad entry does not hide the others.
+  function pickSatellite(file, norad) {
+    validateSatellitesFile(file);
+    const sat = file.satellites.find(item => item && item.norad === Number(norad));
+    R.assert(sat, "Satelite no incluido en la lista diaria. Usa la version instalada para otros NORAD.");
+    try { validateSatelliteEntry(sat, Date.parse(sat.fetchedAt)); } // valid when fetched; use-time age is re-checked by the caller
+    catch (error) { throw new Error(`Datos del satelite ${norad} no validos en la lista diaria: ${error.message}`); }
+    return sat;
+  }
+  function satelliteAgeWarning(file, now = Date.now()) {
+    const age = now - Date.parse(file.fetchedAt);
+    return age > 7 * 86400000 ? `Aviso: la lista de satelites tiene ${Math.floor(age / 86400000)} dias (mas de 7 dias); los elementos pueden no ser fiables.` : null;
+  }
   function predictPasses(orbital, observer, options = {}) {
     const start = options.start ?? Date.now();
     const hours = options.hours ?? 24;
@@ -141,6 +166,6 @@
       attribution: transmitter.attribution || "SatNOGS DB / Libre Space Foundation (CC BY-SA 4.0).",
       license: transmitter.license || "https://creativecommons.org/licenses/by-sa/4.0/" };
   }
-  Object.assign(R, { asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, predictPasses, satelliteChannel, csvCell });
+  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, csvCell });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

@@ -2,6 +2,21 @@
 
 Bricohams Radio Workspace es una aplicación web **local**. Un pequeño servidor Node.js sirve una lista cerrada de archivos estáticos y unas pocas API de solo lectura. Toda la comunicación con la radio ocurre en el navegador mediante WebUSB o Web Serial.
 
+## Modos de ejecución
+
+Al arrancar, `runtime-mode.js` pide `runtime.json` (ruta relativa, sin caché). Solo `{"mode":"local"}` activa el modo local; si falta, da 404, no es JSON o la página se abre como `file://`, la aplicación arranca en **modo web** sin errores. `server.cjs` lo sirve como `{"mode":"local"}` y `scripts/build-pages.cjs` genera `{"mode":"web"}` en `dist/`. La insignia superior indica «Web · GitHub Pages» o «Local · instalado».
+
+| Aspecto | Web (Pages) | Local |
+| --- | --- | --- |
+| Servidor | Ninguno, solo estáticos | `server.cjs` en `127.0.0.1:8787` |
+| Firmware F4HWN | Catálogo desde `api.github.com`; el usuario carga el archivo y se verifica tamaño y SHA-256 publicado | Descarga verificada por el servidor |
+| Firmware OpenGD77 | Carga manual del ZIP (nombre y firma ZIP; sin hash del editor) | Descarga por el servidor |
+| RadioID | Carga de `user.csv` (100 MiB, filtrado, 5 000 filas mostradas) y perfil opcional en `localStorage` | API vía servidor |
+| RepeaterBook | No disponible | Token aprobado, solo en el servidor |
+| Satélites | `data/satellites.json` diario (`scripts/fetch-satellites.cjs`) | TLE en directo |
+
+Las rutas del cliente son siempre relativas. La CSP de cada HTML se declara en `<meta>`, y como un `<meta>` no admite `frame-ancestors`, `app.js` se detiene si la página está enmarcada. El origen de la web es propio (ver ADR-013).
+
 ## Vista de componentes
 
 ```mermaid
@@ -48,6 +63,9 @@ flowchart LR
 | `firmware-catalog.js` | Navegador / Node | Modelos y fuentes de firmware permitidas. |
 | `server.cjs` | Node | Servidor HTTP en `127.0.0.1:8787`, lista de archivos permitidos, cabeceras de seguridad y enrutado de `/api/*`. |
 | `firmware-service.cjs` | Node | Consulta a GitHub Releases y opengd77.com con redirecciones controladas, límites de tamaño y caché. |
+| `runtime-mode.js` | Navegador | Detecta el modo (`runtime.json`; web si falta). |
+| `radioid-csv.js` | Navegador / Node | Lectura filtrada de `user.csv` y perfil local opcional. |
+| `scripts/build-pages.cjs`, `scripts/fetch-satellites.cjs` | Node | Generan `dist/` y `data/satellites.json` para Pages. |
 | `data-service.cjs` | Node | Proxy de solo lectura hacia RadioID, RepeaterBook (credenciales solo en el servidor), SatNOGS y CelesTrak. |
 
 ## Flujo de conexión y copia automática
@@ -86,5 +104,6 @@ Antes de cualquier escritura se relee la copia y se compara con los hashes del p
 
 - **OpenGD77:** no existe aquí un protocolo verificado para extraer el firmware completo del MCU. La copia se marca como **parcial** y la escritura en la radio queda bloqueada.
 - **Quansheng:** la copia física completa de la Flash requiere F4HWN Labs v6.1+. No hay instalación nativa de canales ni SAT en la radio.
-- **RepeaterBook:** requiere un token aprobado por RepeaterBook.
+- **RepeaterBook:** requiere un token aprobado por RepeaterBook y solo está en la versión local.
+- **Web:** los datos de satélites pueden tener hasta un día de antigüedad (se avisa a partir de 7 días) y firmware/RadioID se cargan a mano.
 - **Hardware:** no hay validación con radios físicas en el entorno de desarrollo.

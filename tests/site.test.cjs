@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { once } = require("node:events");
-const { createServer } = require("..\\server.cjs");
+const { createServer } = require("../server.cjs");
 
 const root = path.join(__dirname, "..");
 const read = name => fs.readFileSync(path.join(root, name), "utf8");
@@ -145,4 +145,19 @@ test("no se publican correos ni secretos en paginas y documentacion", () => {
     assert.doesNotMatch(text, /[A-Za-z0-9._%+-]+@(?!example\.invalid)[A-Za-z0-9-]+\.[A-Za-z]{2,}/, name);
     assert.doesNotMatch(text, /rbuapp_[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{20,}|github_pat_/, name);
   }
+});
+
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'";
+test("every page carries the exact meta CSP before any script", () => {
+  for (const page of pages) {
+    const html = read(page);
+    const meta = html.indexOf(`<meta http-equiv="Content-Security-Policy" content="${CSP}">`);
+    assert.ok(meta > 0 && meta < html.indexOf("<script"), page);
+  }
+});
+
+test("radio pages expose topbar connect proxy and numbered steps", () => {
+  const app = read("app.js");
+  for (const id of ["topbar-status", "topbar-connect", "mode-badge"]) assert.match(app, new RegExp(`id="${id}"`));
+  assert.match(app, /RADIOAFICIÓN · HAZLO TÚ MISMO|RADIOAFICION · HAZLO TU MISMO/);
 });

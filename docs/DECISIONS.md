@@ -70,3 +70,10 @@ Cada decisión indica el contexto, lo decidido, las alternativas descartadas y s
 
 - **Decisión:** nombre «Bricohams Radio Workspace», logotipo SVG original y la paleta existente. Ver [BRANDING.md](BRANDING.md).
 - **Consecuencia:** no se usan logotipos de OpenGD77, Quansheng ni F4HWN, y se declara la no afiliación.
+
+## ADR-013 · Web estática en origen dedicado
+
+- **Contexto:** se quiere un uso sin instalar nada, pero IndexedDB y `localStorage` se aíslan por origen y las copias de la radio son datos sensibles.
+- **Decisión:** publicar un sitio estático en GitHub Pages, en la raíz de una cuenta u organización dedicada (`https://<org>.github.io/`), no en una subruta de `bricohams.github.io` (donde vive Bricohams Studio). La aplicación detecta el modo con `runtime.json` (web si falta), usa solo rutas relativas y declara la CSP en `<meta>`. Los satélites se generan a diario con un workflow y las funciones que requieren servidor o credenciales (RepeaterBook, descarga de firmware, API de RadioID) se sustituyen por carga manual de archivos o quedan solo en la versión local.
+- **Alternativas descartadas:** subruta de `bricohams.github.io` (comparte origen y almacenamiento con otros proyectos); un proxy público (haría pasar datos y credenciales por un tercero); replicar RadioID (volumen y licencia).
+- **Consecuencias:** la web tiene menos funciones que la local, y el autor debe crear la cuenta u organización y configurar Pages. Los paquetes instalables llegarán próximamente.

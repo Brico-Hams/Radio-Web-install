@@ -3,11 +3,12 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { FirmwareService, TARGETS } = require("./firmware-service.cjs");
 const { DataService } = require("./data-service.cjs");
-const allowed = new Set([
+const ALLOWED_FILES = Object.freeze([
   "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "bricohams-logo.svg", "styles.css", "app.js", "radio-core.js",
   "transports.js", "quansheng-connector.js", "gd77-connector.js", "backup-store.js",
-  "codeplug-editor.js", "radio-ui.js", "firmware-catalog.js", "planning-core.js", "planning-ui.js", "satellite.min.js"
+  "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js"
 ]);
+const allowed = new Set(ALLOWED_FILES);
 function createServer(firmware = new FirmwareService(), providers = new DataService()) {
 return http.createServer(async (request, response) => {
   response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
@@ -95,6 +96,12 @@ return http.createServer(async (request, response) => {
     }
     return;
   }
+  if (url.pathname === "/runtime.json") {
+    const body = Buffer.from(JSON.stringify({ mode: "local" }));
+    response.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Content-Length": body.length });
+    response.end(request.method === "HEAD" ? undefined : body);
+    return;
+  }
   const name = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
   if (!allowed.has(name)) {
     response.writeHead(404);
@@ -124,4 +131,4 @@ server.on("error", error => {
 });
 server.listen(8787, "127.0.0.1", () => console.log("Bricohams Radio Workspace: http://127.0.0.1:8787 (solo equipo local)"));
 }
-module.exports = { createServer };
+module.exports = { createServer, ALLOWED_FILES };
