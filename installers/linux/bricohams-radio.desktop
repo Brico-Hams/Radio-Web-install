@@ -3,6 +3,6 @@ Type=Application
 Name=Bricohams Radio Workspace
 Comment=Herramientas locales para radios compatibles
 Exec=/usr/bin/bricohams-radio
-Icon=/opt/bricohams-radio-workspace/app/bricohams-logo.svg
+Icon=/opt/bricohams-radio-workspace/app/bricohams-logo.png
 Terminal=false
 Categories=Utility;HamRadio;

@@ -1,4 +1,4 @@
-<img src="bricohams-logo.svg" alt="Bricohams" width="64" height="64">
+<img src="bricohams-logo.png" alt="Bricohams" width="240" height="89">
 
 # Bricohams Radio Workspace
 
@@ -46,14 +46,14 @@ Los datos de satelites cubren NORAD 25544, 27607, 43017 y 43678 (SatNOGS DB / Li
 
 ### Instaladores locales
 
-Los instaladores se publican en [GitHub Releases](https://github.com/anatolbricoham/Radio-Web-install/releases):
+Descarga la [ultima Release](https://github.com/anatolbricoham/Radio-Web-install/releases/latest) y su archivo `SHA256SUMS`. Elige un instalador de **Assets**, no los ZIP/tar.gz automaticos de «Source code». [Guia completa de instalacion local](docs/DEPLOYMENT.md#instaladores-locales).
 
-- Debian, Ubuntu y Raspberry Pi OS: paquete `.deb` para amd64, arm64 y armhf (Node.js incluido; Raspberry Pi OS armhf requiere CPU ARMv7).
-- Arch Linux: paquete fuente con `PKGBUILD` (requiere `nodejs` del sistema); extrae el archivo y ejecuta `makepkg -si`.
-- FreeBSD 14 amd64: archivo `.tar.gz` con instalador (requiere Node.js 22; ejecuta `su -c './install.sh'`).
-- Windows 11 x64: `.zip` autocontenido con Node.js. Extrae el ZIP y ejecuta `powershell -ExecutionPolicy Bypass -File .\Install.ps1`; crea un acceso en Inicio.
+- Windows 11 x64: extrae todo `*-windows-x64.zip`, abre PowerShell en esa carpeta y ejecuta `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1`. Node.js incluido, sin administrador; inicia la app desde el menu Inicio.
+- Debian, Ubuntu y Raspberry Pi OS: consulta `dpkg --print-architecture`, descarga **solo** el `.deb` de tu arquitectura (amd64, arm64 o armhf) y ejecuta `sudo apt install ./nombre-del-paquete.deb`. Node.js incluido; armhf requiere CPU ARMv7 o posterior. Abre la app desde el menu o ejecuta `bricohams-radio`.
+- Arch Linux: instala `base-devel` y `nodejs` con pacman, extrae `*-arch.tar.gz`, revisa `PKGBUILD` y ejecuta `makepkg -si` como usuario normal. Inicia con `bricohams-radio`.
+- FreeBSD 14 amd64: extrae `*-freebsd-amd64.tar.gz`, entra en la carpeta y ejecuta `su -c './install.sh'` (instala Node 22 con `pkg` si falta). Inicia con `bricohams-radio` como usuario normal.
 
-En todos los sistemas la aplicacion queda local, escucha solo en `127.0.0.1:8787` y abre el navegador predeterminado. Consulta [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) para los pasos completos y limitaciones de acceso USB en FreeBSD.
+Comprueba el SHA-256 antes de instalar. Los lanzadores abren el navegador predeterminado y mantienen el servidor en segundo plano solo en `127.0.0.1:8787`. Si tu navegador predeterminado no es compatible, abre esa direccion en Chrome, Edge o Brave. Cerrar la pestana no detiene el servidor; no hay arranque automatico tras reiniciar el equipo. Usa siempre el mismo navegador, perfil y origen para conservar tus copias. Los controladores USB se configuran aparte: [Ayuda](ayuda.html#drivers). En FreeBSD el soporte WebUSB/Web Serial de Chromium no esta garantizado.
 
 ## Estado real del soporte
 

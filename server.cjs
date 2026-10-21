@@ -4,7 +4,7 @@ const path = require("node:path");
 const { FirmwareService, TARGETS } = require("./firmware-service.cjs");
 const { DataService } = require("./data-service.cjs");
 const ALLOWED_FILES = Object.freeze([
-  "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "bricohams-logo.svg", "styles.css", "app.js", "radio-core.js",
+  "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "bricohams-logo.png", "styles.css", "app.js", "radio-core.js",
   "transports.js", "quansheng-connector.js", "gd77-connector.js", "backup-store.js",
   "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js"
 ]);
@@ -119,8 +119,8 @@ return http.createServer(async (request, response) => {
       ? path.join(path.dirname(require.resolve("satellite.js/package.json")), "dist", "satellite.min.js")
       : path.join(__dirname, name);
     const body = await fs.readFile(filename);
-    const type = name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : name.endsWith(".svg") ? "image/svg+xml" : "text/javascript";
-    response.writeHead(200, { "Content-Type": `${type}; charset=utf-8`, "Content-Length": body.length });
+    const type = name.endsWith(".png") ? "image/png" : `${name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript"}; charset=utf-8`;
+    response.writeHead(200, { "Content-Type": type, "Content-Length": body.length });
     response.end(request.method === "HEAD" ? undefined : body);
   } catch (error) {
     console.error(`No se pudo servir ${name}: ${error.message}`);

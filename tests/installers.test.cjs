@@ -40,3 +40,19 @@ test("la documentación da instrucciones por sistema y explica la generación po
   }
   assert.match(deployment, /crea y sube una etiqueta `v\*`/);
 });
+
+test("las guias locales cubren integridad, arquitectura, parada y persistencia", () => {
+  const deployment = read("docs/DEPLOYMENT.md");
+  for (const marker of [
+    "Get-FileHash", "SHA256SUMS", "dpkg --print-architecture", "ARMv6",
+    "makepkg -si", "su -c './install.sh'", "ExecutionPolicy Bypass",
+    "Get-NetTCPConnection", "Stop-Process -Id <PID>", "sudo apt remove",
+    "sudo pacman -R", "Desinstalar no elimina las copias del navegador"
+  ]) assert.ok(deployment.includes(marker), marker);
+  const help = read("ayuda.html");
+  for (const platform of ["Windows 11", "Debian", "Ubuntu", "Raspberry Pi", "Arch Linux", "FreeBSD"]) {
+    assert.ok(help.includes(platform), platform);
+  }
+  assert.match(help, /releases\/latest/);
+  assert.doesNotMatch(help, /próximamente en paquetes/);
+});

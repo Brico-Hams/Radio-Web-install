@@ -7,7 +7,7 @@
   <meta name="description" content="Ayuda, preguntas frecuentes, controladores y soporte de Bricohams Radio Workspace.">
   <title>Ayuda y soporte | Bricohams Radio Workspace</title>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <link rel="icon" href="bricohams-logo.svg" type="image/svg+xml">
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
   <script src="radio-core.js" defer></script>
   <script src="runtime-mode.js" defer></script>
@@ -28,6 +28,17 @@
       <li><a href="#faq">Preguntas frecuentes</a></li><li><a href="#soporte">Soporte</a></li><li><a href="#creditos">Créditos y licencia</a></li></ol></nav>
 
     <section id="inicio" class="panel help-section" data-help><h2>1. Inicio rápido</h2>
+      <h3>Instalar la versión local</h3>
+      <p>Descarga el archivo de tu sistema y <code>SHA256SUMS</code> desde <a href="https://github.com/anatolbricoham/Radio-Web-install/releases/latest" target="_blank" rel="noopener noreferrer">la última Release</a>. No elijas los archivos automáticos «Source code» salvo que quieras instalar desde el código fuente. Comprueba el SHA-256 antes de ejecutar el instalador.</p>
+      <ul>
+        <li><strong>Windows 11 x64:</strong> extrae todo el ZIP <code>*-windows-x64.zip</code>, abre PowerShell en la carpeta extraída y ejecuta <code>powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1</code>. No requiere administrador ni instalar Node por separado. Inicia <strong>Bricohams Radio Workspace</strong> desde el menú Inicio.</li>
+        <li><strong>Debian, Ubuntu y Raspberry Pi OS:</strong> consulta <code>dpkg --print-architecture</code>, descarga solo el <code>.deb</code> correspondiente (amd64, arm64 o armhf) y ejecuta <code>sudo apt install ./nombre-del-paquete.deb</code>. Node viene incluido. Inicia la aplicación desde el menú o con <code>bricohams-radio</code>. ARM de 32 bits requiere ARMv7 o posterior.</li>
+        <li><strong>Arch Linux:</strong> extrae <code>*-arch.tar.gz</code>, instala <code>base-devel</code> y <code>nodejs</code> con pacman, revisa el <code>PKGBUILD</code> y ejecuta <code>makepkg -si</code> como usuario normal. Después inicia <code>bricohams-radio</code>.</li>
+        <li><strong>FreeBSD 14 amd64:</strong> extrae <code>*-freebsd-amd64.tar.gz</code>, entra en esa carpeta y ejecuta <code>su -c './install.sh'</code>. Instala Node 22 con <code>pkg</code> si hace falta. Ejecuta <code>bricohams-radio</code> como usuario normal. El acceso WebUSB/Web Serial depende del soporte de Chromium y no está garantizado.</li>
+      </ul>
+      <p>Los lanzadores abren <code>http://127.0.0.1:8787</code> y dejan el servidor en segundo plano, sin arranque automático al iniciar sesión. Cerrar la pestaña no detiene el servidor. Usa siempre el mismo navegador, perfil y dirección para conservar tus copias. Los controladores USB se configuran aparte: consulta <a href="#drivers">Controladores</a>.</p>
+      <p>La guía completa incluye verificación SHA-256, actualización, parada y desinstalación en <a href="https://github.com/anatolbricoham/Radio-Web-install/blob/main/docs/DEPLOYMENT.md#instaladores-locales" target="_blank" rel="noopener noreferrer">Instalación local y despliegue</a>.</p>
+      <h3>Alternativa: ejecutar desde el código fuente</h3>
       <ol class="guide-steps">
         <li>Instala <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">Node.js 22 o posterior</a>.</li>
         <li>En la carpeta del proyecto ejecuta <code>npm ci --ignore-scripts</code> y después <code>npm start</code>.</li>
@@ -44,7 +55,7 @@
         <li><strong>Firmware</strong>: descargas el archivo en la fuente oficial (el botón te lleva allí) y lo cargas con <em>Cargar el archivo descargado</em>. F4HWN se verifica por tamaño y SHA-256 publicado; OpenGD77 se comprueba por nombre y formato ZIP, y su SHA-256 se calcula solo localmente porque el editor no publica hash.</li>
         <li><strong>Contactos RadioID</strong>: descarga <code>user.csv</code> desde radioid.net y cárgalo en la aplicación (máx. 100 MiB). Se filtra por el país y la zona elegidos y se muestran como máximo 5000 contactos; afina la zona si hay más. Un archivo que no sea de RadioID se rechaza.</li>
         <li><strong>Perfil opcional</strong>: indicativo e ID DMR de 7 dígitos, guardados solo en este navegador; tu entrada aparece marcada «(tú)». Puedes borrarlo cuando quieras.</li>
-        <li><strong>RepeaterBook</strong>: no está disponible; solo en la versión instalada, próximamente en paquetes.</li>
+        <li><strong>RepeaterBook</strong>: no está disponible en modo web; requiere la versión local y un token aprobado configurado en el entorno del servidor.</li>
         <li><strong>Satélites</strong>: vienen de una lista diaria generada desde SatNOGS (ISS 25544, SO-50 27607, AO-91 43017, PO-101 43678). Si tiene más de 7 días verás un aviso. Datos: SatNOGS DB / Libre Space Foundation, <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>.</li>
       </ul>
       <p>La aplicación tiene dos partes que se ejecutan en tu ordenador (modo local):</p>

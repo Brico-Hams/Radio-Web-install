@@ -175,7 +175,7 @@ Comportamiento común:
 - Barra superior fija con el estado de conexión, el modelo identificado y el botón «Conectar», visible en todas las pantallas.
 - Tarjetas oscuras con acento verde azulado, etiqueta «RADIOAFICIÓN · HAZLO TÚ MISMO» y registro de actividad al pie.
 - Indicador de modo: «Web · GitHub Pages» o «Local · instalado».
-- Se reutilizan `bricohams-logo.svg` y `docs/BRANDING.md`, que hay que actualizar con la paleta de Studio. Se mantienen la accesibilidad actual (enlace «Saltar al contenido», roles `status`/`log`, foco visible) y el tema oscuro.
+- Se reutiliza el logotipo original de Studio, `bricohams-logo.png`, con procedencia y proporciones documentadas en `docs/BRANDING.md`. Sustituye al SVG provisional que no correspondía a la marca. Se mantienen la accesibilidad actual (enlace «Saltar al contenido», roles `status`/`log`, foco visible) y el tema oscuro.
 
 ## Decisiones tomadas por Claude (revisables)
 

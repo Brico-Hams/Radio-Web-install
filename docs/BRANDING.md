@@ -4,22 +4,25 @@
 
 - Producto: **Bricohams Radio Workspace**.
 - Forma corta: **Bricohams** (barra superior y pie).
-- Barra lateral: `BRICOHAMS` con el subtítulo `RADIO WORKSPACE`.
+- Barra lateral: logotipo original de Bricohams con el subtítulo `RADIO WORKSPACE`, sin duplicar el nombre que ya incluye la imagen.
 
 ## Logotipo
 
-`bricohams-logo.svg` es un vectorial de 64×64: un cuadrado redondeado oscuro con contorno degradado menta→azul, una «B» y dos arcos de onda de radio. Se usa como favicon y, a 40 px, en la barra lateral.
+[bricohams-logo.png](../bricohams-logo.png) es el **PNG original de 1200 × 446** usado por [Bricohams Studio](https://bricohams.github.io/Bricohams-Studio/). Se obtuvo de [assets/logo-bricohams.png, commit 767edd6](https://github.com/bricohams/Bricohams-Studio/blob/767edd66028d10f859346190d0c8044bd8e5a2b2/assets/logo-bricohams.png). Su SHA-256 es `0e1bec16953129cfc9c946d24e56347ddfb38878137ba43c7e84729acf811c87`, idéntico al PNG incrustado en la página de Studio, comprobado el 2026-10-21.
+
+Sustituye al anterior icono SVG de una «B» con ondas, que no era el logotipo de Bricohams. No se redibuja ni se inventa una variante de la marca.
 
 Reglas de uso:
 
-- No deformarlo, recolorearlo ni añadirle sombras.
-- Margen libre mínimo: 25 % del ancho.
-- Tamaño mínimo: 16 px como favicon y 32 px en la interfaz.
+- No deformarlo, recortarlo, recolorearlo ni añadirle sombras. Mantener su fondo original y la proporción 1200:446, con `height: auto`.
+- Barra lateral: imagen completa a 178 px de ancho (limitada al espacio disponible); en móvil, 144 px y subtítulo al lado. No ocultar la marca en pantallas pequeñas.
+- README: 240 px de ancho con altura proporcional. Favicons y acceso del escritorio Linux usan el mismo PNG; no hay una variante cuadrada aprobada.
+- Dejar al menos 10 px entre la imagen y el subtítulo en escritorio, y 14 px en móvil. Estas medidas son decisiones de maquetación del proyecto, no una guía oficial adicional de marca.
 - No combinarlo con logotipos de OpenGD77, Quansheng, F4HWN ni grid.radio de forma que sugiera afiliación.
 
 ## Paleta
 
-Estilo compartido con Bricohams Studio: fondo oscuro, tarjetas, acento verde azulado.
+Interfaz inspirada en Bricohams Studio: fondo oscuro, tarjetas y acento verde azulado. La siguiente paleta es la de Radio Workspace, no una afirmación de coincidencia exacta con los colores de Studio ni una recoloración del logotipo.
 
 | Token | Color | Uso | Contraste (AA) |
 | --- | --- | --- | --- |

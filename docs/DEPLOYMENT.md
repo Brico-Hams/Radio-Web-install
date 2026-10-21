@@ -4,8 +4,8 @@ Hay dos despliegues soportados: **local** (servidor Node en el mismo equipo al q
 
 ## Requisitos
 
-- Node.js 22 o superior.
-- Git (opcional, para clonar y actualizar).
+- Node.js 22 o superior **solo para ejecutar desde el código fuente, Arch y FreeBSD**. Los paquetes `.deb` y el ZIP de Windows incluyen Node.
+- Git solo para clonar y actualizar una instalación desde código fuente.
 - Chrome, Edge o Brave de escritorio, por WebUSB/Web Serial. Firefox y Safari no son compatibles.
 - Los controladores USB que pida la radio: ver [Ayuda › Controladores](../ayuda.html#drivers).
 
@@ -33,11 +33,11 @@ Ambos comandos deben terminar sin fallos. Después, abre la página de ayuda y c
 
 ## Instaladores locales
 
-Descarga el instalador de la versión deseada desde [GitHub Releases](https://github.com/anatolbricoham/Radio-Web-install/releases). El workflow los genera al publicar una etiqueta `v*`; incluye sumas SHA-256 en `SHA256SUMS`.
+Descarga el archivo de tu sistema y `SHA256SUMS` desde los **Assets** de la [última Release](https://github.com/anatolbricoham/Radio-Web-install/releases/latest). Ya hay paquetes publicados desde `v0.3.0`. Los enlaces automáticos «Source code (zip)» y «Source code (tar.gz)» no son instaladores.
 
 | Sistema | Archivo | Instalación |
 | --- | --- | --- |
-| Debian 12/13, Ubuntu 22.04/24.04, Raspberry Pi OS arm64/armhf | `.deb` para amd64, arm64 o armhf | `sudo apt install ./bricohams-radio-workspace-*.deb` |
+| Debian 12/13, Ubuntu 22.04/24.04, Raspberry Pi OS arm64/armhf | `.deb` para amd64, arm64 o armhf | `sudo apt install ./nombre-del-paquete.deb` (elige solo tu arquitectura) |
 | Arch Linux | `*-arch.tar.gz` | Extrae el archivo y ejecuta `makepkg -si` (requiere `base-devel` y `nodejs`). |
 | FreeBSD 14 amd64 | `*-freebsd-amd64.tar.gz` | Extrae el archivo y ejecuta `su -c './install.sh'` (instala `node22` mediante `pkg` si hace falta). |
 | Windows 11 x64 | `*-windows-x64.zip` | Extrae el ZIP y ejecuta `powershell -ExecutionPolicy Bypass -File .\Install.ps1`; añade un acceso al menú Inicio. |
@@ -45,6 +45,93 @@ Descarga el instalador de la versión deseada desde [GitHub Releases](https://gi
 Los `.deb` y el ZIP de Windows incluyen Node.js 22. Arch usa el paquete `nodejs` de su distribución. FreeBSD requiere `pkg` y el paquete `node22`. Raspberry Pi OS de 32 bits necesita un procesador ARMv7 o posterior. El instalador no configura arranque automático ni eleva permisos para iniciar la aplicación.
 
 Tras instalar, inicia **Bricohams Radio Workspace** desde el menú de aplicaciones/Inicio o ejecuta `bricohams-radio` en Arch y FreeBSD. El servidor queda ligado a `127.0.0.1:8787`; no lo expongas a la red. En FreeBSD, Chromium puede no ofrecer WebUSB/Web Serial, por lo que el acceso a radios es de mejor esfuerzo.
+
+### Verificar la descarga
+
+Comprueba el hash antes de ejecutar el instalador. En PowerShell:
+
+```powershell
+Get-FileHash .\bricohams-radio-workspace-v0.3.0-windows-x64.zip -Algorithm SHA256
+Get-Content .\SHA256SUMS
+```
+
+Compara el hash completo con la línea del mismo nombre en `SHA256SUMS` (no importa mayúsculas/minúsculas). En Linux:
+
+```sh
+sha256sum bricohams-radio-workspace-v0.3.0-amd64.deb
+cat SHA256SUMS
+```
+
+En FreeBSD usa `sha256 nombre-del-archivo`. Sustituye el nombre/version por el archivo realmente descargado. No instales si el hash difiere. Las sumas comprueban integridad, no una firma de editor: los paquetes no tienen firma de código.
+
+### Windows 11 x64
+
+1. Descarga `*-windows-x64.zip` y **extrae todo su contenido**; no ejecutes el script dentro del ZIP.
+2. Abre PowerShell en la carpeta que contiene `Install.ps1`, `Start.ps1`, `app` y `runtime`.
+3. Ejecuta, como usuario normal:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
+   ```
+
+4. Se instala en `%LOCALAPPDATA%\Programs\Bricohams Radio Workspace` y crea **Bricohams Radio Workspace** en el menú Inicio. No necesita UAC ni instalar Node aparte.
+5. Abre ese acceso. Si el navegador predeterminado no es Chrome, Edge o Brave, abre manualmente <http://127.0.0.1:8787> en uno de ellos.
+
+`ExecutionPolicy Bypass` afecta únicamente al proceso que ejecuta el comando; no cambies permanentemente la política de PowerShell. Una política corporativa puede impedir scripts incluso con esta opción: consulta al administrador. El instalador actual es un ZIP con scripts, no un `.exe`/MSI firmado, y no instala controladores WinUSB.
+
+### Debian, Ubuntu y Raspberry Pi OS
+
+Consulta la arquitectura del **sistema operativo** (no solo la del procesador):
+
+```sh
+dpkg --print-architecture
+```
+
+Descarga únicamente el `.deb` cuyo sufijo coincida: `amd64`, `arm64` o `armhf`. Raspberry Pi OS de 64 bits usa `arm64`; el de 32 bits usa `armhf` y necesita ARMv7 o posterior. No se soportan Raspberry Pi 1 ni Zero/Zero W originales con ARMv6.
+
+Desde la carpeta de descargas, para un equipo amd64 y la versión inicial:
+
+```sh
+sudo apt install ./bricohams-radio-workspace-v0.3.0-amd64.deb
+bricohams-radio
+```
+
+Cambia el nombre por tu archivo. Node queda incluido en `/opt/bricohams-radio-workspace`; el lanzador también aparece en el menú de aplicaciones. No ejecutes `bricohams-radio` con `sudo`: las copias y permisos del navegador deben pertenecer a tu usuario.
+
+### Arch Linux
+
+```sh
+sudo pacman -S --needed base-devel nodejs
+mkdir bricohams-installer
+tar -xzf bricohams-radio-workspace-v0.3.0-arch.tar.gz -C bricohams-installer
+cd bricohams-installer
+less PKGBUILD
+makepkg -si
+bricohams-radio
+```
+
+Ejecuta `makepkg` como usuario normal. El archivo `*-arch.tar.gz` contiene la receta; `*-arch-source.tar.gz` contiene la aplicación que esa receta descarga de la misma Release y verifica por SHA-256. No es un paquete binario listo para `pacman -U`, ni un paquete publicado en AUR. Requiere Internet durante la construcción y Node.js 22 o superior.
+
+### FreeBSD 14 amd64
+
+```sh
+mkdir bricohams-installer
+tar -xzf bricohams-radio-workspace-v0.3.0-freebsd-amd64.tar.gz -C bricohams-installer
+cd bricohams-installer
+su -c './install.sh'
+bricohams-radio
+```
+
+La instalación necesita root y repositorios `pkg` disponibles para instalar `node22` si falta. El programa se instala en `/usr/local/libexec/bricohams-radio-workspace`, con lanzador `/usr/local/bin/bricohams-radio`. Vuelve a tu usuario normal para arrancarlo. No es un paquete nativo `.pkg` ni un port oficial. El servidor local y la edición de archivos no garantizan conexión a la radio: depende de que Chromium ofrezca las APIs y permisos USB/serie necesarios.
+
+### Primer arranque, permisos y parada
+
+- Abre siempre <http://127.0.0.1:8787> en el mismo navegador y perfil: las copias pertenecen a ese origen, no a la carpeta de instalación. La insignia debe mostrar **Local · instalado**.
+- Los lanzadores arrancan el servidor en segundo plano; cerrar la pestaña no lo detiene. No se configura inicio automático al iniciar sesión. Desde código fuente, `npm start` queda en la terminal y se detiene con `Ctrl+C`.
+- Los controladores y permisos USB no los configura el instalador. Consulta [Ayuda › Controladores](../ayuda.html#drivers): WinUSB cuando corresponda en Windows, reglas udev y grupo `dialout`/`uucp` según la distribución en Linux. Reinicia sesión después de cambiar grupos y no ejecutes el navegador como root.
+- Si el puerto está ocupado, identifica el proceso antes de detenerlo. En Windows: `Get-NetTCPConnection -LocalPort 8787 -State Listen | Select-Object OwningProcess`, después `Get-Process -Id <PID>` y, solo si corresponde al servidor Bricohams, `Stop-Process -Id <PID>`. En Linux usa `ss -lptn 'sport = :8787'`; en FreeBSD, `sockstat -4 -l`. Confirma el comando y usuario del PID y detén solo ese proceso con `kill <PID>`.
+- Los registros de Linux/FreeBSD están en `${XDG_STATE_HOME:-$HOME/.local/state}/bricohams-radio/server.log`. En Windows, si no arranca, ejecuta desde PowerShell `& "$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\runtime\node.exe" "$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\app\server.cjs"` para ver el error.
+- No hace falta conexión a Internet para servir la interfaz y editar archivos locales. Las consultas a proveedores y las descargas de firmware sí la requieren.
 
 ## Configuración
 
@@ -56,7 +143,7 @@ Tras instalar, inicia **Bricohams Radio Workspace** desde el menú de aplicacion
 
 Solo el servidor lee estas variables. No las guardes en el repositorio. El puerto `8787` y la interfaz `127.0.0.1` están fijados en `server.cjs` por seguridad.
 
-Ejemplo en PowerShell, válido solo para la sesión actual:
+Ejemplo en PowerShell para código fuente, válido solo para la sesión actual:
 
 ```powershell
 $env:RB_USER_TOKEN = "<token aprobado>"
@@ -65,7 +152,13 @@ $env:RB_APPROVED = "yes"
 npm start
 ```
 
+Si usas el ZIP instalado, configura esas variables en PowerShell y ejecuta `& "$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\Start.ps1"` desde esa misma sesión. Detén antes cualquier servidor ya iniciado: un proceso existente conserva su entorno anterior. No hay todavía una pantalla de ajustes que guarde estas claves; no las pegues en el navegador ni en archivos públicos.
+
 ## Actualización
+
+**Instaladores:** exporta primero las copias `.rwb.json`, detén el servidor y descarga/verifica la nueva Release. En Windows vuelve a ejecutar el instalador extraído; en Debian/Ubuntu/Raspberry Pi usa `sudo apt install ./nuevo-paquete.deb`; en Arch reconstruye la nueva receta con `makepkg -si`; en FreeBSD ejecuta el nuevo `install.sh`. Inicia de nuevo el lanzador y recarga el navegador. Las releases ya publicadas no cambian cuando se actualiza `main`; las correcciones requieren otra versión.
+
+**Código fuente:**
 
 ```powershell
 git pull
@@ -76,7 +169,9 @@ npm start
 
 Exporta tus copias antes de actualizar el navegador o de borrar los datos del sitio.
 
-## Ejecución en segundo plano (opcional)
+## Arranque automático (opcional, desde código fuente)
+
+Los instaladores ya arrancan en segundo plano al abrir el lanzador, pero no al iniciar sesión. Estos ejemplos son para una copia del repositorio con Node instalado; adapta las rutas y no los combines con otro servidor en el mismo puerto.
 
 En Windows, como tarea programada al iniciar sesión:
 
@@ -146,4 +241,12 @@ Los instaladores disponibles se publican en [GitHub Releases](https://github.com
 
 ## Desinstalación
 
-Detén el servidor y borra la carpeta del repositorio. Si además quieres eliminar el historial, **exporta antes las copias** y después borra los datos del sitio `http://127.0.0.1:8787` en el navegador.
+Primero exporta tus copias y detén solo el proceso del servidor identificado como se explica arriba.
+
+- **Windows:** elimina la carpeta `%LOCALAPPDATA%\Programs\Bricohams Radio Workspace` y su acceso del menú Inicio (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Bricohams Radio Workspace.lnk`). El instalador ZIP no registra un desinstalador en «Aplicaciones instaladas».
+- **Debian/Ubuntu/Raspberry Pi OS:** `sudo apt remove bricohams-radio-workspace`.
+- **Arch:** `sudo pacman -R bricohams-radio-workspace`.
+- **FreeBSD:** el instalador no registra un paquete de aplicación en `pkg`. Elimina únicamente `/usr/local/libexec/bricohams-radio-workspace` y `/usr/local/bin/bricohams-radio` como root. No desinstales Node si otras aplicaciones lo usan.
+- **Código fuente:** elimina tu copia del repositorio y, si lo configuraste, su tarea programada o servicio de usuario.
+
+Desinstalar no elimina las copias del navegador. Si también quieres borrarlas, **exporta antes los archivos** y después elimina los datos del sitio `http://127.0.0.1:8787` en el navegador. Los registros de usuario de Linux/FreeBSD se pueden borrar aparte, tras revisarlos.

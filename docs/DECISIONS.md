@@ -68,7 +68,7 @@ Cada decisión indica el contexto, lo decidido, las alternativas descartadas y s
 
 ## ADR-012 · Marca Bricohams con recursos propios
 
-- **Decisión:** nombre «Bricohams Radio Workspace», logotipo SVG original y la paleta existente. Ver [BRANDING.md](BRANDING.md).
+- **Decisión:** nombre «Bricohams Radio Workspace» y PNG original de Bricohams Studio, sin redibujar ni recolorear, manteniendo su proporción. La interfaz conserva su propia paleta oscura. El 2026-10-21 se sustituyó el icono SVG de una «B», que no correspondía a la identidad de la marca. Procedencia y hash en [BRANDING.md](BRANDING.md).
 - **Consecuencia:** no se usan logotipos de OpenGD77, Quansheng ni F4HWN, y se declara la no afiliación.
 
 ## ADR-013 · Web estática en origen dedicado

@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { once } = require("node:events");
+const { createHash } = require("node:crypto");
 const { createServer } = require("../server.cjs");
 
 const root = path.join(__dirname, "..");
@@ -26,13 +27,14 @@ async function withServer(run) {
 
 test("el servidor sirve la ayuda y el logotipo con tipo y cabeceras seguras", async () => {
   await withServer(async base => {
-    for (const [name, type] of [["ayuda.html", "text/html"], ["bricohams-logo.svg", "image/svg+xml"]]) {
+    for (const [name, type] of [["ayuda.html", "text/html; charset=utf-8"], ["bricohams-logo.png", "image/png"]]) {
       const response = await fetch(`${base}/${name}`);
       assert.equal(response.status, 200, name);
-      assert.equal(response.headers.get("content-type"), `${type}; charset=utf-8`);
+      assert.equal(response.headers.get("content-type"), type);
+      assert.equal(Number(response.headers.get("content-length")), fs.statSync(path.join(root, name)).size);
       assert.match(response.headers.get("content-security-policy"), /script-src 'self'; style-src 'self'/);
       assert.equal(response.headers.get("x-content-type-options"), "nosniff");
-      assert.equal(await response.text(), read(name));
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), fs.readFileSync(path.join(root, name)));
     }
     for (const hidden of ["LICENSE", "docs/DECISIONS.md", "README.md", "package.json", "tests/site.test.cjs"]) {
       assert.equal((await fetch(`${base}/${hidden}`)).status, 404, hidden);
@@ -44,7 +46,7 @@ test("todas las paginas llevan marca, favicon y ningun script ni estilo en linea
   for (const name of pages) {
     const html = read(name);
     assert.match(html, /<title>[^<]*Bricohams Radio Workspace<\/title>/, name);
-    assert.match(html, /<link rel="icon" href="bricohams-logo.svg" type="image\/svg\+xml">/, name);
+    assert.match(html, /<link rel="icon" href="bricohams-logo\.png" type="image\/png">/, name);
     assert.doesNotMatch(html, /<script(?![^>]*\ssrc=)[^>]*>/i, name);
     assert.doesNotMatch(html, /\sstyle=|<style|\son[a-z]+=/i, name);
     assert.match(html, /<script src="app.js"( defer)?><\/script>/, name);
@@ -124,11 +126,18 @@ test("la documentacion existe, enlaza archivos reales y reconoce las fuentes", (
   }
 });
 
-test("el logotipo es SVG autonomo sin scripts ni recursos externos", () => {
-  const svg = read("bricohams-logo.svg");
-  assert.match(svg, /^<svg[^>]+xmlns="http:\/\/www.w3.org\/2000\/svg"/);
-  assert.match(svg, /<title[^>]*>Bricohams<\/title>/);
-  assert.doesNotMatch(svg, /<script|href="http|xlink:href="http|on[a-z]+=/i);
+test("el logotipo conserva exactamente el PNG original de Bricohams Studio", () => {
+  const png = fs.readFileSync(path.join(root, "bricohams-logo.png"));
+  assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  assert.equal(png.readUInt32BE(16), 1200);
+  assert.equal(png.readUInt32BE(20), 446);
+  assert.equal(createHash("sha256").update(png).digest("hex"),
+    "0e1bec16953129cfc9c946d24e56347ddfb38878137ba43c7e84729acf811c87");
+  assert.match(read("app.js"), /class="brand-logo" src="bricohams-logo\.png" alt="Bricohams" width="1200" height="446"/);
+  assert.match(read("styles.css"), /\.brand-logo\{[^}]*max-width:100%;height:auto/);
+  assert.match(read("scripts/build-installers.sh"), /bricohams-logo\.png/);
+  assert.match(read("installers/linux/bricohams-radio.desktop"), /Icon=.*bricohams-logo\.png/);
+  assert.equal(fs.existsSync(path.join(root, "bricohams-logo.svg")), false);
 });
 
 test("los textos en espanol no contienen caracteres corruptos por codificacion", () => {
