@@ -117,9 +117,8 @@
     async function webSatellite(endpoint, params) {
       R.assert(params.provider === undefined || params.provider === "satnogs", "En la web solo esta disponible SatNOGS.");
       const file = await loadSatFile();
-      const sat = file.satellites.find(item => item.norad === Number(params.norad));
-      R.assert(sat, "Satelite no incluido en la lista diaria. Usa la version instalada para otros NORAD.");
-      return endpoint === "satellite" ? { ...sat, fileFetchedAt: file.fetchedAt }
+      const sat = R.pickSatellite(file, params.norad);
+      return endpoint === "satellite" ? { ...sat, fromFile: true }
         : { norad: sat.norad, source: sat.source, attribution: file.attribution, fetchedAt: sat.fetchedAt, entries: sat.transmitters };
     }
     async function request(endpoint, params = {}) {
@@ -339,7 +338,7 @@
       const result = await request("satellite", { norad: $("plan-norad").value, provider: $("plan-orbit-source").value });
       const { epoch } = R.validateTLE(result);
       orbital = result;
-      const warning = result.fileFetchedAt ? R.satelliteAgeWarning({ fetchedAt: result.fileFetchedAt }) : null;
+      const warning = result.fromFile ? R.satelliteAgeWarning({ fetchedAt: result.fetchedAt }) : null;
       $("plan-tle-info").textContent = `${warning ? `${warning} ` : ""}${result.name} / NORAD ${result.norad}. Epoca UTC ${new Date(epoch).toISOString()}. ${result.source}${result.stale ? " (dato del ultimo despliegue correcto)" : ""}. SatNOGS puede distribuir TLE de terceros; no son una garantia de disponibilidad operativa.`;
     }
     attach("plan-tle-load", "Actualizar TLE oficial", loadOrbit);

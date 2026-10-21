@@ -81,18 +81,24 @@
   }
   function validateSatellitesFile(json) {
     R.assert(json && json.format === "radio-workspace-satellites" && json.version === 1 && Array.isArray(json.satellites) &&
-      Number.isFinite(Date.parse(json.fetchedAt)), "Archivo de satelites: formato o version no reconocidos.");
-    const seen = new Set();
-    for (const sat of json.satellites) {
-      R.assert(sat && Number.isInteger(sat.norad) && sat.norad > 0 && sat.norad < 100000 && !seen.has(sat.norad) &&
-        typeof sat.name === "string" && Array.isArray(sat.transmitters) && Number.isFinite(Date.parse(sat.fetchedAt)),
-      "Archivo de satelites: registro no valido.");
-      seen.add(sat.norad);
-      R.assert([sat.tle1, sat.tle2].every((line, index) => typeof line === "string" && line.startsWith(`${index + 1} ${String(sat.norad).padStart(5, "0")}`)),
-        `NORAD ${sat.norad}: el TLE no coincide.`);
-      validateTLE(sat, Date.parse(sat.fetchedAt)); // valid when fetched; use-time age is re-checked by the caller
-    }
+      typeof json.attribution === "string" && typeof json.license === "string" && Number.isFinite(Date.parse(json.fetchedAt)),
+    "Archivo de satelites: formato o version no reconocidos.");
     return json;
+  }
+  function validateSatelliteEntry(entry, now = Date.now()) {
+    R.assert(entry && Number.isInteger(entry.norad) && entry.norad > 0 && entry.norad < 100000 && typeof entry.name === "string" &&
+      typeof entry.source === "string" && typeof entry.stale === "boolean" && Array.isArray(entry.transmitters) &&
+      Number.isFinite(Date.parse(entry.fetchedAt)), "registro de satelite no valido.");
+    return validateTLE(entry, now);
+  }
+  // Client-facing lookup: only the requested satellite must be valid, so one bad entry does not hide the others.
+  function pickSatellite(file, norad) {
+    validateSatellitesFile(file);
+    const sat = file.satellites.find(item => item && item.norad === Number(norad));
+    R.assert(sat, "Satelite no incluido en la lista diaria. Usa la version instalada para otros NORAD.");
+    try { validateSatelliteEntry(sat, Date.parse(sat.fetchedAt)); } // valid when fetched; use-time age is re-checked by the caller
+    catch (error) { throw new Error(`Datos del satelite ${norad} no validos en la lista diaria: ${error.message}`); }
+    return sat;
   }
   function satelliteAgeWarning(file, now = Date.now()) {
     const age = now - Date.parse(file.fetchedAt);
@@ -160,6 +166,6 @@
       attribution: transmitter.attribution || "SatNOGS DB / Libre Space Foundation (CC BY-SA 4.0).",
       license: transmitter.license || "https://creativecommons.org/licenses/by-sa/4.0/" };
   }
-  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, validateSatellitesFile, satelliteAgeWarning, predictPasses, satelliteChannel, csvCell });
+  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, csvCell });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

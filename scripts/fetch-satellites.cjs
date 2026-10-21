@@ -18,13 +18,19 @@ async function buildSatellites({ dataService, previous, now = Date.now(), norads
   for (const norad of list) {
     try {
       const sat = await dataService.satellite({ norad, provider: "satnogs" });
-      R.validateTLE(sat, now);
       const tx = await dataService.transmitters({ norad });
-      satellites.push({ norad, name: sat.name, tle1: sat.tle1, tle2: sat.tle2, source: sat.source, fetchedAt, stale: false, transmitters: tx.entries });
+      R.assert(sat.norad === norad && tx.norad === norad, "El proveedor devolvio otro NORAD.");
+      const entry = { norad, name: sat.name, tle1: sat.tle1, tle2: sat.tle2, source: sat.source, fetchedAt, stale: false, transmitters: tx.entries };
+      R.validateSatelliteEntry(entry, now);
+      satellites.push(entry);
     } catch (error) {
-      const kept = old && old.satellites.find(item => item.norad === norad);
+      let kept = null;
+      try {
+        const candidate = old && old.satellites.find(item => item && item.norad === norad);
+        if (candidate) { R.validateSatelliteEntry(candidate, now); kept = { ...candidate, stale: true }; }
+      } catch (keptError) { console.warn(`NORAD ${norad}: dato previo descartado: ${keptError.message}`); }
       console.warn(`NORAD ${norad}: ${error.message}${kept ? " (se conserva el dato previo)" : ""}`);
-      if (kept) satellites.push({ ...kept, stale: true });
+      if (kept) satellites.push(kept);
     }
   }
   if (!satellites.length) throw new Error("Ningun satelite valido: ni SatNOGS ni el archivo previo.");

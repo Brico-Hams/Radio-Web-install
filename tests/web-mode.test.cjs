@@ -180,8 +180,30 @@ test("satellites file validation and age warning", async () => {
   const validFile = await buildSatellites({ dataService: fakeDataService({ ok: [25544] }), now: satNow });
   assert.throws(() => R.validateSatellitesFile({ format: "x" }), /formato/i);
   assert.throws(() => R.validateSatellitesFile({ ...validFile, version: 2 }), /formato/i);
-  const bad = structuredClone(validFile); bad.satellites[0].tle1 = bad.satellites[0].tle1.replace("25544", "99999");
-  assert.throws(() => R.validateSatellitesFile(bad), /NORAD/);
+  const entry = validFile.satellites[0];
+  assert.throws(() => R.validateSatelliteEntry({ ...entry, tle1: entry.tle1.replace("25544", "99999") }, satNow), /TLE/);
+  const [other1, other2] = tleFor(99999);
+  assert.throws(() => R.validateSatelliteEntry({ ...entry, tle1: other1, tle2: other2 }, satNow), /NORAD/);
+  assert.throws(() => R.validateSatelliteEntry({ ...entry, stale: "no" }, satNow), /registro/);
   assert.equal(R.satelliteAgeWarning(validFile, Date.parse(validFile.fetchedAt) + 6 * 864e5), null);
   assert.match(R.satelliteAgeWarning(validFile, Date.parse(validFile.fetchedAt) + 8 * 864e5), /7 dias|7 días/);
+});
+test("satellites: expired previous entries are dropped, one bad entry does not hide the rest", async () => {
+  const all = [25544, 27607, 43017, 43678];
+  const previous = await buildSatellites({ dataService: fakeDataService({ ok: all }), now: satNow });
+  const later = satNow + 8 * 864e5; // previous TLE epochs are now older than 7 days
+  await assert.rejects(buildSatellites({ dataService: fakeDataService({}), previous, now: later }), /satelite/i);
+  const mixed = structuredClone(previous);
+  mixed.satellites[1].tle1 = "garbage";
+  const file = await buildSatellites({ dataService: fakeDataService({ ok: [25544] }), previous: mixed, now: satNow });
+  assert.deepEqual(file.satellites.map(s => s.norad).sort(), [25544, 43017, 43678]);
+  // client path
+  const web = structuredClone(previous);
+  web.satellites[1].tle1 = "garbage";
+  assert.equal(R.pickSatellite(web, "25544").norad, 25544);
+  assert.equal(R.pickSatellite(web, "43017").norad, 43017);
+  assert.throws(() => R.pickSatellite(web, "27607"), /Datos del satelite 27607 no validos/);
+  assert.throws(() => R.pickSatellite(web, "12345"), /no incluido/);
+  assert.throws(() => R.pickSatellite({ format: "other", version: 1, satellites: [] }, "25544"), /formato/i);
+  assert.throws(() => R.pickSatellite("<html>", "25544"), /formato/i);
 });
