@@ -104,7 +104,26 @@
     const chosenContacts = new Map();
     const staged = new Map();
     function notify(message) { $("plan-status").textContent = message; log(message); }
+    let satFile = null;
+    function loadSatFile() {
+      satFile = satFile || fetch("data/satellites.json", { credentials: "omit", cache: "no-cache", signal: AbortSignal.timeout(30000) })
+        .then(async response => {
+          R.assert(response.ok, `Lista diaria de satelites no disponible (HTTP ${response.status}).`);
+          return R.validateSatellitesFile(await response.json());
+        });
+      satFile.catch(() => { satFile = null; }); // allow a retry after a failure
+      return satFile;
+    }
+    async function webSatellite(endpoint, params) {
+      R.assert(params.provider === undefined || params.provider === "satnogs", "En la web solo esta disponible SatNOGS.");
+      const file = await loadSatFile();
+      const sat = file.satellites.find(item => item.norad === Number(params.norad));
+      R.assert(sat, "Satelite no incluido en la lista diaria. Usa la version instalada para otros NORAD.");
+      return endpoint === "satellite" ? { ...sat, fileFetchedAt: file.fetchedAt }
+        : { norad: sat.norad, source: sat.source, attribution: file.attribution, fetchedAt: sat.fetchedAt, entries: sat.transmitters };
+    }
     async function request(endpoint, params = {}) {
+      if ((endpoint === "satellite" || endpoint === "transmitters") && (await R.runtime).mode === "web") return webSatellite(endpoint, params);
       R.assert(root.location.protocol !== "file:", "Los proveedores requieren npm start y el servidor local.");
       const response = await fetch(`/api/data/${endpoint}?${new URLSearchParams(params)}`, {
         credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(40000)
@@ -320,7 +339,8 @@
       const result = await request("satellite", { norad: $("plan-norad").value, provider: $("plan-orbit-source").value });
       const { epoch } = R.validateTLE(result);
       orbital = result;
-      $("plan-tle-info").textContent = `${result.name} / NORAD ${result.norad}. Epoca UTC ${new Date(epoch).toISOString()}. ${result.source}. SatNOGS puede distribuir TLE de terceros; no son una garantia de disponibilidad operativa.`;
+      const warning = result.fileFetchedAt ? R.satelliteAgeWarning({ fetchedAt: result.fileFetchedAt }) : null;
+      $("plan-tle-info").textContent = `${warning ? `${warning} ` : ""}${result.name} / NORAD ${result.norad}. Epoca UTC ${new Date(epoch).toISOString()}. ${result.source}${result.stale ? " (dato del ultimo despliegue correcto)" : ""}. SatNOGS puede distribuir TLE de terceros; no son una garantia de disponibilidad operativa.`;
     }
     attach("plan-tle-load", "Actualizar TLE oficial", loadOrbit);
     $("plan-sat-preset").addEventListener("change", () => {
@@ -410,6 +430,7 @@
       $("plan-web-contacts").hidden = false;
       for (const id of ["plan-rb-query", "plan-rb-status", "plan-rb-file", "plan-rb-consent"]) $(id).disabled = true;
       $("plan-rb-web-notice").hidden = false;
+      $("plan-orbit-source").value = "satnogs"; $("plan-orbit-source").disabled = true;
       const repository = typeof BRAND !== "undefined" ? BRAND.repository : "";
       if (repository) { $("plan-rb-release").href = `${repository}/releases/latest`; $("plan-rb-release").hidden = false; }
       const profile = R.profile.get();

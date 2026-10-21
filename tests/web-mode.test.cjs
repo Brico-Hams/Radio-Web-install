@@ -133,3 +133,55 @@ test("profile validates callsign and 7-digit DMR id, and tolerates missing stora
     assert.equal(R.profile.get(), null);
   } finally { delete globalThis.localStorage; }
 });
+
+// Satellites (Task 5)
+require("../planning-core.js");
+const { buildSatellites } = require("../scripts/fetch-satellites.cjs");
+const issTle = [
+  "1 25544U 98067A   26291.78980200  .00007771  00000-0  14938-3 0  9994",
+  "2 25544  51.6325  48.4339 0006764 280.4294  79.5932 15.48929442590914"
+];
+// Same orbit with another NORAD and a recomputed checksum: valid for the validator, not a real satellite.
+function tleFor(norad) {
+  return issTle.map(line => {
+    const body = line.slice(0, 2) + String(norad).padStart(5, "0") + line.slice(7, 68);
+    let sum = 0;
+    for (const char of body) sum += /\d/.test(char) ? Number(char) : char === "-" ? 1 : 0;
+    return body + (sum % 10);
+  });
+}
+function fakeDataService({ ok = [], fail = [] }) {
+  return {
+    async satellite({ norad }) {
+      if (!ok.includes(norad)) throw new Error("offline");
+      const [tle1, tle2] = tleFor(norad);
+      return { norad, name: `SAT-${norad}`, tle1, tle2, source: `https://db.satnogs.org/api/tle/?norad_cat_id=${norad}` };
+    },
+    async transmitters({ norad }) {
+      if (!ok.includes(norad)) throw new Error("offline");
+      return { norad, entries: [{ id: `tx-${norad}`, name: "FM", mode: "FM", downlink: 145800000 }] };
+    }
+  };
+}
+const satNow = Date.parse("2026-10-21T05:00:00Z");
+test("satellites: builds file, falls back per satellite to previous, fails when nothing valid", async () => {
+  const all = [25544, 27607, 43017, 43678];
+  const previous = await buildSatellites({ dataService: fakeDataService({ ok: all }), now: satNow });
+  const file = await buildSatellites({ dataService: fakeDataService({ ok: [25544] }), previous, now: satNow });
+  assert.equal(file.satellites.length, 4);
+  assert.equal(file.satellites.find(s => s.norad === 25544).stale, false);
+  assert.equal(file.satellites.find(s => s.norad === 27607).stale, true);
+  assert.equal(R.validateSatellitesFile(file).satellites.length, 4);
+  await assert.rejects(buildSatellites({ dataService: fakeDataService({}), previous: null, now: satNow }), /satelite/i);
+  const corrupt = { ...previous, format: "other" };
+  await assert.rejects(buildSatellites({ dataService: fakeDataService({}), previous: corrupt, now: satNow }), /satelite/i);
+});
+test("satellites file validation and age warning", async () => {
+  const validFile = await buildSatellites({ dataService: fakeDataService({ ok: [25544] }), now: satNow });
+  assert.throws(() => R.validateSatellitesFile({ format: "x" }), /formato/i);
+  assert.throws(() => R.validateSatellitesFile({ ...validFile, version: 2 }), /formato/i);
+  const bad = structuredClone(validFile); bad.satellites[0].tle1 = bad.satellites[0].tle1.replace("25544", "99999");
+  assert.throws(() => R.validateSatellitesFile(bad), /NORAD/);
+  assert.equal(R.satelliteAgeWarning(validFile, Date.parse(validFile.fetchedAt) + 6 * 864e5), null);
+  assert.match(R.satelliteAgeWarning(validFile, Date.parse(validFile.fetchedAt) + 8 * 864e5), /7 dias|7 días/);
+});
