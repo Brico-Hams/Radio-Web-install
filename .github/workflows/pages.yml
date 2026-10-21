@@ -9,8 +9,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -18,6 +16,8 @@ concurrency:
 
 jobs:
   build:
+    # Only the dedicated <org>/<org>.github.io repo may deploy (own origin, ADR-013).
+    if: github.repository == format('{0}/{0}.github.io', github.repository_owner)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -27,7 +27,9 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm test
       - run: npm run build:pages
-      - run: node scripts/fetch-satellites.cjs --out dist/data/satellites.json --previous "${{ vars.PAGES_ORIGIN }}/data/satellites.json"
+      - run: node scripts/fetch-satellites.cjs --out dist/data/satellites.json --previous "$PAGES_ORIGIN/data/satellites.json"
+        env:
+          PAGES_ORIGIN: ${{ vars.PAGES_ORIGIN }}
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: dist
@@ -35,6 +37,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

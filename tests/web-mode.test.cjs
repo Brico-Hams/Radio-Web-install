@@ -112,6 +112,11 @@ test("RadioID CSV: handles quoted commas and skips invalid ids", () => {
   assert.equal(total, 1);
   assert.equal(entries[0].name, "Ana, Maria Lopez");
 });
+test("RadioID CSV: ids must be plain decimal digits", () => {
+  const csv = header + ["0x1F,A,X,Y,C,D,Spain", "1e3,B,X,Y,C,D,Spain", '" 12 ",C,X,Y,C,D,Spain', "12,D,X,Y,C,D,Spain"].join("\n") + "\n";
+  const { entries } = R.parseRadioIdCSV(csv, { country: "Spain" });
+  assert.deepEqual(entries.map(e => e.id), [12]);
+});
 test("RadioID CSV: rejects foreign CSV, oversize text, and caps rows", () => {
   assert.throws(() => R.parseRadioIdCSV("a,b,c\n1,2,3\n", { country: "Spain" }), /RadioID/);
   assert.throws(() => R.parseRadioIdCSV("", { country: "Spain" }), /RadioID/);
@@ -232,8 +237,20 @@ test("client code never uses absolute paths", () => {
 test("pages workflow pins actions by SHA and keeps minimal permissions", () => {
   const wf = read(".github/workflows/pages.yml");
   for (const use of wf.matchAll(/uses:\s*(\S+)/g)) assert.match(use[1], /@[0-9a-f]{40}$/, use[1]);
-  assert.match(wf, /contents: read/); assert.match(wf, /pages: write/); assert.match(wf, /id-token: write/);
+  const [top, jobs] = wf.split(/^jobs:/m);
+  assert.match(top, /contents: read/);
+  assert.doesNotMatch(top, /pages: write|id-token: write/);
+  assert.match(jobs, /pages: write/); assert.match(jobs, /id-token: write/);
+  assert.ok(wf.includes("if: github.repository == format('{0}/{0}.github.io', github.repository_owner)"));
+  assert.doesNotMatch(wf, /run:.*\$\{\{/);
   assert.doesNotMatch(wf, /secrets\./);
+});
+test("tests and scripts contain no Windows-only relative path literals", () => {
+  const fs = require("node:fs"), path = require("node:path");
+  const files = ["tests", "scripts"].flatMap(d => fs.readdirSync(path.join(__dirname, "..", d), { recursive: true })
+    .filter(f => /\.(cjs|js|mjs)$/.test(f)).map(f => path.join(__dirname, "..", d, f)));
+  const bad = new RegExp("[\"'`]\\.{1,2}" + "\\\\");
+  for (const file of files) if (path.basename(file) !== "web-mode.test.cjs") assert.doesNotMatch(fs.readFileSync(file, "utf8"), bad, file);
 });
 
 test("planning-ui: every R.profile access is guarded (quansheng.html does not load radioid-csv.js)", () => {

@@ -113,6 +113,8 @@
       loaded = null;
       $("firmware-entry").replaceChildren(new Option("Sin catalogo", ""));
       $("firmware-confirm").checked = false;
+      if ($("firmware-source")) $("firmware-source").hidden = true;
+      if ($("firmware-file")) $("firmware-file").value = "";
       $("firmware-metadata").textContent = "";
       $("firmware-status").textContent = message;
       refreshState();

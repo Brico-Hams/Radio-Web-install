@@ -44,7 +44,7 @@
       const f = splitLine(line);
       if (f.length < 7 || R.norm(f[6]) !== wantCountry) continue;
       if (wantRegion && !R.norm(`${f[5]} ${f[4]}`).includes(wantRegion)) continue;
-      const id = Number(f[0]);
+      const id = /^\d+$/.test(f[0]) ? Number(f[0]) : 0;
       if (!Number.isInteger(id) || id < 1 || id > 0xffffff || f[1].length < 1 || f[1].length > 32) continue;
       total++;
       if (entries.length < MAX_ENTRIES) {

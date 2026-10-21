@@ -623,7 +623,7 @@ function isolatedWriter() {
     RadioWorkspace: { ...R, assertBackup() {}, async verifyBackup() {} },
     Uint8Array, DataView
   };
-  vm.runInNewContext(fs.readFileSync(require.resolve("..\\gd77-connector.js"), "utf8"), sandbox);
+  vm.runInNewContext(fs.readFileSync(require.resolve("../gd77-connector.js"), "utf8"), sandbox);
   return sandbox.RadioWorkspace.GD77Connector;
 }
 for (const family of ["MK22", "STM32", "SERIAL"]) {

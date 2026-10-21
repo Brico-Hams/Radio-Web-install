@@ -102,6 +102,8 @@ IndexedDB (copias de la radio) y `localStorage` (perfil) se aíslan por origen. 
 2. Crear el repositorio `<org>.github.io` y subir este código (el push requiere confirmación explícita del autor).
 3. En *Settings › Pages*, elegir «GitHub Actions» como origen y activar «Enforce HTTPS».
 4. Crear la variable de Actions `PAGES_ORIGIN` con `https://<org>.github.io` (sin barra final). El workflow la usa para recuperar el `data/satellites.json` anterior.
+   El workflow solo se ejecuta en el repositorio `<org>/<org>.github.io` (guarda `if: github.repository == ...`): en cualquier otro repositorio se omite, para no publicar bajo un origen compartido que expondría las copias y el perfil (IndexedDB) a otras páginas.
+   El primer push puede ejecutarse antes de definir `PAGES_ORIGIN`: es inofensivo, se omite la recuperación de datos anteriores y se emite un aviso.
 5. Ejecutar el workflow manualmente la primera vez (*Actions › Pages › Run workflow*).
 
 ### Qué hace el workflow

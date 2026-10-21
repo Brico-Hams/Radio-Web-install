@@ -37,7 +37,7 @@
         <div class="table-scroll"><table><thead><tr><th>Elegir</th><th>Nombre</th><th>RX / TX MHz</th><th>Zona</th><th>Modo / tono</th></tr></thead><tbody id="plan-rb-results"></tbody></table></div>
       </div>
       <div id="plan-contacts" hidden>
-        <p>RadioID: busqueda paginada por pais y estado. La zona/ciudad adicional y el texto se filtran en la pagina actual. Selecciona paginas conscientemente; no se descarga toda la base automaticamente. Se anaden contactos privados, no grupos de conversacion.</p>
+        <p id="plan-contacts-help">RadioID: busqueda paginada por pais y estado. La zona/ciudad adicional y el texto se filtran en la pagina actual. Selecciona paginas conscientemente; no se descarga toda la base automaticamente. Se anaden contactos privados, no grupos de conversacion.</p>
         <div class="operation-buttons"><button id="plan-contacts-query" type="button" class="button secondary">Buscar contactos RadioID</button><button id="plan-contacts-prev" type="button" class="button secondary">Pagina anterior</button><button id="plan-contacts-next" type="button" class="button secondary">Pagina siguiente</button><button id="plan-contacts-select" type="button" class="button secondary">Seleccionar pagina visible</button></div>
         <div id="plan-web-contacts" hidden>
           <p><a href="https://radioid.net/static/user.csv" target="_blank" rel="noopener noreferrer">Descargar user.csv en radioid.net &#8599;</a></p>
@@ -434,6 +434,7 @@
       if (page === "quansheng" || !R.profile) return;
       for (const id of ["plan-contacts-query", "plan-contacts-prev", "plan-contacts-next"]) $(id).hidden = true;
       $("plan-web-contacts").hidden = false;
+      $("plan-contacts-help").hidden = true;
       const profile = R.profile.get();
       if (profile) { $("plan-profile-call").value = profile.callsign; $("plan-profile-id").value = profile.dmrId; }
       $("plan-contacts-csv").addEventListener("change", () => perform("Cargar user.csv de RadioID", async () => {
@@ -452,7 +453,7 @@
         contactResult = { ...result, csv: true };
         renderContacts();
         notify(`user.csv: ${result.total} contactos coinciden${result.truncated ? "; se muestran los primeros 5000, afina la zona" : ""}.`);
-      }));
+      }).catch(() => {}).finally(() => { $("plan-contacts-csv").value = ""; }));
       $("plan-profile-save").addEventListener("click", () => {
         try {
           const saved = R.profile.set({ callsign: $("plan-profile-call").value, dmrId: $("plan-profile-id").value });
