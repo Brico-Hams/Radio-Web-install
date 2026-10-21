@@ -98,6 +98,7 @@ const page = document.body.dataset.page;
 const current = tools[page];
 const helpTemplate = document.getElementById("help-content");
 const external = 'target="_blank" rel="noopener noreferrer"';
+const steps = [["Copias y conexión", "#connection"], ["Codeplug", "#radio-operations"], [page === "quansheng" ? "Canales" : "Canales y contactos", "#planning-panel"], ["Satélites", "#planning-panel", "sat"], ["Firmware", ".firmware-panel"]];
 const nav = (key, label, mark) => `<a href="${key === "home" ? "index" : key}.html" ${page === key ? 'aria-current="page"' : ""}><span class="nav-icon" aria-hidden="true">${mark}</span>${label}</a>`;
 
 function card(key, tool) {
@@ -112,7 +113,7 @@ function card(key, tool) {
 }
 
 function home() {
-  return `<section class="hero"><span class="eyebrow accent">TU RADIO. TU CONFIGURACION.</span>
+  return `<section class="hero"><span class="eyebrow accent">RADIOAFICIÓN · HAZLO TÚ MISMO</span>
     <h1>Dos ecosistemas.<br><span>Un punto de partida.</span></h1>
     <p>Elige tu familia y conecta desde este navegador.<br class="desktop"> Copias automaticas antes de escribir, sin mezclar compatibilidades.</p><a class="button secondary help-link" href="ayuda.html">Primeros pasos, controladores y preguntas frecuentes</a>
   </section>
@@ -123,9 +124,9 @@ function home() {
 
 function detail(tool) {
   return `<a class="back" href="index.html">&larr; Todos los espacios</a>
-    <section class="detail-hero"><span class="eyebrow accent">${tool.tag} / ESPACIO DE RADIO</span><h1>${tool.name}<span>${tool.subtitle}</span></h1><p>${tool.description}</p></section>
+    <section class="detail-hero"><p class="eyebrow accent">RADIOAFICIÓN · HAZLO TÚ MISMO <span class="pill">${tool.tag}</span></p><h1>${tool.name}<span>${tool.subtitle}</span></h1><p>${tool.description}</p></section>
     <div class="detail-grid">
-      <section class="panel connection"><div class="section-heading"><span class="step-badge">01</span><h2>Prepara tu equipo</h2></div>
+      <section id="connection" class="panel connection"><div class="section-heading"><span class="step-badge">01</span><h2>Prepara tu equipo</h2></div>
         <p class="muted">Conexion real desde este navegador. Al conectar se inicia una copia automatica local. Ninguna escritura se habilita antes de verificar el respaldo requerido.</p>
         <label for="model">Modelo / familia de hardware</label>
         <select id="model"><option value="">Selecciona tu equipo</option>${tool.models.map(([id, name]) => `<option value="${id}">${name}</option>`).join("")}</select>
@@ -160,9 +161,12 @@ document.getElementById("app").innerHTML = `
   <aside class="sidebar">
     <a class="brand" href="index.html"><img class="brand-logo" src="bricohams-logo.svg" alt="" width="40" height="40"><span>${BRAND.name.toUpperCase()}<small>${BRAND.product.toUpperCase()}</small></span></a>
     <p class="nav-label">TU ESTACION</p><nav aria-label="Navegacion principal">${nav("home", "Vista general", "&#9638;")}${nav("opengd77", "OpenGD77", "GD")}${nav("quansheng", "Quansheng", "UV")}${nav("ayuda", "Ayuda y soporte", "?")}</nav>
+    ${current ? `<p class="nav-label">PASOS</p><nav class="steps" aria-label="Pasos de este espacio">${steps.map(([label, target, tab], index) => `<a href="${target.startsWith("#") ? target : "#radio-operations"}" data-step="${target}"${tab ? ` data-tab="${tab}"` : ""}><span class="step-num" aria-hidden="true">${index}</span>${label}</a>`).join("")}</nav>` : ""}
     <div class="sidebar-bottom"><span class="local-dot"></span> USB / Serial local<p>Sin envio de datos a servidores.<br>Copias antes de escribir.</p></div>
   </aside>
-  <div class="workspace"><header class="topbar"><span>${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : helpTemplate ? "Ayuda y soporte" : "Vista general"}</span></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span></header>
+  <div class="workspace"><header class="topbar">
+    <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : helpTemplate ? "Ayuda y soporte" : "Vista general"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
+    <div class="topbar-right"><span id="mode-badge" class="mode-badge"></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span>${current ? '<button id="topbar-connect" class="button primary topbar-connect" type="button" disabled><span aria-hidden="true">⌁</span> Conectar</button>' : ""}</div></header>
   <main id="main">${current ? detail(current) : helpTemplate ? "" : home()}</main>
   <footer><span>&copy; 2026 ${BRAND.name} ${BRAND.product} <span class="muted">/ GPL-3.0-or-later / Sin garantia</span></span><span><a href="ayuda.html">Ayuda y soporte</a> &middot; <a href="${BRAND.repository}" target="_blank" rel="noopener noreferrer">Codigo fuente</a> &middot; No afiliado a OpenGD77, grid.radio, F4HWN ni Quansheng.</span></footer></div>`;
 
@@ -233,13 +237,32 @@ if (current) {
   }
   document.querySelectorAll("[data-guide]").forEach(button => button.addEventListener("click", () => showGuide(Number(button.dataset.guide))));
   showGuide(0);
+  // Topbar mirrors the section's connect button and status; the section stays the source of truth.
+  const radioConnect = document.getElementById("radio-connect");
+  const radioStatus = document.getElementById("radio-status");
+  const topConnect = document.getElementById("topbar-connect");
+  const topStatus = document.getElementById("topbar-status");
+  const mirror = () => {
+    topConnect.disabled = radioConnect.disabled;
+    topStatus.textContent = radioStatus.textContent;
+    topStatus.dataset.error = radioStatus.dataset.error ?? "";
+  };
+  new MutationObserver(mirror).observe(radioConnect, { attributes: true, attributeFilter: ["disabled"] });
+  new MutationObserver(mirror).observe(radioStatus, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["data-error"] });
+  mirror();
+  topConnect.addEventListener("click", () => radioConnect.click());
+  document.querySelectorAll("[data-step]").forEach(link => link.addEventListener("click", event => {
+    const target = document.querySelector(link.dataset.step);
+    if (!target) return;
+    event.preventDefault();
+    if (link.dataset.tab) document.querySelector(`[data-plan-tab="${link.dataset.tab}"]`)?.click();
+    target.tabIndex = -1;
+    target.scrollIntoView({ block: "start" });
+    target.focus({ preventScroll: true });
+  }));
 }
 
 (globalThis.RadioWorkspace?.runtime ?? Promise.resolve({ mode: "web" })).then(({ mode }) => {
   document.body.dataset.mode = mode;
-  const badge = document.createElement("span");
-  badge.id = "mode-badge";
-  badge.className = "mode-badge";
-  badge.textContent = mode === "local" ? "Local · instalado" : "Web · GitHub Pages";
-  document.querySelector(".topbar > span").append(badge);
+  document.getElementById("mode-badge").textContent = mode === "local" ? "Local · instalado" : "Web · GitHub Pages";
 });

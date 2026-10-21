@@ -155,3 +155,9 @@ test("every page carries the exact meta CSP before any script", () => {
     assert.ok(meta > 0 && meta < html.indexOf("<script"), page);
   }
 });
+
+test("radio pages expose topbar connect proxy and numbered steps", () => {
+  const app = read("app.js");
+  for (const id of ["topbar-status", "topbar-connect", "mode-badge"]) assert.match(app, new RegExp(`id="${id}"`));
+  assert.match(app, /RADIOAFICIÓN · HAZLO TÚ MISMO|RADIOAFICION · HAZLO TU MISMO/);
+});

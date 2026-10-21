@@ -19,17 +19,25 @@ Reglas de uso:
 
 ## Paleta
 
-| Token | Color | Uso |
-| --- | --- | --- |
-| `--bg` | `#0b1017` | Fondo |
-| `--panel` | `#121a24` | Paneles |
-| `--line` | `#25303e` | Bordes |
-| `--muted` | `#98a7b8` | Texto secundario |
-| `--text` | `#edf2f8` | Texto principal |
-| `--mint` | `#71edbf` | Acento y estados correctos |
-| `--blue` | `#89b9ff` | Enlaces y acento secundario |
+Estilo compartido con Bricohams Studio: fondo oscuro, tarjetas, acento verde azulado.
 
-Degradado de marca: `#71edbf` → `#89b9ff`.
+| Token | Color | Uso | Contraste (AA) |
+| --- | --- | --- | --- |
+| `--bg` | `#0b1418` | Fondo | — |
+| `--panel` | `#111d22` | Tarjetas y paneles | — |
+| `--line` | `#1f3238` | Bordes | decorativo |
+| `--text` | `#e6f1f2` | Texto principal | 16,2:1 sobre fondo; 14,9:1 sobre panel |
+| `--muted` | `#8fa7ab` | Texto secundario | 7,4:1 sobre fondo; 6,8:1 sobre panel |
+| `--accent` (`--mint`) | `#2bb3a3` | Acento, foco y estados correctos | 7,2:1 sobre fondo; 6,6:1 sobre panel |
+| `--blue` | `#89b9ff` | Enlaces y acento secundario | 8,5:1 sobre panel |
+
+Texto de los botones primarios: `#042420` sobre el acento (6,3:1).
+
+## Estructura
+
+- Barra superior fija: estado de la conexión (copia de `#radio-status`), distintivo de modo (`#mode-badge`) y botón «⌁ Conectar», que acciona el de la sección y se deshabilita con él.
+- Barra lateral: logotipo, navegación y, en las páginas de radio, pasos numerados (0 Copias y conexión … 4 Firmware) que llevan a cada sección.
+- Etiqueta sobre el título: `RADIOAFICIÓN · HAZLO TÚ MISMO`.
 
 ## Tipografía
 
