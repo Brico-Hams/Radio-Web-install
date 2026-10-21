@@ -146,3 +146,12 @@ test("no se publican correos ni secretos en paginas y documentacion", () => {
     assert.doesNotMatch(text, /rbuapp_[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{20,}|github_pat_/, name);
   }
 });
+
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'";
+test("every page carries the exact meta CSP before any script", () => {
+  for (const page of pages) {
+    const html = read(page);
+    const meta = html.indexOf(`<meta http-equiv="Content-Security-Policy" content="${CSP}">`);
+    assert.ok(meta > 0 && meta < html.indexOf("<script"), page);
+  }
+});

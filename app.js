@@ -1,5 +1,19 @@
 "use strict";
 
+// Clickjacking guard: a meta CSP cannot set frame-ancestors, so refuse to run framed.
+if (window.top !== window.self) {
+  const notice = document.createElement("p");
+  notice.append("Esta herramienta no puede ejecutarse dentro de un marco. ");
+  const link = document.createElement("a");
+  link.href = location.href;
+  link.target = "_blank";
+  link.rel = "noopener";
+  link.textContent = "Abrir en una pestana nueva";
+  notice.append(link);
+  document.getElementById("app").replaceChildren(notice);
+  throw new Error("Bricohams: framed context, initialization stopped");
+}
+
 const tools = {
   opengd77: {
     name: "OpenGD77",
@@ -220,3 +234,12 @@ if (current) {
   document.querySelectorAll("[data-guide]").forEach(button => button.addEventListener("click", () => showGuide(Number(button.dataset.guide))));
   showGuide(0);
 }
+
+(globalThis.RadioWorkspace?.runtime ?? Promise.resolve({ mode: "web" })).then(({ mode }) => {
+  document.body.dataset.mode = mode;
+  const badge = document.createElement("span");
+  badge.id = "mode-badge";
+  badge.className = "mode-badge";
+  badge.textContent = mode === "local" ? "Local · instalado" : "Web · GitHub Pages";
+  document.querySelector(".topbar > span").append(badge);
+});

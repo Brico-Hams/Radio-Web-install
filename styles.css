@@ -25,3 +25,4 @@ footer a{color:var(--blue)}footer a:hover{text-decoration:underline}
 .help-search label{display:block;font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:700;letter-spacing:.5px}.help-search input{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:11px 14px}.help-search input::placeholder{color:var(--muted)}.help-section [hidden],.help-section tr[hidden]{display:none}
 @media(max-width:760px){.sidebar nav{flex-wrap:wrap}.sidebar nav a{flex:1 1 calc(50% - 6px);min-width:0}.brand-logo{width:34px;height:34px}.help-toc ol{columns:1}.help-section .table-scroll{max-height:none}}
 nav.help-toc{display:block}nav.help-toc a{display:inline;padding:0;border-radius:0;font-size:inherit;color:var(--blue)}nav.help-toc a:hover{background:none}
+.mode-badge{border:1px solid var(--mint);color:var(--mint);border-radius:5px;padding:5px 9px;margin-left:14px;font-size:10px;letter-spacing:1px}

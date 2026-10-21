@@ -28,3 +28,11 @@ test("server serves runtime.json as local", async () => {
     server.close();
   }
 });
+
+test("app refuses to run framed and paints the mode badge", () => {
+  const app = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "app.js"), "utf8");
+  assert.match(app, /window\.top !== window\.self/);
+  assert.match(app, /mode-badge/);
+  assert.match(app, /Web · GitHub Pages/);
+  assert.match(app, /Local · instalado/);
+});
