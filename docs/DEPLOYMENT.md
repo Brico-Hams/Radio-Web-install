@@ -9,7 +9,7 @@ Hay dos despliegues soportados: **local** (servidor Node en el mismo equipo al q
 - Chrome, Edge o Brave de escritorio, por WebUSB/Web Serial. Firefox y Safari no son compatibles.
 - Los controladores USB que pida la radio: ver [Ayuda › Controladores](../ayuda.html#drivers).
 
-## Instalación (Windows, macOS y Linux)
+## Instalación desde el código fuente
 
 ```powershell
 git clone https://github.com/anatolbricoham/Radio-Web-install.git
@@ -30,6 +30,21 @@ npm run check
 ```
 
 Ambos comandos deben terminar sin fallos. Después, abre la página de ayuda y comprueba que se muestra el logotipo de Bricohams.
+
+## Instaladores locales
+
+Descarga el instalador de la versión deseada desde [GitHub Releases](https://github.com/anatolbricoham/Radio-Web-install/releases). El workflow los genera al publicar una etiqueta `v*`; incluye sumas SHA-256 en `SHA256SUMS`.
+
+| Sistema | Archivo | Instalación |
+| --- | --- | --- |
+| Debian 12/13, Ubuntu 22.04/24.04, Raspberry Pi OS arm64/armhf | `.deb` para amd64, arm64 o armhf | `sudo apt install ./bricohams-radio-workspace-*.deb` |
+| Arch Linux | `*-arch.tar.gz` | Extrae el archivo y ejecuta `makepkg -si` (requiere `base-devel` y `nodejs`). |
+| FreeBSD 14 amd64 | `*-freebsd-amd64.tar.gz` | Extrae el archivo y ejecuta `su -c './install.sh'` (instala `node22` mediante `pkg` si hace falta). |
+| Windows 11 x64 | `*-windows-x64.zip` | Extrae el ZIP y ejecuta `powershell -ExecutionPolicy Bypass -File .\Install.ps1`; añade un acceso al menú Inicio. |
+
+Los `.deb` y el ZIP de Windows incluyen Node.js 22. Arch usa el paquete `nodejs` de su distribución. FreeBSD requiere `pkg` y el paquete `node22`. Raspberry Pi OS de 32 bits necesita un procesador ARMv7 o posterior. El instalador no configura arranque automático ni eleva permisos para iniciar la aplicación.
+
+Tras instalar, inicia **Bricohams Radio Workspace** desde el menú de aplicaciones/Inicio o ejecuta `bricohams-radio` en Arch y FreeBSD. El servidor queda ligado a `127.0.0.1:8787`; no lo expongas a la red. En FreeBSD, Chromium puede no ofrecer WebUSB/Web Serial, por lo que el acceso a radios es de mejor esfuerzo.
 
 ## Configuración
 
@@ -121,7 +136,7 @@ IndexedDB (copias de la radio) y `localStorage` (perfil) se aíslan por origen. 
 
 Cada HTML lleva una CSP en `<meta>` (sin scripts ni estilos en línea; `connect-src` solo `'self'` y `https://api.github.com`) y la aplicación se niega a ejecutarse dentro de un marco, porque GitHub Pages no permite cabeceras propias. No hay cuentas, subidas ni telemetría. RadioID no se replica y RepeaterBook no está disponible en la web.
 
-Los paquetes instalables (.deb, .rpm, Windows…) y los ajustes locales llegarán próximamente.
+Los instaladores disponibles se publican en [GitHub Releases](https://github.com/anatolbricoham/Radio-Web-install/releases). Para generar una nueva publicación, crea y sube una etiqueta `v*`; GitHub Actions valida el proyecto, descarga runtimes de Node.js 22 verificando sus checksums y adjunta los instaladores junto con `SHA256SUMS`. Las releases incluyen `.deb` amd64/arm64/armhf, `PKGBUILD` para Arch, instalador tarball para FreeBSD y ZIP de Windows 11 x64. El primer release debe publicarse subiendo una etiqueta; este repositorio no crea ni sube etiquetas automáticamente.
 
 ## Despliegues no soportados
 

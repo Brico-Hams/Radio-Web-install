@@ -1,0 +1,71 @@
+name: Installer releases
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release-installers.yml"
+      - "installers/**"
+      - "scripts/build-installers.sh"
+      - "package.json"
+      - "package-lock.json"
+      - "*.js"
+      - "*.cjs"
+      - "*.html"
+      - "*.css"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to package
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+      - name: Verify project
+        run: npm test && npm run check
+      - name: Find latest Node.js 22 runtime
+        id: node
+        shell: bash
+        run: |
+          version=$(curl --fail --silent --show-error --location https://nodejs.org/dist/index.json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(s).find(x=>x.version.startsWith("v22.")&&x.lts);if(!v)process.exit(1);console.log(v.version.slice(1))})')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build installer artifacts
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag || 'v0.0.0' }}
+          NODE_VERSION: ${{ steps.node.outputs.version }}
+        run: bash scripts/build-installers.sh "$RELEASE_TAG" "$NODE_VERSION"
+      - name: Verify generated archives and checksums
+        run: |
+          cd dist/installers
+          sha256sum --check SHA256SUMS
+          for archive in *.tar.gz *.zip; do
+            case "$archive" in
+              *.zip) unzip -t "$archive" >/dev/null ;;
+              *.tar.gz) tar -tzf "$archive" >/dev/null ;;
+            esac
+          done
+          for package in *.deb; do dpkg-deb --info "$package" >/dev/null; done
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "Bricohams Radio Workspace $tag" --generate-notes
+          gh release upload "$tag" dist/installers/* --clobber

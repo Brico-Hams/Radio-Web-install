@@ -42,7 +42,18 @@ La misma aplicacion se puede usar de dos formas. Al arrancar lee `runtime.json`:
 | RepeaterBook | No disponible (solo version instalada) | Si, con tu token aprobado |
 | Satelites | `data/satellites.json` generado a diario desde SatNOGS | TLE en directo |
 
-Los datos de satelites cubren NORAD 25544, 27607, 43017 y 43678 (SatNOGS DB / Libre Space Foundation, CC BY-SA 4.0); se avisa si tienen mas de 7 dias. Para publicar tu propia copia en GitHub Pages, ver [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Los paquetes instalables y los ajustes locales llegaran proximamente.
+Los datos de satelites cubren NORAD 25544, 27607, 43017 y 43678 (SatNOGS DB / Libre Space Foundation, CC BY-SA 4.0); se avisa si tienen mas de 7 dias. Para publicar tu propia copia en GitHub Pages, ver [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+### Instaladores locales
+
+Los instaladores se publican en [GitHub Releases](https://github.com/anatolbricoham/Radio-Web-install/releases):
+
+- Debian, Ubuntu y Raspberry Pi OS: paquete `.deb` para amd64, arm64 y armhf (Node.js incluido; Raspberry Pi OS armhf requiere CPU ARMv7).
+- Arch Linux: paquete fuente con `PKGBUILD` (requiere `nodejs` del sistema); extrae el archivo y ejecuta `makepkg -si`.
+- FreeBSD 14 amd64: archivo `.tar.gz` con instalador (requiere Node.js 22; ejecuta `su -c './install.sh'`).
+- Windows 11 x64: `.zip` autocontenido con Node.js. Extrae el ZIP y ejecuta `powershell -ExecutionPolicy Bypass -File .\Install.ps1`; crea un acceso en Inicio.
+
+En todos los sistemas la aplicacion queda local, escucha solo en `127.0.0.1:8787` y abre el navegador predeterminado. Consulta [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) para los pasos completos y limitaciones de acceso USB en FreeBSD.
 
 ## Estado real del soporte
 

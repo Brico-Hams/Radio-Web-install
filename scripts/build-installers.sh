@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+version=${1:?Uso: build-installers.sh VERSION NODE_VERSION [OUTPUT_DIR]}
+node_version=${2:?Uso: build-installers.sh VERSION NODE_VERSION [OUTPUT_DIR]}
+output=${3:-"$root/dist/installers"}
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+mkdir -p "$output"
+app_files=(
+  index.html opengd77.html quansheng.html ayuda.html bricohams-logo.svg styles.css
+  app.js radio-core.js transports.js quansheng-connector.js gd77-connector.js
+  backup-store.js codeplug-editor.js radio-ui.js firmware-core.js firmware-catalog.js
+  planning-core.js radioid-csv.js planning-ui.js runtime-mode.js server.cjs
+  firmware-service.cjs data-service.cjs
+)
+
+stage_app() {
+  local destination=$1 file
+  mkdir -p "$destination"
+  for file in "${app_files[@]}"; do cp "$root/$file" "$destination/$file"; done
+  mkdir -p "$destination/node_modules"
+  cp -R "$root/node_modules/satellite.js" "$destination/node_modules/satellite.js"
+}
+
+download_node() {
+  local platform=$1 archive=$2 checksum_file="$work/SHASUMS256.txt" expected actual
+  local base="node-v${node_version}-${platform}"
+  curl --fail --silent --show-error --location "https://nodejs.org/dist/v${node_version}/${base}.${archive}" -o "$work/${base}.${archive}"
+  curl --fail --silent --show-error --location "https://nodejs.org/dist/v${node_version}/SHASUMS256.txt" -o "$checksum_file"
+  expected=$(awk -v file="${base}.${archive}" '$2 == file { print $1 }' "$checksum_file")
+  if [ -z "$expected" ]; then echo "No hay checksum publicado para ${base}.${archive}" >&2; exit 1; fi
+  actual=$(sha256sum "$work/${base}.${archive}" | awk '{print $1}')
+  if [ "$actual" != "$expected" ]; then echo "Checksum incorrecto para ${base}.${archive}" >&2; exit 1; fi
+}
+
+build_deb() {
+  local deb_arch=$1 node_arch=$2
+  local package_root="$work/deb-$deb_arch"
+  local node_archive="tar.xz"
+  download_node "linux-${node_arch}" "$node_archive"
+  mkdir -p "$package_root/opt/bricohams-radio-workspace/app" "$package_root/opt/bricohams-radio-workspace/runtime/node/bin"
+  stage_app "$package_root/opt/bricohams-radio-workspace/app"
+  tar -xJf "$work/node-v${node_version}-linux-${node_arch}.tar.xz" -C "$work"
+  install -m 755 "$work/node-v${node_version}-linux-${node_arch}/bin/node" "$package_root/opt/bricohams-radio-workspace/runtime/node/bin/node"
+  install -D -m 755 "$root/installers/linux/bricohams-radio" "$package_root/usr/bin/bricohams-radio"
+  install -D -m 644 "$root/installers/linux/bricohams-radio.desktop" "$package_root/usr/share/applications/bricohams-radio.desktop"
+  mkdir -p "$package_root/DEBIAN"
+  cat > "$package_root/DEBIAN/control" <<EOF
+Package: bricohams-radio-workspace
+Version: ${version#v}
+Section: hamradio
+Priority: optional
+Architecture: $deb_arch
+Depends: libc6 (>= 2.28), libstdc++6, libatomic1
+Maintainer: Bricohams
+Description: Local radio programming workspace
+ Bricohams Radio Workspace local application and Node.js runtime.
+EOF
+  dpkg-deb --root-owner-group --build "$package_root" "$output/bricohams-radio-workspace-${version}-${deb_arch}.deb" >/dev/null
+}
+
+build_deb amd64 x64
+build_deb arm64 arm64
+build_deb armhf armv7l
+
+source_root="$work/arch-source/app"
+stage_app "$source_root"
+install -D -m 755 "$root/installers/linux/bricohams-radio" "$work/arch-source/bricohams-radio"
+install -D -m 644 "$root/installers/linux/bricohams-radio.desktop" "$work/arch-source/bricohams-radio.desktop"
+tar -czf "$output/bricohams-radio-workspace-${version#v}-arch-source.tar.gz" -C "$work/arch-source" .
+arch_sha=$(sha256sum "$output/bricohams-radio-workspace-${version#v}-arch-source.tar.gz" | awk '{print $1}')
+mkdir -p "$work/arch-package"
+cat > "$work/arch-package/PKGBUILD" <<EOF
+pkgname=bricohams-radio-workspace
+pkgver=${version#v}
+pkgrel=1
+pkgdesc='Local radio programming workspace'
+arch=('x86_64' 'aarch64')
+url='https://github.com/anatolbricoham/Radio-Web-install'
+license=('GPL-3.0-or-later')
+depends=('nodejs')
+source=("bricohams-radio-workspace-\${pkgver}-arch-source.tar.gz::https://github.com/anatolbricoham/Radio-Web-install/releases/download/${version}/bricohams-radio-workspace-\${pkgver}-arch-source.tar.gz")
+sha256sums=('$arch_sha')
+
+package() {
+  install -d "\$pkgdir/opt/bricohams-radio-workspace/app" "\$pkgdir/usr/bin"
+  cp -R "\$srcdir/app/." "\$pkgdir/opt/bricohams-radio-workspace/app/"
+  install -m 755 "\$srcdir/bricohams-radio" "\$pkgdir/usr/bin/bricohams-radio"
+  install -D -m 644 "\$srcdir/bricohams-radio.desktop" "\$pkgdir/usr/share/applications/bricohams-radio.desktop"
+}
+EOF
+tar -czf "$output/bricohams-radio-workspace-${version}-arch.tar.gz" -C "$work/arch-package" .
+
+freebsd_root="$work/freebsd"
+stage_app "$freebsd_root/app"
+install -m 755 "$root/installers/freebsd/install.sh" "$freebsd_root/install.sh"
+install -m 755 "$root/installers/freebsd/bricohams-radio" "$freebsd_root/bricohams-radio"
+tar -czf "$output/bricohams-radio-workspace-${version}-freebsd-amd64.tar.gz" -C "$freebsd_root" .
+
+download_node "win-x64" "zip"
+windows_root="$work/windows"
+stage_app "$windows_root/app"
+mkdir -p "$windows_root/runtime"
+unzip -p "$work/node-v${node_version}-win-x64.zip" "node-v${node_version}-win-x64/node.exe" > "$windows_root/runtime/node.exe"
+install -m 644 "$root/installers/windows/Install.ps1" "$windows_root/Install.ps1"
+install -m 644 "$root/installers/windows/Start.ps1" "$windows_root/Start.ps1"
+(
+  cd "$windows_root"
+  zip -qr "$output/bricohams-radio-workspace-${version}-windows-x64.zip" .
+)
+
+(
+  cd "$output"
+  sha256sum bricohams-radio-workspace-"${version}"-* bricohams-radio-workspace-"${version#v}"-arch-source.tar.gz > SHA256SUMS
+)

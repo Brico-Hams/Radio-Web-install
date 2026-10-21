@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Bricohams Radio Workspace
+Comment=Herramientas locales para radios compatibles
+Exec=/usr/bin/bricohams-radio
+Icon=/opt/bricohams-radio-workspace/app/bricohams-logo.svg
+Terminal=false
+Categories=Utility;HamRadio;

@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+app_dir=/opt/bricohams-radio-workspace/app
+runtime_node=/opt/bricohams-radio-workspace/runtime/node/bin/node
+node_bin=$runtime_node
+
+if [ ! -x "$node_bin" ]; then
+  node_bin=$(command -v node || true)
+fi
+if [ -z "$node_bin" ] || ! "$node_bin" -e 'process.exit(Number(process.versions.node.split(".")[0]) < 22)' >/dev/null 2>&1; then
+  printf '%s\n' "Bricohams Radio Workspace requiere Node.js 22 o superior." >&2
+  exit 1
+fi
+
+state_dir=${XDG_STATE_HOME:-"$HOME/.local/state"}/bricohams-radio
+mkdir -p "$state_dir"
+
+server_is_running() {
+  "$node_bin" -e 'const net=require("node:net");const s=net.connect(8787,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(500,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))' >/dev/null 2>&1
+}
+
+if ! server_is_running; then
+  nohup "$node_bin" "$app_dir/server.cjs" >>"$state_dir/server.log" 2>&1 </dev/null &
+  attempt=0
+  until server_is_running; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 20 ]; then
+      printf 'No se pudo iniciar el servidor. Revisa %s/server.log\n' "$state_dir" >&2
+      exit 1
+    fi
+    sleep 0.25
+  done
+fi
+
+if command -v xdg-open >/dev/null 2>&1; then
+  if ! xdg-open http://127.0.0.1:8787; then
+    printf '%s\n' "No se pudo abrir el navegador. Visita http://127.0.0.1:8787" >&2
+  fi
+else
+  printf '%s\n' "Abre http://127.0.0.1:8787 en Chrome, Chromium o Edge."
+fi
