@@ -1,9 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { once } = require("node:events");
-const R = require("..\radio-core.js");
-require("..\runtime-mode.js");
-const { createServer } = require("..\server.cjs");
+const R = require("../radio-core.js");
+require("../runtime-mode.js");
+const { createServer } = require("../server.cjs");
 
 test("runtime: local only when server says so", async () => {
   const ok = body => async () => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
