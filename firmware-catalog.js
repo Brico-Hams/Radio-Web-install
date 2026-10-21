@@ -34,7 +34,30 @@
     }
     return { data, manifest };
   }
-  function mountFirmwareCatalog({ page, model, action, download, log, useImage }) {
+  const MAX_FILE = 4 * 1024 * 1024;
+  // Web mode: the user downloads the file at the official source and loads it here; same size/SHA-256 guarantees.
+  async function verifyLocalFirmware(entry, data) {
+    R.assert(data instanceof Uint8Array && data.length > 0 && data.length <= MAX_FILE, "El archivo debe tener entre 1 B y 4 MiB.");
+    R.assert(entry.size == null || data.length === entry.size, "Tamano distinto al publicado. Archivo rechazado.");
+    const sha256 = await R.sha256(data);
+    if (entry.expectedSHA256) R.assert(sha256 === entry.expectedSHA256, "SHA-256 distinto al publicado por el editor. Archivo rechazado.");
+    const verified = Boolean(entry.expectedSHA256);
+    return {
+      data,
+      manifest: {
+        manifestFormat: "radio-workspace-firmware-download", manifestVersion: 1,
+        downloadedAt: new Date().toISOString(), ...entry, size: data.length, sha256,
+        publisherHashVerified: verified,
+        warning: verified
+          ? "SHA-256 coincide con GitHub Releases del editor; no es una firma digital ni una garantia de compatibilidad."
+          : "Archivo cargado por el usuario. SHA-256 calculado localmente; el editor no publica un hash en este indice. No acredita autenticidad criptografica.",
+        backupSubstitute: false
+      }
+    };
+  }
+  async function mountFirmwareCatalog({ page, model, action, download, log, useImage }) {
+    const web = (await R.runtime).mode === "web";
+    const { TARGETS, REPO, parseF4Release } = R.firmwareCore;
     const panel = document.createElement("section");
     panel.className = "panel operations firmware-panel";
     panel.setAttribute("aria-label", "Catalogo oficial de firmware");
@@ -47,13 +70,14 @@
       <label for="firmware-entry">Firmware / variante</label><select id="firmware-entry" disabled><option value="">Sin catalogo</option></select>
       <p id="firmware-metadata" class="card-note"></p>
       <label class="check"><input id="firmware-confirm" type="checkbox"><span>He comprobado el modelo, la revision y la variante. La descarga no demuestra compatibilidad con mi unidad.</span></label>
-      <div class="operation-buttons"><button id="firmware-download" class="button primary" type="button" disabled>Descargar y verificar</button><button id="firmware-manifest" class="button secondary" type="button" disabled>Guardar manifiesto SHA-256</button>${page === "quansheng" ? '<button id="firmware-use" class="button secondary" type="button" disabled>Preparar imagen para slot (sin escribir)</button>' : ""}</div>`;
+      <div class="operation-buttons">${web ? '<a id="firmware-source" class="button secondary" target="_blank" rel="noopener noreferrer" hidden>Descargar en la fuente oficial ↗</a><label for="firmware-file">Cargar el archivo descargado</label><input id="firmware-file" type="file" disabled>' : '<button id="firmware-download" class="button primary" type="button" disabled>Descargar y verificar</button>'}<button id="firmware-manifest" class="button secondary" type="button" disabled>Guardar manifiesto SHA-256</button>${page === "quansheng" ? '<button id="firmware-use" class="button secondary" type="button" disabled>Preparar imagen para slot (sin escribir)</button>' : ""}</div>`;
     document.getElementById("radio-operations").before(panel);
     const $ = id => document.getElementById(id);
     let catalog = null;
     let loaded = null;
     let targets = [];
     let loading = false;
+    const sizeText = entry => entry.size == null ? "tamano no publicado" : `${entry.size} B`;
     const family = () => page === "quansheng" ? "quansheng" : model.value;
     const selected = () => catalog?.entries.find(entry => entry.id === $("firmware-entry").value);
     function refreshState() {
@@ -64,7 +88,8 @@
       $("firmware-target").disabled = loading;
       $("firmware-entry").disabled = loading || !catalog?.entries.length;
       $("firmware-confirm").disabled = loading;
-      $("firmware-download").disabled = loading || !entry || !$("firmware-confirm").checked;
+      if ($("firmware-download")) $("firmware-download").disabled = loading || !entry || !$("firmware-confirm").checked;
+      if ($("firmware-file")) $("firmware-file").disabled = loading || !entry || !$("firmware-confirm").checked;
       $("firmware-manifest").disabled = loading || !matching;
       if ($("firmware-use")) $("firmware-use").disabled = loading || !matching ||
         loaded.manifest.publisherHashVerified !== true || !entry.slotCompatible ||
@@ -96,10 +121,27 @@
       clear(options.length ? "Selecciona la revision exacta y consulta la ultima version estable." : "No hay una fuente de activos confirmada para la familia seleccionada.");
     }
     $("firmware-targets").addEventListener("click", () => perform("Consultar modelos oficiales", async () => {
-      targets = await requestJSON("/api/firmware/targets");
+      targets = web ? Object.entries(TARGETS).map(([id, target]) => ({ id, family: target.family, label: target.label }))
+        : await requestJSON("/api/firmware/targets");
       R.assert(Array.isArray(targets), "Lista de modelos no valida.");
       renderTargets();
     }));
+    async function webCatalog(target) {
+      const config = TARGETS[target];
+      const fetchedAt = new Date().toISOString();
+      if (config.family !== "quansheng") {
+        const url = `https://www.opengd77.com/downloads/releases/${config.group}/`;
+        return { target, label: config.label, fetchedAt, expiresAt: "n/a", entries: [{
+          id: `${target}|${url}`, target, family: config.family, name: "Archivo OpenGD77 descargado manualmente", version: "manual",
+          edition: "Standard", url, source: url, publisher: "OpenGD77 / VK3KYY", expectedSHA256: null, size: null,
+          verification: "manual-file-no-published-hash", format: "zip", slotCompatible: false }] };
+      }
+      const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`,
+        { signal: AbortSignal.timeout(30000), credentials: "omit", headers: { Accept: "application/vnd.github+json" } });
+      R.assert(response.ok, `GitHub respondio HTTP ${response.status}. Reintenta mas tarde.`);
+      const entries = parseF4Release(await response.json(), target).map(entry => ({ ...entry, id: `${target}|${entry.url}` }));
+      return { target, label: config.label, fetchedAt, expiresAt: "n/a", entries };
+    }
     $("firmware-target").addEventListener("change", () => clear("Modelo cambiado. Consulta de nuevo para evitar mezclar firmware."));
     model.addEventListener("change", () => {
       if (page === "quansheng") useImage(null, "F4HWN");
@@ -109,11 +151,11 @@
       const target = $("firmware-target").value;
       R.assert(targets.some(item => item.id === target && item.family === family()), "Modelo no perteneciente a la familia seleccionada.");
       clear("Consultando fuente oficial...");
-      const result = await requestJSON(`/api/firmware/catalog?target=${encodeURIComponent(target)}`);
+      const result = web ? await webCatalog(target) : await requestJSON(`/api/firmware/catalog?target=${encodeURIComponent(target)}`);
       R.assert(result.target === target && Array.isArray(result.entries) && result.entries.length > 0, "Catalogo sin activos reconocidos.");
       catalog = result;
       $("firmware-entry").replaceChildren(new Option("Selecciona firmware y variante", ""),
-        ...result.entries.map(entry => new Option(`${entry.version} / ${entry.name} / ${entry.size} B`, entry.id)));
+        ...result.entries.map(entry => new Option(`${entry.version} / ${entry.name} / ${sizeText(entry)}`, entry.id)));
       $("firmware-status").textContent = `${result.label}: ${result.entries.length} archivos. Consulta: ${result.fetchedAt}. Caduca: ${result.expiresAt}.`;
     }));
     $("firmware-entry").addEventListener("change", () => {
@@ -124,7 +166,7 @@
       metadata.replaceChildren();
       if (entry) {
         const info = document.createElement("span");
-        info.textContent = `${entry.publisher} | ${entry.name} | ${entry.size} B | ${entry.expectedSHA256 ? `SHA-256 publicado: ${entry.expectedSHA256}` : "Sin hash publicado: se verificaran HTTPS, tamano y formato ZIP; SHA-256 solo calculado localmente."} `;
+        info.textContent = `${entry.publisher} | ${entry.name} | ${sizeText(entry)} | ${entry.expectedSHA256 ? `SHA-256 publicado: ${entry.expectedSHA256}` : web ? "Sin hash publicado: SHA-256 solo calculado localmente." : "Sin hash publicado: se verificaran HTTPS, tamano y formato ZIP; SHA-256 solo calculado localmente."} `;
         const source = document.createElement("a");
         source.textContent = "Ver publicacion original";
         const url = new URL(entry.source);
@@ -133,7 +175,13 @@
         source.target = "_blank";
         source.rel = "noopener noreferrer";
         metadata.append(info, source);
-      }
+        if (web) {
+          const official = new URL(entry.url);
+          R.assert(official.protocol === "https:" && ["github.com", "www.opengd77.com"].includes(official.hostname), "Fuente del catalogo no permitida.");
+          $("firmware-source").href = official.href;
+          $("firmware-source").hidden = false;
+        }
+      } else if (web) $("firmware-source").hidden = true;
       refreshState();
     });
     $("firmware-confirm").addEventListener("change", refreshState);
@@ -146,6 +194,24 @@
       download(entry.name, loaded.data, entry.format === "zip" ? "application/zip" : "application/octet-stream");
       $("firmware-status").textContent = `${entry.name}: verificado y descarga solicitada. SHA-256 ${loaded.manifest.sha256}. ${loaded.manifest.warning}`;
       log(`Descarga oficial: ${entry.url}; SHA-256 ${loaded.manifest.sha256}. No se ha escrito en la radio.`);
+    }));
+    if (web) $("firmware-file").addEventListener("change", () => perform("Verificar archivo cargado", async () => {
+      const entry = selected();
+      const file = $("firmware-file").files[0];
+      loaded = null;
+      R.assert(entry && $("firmware-confirm").checked, "Confirma modelo y variante.");
+      R.assert(file && file.size > 0 && file.size <= MAX_FILE, "El archivo debe tener entre 1 B y 4 MiB.");
+      const data = new Uint8Array(await file.arrayBuffer());
+      let checked = entry;
+      if (entry.size == null) {
+        R.assert(TARGETS[entry.target].pattern.test(file.name), "El nombre del archivo no corresponde al modelo seleccionado.");
+        R.assert(data[0] === 0x50 && data[1] === 0x4b && data[2] === 3 && data[3] === 4, "El archivo no es un ZIP.");
+        checked = { ...entry, name: file.name };
+      }
+      loaded = await verifyLocalFirmware(checked, data);
+      refreshState();
+      $("firmware-status").textContent = `${checked.name}: verificado. SHA-256 ${loaded.manifest.sha256}. ${loaded.manifest.warning}`;
+      log(`Firmware cargado: ${checked.name}; SHA-256 ${loaded.manifest.sha256}. No se ha escrito en la radio.`);
     }));
     $("firmware-manifest").addEventListener("click", () => perform("Guardar manifiesto de procedencia", async () => {
       R.assert(loaded, "Primero descarga el firmware.");
@@ -161,6 +227,6 @@
     }));
     refreshState();
   }
-  Object.assign(R, { mountFirmwareCatalog, verifyFirmwarePayload });
+  Object.assign(R, { mountFirmwareCatalog, verifyFirmwarePayload, verifyLocalFirmware });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);
