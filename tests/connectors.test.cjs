@@ -1,11 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const R = require("..\\radio-core.js");
-require("..\\transports.js");
-require("..\\backup-store.js");
-require("..\\quansheng-connector.js");
-require("..\\gd77-connector.js");
-require("..\\codeplug-editor.js");
+const R = require("../radio-core.js");
+require("../transports.js");
+require("../backup-store.js");
+require("../quansheng-connector.js");
+require("../gd77-connector.js");
+require("../codeplug-editor.js");
 
 const le = data => new DataView(data.buffer, data.byteOffset, data.byteLength);
 const key = [0x16, 0x6c, 0x14, 0xe6, 0x2e, 0x91, 0x0d, 0x40, 0x21, 0x35, 0xd5, 0x40, 0x13, 0x03, 0xe9, 0x80];

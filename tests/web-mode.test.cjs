@@ -207,3 +207,31 @@ test("satellites: expired previous entries are dropped, one bad entry does not h
   assert.throws(() => R.pickSatellite({ format: "other", version: 1, satellites: [] }, "25544"), /formato/i);
   assert.throws(() => R.pickSatellite("<html>", "25544"), /formato/i);
 });
+
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { ALLOWED_FILES: allowed } = require("../server.cjs");
+const { build } = require("../scripts/build-pages.cjs");
+const read = name => fs.readFileSync(path.join(__dirname, "..", name), "utf8");
+
+test("pages build copies only the allow-list plus runtime.json and .nojekyll", () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "pages-"));
+  build(out);
+  const files = fs.readdirSync(out).sort();
+  assert.deepEqual(files, [...allowed, ".nojekyll", "runtime.json"].sort());
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, "runtime.json"), "utf8")), { mode: "web" });
+  fs.rmSync(out, { recursive: true });
+});
+test("client code never uses absolute paths", () => {
+  for (const name of allowed.filter(n => n.endsWith(".js") && n !== "satellite.min.js")) {
+    assert.doesNotMatch(read(name), /fetch\(\s*[`"']\//, name);
+    assert.doesNotMatch(read(name), /[`"']\/(api\/|runtime\.json)/, name);
+  }
+});
+test("pages workflow pins actions by SHA and keeps minimal permissions", () => {
+  const wf = read(".github/workflows/pages.yml");
+  for (const use of wf.matchAll(/uses:\s*(\S+)/g)) assert.match(use[1], /@[0-9a-f]{40}$/, use[1]);
+  assert.match(wf, /contents: read/); assert.match(wf, /pages: write/); assert.match(wf, /id-token: write/);
+  assert.doesNotMatch(wf, /secrets\./);
+});

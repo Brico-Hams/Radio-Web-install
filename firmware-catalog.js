@@ -126,7 +126,7 @@
     }
     $("firmware-targets").addEventListener("click", () => perform("Consultar modelos oficiales", async () => {
       targets = web ? Object.entries(TARGETS).map(([id, target]) => ({ id, family: target.family, label: target.label }))
-        : await requestJSON("/api/firmware/targets");
+        : await requestJSON("api/firmware/targets");
       R.assert(Array.isArray(targets), "Lista de modelos no valida.");
       renderTargets();
     }));
@@ -155,7 +155,7 @@
       const target = $("firmware-target").value;
       R.assert(targets.some(item => item.id === target && item.family === family()), "Modelo no perteneciente a la familia seleccionada.");
       clear("Consultando fuente oficial...");
-      const result = web ? await webCatalog(target) : await requestJSON(`/api/firmware/catalog?target=${encodeURIComponent(target)}`);
+      const result = web ? await webCatalog(target) : await requestJSON(`api/firmware/catalog?target=${encodeURIComponent(target)}`);
       R.assert(result.target === target && Array.isArray(result.entries) && result.entries.length > 0, "Catalogo sin activos reconocidos.");
       catalog = result;
       $("firmware-entry").replaceChildren(new Option("Selecciona firmware y variante", ""),
@@ -194,7 +194,7 @@
       const entry = selected();
       loaded = null;
       R.assert(entry && $("firmware-confirm").checked, "Confirma modelo y variante.");
-      const result = await requestJSON(`/api/firmware/file?id=${encodeURIComponent(entry.id)}`);
+      const result = await requestJSON(`api/firmware/file?id=${encodeURIComponent(entry.id)}`);
       loaded = await verifyFirmwarePayload(entry, result);
       download(entry.name, loaded.data, entry.format === "zip" ? "application/zip" : "application/octet-stream");
       $("firmware-status").textContent = `${entry.name}: verificado y descarga solicitada. SHA-256 ${loaded.manifest.sha256}. ${loaded.manifest.warning}`;

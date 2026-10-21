@@ -124,7 +124,7 @@
     async function request(endpoint, params = {}) {
       if ((endpoint === "satellite" || endpoint === "transmitters") && (await R.runtime).mode === "web") return webSatellite(endpoint, params);
       R.assert(root.location.protocol !== "file:", "Los proveedores requieren npm start y el servidor local.");
-      const response = await fetch(`/api/data/${endpoint}?${new URLSearchParams(params)}`, {
+      const response = await fetch(`api/data/${endpoint}?${new URLSearchParams(params)}`, {
         credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(40000)
       });
       R.assert((response.headers.get("content-type") || "").includes("application/json"), "API de proveedores no disponible. Reinicia npm start.");
