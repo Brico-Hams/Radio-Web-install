@@ -2,7 +2,7 @@
 const { createHash } = require("node:crypto");
 const hash = data => createHash("sha256").update(data).digest("hex");
 const core = require("./firmware-core.js").firmwareCore;
-const { TARGETS, REPO } = core;
+const { TARGETS, SOURCES } = core;
 const MAX_FILE = 4 * 1024 * 1024;
 const TTL = 10 * 60 * 1000;
 class FirmwareError extends Error {
@@ -27,7 +27,7 @@ function validateHop(value, initial) {
     requireCondition(url.href === source.href, "Redireccion del catalogo GitHub no autorizada.");
   } else {
     requireCondition(source.hostname === "github.com" &&
-      source.pathname.startsWith(`/${REPO}/releases/download/`), "Origen GitHub no autorizado.");
+      SOURCES.some(item => source.pathname.startsWith(`/${item.repo}/releases/download/`)), "Origen GitHub no autorizado.");
     requireCondition((url.origin === source.origin && url.pathname === source.pathname && !url.search) ||
       (["release-assets.githubusercontent.com", "objects.githubusercontent.com"].includes(url.hostname) && url.pathname.startsWith("/")),
     "Redireccion de activo GitHub fuera de la CDN autorizada.");
@@ -140,8 +140,10 @@ class FirmwareService {
     const config = TARGETS[target];
     let files;
     if (config.family === "quansheng") {
-      const raw = await fetchLimited(`https://api.github.com/repos/${REPO}/releases/latest`, 1024 * 1024, this.fetcher);
-      files = parseF4Release(JSON.parse(raw.toString("utf8")), target);
+      files = await core.loadQuanshengEntries(target, async url => {
+        const raw = await fetchLimited(url, 4 * 1024 * 1024, this.fetcher);
+        return JSON.parse(raw.toString("utf8"));
+      });
     } else {
       const root = `https://www.opengd77.com/downloads/releases/${config.group}/`;
       const raw = await fetchLimited(root, 1024 * 1024, this.fetcher);

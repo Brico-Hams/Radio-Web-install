@@ -61,15 +61,15 @@
   }
   async function mountFirmwareCatalog({ page, model, action, download, log, useImage }) {
     const web = (await R.runtime).mode === "web";
-    const { TARGETS, REPO, parseF4Release } = R.firmwareCore;
+    const { TARGETS, loadQuanshengEntries } = R.firmwareCore;
     const panel = document.createElement("section");
     panel.className = "panel operations firmware-panel";
     panel.setAttribute("aria-label", "Catalogo oficial de firmware");
     panel.innerHTML = `<h2>Descargar firmware de fuentes oficiales</h2>
-      <p class="muted">Solo publicaciones estables: Armel F4HWN (GitHub Releases) y OpenGD77 (servidor oficial). Sin mirrors, URL personalizadas, firmware donante ni versiones de desarrollo. Descargar no escribe en la radio ni sustituye un respaldo.</p>
+      <p class="muted">Solo publicaciones estables: Armel F4HWN y reald ARDF (GitHub Releases), y OpenGD77 (servidor oficial). Quansheng incluye el historial reconocido con SHA-256 publicado; ARDF, F4HWN anterior a v6 y SA818 son solo descarga, no imagenes para slots. Sin mirrors ni versiones de desarrollo. Descargar no escribe en la radio ni sustituye un respaldo.</p>
       <label for="firmware-target">Modelo y revision exactos de destino (seleccion manual)</label>
       <select id="firmware-target"><option value="">Primero consulta los modelos disponibles</option></select>
-      <div class="operation-buttons"><button id="firmware-targets" class="button secondary" type="button">Consultar modelos oficiales</button><button id="firmware-refresh" class="button secondary" type="button">Consultar ultima version estable</button></div>
+      <div class="operation-buttons"><button id="firmware-targets" class="button secondary" type="button">Consultar modelos oficiales</button><button id="firmware-refresh" class="button secondary" type="button">${page === "quansheng" ? "Consultar versiones estables" : "Consultar ultima version estable"}</button></div>
       <p id="firmware-status" role="status" class="muted">No se ha consultado ninguna fuente. MD-380, DM-32 y UV008 no se ofrecen: fuente de activos no confirmada.</p>
       <label for="firmware-entry">Firmware / variante</label><select id="firmware-entry" disabled><option value="">Sin catalogo</option></select>
       <p id="firmware-metadata" class="card-note"></p>
@@ -124,7 +124,7 @@
       $("firmware-target").replaceChildren(new Option("Selecciona modelo exacto", ""),
         ...options.map(target => new Option(target.label, target.id)));
       if (page === "quansheng" && options.some(target => target.id === model.value)) $("firmware-target").value = model.value;
-      clear(options.length ? "Selecciona la revision exacta y consulta la ultima version estable." : "No hay una fuente de activos confirmada para la familia seleccionada.");
+      clear(options.length ? "Selecciona la revision exacta y consulta el catalogo estable." : "No hay una fuente de activos confirmada para la familia seleccionada.");
     }
     $("firmware-targets").addEventListener("click", () => perform("Consultar modelos oficiales", async () => {
       targets = web ? Object.entries(TARGETS).map(([id, target]) => ({ id, family: target.family, label: target.label }))
@@ -142,10 +142,13 @@
           edition: "Standard", url, source: url, publisher: "OpenGD77 / VK3KYY", expectedSHA256: null, size: null,
           verification: "manual-file-no-published-hash", format: "zip", slotCompatible: false }] };
       }
-      const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`,
-        { signal: AbortSignal.timeout(30000), credentials: "omit", headers: { Accept: "application/vnd.github+json" } });
-      R.assert(response.ok, `GitHub respondio HTTP ${response.status}. Reintenta mas tarde.`);
-      const entries = parseF4Release(await response.json(), target).map(entry => ({ ...entry, id: `${target}|${entry.url}` }));
+      const files = await loadQuanshengEntries(target, async url => {
+        const response = await fetch(url,
+          { signal: AbortSignal.timeout(30000), credentials: "omit", headers: { Accept: "application/vnd.github+json" } });
+        R.assert(response.ok, `GitHub respondio HTTP ${response.status}. Reintenta mas tarde.`);
+        return response.json();
+      });
+      const entries = files.map(entry => ({ ...entry, id: `${target}|${entry.url}` }));
       return { target, label: config.label, fetchedAt, expiresAt: "n/a", entries };
     }
     $("firmware-target").addEventListener("change", () => clear("Modelo cambiado. Consulta de nuevo para evitar mezclar firmware."));
@@ -161,7 +164,7 @@
       R.assert(result.target === target && Array.isArray(result.entries) && result.entries.length > 0, "Catalogo sin activos reconocidos.");
       catalog = result;
       $("firmware-entry").replaceChildren(new Option("Selecciona firmware y variante", ""),
-        ...result.entries.map(entry => new Option(`${entry.version} / ${entry.name} / ${sizeText(entry)}`, entry.id)));
+        ...result.entries.map(entry => new Option(`${entry.publisher} / ${entry.version} / ${entry.name} / ${sizeText(entry)}${entry.family === "quansheng" && !entry.slotCompatible ? " / solo descarga" : ""}`, entry.id)));
       $("firmware-status").textContent = `${result.label}: ${result.entries.length} archivos. Consulta: ${result.fetchedAt}. Caduca: ${result.expiresAt}.`;
     }));
     $("firmware-entry").addEventListener("change", () => {
@@ -173,7 +176,7 @@
       metadata.replaceChildren();
       if (entry) {
         const info = document.createElement("span");
-        info.textContent = `${entry.publisher} | ${entry.name} | ${sizeText(entry)} | ${entry.expectedSHA256 ? `SHA-256 publicado: ${entry.expectedSHA256}` : web ? "Sin hash publicado: SHA-256 solo calculado localmente." : "Sin hash publicado: se verificaran HTTPS, tamano y formato ZIP; SHA-256 solo calculado localmente."} `;
+        info.textContent = `${entry.publisher} | ${entry.name} | ${sizeText(entry)} | ${entry.family === "quansheng" && !entry.slotCompatible ? "Solo descarga: no se admite instalar esta variante en slots desde esta web. " : ""}${entry.expectedSHA256 ? `SHA-256 publicado: ${entry.expectedSHA256}` : web ? "Sin hash publicado: SHA-256 solo calculado localmente." : "Sin hash publicado: se verificaran HTTPS, tamano y formato ZIP; SHA-256 solo calculado localmente."} `;
         const source = document.createElement("a");
         source.textContent = "Ver publicacion original";
         const url = new URL(entry.source);

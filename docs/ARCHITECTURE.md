@@ -9,7 +9,7 @@ Al arrancar, `runtime-mode.js` pide `runtime.json` (ruta relativa, sin caché). 
 | Aspecto | Web (Pages) | Local |
 | --- | --- | --- |
 | Servidor | Ninguno, solo estáticos | `server.cjs` en `127.0.0.1:8787` |
-| Firmware F4HWN | Catálogo desde `api.github.com`; el usuario carga el archivo y se verifica tamaño y SHA-256 publicado | Descarga verificada por el servidor |
+| Firmware F4HWN / ARDF K1-K5 V3 | Historial estable desde `api.github.com` de Armel y reald; el usuario carga el archivo y se verifica tamaño y SHA-256 publicado | Descarga verificada por el servidor; ARDF, versiones anteriores a v6 y SA818 solo descarga |
 | Firmware OpenGD77 | Carga manual del ZIP (nombre y firma ZIP; sin hash del editor) | Descarga por el servidor |
 | RadioID | Carga de `user.csv` (100 MiB, filtrado, 5 000 filas mostradas) y perfil opcional en `localStorage` | API vía servidor |
 | RepeaterBook | No disponible | Token aprobado, solo en el servidor |

@@ -43,7 +43,7 @@ Cada decisión indica el contexto, lo decidido, las alternativas descartadas y s
 
 ## ADR-007 · Solo fuentes oficiales de firmware, sin espejos
 
-- **Decisión:** el catálogo se limita a los GitHub Releases del repositorio oficial de F4HWN (`armel/uv-k1-k5v3-firmware-custom`) y a opengd77.com, con redirecciones restringidas y límites de tamaño.
+- **Decisión:** el catálogo se limita a los GitHub Releases del repositorio oficial de F4HWN (`armel/uv-k1-k5v3-firmware-custom`), al proyecto ARDF para K1/K5 V3 (`reald/uv-k1-k5v3-firmware-custom`) y a opengd77.com, con redirecciones restringidas y límites de tamaño. Quansheng incluye el historial estable reconocido con SHA-256 publicado. ARDF, F4HWN anterior a v6 y SA818 se ofrecen solo para descarga; no amplían el soporte de escritura.
 - **Consecuencias:** si un proveedor cambia su estructura, la descarga falla de forma explícita en vez de recurrir a fuentes no verificadas. SHA-256 detecta corrupción, pero no prueba la autenticidad.
 
 ## ADR-008 · Credenciales de RepeaterBook solo en el servidor

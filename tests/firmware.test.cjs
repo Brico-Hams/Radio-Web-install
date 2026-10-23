@@ -8,7 +8,10 @@ const { createServer } = require("../server.cjs");
 const R = require("../radio-core.js");
 require("../firmware-catalog.js");
 const repo = "https://github.com/armel/uv-k1-k5v3-firmware-custom";
-const api = "https://api.github.com/repos/armel/uv-k1-k5v3-firmware-custom/releases/latest";
+const api = "https://api.github.com/repos/armel/uv-k1-k5v3-firmware-custom/releases?per_page=100&page=1";
+const ardfRepo = "https://github.com/reald/uv-k1-k5v3-firmware-custom";
+const ardfAPI = "https://api.github.com/repos/reald/uv-k1-k5v3-firmware-custom/releases?per_page=100&page=1";
+const { parseQuanshengRelease, loadQuanshengEntries } = R.firmwareCore;
 const official = "https://www.opengd77.com/downloads/releases/MK22/";
 const sha = data => createHash("sha256").update(data).digest("hex");
 function image() {
@@ -26,7 +29,17 @@ function release(data = image()) {
   };
 }
 function fakeF4(data = image(), metadata = release(data)) {
-  return async url => new Response(url === api ? JSON.stringify(metadata) : data);
+  return async url => new Response(url === api ? JSON.stringify([metadata]) : url === ardfAPI ? "[]" : data);
+}
+function ardfRelease(tag = "ARDF-K5v3_K1-v0.5", name = "f4hwn.ARDF_K5v3_K1.bin") {
+  const metadata = release();
+  return { ...metadata, tag_name: tag, html_url: `${ardfRepo}/releases/tag/${tag}`,
+    assets: [{ ...metadata.assets[0], name, browser_download_url: `${ardfRepo}/releases/download/${tag}/${name}` }] };
+}
+function historicalRelease(version, name) {
+  const metadata = release();
+  return { ...metadata, tag_name: version, html_url: `${repo}/releases/tag/${version}`,
+    assets: [{ ...metadata.assets[0], name, browser_download_url: `${repo}/releases/download/${version}/${name}` }] };
 }
 function row(name, size = 0) {
   return `<tr><td><a href="${name}">${name}</a></td><td data-sort="20260131">date</td><td data-sort="${size}">size</td></tr>`;
@@ -46,6 +59,85 @@ test("F4 catalog accepts only stable same-repository releases and known matching
   }
   assert.throws(() => parseF4Release({ ...metadata, assets: [{ ...metadata.assets[0], name: "f4hwn.labs.v6.1.0.bin" }] }, "UV-K1"));
 });
+test("ARDF stable releases are verified downloads, never slot images", () => {
+  for (const metadata of [ardfRelease(), ardfRelease("ARDF-K5v3_K1-v0.5.1", "UV_K5v3_K1_ARDF.bin")]) {
+    for (const target of ["UV-K1", "UV-K5-V3"]) {
+      const [entry] = parseQuanshengRelease(metadata, target, "reald/uv-k1-k5v3-firmware-custom");
+      assert.equal(entry.edition, "ARDF");
+      assert.equal(entry.publisher, "reald / ARDF");
+      assert.equal(entry.expectedSHA256, sha(image()));
+      assert.equal(entry.slotCompatible, false);
+    }
+  }
+  for (const patch of [{ prerelease: true }, { draft: true }, { html_url: release().html_url },
+    { tag_name: "ARDF-v0.1a" }]) {
+    assert.throws(() => parseQuanshengRelease({ ...ardfRelease(), ...patch }, "UV-K1", "reald/uv-k1-k5v3-firmware-custom"));
+  }
+  for (const patch of [{ digest: null }, { browser_download_url: release().assets[0].browser_download_url }]) {
+    const metadata = ardfRelease();
+    assert.throws(() => parseQuanshengRelease({ ...metadata, assets: [{ ...metadata.assets[0], ...patch }] },
+      "UV-K1", "reald/uv-k1-k5v3-firmware-custom"));
+  }
+  assert.throws(() => parseQuanshengRelease(ardfRelease(), "UV-K1", "untrusted/repo"));
+});
+test("historical F4HWN filters exact hardware, release and specialized variants", () => {
+  for (const [target, hardware] of [["UV-K1", "k1"], ["UV-K5-V3", "k5v3"]]) {
+    const metadata = historicalRelease("v4.3.0", `f4hwn.${hardware}.fusion.v4.3.bin`);
+    assert.equal(parseF4Release(metadata, target)[0].slotCompatible, false);
+    const other = target === "UV-K1" ? "UV-K5-V3" : "UV-K1";
+    assert.deepEqual(parseQuanshengRelease(metadata, other), []);
+  }
+  for (const [version, name] of [["v5.2.0", "f4hwn.fusion.v5.2.0.bin"],
+    ["v5.9.0", "f4hwn.fusion.v5.9.0.sa818.bin"], ["v6.2.0", "f4hwn.fusion.v6.2.0.sa818.bin"]]) {
+    assert.equal(parseF4Release(historicalRelease(version, name), "UV-K1")[0].slotCompatible, false);
+  }
+  assert.equal(parseF4Release(release(), "UV-K5-V3")[0].slotCompatible, true);
+  assert.throws(() => parseF4Release(historicalRelease("v5.2.0", "f4hwn.fusion.v5.1.0.bin"), "UV-K1"));
+  assert.throws(() => parseF4Release(release(), "GD-77"));
+});
+test("shared catalog loads both publishers, sorts versions and paginates without admitting development builds", async () => {
+  const requests = [];
+  const old = historicalRelease("v5.2.0", "f4hwn.fusion.v5.2.0.bin");
+  const entries = await loadQuanshengEntries("UV-K5-V3", async url => {
+    requests.push(url);
+    if (url === api) return Array.from({ length: 100 }, () => ({ ...release(), prerelease: true }));
+    if (url === api.replace("&page=1", "&page=2")) return [old, release(), { ...release(), draft: true }];
+    if (url === ardfAPI) return [ardfRelease(), { ...ardfRelease(), prerelease: true }];
+    assert.fail(`Unexpected URL ${url}`);
+  });
+  assert.equal(requests.length, 3);
+  assert.deepEqual(entries.map(entry => entry.version), ["v6.2.0", "v5.2.0", "ARDF-K5v3_K1-v0.5"]);
+  await assert.rejects(loadQuanshengEntries("UV-K1", async () => ({})), /Historial/);
+  await assert.rejects(loadQuanshengEntries("UV-K1", async () => []), /No hay imagenes/);
+  await assert.rejects(loadQuanshengEntries("UV-K1", async () => Array(100).fill({ prerelease: true })), /incompleto/);
+});
+test("ARDF catalog download retains publisher provenance and rejects changed bytes", async () => {
+  const data = image();
+  const service = new FirmwareService(async url => new Response(
+    url === api ? "[]" : url === ardfAPI ? JSON.stringify([ardfRelease()]) : data));
+  const [entry] = (await service.catalog("UV-K5-V3")).entries;
+  const file = await service.download(entry.id);
+  const payload = { manifest: file.manifest, data: file.data.toString("base64") };
+  assert.equal((await R.verifyFirmwarePayload(entry, payload)).manifest.slotCompatible, false);
+  assert.equal(file.manifest.publisherHashVerified, true);
+  const changed = new Uint8Array(data); changed[20] = 1;
+  await assert.rejects(R.verifyLocalFirmware(entry, changed, entry.name), /SHA-256/);
+});
+test("failure of either publisher never caches a partial catalog", async () => {
+  let failARDF = true;
+  const service = new FirmwareService(async url => {
+    if (url === api) return new Response(JSON.stringify([release()]));
+    if (url === ardfAPI) return failARDF
+      ? new Response("Unavailable", { status: 503 })
+      : new Response(JSON.stringify([ardfRelease()]));
+    assert.fail(`Unexpected URL ${url}`);
+  });
+  await assert.rejects(service.catalog("UV-K1"), /HTTP 503/);
+  assert.equal(service.cache.size, 0);
+  assert.equal(service.entries.size, 0);
+  failARDF = false;
+  assert.equal((await service.catalog("UV-K1")).entries.length, 2);
+});
 test("redirect policy rejects host lookalikes, private hosts, credentials, downgrade, query and path changes", () => {
   const binary = release().assets[0].browser_download_url;
   assert.equal(validateHop("https://release-assets.githubusercontent.com/path?token=test", binary).hostname, "release-assets.githubusercontent.com");
@@ -56,6 +148,9 @@ test("redirect policy rejects host lookalikes, private hosts, credentials, downg
     assert.throws(() => validateHop(bad, official));
   }
   assert.throws(() => validateHop(`${api}?extra=1`, api));
+  const ardfBinary = ardfRelease().assets[0].browser_download_url;
+  assert.equal(validateHop("https://release-assets.githubusercontent.com/ardf", ardfBinary).hostname, "release-assets.githubusercontent.com");
+  assert.throws(() => validateHop(ardfBinary.replace("/reald/", "/unknown/"), ardfBinary.replace("/reald/", "/unknown/")));
 });
 test("bounded fetching follows permitted redirects and rejects redirect loops and upstream failures", async () => {
   let calls = 0;
@@ -148,13 +243,13 @@ test("catalog cache deduplicates requests and expires download identifiers", asy
   const [first, second] = await Promise.all([service.catalog("UV-K1"), service.catalog("UV-K1")]);
   assert.equal(first, second);
   assert.equal(await service.catalog("UV-K1"), first);
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
   const id = first.entries[0].id;
   assert.equal((await service.download(id)).manifest.backupSubstitute, false);
   now += 600001;
   await assert.rejects(service.download(id), /caducado/);
   assert.notEqual(await service.catalog("UV-K1"), first);
-  assert.equal(calls, 3);
+  assert.equal(calls, 5);
 });
 test("unknown model/ID never fetches a client-provided URL", async () => {
   let calls = 0;
@@ -168,7 +263,8 @@ test("concurrency is bounded and failed downloads release capacity", async () =>
   let unblock;
   const blocked = new Promise(resolve => { unblock = resolve; });
   const service = new FirmwareService(async url => {
-    if (url === api) return new Response(JSON.stringify(release()));
+    if (url === api) return new Response(JSON.stringify([release()]));
+    if (url === ardfAPI) return new Response("[]");
     await blocked;
     return new Response("upstream unavailable", { status: 503 });
   });
@@ -186,7 +282,7 @@ test("upstream JSON/network failures do not poison pending catalogs", async () =
     calls++;
     if (calls === 1) return new Response("not JSON");
     if (calls === 2) throw new Error("Network unavailable");
-    return new Response(JSON.stringify(release()));
+    return new Response(calls === 3 ? JSON.stringify([release()]) : "[]");
   });
   await assert.rejects(service.catalog("UV-K1"));
   await assert.rejects(service.catalog("UV-K1"), /Network/);
