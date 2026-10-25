@@ -41,6 +41,19 @@ function baseFlash() {
   for (let i = 0; i < 512; i++) flash[0x10000 + i] = i & 255;
   return flash;
 }
+function spectrumBlob() {
+  const bytes = new Uint8Array(208);
+  bytes.set(new TextEncoder().encode("BHSP"));
+  bytes[4] = 1; bytes[5] = 1;
+  bytes.set(new TextEncoder().encode("RAM1"), 12);
+  le(bytes).setUint32(20, 14500000, true);
+  le(bytes).setUint32(24, 125, true);
+  le(bytes).setUint16(28, 128, true);
+  le(bytes).setUint16(30, 20, true);
+  bytes[32] = 1;
+  le(bytes).setUint32(204, R.crc32(bytes.subarray(0, 204)), true);
+  return bytes;
+}
 class QuanshengDevice extends R.BufferedTransport {
   constructor() { super(); this.flash = baseFlash(); this.commands = []; this.configuration = new Uint8Array(0xa180).fill(255); }
   async open(baud) { assert.equal(baud, 38400); this.opened = true; }
@@ -52,6 +65,87 @@ class QuanshengDevice extends R.BufferedTransport {
     if (type === 0x0514) {
       result = new Uint8Array(36);
       result.set(new TextEncoder().encode(this.version || "F4HWN v6.2.0"));
+    } else if (type === 0x7b20) {
+      assert.equal(data.length, 4);
+      assert.equal(data[0], 1);
+      assert.equal(data[1], 0);
+      result = new Uint8Array(140);
+      result[0] = 1; result[2] = 3; result[3] = 5;
+      result.set(data.subarray(2), 4);
+      le(result).setUint32(8, 7, true);
+      le(result).setUint32(12, 60000, true);
+      le(result).setUint32(16, 15000, true);
+      le(result).setUint16(32, 2, true);
+      result[34] = 3; result[35] = 1;
+      le(result).setUint32(36, 1000, true);
+      le(result).setUint32(40, 12000, true);
+      if (this.statsWrongSequence) result[4] ^= 1;
+      if (this.statsNoSession) result[1] = 3;
+      if (this.statsBadFlags) result[2] = 16;
+      if (this.statsBadGain) result[34] = 6;
+      if (this.statsBadTime) le(result).setUint32(40, 16000, true);
+      if (this.statsBadFox) result[3] = 1;
+      if (this.statsBadEmpty) result[20] = 1;
+      if (this.statsBadReserved) result[6] = 1;
+      if (this.statsError) result[2] = 15;
+    } else if (type === 0x7b10) {
+      const operation = data[1];
+      assert.equal(data.length, operation === 2 || operation === 3 ? 110 : 6);
+      result = new Uint8Array(operation < 2 ? 110 : 6);
+      result[0] = 1;
+      result.set(data.subarray(2, 6), 2);
+      const token = le(data).getUint32(2, true);
+      assert.notEqual(token, 0);
+      this.presets ||= spectrumBlob();
+      if (operation === 0) {
+        this.presetToken = token;
+        this.presetSnapshot = this.presets.slice();
+        result.set(this.presetSnapshot.subarray(0, 104), 6);
+      } else if (operation === 1) {
+        assert.equal(token, this.presetToken);
+        result.set(this.presetSnapshot.subarray(104), 6);
+      } else if (operation === 2) {
+        this.presetToken = token;
+        this.presetUpload = new Uint8Array(208);
+        this.presetUpload.set(data.subarray(6));
+      } else if (operation === 3) {
+        assert.equal(token, this.presetToken);
+        this.presetUpload.set(data.subarray(6), 104);
+      } else if (operation === 4) {
+        assert.equal(token, this.presetToken);
+        if (!this.ignorePresetCommit) this.presets = this.presetUpload.slice();
+      }
+      if (this.presetWrongToken) result[2] ^= 1;
+      if (this.presetRejected) result[1] = 3;
+      if (this.presetCorruptRead && operation === 1) result[10] ^= 1;
+    } else if (type === 0x7b00) {
+      assert.equal(data.length, 8);
+      assert.equal(data[0], 1);
+      const operation = data[1];
+      result = new Uint8Array(16);
+      result[0] = 1;
+      result.set(data.subarray(2, 4), 2);
+      le(result).setUint32(4, 7, true);
+      if (this.catPending && operation === 0 && !this.catStuck) {
+        this.catApplied = this.catTarget;
+        this.catPending = false;
+      }
+      if (operation !== 0) {
+        result[1] = this.catActive ? 1 : 5;
+        if (this.catActive) {
+          this.catTarget = operation === 1 ? le(data).getUint32(4, true) : 43500000;
+          this.catRemote = operation === 1;
+          this.catPending = true;
+        }
+      }
+      le(result).setUint32(8, this.catActive ? this.catApplied || 43500000 : 0, true);
+      le(result).setUint32(12, (this.catActive ? 1 : 0) | (this.catRemote ? 2 : 0) | (this.catPending ? 4 : 0), true);
+      if (this.catWrongSequence) result[2] ^= 1;
+      if (this.catBadVersion) result[0] = 2;
+      if (this.catBadFlags) le(result).setUint32(12, 8, true);
+      if (this.catBadFrequency) le(result).setUint32(8, 1, true);
+      if (this.catBadCapabilities) le(result).setUint32(4, 15, true);
+      if (this.catRejected) result[1] = 6;
     } else if (type === 0x051b) {
       const offset = le(data).getUint16(0, true);
       const length = data[2];
@@ -132,6 +226,145 @@ class QuanshengDevice extends R.BufferedTransport {
     this.push(answer.subarray(5));
   }
 }
+test("CAT RX Bricohams consulta capacidades, confirma aplicacion y restaura sin escribir memoria", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  assert.equal((await connector.getCatStatus()).active, false);
+  device.catActive = true;
+  connector.catSequence = 0xffff;
+  const state = await connector.setCatReceive(14580000);
+  assert.equal(state.appliedFrequency10Hz, 14580000);
+  assert.equal(state.remote, true);
+  assert.equal(state.pending, false);
+  assert.equal(state.leaseMilliseconds, 3000);
+  const stopped = await connector.stopCatReceive();
+  assert.equal(stopped.appliedFrequency10Hz, 43500000);
+  assert.equal(stopped.remote, false);
+  assert(device.commands.every(command => [0x0514, 0x7b00].includes(command.type)));
+  assert(device.commands.some(command => command.type === 0x7b00 && le(command.data).getUint16(2, true) === 0));
+  await connector.disconnect();
+});
+test("CAT RX rechaza frecuencias invalidas antes de enviar y no acepta estado pendiente como exito", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const count = device.commands.length;
+  for (const value of [0, 13599999, 17400001, 39999999, 47000001, 14580000.1, NaN, "14580000"]) {
+    assert.throws(() => connector.setCatReceive(value), /fuera de banda/);
+  }
+  assert.equal(device.commands.length, count);
+  await assert.rejects(connector.setCatReceive(14580000), /Entra primero/);
+  assert(!device.commands.some(command => command.type === 0x7b00 && command.data[1] !== 0));
+  await connector.disconnect();
+  await connector.connect("UV-K5-V3");
+  device.catActive = true;
+  device.catStuck = true;
+  await assert.rejects(connector.setCatReceive(14580000), /sigue pendiente/);
+  assert.equal(connector.connected, false);
+  await connector.disconnect();
+});
+test("CAT RX rechaza respuestas corruptas, capacidades desconocidas y errores del firmware", async () => {
+  for (const property of ["catWrongSequence", "catBadVersion", "catBadFlags", "catBadFrequency", "catBadCapabilities", "catRejected"]) {
+    const device = new QuanshengDevice();
+    const connector = new R.QuanshengConnector(device);
+    await connector.connect("UV-K5-V3");
+    device.catActive = true;
+    device[property] = true;
+    await assert.rejects(connector.getCatStatus(), /CAT/);
+    assert.equal(connector.connected, false);
+    await connector.disconnect();
+  }
+});
+test("presets BHSP exportan snapshot y se importan con relectura sin escribir memoria persistente", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const blob = await connector.readSpectrumPresets();
+  assert.deepEqual(blob, spectrumBlob());
+  assert.equal(R.inspectSpectrumPresets(blob).entries[0].name, "RAM1");
+  blob[12] = 70;
+  le(blob).setUint32(204, R.crc32(blob.subarray(0, 204)), true);
+  const result = await connector.writeSpectrumPresets(blob);
+  assert.equal(result.entries[0].name, "FAM1");
+  assert.deepEqual(device.presets, blob);
+  assert(device.commands.every(command => [0x0514, 0x7b10].includes(command.type)));
+  assert.deepEqual(device.commands.filter(command => command.type === 0x7b10).map(command => command.data[1]), [0, 1, 2, 3, 4, 0, 1]);
+  await connector.disconnect();
+});
+test("presets BHSP rechazan CRC, nombres, reservas y configuraciones fuera del adaptador antes de enviar", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const count = device.commands.length;
+  const mutations = [
+    bytes => { bytes[4] = 2; }, bytes => { bytes[5] = 0; }, bytes => { bytes[6] = 1; },
+    bytes => { bytes[7] = 1; }, bytes => { bytes[12] = 0; },
+    bytes => { bytes[14] = 0; bytes[15] = 70; }, bytes => { bytes[33] = 1; },
+    bytes => { bytes[36] = 1; }, bytes => { le(bytes).setUint32(20, 11800000, true); },
+    bytes => { le(bytes).setUint32(20, 17399999, true); },
+    bytes => { le(bytes).setUint32(24, 126, true); }, bytes => { bytes[28] = 127; },
+    bytes => { bytes[30] = 21; }, bytes => { bytes[32] = 3; }
+  ];
+  for (const mutate of mutations) {
+    const bytes = spectrumBlob();
+    mutate(bytes);
+    le(bytes).setUint32(204, R.crc32(bytes.subarray(0, 204)), true);
+    assert.throws(() => connector.writeSpectrumPresets(bytes), /BHSP|Preset/);
+  }
+  const corrupt = spectrumBlob(); corrupt[50] ^= 1;
+  assert.throws(() => connector.writeSpectrumPresets(corrupt), /CRC/);
+  assert.throws(() => connector.writeSpectrumPresets(new Uint8Array(209)));
+  assert.equal(device.commands.length, count);
+  await connector.disconnect();
+});
+test("presets BHSP no presentan rechazos, otra transferencia o relectura diferente como exito", async () => {
+  for (const property of ["presetWrongToken", "presetRejected", "presetCorruptRead", "ignorePresetCommit"]) {
+    const device = new QuanshengDevice();
+    const connector = new R.QuanshengConnector(device);
+    await connector.connect("UV-K5-V3");
+    device[property] = true;
+    const blob = spectrumBlob(); blob[12] = 70;
+    le(blob).setUint32(204, R.crc32(blob.subarray(0, 204)), true);
+    if (property === "ignorePresetCommit") await assert.rejects(connector.writeSpectrumPresets(blob), /no coinciden/);
+    else await assert.rejects(connector.readSpectrumPresets(), /presets|Presets|BHSP/);
+    assert.equal(connector.connected, false);
+    await connector.disconnect();
+  }
+});
+test("estadisticas ARDF exportan observaciones relativas, no detecciones ni ubicacion", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const result = await connector.readArdfStatistics();
+  assert.equal(result.format, "bricohams-ardf-statistics");
+  assert.equal(result.connectionSession, connector.session);
+  assert.equal(result.session, 7);
+  assert.equal(result.active, true);
+  assert.equal(result.synchronized, true);
+  assert.equal(result.elapsedMilliseconds, 15000);
+  assert.deepEqual(result.observations, [{ fox: 2, count: 2, gainIndex: 3, firstMilliseconds: 1000, lastMilliseconds: 12000 }]);
+  assert(Number.isFinite(Date.parse(result.receivedAt)));
+  assert.match(result.warning, /not beacon detections or locations/);
+  assert(device.commands.every(command => [0x0514, 0x7b20].includes(command.type)));
+  device.statsError = true;
+  const errorState = await connector.readArdfStatistics();
+  assert.equal(errorState.firmwareError, true);
+  assert.equal(errorState.countsSaturated, true);
+  await connector.disconnect();
+});
+test("estadisticas ARDF rechazan ausencia de sesion y registros incoherentes", async () => {
+  for (const property of ["statsWrongSequence", "statsNoSession", "statsBadFlags", "statsBadGain",
+    "statsBadTime", "statsBadFox", "statsBadEmpty", "statsBadReserved"]) {
+    const device = new QuanshengDevice();
+    const connector = new R.QuanshengConnector(device);
+    await connector.connect("UV-K5-V3");
+    device[property] = true;
+    await assert.rejects(connector.readArdfStatistics(), /ARDF/);
+    assert.equal(connector.connected, false);
+    await connector.disconnect();
+  }
+});
 class MemoryStore {
   constructor() { this.records = new Map(); this.puts = 0; }
   async put(record) {

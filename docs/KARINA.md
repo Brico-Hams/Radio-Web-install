@@ -13,7 +13,7 @@ se han encontrado fuentes/aviso MIT en ese ZIP.
 
 Este documento describe evidencias del paquete local **Karina-2026.08.21 K5V1
 (Fw+Cal+Instr+K5prog+Rolling)** y las compara con las referencias abiertas indicadas
-por el usuario. No es codigo fuente recuperado, una traduccion integral de sus
+como referencia. No es codigo fuente recuperado, una traduccion integral de sus
 manuales ni una certificacion del firmware. No se ha creado un binario Karina
 Bricohams, modificado el bootloader, flasheado una radio ni probado multiboot V1.
 Si se ha construido una **edicion Bricohams V3 independiente basada en F4HWN**,
@@ -25,11 +25,36 @@ linker, Makefile ni una licencia del firmware. Tener un `.bin` no proporciona su
 proyecto de compilacion ni permite atribuirle la licencia de otro proyecto.
 Los tres archivos Python son controladores CHIRP, no firmware del procesador.
 
-Actualizacion del usuario: indica que «la licencia es MIT». Se registra como
-declaracion aportada, pendiente de identificar componente, titular y texto o
+La atribucion de licencia MIT al firmware sigue siendo una declaracion
+pendiente de identificar componente, titular y texto o
 fuente verificable. No se ha encontrado ese aviso en el paquete inspeccionado
 ni se cambian por ello las licencias de los drivers o F4HWN. Aunque se confirme
 MIT para Karina, sigue faltando su proyecto fuente para una recompilacion.
+
+Al no disponer de fuentes abiertas, la reconstruccion sigue una implementacion
+independiente basada en comportamientos documentados. No se mantiene
+la disponibilidad de fuentes Karina como requisito para escribir funciones
+nuevas. Si sigue siendo imposible prometer una recompilacion Karina o
+equivalencia del 100 % sin implementacion y pruebas. El primer nucleo propio
+ARDF, su contrato y los puntos de integracion pendientes se describen en
+[Bricohams](BRICOHAMS-FIRMWARE.md#nuevo-nucleo-independiente-ardf).
+Ya se construyen tres imagenes independientes para slots V3: ARDF con ciclos,
+Satelites con Doppler RX manual y Espectro con 128 puntos, promedio, peak hold
+y ocho presets de sesion RAM, mas captura VFO-PRO propia de solo recepcion.
+La captura permite sintonia por paso, entrada RX numerica, audio y ajustes
+en los campos RX documentados de R13, preservando los demas bits. Permite
+centrar ventanas y recorrer los presets RAM de forma circular, con blacklist
+temporal de 16 frecuencias exactas y busqueda CTCSS/DCS FM opcional mediante
+el detector upstream, pendiente de validar en RF. No edita calibracion,
+guarda tonos ni transmite.
+Satelites no implementa TLE/SGP4 ni seguimiento
+autonomo. Ninguna ha sido flasheada o validada fisicamente.
+Dividir por funcion no implica que todos los modulos Karina esten recreados.
+Los presets de espectro ya se exportan/importan por USB/UART en archivos BHSP,
+con validacion y relectura; no tienen persistencia interna EEPROM. La imagen
+Satelites dispone de CAT RX experimental y seguimiento orbital desde la web,
+no dentro del MCU. ARDF permite exportar un resumen de observaciones manuales,
+sin GPS. Quedan funciones y comportamientos por reconstruir y verificar.
 
 Se pueden documentar funciones observadas y preparar una implementacion propia
 sobre una base abierta. No se debe anunciar esa implementacion como Karina

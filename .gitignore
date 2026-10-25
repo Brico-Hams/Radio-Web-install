@@ -18,3 +18,9 @@ tmp/
 dist/
 firmware-builds/
 studio.html
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/local.properties
+*.jks
+*.keystore

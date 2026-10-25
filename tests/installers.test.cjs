@@ -36,6 +36,13 @@ test("los lanzadores locales conservan Node 22+ y el servidor solo local", () =>
   assert.match(read("installers/windows/Start.ps1"), /http:\/\/127\.0\.0\.1:8787/);
   assert.match(read("installers/windows/Install.ps1"), /Programs\\Bricohams Radio Workspace/);
 });
+test("los instalables incluyen avisos legales, estado de entrega y licencia del runtime incluido", () => {
+  const build = read("scripts/build-installers.sh");
+  for (const marker of ["LICENSE AUTHORS.md ACKNOWLEDGEMENTS.md SUPPORT.md SECURITY.md",
+    "ayuda-entrega.html", 'runtime/node/LICENSE"', 'windows_root/runtime/LICENSE"']) {
+    assert(build.includes(marker), marker);
+  }
+});
 
 test("Linux y FreeBSD comparten un unico lanzador y Windows reemplaza la app al actualizar", () => {
   const build = read("scripts/build-installers.sh");

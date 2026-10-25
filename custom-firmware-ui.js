@@ -8,6 +8,10 @@
     return Object.keys(options).filter(name => name in selected && selected[name] !== options[name])
       .map(name => `${name}=${selected[name] ? "ON" : "OFF"}`).join(" ");
   }
+  function bricohamsModuleCommand(name) {
+    R.assert(["ardf", "satellite", "spectrum"].includes(name), "Modulo Bricohams desconocido.");
+    return `npm run build:bricohams -- --source '..\\Multiboot\\Fusion61' --output '.\\firmware-builds\\${name}-beta' --preset FieldOps --option ENABLE_FEAT_F4HWN_BEACON=OFF --option ENABLE_VOX=OFF --module ${name}`;
+  }
   function parseSums(text) {
     const sums = new Map();
     for (const line of String(text).split(/\r?\n/)) {
@@ -63,6 +67,12 @@
       <label for="fw-request">Valor para el campo options del workflow</label><textarea id="fw-request" rows="2" readonly></textarea>
       <label for="fw-repo">Repositorio de compilacion</label><input id="fw-repo" value="anatolbricoham/bricohams-firmware">
       <div class="operation-buttons"><button id="fw-copy" class="button secondary" type="button">Copiar peticion</button><a id="fw-run" class="button secondary" target="_blank" rel="noopener noreferrer">Abrir el workflow &nearr;</a></div>
+      <h3>Imagenes Bricohams locales: ARDF, Satelites y Espectro</h3>
+      <p class="card-note">Base F4HWN v6.1.0, independiente del workflow online anterior. Elige una imagen: no se mezclan estos adaptadores. ARDF incluye ciclos; Satelites aplica Doppler RX manual y CAT RX v1 experimental habilitable con 8, sin TLE/SGP4; Espectro incluye 128 puntos, multipreset RAM, blacklist temporal y VFO-PRO con entrada RX, ganancia manual y busqueda CTCSS/DCS FM opcional (PTT captura, no transmite). No guarda calibracion ni tonos. BETA sin prueba fisica.</p>
+      <label for="fw-local-module">Modulo de la imagen</label><select id="fw-local-module"><option value="ardf">ARDF / caza del zorro</option><option value="satellite">Satelites / Doppler RX manual</option><option value="spectrum">Espectro / presets RAM</option></select>
+      <label for="fw-local-command">Comando PowerShell desde el repositorio web</label><textarea id="fw-local-command" rows="4" readonly></textarea>
+      <p class="muted">Requiere Node.js, Git, toolchain ARM, CMake y Ninja locales. Ajusta la ruta de Fusion61 y usa un destino nuevo si ya existe. Este comando no usa las casillas del catalogo online ni instala nada en la radio. <a href="ayuda-bricohams.html">Controles, fuentes, licencias y limites</a>.</p>
+      <div class="operation-buttons"><button id="fw-local-copy" class="button secondary" type="button">Copiar comando local</button></div>
       <h3>Comprobar la compilacion descargada</h3>
       <label for="fw-files">Carga juntos SHA256SUMS, build-info.json y los .bin/.app del artefacto</label><input id="fw-files" type="file" multiple>
       <p id="fw-verify" class="card-note" role="status">Sin archivos.</p>
@@ -106,6 +116,15 @@
       await root.navigator.clipboard.writeText($("fw-request").value);
       log(`Peticion copiada: edicion ${$("fw-preset").value}, cambios "${$("fw-request").value || "ninguno"}".`);
     }));
+    const updateLocalCommand = () => {
+      $("fw-local-command").value = bricohamsModuleCommand($("fw-local-module").value);
+    };
+    $("fw-local-module").addEventListener("change", updateLocalCommand);
+    $("fw-local-copy").addEventListener("click", () => action("Copiar comando Bricohams", async () => {
+      await root.navigator.clipboard.writeText($("fw-local-command").value);
+      log(`Comando local copiado: ${$("fw-local-module").value}. No se ha compilado ni instalado firmware.`);
+    }));
+    updateLocalCommand();
     $("fw-files").addEventListener("change", () => action("Comprobar compilacion", async () => {
       verified = null;
       $("fw-use").disabled = true;
@@ -125,6 +144,6 @@
     }));
     render();
   }
-  Object.assign(R, { customFirmwareRequest, verifyCustomBuild: verifyBuild, mountCustomFirmware });
+  Object.assign(R, { customFirmwareRequest, bricohamsModuleCommand, verifyCustomBuild: verifyBuild, mountCustomFirmware });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

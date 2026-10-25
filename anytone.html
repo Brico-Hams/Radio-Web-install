@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>AnyTone | Bricohams Radio Workspace</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="radio-core.js" defer></script>
+  <script src="runtime-mode.js" defer></script>
+  <script src="satellite.min.js" defer></script>
+  <script src="planning-core.js" defer></script>
+  <script src="codeplug-editor.js" defer></script>
+  <script src="quansheng-channels.js" defer></script>
+  <script src="anytone-core.js" defer></script>
+  <script src="anytone-ui.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body data-page="anytone">
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <div id="app"></div>
+  <template id="anytone-content">
+    <section class="hero"><span class="eyebrow accent">ANYTONE - BETA</span>
+      <h1>Preparador de codeplug para Espana</h1>
+      <p>Editor web sin instalacion. Proyecto portable y CSV de intercambio: NO son un archivo RDT
+        ni un CSV certificado para importar directamente al CPS AnyTone.</p>
+    </section>
+    <aside class="notice"><div><h2>Compatibilidad y respaldo</h2>
+      <p>No hay programacion USB, flasheo ni respaldo AnyTone implementados. No conectes este editor como
+        si fuera un CPS completo. Antes de escribir con el CPS del fabricante, lee y guarda el original
+        y verifica modelo, firmware y formato. Todos los canales preparados son solo RX.</p>
+      <p>No hay una base nacional de repetidores ni aeropuertos incluida o certificada. Importa datos actuales
+        autorizados; el resumen distingue los registros presentes de los pendientes. PMR446 solo escucha:
+        estas radios no se convierten en equipos PMR446 homologados.</p></div></aside>
+    <section class="panel">
+      <h2>1. Modelo y capacidades</h2>
+      <label>Perfil de destino <select id="at-profile"></select></label>
+      <label><input id="at-airband" type="checkbox" disabled> He comprobado en el manual del modelo exacto
+        la recepcion AM 118-136.99 MHz (no basta cobertura FM). Solo para el perfil Otro.</label>
+      <p>Los perfiles no certifican compatibilidad de todas las variantes. Las capacidades AM no se deducen del nombre de familia.</p>
+    </section>
+    <section class="panel">
+      <h2>2. Reutilizar bases existentes</h2>
+      <label>Archivo OpenGD77 estandar 128 KiB, Quansheng F4HWN v6 o proyecto AnyTone JSON
+        <input id="at-base-file" type="file" accept=".bin,.json"></label>
+      <button id="at-pmr" class="button secondary" type="button">Anadir los 16 PMR446 de la base comun (RX)</button>
+      <p>Los binarios originales no se modifican. Se trasladan frecuencias y parametros conocidos, no calibracion
+        ni ajustes propietarios. En DMR se conserva CC/TS; TG y listas RX requieren revision.
+        Los tonos analogicos no se convierten: se anotan para revisar.</p>
+      <label>Repetidores: JSON autorizado RepeaterBook (results), RadioID (rptrs) o URE (items)
+        <input id="at-repeaters-file" type="file" accept=".json"></label>
+      <p>Se reutiliza el normalizador FM/DMR de las otras familias. No se inventan TS ni TG del repetidor:
+        TS1/TG0 son marcadores pendientes de configuracion. La consulta autenticada sigue disponible en
+        <a href="opengd77.html">OpenGD77</a>; aqui puedes importar su exportacion autorizada.</p>
+      <label>Aeropuertos: JSON con results y campos name, frequencyMHz, source
+        <input id="at-airports-file" type="file" accept=".json" disabled></label>
+      <p>Usa frecuencias RF verificadas en AIP ENAIRE vigente, no designadores de canal 8.33 kHz.
+        Incluye aeropuerto/servicio en name y referencia AIP en source.
+        <a href="https://aip.enaire.es/" target="_blank" rel="noopener noreferrer">Consultar AIP ENAIRE</a>.
+        No se incluyen frecuencias de emergencia por defecto.</p>
+    </section>
+    <section class="panel">
+      <h2>3. Configurar canales</h2>
+      <form id="at-form">
+        <label>Nombre <input id="at-name" required maxlength="16"></label>
+        <label>Modo <select id="at-mode"><option>FM</option><option>DMR</option><option id="at-am" disabled>AM</option></select></label>
+        <label>RX MHz <input id="at-rx" required inputmode="decimal"></label>
+        <label>TX nominal MHz (no habilita TX) <input id="at-tx" required inputmode="decimal"></label>
+        <label>Color Code <input id="at-cc" type="number" min="0" max="15" value="1" required></label>
+        <label>Time Slot <select id="at-ts"><option>1</option><option>2</option></select></label>
+        <label>Talkgroup (0 = pendiente) <input id="at-tg" type="number" min="0" max="16777215" value="0" required></label>
+        <label>Zona <input id="at-zone" maxlength="64" value="Espana"></label>
+        <label>Ancho de banda <select id="at-bandwidth"><option value="pending">Pendiente de verificar</option><option value="12.5">12.5 kHz</option><option value="25">25 kHz</option></select></label>
+        <label>Procedencia <input id="at-source" required maxlength="500" value="Configuracion manual; pendiente de verificar"></label>
+        <button class="button primary" type="submit">Guardar canal (RX)</button>
+        <button id="at-cancel" class="button secondary" type="button">Cancelar edicion</button>
+      </form>
+      <p id="at-summary" role="status"></p>
+      <div class="table-wrap"><table><thead><tr><th>Nombre</th><th>RX MHz</th><th>TX nominal</th><th>Modo</th><th>CC/TS/TG</th><th>Zona</th><th>Acciones</th></tr></thead><tbody id="at-channels"></tbody></table></div>
+    </section>
+    <section class="panel">
+      <h2>4. Guardar proyecto</h2>
+      <button id="at-save" class="button primary" type="button">Descargar proyecto JSON</button>
+      <button id="at-csv" class="button secondary" type="button">Descargar CSV de intercambio (no CPS nativo)</button>
+      <p>Exporta antes de cerrar o cambiar de pagina: no se guarda automaticamente. TG0 no es un contacto utilizable;
+        revisa tonos, TS, TG, ID DMR, zonas y limites del modelo antes de convertir con su CPS.
+        No se habilita TX desde esta Beta.</p>
+      <p id="at-status" role="status" aria-live="polite"></p>
+    </section>
+  </template>
+  <noscript>Activa JavaScript para usar el editor web AnyTone.</noscript>
+</body>
+</html>

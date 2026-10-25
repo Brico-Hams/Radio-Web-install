@@ -175,6 +175,81 @@
     const rangeRate = look(time + 500).rangeKm - look(time - 500).rangeKm;
     return downlinkHz * (1 - rangeRate / LIGHT_KM_S);
   }
+  function catPassTarget(orbital, transmitter, pass, observer, time = Date.now()) {
+    R.assert(Number.isFinite(time) && pass && Number.isFinite(pass.aos?.time) &&
+      Number.isFinite(pass.los?.time) && pass.los.time > pass.aos.time &&
+      pass.los.time - pass.aos.time <= 2 * 3600000, "Pase CAT no valido.");
+    R.assert(time >= pass.aos.time && time < pass.los.time, "Fuera del pase CAT seleccionado.");
+    R.assert(observer && Number.isFinite(observer.latitude) && Math.abs(observer.latitude) <= 90 &&
+      Number.isFinite(observer.longitude) && Math.abs(observer.longitude) <= 180 &&
+      Number.isFinite(observer.height) && observer.height >= -0.5 && observer.height <= 9, "Posicion CAT no valida.");
+    satelliteChannel(orbital, transmitter);
+    const { record } = validateTLE(orbital, time);
+    const look = lookFor(record, observer);
+    const position = look(time);
+    R.assert(position.elevation >= 0, "Satelite bajo el horizonte; CAT detenido.");
+    const frequency10Hz = Math.round(dopplerHz(look, transmitter.downlink, time) / 10);
+    R.assert(Number.isInteger(frequency10Hz) &&
+      ((frequency10Hz >= 13600000 && frequency10Hz <= 17400000) ||
+      (frequency10Hz >= 40000000 && frequency10Hz <= 47000000)), "Doppler CAT fuera de banda RX.");
+    return { frequency10Hz, elevation: position.elevation, azimuth: position.azimuth, time };
+  }
+  class CatPassTracker {
+    constructor(connector, plan, clock = () => Date.now()) {
+      this.connector = connector;
+      this.plan = structuredClone(plan);
+      this.clock = clock;
+      this.active = false;
+      this.inFlight = null;
+      this.lastTime = null;
+      this.started = false;
+      this.stopPromise = null;
+    }
+    async start() {
+      R.assert(!this.started && !this.stopPromise, "Crea una sesion CAT nueva para cada inicio.");
+      this.started = true;
+      catPassTarget(this.plan.orbital, this.plan.transmitter, this.plan.pass, this.plan.observer, this.clock());
+      this.active = true;
+      return this.step();
+    }
+    async step() {
+      R.assert(this.active && !this.inFlight, "Seguimiento CAT inactivo u ocupado.");
+      const task = async () => {
+        const time = this.clock();
+        R.assert(this.lastTime === null || time > this.lastTime && time - this.lastTime <= 2000,
+          "Reloj o intervalo CAT discontinuo; reinicia el seguimiento.");
+        const target = catPassTarget(this.plan.orbital, this.plan.transmitter, this.plan.pass, this.plan.observer, time);
+        this.lastTime = time;
+        const state = await this.connector.setCatReceive(target.frequency10Hz);
+        if (!this.active) return null;
+        R.assert(this.clock() - time >= 0 && this.clock() - time < 2000,
+          "Confirmacion CAT demasiado tardia; reinicia el seguimiento.");
+        return { ...target, state };
+      };
+      const operation = task();
+      this.inFlight = operation;
+      try { return await operation; }
+      catch (error) { this.active = false; throw error; }
+      finally { if (this.inFlight === operation) this.inFlight = null; }
+    }
+    stop() {
+      this.active = false;
+      if (!this.stopPromise) this.stopPromise = this.finishStop();
+      return this.stopPromise;
+    }
+    async finishStop() {
+      const errors = [];
+      if (this.inFlight) {
+        try { await this.inFlight; } catch (error) { errors.push(error); }
+      }
+      if (this.connector.connected) {
+        try { await this.connector.stopCatReceive(); } catch (error) { errors.push(error); }
+      } else {
+        errors.push(new Error("Sin conexion CAT: restauracion no confirmada; esperar caducidad del lease en el firmware."));
+      }
+      if (errors.length) throw new AggregateError(errors, "Seguimiento CAT detenido sin restauracion confirmada");
+    }
+  }
   // Splits one pass into equal frequency steps (short windows around closest approach), so every RX-only
   // memory is within half a step of the received frequency for its whole window.
   function dopplerChannels(orbital, transmitter, pass, observer, segments = 5) {
@@ -228,6 +303,6 @@
     R.assert(entries.length > 0 && entries.length <= 1024, "Seleccion TG vacia o superior a 1024. Ajusta el prefijo.");
     return { provider: "BrandMeister", entries };
   }
-  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, dopplerChannels, csvCell, pmrChannels, normalizeTalkgroups });
+  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, normalizeTalkgroups });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

@@ -120,6 +120,89 @@ test("el generador escapa HTML y codigo, renderiza tablas y rechaza enlaces ejec
   assert.throws(() => render("[x](inexistente.md)", "AYUDA-FIRMWARES.md"), /roto/);
 });
 
+test("las imagenes Bricohams documentan captura RX, multipreset RAM y sus limites Beta", () => {
+  for (const name of ["docs/BRICOHAMS-FIRMWARE.md", "ayuda-bricohams.html"]) {
+    const text = read(name);
+    for (const value of ["--module spectrum", "VFO-PRO", "118044", "13440/16384",
+      "WAIT SAMPLES", "ENTER 8 DIGITS", "SPAN OUT OF BAND", "SAVE 2 PRESETS",
+      "BLACKLIST FULL", "GAIN LIMIT", "524288", "CSS SEARCH...", "CSS NEEDS FM"]) {
+      assert.ok(text.includes(value), `${name}: ${value}`);
+    }
+    assert.match(text, /no transmite|no transmitir/);
+    assert.match(text, /no escriben EEPROM/);
+    assert.match(text, /sin ARDF\/Satelites/);
+    assert.doesNotMatch(text, /pendientes adaptador y construccion de imagen dedicada/);
+  }
+});
+test("CAT RX documenta protocolo experimental, seguimiento web y limites de hardware", () => {
+  for (const name of ["docs/BRICOHAMS-FIRMWARE.md", "ayuda-bricohams.html"]) {
+    const text = read(name);
+    for (const value of ["CAT RX Bricohams v1", "0x7B00", "0x7B01", "113868",
+      "12384/16384", "3000 ms", "CAT TIMEOUT", "CAT READY RX", "no significa aplicado",
+      "no es cifrado ni autenticacion", "Seguimiento de pase web implementado",
+      "CatPassTracker", "2000 ms", "750 ms", "cliente USB experimental con seguimiento orbital SGP4"]) {
+      assert(text.includes(value), `${name}: ${value}`);
+    }
+  }
+});
+test("los presets BHSP distinguen archivos locales de persistencia EEPROM", () => {
+  for (const name of ["docs/BRICOHAMS-FIRMWARE.md", "ayuda-bricohams.html"]) {
+    const text = read(name);
+    for (const value of ["Transferencia de presets a archivos implementada", "0x7B10", "0x7B11",
+      "208 bytes", "5000 ms", "CRC incorrecto no sustituye la tabla",
+      "no equivale a persistencia EEPROM", "no escribe EEPROM", "118044"]) {
+      assert(text.includes(value), `${name}: ${value}`);
+    }
+  }
+});
+test("estadisticas ARDF explican observaciones manuales, limites y ausencia de GPS", () => {
+  for (const name of ["docs/BRICOHAMS-FIRMWARE.md", "ayuda-bricohams.html"]) {
+    const text = read(name);
+    for (const value of ["Estadisticas ARDF por baliza implementadas", "113960", "12576/16384",
+      "0x7B20", "0x7B21", "65535", "connectionSession", "No es deteccion automatica",
+      "no un evento por pulsacion ni un recorrido GPS", "no es cifrado/autenticacion"]) {
+      assert(text.includes(value), `${name}: ${value}`);
+    }
+  }
+});
+test("Android documenta las funciones reales, permisos y limites de la APK", () => {
+  for (const name of ["docs/ANDROID.md", "ayuda-android.html"]) {
+    const value = read(name);
+    for (const marker of ["0.7.0-beta", "SQLite", "WAV PCM", "LoTW", "no ejecutadas",
+      "GPS", "No se fusionan sesiones", "rollback", "Sesenta y nueve pruebas host", "60 segundos",
+      "Estadisticas e historial ARDF", "Haversine", "No es recorrido completo", "222.39016",
+      "Captura de microfono Morse y Robot36", "RECORD_AUDIO", "Conceder permiso no graba",
+      "2880000", "No se reanuda", "no valida recepcion RF real",
+      "Importar ADIF con vista previa", "campos no conservados", "Buscar contactos", "no duplica",
+      "SSTV Robot36 desde WAV", "320x240", "VIS", "paridad par", "No admite 44.1 kHz", "15 en los de color",
+      "Satelites SGP4 y seguimiento de pases", "Rhino 1.7.15", "satellite.js 6.0.1", "500 ms", "no reanuda",
+      "CDC ACM", "usb-serial-for-android 3.9.0", "3000 ms", "0x7B00", "no son cifrado ni autenticacion"]) {
+      assert(value.includes(marker), `${name}: ${marker}`);
+    }
+  }
+  assert(read("scripts/build-installers.sh").includes("ayuda-android.html"));
+});
+
+test("la revision de entrega mantiene cada peticion y distingue objetivos de capacidades", () => {
+  const markdown = read("docs/ESTADO-ENTREGA.md");
+  const ids = [...markdown.matchAll(/^\| ([A-Z0-9]+-\d+) \|/gm)].map(match => match[1]);
+  const expected = ["USB-01", "USB-02", "FW-01", "WEB-01", "FW-02", "FW-03", "FW-04", "FW-05",
+    "FW-06", "FW-07", "FW-08", "FW-09", "HELP-01", "HELP-02", "PRO-01", "DATA-01", "DATA-02",
+    "DATA-03", "GD77-01", "GD77-02", "ANY-01", "ANY-02", "ANY-03", "ANY-04", "CAT-01", "CAT-02",
+    "AND-01", "AND-02", "AND-03", "AND-04", "AND-05", "AND-06", "AND-07", "AND-08",
+    "BRAND-01", "BRAND-02", "DOC-01", "REL-01", "REL-02", "REL-03"];
+  assert.deepEqual(ids, expected);
+  const html = read("ayuda-entrega.html");
+  for (const id of expected) assert(html.includes(id), id);
+  assert.match(html, /incompleta/);
+  assert.match(read("ayuda.html"), /href="ayuda-entrega.html"/);
+  assert.doesNotMatch(read("AUTHORS.md"), /Copilot|ChatGPT|inteligencia artificial/i);
+  for (const name of ["docs/KARINA.md", "ayuda-karina.html"]) {
+    assert(read(name).includes("archivos BHSP"), name);
+    assert(!read(name).includes("no tienen persistencia ni transferencia USB"), name);
+  }
+});
+
 test("ayuda, instaladores y paginas estaticas incluyen todas las guias sin exponer fuentes arbitrarias", async () => {
   const help = read("ayuda.html");
   const installer = read("scripts/build-installers.sh");

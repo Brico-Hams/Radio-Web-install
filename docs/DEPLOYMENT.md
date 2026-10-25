@@ -237,6 +237,88 @@ Cada HTML lleva una CSP en `<meta>` (sin scripts ni estilos en línea; `connect-
 
 Los instaladores disponibles se publican en [GitHub Releases](https://github.com/anatolbricoham/Radio-Web-install/releases). Para generar una nueva publicación, crea y sube una etiqueta `v*`; GitHub Actions valida el proyecto, descarga runtimes de Node.js 22 verificando sus checksums y adjunta los instaladores junto con `SHA256SUMS`. Las releases incluyen `.deb` amd64/arm64/armhf, `PKGBUILD` para Arch, instalador tarball para FreeBSD y ZIP de Windows 11 x64. El primer release debe publicarse subiendo una etiqueta; este repositorio no crea ni sube etiquetas automáticamente.
 
+## Exportar el proyecto
+
+La [revision de requisitos](ESTADO-ENTREGA.md) enumera lo implementado y los
+pendientes. Mientras siga incompleta, la exportacion requiere `--beta`:
+genera una instantanea de desarrollo, no una entrega final certificada.
+No construye instaladores, no publica y no programa ninguna radio.
+
+Con Node.js 22+, Git y las herramientas de archivo del sistema:
+
+```powershell
+npm run export:project -- --beta `
+  --firmware 'C:\ruta\Multiboot\Bricohams' `
+  --installers 'C:\ruta\instalables-verificados' `
+  --android 'C:\ruta\Android-0.7.0-beta' `
+  --output 'C:\ruta\entregas\Bricohams-desarrollo.zip'
+```
+
+El destino debe ser un ZIP nuevo. En Windows se usa `tar.exe` (bsdtar);
+Linux/FreeBSD necesitan `zip`. La herramienta utiliza un directorio temporal
+propio y lo limpia al terminar, incluso ante errores.
+
+Contenido:
+
+- `android`, cuando se indica `--android`: APK Beta debug, APK de pruebas,
+  guia, licencias, manifiesto de compilacion y SHA256SUMS de una entrega
+  creada por `scripts/build-android.ps1`. Comprueba todos sus hashes,
+  pruebas host sin fallos, lint sin errores y correspondencia exacta de
+  cada fuente Android con `project`, sin omitir ni duplicar archivos.
+  Tambien compara version y guia. Si la APK pertenece a fuentes anteriores,
+  aborta: reconstruye antes de exportar. Conserva los indicadores de pruebas
+  instrumentadas y hardware, no los convierte en pruebas ejecutadas.
+  La verificacion criptografica de firma APK corresponde al constructor;
+  el exportador verifica integridad/procedencia declarada, no ejecuta el APK.
+  Sin `--android`, el manifiesto registra `android: null` y no se incluye
+  ninguna APK; no se presenta como una entrega con instalable Android.
+
+- `project`: fuentes actuales, incluidas las nuevas no ignoradas por Git,
+  documentacion y herramientas. No incluye dependencias instaladas:
+  ejecutar `npm ci --ignore-scripts` tras extraer. Studio se recupera con
+  `npm run fetch:studio` usando el lock; los instaladores si lo incluyen.
+- `history.bundle`: historial de HEAD, recuperable con
+  `git clone history.bundle historial`. Los cambios aun sin commit estan
+  en `project`, no en el bundle. El manifiesto indica revision y estado dirty.
+- `firmware`: todas las subcarpetas de la raiz indicada que tengan
+  `artifacts/build-info.json`, sus artefactos verificados y las fuentes
+  de su clon aislado. Comprueba SHA256SUMS, revision upstream y hashes de
+  fuentes declarados. Una fuente modificada o manifiesto invalido aborta.
+  Los destinos sin artefactos se enumeran como excluidos, no como compilaciones.
+  Si una carpeta historica solo contiene los artefactos directamente
+  (por ejemplo Fusion/Labs), aborta en vez de omitir ese firmware: localiza
+  su construccion original con `source` y `artifacts` en `firmware-builds`.
+  Reune las construcciones completas en una raiz de entrega antes de exportar.
+- `installers`: los paquetes enumerados en SHA256SUMS de la carpeta indicada.
+  Debe contener Windows x64, Debian amd64/arm64/armhf, receta y fuentes Arch
+  y FreeBSD amd64. Verifica integridad, no ejecucion ni procedencia de la
+  revision: construirlos y probarlos primero. No mezclar versiones antiguas
+  para aparentar una entrega nueva.
+- `export-info.json` y `SHA256SUMS`: inventario, tamanos, hashes, revisiones,
+  compilaciones incluidas/excluidas y advertencia de estado incompleto.
+
+No copia `.git`, `.env`, claves/certificados, cachés, `node_modules`, `dist`,
+backups de radio ni datos descargados desde el arbol del proyecto. De `data`
+solo incluye `satellites.config.json`. No copia la biblioteca Multiboot ajena,
+calibraciones de radios ni la configuracion del navegador.
+Las carpetas de firmware e instaladores deben ser salidas de construccion,
+no carpetas de datos personales. Revisa tambien el historial Git antes de
+compartirlo: excluir un secreto actual no lo elimina de commits antiguos.
+Las exclusiones no sustituyen esa revision ni autorizan redistribuir
+componentes sin sus licencias.
+
+Extrae en una carpeta nueva y verifica dentro de `Bricohams`:
+
+```sh
+sha256sum --check SHA256SUMS
+```
+
+En PowerShell, compara cada linea con `Get-FileHash -Algorithm SHA256`, o
+usa `export-info.json` para recorrer las rutas y contrastar tamano y SHA-256.
+Comprueba tambien el hash del ZIP que muestra el exportador. Ninguno de estos
+hashes es una firma digital. El ensayo de extraccion/arranque y la cobertura
+funcional siguen siendo condiciones independientes de entrega.
+
 ## Despliegues no soportados
 
 - **Otro alojamiento estático** distinto de GitHub Pages: no está probado. Para Pages, ver la sección anterior.

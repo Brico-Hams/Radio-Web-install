@@ -8,7 +8,7 @@ const { createServer } = require("../server.cjs");
 
 const root = path.join(__dirname, "..");
 const read = name => fs.readFileSync(path.join(root, name), "utf8");
-const pages = ["index.html", "opengd77.html", "quansheng.html", "ayuda.html"];
+const pages = ["index.html", "opengd77.html", "quansheng.html", "anytone.html", "ayuda.html"];
 const docs = ["README.md", "AUTHORS.md", "ACKNOWLEDGEMENTS.md", "SUPPORT.md", "SECURITY.md",
   "docs/ARCHITECTURE.md", "docs/DECISIONS.md", "docs/DEPLOYMENT.md", "docs/BRANDING.md"];
 const helpSections = ["inicio", "funcionamiento", "opengd77", "quansheng", "codeplug", "firmware",

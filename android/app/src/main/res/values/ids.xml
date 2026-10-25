@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="live_mode" type="id" />
+    <item name="live_tone" type="id" />
+    <item name="live_speed" type="id" />
+    <item name="contact_call" type="id" />
+    <item name="contact_utc" type="id" />
+    <item name="contact_frequency" type="id" />
+    <item name="contact_mode" type="id" />
+    <item name="contact_sent" type="id" />
+    <item name="contact_received" type="id" />
+    <item name="contact_notes" type="id" />
+    <item name="contact_search" type="id" />
+    <item name="session_name" type="id" />
+    <item name="fox_number" type="id" />
+    <item name="observation_notes" type="id" />
+    <item name="morse_input" type="id" />
+    <item name="morse_tone" type="id" />
+    <item name="morse_speed" type="id" />
+    <item name="cat_frequency" type="id" />
+    <item name="satellite_name" type="id" />
+    <item name="satellite_line1" type="id" />
+    <item name="satellite_line2" type="id" />
+    <item name="satellite_latitude" type="id" />
+    <item name="satellite_longitude" type="id" />
+    <item name="satellite_height" type="id" />
+    <item name="satellite_downlink" type="id" />
+    <item name="satellite_minimum" type="id" />
+</resources>

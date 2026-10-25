@@ -4,13 +4,14 @@ const path = require("node:path");
 const { FirmwareService, TARGETS } = require("./firmware-service.cjs");
 const { DataService } = require("./data-service.cjs");
 const ALLOWED_FILES = Object.freeze([
+  "anytone.html", "anytone-core.js", "anytone-ui.js",
   "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "bricohams-logo.png", "styles.css", "app.js", "radio-core.js",
   "transports.js", "quansheng-connector.js", "quansheng-channels.js", "gd77-connector.js", "backup-store.js",
   "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js", "f4hwn-options.js", "custom-firmware-ui.js",
   "ayuda-firmwares.html", "ayuda-configuracion.html", "ayuda-quansheng.html",
   "ayuda-opciones-f4hwn.html", "ayuda-presets-f4hwn.html", "ayuda-ardf.html",
   "ayuda-opengd77.html", "ayuda-opengd77-modelos.html", "ayuda-karina.html",
-  "ayuda-bricohams.html", "help-docs.css",
+  "ayuda-bricohams.html", "ayuda-entrega.html", "ayuda-android.html", "help-docs.css",
   "ayuda-egzumer.html", "ayuda-pack-dim0s.html"
 ]);
 const allowed = new Set(ALLOWED_FILES);

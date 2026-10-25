@@ -20,7 +20,22 @@ Reglas de uso:
 - Dejar al menos 10 px entre la imagen y el subtítulo en escritorio, y 14 px en móvil. Estas medidas son decisiones de maquetación del proyecto, no una guía oficial adicional de marca.
 - No combinarlo con logotipos de OpenGD77, Quansheng, F4HWN ni grid.radio de forma que sugiera afiliación.
 
+Excepción específica del firmware solicitada el 25-10-2026: el LCD monocromo
+requiere una adaptación proporcional del original a 128 × 48, sin color,
+sobre fondo vacío, con la identificación `Bricohams BETA` debajo. Se genera
+desde el PNG original, no se dibuja una marca nueva. No sustituye el PNG
+a color en web o Android. Construcción y límites en la
+[guía de firmware](BRICOHAMS-FIRMWARE.md#branding-de-arranque-implementado).
+
 ## Paleta
+
+**Cambio solicitado el 25-10-2026:** el color corporativo indicado por el
+usuario es el **naranja**. La paleta verde azulada de abajo describe la
+implementación actual, no la identidad objetivo. La migración de web y futura
+aplicación Android a naranja se realizará después de completar y probar las
+funciones, según la secuencia solicitada. El tono exacto y los contrastes
+deberán validarse antes de sustituir los tokens; no recolorear el logotipo
+original ni usar únicamente el color para comunicar estados.
 
 Interfaz inspirada en Bricohams Studio: fondo oscuro, tarjetas y acento verde azulado. La siguiente paleta es la de Radio Workspace, no una afirmación de coincidencia exacta con los colores de Studio ni una recoloración del logotipo.
 

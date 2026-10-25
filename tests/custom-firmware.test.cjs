@@ -23,6 +23,22 @@ test("la peticion solo lleva cambios reales sobre la edicion, en formato ON/OFF"
   assert.throws(() => R.customFirmwareRequest(catalog, "Nope", {}), /desconocida/);
 });
 
+test("cada modulo local genera una imagen FieldOps separada, con Beacon y VOX OFF", () => {
+  const { readArguments } = require("../scripts/build-bricohams.cjs");
+  for (const name of ["ardf", "satellite", "spectrum"]) {
+    const command = R.bricohamsModuleCommand(name);
+    const tokens = command.match(/'[^']*'|\S+/g).map(token => token.replace(/^'|'$/g, ""));
+    const args = readArguments(tokens.slice(4));
+    assert.deepEqual(args.modules, [name]);
+    assert.equal(args.preset, "FieldOps");
+    assert.deepEqual(args.source.split("\\"), ["..", "Multiboot", "Fusion61"]);
+    assert.deepEqual(args.output.split("\\"), [".", "firmware-builds", `${name}-beta`]);
+    assert.deepEqual(args.options, ["ENABLE_FEAT_F4HWN_BEACON=OFF", "ENABLE_VOX=OFF"]);
+  }
+  for (const bad of ["", "karina", "ardf;satellite", null, ["ardf"]])
+    assert.throws(() => R.bricohamsModuleCommand(bad), /desconocido/);
+});
+
 test("una compilacion solo se acepta si cada archivo coincide con SHA256SUMS", async () => {
   const bin = new Uint8Array(1024).fill(7);
   const info = JSON.stringify({ format: "bricohams-firmware-build", firmware: "f4hwn.labs.bin", preset: "Labs", options: [], upstream: { tag: "v6.3.0" } });

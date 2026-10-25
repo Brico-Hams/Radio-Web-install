@@ -1,0 +1,45 @@
+name: Firmware module tests
+
+on:
+  push:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware-modules.yml"
+  pull_request:
+    paths:
+      - "firmware/**"
+      - ".github/workflows/firmware-modules.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: all
+            ardf: "ON"
+            spectrum: "ON"
+            satellite: "ON"
+          - name: ardf
+            ardf: "ON"
+            spectrum: "OFF"
+            satellite: "OFF"
+          - name: spectrum
+            ardf: "OFF"
+            spectrum: "ON"
+            satellite: "OFF"
+          - name: satellite
+            ardf: "OFF"
+            spectrum: "OFF"
+            satellite: "ON"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: cmake -S firmware -B "$RUNNER_TEMP/bricohams-modules" -DBUILD_TESTING=ON -DBRICOHAMS_ENABLE_ARDF=${{ matrix.ardf }} -DBRICOHAMS_ENABLE_SPECTRUM=${{ matrix.spectrum }} -DBRICOHAMS_ENABLE_SATELLITE=${{ matrix.satellite }}
+      - run: cmake --build "$RUNNER_TEMP/bricohams-modules" --parallel 2
+      - run: ctest --test-dir "$RUNNER_TEMP/bricohams-modules" --no-tests=error --output-on-failure
+      - run: cmake -S firmware -B "$RUNNER_TEMP/bricohams-modules-disabled" -DBRICOHAMS_ENABLE_ARDF=OFF -DBRICOHAMS_ENABLE_SPECTRUM=OFF -DBRICOHAMS_ENABLE_SATELLITE=OFF -DBUILD_TESTING=OFF
+      - run: cmake --build "$RUNNER_TEMP/bricohams-modules-disabled"

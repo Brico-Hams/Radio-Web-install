@@ -18,7 +18,9 @@ const pages = Object.freeze({
   "AYUDA-OPENGD77.md": "ayuda-opengd77.html",
   "AYUDA-OPENGD77-MODELOS.md": "ayuda-opengd77-modelos.html",
   "KARINA.md": "ayuda-karina.html",
-  "BRICOHAMS-FIRMWARE.md": "ayuda-bricohams.html"
+  "BRICOHAMS-FIRMWARE.md": "ayuda-bricohams.html",
+  "ESTADO-ENTREGA.md": "ayuda-entrega.html",
+  "ANDROID.md": "ayuda-android.html"
 });
 const escape = value => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;")
   .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");

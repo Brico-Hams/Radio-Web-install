@@ -17,6 +17,7 @@
     let connector = null;
     let permit = null;
     let busy = false;
+    let catTracking = false;
     let image = null;
     let originalConfiguration = null;
     let slotImage = null;
@@ -48,22 +49,27 @@
       }
       const api = page === "quansheng" || model.value === "SERIAL" ? "serial" : "usb";
       $("radio-connect").disabled = busy || Boolean(connector) || !model.value || !(confirmation.checked || pro.checked) || !(api in navigator) || !root.isSecureContext;
-      $("radio-disconnect").disabled = busy || !connector;
+      $("radio-disconnect").disabled = busy || catTracking || !connector;
       model.disabled = busy || Boolean(connector);
       confirmation.disabled = busy || Boolean(connector);
       pro.disabled = busy || Boolean(connector);
       $("launch").disabled = busy || Boolean(connector) || !model.value || !(confirmation.checked || pro.checked);
-      document.querySelectorAll("[data-connected]").forEach(button => { button.disabled = busy || !connected || page === "opengd77" && !permit; });
-      document.querySelectorAll("[data-write]").forEach(button => { button.disabled = busy || !connected || !permit; });
+      document.querySelectorAll("[data-connected]").forEach(button => { button.disabled = busy || catTracking || !connected || page === "opengd77" && !permit; });
+      document.querySelectorAll("[data-write]").forEach(button => { button.disabled = busy || catTracking || !connected || !permit; });
       if ($("write-codeplug")) $("write-codeplug").disabled = busy || !connected || !permit || !image;
       if ($("qs-write")) $("qs-write").disabled = busy || !connected || !permit || !image || !originalConfiguration;
       if ($("slot-install")) $("slot-install").disabled = busy || !connected || !permit || !slotImage;
       document.querySelectorAll("#radio-operations input, #radio-operations select").forEach(input => { input.disabled = busy; });
       $("backup-status").dataset.ready = Boolean(permit);
       planning?.setBusy(busy);
+      $("radio-operations").inert = catTracking;
     };
     async function action(label, operation) {
       if (busy) return;
+      if (catTracking) {
+        fail(new Error("Deten primero el seguimiento CAT con Detener seguimiento CAT."));
+        return;
+      }
       busy = true;
       state();
       delete status.dataset.error;
@@ -137,7 +143,23 @@
     }
     const operations = $("radio-operations");
     if (page === "quansheng") {
-      operations.innerHTML = `<h2>Firmware Slots / Multiconfig</h2>
+      operations.innerHTML = `<h2>CAT RX Bricohams Beta</h2>
+        <p>Solo para la imagen Bricohams Satelites con CAT v1: entra en SAT RX y pulsa 8 en la radio para habilitarlo. No compatible con F4HWN original, ARDF o Espectro. No transmite ni guarda VFO/canales/calibracion. No requiere respaldo para esta sintonia temporal; las escrituras persistentes conservan sus protecciones.</p>
+        <p>Una orden sintoniza RX durante un maximo de 3 segundos sin renovacion. Despues vuelve a la frecuencia nominal de entrada. No es todavia seguimiento automatico de pases. Las teclas 4/5/6, 8 o el bloqueo del teclado cancelan CAT; salir restaura el VFO.</p>
+        <label for="cat-rx-frequency">Frecuencia RX en MHz (136-174 o 400-470, resolucion 10 Hz)</label>
+        <input id="cat-rx-frequency" type="number" min="136" max="470" step="0.00001" value="145.80000">
+        <div class="operation-buttons"><button id="cat-rx-query" data-connected class="button secondary" type="button" disabled>Consultar CAT</button><button id="cat-rx-set" data-connected class="button primary" type="button" disabled>Sintonizar RX (3 s)</button><button id="cat-rx-stop" data-connected class="button secondary" type="button" disabled>Volver a RX nominal</button></div>
+        <p id="cat-rx-status" role="status">CAT no consultado. La confirmacion es software, no una medida de frecuencia RF.</p>
+        <h2>Estadisticas ARDF Bricohams Beta</h2>
+        <p>Solo imagen ARDF con estadisticas v1. La tecla 8 guarda una observacion manual y el indice de atenuacion para la baliza del turno sincronizado. No detecta ni localiza balizas. Los datos se reinician al entrar de nuevo o cambiar numero/duracion; quedan consultables al salir mientras no reinicies la radio.</p>
+        <div class="operation-buttons"><button id="ardf-stats-read" data-connected class="button secondary" type="button" disabled>Consultar y descargar estadisticas ARDF</button></div>
+        <p id="ardf-stats-status" role="status">Sin consulta. Tiempos relativos de la radio, no GPS/UTC. Exporta antes de reiniciar la sesion; indice de ganancia no equivale a dB.</p>
+        <h2>Presets de Espectro Bricohams Beta</h2>
+        <p>Solo imagen Espectro con transferencia BHSP v1. Guarda presets con 8 en la radio; pausa el barrido con 4 (HOLD), desactiva MULTI y desbloquea el teclado. Exportar/importar conserva los ocho presets en un archivo local, no escribe EEPROM ni calibracion. La importacion reemplaza la tabla RAM completa; exporta antes para conservarla. Cualquier tecla durante la transferencia la interrumpe.</p>
+        <label for="spectrum-presets-file">Archivo de presets BHSP v1 (208 bytes)</label><input id="spectrum-presets-file" type="file" accept=".bhsp,.bin">
+        <div class="operation-buttons"><button id="spectrum-presets-export" data-connected class="button secondary" type="button" disabled>Exportar presets RAM a archivo</button><button id="spectrum-presets-import" data-connected class="button secondary" type="button" disabled>Importar archivo a RAM (reemplaza tabla)</button></div>
+        <p id="spectrum-presets-status" role="status">Sin transferencia. Al salir/apagar se pierde la tabla RAM; conserva el archivo para recuperarla. Importar no sintoniza ni reanuda el barrido: 9 recupera un preset y 4 reanuda.</p>
+        <h2>Firmware Slots / Multiconfig</h2>
         <p class="muted">Escrituras solo tras respaldo completo. La copia Flash requiere Labs v6.1+ con comandos de lectura fisica; otras ediciones quedan en solo lectura. Main es la aplicacion base inicializada por el firmware, no el bootloader.</p>
         <div class="operation-buttons"><button id="slots-refresh" data-connected class="button secondary" type="button" disabled>Consultar slots</button></div>
         <div class="table-scroll"><table><thead><tr><th>Slot</th><th>Nombre</th><th>Version</th><th>Bytes</th><th>Estado</th><th>CRC</th></tr></thead><tbody id="slots-body"></tbody></table></div>
@@ -160,6 +182,58 @@
         <label for="app-slot">Hueco de destino</label><select id="app-slot"><option value="">Consulta las apps primero</option></select>
         <div class="operation-buttons"><button id="app-install" data-write class="button primary" type="button" disabled>Instalar app y verificar</button><button id="app-delete" data-write class="button secondary" type="button" disabled>Borrar app del hueco</button></div>`;
       const slot = () => Number($("slot-number").value);
+      const showCat = result => {
+        $("cat-rx-status").textContent = result.active ?
+          `Ultima respuesta CAT v${result.version}: RX ${(result.appliedFrequency10Hz / 100000).toFixed(5)} MHz; ${result.pending ? "pendiente" : result.remote ? "remoto, lease 3 s" : "habilitado localmente"}. Confirmacion software, sin medida RF ni consulta continua.` :
+          "CAT v1 disponible pero deshabilitado. Entra en SAT RX y pulsa 8 en la radio.";
+      };
+      const catAction = (label, operation) => action(label, async () => {
+        $("cat-rx-status").textContent = "Esperando respuesta CAT...";
+        try { showCat(await operation()); }
+        catch (error) {
+          $("cat-rx-status").textContent = `ERROR: ${error.message}. Sin confirmacion de sintonia; si habia control remoto, el firmware debe volver a nominal al caducar el lease de 3 s.`;
+          throw error;
+        }
+      });
+      $("cat-rx-query").addEventListener("click", () => catAction("Consultar CAT RX", () => connector.getCatStatus()));
+      $("cat-rx-set").addEventListener("click", () => catAction("Sintonizar CAT RX", () => {
+        const input = $("cat-rx-frequency").value.trim();
+        R.assert(/^\d{3}(?:\.\d{1,5})?$/.test(input), "Introduce MHz con hasta cinco decimales.");
+        return connector.setCatReceive(Math.round(Number(input) * 100000));
+      }));
+      $("cat-rx-stop").addEventListener("click", () => catAction("Restaurar RX nominal CAT", () => connector.stopCatReceive()));
+      $("ardf-stats-read").addEventListener("click", () => action("Consultar estadisticas ARDF", async () => {
+        $("ardf-stats-status").textContent = "Consultando instantanea ARDF...";
+        try {
+          const result = await connector.readArdfStatistics();
+          const total = result.observations.reduce((sum, item) => sum + item.count, 0);
+          download(`bricohams-ardf-session-${result.session}.json`, JSON.stringify(result, null, 2), "application/json");
+          $("ardf-stats-status").textContent = `Sesion ${result.session}, ${result.active ? "activa" : "finalizada"}, ${total} observaciones manuales en ${result.observations.length}/${result.foxCount} balizas. ${result.countsSaturated ? "AVISO: contador saturado; los totales son un minimo. " : ""}${result.firmwareError ? "ERROR de modulo indicado por firmware. " : ""}Descarga solicitada; confirma que se ha guardado. Sin posicion ni detecciones automaticas.`;
+        } catch (error) {
+          $("ardf-stats-status").textContent = `ERROR: ${error.message}. No se han obtenido estadisticas verificadas.`;
+          throw error;
+        }
+      }));
+      const presetAction = (label, operation) => action(label, async () => {
+        $("spectrum-presets-status").textContent = "Transferencia en curso; no pulses teclas en la radio.";
+        try { await operation(); }
+        catch (error) {
+          $("spectrum-presets-status").textContent = `ERROR: ${error.message}. No se confirma la transferencia; consulta/exporta de nuevo la tabla. No se ha escrito EEPROM.`;
+          throw error;
+        }
+      });
+      $("spectrum-presets-export").addEventListener("click", () => presetAction("Exportar presets Espectro", async () => {
+        const bytes = await connector.readSpectrumPresets();
+        const info = R.inspectSpectrumPresets(bytes);
+        download("bricohams-spectrum-presets.bhsp", bytes);
+        $("spectrum-presets-status").textContent = `${info.entries.length} presets leidos y validados; descarga solicitada. Comprueba que el archivo se ha guardado.`;
+      }));
+      $("spectrum-presets-import").addEventListener("click", () => presetAction("Importar presets Espectro a RAM", async () => {
+        const file = $("spectrum-presets-file").files[0];
+        R.assert(file && file.size === 208, "Selecciona un archivo BHSP de exactamente 208 bytes.");
+        const result = await connector.writeSpectrumPresets(new Uint8Array(await file.arrayBuffer()));
+        $("spectrum-presets-status").textContent = `${result.entries.length} presets importados y releidos en RAM. Sin EEPROM ni cambio de sintonia; 9 recupera un preset, 4 reanuda. Conserva el archivo para la proxima sesion.`;
+      }));
       async function refreshSlots() {
         const slots = await connector.listSlots();
         $("slots-body").replaceChildren();
@@ -456,6 +530,15 @@
     }
     planning = R.mountPlanningUI({
       page, model, action, download, log,
+      cat: page === "quansheng" ? {
+        connector: () => {
+          R.assert(connector?.connected && !connector.transport.error && !connector.busy,
+            "Conecta primero la radio con firmware Bricohams CAT y habilita SAT RX con 8.");
+          return connector;
+        },
+        setTracking(value) { catTracking = value; state(); },
+        error: fail
+      } : null,
       templates: () => image ? page === "quansheng" ? R.readQuanshengChannels(image).filter(channel => channel.mode === 0) : R.readChannels(image) : [],
       importChannels(channels, template) {
         R.assert(image, page === "quansheng" ? "Abre o lee primero una configuracion Quansheng F4HWN v6." : "Abre o lee primero un codeplug estandar OpenGD77 de 128 KiB.");

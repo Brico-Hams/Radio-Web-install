@@ -78,6 +78,38 @@
   const APP = Object.freeze({ magic: 0x31504146, base: 0x102000, stride: 0x2000, codeOffset: 0x1000, assetOffset: 0x100, codeMax: 0x1000, assetMax: 0xf00 });
   const APP_STATUS = ["Valida", "Hueco fuera de rango", "Vacio", "ABI/API incompatible con este firmware", "Incompleta",
     "Tamano invalido", "CRC invalido", "VMA incorrecta", "Autorizacion rechazada", "Falta una capacidad del firmware"];
+  function inspectSpectrumPresets(input) {
+    const bytes = R.bytes(input, 208);
+    const view = R.view(bytes);
+    R.assert(R.text(bytes.subarray(0, 4)) === "BHSP" && bytes[4] === 1 &&
+      view.getUint32(204, true) === R.crc32(bytes.subarray(0, 204)), "Archivo BHSP v1 invalido o CRC incorrecto.");
+    R.assert(bytes[5] >= 1 && bytes[5] <= 8 && bytes[6] < bytes[5] &&
+      bytes.subarray(7, 12).every(value => value === 0), "Cabecera BHSP no compatible.");
+    const entries = [];
+    for (let index = 0; index < 8; index++) {
+      const offset = 12 + index * 24;
+      const record = bytes.subarray(offset, offset + 24);
+      if (index >= bytes[5]) {
+        R.assert(record.every(value => value === 0), "Registros BHSP no usados deben estar vacios.");
+        continue;
+      }
+      const nameBytes = record.subarray(0, 8);
+      const end = nameBytes.indexOf(0);
+      const name = end < 0 ? nameBytes : nameBytes.subarray(0, end);
+      R.assert(name.length > 0 && name.every(value => value >= 32 && value <= 126) &&
+        (end < 0 || nameBytes.subarray(end).every(value => value === 0)) &&
+        record.subarray(21).every(value => value === 0), "Nombre/reservados BHSP invalidos.");
+      const first10Hz = view.getUint32(offset + 8, true);
+      const step10Hz = view.getUint32(offset + 12, true);
+      const last10Hz = first10Hz + 127 * step10Hz;
+      R.assert(view.getUint16(offset + 16, true) === 128 && view.getUint16(offset + 18, true) === 20 &&
+        [125, 250, 625, 1250].includes(step10Hz) && [1, 2, 4, 8].includes(record[20]) &&
+        ((first10Hz >= 13600000 && last10Hz <= 17400000) ||
+        (first10Hz >= 40000000 && last10Hz <= 47000000)), "Preset BHSP no admitido por Espectro (banda, paso, 128 puntos, 20 ms o promedio).");
+      entries.push({ name: R.text(name), first10Hz, step10Hz, samples: record[20] });
+    }
+    return { selected: bytes[6], entries };
+  }
   function appHeader(data) {
     R.bytes(data, 64);
     const v = R.view(data);
@@ -108,6 +140,7 @@
     constructor(transport = new R.SerialTransport()) {
       super(transport);
       this.family = "quansheng";
+      this.catSequence = 0;
     }
     async connect(model) {
       R.assert(["UV-K1", "UV-K5-V3"].includes(model), "Modelo Quansheng no compatible.");
@@ -150,6 +183,145 @@
       R.assert(match && Number(match[1]) >= 6, `Firmware no compatible: ${firmware}. Se requiere F4HWN v6+.`);
       this.info = { family: this.family, model: this.model, firmware, hardwareConfirmed: false,
         legacyReadOnly: Number(match[1]) === 6 && Number(match[2] || 0) === 0 };
+    }
+    async catExchange(operation, frequency10Hz = 0) {
+      const sequence = this.catSequence = (this.catSequence + 1) & 0xffff;
+      const request = new Uint8Array(8);
+      request[0] = 1;
+      request[1] = operation;
+      R.view(request).setUint16(2, sequence, true);
+      R.view(request).setUint32(4, frequency10Hz, true);
+      const response = await this.exchange(0x7b00, request, 0x7b01, 1000);
+      R.assert(response.length === 16 && response[0] === 1 &&
+        R.view(response).getUint16(2, true) === sequence, "Respuesta CAT Bricohams invalida o fuera de secuencia.");
+      const statuses = ["OK", "En cola", "Longitud/campos invalidos", "Version no admitida",
+        "Operacion no admitida", "Entra primero en SAT RX y habilita CAT con 8", "Frecuencia fuera de banda RX"];
+      const status = response[1];
+      R.assert(status === (operation === 0 ? 0 : 1),
+        `CAT rechazado: ${statuses[status] || `estado desconocido ${status}`}.`);
+      const capabilities = R.view(response).getUint32(4, true);
+      const appliedFrequency10Hz = R.view(response).getUint32(8, true);
+      const flags = R.view(response).getUint32(12, true);
+      R.assert(capabilities === 7 && flags <= 7, "Capacidades/estado CAT v1 no reconocidos.");
+      const active = Boolean(flags & 1);
+      R.assert(active ? ((appliedFrequency10Hz >= 13600000 && appliedFrequency10Hz <= 17400000) ||
+        (appliedFrequency10Hz >= 40000000 && appliedFrequency10Hz <= 47000000)) :
+        appliedFrequency10Hz === 0 && flags === 0, "Frecuencia/estado CAT incoherentes.");
+      return { version: 1, capabilities, active, remote: Boolean(flags & 2),
+        pending: Boolean(flags & 4), appliedFrequency10Hz, leaseMilliseconds: 3000 };
+    }
+    getCatStatus() {
+      return this.run("Consultar CAT RX Bricohams Beta", () => this.catExchange(0));
+    }
+    setCatReceive(frequency10Hz) {
+      R.assert(Number.isInteger(frequency10Hz) &&
+        ((frequency10Hz >= 13600000 && frequency10Hz <= 17400000) ||
+        (frequency10Hz >= 40000000 && frequency10Hz <= 47000000)), "Frecuencia CAT RX fuera de banda o resolucion de 10 Hz.");
+      return this.run("Sintonizar CAT RX Bricohams Beta", () => this.catChange(1, frequency10Hz));
+    }
+    stopCatReceive() {
+      return this.run("Detener CAT RX Bricohams Beta", () => this.catChange(2, 0));
+    }
+    async catChange(operation, frequency10Hz) {
+      R.assert((await this.catExchange(0)).active, "Entra primero en SAT RX del firmware Bricohams compatible y habilita CAT con 8.");
+      await this.catExchange(operation, frequency10Hz);
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 75));
+        const state = await this.catExchange(0);
+        R.assert(state.active, "Se ha salido de SAT RX durante el cambio CAT.");
+        if (state.pending) continue;
+        R.assert(operation === 1 ? state.remote && state.appliedFrequency10Hz === frequency10Hz : !state.remote,
+          "El receptor no confirma el cambio CAT solicitado.");
+        return state;
+      }
+      throw new Error("El cambio CAT sigue pendiente; no se considera aplicado.");
+    }
+    async spectrumPresetExchange(operation, token, chunk = new Uint8Array()) {
+      const request = new Uint8Array(6 + chunk.length);
+      request[0] = 1;
+      request[1] = operation;
+      R.view(request).setUint32(2, token, true);
+      request.set(chunk, 6);
+      const result = await this.exchange(0x7b10, request, 0x7b11, 1500);
+      R.assert(result.length >= 6 && result[0] === 1 && R.view(result).getUint32(2, true) === token,
+        "Respuesta de presets Bricohams invalida o de otra transferencia.");
+      const errors = ["OK", "Reservado", "Solicitud invalida", "Pausa Espectro con 4, sin captura/multipreset ni bloqueo",
+        "No hay presets validos para exportar", "Transferencia caducada, interrumpida o fuera de orden",
+        "Archivo BHSP corrupto", "Preset no admitido por esta imagen"];
+      R.assert(result[1] === 0, `Presets rechazados: ${errors[result[1]] || `error ${result[1]}`}.`);
+      R.assert(result.length === (operation <= 1 ? 110 : 6), "Longitud de respuesta de presets incorrecta.");
+      return result.subarray(6);
+    }
+    presetTransferToken() {
+      const token = new Uint32Array(1);
+      do { root.crypto.getRandomValues(token); } while (token[0] === 0);
+      return token[0];
+    }
+    async readSpectrumPresetsRaw() {
+      const token = this.presetTransferToken();
+      const first = await this.spectrumPresetExchange(0, token);
+      const second = await this.spectrumPresetExchange(1, token);
+      const bytes = new Uint8Array(208);
+      bytes.set(first);
+      bytes.set(second, 104);
+      inspectSpectrumPresets(bytes);
+      return bytes;
+    }
+    readArdfStatistics() {
+      return this.run("Leer estadisticas ARDF Bricohams", async () => {
+        const sequence = this.catSequence = (this.catSequence + 1) & 0xffff;
+        const request = new Uint8Array(4);
+        request[0] = 1;
+        R.view(request).setUint16(2, sequence, true);
+        const bytes = await this.exchange(0x7b20, request, 0x7b21, 1500);
+        R.assert(bytes.length === 140 && bytes[0] === 1 && R.view(bytes).getUint16(4, true) === sequence,
+          "Respuesta de estadisticas ARDF invalida o fuera de secuencia.");
+        R.assert(bytes[1] === 0, bytes[1] === 3 ? "Entra al menos una vez en ARDF para iniciar una sesion." : `Estadisticas ARDF rechazadas: ${bytes[1]}.`);
+        const view = R.view(bytes);
+        const flags = bytes[2];
+        const foxCount = bytes[3];
+        const session = view.getUint32(8, true);
+        const durationMilliseconds = view.getUint32(12, true);
+        const elapsedMilliseconds = view.getUint32(16, true);
+        R.assert(flags <= 15 && foxCount <= 10 && view.getUint16(6, true) === 0 && session > 0 &&
+          durationMilliseconds >= 15000 && durationMilliseconds <= 120000 && durationMilliseconds % 15000 === 0 &&
+          (!(flags & 2) || foxCount > 0), "Cabecera de estadisticas ARDF incoherente.");
+        const observations = [];
+        for (let index = 0; index < 10; index++) {
+          const offset = 20 + index * 12;
+          const count = view.getUint16(offset, true);
+          const gainIndex = bytes[offset + 2];
+          const valid = bytes[offset + 3];
+          const firstMilliseconds = view.getUint32(offset + 4, true);
+          const lastMilliseconds = view.getUint32(offset + 8, true);
+          R.assert(count ? index < foxCount && valid === 1 && gainIndex <= 5 &&
+            firstMilliseconds <= lastMilliseconds && lastMilliseconds <= elapsedMilliseconds :
+            valid === 0 && gainIndex === 0 && firstMilliseconds === 0 && lastMilliseconds === 0,
+          "Registro de observaciones ARDF incoherente.");
+          if (count) observations.push({ fox: index + 1, count, gainIndex, firstMilliseconds, lastMilliseconds });
+        }
+        return { format: "bricohams-ardf-statistics", version: 1, session,
+          connectionSession: this.session, receivedAt: new Date().toISOString(),
+          active: Boolean(flags & 1), synchronized: Boolean(flags & 2), firmwareError: Boolean(flags & 4),
+          countsSaturated: Boolean(flags & 8), foxCount, durationMilliseconds, elapsedMilliseconds, observations,
+          warning: "Manual observations, not beacon detections or locations. Gain index is not dB. Relative radio times, not GPS/UTC. RAM only." };
+      });
+    }
+    readSpectrumPresets() {
+      return this.run("Exportar presets RAM Bricohams", () => this.readSpectrumPresetsRaw());
+    }
+    writeSpectrumPresets(input) {
+      const bytes = R.bytes(input, 208).slice();
+      inspectSpectrumPresets(bytes);
+      return this.run("Importar presets RAM Bricohams", async () => {
+        const token = this.presetTransferToken();
+        await this.spectrumPresetExchange(2, token, bytes.subarray(0, 104));
+        await this.spectrumPresetExchange(3, token, bytes.subarray(104));
+        await this.spectrumPresetExchange(4, token);
+        const checked = await this.readSpectrumPresetsRaw();
+        R.assert(R.equal(checked, bytes), "Los presets RAM releidos no coinciden con el archivo. Importacion no verificada.");
+        return inspectSpectrumPresets(checked);
+      });
     }
     async readConfigurationRaw() {
       R.assert(/^F4HWN.*v6\./i.test(this.info?.firmware || ""), "La gestion de canales Beta solo admite F4HWN v6.x.");
@@ -448,6 +620,6 @@
       });
     }
   }
-  Object.assign(R, { QuanshengConnector, quanshengPacket: packet, decodeQuanshengPacket: decodePacket, quanshengBaseFromFlash: baseFromFlash, crc16, parseQuanshengApp: parseApp, QUANSHENG_APP_STATUS: APP_STATUS, inspectQuanshengSlotImage: inspectSlotImage });
+  Object.assign(R, { QuanshengConnector, inspectSpectrumPresets, quanshengPacket: packet, decodeQuanshengPacket: decodePacket, quanshengBaseFromFlash: baseFromFlash, crc16, parseQuanshengApp: parseApp, QUANSHENG_APP_STATUS: APP_STATUS, inspectQuanshengSlotImage: inspectSlotImage });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

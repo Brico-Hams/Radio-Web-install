@@ -1,7 +1,7 @@
 (function (root) {
   "use strict";
   const R = root.RadioWorkspace;
-  function mountPlanningUI({ page, model, action, download, log, importChannels, importContacts, importSatellites, readSatellites, templates }) {
+  function mountPlanningUI({ page, model, action, download, log, importChannels, importContacts, importSatellites, readSatellites, templates, cat = null }) {
     const panel = document.createElement("section");
     panel.id = "planning-panel";
     panel.className = "panel operations planning-panel";
@@ -100,7 +100,10 @@
         </div>
         <div class="operation-buttons"><button id="plan-doppler-stage" type="button" class="button secondary">Preparar canales con Doppler corregido (solo RX)</button></div>
         ${page === "quansheng" ? '<p>Quansheng: los canales Doppler se cargan como memorias FM escalonadas en la configuracion local F4HWN v6. No es control continuo del modulo Doppler ni carga de TLE en el firmware. Lee primero la configuracion y elige una plantilla FM abajo; el envio fisico mantiene los requisitos de respaldo.</p><button id="plan-qs-load" type="button" class="button primary">Cargar SAT / Doppler preparados en configuracion Quansheng</button>' : ""}
-        <p id="plan-doppler-info" role="status">Una memoria por salto de frecuencia igual del Doppler; las ventanas son mas cortas cerca del maximo. Cambia de memoria a la hora indicada; la radio no sigue el Doppler sola.</p>
+        <p id="plan-doppler-info" role="status">Una memoria por salto de frecuencia igual del Doppler; las ventanas son mas cortas cerca del maximo. Cambia de memoria a la hora indicada; estas memorias no siguen el Doppler solas.</p>
+        ${page === "quansheng" ? `<h3>Seguimiento CAT RX Bricohams Beta</h3>
+        <p>Solo imagen Satelites con CAT v1: entra en SAT RX y pulsa 8 en la radio. Selecciona un pase actualmente visible y una frecuencia FM. Este navegador calcula Doppler SGP4 y envia RX aproximadamente cada segundo; no carga TLE en la radio ni controla TX. Revisa el reloj del equipo. No inicia automaticamente pases futuros.</p>
+        <div class="operation-buttons"><button id="plan-cat-start" type="button" class="button primary">Seguir pase seleccionado por CAT RX</button></div>` : ""}
       </div>
       <hr><h3>Canales preparados (sin escribir en la radio)</h3>
       <button id="plan-pmr-stage" type="button" class="button secondary">Preparar PMR446 analogicos 1-16 (solo RX)</button>
@@ -122,6 +125,97 @@
     let orbital = null;
     let transmitters = [];
     let prediction = null;
+    let tracker = null;
+    let catTimer = null;
+    let catStopping = false;
+    let uiBusy = false;
+    if (cat) {
+      const controls = document.createElement("div");
+      controls.innerHTML = `<button id="plan-cat-stop" type="button" class="button secondary" disabled>Detener seguimiento CAT</button>
+        <p id="plan-cat-status" role="status">Seguimiento CAT detenido. El firmware caduca las ordenes tras 3 s sin renovacion.</p>`;
+      panel.append(controls);
+      const catStatus = text => { $("plan-cat-status").textContent = text; };
+      const updateCatControls = () => {
+        $("plan-cat-start").disabled = uiBusy || Boolean(tracker) || catStopping;
+        $("plan-cat-stop").disabled = !tracker || catStopping;
+      };
+      async function stopTracking(reason, cause = null) {
+        if (!tracker || catStopping) return;
+        catStopping = true;
+        clearTimeout(catTimer);
+        const current = tracker;
+        updateCatControls();
+        catStatus(`${reason}: deteniendo y solicitando RX nominal...`);
+        let error = cause;
+        try { await current.stop(); }
+        catch (cleanup) {
+          error = error ? new AggregateError([error, cleanup], "Error CAT y de restauracion") : cleanup;
+        } finally {
+          tracker = null;
+          catStopping = false;
+          cat.setTracking(false);
+          $("plan-controls").disabled = uiBusy;
+          updateCatControls();
+        }
+        if (error) {
+          const details = error instanceof AggregateError ? `${error.message}: ${error.errors.map(item => item.message).join("; ")}` : error.message;
+          catStatus(`ERROR: ${reason}: ${details}. No se garantiza RX nominal; el firmware debe caducar el lease de 3 s.`);
+          cat.error(error);
+        } else {
+          catStatus(`${reason}. RX nominal confirmado por software; sin medida RF.`);
+          log(`CAT: ${reason}. RX nominal confirmado por software.`);
+        }
+      }
+      async function tickCat(first = false) {
+        const current = tracker;
+        if (!current || catStopping) return;
+        try {
+          R.assert(document.visibilityState === "visible" && $("plan-location-consent").checked,
+            "Pagina no visible o permiso de posicion retirado.");
+          if (Date.now() >= current.plan.pass.los.time) {
+            await stopTracking("Pase finalizado");
+            return;
+          }
+          const result = await (first ? current.start() : current.step());
+          if (tracker !== current || catStopping || !result) return;
+          catStatus(`${prediction.name}: RX ${(result.frequency10Hz / 100000).toFixed(5)} MHz; elevacion ${result.elevation.toFixed(1)} grados; ${new Date(result.time).toISOString()}. Solo RX, confirmacion software.`);
+          catTimer = setTimeout(() => tickCat(), 750);
+        } catch (error) { await stopTracking("Seguimiento interrumpido", error); }
+      }
+      $("plan-cat-start").addEventListener("click", () => {
+        if (tracker || catStopping || uiBusy) return;
+        try {
+          requireOrbit(); consentLocation();
+          R.assert(document.visibilityState === "visible", "Mantener la pagina visible para CAT.");
+          R.assert(prediction && Date.now() - Date.parse(prediction.start) < 15 * 60000,
+            "Calcula de nuevo los pases antes de iniciar CAT (caducidad 15 minutos).");
+          R.assert($("plan-doppler-pass").value !== "", "Selecciona un pase.");
+          const pass = prediction.passes[Number($("plan-doppler-pass").value)];
+          const transmitter = transmitters.find(item => item.id === $("plan-tx").value);
+          const plan = { orbital, transmitter, pass, observer: prediction.observer };
+          R.catPassTarget(orbital, transmitter, pass, prediction.observer);
+          tracker = new R.CatPassTracker(cat.connector(), plan);
+          cat.setTracking(true);
+          $("plan-controls").disabled = true;
+          updateCatControls();
+          log("CAT: seguimiento RX iniciado para el pase seleccionado; sin TX ni escrituras persistentes.");
+          void tickCat(true);
+        } catch (error) { catStatus(`ERROR: ${error.message}`); cat.error(error); }
+      });
+      $("plan-cat-stop").addEventListener("click", () => { void stopTracking("Detenido por el operador"); });
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible") void stopTracking("Pagina en segundo plano");
+      });
+      root.addEventListener("pagehide", () => {
+        void stopTracking("Pagina cerrada; si no llega STOP, esperar caducidad del lease");
+      });
+      panel.addEventListener("change", event => {
+        if (tracker && event.target.closest("#plan-controls")) void stopTracking("Parametros cambiados");
+      });
+      panel.addEventListener("input", event => {
+        if (tracker && event.target.closest("#plan-controls")) void stopTracking("Parametros cambiados");
+      });
+    }
     const chosenRepeaters = new Set();
     const chosenContacts = new Map();
     const staged = new Map();
@@ -571,7 +665,7 @@
       notify("Destino cambiado: canales preparados y seleccion de contactos vaciados para no mezclar modelos.");
     });
     return {
-      setBusy(value) { busy = value; $("plan-controls").disabled = value; },
+      setBusy(value) { busy = value; uiBusy = value; $("plan-controls").disabled = value || Boolean(tracker); },
       refreshTemplates
     };
   }

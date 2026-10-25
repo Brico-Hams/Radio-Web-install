@@ -5,10 +5,6 @@
 - **Anatol-Emilio Lopez-Maitchovcow** (Bricohams) — concepción, dirección y mantenimiento.
   Contacto: [GitHub Issues](https://github.com/anatolbricoham/Radio-Web-install/issues).
 
-## Colaboración
-
-- Desarrollo asistido por GitHub Copilot (coautor en los commits).
-
 ## Contribuir
 
 Las contribuciones se aceptan bajo la licencia del proyecto (GPL-3.0-or-later). Al enviar un cambio confirmas que tienes derecho a aportarlo. Si contribuyes, añade tu nombre a esta lista.

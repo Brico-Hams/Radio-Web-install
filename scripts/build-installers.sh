@@ -13,10 +13,13 @@ mkdir -p "$output"
 node "$root/scripts/fetch-studio.cjs"
 node "$root/scripts/build-help.cjs"
 app_files=(
+  LICENSE AUTHORS.md ACKNOWLEDGEMENTS.md SUPPORT.md SECURITY.md
+  anytone.html anytone-core.js anytone-ui.js
   index.html opengd77.html quansheng.html ayuda.html bricohams-logo.png styles.css
   ayuda-firmwares.html ayuda-configuracion.html ayuda-quansheng.html help-docs.css
   ayuda-opciones-f4hwn.html ayuda-presets-f4hwn.html ayuda-ardf.html
   ayuda-opengd77.html ayuda-opengd77-modelos.html ayuda-karina.html ayuda-bricohams.html
+  ayuda-entrega.html ayuda-android.html
   ayuda-egzumer.html ayuda-pack-dim0s.html
   app.js radio-core.js transports.js quansheng-connector.js quansheng-channels.js gd77-connector.js
   backup-store.js codeplug-editor.js radio-ui.js firmware-core.js firmware-catalog.js
@@ -52,6 +55,7 @@ build_deb() {
   stage_app "$package_root/opt/bricohams-radio-workspace/app"
   tar -xJf "$work/node-v${node_version}-linux-${node_arch}.tar.xz" -C "$work"
   install -m 755 "$work/node-v${node_version}-linux-${node_arch}/bin/node" "$package_root/opt/bricohams-radio-workspace/runtime/node/bin/node"
+  install -m 644 "$work/node-v${node_version}-linux-${node_arch}/LICENSE" "$package_root/opt/bricohams-radio-workspace/runtime/node/LICENSE"
   install -D -m 755 "$root/installers/unix/bricohams-radio" "$package_root/usr/bin/bricohams-radio"
   install -D -m 644 "$root/installers/linux/bricohams-radio.desktop" "$package_root/usr/share/applications/bricohams-radio.desktop"
   mkdir -p "$package_root/DEBIAN"
@@ -112,6 +116,7 @@ windows_root="$work/windows"
 stage_app "$windows_root/app"
 mkdir -p "$windows_root/runtime"
 unzip -p "$work/node-v${node_version}-win-x64.zip" "node-v${node_version}-win-x64/node.exe" > "$windows_root/runtime/node.exe"
+unzip -p "$work/node-v${node_version}-win-x64.zip" "node-v${node_version}-win-x64/LICENSE" > "$windows_root/runtime/LICENSE"
 install -m 644 "$root/installers/windows/Install.ps1" "$windows_root/Install.ps1"
 install -m 644 "$root/installers/windows/Start.ps1" "$windows_root/Start.ps1"
 (

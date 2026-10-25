@@ -4,14 +4,106 @@
 
 Dos espacios con conectores propios WebUSB/Web Serial, operaciones locales y respaldo automatico antes de habilitar escrituras.
 
+## AnyTone Beta: preparacion web
+
+La nueva [seccion AnyTone](anytone.html) prepara un **proyecto portable**, no un
+RDT propietario ni un CSV certificado para el CPS de una version concreta.
+No implementa programacion USB ni modifica la radio.
+
+- Base inicial: los mismos 16 canales PMR446 de las otras familias, solo RX.
+- Importa binarios OpenGD77 estandar de 128 KiB y configuraciones Quansheng
+  F4HWN v6. Conserva RX/TX nominales; CC/TS y el TG de contacto de grupo conocido
+  en OpenGD77. Omite modos Quansheng no FM, sin confundir AM con DMR.
+- Importa JSON RepeaterBook autorizado, reutiliza el normalizador existente
+  para FM/DMR y filtra Espana. No hay un listado nacional verificado incluido.
+  TS/TG no publicados quedan pendientes: nunca se deducen por frecuencia.
+- Admite tambien el registro RadioID `rptrs`: Espana, estado ACTIVE,
+  desplazamiento y CC validos. Usa TS/TG publicados; si solo se publican TS,
+  TG0 queda pendiente. ACTIVE es un estado del registro, no prueba de RF.
+- Admite el listado JSON URE `items` de repetidores (no balizas): convierte
+  solo modo FM y frecuencias/desplazamientos con unidades explicitas.
+  Conserva el subtono publicado como nota sin activarlo. URE advierte que
+  el listado puede contener datos desactualizados; revisar con el titular.
+- Edita y elimina canales, organiza etiquetas de zona y exporta JSON reabrible
+  y CSV de intercambio. Todos los canales quedan bloqueados para TX.
+- Los perfiles D868/D878/D578 son agrupaciones para preparar datos, no una
+  certificacion de variantes o limites. AM aerea solo se habilita con el perfil
+  Otro y confirmacion manual de soporte AM en la radio exacta.
+- Aeropuertos: JSON `{"results":[{"name":"SERVICIO","frequencyMHz":"123.45000",
+  "source":"Referencia AIP vigente"}]}`. El ejemplo es de formato, no una
+  asignacion aeroportuaria. Usa frecuencias RF, no designadores de canal 8.33,
+  y contrasta cada servicio con [AIP ENAIRE](https://aip.enaire.es/).
+- Exporta antes de salir; no hay guardado automatico. No publiques proyectos
+  de tu unidad. Tonos, contactos privados/listas RX, ID DMR, limites por modelo
+  y ajustes propietarios requieren revision en el CPS correcto.
+
+Para producir un codeplug nacional nativo faltan el modelo/firmware exactos y
+fuentes autorizadas actuales de repetidores y aeropuertos. No se inventan
+frecuencias ni se declara completa una cobertura vacia de repetidores.
+
+## Firmware propio: imagenes ARDF, Satelites y Espectro Beta
+
+El builder admite `--module ardf` para incluir un nucleo propio de ciclos y
+un adaptador de teclado/pantalla en Fox Hunt residente sobre F4HWN v6.1.0
+Multiboot. La nueva imagen ARDF registra observaciones manuales con 8
+(contador, primer/ultimo instante relativo y atenuacion por baliza) y permite
+consultar/exportar JSON por USB/UART desde la web, sin GPS ni localizacion
+automatica. Conserva la ultima sesion en RAM al salir; se borra al reiniciar
+o reconfigurar. Una segunda imagen, `--module satellite`, aplica Doppler manual
+solo a RX, con velocidad radial ajustable, pantalla de frecuencia corregida
+y salida por el flujo de restauracion RF upstream. No incluye TLE/SGP4 ni
+seguimiento orbital autonomo. La nueva imagen Satelites incluye CAT RX
+experimental propio, habilitado con 8 en SAT RX, con lease de 3 segundos
+y panel web de consulta/sintonia temporal. No controla TX ni modifica
+canales, tonos o potencia. La radio no calcula orbitas por si sola.
+El navegador ya permite seguimiento RX del pase seleccionado con SGP4 y
+renovacion CAT, con parada manual/al ocultar la pagina y al finalizar el
+pase. Requiere habilitacion fisica y se ha probado con transporte simulado,
+no en RF. No inicia automaticamente pases futuros ni carga TLE en el MCU.
+El constructor exige imagenes separadas.
+No es Karina ni equivalencia del 100 %. Las imagenes actuales miden
+113960 bytes (ARDF con estadisticas) y 113868 bytes (Satelites con CAT), sin instalarlas en la radio;
+ocho suites C nativas comprueban los nucleos y adaptadores con RF simulado.
+La tercera imagen, `--module spectrum`, conecta el nucleo propio al receptor
+y pantalla: 128 puntos RSSI, peak hold, promedio, pausa y ocho presets RAM.
+Los presets no sobreviven a salir/apagar y no escriben EEPROM.
+PTT captura el punto medido mas fuerte en una vista VFO-PRO RX propia,
+con sintonia por paso, entrada directa RX, audio y ajuste de ganancia RX;
+no transmite ni edita calibracion. Permite centrar nuevas ventanas y
+recorrer circularmente los presets RAM, con hasta 16 exclusiones exactas
+de sesion y busqueda CTCSS/DCS opcional en captura FM, sin guardar tonos.
+La imagen con bootlogo y transferencia de presets mide 118044 bytes. Permite
+conservar los presets en archivos BHSP locales y recuperarlos a RAM con el
+barrido pausado, validacion atomica y relectura; no escribe EEPROM.
+La deteccion real sigue
+pendiente de validar. Las nuevas compilaciones incluyen bienvenida Beta y
+logo monocromo embebido en el modo LOGO, sin sobrescribir el logo externo
+ni cambiar las preferencias de encendido.
+Ver [construccion, controles, licencias y limites](docs/BRICOHAMS-FIRMWARE.md#nuevo-nucleo-independiente-ardf).
+
 **BETA - en validacion y pruebas.** El **Modo PRO**, activado expresamente para esta sesion, evita confirmaciones repetitivas al pulsar operaciones, pero no elimina permisos USB, respaldo completo, comprobaciones de hardware/firmware, hashes, CRC, relectura ni proteccion de Main. No habilita escrituras con copias parciales.
 
 **Prueba real UV-K5 V3 (modelo declarado), F4HWN v6.0.0:** identificacion, calibracion, configuracion con 200 canales y consulta de cinco slots correctas en COM4; calibracion/configuracion coinciden en dos lecturas independientes. El comando de Flash fisica no responde en v6.0. Se corrige el respaldo automatico de esta version para conservar el acceso de solo lectura y guardar una copia parcial, en vez de invalidar la conexion por intentar un comando no disponible. No se han escrito/borrado datos fisicos. Detalles y procedimiento en [ayuda Quansheng](docs/AYUDA-QUANSHENG.md).
 
 ## Documentacion
 
+### Android Bricohams Beta
+
+La APK nativa 0.7.0-beta incluye contactos locales editables con busqueda e importacion ADIF con vista previa, exportacion
+ADIF/JSON, sesiones ARDF con historial, estadisticas, segmentos GPS filtrados y observaciones GPS puntuales, y Morse de texto
+y WAV PCM experimental. Incorpora CAT RX temporal por USB CDC ACM y
+adaptadores CH34x/CP210x/FTDI/Prolific reconocidos. Calcula pases SGP4 offline
+con TLE importados y permite seguimiento Doppler RX del pase seleccionado.
+Captura microfono en primer plano hasta 60 s para decodificar despues Morse
+o Robot36; no es decodificacion continua. No incluye escritura de canales ni
+subida LoTW. Decodifica SSTV Robot36 experimental desde WAV y exporta PNG.
+Compila para Android 8.0+;
+las pruebas host no sustituyen pruebas en telefono.
+Consulta [funciones, permisos, compilacion y limites](docs/ANDROID.md).
+
 | Documento | Contenido |
 | --- | --- |
+| [Estado de entrega](docs/ESTADO-ENTREGA.md) | Revision de todas las peticiones, evidencias, pendientes y condiciones de publicacion y exportacion |
 | [Ayuda y soporte](ayuda.html) (en la app: <http://127.0.0.1:8787/ayuda.html>) | Primeros pasos, controladores USB (soporte no oficial), errores frecuentes y preguntas frecuentes |
 | [Biblioteca completa de firmware](ayuda-firmwares.html) / [indice Markdown](docs/AYUDA-FIRMWARES.md) | Guias por familia, modelo, revision y version: F4HWN, ARDF, Karina, Bricohams y OpenGD77; menus, configuracion FM/DMR y todas las opciones del catalogo con matriz ON/OFF. Incluida sin red en instaladores y servidor local. Regenerar con `npm run build:help`. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Componentes, flujo de datos, modulos y capas de seguridad |

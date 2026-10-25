@@ -52,6 +52,119 @@ const orbital = {
 };
 const start = Date.parse("2026-10-19T06:00:00Z");
 const observer = { latitude: 40.4168, longitude: -3.7038, height: 0.667 };
+function catFixture() {
+  const pass = R.predictPasses(orbital, observer, { start, hours: 24, minimum: 10 }).passes.find(item => !item.partialStart && !item.partialEnd);
+  const plan = { orbital, observer, pass, transmitter: { id: "test", mode: "FM", downlink: 145800000, source: orbital.source } };
+  let time = pass.maximum.time;
+  const commands = [];
+  const connector = { connected: true,
+    async setCatReceive(frequency10Hz) { commands.push(frequency10Hz); return { appliedFrequency10Hz: frequency10Hz }; },
+    async stopCatReceive() { commands.push("stop"); }
+  };
+  return { plan, connector, commands, clock: () => time, setTime: value => { time = value; } };
+}
+test("CAT de pase calcula Doppler RX con rango SGP4 y valida limites de tiempo/posicion", () => {
+  const { plan } = catFixture();
+  const time = plan.pass.maximum.time;
+  const target = R.catPassTarget(plan.orbital, plan.transmitter, plan.pass, plan.observer, time);
+  const record = S.twoline2satrec(orbital.tle1, orbital.tle2);
+  const location = { latitude: observer.latitude * Math.PI / 180, longitude: observer.longitude * Math.PI / 180, height: observer.height };
+  const range = at => {
+    const date = new Date(at);
+    return S.ecfToLookAngles(location, S.eciToEcf(S.propagate(record, date).position, S.gstime(date))).rangeSat;
+  };
+  const expected = Math.round(145800000 * (1 - (range(time + 500) - range(time - 500)) / 299792.458) / 10);
+  assert.equal(target.frequency10Hz, expected);
+  assert(target.elevation >= 10 && target.azimuth >= 0 && target.azimuth <= 360);
+  for (const at of [plan.pass.aos.time - 1, plan.pass.los.time, NaN]) {
+    assert.throws(() => R.catPassTarget(orbital, plan.transmitter, plan.pass, observer, at), /CAT/);
+  }
+  assert.throws(() => R.catPassTarget(orbital, plan.transmitter, plan.pass, { ...observer, height: 10 }, time), /Posicion/);
+  assert.throws(() => R.catPassTarget(orbital, { ...plan.transmitter, mode: "USB" }, plan.pass, observer, time), /puntuales/);
+});
+test("seguimiento CAT renueva aunque no cambie frecuencia y stop es idempotente", async () => {
+  const fixture = catFixture();
+  const tracker = new R.CatPassTracker(fixture.connector, fixture.plan, fixture.clock);
+  fixture.plan.transmitter.downlink = 435000000;
+  const first = await tracker.start();
+  assert(first.frequency10Hz < 15000000);
+  fixture.setTime(fixture.clock() + 1000);
+  await tracker.step();
+  assert.equal(fixture.commands.length, 2);
+  await tracker.stop();
+  await tracker.stop();
+  assert.deepEqual(fixture.commands.slice(2), ["stop"]);
+  await assert.rejects(tracker.step(), /inactivo/);
+  await assert.rejects(tracker.start(), /nueva/);
+});
+test("CAT detiene renovaciones tras reloj discontinuo, suspension o fin del pase", async () => {
+  for (const shift of [-1000, 0, 2001, 3600000]) {
+    const fixture = catFixture();
+    const tracker = new R.CatPassTracker(fixture.connector, fixture.plan, fixture.clock);
+    await tracker.start();
+    fixture.setTime(fixture.clock() + shift);
+    await assert.rejects(tracker.step(), /discontinuo/);
+    assert.equal(tracker.active, false);
+    assert.equal(fixture.commands.length, 1);
+    await tracker.stop();
+    assert.equal(fixture.commands.at(-1), "stop");
+  }
+  const fixture = catFixture();
+  fixture.setTime(fixture.plan.pass.los.time - 500);
+  const tracker = new R.CatPassTracker(fixture.connector, fixture.plan, fixture.clock);
+  await tracker.start();
+  fixture.setTime(fixture.plan.pass.los.time);
+  await assert.rejects(tracker.step(), /Fuera del pase/);
+  await tracker.stop();
+});
+test("cancelar CAT en vuelo espera confirmacion antes de STOP y no envia mas SET", async () => {
+  const fixture = catFixture();
+  let finish;
+  fixture.connector.setCatReceive = async frequency => {
+    fixture.commands.push(frequency);
+    await new Promise(resolve => { finish = resolve; });
+    return {};
+  };
+  const tracker = new R.CatPassTracker(fixture.connector, fixture.plan, fixture.clock);
+  const starting = tracker.start();
+  await assert.rejects(tracker.step(), /ocupado/);
+  const stopping = tracker.stop();
+  assert.equal(tracker.active, false);
+  assert.equal(fixture.commands.length, 1);
+  finish();
+  assert.equal(await starting, null);
+  await stopping;
+  assert.equal(fixture.commands.at(-1), "stop");
+});
+test("fallos CAT y desconexion no se convierten en restauracion exitosa", async () => {
+  const fixture = catFixture();
+  const tracker = new R.CatPassTracker(fixture.connector, fixture.plan, fixture.clock);
+  fixture.connector.setCatReceive = async () => { throw new Error("USB perdido"); };
+  await assert.rejects(tracker.start(), /USB perdido/);
+  assert.equal(tracker.active, false);
+  fixture.connector.connected = false;
+  await assert.rejects(tracker.stop(), /sin restauracion confirmada/);
+  const late = catFixture();
+  late.connector.setCatReceive = async () => { late.setTime(late.clock() + 2000); return {}; };
+  const delayed = new R.CatPassTracker(late.connector, late.plan, late.clock);
+  await assert.rejects(delayed.start(), /demasiado tardia/);
+  assert.equal(delayed.active, false);
+  await delayed.stop();
+});
+test("CAT no inicia fuera del pase y no reabre una sesion ya cancelada", async () => {
+  const fixture = catFixture();
+  fixture.setTime(fixture.plan.pass.aos.time - 1);
+  const tracker = new R.CatPassTracker(fixture.connector, fixture.plan, fixture.clock);
+  await assert.rejects(tracker.start(), /Fuera del pase/);
+  assert.equal(tracker.active, false);
+  assert.equal(fixture.commands.length, 0);
+  const cancelled = new R.CatPassTracker(fixture.connector, fixture.plan, fixture.clock);
+  await cancelled.stop();
+  await assert.rejects(cancelled.start(), /sesion CAT nueva/);
+  fixture.connector.stopCatReceive = async () => { throw new Error("STOP rechazado"); };
+  const failed = new R.CatPassTracker(fixture.connector, fixture.plan, fixture.clock);
+  await assert.rejects(failed.stop(), error => error instanceof AggregateError && error.errors[0].message === "STOP rechazado");
+});
 function blankCodeplug() {
   const image = new Uint8Array(0x20000).fill(255);
   for (let bank = 0; bank < 8; bank++) {
