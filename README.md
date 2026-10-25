@@ -53,6 +53,8 @@ Descarga la [ultima Release](https://github.com/anatolbricoham/Radio-Web-install
 - Arch Linux: instala `base-devel` y `nodejs` con pacman, extrae `*-arch.tar.gz`, revisa `PKGBUILD` y ejecuta `makepkg -si` como usuario normal. Inicia con `bricohams-radio`.
 - FreeBSD 14 amd64: extrae `*-freebsd-amd64.tar.gz`, entra en la carpeta y ejecuta `su -c './install.sh'` (instala Node 22 con `pkg` si falta). Inicia con `bricohams-radio` como usuario normal.
 
+Todos los instaladores incluyen **Bricohams Quansheng Studio** (UV-K1 / UV-K5 V3 con F4HWN Fusion 6), del repositorio [bricohams/Bricohams-Studio](https://github.com/bricohams/Bricohams-Studio). Se abre en <http://127.0.0.1:8787/studio.html> o desde el espacio Quansheng. La copia se descarga al empaquetar, en el commit y con el SHA-256 fijados en `studio.lock.json`, y el servidor la vuelve a comprobar antes de servirla. Se sirve con una CSP propia que solo admite sus scripts por hash y le impide conectarse a la red. Desde el codigo fuente, ejecuta `npm run fetch:studio` una vez. En modo web, el enlace lleva a la [pagina publica de Studio](https://bricohams.github.io/Bricohams-Studio/).
+
 Comprueba el SHA-256 antes de instalar. Los lanzadores abren el navegador predeterminado y mantienen el servidor en segundo plano solo en `127.0.0.1:8787`. Si tu navegador predeterminado no es compatible, abre esa direccion en Chrome, Edge o Brave. Cerrar la pestana no detiene el servidor; no hay arranque automatico tras reiniciar el equipo. Usa siempre el mismo navegador, perfil y origen para conservar tus copias. Los controladores USB se configuran aparte: [Ayuda](ayuda.html#drivers). En FreeBSD el soporte WebUSB/Web Serial de Chromium no esta garantizado.
 
 ## Estado real del soporte

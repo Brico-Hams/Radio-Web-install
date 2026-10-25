@@ -2,6 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { once } = require("node:events");
+const { createHash } = require("node:crypto");
 
 const root = path.join(__dirname, "..");
 const read = name => fs.readFileSync(path.join(root, name), "utf8");
@@ -75,4 +77,50 @@ test("las guias locales cubren integridad, arquitectura, parada y persistencia",
   }
   assert.match(help, /releases\/latest/);
   assert.doesNotMatch(help, /próximamente en paquetes/);
+});
+
+test("Studio se incluye fijado por commit y SHA-256, sin versionar su HTML con firmware", () => {
+  const lock = JSON.parse(read("studio.lock.json"));
+  assert.equal(lock.repository, "bricohams/Bricohams-Studio");
+  assert.match(lock.commit, /^[0-9a-f]{40}$/);
+  assert.match(lock.sha256, /^[0-9a-f]{64}$/);
+  assert.ok(lock.scriptHashes.length > 0 && lock.scriptHashes.every(hash => /^sha256-[A-Za-z0-9+/]{43}=$/.test(hash)));
+  assert.match(read(".gitignore"), /^studio\.html$/m);
+  const build = read("scripts/build-installers.sh");
+  assert.ok(build.indexOf('node "$root/scripts/fetch-studio.cjs"') < build.indexOf("stage_app()"));
+  for (const file of ["studio.html", "studio.lock.json", "studio-pin.cjs"]) assert.ok(build.includes(` ${file}`), file);
+});
+
+test("los hashes CSP de Studio cubren solo scripts ejecutables y rechazan scripts externos", () => {
+  const { scriptHashes } = require("../studio-pin.cjs");
+  const html = '<script type="application/x-bricohams-firmware">AAAA</script><script>run()</script><script type="text/plain">x</script>';
+  const expected = `sha256-${createHash("sha256").update("run()").digest("base64")}`;
+  assert.deepEqual(scriptHashes(html), [expected]);
+  assert.throws(() => scriptHashes('<script src="https://evil.test/x.js"></script>'), /externos/);
+  assert.throws(() => scriptHashes("<p>sin scripts</p>"), /sin scripts/);
+});
+
+test("el servidor local sirve Studio solo si coincide con el lock y con una CSP por hashes", async t => {
+  const { createServer } = require("../server.cjs");
+  const { sha256, scriptHashes } = require("../studio-pin.cjs");
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "studio-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const html = Buffer.from("<!doctype html><title>Studio</title><script>document.title='ok'</script>");
+  const file = path.join(dir, "studio.html");
+  const lock = { commit: "0".repeat(40), bytes: html.length, sha256: sha256(html), scriptHashes: scriptHashes(html.toString()) };
+  const server = createServer(undefined, undefined, { file, lock });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
+  const url = `http://127.0.0.1:${server.address().port}/studio.html`;
+  assert.equal((await fetch(url)).status, 404);
+  fs.writeFileSync(file, html);
+  const response = await fetch(url);
+  assert.equal(response.status, 200);
+  const csp = response.headers.get("content-security-policy");
+  assert.ok(csp.includes(`script-src '${lock.scriptHashes[0]}';`), csp);
+  assert.match(csp, /connect-src 'none'/);
+  assert.doesNotMatch(csp, /script-src[^;]*unsafe-inline/);
+  assert.equal(await response.text(), html.toString());
+  fs.writeFileSync(file, Buffer.concat([html, Buffer.from("<script>steal()</script>")]));
+  assert.equal((await fetch(url)).status, 500);
 });

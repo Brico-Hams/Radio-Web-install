@@ -154,7 +154,7 @@ function detail(tool) {
     <section class="panel backups-panel"><h2>Copias locales de esta web</h2><p class="muted">Se guardan en IndexedDB en este navegador y origen. Exportalas: borrar datos del navegador elimina las copias locales. Incluyen canales y otros datos privados; no las publiques.</p><button id="refresh-backups" class="button secondary" type="button">Actualizar historial</button><ul id="backup-list"></ul></section>
     <section class="panel"><h2>Registro de operaciones</h2><pre id="radio-log" role="log" aria-label="Registro local"></pre></section>
     <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Antes de escribir, verifica.</h2><p>Conectores en validacion: pruebas automatizadas con transportes simulados, sin certificacion con hardware fisico. No se afirma paridad completa con las referencias. La seleccion de modelo Quansheng es manual. No cierres ni desconectes durante una operacion.</p></div></aside>
-    <section class="sources"><h2>Documentacion de referencia</h2><a href="ayuda.html#drivers">Controladores USB y solucion de errores</a><a href="${tool.url}" ${external}>${tool.action} &nearr;</a>${page === "quansheng" ? `<a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/Multiboot-and-Multiconfig" ${external}>Multiboot y Multiconfig &nearr;</a><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/UV-Studio" ${external}>Guia de UV Studio &nearr;</a>` : ""}</section>`;
+    <section class="sources"><h2>Documentacion de referencia</h2><a href="ayuda.html#drivers">Controladores USB y solucion de errores</a><a href="${tool.url}" ${external}>${tool.action} &nearr;</a>${page === "quansheng" ? `<a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/Multiboot-and-Multiconfig" ${external}>Multiboot y Multiconfig &nearr;</a><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/UV-Studio" ${external}>Guia de UV Studio &nearr;</a><a id="studio-link" href="https://bricohams.github.io/Bricohams-Studio/" ${external}>Bricohams Quansheng Studio (UV-K1 / UV-K5 V3) &nearr;</a>` : ""}</section>`;
 }
 
 document.getElementById("app").innerHTML = `
@@ -265,4 +265,11 @@ if (current) {
 (globalThis.RadioWorkspace?.runtime ?? Promise.resolve({ mode: "web" })).then(({ mode }) => {
   document.body.dataset.mode = mode;
   document.getElementById("mode-badge").textContent = mode === "local" ? "Local · instalado" : "Web · GitHub Pages";
+  // The installers ship a pinned copy of Studio; the static site links to its own GitHub Pages origin.
+  const studio = document.getElementById("studio-link");
+  if (studio && mode === "local") {
+    studio.href = "studio.html";
+    studio.removeAttribute("target");
+    studio.textContent = "Bricohams Quansheng Studio incluido (UV-K1 / UV-K5 V3)";
+  }
 });

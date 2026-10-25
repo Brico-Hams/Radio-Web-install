@@ -9,7 +9,14 @@ const ALLOWED_FILES = Object.freeze([
   "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js"
 ]);
 const allowed = new Set(ALLOWED_FILES);
-function createServer(firmware = new FirmwareService(), providers = new DataService()) {
+const { verify: verifyStudio } = require("./studio-pin.cjs");
+// Studio is a single self-contained page with inline scripts: it gets its own CSP that only admits those exact
+// scripts (hashes pinned in studio.lock.json) and no network access.
+function studioCSP(lock) {
+  return `default-src 'none'; script-src ${lock.scriptHashes.map(hash => `'${hash}'`).join(" ")}; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
+}
+const defaultStudio = () => ({ file: path.join(__dirname, "studio.html"), lock: require("./studio.lock.json") });
+function createServer(firmware = new FirmwareService(), providers = new DataService(), studio = defaultStudio()) {
 return http.createServer(async (request, response) => {
   response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
   response.setHeader("Permissions-Policy", "usb=(self), serial=(self), camera=(), microphone=(), geolocation=(self)");
@@ -109,6 +116,26 @@ return http.createServer(async (request, response) => {
     return;
   }
   const name = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
+  if (name === "studio.html") {
+    let body;
+    try { body = await fs.readFile(studio.file); }
+    catch {
+      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Studio no esta incluido en esta copia. Ejecuta: npm run fetch:studio");
+      return;
+    }
+    try { verifyStudio(body, studio.lock); }
+    catch (error) {
+      console.error(error.message);
+      response.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end("Studio no supera la verificacion SHA-256. Ejecuta: npm run fetch:studio");
+      return;
+    }
+    response.setHeader("Content-Security-Policy", studioCSP(studio.lock));
+    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": body.length });
+    response.end(request.method === "HEAD" ? undefined : body);
+    return;
+  }
   if (!allowed.has(name)) {
     response.writeHead(404);
     response.end("No encontrado.");

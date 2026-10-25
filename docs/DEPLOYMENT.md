@@ -20,6 +20,10 @@ npm start
 
 Abre <http://127.0.0.1:8787>. Si abres `localhost`, el servidor te redirige a `127.0.0.1`: valida el encabezado `Host` y solo sirve ese origen. Usa siempre el mismo origen para conservar el historial de IndexedDB.
 
+Para incluir Bricohams Quansheng Studio en la copia local, ejecuta `npm run fetch:studio`. Descarga `studio.html` desde `bricohams/Bricohams-Studio`, en el commit fijado en `studio.lock.json`, y comprueba su tamaño y su SHA-256. El archivo no se versiona porque lleva firmware incrustado.
+
+**Actualizar Studio (autor):** cuando el commit nuevo ya esté en GitHub, ejecuta `node scripts/fetch-studio.cjs --update <commit-completo>`. El comando reescribe `studio.lock.json` con el tamaño, el SHA-256 y los hashes CSP de sus scripts. Revisa el diff y haz commit del lock.
+
 `--ignore-scripts` evita que se ejecuten scripts de instalación de terceros. La versión de `satellite.js` está fijada en `package-lock.json`.
 
 ## Verificación

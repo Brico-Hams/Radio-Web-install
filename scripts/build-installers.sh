@@ -9,11 +9,13 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 mkdir -p "$output"
+# Bricohams Quansheng Studio ships with every installer, downloaded at the commit and SHA-256 pinned in studio.lock.json.
+node "$root/scripts/fetch-studio.cjs"
 app_files=(
   index.html opengd77.html quansheng.html ayuda.html bricohams-logo.png styles.css
   app.js radio-core.js transports.js quansheng-connector.js gd77-connector.js
   backup-store.js codeplug-editor.js radio-ui.js firmware-core.js firmware-catalog.js
-  planning-core.js radioid-csv.js planning-ui.js runtime-mode.js server.cjs
+  planning-core.js radioid-csv.js planning-ui.js runtime-mode.js server.cjs studio-pin.cjs studio.html studio.lock.json
   firmware-service.cjs data-service.cjs
 )
 
