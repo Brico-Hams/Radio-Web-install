@@ -80,7 +80,8 @@
       result[record + 13] = 0;
       result.fill(0, destination.name, destination.name + 16);
       result.set(new TextEncoder().encode(name), destination.name);
-      view.setUint16(attributes, rx < 17400000 ? 2 : rx < 35000000 ? 3 : rx < 40000000 ? 4 : rx < 47000000 ? 5 : 6, true);
+      // F4HWN frequencyBandTable: BAND2 108-137, BAND3 137-174 ... BAND6 400-470 MHz (attribute value = band index).
+      view.setUint16(attributes, rx < 13700000 ? 1 : rx < 17400000 ? 2 : rx < 35000000 ? 3 : rx < 40000000 ? 4 : rx < 47000000 ? 5 : 6, true);
       known.add(key);
       added++;
     }

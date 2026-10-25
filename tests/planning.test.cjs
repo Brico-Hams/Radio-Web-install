@@ -308,6 +308,13 @@ test("Quansheng conserva offset de repetidor, fuerza RX-only y limita nombres a 
   assert.equal(deleted[0x8002] & 7, 7);
   assert.deepEqual(deleted.subarray(0x8800), original.subarray(0x8800));
 });
+test("Quansheng asigna la banda de F4HWN: 136 MHz es BAND2, 137-174 BAND3 y 400-470 BAND6", () => {
+  const added = R.appendQuanshengChannels(quanshengConfig(), [
+    { ...channel, name: "B2", rx: "136.50000", tx: "136.50000" },
+    { ...channel, name: "B3", rx: "137.00000", tx: "137.00000" },
+    { ...channel, name: "B6", rx: "438.77500", tx: "431.17500" }], 1).image;
+  assert.deepEqual([1, 2, 3].map(index => added[0x8000 + index * 2] & 7), [1, 2, 5]);
+});
 test("Quansheng rechaza formato incorrecto, DMR, frecuencias no soportadas y plantilla ausente", () => {
   const original = quanshengConfig();
   assert.throws(() => R.readQuanshengChannels(new Uint8Array(512)), /Tamano/);
