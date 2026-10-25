@@ -51,8 +51,7 @@
       document.querySelectorAll("[data-connected]").forEach(button => { button.disabled = busy || !connected; });
       document.querySelectorAll("[data-write]").forEach(button => { button.disabled = busy || !connected || !permit; });
       if ($("write-codeplug")) $("write-codeplug").disabled = busy || !connected || !permit || !image;
-      if ($("slot-install")) $("slot-install").disabled = busy || !connected || !permit || !slotImage;
-      document.querySelectorAll("#radio-operations input, #radio-operations select").forEach(input => { input.disabled = busy; });
+      if ($("slot-install")) $("slot-install").disabled = busy || !connected || !permit || !slotImage;      document.querySelectorAll("#radio-operations input, #radio-operations select").forEach(input => { input.disabled = busy; });
       $("backup-status").dataset.ready = Boolean(permit);
       planning?.setBusy(busy);
     };
@@ -132,7 +131,16 @@
         <label for="slot-file">Imagen F4HWN estable v6.x (maximo 118 KiB)</label><input id="slot-file" type="file" accept=".bin">
         <label for="slot-name">Nombre (ASCII, maximo 15 caracteres)</label><input id="slot-name" maxlength="15" value="F4HWN">
         <div class="operation-buttons"><button id="slot-install" data-write class="button primary" type="button" disabled>Instalar y verificar CRC</button><button id="slot-erase" data-write class="button secondary" type="button" disabled>Borrar firmware del slot</button><button id="bank-reset" data-write class="button secondary" type="button" disabled>Restablecer banco CFG</button></div>
-        <p class="card-note">Cambiar firmware: MENU al encender y seleccion en la radio. Cambiar solo banco: SetCfg en la radio. No se inventa un comando remoto para estas acciones. No se implementa flash DFU ni restauracion de calibracion.</p>`;
+        <p class="card-note">Cambiar firmware: MENU al encender y seleccion en la radio. Cambiar solo banco: SetCfg en la radio. No se inventa un comando remoto para estas acciones. No se implementa flash DFU ni restauracion de calibracion.</p>
+        <h2 id="apps">Apps de F4HWN Labs</h2>
+        <p class="muted">Apps (APRS, SSTV, sondas, CW, caza del zorro...) en los huecos de la Flash externa. Solo las ejecuta la edicion Labs y cada una exige un nivel de API minimo: usa las de la misma version que el firmware arrancado. Una app es codigo nativo con acceso total a la radio; instala solo las que conozcas. No toca canales, ajustes, calibracion ni firmware.</p>
+        <p class="muted">Descarga los <code>.app</code> de tu version en <a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/tree/main/archive/apps" target="_blank" rel="noopener noreferrer">archive/apps de F4HWN &nearr;</a> o de una compilacion a medida.</p>
+        <div class="operation-buttons"><button id="apps-refresh" data-connected class="button secondary" type="button" disabled>Consultar apps</button></div>
+        <div class="table-scroll"><table><thead><tr><th>Hueco</th><th>App</th><th>Version</th><th>API min.</th><th>Bytes</th><th>Estado</th></tr></thead><tbody id="apps-body"></tbody></table></div>
+        <label for="app-file">Archivo .app (cabecera FAP1, codigo maximo 4 KiB)</label><input id="app-file" type="file" accept=".app">
+        <p id="app-file-info" class="card-note" role="status">Ningun archivo cargado.</p>
+        <label for="app-slot">Hueco de destino</label><select id="app-slot"><option value="">Consulta las apps primero</option></select>
+        <div class="operation-buttons"><button id="app-install" data-write class="button primary" type="button" disabled>Instalar app y verificar</button><button id="app-delete" data-write class="button secondary" type="button" disabled>Borrar app del hueco</button></div>`;
       const slot = () => Number($("slot-number").value);
       async function refreshSlots() {
         const slots = await connector.listSlots();
@@ -182,6 +190,52 @@
       attach("bank-reset", "Restablecer banco", async () => {
         if (!consent(`Se eliminaran canales y ajustes del banco CFG ${slot()}. No es borrar firmware.`, `CFG ${slot()}`)) { log("Restablecimiento cancelado."); return; }
         await connector.resetBank(slot(), permit);
+      });
+      let appFile = null;
+      const appSlot = () => Number($("app-slot").value);
+      async function refreshApps() {
+        const apps = await connector.listApps();
+        $("apps-body").replaceChildren();
+        const previous = $("app-slot").value;
+        $("app-slot").replaceChildren(...apps.map(item => new Option(`${item.slot + 1} · ${item.status === 2 ? "vacio" : item.name}`, item.slot)));
+        $("app-slot").value = previous || String(apps.find(item => item.status === 2)?.slot ?? 0);
+        for (const item of apps) {
+          const row = document.createElement("tr");
+          const filled = item.status !== 2;
+          for (const text of [item.slot + 1, filled ? item.name : "-", filled ? item.appVersion : "-", filled ? item.apiMin : "-",
+            filled ? item.codeSize + item.assetSize : "-", item.statusText]) {
+            const cell = document.createElement("td");
+            cell.textContent = String(text);
+            row.append(cell);
+          }
+          $("apps-body").append(row);
+        }
+        log(`${apps.length} huecos de apps; ${apps.filter(item => item.status !== 2).length} ocupados.`);
+      }
+      attach("apps-refresh", "Consultar apps", refreshApps);
+      $("app-file").addEventListener("change", () => action("Cargar app local", async () => {
+        appFile = null;
+        const file = $("app-file").files[0];
+        R.assert(file && file.size <= 64 + 0x1000 + 0xf00, "Selecciona un archivo .app de hasta 7,8 KiB.");
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const app = R.parseQuanshengApp(bytes);
+        appFile = bytes;
+        $("app-file-info").textContent = `${app.header.name} ${app.header.appVersion} · API minima ${app.header.apiMin} · ${bytes.length} bytes · CRC correcto · SHA-256 ${await R.sha256(bytes)}`;
+        log(`App local: ${file.name} (${app.header.name}). Aun no escrita.`);
+      }));
+      attach("app-install", "Instalar app", async () => {
+        R.assert(appFile, "Carga primero un archivo .app valido.");
+        R.assert($("app-slot").value !== "", "Consulta las apps y elige un hueco.");
+        if (!consent(`Se instalara la app en el hueco ${appSlot() + 1}, reemplazando lo que haya. Se ejecutara con acceso total a la radio.`, `APP ${appSlot() + 1}`)) { log("Instalacion cancelada."); return; }
+        const result = await connector.installApp(appSlot(), appFile, permit);
+        log(result.status === 0 ? `App ${result.name} instalada y verificada.` : `App ${result.name} instalada, pero este firmware no la puede ejecutar: ${result.statusText}.`);
+        await refreshApps();
+      });
+      attach("app-delete", "Borrar app", async () => {
+        R.assert($("app-slot").value !== "", "Consulta las apps y elige un hueco.");
+        if (!consent(`Se borrara la app del hueco ${appSlot() + 1}. No afecta a canales ni firmware.`, `BORRAR APP ${appSlot() + 1}`)) { log("Borrado cancelado."); return; }
+        await connector.deleteApp(appSlot(), permit);
+        await refreshApps();
       });
     } else {
       operations.innerHTML = `<h2>Codeplug OpenGD77</h2><p class="muted">Lectura real de calibracion y codeplug estandar de 128 KiB. Escritura bloqueada mientras no sea posible respaldar todo el firmware interno mediante un protocolo verificado. No incluye canales extendidos 1025+.</p>
@@ -288,15 +342,16 @@
         return R.readSatellites(image);
       }
     });
-    R.mountFirmwareCatalog({
-      page, model, action, download, log,
-      useImage(data, edition) {
-        slotImage = data;
-        $("slot-file").value = "";
-        $("slot-name").value = edition;
-        log(data ? "Imagen oficial preparada para slot; no se ha modificado la radio." : "Modelo cambiado: imagen de slot eliminada de la seleccion.");
-      }
-    }).catch(error => log(`ERROR: catalogo de firmware no disponible: ${error.message}`));
+    const useImage = (data, edition) => {
+      slotImage = data;
+      $("slot-file").value = "";
+      $("slot-name").value = edition;
+      log(data ? "Imagen preparada para slot; no se ha modificado la radio." : "Modelo cambiado: imagen de slot eliminada de la seleccion.");
+      state();
+    };
+    R.mountFirmwareCatalog({ page, model, action, download, log, useImage })
+      .catch(error => log(`ERROR: catalogo de firmware no disponible: ${error.message}`));
+    R.mountCustomFirmware?.({ page, action, log, useImage });
     attach("radio-connect", "Conectar y crear respaldo automatico", async () => {
       permit = null;
       await stored();

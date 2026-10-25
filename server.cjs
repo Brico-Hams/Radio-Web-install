@@ -6,7 +6,7 @@ const { DataService } = require("./data-service.cjs");
 const ALLOWED_FILES = Object.freeze([
   "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "bricohams-logo.png", "styles.css", "app.js", "radio-core.js",
   "transports.js", "quansheng-connector.js", "gd77-connector.js", "backup-store.js",
-  "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js"
+  "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js", "f4hwn-options.js", "custom-firmware-ui.js"
 ]);
 const allowed = new Set(ALLOWED_FILES);
 const { verify: verifyStudio } = require("./studio-pin.cjs");

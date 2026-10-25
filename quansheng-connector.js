@@ -56,6 +56,35 @@
     R.assert(R.crc32(image) === header.crc, "El CRC del firmware base Main no coincide.");
     return { header, image };
   }
+  // F4HWN Labs overlay apps (App/apps/app_overlay.h): a .app file is the 64-byte FAP1 header,
+  // the code (written at slot+0x1000) and optional read-only assets (written at slot+0x100).
+  const APP = Object.freeze({ magic: 0x31504146, codeOffset: 0x1000, assetOffset: 0x100, codeMax: 0x1000, assetMax: 0xf00 });
+  const APP_STATUS = ["Valida", "Hueco fuera de rango", "Vacio", "ABI/API incompatible con este firmware", "Incompleta",
+    "Tamano invalido", "CRC invalido", "VMA incorrecta", "Autorizacion rechazada", "Falta una capacidad del firmware"];
+  function appHeader(data) {
+    R.bytes(data, 64);
+    const v = R.view(data);
+    return {
+      magic: v.getUint32(0, true), version: v.getUint16(4, true), abi: data[6], apiMin: data[7],
+      codeSize: v.getUint32(8, true), codeCRC: v.getUint32(12, true), flags: v.getUint16(18, true),
+      name: R.text(data.subarray(20, 36)), appVersion: R.text(data.subarray(36, 52)),
+      linkVMA: v.getUint32(52, true), assetSize: v.getUint16(60, true)
+    };
+  }
+  function parseApp(bytes) {
+    bytes = R.bytes(bytes);
+    R.assert(bytes.length > 64, "Archivo .app demasiado corto.");
+    const header = appHeader(bytes.subarray(0, 64));
+    R.assert(header.magic === APP.magic && header.version === 1, "No es una app F4HWN (cabecera FAP1).");
+    R.assert(header.flags & 1, "La app no esta marcada como completa.");
+    R.assert(header.codeSize > 0 && header.codeSize <= APP.codeMax, "Codigo de la app fuera del limite de 4 KiB.");
+    R.assert(header.assetSize <= APP.assetMax && bytes.length === 64 + header.codeSize + header.assetSize,
+      "El tamano del archivo no coincide con la cabecera de la app.");
+    const code = bytes.slice(64, 64 + header.codeSize);
+    R.assert(R.crc32(code) === header.codeCRC, "CRC del codigo de la app incorrecto: archivo danado.");
+    R.assert(/^[\x20-\x7e]+$/.test(header.name), "Nombre de app no valido.");
+    return { header, headerBytes: bytes.slice(0, 64), code, assets: bytes.slice(64 + header.codeSize) };
+  }
   class QuanshengConnector extends R.Connector {
     constructor(transport = new R.SerialTransport()) {
       super(transport);
@@ -188,7 +217,7 @@
       return this.run("Verificar CRC del slot", () => this.validateRaw(slot));
     }
     async slotMutation(type, slot, data) {
-      const response = await this.exchange(type, data, type + 1, type === 0x0722 || type === 0x0728 ? 35000 : 5000);
+      const response = await this.exchange(type, data, type + 1, [0x0722, 0x0728, 0x0732].includes(type) ? 35000 : 5000);
       R.assert(response.length === 2 && response[0] === slot && response[1] === 0, `Operacion de slot rechazada: ${response[1]}.`);
     }
     authSlot(slot) {
@@ -255,7 +284,74 @@
         R.assert(await this.validateRaw(slot) === checksum, "CRC de la imagen escrita distinto al original.");
       });
     }
+    async appInfoRaw(slot) {
+      const data = await this.exchange(0x0730, Uint8Array.of(slot), 0x0731, 3000);
+      R.assert(data.length === 66 && data[0] === slot, "Respuesta de hueco de app incorrecta.");
+      return { slot, status: data[1], statusText: APP_STATUS[data[1]] || `Error ${data[1]}`, ...appHeader(data.slice(2)) };
+    }
+    listApps() {
+      return this.run("Consultar apps", async () => {
+        const apps = [];
+        // Labs v6.0-6.2 has 16 app slots and v6.3 has 48: probe until the firmware says "out of range".
+        for (let slot = 0; slot < 64; slot++) {
+          let info;
+          try { info = await this.appInfoRaw(slot); }
+          catch (error) { R.assert(slot > 0, "Este firmware no admite apps: arranca la edicion Labs."); throw error; }
+          if (info.status === 1) break;
+          apps.push(info);
+        }
+        return apps;
+      });
+    }
+    authApp(slot) {
+      R.assert(Number.isInteger(slot) && slot >= 0 && slot < 64, "Hueco de app invalido.");
+      const data = new Uint8Array(6);
+      data[0] = slot;
+      R.view(data).setUint32(2, this.timestamp, true);
+      return data;
+    }
+    async deleteApp(slot, permit) {
+      R.assertBackup(this, permit);
+      const data = this.authApp(slot);
+      await R.verifyBackup(this, permit);
+      return this.run("Borrar app", () => this.slotMutation(0x0732, slot, data));
+    }
+    async installApp(slot, bytes, permit) {
+      R.assertBackup(this, permit);
+      const app = parseApp(bytes);
+      this.authApp(slot);
+      await R.verifyBackup(this, permit);
+      return this.run(`Instalar app ${app.header.name}`, async () => {
+        await this.slotMutation(0x0732, slot, this.authApp(slot));
+        const total = app.code.length + app.assets.length;
+        let done = 0;
+        const write = async (offset, source) => {
+          const data = new Uint8Array(12 + source.length);
+          data[0] = slot;
+          const dv = R.view(data);
+          dv.setUint32(2, offset, true);
+          dv.setUint16(6, source.length, true);
+          dv.setUint32(8, this.timestamp, true);
+          data.set(source, 12);
+          await this.slotMutation(0x0734, slot, data);
+        };
+        for (const [part, base] of [[app.code, APP.codeOffset], [app.assets, APP.assetOffset]]) {
+          for (let position = 0; position < part.length; position += 128) {
+            const chunk = part.subarray(position, position + 128);
+            await write(base + position, chunk);
+            done += chunk.length;
+            this.progress(done / total, "Escribiendo app");
+          }
+        }
+        // Header last: it carries the "complete" flag, so an interrupted install never validates.
+        await write(0, app.headerBytes);
+        const data = await this.exchange(0x0736, Uint8Array.of(slot), 0x0737, 20000);
+        R.assert(data.length === 2 && data[0] === slot, "Respuesta de verificacion de app incorrecta.");
+        R.assert([0, 3, 9].includes(data[1]), `La app no se verifico: ${APP_STATUS[data[1]] || data[1]}.`);
+        return { ...app.header, status: data[1], statusText: APP_STATUS[data[1]] };
+      });
+    }
   }
-  Object.assign(R, { QuanshengConnector, quanshengPacket: packet, decodeQuanshengPacket: decodePacket, quanshengBaseFromFlash: baseFromFlash, crc16 });
+  Object.assign(R, { QuanshengConnector, quanshengPacket: packet, decodeQuanshengPacket: decodePacket, quanshengBaseFromFlash: baseFromFlash, crc16, parseQuanshengApp: parseApp, QUANSHENG_APP_STATUS: APP_STATUS });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

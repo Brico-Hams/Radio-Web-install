@@ -16,7 +16,7 @@ app_files=(
   app.js radio-core.js transports.js quansheng-connector.js gd77-connector.js
   backup-store.js codeplug-editor.js radio-ui.js firmware-core.js firmware-catalog.js
   planning-core.js radioid-csv.js planning-ui.js runtime-mode.js server.cjs studio-pin.cjs studio.html studio.lock.json
-  firmware-service.cjs data-service.cjs
+  firmware-service.cjs data-service.cjs f4hwn-options.js custom-firmware-ui.js
 )
 
 stage_app() {

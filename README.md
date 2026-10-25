@@ -139,6 +139,11 @@ El editor OpenGD77 abre binarios de exactamente 131072 bytes y modifica canales 
 
 Las lecturas OpenGD77 no envian el comando de guardar ajustes/VFO ni reinician el equipo: leen los valores ya persistidos, no fuerzan a guardar modificaciones aun presentes en RAM.
 
+## Apps de F4HWN Labs y firmware a medida (Quansheng)
+
+- **Apps:** en el espacio Quansheng, **Apps de F4HWN Labs** lista los huecos de apps de la Flash externa, instala un `.app` y lo borra. Solo funciona con la edicion Labs arrancada. Antes de tocar la radio se comprueban la cabecera FAP1 y el CRC del codigo. La app se escribe en este orden: codigo, assets y, al final, la cabecera, de modo que una instalacion interrumpida nunca queda como valida. Despues la verifica el propio firmware. Como el resto de escrituras, exige el respaldo completo. Los `.app` se descargan de [archive/apps de F4HWN](https://github.com/armel/uv-k1-k5v3-firmware-custom/tree/main/archive/apps), usando la carpeta de tu version.
+- **Firmware a medida:** eliges una edicion (Labs, Fusion...) y activas o desactivas opciones `ENABLE_*`. La web genera la peticion para el workflow *Firmware a la carta* del repositorio de compilacion. Al cargar el artefacto descargado (`SHA256SUMS`, `build-info.json`, `.bin`), comprueba cada SHA-256 y deja el `.bin` listo en **Instalar en slot**. El catalogo [f4hwn-options.js](f4hwn-options.js) se regenera con `node scripts/f4hwn-options.cjs <bricohams-firmware>/options/<version>.json > f4hwn-options.js`.
+
 ## Copias automaticas y proteccion del equipo
 
 1. Seleccionar modelo y autorizar lectura local.

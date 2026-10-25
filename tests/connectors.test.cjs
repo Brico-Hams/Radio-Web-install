@@ -97,7 +97,27 @@ class QuanshengDevice extends R.BufferedTransport {
     } else if (type === 0x0728) {
       this.flash.fill(255, 0xb0000 + data[0] * 0x10000, 0xc0000 + data[0] * 0x10000);
       result = Uint8Array.of(data[0], 0);
+    } else if (type === 0x0730 || type === 0x0736) {
+      if (this.noApps) return;
+      const slot = data[0], base = 0x102000 + slot * 0x2000, header = this.flash.subarray(base, base + 64);
+      let status = slot >= (this.appSlots || 16) ? 1 : le(header).getUint32(0, true) !== 0x31504146 ? 2 : 0;
+      if (status === 0 && type === 0x0736) {
+        const size = le(header).getUint32(8, true);
+        status = R.crc32(this.flash.subarray(base + 0x1000, base + 0x1000 + size)) === le(header).getUint32(12, true) ? 0 : 6;
+      }
+      result = type === 0x0730 ? new Uint8Array(66) : new Uint8Array(2);
+      result[0] = slot; result[1] = status;
+      if (type === 0x0730) result.set(header, 2);
+    } else if (type === 0x0732) {
+      const authorized = le(data).getUint32(2, true) === this.timestamp;
+      if (authorized) this.flash.fill(255, 0x102000 + data[0] * 0x2000, 0x104000 + data[0] * 0x2000);
+      result = Uint8Array.of(data[0], authorized ? 0 : 8);
+    } else if (type === 0x0734) {
+      assert.equal(le(data).getUint32(8, true), this.timestamp);
+      this.flash.set(data.subarray(12), 0x102000 + data[0] * 0x2000 + le(data).getUint32(2, true));
+      result = Uint8Array.of(data[0], 0);
     } else throw new Error(`Unexpected command ${type.toString(16)}`);
+    if (type === 0x0514) this.timestamp = le(data).getUint32(0, true);
     const answer = response(type + 1, result);
     this.push(answer.subarray(0, 5));
     this.push(answer.subarray(5));
@@ -655,4 +675,55 @@ test("Escritor aislado aborta ante ACK negativo sin exito aparente", async () =>
   device.rejectWrite = true;
   await assert.rejects(connector.writeCodeplug(channelImage(), {}), /rechazo/);
   assert.equal(connector.connected, false);
+});
+function overlayApp({ name = "FoxHunt", code = new Uint8Array(300).map((_, i) => i & 255), assets = new Uint8Array(0), flags = 1 } = {}) {
+  const header = new Uint8Array(64);
+  const v = le(header);
+  v.setUint32(0, 0x31504146, true); v.setUint16(4, 1, true); header[6] = 1; header[7] = 3;
+  v.setUint32(8, code.length, true); v.setUint32(12, R.crc32(code), true); v.setUint16(18, flags, true);
+  header.set(new TextEncoder().encode(name), 20); header.set(new TextEncoder().encode("1.1"), 36);
+  v.setUint32(52, 0x20000280, true); v.setUint16(60, assets.length, true);
+  const file = new Uint8Array(64 + code.length + assets.length);
+  file.set(header); file.set(code, 64); file.set(assets, 64 + code.length);
+  return file;
+}
+test("Apps Labs: el archivo .app se valida antes de tocar la radio", () => {
+  const app = R.parseQuanshengApp(overlayApp({ assets: Uint8Array.of(9, 9, 9) }));
+  assert.equal(app.header.name, "FoxHunt"); assert.equal(app.header.apiMin, 3); assert.equal(app.assets.length, 3);
+  const corrupt = overlayApp(); corrupt[100] ^= 1;
+  assert.throws(() => R.parseQuanshengApp(corrupt), /CRC/);
+  assert.throws(() => R.parseQuanshengApp(overlayApp({ flags: 0 })), /completa/);
+  assert.throws(() => R.parseQuanshengApp(overlayApp({ code: new Uint8Array(4097) })), /4 KiB/);
+  assert.throws(() => R.parseQuanshengApp(overlayApp().subarray(0, 200)), /tamano/i);
+  assert.throws(() => R.parseQuanshengApp(baseFlash().subarray(0x21000, 0x21400)), /FAP1/);
+});
+test("Apps Labs: instalar escribe codigo y assets antes que la cabecera y verifica", async () => {
+  const device = new QuanshengDevice(); const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  await assert.rejects(connector.installApp(2, overlayApp()), /bloqueada/);
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  device.commands = [];
+  const file = overlayApp({ assets: new Uint8Array(200).fill(7) });
+  const result = await connector.installApp(2, file, permit);
+  assert.equal(result.status, 0);
+  const base = 0x102000 + 2 * 0x2000;
+  assert.deepEqual(device.flash.slice(base, base + 64), file.slice(0, 64));
+  assert.deepEqual(device.flash.slice(base + 0x1000, base + 0x1000 + 300), file.slice(64, 364));
+  assert.deepEqual(device.flash.slice(base + 0x100, base + 0x100 + 200), file.slice(364));
+  const writes = device.commands.filter(item => item.type === 0x0734);
+  assert.equal(le(writes[0].data).getUint32(2, true), 0x1000);
+  assert.equal(le(writes.at(-1).data).getUint32(2, true), 0);
+  assert(writes.every(item => le(item.data).getUint16(6, true) <= 128));
+  assert.equal(device.commands.at(-1).type, 0x0736);
+  const apps = await connector.listApps();
+  assert.equal(apps.length, 16);
+  assert.equal(apps[2].name, "FoxHunt"); assert.equal(apps[2].status, 0); assert.equal(apps[0].status, 2);
+  await connector.deleteApp(2, permit);
+  assert.equal((await connector.listApps())[2].status, 2);
+});
+test("Apps Labs: firmware sin apps se identifica sin escribir", async () => {
+  const device = new QuanshengDevice(); device.noApps = true;
+  const connector = new R.QuanshengConnector(device); await connector.connect("UV-K1");
+  await assert.rejects(connector.listApps(), /Labs/);
+  assert(device.commands.every(item => [0x0514, 0x0730].includes(item.type)));
 });
