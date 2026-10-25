@@ -34,6 +34,7 @@
     let info = null;
     if (byName.has("build-info.json")) {
       info = JSON.parse(new TextDecoder().decode(byName.get("build-info.json")));
+      R.assert(sums.has("build-info.json"), "build-info.json no esta en SHA256SUMS: compilacion antigua o modificada.");
       R.assert(info.format === "bricohams-firmware-build" && sums.has(info.firmware), "build-info.json no corresponde a esta compilacion.");
     }
     return { results, info, firmware: results.find(item => item.name.endsWith(".bin")) || null };

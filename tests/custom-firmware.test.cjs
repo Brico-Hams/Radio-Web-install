@@ -33,6 +33,9 @@ test("una compilacion solo se acepta si cada archivo coincide con SHA256SUMS", a
   const tampered = bin.slice(); tampered[0] ^= 1;
   await assert.rejects(R.verifyCustomBuild([file("SHA256SUMS", sums), { name: "f4hwn.labs.bin", bytes: tampered }, file("build-info.json", info)]), /distinto/);
   await assert.rejects(R.verifyCustomBuild([file("SHA256SUMS", sums), { name: "f4hwn.labs.bin", bytes: bin }]), /Falta build-info/);
+  const unsigned = `${sha(bin)}  f4hwn.labs.bin
+`;
+  await assert.rejects(R.verifyCustomBuild([file("SHA256SUMS", unsigned), { name: "f4hwn.labs.bin", bytes: bin }, file("build-info.json", info)]), /no esta en SHA256SUMS/);
   await assert.rejects(R.verifyCustomBuild([{ name: "f4hwn.labs.bin", bytes: bin }]), /Falta SHA256SUMS/);
   await assert.rejects(R.verifyCustomBuild([file("SHA256SUMS", "not a sum line")]), /no valida/);
 });
