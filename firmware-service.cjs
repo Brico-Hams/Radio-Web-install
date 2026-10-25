@@ -41,7 +41,7 @@ async function fetchLimited(url, limit, fetcher = fetch) {
     const safe = validateHop(next, url);
     const response = await fetcher(safe.href, {
       redirect: "manual", signal,
-      headers: { "User-Agent": "BricohamsRadioWorkspace/0.3 (+https://github.com/anatolbricoham/Radio-Web-install)", Accept: safe.hostname === "api.github.com" ? "application/vnd.github+json" : "*/*" }
+      headers: { "User-Agent": "BricohamsRadioWorkspace/0.4 (+https://github.com/Brico-Hams/Radio-Web-install)", Accept: safe.hostname === "api.github.com" ? "application/vnd.github+json" : "*/*" }
     });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       const location = response.headers.get("location");

@@ -12,7 +12,7 @@ Hay dos despliegues soportados: **local** (servidor Node en el mismo equipo al q
 ## Instalación desde el código fuente
 
 ```powershell
-git clone https://github.com/anatolbricoham/Radio-Web-install.git
+git clone https://github.com/Brico-Hams/Radio-Web-install.git
 cd Radio-Web-install
 npm ci --ignore-scripts
 npm start
@@ -20,7 +20,7 @@ npm start
 
 Abre <http://127.0.0.1:8787>. Si abres `localhost`, el servidor te redirige a `127.0.0.1`: valida el encabezado `Host` y solo sirve ese origen. Usa siempre el mismo origen para conservar el historial de IndexedDB.
 
-Para incluir Bricohams Quansheng Studio en la copia local, ejecuta `npm run fetch:studio`. Descarga `studio.html` desde `bricohams/Bricohams-Studio`, en el commit fijado en `studio.lock.json`, y comprueba su tamaño y su SHA-256. El archivo no se versiona porque lleva firmware incrustado.
+Para incluir Bricohams Quansheng Studio en la copia local, ejecuta `npm run fetch:studio`. Descarga `studio.html` desde `Brico-Hams/Bricohams-Studio`, en el commit fijado en `studio.lock.json`, y comprueba su tamaño y su SHA-256. El archivo no se versiona porque lleva firmware incrustado.
 
 **Actualizar Studio (autor):** cuando el commit nuevo ya esté en GitHub, ejecuta `node scripts/fetch-studio.cjs --update <commit-completo>`. El comando reescribe `studio.lock.json` con el tamaño, el SHA-256 y los hashes CSP de sus scripts. Revisa el diff y haz commit del lock.
 
@@ -37,7 +37,7 @@ Ambos comandos deben terminar sin fallos. Después, abre la página de ayuda y c
 
 ## Instaladores locales
 
-Descarga el archivo de tu sistema y `SHA256SUMS` desde los **Assets** de la [última Release](https://github.com/anatolbricoham/Radio-Web-install/releases/latest). Ya hay paquetes publicados desde `v0.3.0`. Los enlaces automáticos «Source code (zip)» y «Source code (tar.gz)» no son instaladores.
+Descarga el archivo de tu sistema y `SHA256SUMS` desde los **Assets** de la [última Release](https://github.com/Brico-Hams/Radio-Web-install/releases/latest). Ya hay paquetes publicados desde `v0.3.0`. Los enlaces automáticos «Source code (zip)» y «Source code (tar.gz)» no son instaladores.
 
 | Sistema | Archivo | Instalación |
 | --- | --- | --- |
@@ -235,7 +235,7 @@ IndexedDB (copias de la radio) y `localStorage` (perfil) se aíslan por origen. 
 
 Cada HTML lleva una CSP en `<meta>` (sin scripts ni estilos en línea; `connect-src` solo `'self'` y `https://api.github.com`) y la aplicación se niega a ejecutarse dentro de un marco, porque GitHub Pages no permite cabeceras propias. No hay cuentas, subidas ni telemetría. RadioID no se replica y RepeaterBook no está disponible en la web.
 
-Los instaladores disponibles se publican en [GitHub Releases](https://github.com/anatolbricoham/Radio-Web-install/releases). Para generar una nueva publicación, crea y sube una etiqueta `v*`; GitHub Actions valida el proyecto, descarga runtimes de Node.js 22 verificando sus checksums y adjunta los instaladores junto con `SHA256SUMS`. Las releases incluyen `.deb` amd64/arm64/armhf, `PKGBUILD` para Arch, instalador tarball para FreeBSD y ZIP de Windows 11 x64. El primer release debe publicarse subiendo una etiqueta; este repositorio no crea ni sube etiquetas automáticamente.
+Los instaladores disponibles se publican en [GitHub Releases](https://github.com/Brico-Hams/Radio-Web-install/releases). Para generar una nueva publicación, crea y sube una etiqueta `v*`; GitHub Actions valida el proyecto, descarga runtimes de Node.js 22 verificando sus checksums y adjunta los instaladores junto con `SHA256SUMS`. Las releases incluyen `.deb` amd64/arm64/armhf, `PKGBUILD` para Arch, instalador tarball para FreeBSD y ZIP de Windows 11 x64. El primer release debe publicarse subiendo una etiqueta; este repositorio no crea ni sube etiquetas automáticamente.
 
 ## Exportar el proyecto
 

@@ -88,7 +88,7 @@ test("las guias locales cubren integridad, arquitectura, parada y persistencia",
 
 test("Studio se incluye fijado por commit y SHA-256, sin versionar su HTML con firmware", () => {
   const lock = JSON.parse(read("studio.lock.json"));
-  assert.equal(lock.repository, "bricohams/Bricohams-Studio");
+  assert.equal(lock.repository, "Brico-Hams/Bricohams-Studio");
   assert.match(lock.commit, /^[0-9a-f]{40}$/);
   assert.match(lock.sha256, /^[0-9a-f]{64}$/);
   assert.ok(lock.scriptHashes.length > 0 && lock.scriptHashes.every(hash => /^sha256-[A-Za-z0-9+/]{43}=$/.test(hash)));

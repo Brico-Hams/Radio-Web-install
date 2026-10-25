@@ -90,10 +90,10 @@ pkgver=${version#v}
 pkgrel=1
 pkgdesc='Local radio programming workspace'
 arch=('x86_64' 'aarch64')
-url='https://github.com/anatolbricoham/Radio-Web-install'
+url='https://github.com/Brico-Hams/Radio-Web-install'
 license=('GPL-3.0-or-later')
 depends=('nodejs')
-source=("bricohams-radio-workspace-\${pkgver}-arch-source.tar.gz::https://github.com/anatolbricoham/Radio-Web-install/releases/download/${version}/bricohams-radio-workspace-\${pkgver}-arch-source.tar.gz")
+source=("bricohams-radio-workspace-\${pkgver}-arch-source.tar.gz::https://github.com/Brico-Hams/Radio-Web-install/releases/download/${version}/bricohams-radio-workspace-\${pkgver}-arch-source.tar.gz")
 sha256sums=('$arch_sha')
 
 package() {

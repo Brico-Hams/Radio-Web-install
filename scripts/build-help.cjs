@@ -137,7 +137,7 @@ function destination(target, source) {
   const relative = path.relative(path.join(root, "docs"), resolved).replace(/\\/g, "/");
   return pages[relative]
     ? `${pages[relative]}${anchor ? `#${anchor}` : ""}`
-    : `https://github.com/anatolbricoham/Radio-Web-install/blob/main/${path.relative(root, resolved).replace(/\\/g, "/")}${anchor ? `#${anchor}` : ""}`;
+    : `https://github.com/Brico-Hams/Radio-Web-install/blob/main/${path.relative(root, resolved).replace(/\\/g, "/")}${anchor ? `#${anchor}` : ""}`;
 }
 function inline(text, source) {
   const tokens = [];

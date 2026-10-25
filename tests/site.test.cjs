@@ -96,7 +96,7 @@ test("licencia, autoria y metadatos del paquete son coherentes", () => {
   assert.equal(lock.name, pkg.name);
   assert.equal(lock.version, pkg.version);
   assert.match(pkg.author, /Bricohams/);
-  assert.equal(pkg.repository.url, "git+https://github.com/anatolbricoham/Radio-Web-install.git");
+  assert.equal(pkg.repository.url, "git+https://github.com/Brico-Hams/Radio-Web-install.git");
   assert.deepEqual(Object.keys(pkg.dependencies), ["satellite.js"]);
   const license = read("LICENSE");
   assert.match(license, /GNU GENERAL PUBLIC LICENSE\s+Version 3, 29 June 2007/);

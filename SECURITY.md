@@ -6,7 +6,7 @@ Solo la rama `main` más reciente.
 
 ## Cómo informar
 
-Informa en privado mediante [GitHub Security Advisories](https://github.com/anatolbricoham/Radio-Web-install/security/advisories/new). **No abras una incidencia pública** para vulnerabilidades.
+Informa en privado mediante [GitHub Security Advisories](https://github.com/Brico-Hams/Radio-Web-install/security/advisories/new). **No abras una incidencia pública** para vulnerabilidades.
 
 Incluye descripción, impacto, pasos de reproducción y versión/commit. Nunca envíes tokens, copias de radio ni datos personales reales; usa datos sintéticos.
 

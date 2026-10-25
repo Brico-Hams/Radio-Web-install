@@ -93,7 +93,7 @@ const tools = {
   }
 };
 
-const BRAND = { name: "Bricohams", product: "Radio Workspace", repository: "https://github.com/anatolbricoham/Radio-Web-install" };
+const BRAND = { name: "Bricohams", product: "Radio Workspace", repository: "https://github.com/Brico-Hams/Radio-Web-install" };
 const page = document.body.dataset.page;
 const current = tools[page];
 const helpTemplate = document.getElementById("help-content");
@@ -172,7 +172,7 @@ function detail(tool) {
     <section class="panel backups-panel"><h2>Copias locales de esta web</h2><p class="muted">Se guardan en IndexedDB en este navegador y origen. Exportalas: borrar datos del navegador elimina las copias locales. Incluyen canales y otros datos privados; no las publiques.</p><button id="refresh-backups" class="button secondary" type="button">Actualizar historial</button><ul id="backup-list"></ul></section>
     <section class="panel"><h2>Registro de operaciones</h2><pre id="radio-log" role="log" aria-label="Registro local"></pre></section>
     <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Beta: antes de escribir, verifica.</h2><p>En fase de validacion: lectura USB probada en una unidad declarada UV-K5 V3 con F4HWN v6.0.0; no se han probado escrituras fisicas ni radios OpenGD77. No es una certificacion de todos los modelos. La seleccion de modelo Quansheng es manual. No cierres ni desconectes durante una operacion.</p></div></aside>
-    <section class="sources"><h2>Documentacion de referencia</h2><a href="ayuda.html#drivers">Controladores USB y solucion de errores</a><a href="${tool.url}" ${external}>${tool.action} &nearr;</a>${page === "quansheng" ? `<a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/Multiboot-and-Multiconfig" ${external}>Multiboot y Multiconfig &nearr;</a><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/UV-Studio" ${external}>Guia de UV Studio &nearr;</a><a id="studio-link" href="https://bricohams.github.io/Bricohams-Studio/" ${external}>Bricohams Quansheng Studio (UV-K1 / UV-K5 V3) &nearr;</a>` : ""}</section>`;
+    <section class="sources"><h2>Documentacion de referencia</h2><a href="ayuda.html#drivers">Controladores USB y solucion de errores</a><a href="${tool.url}" ${external}>${tool.action} &nearr;</a>${page === "quansheng" ? `<a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/Multiboot-and-Multiconfig" ${external}>Multiboot y Multiconfig &nearr;</a><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/UV-Studio" ${external}>Guia de UV Studio &nearr;</a><a id="studio-link" href="https://brico-hams.github.io/Bricohams-Studio/" ${external}>Bricohams Quansheng Studio (UV-K1 / UV-K5 V3) &nearr;</a>` : ""}</section>`;
 }
 
 document.getElementById("app").innerHTML = `

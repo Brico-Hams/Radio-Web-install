@@ -65,7 +65,7 @@
       <label for="fw-search">Filtrar opciones</label><input id="fw-search" type="search" placeholder="APRS, SPECTRUM, VOX...">
       <div class="table-scroll"><table><thead><tr><th>Activa</th><th>Opcion</th><th>En la edicion</th></tr></thead><tbody id="fw-options"></tbody></table></div>
       <label for="fw-request">Valor para el campo options del workflow</label><textarea id="fw-request" rows="2" readonly></textarea>
-      <label for="fw-repo">Repositorio de compilacion</label><input id="fw-repo" value="anatolbricoham/bricohams-firmware">
+      <label for="fw-repo">Repositorio de compilacion</label><input id="fw-repo" value="Brico-Hams/bricohams-firmware">
       <div class="operation-buttons"><button id="fw-copy" class="button secondary" type="button">Copiar peticion</button><a id="fw-run" class="button secondary" target="_blank" rel="noopener noreferrer">Abrir el workflow &nearr;</a></div>
       <h3>Imagenes Bricohams locales: ARDF, Satelites y Espectro</h3>
       <p class="card-note">Base F4HWN v6.1.0, independiente del workflow online anterior. Elige una imagen: no se mezclan estos adaptadores. ARDF incluye ciclos; Satelites aplica Doppler RX manual y CAT RX v1 experimental habilitable con 8, sin TLE/SGP4; Espectro incluye 128 puntos, multipreset RAM, blacklist temporal y VFO-PRO con entrada RX, ganancia manual y busqueda CTCSS/DCS FM opcional (PTT captura, no transmite). No guarda calibracion ni tonos. BETA sin prueba fisica.</p>

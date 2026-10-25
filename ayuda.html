@@ -41,7 +41,7 @@
 
     <section id="inicio" class="panel help-section" data-help><h2>1. Inicio rápido</h2>
       <h3>Instalar la versión local</h3>
-      <p>Descarga el archivo de tu sistema y <code>SHA256SUMS</code> desde <a href="https://github.com/anatolbricoham/Radio-Web-install/releases/latest" target="_blank" rel="noopener noreferrer">la última Release</a>. No elijas los archivos automáticos «Source code» salvo que quieras instalar desde el código fuente. Comprueba el SHA-256 antes de ejecutar el instalador.</p>
+      <p>Descarga el archivo de tu sistema y <code>SHA256SUMS</code> desde <a href="https://github.com/Brico-Hams/Radio-Web-install/releases/latest" target="_blank" rel="noopener noreferrer">la última Release</a>. No elijas los archivos automáticos «Source code» salvo que quieras instalar desde el código fuente. Comprueba el SHA-256 antes de ejecutar el instalador.</p>
       <ul>
         <li><strong>Windows 11 x64:</strong> extrae todo el ZIP <code>*-windows-x64.zip</code>, abre PowerShell en la carpeta extraída y ejecuta <code>powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1</code>. No requiere administrador ni instalar Node por separado. Inicia <strong>Bricohams Radio Workspace</strong> desde el menú Inicio.</li>
         <li><strong>Debian, Ubuntu y Raspberry Pi OS:</strong> consulta <code>dpkg --print-architecture</code>, descarga solo el <code>.deb</code> correspondiente (amd64, arm64 o armhf) y ejecuta <code>sudo apt install ./nombre-del-paquete.deb</code>. Node viene incluido. Inicia la aplicación desde el menú o con <code>bricohams-radio</code>. ARM de 32 bits requiere ARMv7 o posterior.</li>
@@ -49,7 +49,7 @@
         <li><strong>FreeBSD 14 amd64:</strong> extrae <code>*-freebsd-amd64.tar.gz</code>, entra en esa carpeta y ejecuta <code>su -c './install.sh'</code>. Instala Node 22 con <code>pkg</code> si hace falta. Ejecuta <code>bricohams-radio</code> como usuario normal. El acceso WebUSB/Web Serial depende del soporte de Chromium y no está garantizado.</li>
       </ul>
       <p>Los lanzadores abren <code>http://127.0.0.1:8787</code> y dejan el servidor en segundo plano, sin arranque automático al iniciar sesión. Cerrar la pestaña no detiene el servidor. Usa siempre el mismo navegador, perfil y dirección para conservar tus copias. Los controladores USB se configuran aparte: consulta <a href="#drivers">Controladores</a>.</p>
-      <p>La guía completa incluye verificación SHA-256, actualización, parada y desinstalación en <a href="https://github.com/anatolbricoham/Radio-Web-install/blob/main/docs/DEPLOYMENT.md#instaladores-locales" target="_blank" rel="noopener noreferrer">Instalación local y despliegue</a>.</p>
+      <p>La guía completa incluye verificación SHA-256, actualización, parada y desinstalación en <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/docs/DEPLOYMENT.md#instaladores-locales" target="_blank" rel="noopener noreferrer">Instalación local y despliegue</a>.</p>
       <h3>Alternativa: ejecutar desde el código fuente</h3>
       <ol class="guide-steps">
         <li>Instala <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">Node.js 22 o posterior</a>.</li>
@@ -180,16 +180,16 @@
     </section>
 
     <section id="soporte" class="panel help-section" data-help><h2>11. Soporte</h2>
-      <p>Soporte comunitario, sin garantía, en <a href="https://github.com/anatolbricoham/Radio-Web-install/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>. Incluye:</p>
+      <p>Soporte comunitario, sin garantía, en <a href="https://github.com/Brico-Hams/Radio-Web-install/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>. Incluye:</p>
       <ul class="feature-list"><li>Sistema operativo, navegador y versión, versión de Node.</li><li>Modelo exacto de radio, revisión y firmware.</li><li>Pasos para reproducir y el texto del Registro de operaciones.</li></ul>
       <p><strong>Nunca publiques</strong> tokens RepeaterBook, archivos <code>.rwb.json</code>, calibración, codeplugs con datos personales ni tu ubicación. Para vulnerabilidades sigue <code>SECURITY.md</code> y no abras una incidencia pública.</p>
     </section>
 
     <section id="creditos" class="panel help-section" data-help><h2>12. Créditos y licencia</h2>
-      <p>&copy; 2026 Anatol-Emilio Lopez-Maitchovcow (Bricohams). Código bajo <a href="https://github.com/anatolbricoham/Radio-Web-install/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GPL-3.0-or-later</a>, sin garantía. Autores en <a href="https://github.com/anatolbricoham/Radio-Web-install/blob/main/AUTHORS.md" target="_blank" rel="noopener noreferrer">AUTHORS.md</a>; fuentes, licencias de terceros y reconocimientos en <a href="https://github.com/anatolbricoham/Radio-Web-install/blob/main/ACKNOWLEDGEMENTS.md" target="_blank" rel="noopener noreferrer">ACKNOWLEDGEMENTS.md</a>.</p>
+      <p>&copy; 2026 Anatol-Emilio Lopez-Maitchovcow (Bricohams). Código bajo <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GPL-3.0-or-later</a>, sin garantía. Autores en <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/AUTHORS.md" target="_blank" rel="noopener noreferrer">AUTHORS.md</a>; fuentes, licencias de terceros y reconocimientos en <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/ACKNOWLEDGEMENTS.md" target="_blank" rel="noopener noreferrer">ACKNOWLEDGEMENTS.md</a>.</p>
       <p>Gracias a OpenGD77, grid.radio, F4HWN/Armel, egzumer, DualTachyon, RadioID, RepeaterBook, SatNOGS/Libre Space Foundation, CelesTrak y satellite.js. Data courtesy of RepeaterBook.com.</p>
     </section>
   </template>
-  <noscript>Activa JavaScript para usar el buscador. La ayuda también está en <a href="https://github.com/anatolbricoham/Radio-Web-install" target="_blank" rel="noopener noreferrer">el repositorio</a>.</noscript>
+  <noscript>Activa JavaScript para usar el buscador. La ayuda también está en <a href="https://github.com/Brico-Hams/Radio-Web-install" target="_blank" rel="noopener noreferrer">el repositorio</a>.</noscript>
 </body>
 </html>

@@ -1,5 +1,5 @@
 "use strict";
-// Bricohams Quansheng Studio is maintained in bricohams/Bricohams-Studio. The installers ship a copy pinned by
+// Bricohams Quansheng Studio is maintained in Brico-Hams/Bricohams-Studio. The installers ship a copy pinned by
 // commit and SHA-256 in studio.lock.json; it is never committed here because it embeds firmware binaries.
 const fs = require("node:fs");
 const path = require("node:path");
@@ -10,7 +10,7 @@ const LOCK = path.join(root, "studio.lock.json");
 
 async function download(commit) {
   if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error("El commit de Studio debe ser un SHA-1 completo.");
-  const url = `https://raw.githubusercontent.com/bricohams/Bricohams-Studio/${commit}/index.html`;
+  const url = `https://raw.githubusercontent.com/Brico-Hams/Bricohams-Studio/${commit}/index.html`;
   const response = await fetch(url, { signal: AbortSignal.timeout(60000), redirect: "error" });
   if (!response.ok) throw new Error(`Descarga de Studio fallida: HTTP ${response.status}.`);
   return Buffer.from(await response.arrayBuffer());
@@ -21,7 +21,7 @@ async function main(args) {
     // Maintainer step: pin a commit that is already pushed to GitHub.
     const commit = args[1];
     const data = await download(commit);
-    const lock = { repository: "bricohams/Bricohams-Studio", commit, path: "index.html", bytes: data.length, sha256: sha256(data),
+    const lock = { repository: "Brico-Hams/Bricohams-Studio", commit, path: "index.html", bytes: data.length, sha256: sha256(data),
       scriptHashes: scriptHashes(data.toString("utf8")) };
     fs.writeFileSync(LOCK, `${JSON.stringify(lock, null, 2)}\n`);
     console.log(`studio.lock.json -> ${commit} (${lock.sha256})`);

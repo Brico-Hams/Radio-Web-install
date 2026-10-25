@@ -3,7 +3,7 @@
 ## Autor y mantenedor
 
 - **Anatol-Emilio Lopez-Maitchovcow** (Bricohams) — concepción, dirección y mantenimiento.
-  Contacto: [GitHub Issues](https://github.com/anatolbricoham/Radio-Web-install/issues).
+  Contacto: [GitHub Issues](https://github.com/Brico-Hams/Radio-Web-install/issues).
 
 ## Contribuir
 

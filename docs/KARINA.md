@@ -314,7 +314,7 @@ Este es el trabajo pendiente, no funcionalidades que ya tenga Karina:
    automaticamente emisiones fuera de bandas permitidas.
 
 La web ya tiene un formulario de opciones para el workflow
-`anatolbricoham/bricohams-firmware`; no es un compilador Karina. En esta tarea
+`Brico-Hams/bricohams-firmware`; no es un compilador Karina. En esta tarea
 no se ha ejecutado ese workflow. Se ha anadido un constructor local independiente
 para F4HWN v6.1.0 y generado las ediciones Bricohams Fusion y Labs. El resto de
 esta seccion sigue siendo requisito para derivar Karina, no una afirmacion de

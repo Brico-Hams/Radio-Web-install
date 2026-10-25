@@ -31,7 +31,7 @@ Bricohams Radio Workspace es una **implementación independiente con fines de in
 
 ## Documentación y herramientas
 
-- Identidad propia Bricohams: [logotipo original de Bricohams Studio](https://github.com/bricohams/Bricohams-Studio/blob/767edd66028d10f859346190d0c8044bd8e5a2b2/assets/logo-bricohams.png), conservado sin redibujar ni recolorear. Procedencia y verificación en [Guía de marca](docs/BRANDING.md).
+- Identidad propia Bricohams: [logotipo original de Bricohams Studio](https://github.com/Brico-Hams/Bricohams-Studio/blob/767edd66028d10f859346190d0c8044bd8e5a2b2/assets/logo-bricohams.png), conservado sin redibujar ni recolorear. Procedencia y verificación en [Guía de marca](docs/BRANDING.md).
 - [MDN: Web Serial API](https://developer.mozilla.org/docs/Web/API/Web_Serial_API) y [WebUSB API](https://developer.mozilla.org/docs/Web/API/WebUSB_API).
 - Vallado, Crawford, Hujsak y Kelso, *Revisiting Spacetrack Report #3* (2006): vector de prueba SGP4 usado en los tests.
 - [Zadig](https://zadig.akeo.ie/) (WinUSB en Windows), [WCH CH341SER](https://www.wch-ic.com/downloads/CH341SER_EXE.html), [Silicon Labs CP210x](https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers) y [Prolific PL2303](https://www.prolific.com.tw/) — enlazados, no redistribuidos.
