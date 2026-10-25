@@ -3,13 +3,18 @@
 #include <stddef.h>
 #include <string.h>
 
+bool bh_spectrum_config_valid(const bh_spectrum_config *config)
+{
+    return config != NULL && config->first_10hz != 0 &&
+        config->step_10hz != 0 && config->bins != 0 && config->bins <= BH_SPECTRUM_MAX_BINS &&
+        config->settle_ms != 0 && config->settle_ms <= 1000 &&
+        config->samples_per_bin != 0 && config->samples_per_bin <= 16 &&
+        (uint64_t)config->first_10hz + (uint64_t)(config->bins - 1U) * config->step_10hz <= UINT32_MAX;
+}
+
 bh_spectrum_result bh_spectrum_init(bh_spectrum *state, const bh_spectrum_config *config)
 {
-    if (state == NULL || config == NULL || config->first_10hz == 0 ||
-        config->step_10hz == 0 || config->bins == 0 || config->bins > BH_SPECTRUM_MAX_BINS ||
-        config->settle_ms == 0 || config->settle_ms > 1000 ||
-        config->samples_per_bin == 0 || config->samples_per_bin > 16 ||
-        (uint64_t)config->first_10hz + (uint64_t)(config->bins - 1U) * config->step_10hz > UINT32_MAX)
+    if (state == NULL || !bh_spectrum_config_valid(config))
         return BH_SPECTRUM_INVALID_CONFIG;
     const bh_spectrum_config checked = *config;
     memset(state, 0, sizeof(*state));

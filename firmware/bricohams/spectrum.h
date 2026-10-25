@@ -37,6 +37,7 @@ typedef struct {
     uint16_t peaks[BH_SPECTRUM_MAX_BINS];
 } bh_spectrum;
 
+bool bh_spectrum_config_valid(const bh_spectrum_config *config);
 bh_spectrum_result bh_spectrum_init(bh_spectrum *state, const bh_spectrum_config *config);
 bh_spectrum_result bh_spectrum_frequency(const bh_spectrum *state, uint32_t *frequency_10hz);
 bh_spectrum_result bh_spectrum_tuned(bh_spectrum *state, uint32_t tick_ms);

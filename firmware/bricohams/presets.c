@@ -44,8 +44,8 @@ bh_presets_result bh_presets_validate(const bh_presets *presets)
             else if (ended || c < 32 || c > 126)
                 return BH_PRESETS_INVALID;
         }
-        bh_spectrum scratch;
-        if (bh_spectrum_init(&scratch, &entry->spectrum) != BH_SPECTRUM_OK)
+        /* Not bh_spectrum_init: a scratch bh_spectrum costs ~540 B of stack on the UART path. */
+        if (!bh_spectrum_config_valid(&entry->spectrum))
             return BH_PRESETS_INVALID;
     }
     return BH_PRESETS_OK;
