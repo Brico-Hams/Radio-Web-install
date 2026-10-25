@@ -118,7 +118,7 @@ class RadioStoreHostTest {
         val snapshot = RadioStore(context).use { store ->
             store.save(contact)
             val session = store.session("Campo")
-            store.observe(session, 2, "Sample", Fix(40.0, -3.0, 8.0, contact.utc))
+            store.observe(session, 2, "Sample", Fix(40.416775, -3.70379, 8.5, contact.utc))
             store.export()
         }
         context.deleteDatabase("bricohams.db")

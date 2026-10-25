@@ -216,7 +216,12 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
                         if (!cursor.moveToFirst()) null
                         else columns.associateWith { column ->
                             val position = cursor.getColumnIndexOrThrow(column)
-                            if (cursor.isNull(position)) null else cursor.getString(position)
+                            // getString() renders REAL with %g ("40", 6 digits); compare the exact double as ContentValues does.
+                            when (cursor.getType(position)) {
+                                android.database.Cursor.FIELD_TYPE_NULL -> null
+                                android.database.Cursor.FIELD_TYPE_FLOAT -> cursor.getDouble(position).toString()
+                                else -> cursor.getString(position)
+                            }
                         }
                     }
                     if (existing == null) {
