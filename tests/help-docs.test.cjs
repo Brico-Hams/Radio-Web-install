@@ -57,6 +57,7 @@ test("las 18 versiones historicas resuelven herencia sin proyectar opciones nuev
 test("las guias generadas tienen enlaces y anclas locales resolubles, sin scripts", () => {
   for (const [source, file] of Object.entries(pages)) {
     const markdown = read(`docs/${source}`);
+    assert.doesNotMatch(markdown, /\]\([^)]*\\/, `Enlace no portable: ${source}`);
     const html = read(file);
     assert.ok(markdown.length > 1000, source);
     assert.match(html, /<html lang="es">/);

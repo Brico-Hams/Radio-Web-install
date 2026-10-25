@@ -232,7 +232,7 @@ Todas las fuentes siguientes se consultaron el **2026-10-25**. Los enlaces ident
 | F2 | [MDUV380_DM1701, 2026-05-04 / ebd7100bb4c930e6ff0c24202474b5b72e7d6beb](https://www.opengd77.com/downloads/MDUV380_DM1701/Firmware/20260504_ebd7100bb4c930e6ff0c24202474b5b72e7d6beb/) | ZIP propios de UV380, UV380 10W PLUS, DM1701 y RT84 |
 | F3 | [MD9600, 2026-05-04 / e779365405cbe4a73803a402626294764784b11f](https://www.opengd77.com/downloads/MD9600/Firmware/20260504_e779365405cbe4a73803a402626294764784b11f/) | ZIP HW V1/V2/V4/V5 y variantes japonesas |
 | F4 | [MD2017, 2026-05-05 / 6b43740c89378240c0cabad0ca827e5b0963124e](https://www.opengd77.com/downloads/MD2017/Firmware/20260505_6b43740c89378240c0cabad0ca827e5b0963124e/) | Publicación de imagen MD2017 y variante japonesa |
-| L | [`firmware-core.js`](..\firmware-core.js), [`gd77-connector.js`](..\gd77-connector.js), [`radio-ui.js`](..\radio-ui.js) | Catálogo, etiquetas del protocolo y alcance real de lectura/edición/bloqueo web |
+| L | [`firmware-core.js`](../firmware-core.js), [`gd77-connector.js`](../gd77-connector.js), [`radio-ui.js`](../radio-ui.js) | Catálogo, etiquetas del protocolo y alcance real de lectura/edición/bloqueo web |
 
 Las rutas `Latest` de esas familias apuntaban a los índices fechados citados; no se afirma que sean todas las builds disponibles ni que «Latest» signifique estable para cada unidad. Los nombres `Japanese`, `JA` o `NMEA` describen variantes de distribución, no nuevos modelos ni una equivalencia de capacidades.
 
