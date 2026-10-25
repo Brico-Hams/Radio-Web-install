@@ -50,7 +50,7 @@
       <label for="fw-search">Filtrar opciones</label><input id="fw-search" type="search" placeholder="APRS, SPECTRUM, VOX...">
       <div class="table-scroll"><table><thead><tr><th>Activa</th><th>Opcion</th><th>En la edicion</th></tr></thead><tbody id="fw-options"></tbody></table></div>
       <label for="fw-request">Valor para el campo options del workflow</label><textarea id="fw-request" rows="2" readonly></textarea>
-      <label for="fw-repo">Repositorio de compilacion</label><input id="fw-repo" value="bricohams/bricohams-firmware">
+      <label for="fw-repo">Repositorio de compilacion</label><input id="fw-repo" value="anatolbricoham/bricohams-firmware">
       <div class="operation-buttons"><button id="fw-copy" class="button secondary" type="button">Copiar peticion</button><a id="fw-run" class="button secondary" target="_blank" rel="noopener noreferrer">Abrir el workflow &nearr;</a></div>
       <h3>Comprobar la compilacion descargada</h3>
       <label for="fw-files">Carga juntos SHA256SUMS, build-info.json y los .bin/.app del artefacto</label><input id="fw-files" type="file" multiple>
