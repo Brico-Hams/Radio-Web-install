@@ -1,6 +1,6 @@
 {
   "name": "bricohams-radio-workspace",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "Bricohams Radio Workspace: conectores locales OpenGD77 y F4HWN con copias previas verificadas",
   "license": "GPL-3.0-or-later",

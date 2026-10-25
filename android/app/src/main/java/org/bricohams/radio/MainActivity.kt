@@ -185,7 +185,7 @@ class MainActivity : Activity() {
         }
     }
     private fun home() {
-        text("Bricohams Android 0.7.0 Beta")
+        text("Bricohams Android 0.7.1 Beta")
         text("Disponible sin red: libro de guardia local con busqueda, importacion ADIF con vista previa, exportacion ADIF/JSON, sesiones ARDF y observaciones GPS puntuales, Morse de texto y WAV PCM experimental.")
         text("CAT RX experimental por USB OTG, CDC y adaptadores USB-serie reconocidos. Satelites SGP4 offline con TLE importados, observador manual, pases y seguimiento Doppler RX. SSTV Robot36 desde WAV con PNG. Captura de microfono Morse/Robot36 de hasta 60 s y decodificacion posterior. Pendientes: escritura de canales y subida firmada a LoTW.")
         text("Las observaciones ARDF son manuales. La posicion es la del telefono, no la de una baliza. No se graba un recorrido ni se localiza en segundo plano.")

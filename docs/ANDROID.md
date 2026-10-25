@@ -5,7 +5,7 @@
 Aplicacion nativa Kotlin para Android 8.0/API 26 o posterior, sin servidor,
 cuentas ni conexion a Internet. Es una implementacion independiente: no
 incluye codigo ni recursos de Look4sat, Robot36 o HAMRS.
-La version `0.7.0-beta` no sustituye sus funciones completas.
+La version `0.7.1-beta` no sustituye sus funciones completas.
 
 | Funcion | Estado |
 | --- | --- |
@@ -438,7 +438,7 @@ Salidas:
 Para entregar un conjunto verificado en Windows, con los mismos requisitos:
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.7.0-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.7.1-beta'
 ```
 
 El destino debe ser nuevo. El script ejecuta pruebas/lint, verifica las firmas

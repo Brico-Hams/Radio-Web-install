@@ -169,7 +169,7 @@ test("estadisticas ARDF explican observaciones manuales, limites y ausencia de G
 test("Android documenta las funciones reales, permisos y limites de la APK", () => {
   for (const name of ["docs/ANDROID.md", "ayuda-android.html"]) {
     const value = read(name);
-    for (const marker of ["0.7.0-beta", "SQLite", "WAV PCM", "LoTW", "no ejecutadas",
+    for (const marker of ["0.7.1-beta", "SQLite", "WAV PCM", "LoTW", "no ejecutadas",
       "GPS", "No se fusionan sesiones", "rollback", "Sesenta y nueve pruebas host", "60 segundos",
       "Estadisticas e historial ARDF", "Haversine", "No es recorrido completo", "222.39016",
       "Captura de microfono Morse y Robot36", "RECORD_AUDIO", "Conceder permiso no graba",

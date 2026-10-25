@@ -20,7 +20,7 @@
     <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#alcance-de-la-apk">Alcance de la APK</a></li><li><a href="#instalacion-y-datos">Instalacion y datos</a></li><li><a href="#libro-de-guardia">Libro de guardia</a></li><li><a href="#ardf-y-gps">ARDF y GPS</a></li><li><a href="#usb-cdc-y-cat-rx-experimental">USB CDC y CAT RX experimental</a></li><li><a href="#satelites-sgp4-y-seguimiento-de-pases">Satelites SGP4 y seguimiento de pases</a></li><li><a href="#morse-wav-experimental">Morse WAV experimental</a></li><li><a href="#sstv-robot36-desde-wav">SSTV Robot36 desde WAV</a></li><li><a href="#captura-de-microfono-morse-y-robot36">Captura de microfono Morse y Robot36</a></li><li><a href="#compilacion">Compilacion</a></li><li><a href="#validacion-realizada-y-pendiente">Validacion realizada y pendiente</a></li></ul></nav>
     <article class="panel"><h1 id="bricohams-android-beta">Bricohams Android Beta</h1>
 <h2 id="alcance-de-la-apk">Alcance de la APK</h2>
-<p>Aplicacion nativa Kotlin para Android 8.0/API 26 o posterior, sin servidor, cuentas ni conexion a Internet. Es una implementacion independiente: no incluye codigo ni recursos de Look4sat, Robot36 o HAMRS. La version <code>0.7.0-beta</code> no sustituye sus funciones completas.</p>
+<p>Aplicacion nativa Kotlin para Android 8.0/API 26 o posterior, sin servidor, cuentas ni conexion a Internet. Es una implementacion independiente: no incluye codigo ni recursos de Look4sat, Robot36 o HAMRS. La version <code>0.7.1-beta</code> no sustituye sus funciones completas.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Funcion</th><th scope="col">Estado</th></tr></thead><tbody>
 <tr><td>Contactos del libro de guardia</td><td>Crear, buscar, consultar, editar y borrar con confirmacion; SQLite local</td></tr>
 <tr><td>Intercambio de contactos</td><td>ADIF ASCII exportacion/importacion con vista previa, JSON UTF-8 y restauracion de copia JSON</td></tr>
@@ -138,7 +138,7 @@ $env:ANDROID_HOME = &#39;C:\ruta\android-sdk&#39;
 <li>Informes en <code>android/app/build/reports/</code>.</li>
 </ul>
 <p>Para entregar un conjunto verificado en Windows, con los mismos requisitos:</p>
-<pre><code>.\scripts\build-android.ps1 -OutputDirectory &#39;C:\ruta\entregas\Android-0.7.0-beta&#39;</code></pre>
+<pre><code>.\scripts\build-android.ps1 -OutputDirectory &#39;C:\ruta\entregas\Android-0.7.1-beta&#39;</code></pre>
 <p>El destino debe ser nuevo. El script ejecuta pruebas/lint, verifica las firmas APK e incluye aplicacion, APK instrumentada, guia, licencias, <code>build-info.json</code> y <code>SHA256SUMS</code>. El manifiesto identifica revision, estado dirty, fuentes por hash, capacidades y funciones no disponibles. Siempre declara firma debug y prueba fisica pendiente; no convierte una construccion en version estable.</p>
 <p>Con un telefono/emulador de pruebas conectado y autorizado por ADB:</p>
 <pre><code>.\android\gradlew.bat -p android :app:connectedDebugAndroidTest</code></pre>
