@@ -7,7 +7,8 @@ const { once } = require("node:events");
 const { pages, render, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown } = require("../scripts/build-help.cjs");
 const { ALLOWED_FILES, createServer } = require("../server.cjs");
 const root = path.join(__dirname, "..");
-const read = name => fs.readFileSync(path.join(root, name), "utf8");
+// Generated docs are stored with LF; a Windows checkout with core.autocrlf turns them into CRLF.
+const read = name => fs.readFileSync(path.join(root, name), "utf8").replace(/\r\n/g, "\n");
 
 test("cada opcion del catalogo tiene explicacion y las matrices conservan valores y ausencias", () => {
   const text = read("docs/AYUDA-OPCIONES-F4HWN.md");
@@ -220,7 +221,7 @@ test("ayuda, instaladores y paginas estaticas incluyen todas las guias sin expon
     for (const file of [...Object.values(pages), "help-docs.css"]) {
       const response = await fetch(`${base}/${file}`);
       assert.equal(response.status, 200, file);
-      assert.equal(await response.text(), read(file));
+      assert.equal(await response.text(), fs.readFileSync(path.join(root, file), "utf8"));
       assert.match(response.headers.get("content-type"), file.endsWith(".css") ? /text\/css/ : /text\/html/);
     }
     assert.equal((await fetch(`${base}/docs/AYUDA-FIRMWARES.md`)).status, 404);

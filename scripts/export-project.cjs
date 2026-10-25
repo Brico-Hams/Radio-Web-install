@@ -216,7 +216,8 @@ async function exportProject({ project = root, firmware, installers, android, ou
       `${sha(json)}  export-info.json`].join("\n") + "\n");
     const archive = path.join(stage, "export.zip");
     if (process.platform === "win32") {
-      execFileSync("tar", ["-a", "-cf", archive, "-C", stage, "Bricohams"], { stdio: "pipe" });
+      // Windows bsdtar creates ZIP with -a; a GNU tar earlier in PATH (Git Bash, MSYS) reads "C:" as a remote host.
+      execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-a", "-cf", archive, "-C", stage, "Bricohams"], { stdio: "pipe" });
     } else {
       execFileSync("zip", ["-q", "-r", archive, "Bricohams"], { cwd: stage, stdio: "pipe" });
     }

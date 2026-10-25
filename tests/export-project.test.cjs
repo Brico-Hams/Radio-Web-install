@@ -165,7 +165,7 @@ test("el ZIP Beta conserva fuentes, historial y artefactos verificables y no sob
   assert.equal(result.sha256, sha(fs.readFileSync(output)));
   const extract = path.join(directory, "extracted");
   fs.mkdirSync(extract);
-  if (process.platform === "win32") execFileSync("tar", ["-xf", output, "-C", extract]);
+  if (process.platform === "win32") execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-xf", output, "-C", extract]);
   else execFileSync("unzip", ["-q", output, "-d", extract]);
   const exported = path.join(extract, "Bricohams");
   const info = JSON.parse(fs.readFileSync(path.join(exported, "export-info.json"), "utf8"));
