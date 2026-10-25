@@ -160,7 +160,8 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 's
 test("every page carries the exact meta CSP before any script", () => {
   for (const page of pages) {
     const html = read(page);
-    const meta = html.indexOf(`<meta http-equiv="Content-Security-Policy" content="${CSP}">`);
+    const expected = page === "opengd77.html" ? CSP.replace("https://api.github.com;", "https://api.github.com https://api.brandmeister.network;") : CSP;
+    const meta = html.indexOf(`<meta http-equiv="Content-Security-Policy" content="${expected}">`);
     assert.ok(meta > 0 && meta < html.indexOf("<script"), page);
   }
 });

@@ -1,0 +1,4502 @@
+{
+  "format": "bricohams-help-history",
+  "inspectedAt": "2026-10-25",
+  "repository": "armel/uv-k1-k5v3-firmware-custom",
+  "versions": [
+    {
+      "tag": "v4.3.0",
+      "commit": "77adba2afc1406abd2bb8dc8f963f2ded07067f5",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/77adba2afc1406abd2bb8dc8f963f2ded07067f5/CMakePresets.json",
+      "status": "verified",
+      "sha256": "0754d753c93de0d9b7d44a4b5a8d20a987f21689461d596c42c9d9865684ce54",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": true,
+              "ENABLE_AM_FIX": true,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_RESET_CHANNEL": false,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_AM_FIX_SHOW_DATA": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_NAVIG_LEFT_RIGHT": true,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v4.3"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v4.3.1",
+      "commit": "15d97316112876c239020c86f967f56accc6200b",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/15d97316112876c239020c86f967f56accc6200b/CMakePresets.json",
+      "status": "verified",
+      "sha256": "7ce7ffcdc9d4a61bcc00ff3dff9787aa4a8d7c2a4a3b74c01c60b0afafdd8d2d",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": true,
+              "ENABLE_AM_FIX": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_RESET_CHANNEL": false,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_AM_FIX_SHOW_DATA": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_NAVIG_LEFT_RIGHT": true,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v4.3.1"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v4.3.2",
+      "commit": "e0ac4de1efa671145ebd6148c43aeb13a21cf4d4",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/e0ac4de1efa671145ebd6148c43aeb13a21cf4d4/CMakePresets.json",
+      "status": "verified",
+      "sha256": "d1eba4626ad9ad644edbb8810e720b5255947c75d1409aaec83b7ddf76a831cb",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": true,
+              "ENABLE_AM_FIX": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_RESET_CHANNEL": false,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_AM_FIX_SHOW_DATA": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_NAVIG_LEFT_RIGHT": true,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v4.3.2"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.1.0",
+      "commit": "086858945bd7d1c936f4cee4eac3df64169e78d9",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/086858945bd7d1c936f4cee4eac3df64169e78d9/CMakePresets.json",
+      "status": "verified",
+      "sha256": "4833001f52337c9a74d7fdbb6db16f09a92a6d39ead6d0ee405fbb6dda0ea70f",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": true,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.1.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.2.0",
+      "commit": "8a8752f80c58716e6bf28d774a19f49ad5b8f6bc",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/8a8752f80c58716e6bf28d774a19f49ad5b8f6bc/CMakePresets.json",
+      "status": "verified",
+      "sha256": "0e4aad35f1094b11d3393e2063dfc3ec84fc4896d7406284a40a5ee40987c363",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": true,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.2.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.3.0",
+      "commit": "064a203db0236ce024475462024aa953a4e14944",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/064a203db0236ce024475462024aa953a4e14944/CMakePresets.json",
+      "status": "verified",
+      "sha256": "ffe74b7ca981db800cfaeec93fce08068efa650aee3b0baa5c46f5ca6f6f2019",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": true,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.3.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.3.1",
+      "commit": "61aa14cd8656cbf5aa1f16b08972a02107961cb3",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/61aa14cd8656cbf5aa1f16b08972a02107961cb3/CMakePresets.json",
+      "status": "verified",
+      "sha256": "57f34fa8580021acb9f3bb20343ca0691de726c9a06b508aa5e0858b1508698a",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": true,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.3.1"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.4.0",
+      "commit": "786318453f7421cb06792ec0990e2ba00353a476",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/786318453f7421cb06792ec0990e2ba00353a476/CMakePresets.json",
+      "status": "verified",
+      "sha256": "1624065e5bd87581b458b61fa08c669a3800501c8e6905a32d975621d283b66c",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": true,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.4.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.5.0",
+      "commit": "e21d47260915174f358f1033564844148d5c6590",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/e21d47260915174f358f1033564844148d5c6590/CMakePresets.json",
+      "status": "verified",
+      "sha256": "cd36ec8941b08e0d9280aed854938d7c25c959a28fa1bea2f34473c9197c8d18",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": true,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": false,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_LOGO": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.5.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.6.0",
+      "commit": "504a2b0fb041db3b072429347d42f45112b9ec47",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/504a2b0fb041db3b072429347d42f45112b9ec47/CMakePresets.json",
+      "status": "verified",
+      "sha256": "467deb167e46e3fead0c5eea098e02717d2ae2e08e04d24bdf5115b686a4026d",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": false,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": false,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": false,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_LOGO": false,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.6.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.6.1",
+      "commit": "5b4b3e2a71f1f752014634e3a195add1d8a2f6f9",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/5b4b3e2a71f1f752014634e3a195add1d8a2f6f9/CMakePresets.json",
+      "status": "verified",
+      "sha256": "5ab2e68170e6bae3cdf50383daaa38f7ae183d481a22c073d1dc59257759912f",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_REGA": false,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": false,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": false,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": false,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_LOGO": false,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.6.1"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_SCREENSHOT": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.7.0",
+      "commit": "3bd3ebba2ceb553edc88c3f087ce0c7f420433b2",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/3bd3ebba2ceb553edc88c3f087ce0c7f420433b2/CMakePresets.json",
+      "status": "verified",
+      "sha256": "913a5538eb246f846b08c21e246f5a7bcc3decf5a12e266cc1f67204816cb106",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": false,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": false,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": false,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_LOGO": false,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.7.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.8.0",
+      "commit": "fe9c4e9432694b50aea651084a043aae0b58673d",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/fe9c4e9432694b50aea651084a043aae0b58673d/CMakePresets.json",
+      "status": "verified",
+      "sha256": "e2bb0d74d331099857b97efd4aab2203ef08b2e404503dc1abd06d709ff36dfd",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "DEV": false,
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": false,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": false,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": false,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_LOGO": false,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.8.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v5.9.0",
+      "commit": "435192e3bf78a208ba9f3c1dc9ad20ddcd3b4684",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/435192e3bf78a208ba9f3c1dc9ad20ddcd3b4684/CMakePresets.json",
+      "status": "verified",
+      "sha256": "839bc565eec103d2201c44f1fea86fa510205b436cc9218e35d60820d9f1dcba",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "DEV": false,
+              "ENABLE_LTO": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_ALARM": false,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_TX_WHEN_AM": false,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_BLMIN_TMP_OFF": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": false,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": false,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": false,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_LOGO": false,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": false,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v5.9.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Bandscope",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Bandscope",
+              "TARGET": "f4hwn.bandscope"
+            }
+          },
+          {
+            "name": "Broadcast",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Broadcast",
+              "TARGET": "f4hwn.broadcast"
+            }
+          },
+          {
+            "name": "Basic",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_AUDIO_BAR": false,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": false,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": false,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Basic",
+              "TARGET": "f4hwn.basic"
+            }
+          },
+          {
+            "name": "RescueOps",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_NOAA": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "EDITION_STRING": "RescueOps",
+              "TARGET": "f4hwn.rescueops"
+            }
+          },
+          {
+            "name": "Game",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "EDITION_STRING": "Game",
+              "TARGET": "f4hwn.game"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Bandscope",
+            "configurePreset": "Bandscope"
+          },
+          {
+            "name": "Broadcast",
+            "configurePreset": "Broadcast"
+          },
+          {
+            "name": "Basic",
+            "configurePreset": "Basic"
+          },
+          {
+            "name": "RescueOps",
+            "configurePreset": "RescueOps"
+          },
+          {
+            "name": "Game",
+            "configurePreset": "Game"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v6.0.0",
+      "commit": "345535de4ca67764bf958c5aa8ab3918b2e7e113",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/345535de4ca67764bf958c5aa8ab3918b2e7e113/CMakePresets.json",
+      "status": "verified",
+      "sha256": "156f91956b7ae1bd48886efdebc92d569a4089ce0f2a49f4d435f2f830175d74",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "vendor": {
+              "github.com/armel/uv-k1-k5v3-firmware-custom/support-policy/1.0": {
+                "notice": [
+                  "SUPPORT POLICY",
+                  "Most options outside ENABLE_FEAT_F4HWN_* that are intentionally set to false in this preset are unsupported unless documented otherwise.",
+                  "Enabling them is at your own risk and may cause bugs, side effects, or instability.",
+                  "Do not expect troubleshooting assistance for such configurations."
+                ]
+              }
+            },
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "DEV": false,
+              "ENABLE_LTO": false,
+              "ENABLE_NO_HEAP": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": false,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": false,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": false,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_LOGO": false,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": false,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v6.0.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_NO_HEAP": true,
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          },
+          {
+            "name": "FieldOps",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+              "ENABLE_FEAT_F4HWN_BEACON": true,
+              "EDITION_STRING": "FieldOps",
+              "TARGET": "f4hwn.fieldops"
+            }
+          },
+          {
+            "name": "Transfer",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "EDITION_STRING": "Transfer",
+              "TARGET": "f4hwn.transfer"
+            }
+          },
+          {
+            "name": "Labs",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_TRIVFO": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_BEAM": true,
+              "EDITION_STRING": "Labs",
+              "TARGET": "f4hwn.labs"
+            }
+          },
+          {
+            "name": "Max",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+              "ENABLE_FEAT_F4HWN_BEACON": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "EDITION_STRING": "Max",
+              "TARGET": "f4hwn.max"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          },
+          {
+            "name": "Transfer",
+            "configurePreset": "Transfer"
+          },
+          {
+            "name": "FieldOps",
+            "configurePreset": "FieldOps"
+          },
+          {
+            "name": "Labs",
+            "configurePreset": "Labs"
+          },
+          {
+            "name": "Max",
+            "configurePreset": "Max"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v6.1.0",
+      "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/f556a96e73c3e423a00cf473aeb37f827cac05a5/CMakePresets.json",
+      "status": "verified",
+      "sha256": "519f845c3c83fe1d29d44e1bd537d7f6ed994cc1a004557d3731f1c582ee7f0e",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "vendor": {
+              "github.com/armel/uv-k1-k5v3-firmware-custom/support-policy/1.0": {
+                "notice": [
+                  "SUPPORT POLICY",
+                  "Most options outside ENABLE_FEAT_F4HWN_* that are intentionally set to false in this preset are unsupported unless documented otherwise.",
+                  "Enabling them is at your own risk and may cause bugs, side effects, or instability.",
+                  "Do not expect troubleshooting assistance for such configurations."
+                ]
+              }
+            },
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "DEV": false,
+              "ENABLE_LTO": false,
+              "ENABLE_NO_HEAP": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_AIRCOPY_UART": false,
+              "ENABLE_AIRCOPY_FLASH": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_FULL_WATCH": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": false,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": false,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": false,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_LOGO": false,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": false,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v6.1.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_NO_HEAP": true,
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_FULL_WATCH": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": false,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          },
+          {
+            "name": "FieldOps",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+              "ENABLE_FEAT_F4HWN_BEACON": true,
+              "EDITION_STRING": "FieldOps",
+              "TARGET": "f4hwn.fieldops"
+            }
+          },
+          {
+            "name": "Transfer",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_AIRCOPY_UART": true,
+              "ENABLE_AIRCOPY_FLASH": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "EDITION_STRING": "Transfer",
+              "TARGET": "f4hwn.transfer"
+            }
+          },
+          {
+            "name": "Labs",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_BEAM": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_INFO": true,
+              "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": true,
+              "EDITION_STRING": "Labs",
+              "TARGET": "f4hwn.labs"
+            }
+          },
+          {
+            "name": "Max",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_FULL_WATCH": false,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+              "ENABLE_FEAT_F4HWN_BEACON": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "EDITION_STRING": "Max",
+              "TARGET": "f4hwn.max"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          },
+          {
+            "name": "Transfer",
+            "configurePreset": "Transfer"
+          },
+          {
+            "name": "FieldOps",
+            "configurePreset": "FieldOps"
+          },
+          {
+            "name": "Labs",
+            "configurePreset": "Labs"
+          },
+          {
+            "name": "Max",
+            "configurePreset": "Max"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v6.2.0",
+      "commit": "0ade03c0b1c94514566fadf7ce1c7a1f542a2283",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/0ade03c0b1c94514566fadf7ce1c7a1f542a2283/CMakePresets.json",
+      "status": "verified",
+      "sha256": "5529a75555192d6568456d946add43837234759ef07306f4cd05e77225f96cf3",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "vendor": {
+              "github.com/armel/uv-k1-k5v3-firmware-custom/support-policy/1.0": {
+                "notice": [
+                  "SUPPORT POLICY",
+                  "Most options outside ENABLE_FEAT_F4HWN_* that are intentionally set to false in this preset are unsupported unless documented otherwise.",
+                  "Enabling them is at your own risk and may cause bugs, side effects, or instability.",
+                  "Do not expect troubleshooting assistance for such configurations."
+                ]
+              }
+            },
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "DEV": false,
+              "ENABLE_LTO": false,
+              "ENABLE_NO_HEAP": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_AIRCOPY_UART": false,
+              "ENABLE_AIRCOPY_FLASH": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_FULL_WATCH": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": false,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": false,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": false,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_LOGO": false,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": false,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v6.2.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_NO_HEAP": true,
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_FULL_WATCH": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": false,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          },
+          {
+            "name": "FieldOps",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+              "ENABLE_FEAT_F4HWN_BEACON": true,
+              "EDITION_STRING": "FieldOps",
+              "TARGET": "f4hwn.fieldops"
+            }
+          },
+          {
+            "name": "Transfer",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_AIRCOPY_UART": true,
+              "ENABLE_AIRCOPY_FLASH": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "EDITION_STRING": "Transfer",
+              "TARGET": "f4hwn.transfer"
+            }
+          },
+          {
+            "name": "Labs",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_BEAM": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_INFO": true,
+              "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": true,
+              "EDITION_STRING": "Labs",
+              "TARGET": "f4hwn.labs"
+            }
+          },
+          {
+            "name": "Max",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_FULL_WATCH": false,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+              "ENABLE_FEAT_F4HWN_BEACON": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "EDITION_STRING": "Max",
+              "TARGET": "f4hwn.max"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          },
+          {
+            "name": "Transfer",
+            "configurePreset": "Transfer"
+          },
+          {
+            "name": "FieldOps",
+            "configurePreset": "FieldOps"
+          },
+          {
+            "name": "Labs",
+            "configurePreset": "Labs"
+          },
+          {
+            "name": "Max",
+            "configurePreset": "Max"
+          }
+        ]
+      }
+    },
+    {
+      "tag": "v6.3.0",
+      "commit": "ca3a4271386049e7b459b215cef0ad0eea1a30ca",
+      "source": "https://raw.githubusercontent.com/armel/uv-k1-k5v3-firmware-custom/ca3a4271386049e7b459b215cef0ad0eea1a30ca/CMakePresets.json",
+      "status": "verified",
+      "sha256": "8feff43c5f6c6ccf2a7f4188d2854dff40c7892a644e9bc2dcaec70a5eb7e969",
+      "presets": {
+        "version": 3,
+        "configurePresets": [
+          {
+            "name": "default",
+            "hidden": true,
+            "vendor": {
+              "github.com/armel/uv-k1-k5v3-firmware-custom/support-policy/1.0": {
+                "notice": [
+                  "SUPPORT POLICY",
+                  "Most options outside ENABLE_FEAT_F4HWN_* that are intentionally set to false in this preset are unsupported unless documented otherwise.",
+                  "Enabling them is at your own risk and may cause bugs, side effects, or instability.",
+                  "Do not expect troubleshooting assistance for such configurations."
+                ]
+              }
+            },
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+              "CMAKE_BUILD_TYPE": "Release",
+              "DEV": false,
+              "ENABLE_LTO": false,
+              "ENABLE_NO_HEAP": false,
+              "ENABLE_FMRADIO": false,
+              "ENABLE_UART": true,
+              "ENABLE_USB": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_AIRCOPY_UART": false,
+              "ENABLE_AIRCOPY_FLASH": false,
+              "ENABLE_NOAA": false,
+              "ENABLE_VOICE": false,
+              "ENABLE_VOX": true,
+              "ENABLE_TX1750": true,
+              "ENABLE_PWRON_PASSWORD": false,
+              "ENABLE_DTMF_CALLING": false,
+              "ENABLE_FLASHLIGHT": true,
+              "ENABLE_SPECTRUM": false,
+              "ENABLE_BIG_FREQ": true,
+              "ENABLE_SMALL_BOLD": true,
+              "ENABLE_CUSTOM_MENU_LAYOUT": true,
+              "ENABLE_KEEP_MEM_NAME": true,
+              "ENABLE_WIDE_RX": true,
+              "ENABLE_F_CAL_MENU": false,
+              "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+              "ENABLE_BOOT_BEEPS": false,
+              "ENABLE_SHOW_CHARGE_LEVEL": false,
+              "ENABLE_REVERSE_BAT_SYMBOL": false,
+              "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+              "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+              "ENABLE_FASTER_CHANNEL_SCAN": true,
+              "ENABLE_RSSI_BAR": true,
+              "ENABLE_AUDIO_BAR": true,
+              "ENABLE_COPY_CHAN_TO_VFO": true,
+              "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+              "ENABLE_BYP_RAW_DEMODULATORS": false,
+              "ENABLE_SCAN_RANGES": true,
+              "ENABLE_EXTRA_UART_CMD": false,
+              "ENABLE_FEAT_F4HWN": true,
+              "ENABLE_FEAT_F4HWN_FULL_WATCH": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+              "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+              "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+              "ENABLE_FEAT_F4HWN_SLEEP": true,
+              "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+              "ENABLE_FEAT_F4HWN_NARROWER": true,
+              "ENABLE_FEAT_F4HWN_INV": true,
+              "ENABLE_FEAT_F4HWN_CTR": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": false,
+              "ENABLE_FEAT_F4HWN_AUDIO": false,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": false,
+              "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+              "ENABLE_FEAT_F4HWN_PMR": false,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": false,
+              "ENABLE_FEAT_F4HWN_CA": true,
+              "ENABLE_FEAT_F4HWN_DEBUG": false,
+              "ENABLE_FEAT_F4HWN_QRCODE": false,
+              "ENABLE_FEAT_F4HWN_MEM": false,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": false,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": false,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": false,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": false,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": false,
+              "ENABLE_FEAT_F4HWN_LOGO": false,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": false,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": false,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "ENABLE_AGC_SHOW_DATA": false,
+              "ENABLE_UART_RW_BK_REGS": false,
+              "ENABLE_SWD": false,
+              "VERSION_STRING_1": "v0.22",
+              "VERSION_STRING_2": "v6.3.0"
+            }
+          },
+          {
+            "name": "Custom",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "EDITION_STRING": "Custom",
+              "TARGET": "f4hwn.custom"
+            }
+          },
+          {
+            "name": "Fusion",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_NO_HEAP": true,
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_FULL_WATCH": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": false,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion",
+              "TARGET": "f4hwn.fusion"
+            }
+          },
+          {
+            "name": "FieldOps",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+              "ENABLE_FEAT_F4HWN_BEACON": true,
+              "EDITION_STRING": "FieldOps",
+              "TARGET": "f4hwn.fieldops"
+            }
+          },
+          {
+            "name": "Transfer",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_AIRCOPY_UART": true,
+              "ENABLE_AIRCOPY_FLASH": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "EDITION_STRING": "Transfer",
+              "TARGET": "f4hwn.transfer"
+            }
+          },
+          {
+            "name": "Labs",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_BEAM": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_INFO": true,
+              "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": true,
+              "EDITION_STRING": "Labs",
+              "TARGET": "f4hwn.labs"
+            }
+          },
+          {
+            "name": "Fusion_",
+            "inherits": "default",
+            "cacheVariables": {
+              "ENABLE_NO_HEAP": true,
+              "ENABLE_SPECTRUM": true,
+              "ENABLE_FMRADIO": true,
+              "ENABLE_VOX": true,
+              "ENABLE_AIRCOPY": false,
+              "ENABLE_FEAT_F4HWN_FULL_WATCH": true,
+              "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_GAME": false,
+              "ENABLE_FEAT_F4HWN_PMR": true,
+              "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_VOL": true,
+              "ENABLE_FEAT_F4HWN_AUDIO": true,
+              "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+              "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+              "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+              "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+              "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+              "ENABLE_FEAT_F4HWN_BEAM": false,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+              "ENABLE_FEAT_F4HWN_BEACON": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+              "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+              "ENABLE_FEAT_F4HWN_QRCODE": true,
+              "ENABLE_FEAT_F4HWN_MEM": true,
+              "ENABLE_FEAT_F4HWN_LOGO": true,
+              "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+              "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+              "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": true,
+              "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_BEAM": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_INFO": true,
+              "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": false,
+              "ENABLE_SWD": true,
+              "EDITION_STRING": "Fusion_",
+              "TARGET": "f4hwn.fusion_"
+            }
+          },
+          {
+            "name": "Service_",
+            "inherits": "Fusion_",
+            "cacheVariables": {
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_AIRCOPY_UART": true,
+              "ENABLE_AIRCOPY_FLASH": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_BEAM": false,
+              "ENABLE_FEAT_F4HWN_OVERLAY_INFO": false,
+              "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": true,
+              "EDITION_STRING": "Service_",
+              "TARGET": "f4hwn.service_"
+            }
+          },
+          {
+            "name": "Max",
+            "inherits": "Fusion",
+            "cacheVariables": {
+              "ENABLE_FEAT_F4HWN_FULL_WATCH": false,
+              "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+              "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+              "ENABLE_FEAT_F4HWN_BEACON": true,
+              "ENABLE_AIRCOPY": true,
+              "ENABLE_FEAT_F4HWN_BEAM": true,
+              "ENABLE_FEAT_F4HWN_GAME": true,
+              "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+              "EDITION_STRING": "Max",
+              "TARGET": "f4hwn.max"
+            }
+          }
+        ],
+        "buildPresets": [
+          {
+            "name": "Custom",
+            "configurePreset": "Custom"
+          },
+          {
+            "name": "Fusion",
+            "configurePreset": "Fusion"
+          },
+          {
+            "name": "Transfer",
+            "configurePreset": "Transfer"
+          },
+          {
+            "name": "FieldOps",
+            "configurePreset": "FieldOps"
+          },
+          {
+            "name": "Labs",
+            "configurePreset": "Labs"
+          },
+          {
+            "name": "Fusion_",
+            "configurePreset": "Fusion_"
+          },
+          {
+            "name": "Service_",
+            "configurePreset": "Service_"
+          },
+          {
+            "name": "Max",
+            "configurePreset": "Max"
+          }
+        ]
+      }
+    }
+  ]
+}

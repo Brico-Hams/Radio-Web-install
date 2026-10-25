@@ -5,8 +5,13 @@ const { FirmwareService, TARGETS } = require("./firmware-service.cjs");
 const { DataService } = require("./data-service.cjs");
 const ALLOWED_FILES = Object.freeze([
   "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "bricohams-logo.png", "styles.css", "app.js", "radio-core.js",
-  "transports.js", "quansheng-connector.js", "gd77-connector.js", "backup-store.js",
-  "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js", "f4hwn-options.js", "custom-firmware-ui.js"
+  "transports.js", "quansheng-connector.js", "quansheng-channels.js", "gd77-connector.js", "backup-store.js",
+  "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js", "f4hwn-options.js", "custom-firmware-ui.js",
+  "ayuda-firmwares.html", "ayuda-configuracion.html", "ayuda-quansheng.html",
+  "ayuda-opciones-f4hwn.html", "ayuda-presets-f4hwn.html", "ayuda-ardf.html",
+  "ayuda-opengd77.html", "ayuda-opengd77-modelos.html", "ayuda-karina.html",
+  "ayuda-bricohams.html", "help-docs.css",
+  "ayuda-egzumer.html", "ayuda-pack-dim0s.html"
 ]);
 const allowed = new Set(ALLOWED_FILES);
 const { verify: verifyStudio } = require("./studio-pin.cjs");
@@ -35,6 +40,28 @@ return http.createServer(async (request, response) => {
     response.end("Solo se permite el origen local.");
     return;
   }
+  if (request.method === "POST" && request.url === "/api/data/repeaterbook-config") {
+    if (request.headers.origin !== `http://${request.headers.host}` ||
+      request.headers["content-type"] !== "application/json") {
+      response.writeHead(403); response.end("Origen o tipo no permitido."); return;
+    }
+    try {
+      let body = "";
+      for await (const chunk of request) {
+        body += chunk.toString("utf8");
+        if (Buffer.byteLength(body) > 2048) throw new Error("Configuracion demasiado grande.");
+      }
+      let config;
+      try { config = JSON.parse(body); } catch { throw new Error("Configuracion JSON no valida."); }
+      const result = providers.configureRepeaterbook(config);
+      response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify(result));
+    } catch (error) {
+      response.writeHead(error.status || 400, { "Content-Type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify({ error: error.message }));
+    }
+    return;
+  }
   if (!["GET", "HEAD"].includes(request.method)) {
     response.writeHead(405, { Allow: "GET, HEAD" });
     response.end("Metodo no permitido.");
@@ -58,6 +85,7 @@ return http.createServer(async (request, response) => {
     const routes = {
       "/api/data/status": { method: "status", keys: [] },
       "/api/data/contacts": { method: "contacts", keys: ["country", "region", "page"] },
+      "/api/data/talkgroups": { method: "talkgroups", keys: ["prefix"] },
       "/api/data/repeaters": { method: "repeaters", keys: ["country", "region", "stateId", "mode"] },
       "/api/data/satellite": { method: "satellite", keys: ["norad", "provider"] },
       "/api/data/transmitters": { method: "transmitters", keys: ["norad"] }
@@ -119,9 +147,11 @@ return http.createServer(async (request, response) => {
   if (name === "studio.html") {
     let body;
     try { body = await fs.readFile(studio.file); }
-    catch {
-      response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      response.end("Studio no esta incluido en esta copia. Ejecuta: npm run fetch:studio");
+    catch (error) {
+      const missing = error.code === "ENOENT";
+      if (!missing) console.error(`No se pudo leer Studio: ${error.message}`);
+      response.writeHead(missing ? 404 : 500, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end(missing ? "Studio no esta incluido en esta copia. Ejecuta: npm run fetch:studio" : "No se pudo leer Studio. Revisa el registro del servidor.");
       return;
     }
     try { verifyStudio(body, studio.lock); }

@@ -8,7 +8,7 @@
     panel.innerHTML = `<h2>Codeplug: contactos, repetidores y SAT</h2>
       <p>Consulta proveedores solo al pulsar un boton. Los datos se preparan localmente; no se envian copias ni codeplugs. Todos los canales importados empiezan <strong>solo recepcion</strong>. Comprueba bandas, permisos, tonos y parametros antes de transmitir.</p>
       <p class="card-note">${page === "quansheng"
-        ? "Quansheng es analogico: no admite contactos DMR. Se exportan canales FM en CSV CHIRP para revisar en una herramienta compatible con tu firmware. No hay escritura remota de canales ni formato nativo SAT verificado en este conector."
+        ? "Quansheng es analogico: no admite contactos DMR. Puedes anadir canales FM a la configuracion F4HWN v6 abierta, o exportar CSV CHIRP. Escritura Beta solo con respaldo Flash completo; v6.0 permanece en solo lectura. SAT se prepara como memorias FM, no como lista orbital nativa."
         : "Anade contactos privados (max. 1024 en total), canales y satelites (lista SAT, max. 25) a tu binario estandar abierto. No es la base masiva de indicativos DMR. Se preservan los registros existentes. Escribir en la radio sigue bloqueado sin respaldo MCU completo."}</p>
       <fieldset id="plan-controls" class="planning-controls">
       <div class="guide-tabs" role="group" aria-label="Tipo de datos">
@@ -22,6 +22,13 @@
         <div><label for="plan-query">Filtrar resultados visibles por nombre / indicativo / ID</label><input id="plan-query" maxlength="80"></div>
       </div>
       <div id="plan-repeaters">
+        <details id="plan-rb-config"><summary>Configurar API RepeaterBook (version instalada)</summary>
+          <p>Requiere aprobacion de RepeaterBook para esta aplicacion. Se conserva solo en memoria del servidor local hasta reiniciarlo; el token no se guarda en el navegador ni se devuelve por la API.</p>
+          <label for="plan-rb-token">Token individual rbuapp_</label><input id="plan-rb-token" type="password" autocomplete="off" maxlength="247">
+          <label for="plan-rb-agent">User-Agent aprobado, con correo de contacto</label><input id="plan-rb-agent" maxlength="240" autocomplete="off">
+          <label class="check"><input id="plan-rb-approved" type="checkbox"> Dispongo de aprobacion para esta aplicacion y token</label>
+          <button id="plan-rb-config-save" type="button" class="button secondary">Aplicar configuracion local de esta sesion</button>
+        </details>
         <p><a href="https://www.repeaterbook.com/api/token_request.php" target="_blank" rel="noopener noreferrer">Solicitar aprobacion de RepeaterBook</a>. Data courtesy of RepeaterBook.com. Solo importacion para programar tu radio con autorizacion; sin scraping, mirrors ni directorio publico.</p>
         <div class="planning-filters">
           <div><label for="plan-mode">Modo de repetidores</label><select id="plan-mode"><option value="FM">FM analogica</option>${page !== "quansheng" ? '<option value="DMR">DMR (requiere plantilla DMR)</option>' : ""}</select></div>
@@ -31,12 +38,19 @@
         <label class="check"><input id="plan-rb-consent" type="checkbox"><span>Tengo autorizacion para usar estos datos de RepeaterBook en la programacion personal de mi radio.</span></label>
         <div class="operation-buttons"><button id="plan-rb-query" type="button" class="button secondary">Consultar RepeaterBook autorizado</button><button id="plan-rb-status" type="button" class="button secondary">Comprobar configuracion de acceso</button></div>
         <label for="plan-rb-file">O importar una exportacion JSON RepeaterBook obtenida con autorizacion (max. 8 MiB)</label><input id="plan-rb-file" type="file" accept=".json,application/json">
-        <p id="plan-rb-web-notice" role="status" hidden>RepeaterBook solo est&aacute; disponible en la versi&oacute;n instalada (requiere tu clave aprobada). <a id="plan-rb-release" href="#" target="_blank" rel="noopener noreferrer" hidden>Descargar la versi&oacute;n instalada</a></p>
+        <p id="plan-rb-web-notice" role="status" hidden>La consulta API RepeaterBook requiere servidor y aprobacion. Sin instalar nada puedes importar aqui un JSON obtenido con autorizacion. No se pide ni guarda el token en Pages. <a id="plan-rb-release" href="#" target="_blank" rel="noopener noreferrer" hidden>Version instalada para consulta API</a></p>
         <p id="plan-rb-info" role="status">Sin consultas. El token individual se configura solo en el entorno del servidor.</p>
         <div class="operation-buttons"><button id="plan-rb-select" type="button" class="button secondary">Seleccionar visibles</button><button id="plan-rb-stage" type="button" class="button primary">Anadir seleccion a canales preparados</button></div>
         <div class="table-scroll"><table><thead><tr><th>Elegir</th><th>Nombre</th><th>RX / TX MHz</th><th>Zona</th><th>Modo / tono</th></tr></thead><tbody id="plan-rb-results"></tbody></table></div>
       </div>
       <div id="plan-contacts" hidden>
+        <fieldset id="plan-dmr-auto"><legend>Descarga de contactos y grupos DMR</legend>
+          <p>Consulta e importa al archivo local abierto al pulsar. No escribe la radio, no crea zonas ni asigna TG a canales. Maximo 1024 contactos totales, privados y grupos combinados. No sincroniza en segundo plano.</p>
+          <div id="plan-radioid-auto"><label for="plan-auto-pages">Maximo de paginas RadioID (1-10, pais y region de arriba)</label><input id="plan-auto-pages" type="number" min="1" max="10" value="1">
+          <button id="plan-contacts-auto" type="button" class="button primary">Descargar e importar contactos RadioID</button></div>
+          <label for="plan-tg-prefix">Salas / grupos BrandMeister: prefijo TG (214 para Espana)</label><input id="plan-tg-prefix" value="214" inputmode="numeric" maxlength="7">
+          <button id="plan-tg-auto" type="button" class="button primary">Descargar e importar grupos BrandMeister</button>
+        </fieldset>
         <p id="plan-contacts-help">RadioID: busqueda paginada por pais y estado. La zona/ciudad adicional y el texto se filtran en la pagina actual. Selecciona paginas conscientemente; no se descarga toda la base automaticamente. Se anaden contactos privados, no grupos de conversacion.</p>
         <div class="operation-buttons"><button id="plan-contacts-query" type="button" class="button secondary">Buscar contactos RadioID</button><button id="plan-contacts-prev" type="button" class="button secondary">Pagina anterior</button><button id="plan-contacts-next" type="button" class="button secondary">Pagina siguiente</button><button id="plan-contacts-select" type="button" class="button secondary">Seleccionar pagina visible</button></div>
         <div id="plan-web-contacts" hidden>
@@ -85,13 +99,15 @@
           <div><label for="plan-doppler-segments">Canales por pase (1 a 10)</label><input id="plan-doppler-segments" type="number" value="5" min="1" max="10"></div>
         </div>
         <div class="operation-buttons"><button id="plan-doppler-stage" type="button" class="button secondary">Preparar canales con Doppler corregido (solo RX)</button></div>
+        ${page === "quansheng" ? '<p>Quansheng: los canales Doppler se cargan como memorias FM escalonadas en la configuracion local F4HWN v6. No es control continuo del modulo Doppler ni carga de TLE en el firmware. Lee primero la configuracion y elige una plantilla FM abajo; el envio fisico mantiene los requisitos de respaldo.</p><button id="plan-qs-load" type="button" class="button primary">Cargar SAT / Doppler preparados en configuracion Quansheng</button>' : ""}
         <p id="plan-doppler-info" role="status">Una memoria por salto de frecuencia igual del Doppler; las ventanas son mas cortas cerca del maximo. Cambia de memoria a la hora indicada; la radio no sigue el Doppler sola.</p>
       </div>
       <hr><h3>Canales preparados (sin escribir en la radio)</h3>
-      ${page !== "quansheng" ? '<label for="plan-template">Plantilla del codeplug abierto: se preservan sus ajustes no importados</label><select id="plan-template"><option value="">Abre o lee un codeplug primero</option></select><button id="plan-template-refresh" type="button" class="button secondary">Actualizar plantillas</button>' : ""}
+      <button id="plan-pmr-stage" type="button" class="button secondary">Preparar PMR446 analogicos 1-16 (solo RX)</button>
+      <label for="plan-template">Plantilla del archivo abierto: se preservan sus ajustes no importados</label><select id="plan-template"><option value="">Abre o lee una configuracion primero</option></select><button id="plan-template-refresh" type="button" class="button secondary">Actualizar plantillas</button>
       <p id="plan-channel-count" role="status">0 canales preparados. Los tonos no se activan automaticamente; revisalos en el editor oficial.</p>
       <div class="table-scroll"><table><thead><tr><th>Nombre</th><th>RX / TX nominal</th><th>Modo</th><th>Fuente</th><th>Quitar</th></tr></thead><tbody id="plan-channel-results"></tbody></table></div>
-      <div class="operation-buttons">${page !== "quansheng" ? '<button id="plan-channels-add" type="button" class="button primary">Anadir canales al codeplug local abierto</button>' : '<button id="plan-chirp-save" type="button" class="button primary">Exportar canales FM CSV CHIRP (solo RX)</button>'}<button id="plan-channel-save" type="button" class="button secondary">Guardar proyecto de canales JSON</button></div>
+      <div class="operation-buttons"><button id="plan-channels-add" type="button" class="button primary">Anadir canales al archivo local abierto</button>${page === "quansheng" ? '<button id="plan-chirp-save" type="button" class="button secondary">Exportar canales FM CSV CHIRP (solo RX)</button>' : ""}<button id="plan-channel-save" type="button" class="button secondary">Guardar proyecto de canales JSON</button></div>
       <button type="button" class="button secondary" disabled>Instalacion directa de estos datos no disponible con las garantias actuales</button>
       </fieldset><p id="plan-status" role="status">Listo. Sin solicitudes externas ni geolocalizacion automatica.</p>`;
     document.getElementById("radio-operations").before(panel);
@@ -128,6 +144,15 @@
         : { norad: sat.norad, source: sat.source, attribution: file.attribution, fetchedAt: sat.fetchedAt, entries: sat.transmitters };
     }
     async function request(endpoint, params = {}) {
+      if (endpoint === "talkgroups" && (await R.runtime).mode === "web") {
+        const response = await fetch("https://api.brandmeister.network/v2/talkgroup", {
+          credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(30000)
+        });
+        R.assert(response.ok, `BrandMeister respondio HTTP ${response.status}.`);
+        const raw = await response.text();
+        R.assert(raw.length <= 2 * 1024 * 1024, "Lista BrandMeister demasiado grande.");
+        return R.normalizeTalkgroups(JSON.parse(raw), params.prefix);
+      }
       if ((endpoint === "satellite" || endpoint === "transmitters") && (await R.runtime).mode === "web") return webSatellite(endpoint, params);
       R.assert(root.location.protocol !== "file:", "Los proveedores requieren npm start y el servidor local.");
       const response = await fetch(`api/data/${endpoint}?${new URLSearchParams(params)}`, {
@@ -268,6 +293,19 @@
       const status = await request("status");
       notify(`${status.repeaterbookConfigured ? "Entorno configurado; la aprobacion se comprueba al consultar." : "Acceso sin configurar."} ${status.notice}`);
     });
+    attach("plan-rb-config-save", "Configurar RepeaterBook local", async () => {
+      R.assert((await R.runtime).mode === "local", "La configuracion de API requiere la version instalada.");
+      try {
+        const response = await fetch("api/data/repeaterbook-config", {
+          method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
+          signal: AbortSignal.timeout(10000),
+          body: JSON.stringify({ token: $("plan-rb-token").value, agent: $("plan-rb-agent").value, approved: $("plan-rb-approved").checked })
+        });
+        const result = await response.json();
+        R.assert(response.ok, result.error || "No se pudo configurar RepeaterBook.");
+        notify(`RepeaterBook configurado para esta sesion del servidor. ${result.notice}`);
+      } finally { $("plan-rb-token").value = ""; }
+    });
     attach("plan-rb-query", "Consultar RepeaterBook", async () => {
       requireRB();
       acceptRepeaters(await request("repeaters", { country: $("plan-country").value, region: $("plan-region").value,
@@ -296,6 +334,29 @@
       renderContacts();
     }
     attach("plan-contacts-query", "Buscar contactos RadioID", () => loadContacts(1, true));
+    attach("plan-contacts-auto", "Descargar e importar contactos RadioID", async () => {
+      R.assert(page !== "quansheng" && templates().length > 0, "Abre o lee primero un codeplug OpenGD77 con canales.");
+      const maximum = Number($("plan-auto-pages").value);
+      R.assert(Number.isInteger(maximum) && maximum >= 1 && maximum <= 10, "Selecciona 1-10 paginas.");
+      const entries = [];
+      const params = { country: $("plan-country").value, region: $("plan-region").value };
+      for (let number = 1; number <= maximum; number++) {
+        const result = await request("contacts", { ...params, page: String(number) });
+        R.assert(Array.isArray(result.entries), "Contactos no reconocidos.");
+        entries.push(...result.entries);
+        R.assert(entries.length <= 1024, "El lote supera 1024 contactos. Reduce paginas o acota la region. No se ha importado ningun contacto.");
+        if (number >= result.pages) break;
+      }
+      const result = importContacts(entries);
+      notify(`${result.added} contactos privados importados; ${result.duplicates} duplicados. Archivo local; sin escribir radio.`);
+    });
+    attach("plan-tg-auto", "Descargar e importar grupos BrandMeister", async () => {
+      R.assert(page !== "quansheng" && templates().length > 0, "Abre o lee primero un codeplug OpenGD77 con canales.");
+      const data = await request("talkgroups", { prefix: $("plan-tg-prefix").value });
+      R.assert(Array.isArray(data.entries), "Grupos DMR no reconocidos.");
+      const result = importContacts(data.entries);
+      notify(`${result.added} grupos BrandMeister importados; ${result.duplicates} duplicados. Se guardan como TG numerico; asigna los grupos a tus canales en el CPS.`);
+    });
     attach("plan-contacts-prev", "Pagina anterior RadioID", async () => {
       R.assert(contactResult && contactResult.page > 1, "No hay pagina anterior.");
       await loadContacts(contactResult.page - 1);
@@ -320,10 +381,18 @@
         exportedAt: new Date().toISOString(), contacts: [...chosenContacts.values()] }, null, 2), "application/json");
     });
     if ($("plan-template-refresh")) attach("plan-template-refresh", "Actualizar plantillas", refreshTemplates);
+    attach("plan-pmr-stage", "Preparar PMR446 solo RX", async () => { stage(R.pmrChannels()); });
     if ($("plan-channels-add")) attach("plan-channels-add", "Anadir canales al codeplug local", async () => {
       const result = importChannels([...staged.values()], Number($("plan-template").value));
       refreshTemplates();
       notify(`${result.added} canales anadidos; ${result.duplicates} duplicados omitidos. Solo RX. Guarda el binario en el editor; no se ha instalado en la radio.`);
+    });
+    if ($("plan-qs-load")) attach("plan-qs-load", "Cargar SAT Doppler en archivo Quansheng", async () => {
+      const channels = [...staged.values()].filter(entry => entry.source?.includes("satnogs") || entry.window || entry.norad);
+      R.assert(channels.length > 0, "Prepara primero canales SAT o Doppler desde un pase calculado.");
+      const result = importChannels(channels, Number($("plan-template").value));
+      refreshTemplates();
+      notify(`${result.added} memorias SAT/Doppler cargadas en la configuracion Quansheng local; ${result.duplicates} duplicadas. Guarda el binario. No se ha escrito la radio.`);
     });
     if ($("plan-chirp-save")) attach("plan-chirp-save", "Exportar canales FM", async () => {
       download("quansheng-rx-channels.csv", R.channelCSV([...staged.values()]), "text/csv;charset=utf-8");
@@ -444,7 +513,7 @@
     });
     function webMode() {
       web = true;
-      for (const id of ["plan-rb-query", "plan-rb-status", "plan-rb-file", "plan-rb-consent"]) $(id).disabled = true;
+      for (const id of ["plan-rb-query", "plan-rb-status"]) $(id).disabled = true;
       $("plan-rb-web-notice").hidden = false;
       $("plan-orbit-source").value = "satnogs"; $("plan-orbit-source").disabled = true;
       const repository = typeof BRAND !== "undefined" ? BRAND.repository : "";
@@ -488,7 +557,13 @@
         renderContacts();
       });
     }
-    R.runtime.then(runtime => { if (runtime.mode === "web") webMode(); })
+    R.runtime.then(runtime => {
+      if (runtime.mode === "web") {
+        $("plan-rb-config").hidden = true;
+        $("plan-radioid-auto").hidden = true;
+        webMode();
+      }
+    })
       .catch(error => { $("plan-status").textContent = `ERROR: ${error.message}`; });
     model.addEventListener("change", () => {
       staged.clear(); chosenRepeaters.clear(); chosenContacts.clear();

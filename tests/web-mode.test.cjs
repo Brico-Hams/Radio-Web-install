@@ -4,6 +4,13 @@ const { once } = require("node:events");
 const R = require("../radio-core.js");
 require("../runtime-mode.js");
 const { createServer } = require("../server.cjs");
+require("../planning-core.js");
+test("web BrandMeister normaliza grupos con el mismo formato del servidor sin credenciales", () => {
+  const result = R.normalizeTalkgroups({ 91: "Worldwide", 214: "Spain", 21401: "Madrid" }, "214");
+  assert.deepEqual(result.entries.map(entry => [entry.id, entry.type]), [[214, 0], [21401, 0]]);
+  assert.throws(() => R.normalizeTalkgroups({ 214: 1 }, "214"), /invalido/);
+  assert.throws(() => R.normalizeTalkgroups({}, "214"), /vacia/);
+});
 
 test("runtime: local only when server says so", async () => {
   const ok = body => async () => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });

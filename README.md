@@ -4,11 +4,16 @@
 
 Dos espacios con conectores propios WebUSB/Web Serial, operaciones locales y respaldo automatico antes de habilitar escrituras.
 
+**BETA - en validacion y pruebas.** El **Modo PRO**, activado expresamente para esta sesion, evita confirmaciones repetitivas al pulsar operaciones, pero no elimina permisos USB, respaldo completo, comprobaciones de hardware/firmware, hashes, CRC, relectura ni proteccion de Main. No habilita escrituras con copias parciales.
+
+**Prueba real UV-K5 V3 (modelo declarado), F4HWN v6.0.0:** identificacion, calibracion, configuracion con 200 canales y consulta de cinco slots correctas en COM4; calibracion/configuracion coinciden en dos lecturas independientes. El comando de Flash fisica no responde en v6.0. Se corrige el respaldo automatico de esta version para conservar el acceso de solo lectura y guardar una copia parcial, en vez de invalidar la conexion por intentar un comando no disponible. No se han escrito/borrado datos fisicos. Detalles y procedimiento en [ayuda Quansheng](docs/AYUDA-QUANSHENG.md).
+
 ## Documentacion
 
 | Documento | Contenido |
 | --- | --- |
 | [Ayuda y soporte](ayuda.html) (en la app: <http://127.0.0.1:8787/ayuda.html>) | Primeros pasos, controladores USB (soporte no oficial), errores frecuentes y preguntas frecuentes |
+| [Biblioteca completa de firmware](ayuda-firmwares.html) / [indice Markdown](docs/AYUDA-FIRMWARES.md) | Guias por familia, modelo, revision y version: F4HWN, ARDF, Karina, Bricohams y OpenGD77; menus, configuracion FM/DMR y todas las opciones del catalogo con matriz ON/OFF. Incluida sin red en instaladores y servidor local. Regenerar con `npm run build:help`. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Componentes, flujo de datos, modulos y capas de seguridad |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Decisiones de arquitectura y por que se eligio cada tecnologia |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Instalacion, configuracion, actualizacion y despliegues no soportados |
@@ -18,6 +23,33 @@ Dos espacios con conectores propios WebUSB/Web Serial, operaciones locales y res
 | [SUPPORT.md](SUPPORT.md) / [SECURITY.md](SECURITY.md) | Soporte y reporte privado de vulnerabilidades |
 
 ## Arranque
+
+### Proveedores en la version instalada
+
+- **Repetidores > Configurar API RepeaterBook**: introduce token `rbuapp_`,
+  User-Agent aprobado con contacto y confirma la aprobacion. Se aplica solo a
+  la memoria del servidor hasta reiniciarlo. No se devuelve el token ni se
+  guarda en el navegador. Las variables de entorno existentes siguen siendo
+  otra via de configuracion persistente. Nunca pongas tokens en URLs.
+- **Contactos DMR > Descarga automatica DMR**: descarga e importa al codeplug
+  local abierto un lote RadioID de 1-10 paginas, limitado a 1024 contactos.
+  Ajusta pais/region para no superar la capacidad; si falla una pagina no se
+  importa parcialmente. No es una base masiva de indicativos.
+- **Salas/grupos BrandMeister**: consulta la lista publica por prefijo TG
+  (`214` para Espana). Se importan como llamadas de grupo, no contactos
+  privados, con nombre `TG` mas numero. No activa subscripciones del hotspot
+  ni asigna grupos a canales. No integra DMR+/TGIF ni salas de otras redes.
+- **Quansheng > SAT / pases**: actualiza TLE, consulta una frecuencia FM,
+  calcula el pase y prepara memorias Doppler. Selecciona una plantilla FM
+  de la configuracion leida y pulsa **Cargar SAT / Doppler preparados en
+  configuracion Quansheng**. Son memorias RX escalonadas, no carga orbital
+  nativa ni control del modulo Doppler del firmware. Guarda el binario;
+  escribir sigue requiriendo respaldo completo.
+
+Automatico significa ejecutar el lote al pulsar, no descargas silenciosas al
+arrancar ni sincronizacion periodica. RadioID y la API autenticada RepeaterBook
+necesitan el servidor instalado. BrandMeister tambien admite consulta directa
+en Pages; RepeaterBook permite importar JSON autorizado sin instalar nada.
 
 Requiere Node.js 22+. La unica dependencia runtime es `satellite.js` 6.0.1 (MIT), para propagacion orbital SGP4; se sirve desde el equipo, no desde un CDN. En una copia nueva del repositorio:
 
@@ -34,15 +66,25 @@ La misma aplicacion se puede usar de dos formas. Al arrancar lee `runtime.json`:
 
 | Funcion | Web (sitio estatico) | Local (`npm start`) |
 | --- | --- | --- |
-| Conexion a la radio, copias, edicion de codeplug | Si | Si |
+| Conexion a la radio, copias parciales, edicion offline | Si; OpenGD77 bloquea procesos posteriores sin copia integral del firmware | Igual |
 | Firmware F4HWN | Catalogo desde `api.github.com`; descargas el archivo en la fuente oficial y lo cargas: se verifica tamano y SHA-256 publicado | Descarga verificada por el servidor |
 | Firmware OpenGD77 | ZIP cargado a mano (nombre y formato ZIP comprobados; el editor no publica hash, SHA-256 solo local) | Descarga por el servidor |
 | Contactos RadioID | Cargas `user.csv` de radioid.net (max. 100 MiB, filtro por pais/zona, max. 5000 mostrados) | Consulta a la API a traves del servidor |
 | Perfil (indicativo + ID DMR) | Opcional, solo en tu navegador; marca «(tú)» | No aplica |
-| RepeaterBook | No disponible (solo version instalada) | Si, con tu token aprobado |
+| RepeaterBook | Importacion de JSON autorizado; no consulta autenticada | Si, con tu token aprobado |
+| Grupos BrandMeister | Consulta directa por prefijo e importacion al archivo local | Consulta via servidor |
 | Satelites | `data/satellites.json` generado a diario desde SatNOGS | TLE en directo |
 
 Los datos de satelites cubren NORAD 25544, 27607, 43017 y 43678 (SatNOGS DB / Libre Space Foundation, CC BY-SA 4.0); se avisa si tienen mas de 7 dias. Para publicar tu propia copia en GitHub Pages, ver [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+**Comprobacion CPS OpenGD77:** hay una matriz visible de capacidades y limites
+en su pagina. No se afirma paridad completa ni copia automatica integral del
+firmware MCU. Conectar inicia automaticamente calibracion y codeplug, persiste
+la copia y sus hashes y abre el codeplug para trabajar offline. Mientras falte
+el firmware original, se bloquean operaciones posteriores de radio, incluidas
+nueva lectura y captura, tambien en PRO. Una imagen oficial descargada no sirve
+de respaldo de la unidad ni recupera el firmware comercial ya reemplazado.
+Ver [alcance web y respaldo obligatorio](docs/AYUDA-OPENGD77.md).
 
 ### Instaladores locales
 
@@ -66,7 +108,7 @@ Comprueba el SHA-256 antes de instalar. Los lanzadores abren el navegador predet
 | DM-32 / UV008 con OpenGD77 | Las mismas operaciones a 115200 baudios con Web Serial | Igual: escritura bloqueada | No boot ROM, microcodigo ni flasheo del firmware stock. |
 | Quansheng UV-K1 / UV-K5 V3 PY32F071 con F4HWN v6+ | Identificacion, calibracion 512 B, consulta de slots y CRC | Instalar/borrar slots 1-4 y restablecer bancos 1-4, **solo tras copia completa verificada** | El respaldo Flash fisico requiere Labs v6.1+ con comandos 0x0738. En otras ediciones se conserva la calibracion y se bloquean escrituras si no puede completarse. |
 
-No hay paridad completa con grid.radio ni UV Studio. No se implementan aqui flasheo DFU, restauracion de calibracion, aplicaciones Labs, visor Quansheng, cuentas ni edicion de zonas. Cambiar firmware en Multiboot o seleccionar SetCfg se hace en la propia radio; no hay un comando remoto inventado.
+No hay paridad completa con grid.radio ni UV Studio. No se implementan aqui flasheo DFU, restauracion de calibracion, ejecucion remota de aplicaciones Labs, visor Quansheng, cuentas ni edicion de zonas. La gestion de archivos `.app` se describe mas abajo. Cambiar firmware en Multiboot o seleccionar SetCfg se hace en la propia radio; no hay un comando remoto inventado.
 
 ## Codeplug: contactos, repetidores y satelites
 
@@ -102,7 +144,7 @@ No pegues el token en el chat, el navegador, una URL, un commit o un archivo pub
 En la interfaz puedes consultar por pais/zona y modo (FM; tambien DMR en OpenGD77), o abrir un JSON de exportacion RepeaterBook que tengas autorizacion para usar (`results`, hasta 8 MiB). EE.UU., Canada y Mexico requieren el ID de estado/provincia RepeaterBook. El filtro de zona, texto y banda se aplica a los resultados visibles; los registros sin confirmacion del modo, fuera de rango, no operativos o corruptos se excluyen **con recuento y ejemplos del motivo**.
 
 - **OpenGD77:** elige una plantilla existente del mismo modo del lote y anade a posiciones libres. No se crean valores binarios arbitrarios ni se reordenan canales. Se importan nombre, RX/TX nominal y Color Code cuando corresponda; los otros ajustes vienen de la plantilla. **Todos los canales nuevos quedan solo RX y sin tonos RX/TX heredados.** DMR conserva TS/contacto/lista RX de la plantilla: no se inventa un talkgroup ni un TS del repetidor. Revisa esos parametros en el CPS antes de habilitar TX. Guarda el binario local.
-- **Quansheng:** solo FM; exporta CSV CHIRP con `Duplex=off` (TX desactivada). El TX nominal y tono del proveedor se conservan como comentario para revision. El CSV es un archivo de intercambio, **no** un volcado ni una instalacion. Importalo en una herramienta cuyo controlador admita exactamente tu modelo y firmware; el nombre Quansheng no garantiza compatibilidad con cualquier controlador UV-K5. Los proyectos JSON son datos locales, no formatos nativos de las radios.
+- **Quansheng:** solo FM; lee/abre configuracion logica F4HWN v6 de 41344 bytes y permite anadir canales sobre plantilla o borrar memorias del archivo local. Incluye PMR446 analogicos 1-16 solo RX; repetidores/SAT se preparan desde proveedores. El envio Beta exige respaldo Flash completo y relectura; v6.0 no puede habilitarlo. Tambien exporta CSV CHIRP con `Duplex=off` (TX desactivada): es intercambio, no volcado ni instalacion. Los proyectos JSON tampoco son formatos nativos de radio.
 - Solo se preparan frecuencias VHF 136-174 y UHF 400-470 MHz. Selecciona la banda real de tu unidad: radios monobanda, revisiones distintas y restricciones regionales pueden admitir menos. No se promete compatibilidad universal.
 
 ### SAT y proximos pases
@@ -113,13 +155,13 @@ En la interfaz puedes consultar por pais/zona y modo (FM; tambien DMR en OpenGD7
 4. Autoriza el uso local de posicion y escribe latitud/longitud/altitud o pulsa **Usar mi ubicacion**. Solo entonces se pide permiso al navegador. No se envian coordenadas a los proveedores ni se guardan automaticamente.
 5. Calcula los pases de las proximas 24/48 horas por encima de la elevacion minima elegida. Se usa SGP4 local con posicion del observador, muestras de 5 s y cruces refinados a 0,5 s. Se muestran inicio, maximo, fin, elevacion y azimuts en **UTC**. Se indican los pases ya en curso o truncados por la ventana. Sin relieve, refraccion atmosferica ni garantia de precision de campo.
 6. Puedes exportar un plan JSON (**incluye tu posicion**, consentimiento obligatorio) y el TLE junto a un JSON de procedencia/licencia. Comprueba que el navegador haya guardado ambos archivos del TLE. El plan se invalida al cambiar los parametros y requiere recalcular despues de 15 minutos. Un canal SAT FM preparado es solo RX nominal: no controla Doppler ni habilita un enlace ascendente.
-7. **Canales Doppler (Quansheng UV-K5 V3 / UV-K1 y OpenGD77):** elige un pase calculado y entre 1 y 10 canales. La desviacion Doppler del pase (velocidad radial SGP4) se divide en saltos de frecuencia iguales. Cada canal se sintoniza, en pasos de 10 Hz, al centro de su salto y se usa durante la ventana UTC en que la frecuencia recibida cae en ese salto; las ventanas son mas cortas cerca del maximo acercamiento. Cada canal indica su ventana y su error maximo, que es la mitad de un salto. En un pase de la ISS sobre Madrid, con 5 canales, el error queda por debajo de 0,7 kHz a 145,8 MHz y de 2 kHz a 437,8 MHz. Son solo RX: cambia de memoria a la hora indicada. La radio no sigue el Doppler sola y no se generan subidas TX.
+7. **Canales Doppler (Quansheng UV-K5 V3 / UV-K1 y OpenGD77):** elige un pase calculado y entre 1 y 10 canales. La desviacion Doppler del pase (velocidad radial SGP4) se divide en saltos de frecuencia iguales. Cada canal se sintoniza, en pasos de 10 Hz, al centro de su salto y se usa durante la ventana UTC en que la frecuencia recibida cae en ese salto; las ventanas son mas cortas cerca del maximo acercamiento. Cada canal indica su ventana y su error maximo en los extremos, teniendo en cuenta el redondeo de la frecuencia a 10 Hz y redondeando el error hacia arriba. En un pase de la ISS sobre Madrid, con 5 canales, el error queda por debajo de 0,7 kHz a 145,8 MHz y de 2 kHz a 437,8 MHz. Son solo RX: cambia de memoria a la hora indicada. La radio no sigue el Doppler sola y no se generan subidas TX.
 
 SatNOGS DB / Libre Space Foundation: atribucion de datos [CC BY-SA 4.0](https://wiki.satnogs.org/SatNOGS_DB); sus TLE pueden indicar fuentes orbitales de terceros. Los JSON/CSV derivados conservan atribucion y enlace de licencia. La dependencia SGP4 incluye su licencia MIT en el paquete instalado.
 
 7. **OpenGD77: lista SAT nativa en el codeplug local.** Tras abrir/leer un codeplug de 128 KiB, **Cargar satelite en lista SAT del codeplug local** escribe el satelite en el bloque de datos personalizados **tipo 3** (offset `0x1EE60`, 25 registros de 100 bytes: nombre de 8 caracteres, campos TLE empaquetados por nibbles, frecuencias LE), con el mismo formato que el CPS oficial. Se conservan los satelites existentes (se reemplazan por nombre y se ordenan), la cabecera `OpenGD77` y los demas bloques (imagen de arranque, melodia, tema). Si la zona no tiene cabecera y no esta borrada (`0xFF`), o la cadena de bloques es incoherente, la operacion se cancela sin modificar el archivo. Solo se guarda la bajada (RX1); subida, CTCSS y APRS quedan a cero. **Ver satelites del codeplug** decodifica la lista. Guarda el binario y aplicalo con el CPS oficial: la escritura directa a la radio sigue bloqueada hasta tener respaldo MCU completo.
 
-**Limites de instalacion:** no se ha implementado un formato/protocolo nativo SAT para F4HWN ni la escritura de sus canales de configuracion; se exporta TLE/plan y CSV CHIRP solo RX. La lista SAT OpenGD77 se modifica en el binario local, no en la radio. La escritura OpenGD77 permanece bloqueada hasta verificar una copia completa del firmware MCU, como exige la politica de proteccion. Las nuevas consultas/importaciones no generan permisos de escritura. No hay validacion con radios fisicas.
+**Limites de instalacion:** F4HWN admite aqui memorias FM/SAT escalonadas en la configuracion v6, pero no tabla orbital SAT nativa. El envio de canales es Beta con respaldo completo; solo la lectura se ha probado fisicamente en v6.0. La lista SAT OpenGD77 se modifica en el binario local, no en la radio. La escritura OpenGD77 permanece bloqueada hasta verificar una copia completa del firmware MCU. El borrado local OpenGD77 elimina referencias en las 68 zonas estandar y 64 listas de escaneo, incluidas prioridades y canal TX designado; no renumera otras memorias. No admite zonas extendidas de Scanner. Conserva siempre el archivo original. La UV-K5 V3 no valida hardware OpenGD77. Las consultas/importaciones no generan permisos de escritura.
 
 ## Descargas oficiales de firmware
 
@@ -141,8 +183,10 @@ Las lecturas OpenGD77 no envian el comando de guardar ajustes/VFO ni reinician e
 
 ## Apps de F4HWN Labs y firmware a medida (Quansheng)
 
-- **Apps:** en el espacio Quansheng, **Apps de F4HWN Labs** lista los huecos de apps de la Flash externa, instala un `.app` y lo borra. Solo funciona con la edicion Labs arrancada. Antes de tocar la radio se comprueban la cabecera FAP1 y el CRC del codigo. La app se escribe en este orden: codigo, assets y, al final, la cabecera, de modo que una instalacion interrumpida nunca queda como valida. Despues la verifica el propio firmware. Como el resto de escrituras, exige el respaldo completo. Los `.app` se descargan de [archive/apps de F4HWN](https://github.com/armel/uv-k1-k5v3-firmware-custom/tree/main/archive/apps), usando la carpeta de tu version.
-- **Firmware a medida:** eliges una edicion (Labs, Fusion...) y activas o desactivas opciones `ENABLE_*`. La web genera la peticion para el workflow *Firmware a la carta* del repositorio de compilacion. Al cargar el artefacto descargado (`SHA256SUMS`, `build-info.json`, `.bin`), comprueba cada SHA-256 y deja el `.bin` listo en **Instalar en slot**. El catalogo [f4hwn-options.js](f4hwn-options.js) se regenera con `node scripts/f4hwn-options.cjs <bricohams-firmware>/options/<version>.json > f4hwn-options.js`.
+- **Bricohams V3 local a demanda:** `npm run build:bricohams -- --source "<Fusion61>" --output "<directorio nuevo>" --preset Fusion --option ENABLE_VOX=OFF` compila una edicion independiente sobre el commit fijado de F4HWN v6.1.0. Admite Fusion/Labs/FieldOps/Transfer y opciones booleanas verificadas; mantiene multiboot y genera firmware, mapa, ELF, metadatos, licencias y SHA256SUMS compatibles con el verificador web. No es Karina ni una version V1; tampoco es el catalogo online v6.3.0. Se han compilado Fusion y Labs y verificado reproducibilidad local de Fusion, sin prueba fisica ni flasheo. Instrucciones y resultados en [BRICOHAMS-FIRMWARE.md](docs/BRICOHAMS-FIRMWARE.md).
+- **Biblioteca local Multiboot:** en **Firmware Slots / Multiconfig**, selecciona tu carpeta Multiboot. Los `.bin` se leen en el navegador sin subirse al servidor. Cada imagen indica si cumple las comprobaciones de slots o por que se bloquea. Solo se preparan imagenes F4HWN v6.x con vectores PY32 validos; no Karina V1, stock, versiones antiguas ni variantes packed/SA818/beta/desarrollo. El SHA-256 local no demuestra autenticidad. La instalacion sigue exigiendo respaldo completo y confirmacion; Main permanece protegido. Consulta el [expediente Karina, hardware y viabilidad Bricohams](docs/KARINA.md).
+- **Apps:** en el espacio Quansheng, **Apps de F4HWN Labs** lista los huecos de apps de la Flash externa, instala un `.app` y lo borra. Solo funciona con la edicion Labs arrancada. Antes de tocar la radio se comprueban la cabecera FAP1 y los CRC del codigo y de los assets. La app se escribe en este orden: codigo, assets y, al final, la cabecera. Cada bloque se relee de la Flash fisica y se compara byte a byte; si falla, se cancela sin confirmar la cabecera. La comprobacion final del firmware solo valida la cabecera y compatibilidad, no el CRC del codigo; no sustituye la relectura. Como el resto de escrituras, exige el respaldo completo. Los `.app` se descargan de [archive/apps de F4HWN](https://github.com/armel/uv-k1-k5v3-firmware-custom/tree/main/archive/apps), usando la carpeta de tu version.
+- **Firmware a medida:** eliges una edicion (Labs, Fusion...) y activas o desactivas opciones `ENABLE_*`. La web genera la peticion para el workflow *Firmware a la carta* del repositorio de compilacion. Al cargar el artefacto descargado (`SHA256SUMS`, `build-info.json`, `.bin`), comprueba cada SHA-256 y deja exclusivamente el `.bin` indicado por `build-info.json` listo en **Instalar en slot**. El manifiesto debe cubrir tambien `build-info.json`; se rechazan nombres duplicados. Estos hashes detectan corrupcion, no acreditan autenticidad ni compatibilidad. El catalogo [f4hwn-options.js](f4hwn-options.js) se regenera con `node scripts/f4hwn-options.cjs <bricohams-firmware>/options/<version>.json > f4hwn-options.js`.
 
 ## Copias automaticas y proteccion del equipo
 
@@ -187,7 +231,7 @@ Las pruebas de `tests/connectors.test.cjs` emplean dispositivos simulados: fragm
 
 `tests/site.test.cjs` verifica la marca, el favicon y la ausencia de scripts/estilos en linea en todas las paginas; que el servidor sirve la ayuda y el logotipo con su tipo y cabeceras; las anclas y enlaces locales de la ayuda; que cada mensaje de la tabla de errores existe literalmente en el codigo; los enlaces relativos de toda la documentacion; la licencia, la autoria y los metadatos del paquete; y la ausencia de correos, secretos y caracteres corruptos.
 
-Tambien se comprueban en navegador la interfaz de escritorio/movil, los estados deshabilitados y el almacenamiento IndexedDB. **No hay radio fisica disponible en esta sesion.** No se certifica compatibilidad de campo ni funcionamiento del 100% de los equipos. Antes de usar escrituras en un equipo valioso se necesita validar con hardware de prueba y un procedimiento de recuperacion conocido.
+Tambien se comprueban en navegador la interfaz de escritorio/movil, los estados deshabilitados y el almacenamiento IndexedDB. Se ha probado fisicamente la lectura USB de una unidad declarada UV-K5 V3 con F4HWN v6.0.0; no las escrituras, RF ni radios OpenGD77. No se certifica compatibilidad de campo ni funcionamiento del 100% de los equipos. Antes de usar escrituras en un equipo valioso se necesita validar con hardware de prueba y un procedimiento de recuperacion conocido.
 
 ## Referencias de interoperabilidad
 

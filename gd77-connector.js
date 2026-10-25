@@ -86,10 +86,12 @@
       }
       return out;
     }
-    readCodeplug() {
+    async readCodeplug(permit) {
+      await R.verifyBackup(this, permit);
       return this.run("Leer codeplug", () => this.cps(() => this.readCodeplugRaw()));
     }
-    readScreen() {
+    async readScreen(permit) {
+      await R.verifyBackup(this, permit);
       return this.run("Capturar pantalla", () => this.cps(() => this.readMemory(6, 0, this.family === "MK22" ? 1024 : 160 * 128 / 8)));
     }
     async backup(emit) {
@@ -102,7 +104,7 @@
         await emit("codeplug", codeplug, { contains: "Codeplug estandar 128 KiB; NO es firmware ni clon completo" });
         return {
           complete: false,
-          scope: "Calibracion y codeplug guardados. Escritura bloqueada: no se ha verificado un protocolo de lectura completa del firmware MCU para esta familia. No se sustituye por una imagen descargada."
+          scope: "RESPALDO PARCIAL: calibracion y codeplug guardados; firmware MCU original NO respaldado. Operaciones de radio bloqueadas: no se ha verificado un protocolo de lectura completa del firmware MCU para esta familia. No se sustituye por una imagen descargada."
         };
       }));
     }

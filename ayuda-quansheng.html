@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Quansheng: F4HWN, versiones y configuracion: ayuda de Bricohams por modelo y version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Quansheng: F4HWN, versiones y configuracion | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+</head>
+<body>
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#beta-prueba-usb-real-y-canales">Beta: prueba USB real y canales</a></li><li><a href="#elegir-hardware-antes-de-firmware">Elegir hardware antes de firmware</a></li><li><a href="#matriz-de-versiones-y-formatos">Matriz de versiones y formatos</a></li><li><a href="#que-edicion-elegir">Que edicion elegir</a></li><li><a href="#diccionario-de-menus-de-radio">Diccionario de menus de radio</a></li><li><a href="#rxmode-y-full-watch">RxMode y Full Watch</a></li><li><a href="#slots-y-bancos-cfg-operaciones-distintas">Slots y bancos CFG: operaciones distintas</a></li><li><a href="#labs-y-aplicaciones">Labs y aplicaciones</a></li><li><a href="#problemas-habituales">Problemas habituales</a></li><li><a href="#fuentes-y-mantenimiento">Fuentes y mantenimiento</a></li></ul></nav>
+    <article class="panel"><h1 id="quansheng-f4hwn-versiones-y-configuracion">Quansheng: F4HWN, versiones y configuracion</h1>
+<p>Revision: 25-10-2026. Base funcional inspeccionada: Fusion61, commit <code>f556a96e73c3e423a00cf473aeb37f827cac05a5</code>; catalogo modular web v6.3.0, commit <code>ca3a4271386049e7b459b215cef0ad0eea1a30ca</code>. Esta guia no atribuye automaticamente las funciones v6.1/v6.3 a v4 o v5.</p>
+<h2 id="beta-prueba-usb-real-y-canales">Beta: prueba USB real y canales</h2>
+<p>Prueba de solo lectura realizada el 25-10-2026 en COM4 (USB CDC VID 36B7 / PID FFFF), modelo declarado por el propietario <strong>UV-K5 V3</strong>. La radio identifica <strong>F4HWN v6.0.0</strong>; no se deduce automaticamente la placa.</p>
+<ul>
+<li>Identificacion, calibracion de 512 bytes y configuracion logica de 41344 bytes: correctas. Dos lecturas independientes coinciden byte a byte y por SHA-256.</li>
+<li>Se reconocen 200 canales existentes. Las memorias con frecuencia borrada (<code>0</code>/<code>0xFFFFFFFF</code>) no se muestran aunque conserven atributos residuales, siguiendo la comprobacion del firmware.</li>
+<li>Consulta de slots: Main/Fusion, FieldOps, Labs, Doppler y Ardf, todos v6.0.0. Esto lee cabeceras; no equivale a verificar CRC de cada imagen.</li>
+<li>El comando de Flash fisica <code>0x0738</code> no responde en este firmware. Antes se intentaba durante el respaldo automatico y el timeout invalidaba la conexion. Ahora v6.0 guarda una copia <strong>parcial</strong> (calibracion/configuracion), mantiene la conexion de lectura y explica el bloqueo de escritura, sin intentar ese comando.</li>
+<li>No se han escrito ni borrado canales fisicos, firmware, slots o calibracion. No se han hecho pruebas RF ni pruebas de hardware OpenGD77.</li>
+</ul>
+<h3 id="preparar-y-enviar-memorias-fm">Preparar y enviar memorias FM</h3>
+<ol>
+<li>Seleccionar UV-K5 V3 o UV-K1 segun el equipo. Conectar normalmente o activar <a href="ayuda-configuracion.html">Modo PRO</a> antes de conectar.</li>
+<li>Pulsar <strong>Leer canales del banco activo</strong>. En v6.0 se muestran automaticamente desde la copia parcial. Para trabajar sin radio, abrir una configuracion logica F4HWN v6 de exactamente 41344 bytes, no un firmware ni Flash completa.</li>
+<li>Preparar <strong>PMR446 analogicos 1-16 (solo RX)</strong>, repetidores FM o memorias SAT/Doppler desde el planificador. Seleccionar una memoria FM existente como plantilla y pulsar <strong>Anadir canales al archivo local abierto</strong>.</li>
+<li>Las nuevas memorias tienen TXLock activo, tonos y DTMF desactivados y Reverse desactivado. PMR se prepara estrecho. Solo se importan RX/TX nominales entre 136-174 o 400-470 MHz; esto no autoriza transmitir. Nombres: primeros 10 caracteres ASCII. Se omiten duplicados por nombre truncado/frecuencias/modo.</li>
+<li><strong>Borrar del archivo</strong> elimina una memoria de la copia local, sin resetear bancos CFG ni tocar slots. Guardar el binario editado aparte del original.</li>
+<li><strong>Escribir y releer canales (Beta)</strong> solo se habilita con respaldo completo de esta sesion, mediante Labs v6.1+ con lectura Flash y CRC. Verifica que la radio siga igual que al leerla, escribe bloques de 8 bytes y relee todo. Durante la escritura las memorias afectadas se marcan temporalmente vacias; se reactivan despues de sus datos/nombres. No es una transaccion resistente a apagones. VFO, ajustes, calibracion y bancos distintos estan protegidos.</li>
+<li>Tras exito, reiniciar manualmente la radio para recargar caches. Si falla, conservar respaldo y mensaje exacto; no asumir exito por recibir un ACK.</li>
+</ol>
+<p>El envio se ha verificado con transporte simulado, <strong>no en hardware</strong>: la unidad v6.0 conectada no permite el respaldo completo requerido. No se actualiza ni flashea esa unidad como efecto secundario. La tabla orbital SAT nativa y el seguimiento continuo no se implementan; SAT/Doppler son memorias FM.</p>
+<h2 id="elegir-hardware-antes-de-firmware">Elegir hardware antes de firmware</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Radio/revision</th><th scope="col">Relacion con esta web</th><th scope="col">Regla</th></tr></thead><tbody>
+<tr><td>UV-K1 / UV-K1(8) PY32</td><td>Destino UV-K1 del catalogo/conector</td><td>Verificar placa e identificacion; no imagen V1</td></tr>
+<tr><td>UV-K5 V3 PY32</td><td>Destino UV-K5-V3</td><td>Compartir familia no permite ignorar revision real</td></tr>
+<tr><td>UV-K5(8), UV-K6, UV-K5+ V1</td><td>Karina V1/OneOfEleven u otros proyectos V1</td><td>Fuera del conector de slots PY32</td></tr>
+<tr><td>UV-K5 V2</td><td>Hardware diferente</td><td>Ni V1 ni V3 por parecido exterior</td></tr>
+<tr><td>UV-K5(99) y etiquetas comerciales</td><td>El nombre puede abarcar revisiones diferentes</td><td>Identificar MCU/revision con fuente del proyecto</td></tr>
+<tr><td>TK-11 y Baofeng de aspecto parecido</td><td>No son destinos del conector</td><td>No usar estas imagenes</td></tr>
+</tbody></table></div>
+<p>El manual ARDF advierte incluso de etiquetas V3 en hardware V2. La pegatina ayuda pero no es prueba unica. USB-C no garantiza que cualquier firmware hable el mismo protocolo ni que el puerto sirva para programacion en todas las revisiones.</p>
+<h2 id="matriz-de-versiones-y-formatos">Matriz de versiones y formatos</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Rama</th><th scope="col">Catalogo</th><th scope="col">Ediciones/variantes</th><th scope="col">Escritura desde esta web</th></tr></thead><tbody>
+<tr><td>F4HWN v4.x</td><td>Estables reconocidas con archivo especifico <code>k1</code> o <code>k5v3</code></td><td>Fusion, posibles SA818 segun publicacion</td><td>Solo descarga</td></tr>
+<tr><td>F4HWN v5.x</td><td>Estables reconocidas y hash publicado</td><td>Fusion, posibles SA818</td><td>Solo descarga</td></tr>
+<tr><td>F4HWN v6.x</td><td>Estables reconocidas y hash publicado</td><td>Fusion, FieldOps, Transfer, Labs segun publicacion</td><td>Solo imagenes no SA818, inspeccionadas y con respaldo completo</td></tr>
+<tr><td>Desarrollo/beta/rolling</td><td>Excluidas del catalogo estable</td><td>No se equiparan a release</td><td>Biblioteca bloquea nombres conocidos de esas variantes</td></tr>
+<tr><td>ARDF V3/UV-K1</td><td>Fuente reald separada</td><td>Versiones ARDF-K5v3_K1</td><td>Solo descarga; ver <a href="ayuda-ardf.html">ARDF</a></td></tr>
+<tr><td>Stock</td><td>No se selecciona como F4HWN</td><td>Imagen del fabricante</td><td>No se instala en slots mediante este inspector</td></tr>
+<tr><td>Karina V1</td><td>Documentacion del paquete</td><td>RAW y packed V1</td><td>Bloqueado por incompatibilidad PY32</td></tr>
+<tr><td>Karina V3/K1 de Dim0s</td><td>ZIP inspeccionado separado, con vectores PY32</td><td>RAW y packed por hardware</td><td>No se habilita: multiboot Armel y fuentes no verificados</td></tr>
+<tr><td>Bricohams V3</td><td>Constructor local v6.1.0</td><td>Fusion y Labs generadas</td><td>Preparacion en slots, mismas barreras, experimental</td></tr>
+</tbody></table></div>
+<p>Los nombres historicos Bandscope, Broadcast, Basic, RescueOps o Game que aparecen en documentos antiguos no son equivalentes uno-a-uno a los presets v6. No conviertas sus ajustes por posicion de menu. Para el inventario exacto de opciones y defaults usa <a href="ayuda-opciones-f4hwn.html">opciones</a> y <a href="ayuda-presets-f4hwn.html">presets por commit</a>.</p>
+<p>El selector consulta publicaciones autorizadas, descarta prereleases/drafts, comprueba nombre, version, tamano y digest SHA-256 publicado por GitHub. No muestra un catalogo parcial como si estuviera completo ante errores. La version instalada debe leerse en SysInf, no deducirse del ultimo archivo descargado. Una actualizacion puede cambiar persistencia y compatibilidad CFG.</p>
+<h3 id="inventario-de-publicaciones-reconocido-el-25-10-2026">Inventario de publicaciones reconocido el 25-10-2026</h3>
+<p>Consulta en vivo realizada para UV-K5-V3: 41 imagenes reconocidas, no un listado de todos los archivos de los repositorios. Para UV-K1 las v4 deben ser las imagenes especificas de K1. Cada enlace contiene las notas de esa version; esta tabla no inventa diferencias funcionales no comprobadas entre parches.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Version</th><th scope="col">Ediciones reconocidas</th><th scope="col">Tratamiento</th></tr></thead><tbody>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.3.0" target="_blank" rel="noopener noreferrer">v6.3.0</a></td><td>Fusion, FieldOps, Labs, Transfer</td><td>Preparables tras comprobaciones y respaldo</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.2.0" target="_blank" rel="noopener noreferrer">v6.2.0</a></td><td>Fusion, FieldOps, Labs, Transfer</td><td>Igual; revisar cambios de datos/API</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.1.0" target="_blank" rel="noopener noreferrer">v6.1.0</a></td><td>Fusion, FieldOps, Labs, Transfer</td><td>Base local Bricohams, no misma identidad de edicion</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.0.0" target="_blank" rel="noopener noreferrer">v6.0.0</a></td><td>Fusion, FieldOps, Labs, Transfer</td><td>No asumir lector fisico Labs v6.1+</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.9.0" target="_blank" rel="noopener noreferrer">v5.9.0</a></td><td>Fusion y SA818</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.8.0" target="_blank" rel="noopener noreferrer">v5.8.0</a></td><td>Fusion y SA818</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.7.0" target="_blank" rel="noopener noreferrer">v5.7.0</a></td><td>Fusion y SA818</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.6.1" target="_blank" rel="noopener noreferrer">v5.6.1</a></td><td>Fusion y SA818</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.6.0" target="_blank" rel="noopener noreferrer">v5.6.0</a></td><td>Fusion y SA818</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.5.0" target="_blank" rel="noopener noreferrer">v5.5.0</a></td><td>Fusion y SA818</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.4.0" target="_blank" rel="noopener noreferrer">v5.4.0</a></td><td>Fusion y SA818</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.3.1" target="_blank" rel="noopener noreferrer">v5.3.1</a></td><td>Fusion</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.3.0" target="_blank" rel="noopener noreferrer">v5.3.0</a></td><td>Fusion</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.2.0" target="_blank" rel="noopener noreferrer">v5.2.0</a></td><td>Fusion</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.1.0" target="_blank" rel="noopener noreferrer">v5.1.0</a></td><td>Fusion</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v4.3.2" target="_blank" rel="noopener noreferrer">v4.3.2</a></td><td>Fusion por hardware</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v4.3.1" target="_blank" rel="noopener noreferrer">v4.3.1</a></td><td>Fusion por hardware</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v4.3.0" target="_blank" rel="noopener noreferrer">v4.3.0</a></td><td>Fusion por hardware</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/releases/tag/ARDF-K5v3_K1-v0.5.1" target="_blank" rel="noopener noreferrer">ARDF v0.5.1</a></td><td>ARDF</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/releases/tag/ARDF-K5v3_K1-v0.5" target="_blank" rel="noopener noreferrer">ARDF v0.5</a></td><td>ARDF</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/releases/tag/ARDF-K5v3_K1-v0.4" target="_blank" rel="noopener noreferrer">ARDF v0.4</a></td><td>ARDF</td><td>Solo descarga</td></tr>
+<tr><td><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/releases/tag/ARDF-K5v3_K1-v0.2" target="_blank" rel="noopener noreferrer">ARDF v0.2</a></td><td>ARDF</td><td>Solo descarga</td></tr>
+</tbody></table></div>
+<h2 id="que-edicion-elegir">Que edicion elegir</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Edicion</th><th scope="col">Enfoque del perfil v6</th><th scope="col">Precaucion</th></tr></thead><tbody>
+<tr><td>Fusion</td><td>Uso general, espectro, escaneo, multiboot/CFG segun preset</td><td>No contiene por ello el lector fisico completo de Labs</td></tr>
+<tr><td>FieldOps</td><td>Funciones de campo, Fox Hunt/Beacon y RescueOps segun preset</td><td>Revisar funciones TX; no es homologacion de emergencias</td></tr>
+<tr><td>Transfer</td><td>Enfasis de transferencia/AirCopy segun preset</td><td>Requiere extremo/protocolo compatible, no sustituye copia completa</td></tr>
+<tr><td>Labs</td><td>Apps overlay, diagnostico y lectura/escritura externa cuando habilitada</td><td>Experimental; ABI/API y comandos cambian</td></tr>
+<tr><td>Max</td><td>Perfil disponible en catalogo de opciones v6.3.0</td><td>No asumir que existe binario de release ni que cabe con cualquier cambio</td></tr>
+<tr><td>Custom</td><td>Perfil reducido configurable</td><td>No tiene garantizado multiboot; el builder local aqui no lo acepta</td></tr>
+<tr><td>Bricohams</td><td>Identidad de edicion propia sobre perfiles v6.1.0 fijados</td><td>No es Karina ni firmware oficial firmado</td></tr>
+</tbody></table></div>
+<p>Los valores exactos ON/OFF son mas fiables que el nombre comercial del perfil. Por ejemplo, Labs requiere las opciones concretas de Flash fisica para el respaldo que exige esta web.</p>
+<h2 id="diccionario-de-menus-de-radio">Diccionario de menus de radio</h2>
+<p>Los siguientes nombres proceden de <code>MenuList</code> del codigo v6.1 inspeccionado. Un menu condicionado puede no existir en tu compilacion. Se usa el nombre, no un numero fijo que cambia al incluir/excluir funciones. «Guardar canal» significa persistir la memoria; no todas las modificaciones temporales en MR se guardan automaticamente.</p>
+<h3 id="canal-recepcion-y-tonos">Canal, recepcion y tonos</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Menu</th><th scope="col">Explicacion y comprobacion</th></tr></thead><tbody>
+<tr><td>Step</td><td>Paso del VFO; no ancho del filtro. Elegir el raster del servicio escuchado</td></tr>
+<tr><td>Power</td><td>Nivel RF por canal/VFO. Los valores nominales no garantizan potencia medida</td></tr>
+<tr><td>RxDCS / RxCTCS</td><td>Filtro subaudible de recepcion. Desactivar al diagnosticar silencio</td></tr>
+<tr><td>TxDCS / TxCTCS</td><td>Codigo/tono transmitido. Solo el exigido por el sistema</td></tr>
+<tr><td>TxODir</td><td>Direccion del desplazamiento TX: OFF, + o - en la base inspeccionada</td></tr>
+<tr><td>TxOffs</td><td>Magnitud de desplazamiento. Revisar frecuencia TX resultante</td></tr>
+<tr><td>W/N</td><td>Canal FM ancho/estrecho; SetNFM puede elegir variante estrecha</td></tr>
+<tr><td>BusyCL</td><td>Impide TX cuando el criterio de canal ocupado lo detecta</td></tr>
+<tr><td>Compnd</td><td>Compander de audio; exige compatibilidad del interlocutor</td></tr>
+<tr><td>Mode</td><td>Demodulacion RX disponible en ese build; no cambia hardware ni permisos TX</td></tr>
+<tr><td>TXLock</td><td>Bloqueo de emision del canal; mantener en canales de escucha</td></tr>
+<tr><td>Sql</td><td>Umbral de squelch; cero puede dejar ruido abierto continuamente</td></tr>
+<tr><td>RxMode</td><td>Determina escucha y respuesta TX; comprobar el VFO que emitira</td></tr>
+<tr><td>ChList</td><td>Consulta/seleccion de memorias segun contexto de interfaz</td></tr>
+<tr><td>ChSave</td><td>Guardar en memoria; comprobar destino antes de reemplazar</td></tr>
+<tr><td>ChDele</td><td>Borrar memoria; no equivale a borrar solo el nombre</td></tr>
+<tr><td>ChName</td><td>Nombre de canal; no modifica frecuencia</td></tr>
+</tbody></table></div>
+<h3 id="escaneo-prioridades-y-teclas">Escaneo, prioridades y teclas</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Menu</th><th scope="col">Explicacion y comprobacion</th></tr></thead><tbody>
+<tr><td>ScList</td><td>Lista de escaneo activa; revisar que no este vacia</td></tr>
+<tr><td>ScPri</td><td>Uso de canales prioritarios en el ciclo</td></tr>
+<tr><td>PriCh1 / PriCh2</td><td>Memorias prioritarias; no son VFO A/B</td></tr>
+<tr><td>ScnRev</td><td>Reanudacion: portadora, tiempo o parada segun build</td></tr>
+<tr><td>F1Shrt / F1Long</td><td>Funcion de pulsacion corta/larga del lateral 1</td></tr>
+<tr><td>F2Shrt / F2Long</td><td>Funcion de pulsacion corta/larga del lateral 2</td></tr>
+<tr><td>M Long</td><td>Accion asignada a pulsacion larga de MENU</td></tr>
+<tr><td>KeyLck</td><td>Bloqueo automatico y demora; diferente de SetLck</td></tr>
+<tr><td>1 Call</td><td>Canal de llamada rapida; verificar que la memoria elegida sea correcta</td></tr>
+<tr><td>SetScn</td><td>Modo/velocidad de escaneo cuando se compila; mas rapido no asegura mejor deteccion</td></tr>
+<tr><td>SetKey</td><td>Ajustes de teclas de RescueOps; solo si el perfil lo incluye</td></tr>
+</tbody></table></div>
+<p>En v6.1 se describen 24 listas con nombre mas combinaciones ALL y MIX. ALL omite las memorias excluidas y MIX combina listas seleccionadas. No proyectar esa capacidad sobre v4/v5. Las prioridades de Full Watch provienen de las prioridades de lista; duplicados/entradas invalidas no crean receptores nuevos.</p>
+<h3 id="audio-dtmf-y-emision">Audio, DTMF y emision</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Menu</th><th scope="col">Explicacion y comprobacion</th></tr></thead><tbody>
+<tr><td>TxTOut</td><td>Limite continuo de TX; distinto de elegir el aviso SetTOT</td></tr>
+<tr><td>Mic</td><td>Ganancia de microfono; exceso causa distorsion, no mas potencia util</td></tr>
+<tr><td>MicBar</td><td>Indicador de nivel; no sustituye medida de desviacion</td></tr>
+<tr><td>Beep</td><td>Avisos de teclado/interfaz; ajustar volumen antes de auriculares</td></tr>
+<tr><td>Voice</td><td>Indicaciones de voz solo si estan compiladas</td></tr>
+<tr><td>Roger</td><td>Aviso de fin de TX; usar solo donde este permitido y sea apropiado</td></tr>
+<tr><td>STE / RP STE</td><td>Tratamiento de cola de squelch local/repetidor, dependiente del otro extremo</td></tr>
+<tr><td>ANI ID</td><td>Identificador DTMF cuando la llamada DTMF esta compilada</td></tr>
+<tr><td>UPCode / DWCode</td><td>Secuencias configuradas de identificacion/control DTMF; no enviar a sistemas sin permiso</td></tr>
+<tr><td>PTT ID</td><td>Momento/uso de identificacion al accionar PTT</td></tr>
+<tr><td>D ST</td><td>Audio local asociado a DTMF segun implementacion; no es Time Slot DMR</td></tr>
+<tr><td>D Resp / D Hold</td><td>Respuesta y retencion de llamadas DTMF cuando habilitadas</td></tr>
+<tr><td>D Prel</td><td>Parametro de preambulo/temporizacion DTMF; conservar default salvo requisito del sistema</td></tr>
+<tr><td>D Decd / D List</td><td>Decodificacion/lista DTMF de la funcion de llamadas</td></tr>
+<tr><td>D Live</td><td>Visualizacion de DTMF recibido; no convierte la señal en privada</td></tr>
+<tr><td>VOX</td><td>Disparo por audio; desactivar para diagnostico y para evitar TX accidental</td></tr>
+<tr><td>SetPwr</td><td>Nivel de usuario usado por Power=USER</td></tr>
+<tr><td>SetPTT</td><td>PTT clasico o enclavado OnePush; el segundo puede seguir emitiendo al soltar</td></tr>
+<tr><td>SetTOT</td><td>Tipo de aviso de timeout, no su duracion</td></tr>
+<tr><td>SetEOT</td><td>Aviso de fin de emision; revisar sonido/visual segun uso</td></tr>
+<tr><td>SetRxA</td><td>Perfil de audio RX cuando AUDIO esta habilitado</td></tr>
+<tr><td>SetVol</td><td>Ajuste de audio RX por firmware, distinto del mando fisico</td></tr>
+<tr><td>SetNFM</td><td>Variante de filtro estrecho 12.5/6.25 kHz documentada por upstream; no paso VFO</td></tr>
+</tbody></table></div>
+<h3 id="pantalla-energia-y-opciones-avanzadas">Pantalla, energia y opciones avanzadas</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Menu</th><th scope="col">Explicacion y comprobacion</th></tr></thead><tbody>
+<tr><td>BatSav</td><td>Ahorro de recepcion; puede retrasar deteccion de actividad</td></tr>
+<tr><td>BatTxt</td><td>Presentacion de bateria</td></tr>
+<tr><td>ChDisp</td><td>Nombre/frecuencia/numero segun modo de visualizacion</td></tr>
+<tr><td>POnMsg</td><td>Mensaje de encendido; no prueba autenticidad del firmware</td></tr>
+<tr><td>BLTime</td><td>Tiempo de retroiluminacion</td></tr>
+<tr><td>BLMin / BLMax</td><td>Brillo minimo/maximo; deben resultar legibles</td></tr>
+<tr><td>BLTxRx</td><td>Activacion de luz durante TX/RX</td></tr>
+<tr><td>SysInf</td><td>Version/build, bateria y paginas de diagnostico segun opciones</td></tr>
+<tr><td>SetCtr</td><td>Contraste de pantalla, no ganancia RF</td></tr>
+<tr><td>SetInv</td><td>Inversion de colores/pixeles</td></tr>
+<tr><td>SetLck</td><td>Alcance del bloqueo: teclas o tambien PTT segun build</td></tr>
+<tr><td>SetMet</td><td>Estilo del S-meter; cifras no equivalen a instrumento calibrado de banco</td></tr>
+<tr><td>SetGUI</td><td>Estilo/tamano de informacion VFO</td></tr>
+<tr><td>SetTmr</td><td>Visualizacion de tiempos RX/TX</td></tr>
+<tr><td>SetOff</td><td>Temporizador de deep sleep; puede interrumpir una sesion</td></tr>
+<tr><td>SetSav</td><td>Presentacion/logo de ahorro cuando compilado</td></tr>
+<tr><td>SetCfg</td><td>Aplicar otro banco de configuracion sin cambiar firmware</td></tr>
+<tr><td>SetNWR</td><td>Funcion NOAA si compilada y aplicable a la region</td></tr>
+<tr><td>F Lock</td><td>Perfil de bandas; no homologacion ni permiso para ampliar TX</td></tr>
+<tr><td>350 En</td><td>Acceso de recepcion a un rango adicional segun build; no implica emision autorizada</td></tr>
+<tr><td>FrCali</td><td>Ajuste de referencia de frecuencia si se compila; requiere instrumental</td></tr>
+<tr><td>BatCal</td><td>Calibracion de lectura de tension; no cargar valores de otra unidad</td></tr>
+<tr><td>BatTyp</td><td>Perfil de capacidad de bateria; no reparacion ni calibracion RF</td></tr>
+<tr><td>SetNav</td><td>Disposicion de navegacion UV-K1 frente a UV-K5 V3</td></tr>
+<tr><td>Reset</td><td>Restauracion de ajustes; alcance dependiente del build, con riesgo de perdida</td></tr>
+</tbody></table></div>
+<p>Menus <code>Scramb</code>, <code>Tx 200</code>, <code>Tx 350</code>, <code>Tx 500</code>, <code>ScraEn</code> o <code>NOAA-S</code> pueden aparecer en ramas sin la capa F4HWN. Se citan para identificacion historica, no como opciones habilitadas en los perfiles publicados ni instrucciones para desbloquear emisiones. Un scrambler no debe tratarse como cifrado seguro.</p>
+<h2 id="rxmode-y-full-watch">RxMode y Full Watch</h2>
+<p>En v6.1 Full Watch visita VFO A, B y prioridades validas. No son cuatro receptores independientes. FULL RX/RESPOND puede responder en el ultimo canal recibido; MAIN TX/FULL RX mantiene TX en el principal. Antes de usar PTT verifica la indicacion de destino. Para diagnostico elige MAIN ONLY. Los modos DUAL/CROSS de pantalla no deben confundirse con configuracion de repetidor ni asumirse como repeticion automatica entre bandas.</p>
+<h2 id="slots-y-bancos-cfg-operaciones-distintas">Slots y bancos CFG: operaciones distintas</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Elemento</th><th scope="col">Contenido</th><th scope="col">Cambiarlo implica</th></tr></thead><tbody>
+<tr><td>Main</td><td>Copia base gestionada por firmware, no bootloader</td><td>Protegido por la web</td></tr>
+<tr><td>Slot 1-4</td><td>Imagen de firmware adicional en Flash externa</td><td>Restaurar una imagen al procesador desde la radio</td></tr>
+<tr><td>CFG M/1-4</td><td>Canales, VFO, ajustes y listas independientes</td><td>Cargar otra configuracion compatible</td></tr>
+<tr><td>App Labs</td><td>Codigo/recursos con ABI/API especifica</td><td>Ejecutar una funcion en overlay RAM, no cambiar firmware completo</td></tr>
+</tbody></table></div>
+<p>En el upstream v6.1 inspeccionado se abre el selector con MENU al encender. Confirmar restauracion en la propia radio; no apagar durante ella. SetCfg cambia banco sin restaurar firmware. La web no inventa un comando remoto para ninguna de estas acciones.</p>
+<p>Para preparar desde biblioteca, elegir carpeta, seleccionar entrada admitida, revisar nombre/hash y pulsar Preparar. No escribe. Instalar requiere conexion compatible, respaldo Flash completo y confirmacion. Se verifica CRC del slot. Vectores y cadena F4HWN correctos no prueban que el codigo sea autentico.</p>
+<h2 id="labs-y-aplicaciones">Labs y aplicaciones</h2>
+<p>La base inspeccionada documenta 16 huecos y apps de radio, APRS, SSTV, diagnostico y demos. El conjunto cambia entre releases; no todas las apps estan disponibles ni son compatibles con todos los builds.</p>
+<p>El conector comprueba FAP1, limites de codigo/recursos y CRC de recursos, y relee bloques escritos. La aceptacion de cabecera no demuestra que una app pueda ejecutarse: ABI, API y capacidades pueden rechazarla al cargar/ejecutar. Usa firmware y apps de la misma publicacion. Instalar una app de origen desconocido equivale a dar codigo nativo acceso a la radio.</p>
+<p>APRS TX requiere configuracion legal de indicativo/SSID, posicion y ruta. No transmite esta web por cargar un <code>.app</code>; no se configuran balizas automaticas como parte de un respaldo. Las funciones de emergencia/EPIRB se citan como inventario upstream: no probar emisiones en frecuencias de socorro.</p>
+<h2 id="problemas-habituales">Problemas habituales</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Sintoma</th><th scope="col">Revision</th></tr></thead><tbody>
+<tr><td>Arranca pero no aparece SetCfg</td><td>Comprobar opciones multiboot del build, no solo version</td></tr>
+<tr><td>Slot visible con datos pero CRC incorrecto</td><td>No restaurar; conservar archivo y respaldo</td></tr>
+<tr><td>USB identifica pero lectura Flash falla</td><td>Puede faltar comando fisico Labs; cerrar otros programas y registrar build</td></tr>
+<tr><td>Teclas parecen invertidas</td><td>Revisar SetNav/modelo; no flashear otra familia para corregirlo</td></tr>
+<tr><td>Cambio de ajustes desaparece</td><td>Guardar memoria o comprobar banco CFG y persistencia</td></tr>
+<tr><td>No se oye un repetidor</td><td>RX, modo, SQL y filtro RX; no empezar aumentando potencia TX</td></tr>
+<tr><td>Una app no se ejecuta</td><td>Verificar ABI/API/caps y release, no repetir escrituras a ciegas</td></tr>
+<tr><td>SA818 o packed bloqueado</td><td>Es intencionado; no renombrar para eludir la restriccion</td></tr>
+</tbody></table></div>
+<h2 id="fuentes-y-mantenimiento">Fuentes y mantenimiento</h2>
+<ul>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">Proyecto PY32 y README</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases" target="_blank" rel="noopener noreferrer">Publicaciones por version</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/ca3a4271386049e7b459b215cef0ad0eea1a30ca/CMakePresets.json" target="_blank" rel="noopener noreferrer">Presets v6.3.0 fijados</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/App/ui/menu.c" target="_blank" rel="noopener noreferrer">Menu v6.1 inspeccionado</a>.</li>
+<li><a href="https://armel.github.io/uvtools2/" target="_blank" rel="noopener noreferrer">UVTOOLS2 del proyecto</a>.</li>
+<li><a href="https://github.com/armel/uv-k5-chirp-driver" target="_blank" rel="noopener noreferrer">Driver CHIRP dedicado</a>.</li>
+<li><a href="ayuda-bricohams.html">Bricohams, hashes y compilacion</a>.</li>
+<li><a href="ayuda-karina.html">Karina V1 y limites de licencia/fuentes</a>.</li>
+</ul>
+<p>Para un firmware stock, UVMOD o OneOfEleven consultar su proyecto y hardware exactos: no hay equivalencia de menus/EEPROM garantizada con esta guia. Para los enlaces añadidos por el usuario, ver <a href="ayuda-egzumer.html">Egzumer V1</a> y <a href="ayuda-pack-dim0s.html">pack Dim0s con Karina V3/K1</a>.</p></article>
+    <footer><p>Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia. <a href="ayuda-firmwares.html">Volver al indice</a>.</p></footer>
+  </main>
+</body>
+</html>

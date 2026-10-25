@@ -21,6 +21,16 @@
     <section class="detail-hero"><span class="eyebrow accent">CENTRO DE AYUDA</span><h1>Ayuda y soporte<span>Bricohams Radio Workspace</span></h1>
       <p>Cómo funciona la aplicación, cómo resolver errores, qué controladores USB necesitas y cómo pedir ayuda. Los controladores de esta guía son <strong>soporte no oficial de la comunidad</strong>: los fabricantes y los proyectos de firmware no los respaldan a través de esta aplicación.</p></section>
     <div class="help-search"><label for="help-filter">Buscar en la ayuda</label><input id="help-filter" type="search" placeholder="Ej.: WinUSB, CRC, RepeaterBook, TLE" maxlength="60" autocomplete="off"><p id="help-filter-status" role="status" class="card-note"></p></div>
+    <section class="panel help-section" id="manuales" data-help><h2>Biblioteca de firmware, modelos y configuraciones</h2>
+      <p><a href="ayuda-firmwares.html">Abrir la biblioteca completa</a>: guías por versión y hardware, explicación de ajustes y límites reales de la web.</p>
+      <ul><li><a href="ayuda-configuracion.html">Configuración común, repetidores, satélites y USB</a></li>
+        <li><a href="ayuda-quansheng.html">Quansheng F4HWN: versiones, menús, slots y CFG</a></li>
+        <li><a href="ayuda-opciones-f4hwn.html">Todas las opciones de compilación F4HWN</a> · <a href="ayuda-presets-f4hwn.html">Valores ON/OFF por edición</a></li>
+        <li><a href="ayuda-ardf.html">ARDF: ganancia, ciclos y configuración</a></li>
+        <li><a href="ayuda-egzumer.html">Egzumer original: fuentes V1 y opciones</a> · <a href="ayuda-pack-dim0s.html">Pack Dim0s y Karina V3/UV-K1</a></li>
+        <li><a href="ayuda-opengd77.html">OpenGD77: configuración FM/DMR</a> · <a href="ayuda-opengd77-modelos.html">Modelos, alias y revisiones</a></li>
+        <li><a href="ayuda-karina.html">Karina V1: expediente técnico</a> · <a href="ayuda-bricohams.html">Bricohams V3: compilación modular</a></li></ul>
+    </section>
     <nav class="help-toc panel" aria-label="Índice de la ayuda"><h2>Índice</h2><ol>
       <li><a href="#inicio">Inicio rápido</a></li><li><a href="#funcionamiento">Cómo funciona</a></li><li><a href="#opengd77">OpenGD77</a></li>
       <li><a href="#quansheng">Quansheng F4HWN</a></li><li><a href="#codeplug">Contactos, repetidores y satélites</a></li><li><a href="#firmware">Firmware oficial</a></li>
@@ -43,7 +53,7 @@
         <li>Instala <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">Node.js 22 o posterior</a>.</li>
         <li>En la carpeta del proyecto ejecuta <code>npm ci --ignore-scripts</code> y después <code>npm start</code>.</li>
         <li>Abre <code>http://127.0.0.1:8787</code> en <strong>Chrome, Edge o Brave de escritorio</strong>. Si escribes <code>localhost</code>, el servidor te redirige a esa dirección para no separar el almacenamiento de las copias; otras IP se rechazan por seguridad.</li>
-        <li>Elige tu familia (OpenGD77 o Quansheng), el modelo exacto, marca la confirmación y pulsa <strong>Conectar y respaldar</strong>.</li>
+        <li>Elige tu familia (OpenGD77 o Quansheng), el modelo exacto, marca la confirmación o activa <strong>Modo PRO</strong> para esta sesión y pulsa <strong>Conectar y respaldar</strong>. PRO evita confirmaciones repetitivas, no elimina permisos del navegador, respaldos ni CRC. Todo el proyecto está en fase <strong>Beta / validación</strong>.</li>
         <li>Espera a que termine la copia automática y exporta el archivo <code>.rwb.json</code>. Sin copia verificada no se habilita ninguna escritura.</li>
       </ol>
       <p class="card-note">Firefox y Safari no ofrecen WebUSB/Web Serial. Las ventanas privadas pueden borrar las copias al cerrarse.</p>
@@ -89,7 +99,7 @@
       <ul class="feature-list">
         <li><strong>Contactos RadioID</strong> (solo OpenGD77): busca por país y estado, pagina, selecciona y añade al codeplug abierto. Se omiten duplicados.</li>
         <li><strong>Repetidores RepeaterBook</strong>: requiere que RepeaterBook apruebe esta aplicación y te dé un token individual <code>rbuapp_</code>, configurado solo en el servidor. Alternativa: importar una exportación JSON autorizada. Todos los canales nuevos quedan <strong>solo RX</strong>.</li>
-        <li><strong>Satélites</strong>: elige un NORAD, actualiza el TLE (SatNOGS o CelesTrak), consulta frecuencias FM y calcula pases localmente con tu posición (con consentimiento). En OpenGD77 puedes cargarlo en la lista SAT nativa; en Quansheng se exporta CSV CHIRP y TLE.</li>
+        <li><strong>Satélites</strong>: elige un NORAD, actualiza el TLE (SatNOGS o CelesTrak), consulta frecuencias FM y calcula pases localmente con tu posición (con consentimiento). En OpenGD77 puedes cargarlo en la lista SAT nativa; en Quansheng puedes añadir memorias FM a la configuración F4HWN v6 o exportar CSV CHIRP y TLE. La escritura Beta exige respaldo completo; F4HWN v6.0 permanece en solo lectura.</li>
       </ul>
     </section>
 

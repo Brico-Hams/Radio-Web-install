@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Karina: expediente tecnico y limites de una derivacion Bricohams: ayuda de Bricohams por modelo y version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Karina: expediente tecnico y limites de una derivacion Bricohams | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+</head>
+<body>
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#1-estado-y-alcance">1. Estado y alcance</a></li><li><a href="#2-metodo-y-fuentes-de-evidencia">2. Metodo y fuentes de evidencia</a></li><li><a href="#3-inventario-del-paquete">3. Inventario del paquete</a></li><li><a href="#4-hardware-y-memoria-no-confundir-v1-y-v3">4. Hardware y memoria: no confundir V1 y V3</a></li><li><a href="#5-documentacion-funcional-de-karina">5. Documentacion funcional de Karina</a></li><li><a href="#6-chirp-lo-que-hay-y-lo-que-no-prueba">6. CHIRP: lo que hay y lo que no prueba</a></li><li><a href="#7-compilacion-modular-parches-y-multiboot">7. Compilacion modular, parches y multiboot</a></li><li><a href="#8-biblioteca-local-multiboot-integrada-en-la-web">8. Biblioteca local Multiboot integrada en la web</a></li><li><a href="#9-contrato-necesario-para-una-version-bricohams-reproducible">9. Contrato necesario para una version Bricohams reproducible</a></li><li><a href="#10-recuperacion-y-limites-operativos">10. Recuperacion y limites operativos</a></li><li><a href="#11-fuentes-externas-consultadas">11. Fuentes externas consultadas</a></li></ul></nav>
+    <article class="panel"><h1 id="karina-expediente-tecnico-y-limites-de-una-derivacion-bricohams">Karina: expediente tecnico y limites de una derivacion Bricohams</h1>
+<p>Fecha de inspeccion: 2026-10-25.</p>
+<h2 id="1-estado-y-alcance">1. Estado y alcance</h2>
+<p><strong>Nueva evidencia del 25-10-2026:</strong> el enlace Dim0s aportado despues contiene otro paquete Karina para <strong>V3 y UV-K1</strong>, con vectores PY32. Este expediente describe el paquete <strong>V1 local</strong>, no todas las variantes Karina existentes. El <a href="ayuda-pack-dim0s.html">informe Karina V3 y pack Dim0s</a> documenta la descarga, inventario y hashes. No se ha demostrado compatibilidad con slots Armel ni se han encontrado fuentes/aviso MIT en ese ZIP.</p>
+<p>Este documento describe evidencias del paquete local <strong>Karina-2026.08.21 K5V1 (Fw+Cal+Instr+K5prog+Rolling)</strong> y las compara con las referencias abiertas indicadas por el usuario. No es codigo fuente recuperado, una traduccion integral de sus manuales ni una certificacion del firmware. No se ha creado un binario Karina Bricohams, modificado el bootloader, flasheado una radio ni probado multiboot V1. Si se ha construido una <strong>edicion Bricohams V3 independiente basada en F4HWN</strong>, descrita en <a href="ayuda-bricohams.html">BRICOHAMS-FIRMWARE.md</a>; no incorpora codigo Karina ni pretende ser su port.</p>
+<p><strong>Bloqueo para derivar Karina:</strong> el paquete no contiene fuentes C, assembler, linker, Makefile ni una licencia del firmware. Tener un <code>.bin</code> no proporciona su proyecto de compilacion ni permite atribuirle la licencia de otro proyecto. Los tres archivos Python son controladores CHIRP, no firmware del procesador.</p>
+<p>Actualizacion del usuario: indica que «la licencia es MIT». Se registra como declaracion aportada, pendiente de identificar componente, titular y texto o fuente verificable. No se ha encontrado ese aviso en el paquete inspeccionado ni se cambian por ello las licencias de los drivers o F4HWN. Aunque se confirme MIT para Karina, sigue faltando su proyecto fuente para una recompilacion.</p>
+<p>Se pueden documentar funciones observadas y preparar una implementacion propia sobre una base abierta. No se debe anunciar esa implementacion como Karina recompilada ni afirmar equivalencia sin verificarla.</p>
+<h2 id="2-metodo-y-fuentes-de-evidencia">2. Metodo y fuentes de evidencia</h2>
+<ul>
+<li>Inventario recursivo de la carpeta suministrada, sin ejecutar EXE, drivers ni binarios.</li>
+<li>SHA-256 y lectura de los primeros vectores de las imagenes.</li>
+<li>Extraccion de texto de cinco PDF, 102 paginas en total, con PDF.js en un directorio de herramientas aislado, fuera de las dependencias de la web.</li>
+<li>Consulta de los README, Makefile, linker y licencia de las referencias abiertas.</li>
+<li>Contraste de las imagenes locales con las comprobaciones del conector PY32.</li>
+</ul>
+<p>Los PDF produjeron advertencias de fuentes durante la extraccion. Los diagramas, colores de las versiones estables/de prueba y capturas no se han verificado visualmente pagina a pagina. Por ello no se infiere estabilidad a partir de un color perdido ni se considera que el inventario documente exhaustivamente la implementacion interna. Los resumenes siguientes son propios y no reproducen los manuales completos.</p>
+<h2 id="3-inventario-del-paquete">3. Inventario del paquete</h2>
+<p>24 archivos: 13 <code>.bin</code>, 5 PDF, 3 <code>.py</code>, 1 <code>.exe</code>, 1 <code>.ini</code>, 1 <code>.txt</code>.</p>
+<h3 id="3-1-imagenes-y-datos">3.1. Imagenes y datos</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Archivo</th><th scope="col">Bytes</th><th scope="col">Clasificacion prudente</th></tr></thead><tbody>
+<tr><td><code>v1_210826_2.bin</code></td><td>61412</td><td>Imagen Karina V1 del paquete mas reciente por nombre</td></tr>
+<tr><td><code>v1_210826_2.packed.bin</code></td><td>61430</td><td>Contenedor de actualizacion, no imagen RAW intercambiable</td></tr>
+<tr><td><code>30.07fw_2.bin</code></td><td>61280</td><td>Imagen anterior; el nombre no certifica estabilidad</td></tr>
+<tr><td><code>30.07fw_2.packed.bin</code></td><td>61298</td><td>Variante empaquetada de la anterior</td></tr>
+<tr><td><code>16.10fw_7.bin</code></td><td>61040</td><td>Imagen historica; ano no demostrado por el nombre</td></tr>
+<tr><td><code>Config-29.01.26.bin</code></td><td>7424</td><td>Configuracion; no firmware</td></tr>
+<tr><td><code>28.11.25calib_mic.bin</code></td><td>512</td><td>Datos etiquetados como calibracion de microfono</td></tr>
+<tr><td><code>29.01.26calib_sql.bin</code></td><td>512</td><td>Datos etiquetados como calibracion SQL</td></tr>
+<tr><td><code>30.07calib_mic.bin</code></td><td>512</td><td>Datos etiquetados como calibracion de microfono</td></tr>
+<tr><td><code>30.07calib_sql.bin</code></td><td>512</td><td>Datos etiquetados como calibracion SQL</td></tr>
+<tr><td><code>Rolling back (BACKUP)/k5_v4.00.07_publish.bin</code></td><td>58726</td><td>Imagen de recuperacion del paquete; origen sin verificar</td></tr>
+<tr><td><code>Rolling back (BACKUP)/Reborn-RUS.bin</code></td><td>61006</td><td>Otro firmware; no asumir que sea Karina</td></tr>
+<tr><td><code>Rolling back (BACKUP)/my_calibration-FIRST-Power.bin</code></td><td>512</td><td>Posible calibracion especifica de otra unidad</td></tr>
+</tbody></table></div>
+<p>Las etiquetas <code>calib</code> no prueban que un archivo sea el respaldo original de la radio del usuario. <strong>No aplicar calibraciones ajenas ni incluirlas en un repositorio publico.</strong> El EXE K5prog tampoco se ha ejecutado ni certificado.</p>
+<h3 id="3-2-huellas-verificadas">3.2. Huellas verificadas</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Archivo</th><th scope="col">SHA-256</th></tr></thead><tbody>
+<tr><td><code>v1_210826_2.bin</code></td><td><code>c7612a86325d10d768efc9fc7330bede203226879aae0a7d6f026418d55166f9</code></td></tr>
+<tr><td><code>v1_210826_2.packed.bin</code></td><td><code>7690da5a740fb24c9a36e711f0410c27b7e99e9ab450d0ef0cdc161b21c11c52</code></td></tr>
+<tr><td><code>30.07fw_2.bin</code></td><td><code>9e97e28325468a70aebe19a288cd44878e16ad705f05485c92d2bf9dc50f05b7</code></td></tr>
+<tr><td><code>30.07fw_2.packed.bin</code></td><td><code>e53b74b9e755175b72acec8e470e90db0c7c08ac53f1023e10e7e3faeee2d08f</code></td></tr>
+<tr><td><code>16.10fw_7.bin</code></td><td><code>af51612d4d20b2637c6da2c72d62493f537621685c1ab604165f0e05fc1fe1ee</code></td></tr>
+</tbody></table></div>
+<p>Son huellas calculadas localmente, no hashes contrastados con una publicacion firmada del autor.</p>
+<h3 id="3-3-manuales">3.3. Manuales</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Documento local</th><th scope="col">Paginas</th><th scope="col">Uso en este expediente</th></tr></thead><tbody>
+<tr><td><code>00-UV-K5V1-КРАТКО установка и настройка.pdf</code></td><td>2</td><td>Introduccion de instalacion y configuracion</td></tr>
+<tr><td><code>01-UV-K5V1-ПОДРОБНО-Прошивка, Восстановление, CHIRP.pdf</code></td><td>17</td><td>Referencia de instalacion, recuperacion y CHIRP</td></tr>
+<tr><td><code>02-UV-K5V1_Инструкция Karina_21.08.26.pdf</code></td><td>29</td><td>Referencia funcional principal de agosto de 2026</td></tr>
+<tr><td><code>03-UV-K5V1_История версий Karina.pdf</code></td><td>16</td><td>Historial de cambios, no sustituto del codigo fuente</td></tr>
+<tr><td><code>UV-K5(8)_FW_Karina_mod_15.06.2025-R8.pdf</code></td><td>38</td><td>Manual anterior, no equivalente automaticamente al de 2026</td></tr>
+</tbody></table></div>
+<h2 id="4-hardware-y-memoria-no-confundir-v1-y-v3">4. Hardware y memoria: no confundir V1 y V3</h2>
+<p>La portada del manual principal identifica UV-K5, UV-K5+, UV-K5(8) y UV-K6 <strong>V1</strong>. La radio descrita antes por el usuario era <strong>UV-K5 V3</strong>.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Familia</th><th scope="col">Base relevante</th><th scope="col">Consecuencia</th></tr></thead><tbody>
+<tr><td>UV-K5 V1</td><td>Ecosistema DP32G030 / referencia OneOfEleven</td><td>Imagen y mapa distintos; sin soporte de slots V3 en esta web</td></tr>
+<tr><td>UV-K5 V3 / UV-K1</td><td>F4HWN PY32F071 en <code>Multiboot/Fusion61</code></td><td>Conector existente de slots 1-4 y Main protegido</td></tr>
+</tbody></table></div>
+<p>En <code>v1_210826_2.bin</code> se leen <code>SP=0x20003FF0</code> y <code>Reset=0x0000010B</code>. Los RAW <code>16.10fw_7.bin</code> y <code>30.07fw_2.bin</code> presentan esos mismos vectores. El conector V3 espera un reset Thumb dentro de la aplicacion a partir de <code>0x08002800</code>. Karina V1 <strong>no pasa</strong> esa comprobacion.</p>
+<p>El linker consultado de OneOfEleven declara 60 KiB de FLASH y 16 KiB de RAM. Los 61412 bytes de la imagen Karina dejan solo 28 bytes frente a 60 KiB; es una comparacion de tamanos con esa referencia, no un mapa interno de Karina. No demuestra espacio para otro firmware ni para un gestor de arranque. Los 18 bytes adicionales de los <code>.packed.bin</code> no son espacio libre utilizable.</p>
+<p>La portada del manual Karina advierte que no soporta Si4732 y que las memorias ampliadas M24M01/M24M02 no se aprovechan como memoria ampliada. No hay evidencia en el paquete de slots de firmware compatibles con el Multiboot F4HWN V3.</p>
+<h2 id="5-documentacion-funcional-de-karina">5. Documentacion funcional de Karina</h2>
+<p>Las funciones de esta seccion proceden del texto del manual, no de pruebas con hardware ni de inspeccion del codigo de implementacion.</p>
+<h3 id="5-1-pantalla-y-estado-manual-principal-paginas-3-4">5.1. Pantalla y estado (manual principal, paginas 3-4)</h3>
+<ul>
+<li>Presentacion de VFO/canales y ultimo receptor activo.</li>
+<li>Indicadores de ahorro, bloqueo de teclado y modo de funcion.</li>
+<li>Doble escucha, informacion CTCSS/DCS y pertenencia a listas de escaneo.</li>
+<li>Bateria, medidor de senal, nombres y frecuencia.</li>
+<li>Indicacion de modos AM/FM/SSB; la etiqueta SSB no demuestra un receptor con prestaciones equivalentes a un equipo SSB dedicado.</li>
+</ul>
+<h3 id="5-2-menus-y-persistencia-paginas-5-9">5.2. Menus y persistencia (paginas 5-9)</h3>
+<ul>
+<li>SQL, paso de sintonia, potencia, desplazamiento, tonos y ancho de banda.</li>
+<li>Bloqueo de canal ocupado, guardado de memoria y estilo de nombres.</li>
+<li>Ahorro de energia, VOX, doble escucha y comportamiento de escaneo.</li>
+<li>Ajustes de audio RX/TX y funciones especificas de filtrado.</li>
+<li>Menus ocultos y parametros avanzados: deben documentarse contra fuentes antes de exponerlos en una compilacion Bricohams.</li>
+</ul>
+<p>El manual distingue parametros por VFO, banda y memoria, y explica que algunos cambios de canal solo persisten tras guardado explicito. Un port no debe confundir ajustes temporales con datos persistidos.</p>
+<h3 id="5-3-teclado-escucha-y-escaneo-paginas-10-16">5.3. Teclado, escucha y escaneo (paginas 10-16)</h3>
+<ul>
+<li>Acciones cortas, largas y combinaciones con la tecla de funcion.</li>
+<li>Cambio VFO/MR, copia de ajustes y entrada de frecuencia.</li>
+<li>Escaneo y funciones asignables a teclas laterales.</li>
+<li>El manual advierte de posibles problemas al asignar <code>NONE</code> a FN1/FN2 mediante herramientas externas; la compatibilidad del driver debe verificarse.</li>
+</ul>
+<p>El manual tambien describe funciones de TX automatico y aleatorizacion. Su presencia en la documentacion no las convierte en requisitos del nuevo firmware. No se automatizan ni se proporcionan aqui secuencias para interferir servicios. Una derivacion inicial debe mantener limitaciones legales y TX automatico apagado.</p>
+<h3 id="5-4-analizador-de-espectro-paginas-17-24">5.4. Analizador de espectro (paginas 17-24)</h3>
+<ul>
+<li>Pantalla de espectro y visualizacion de actividad.</li>
+<li>Sintonia, seleccion de frecuencia activa y relacion con las memorias.</li>
+<li>Rangos de entrada libre y presets.</li>
+<li>Multipreset y parametros de exploracion.</li>
+<li>Vista detallada denominada VFO-PRO.</li>
+<li>Parametros de ganancia y registros del receptor, incluyendo LNA/PGA.</li>
+<li>El manual indica que determinados parametros pueden escribirse en calibracion al salir del espectro: no tratarlos como controles visuales inocuos.</li>
+</ul>
+<p>No se han verificado algoritmos, filtros, tiempos, limites ni asignaciones de registros en fuentes Karina. No es correcto implementar supuestos offsets a partir de capturas o textos.</p>
+<h3 id="5-5-diagnostico-y-evolucion-paginas-25-29-e-historial-separado">5.5. Diagnostico y evolucion (paginas 25-29 e historial separado)</h3>
+<p>El manual incluye problemas de uso y configuracion; el historial relaciona cambios de recepcion, squelch, ahorro, escaneo, subtonos y espectro. La entrada de 21-08-2026 menciona una correccion de bloqueo de recepcion asociada a un modo descrito como Roger 5 y referencia <code>29.01.26calib_sql.bin</code>. Esto no certifica que ese archivo sea adecuado para otra unidad.</p>
+<p>El historial alcanza versiones de 2023-2026. Su codificacion por colores estable/prueba no se conserva de forma fiable en la extraccion de texto. No se declara que todos los binarios de la carpeta sean estables.</p>
+<h2 id="6-chirp-lo-que-hay-y-lo-que-no-prueba">6. CHIRP: lo que hay y lo que no prueba</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Archivo Python</th><th scope="col">Observacion</th></tr></thead><tbody>
+<tr><td><code>f4hwn.chirp.driver.v2.8.1+Karina-5.py</code></td><td>Modelo declarado UV-K5/1, basado en Egzumer/F4HWN/Karina</td></tr>
+<tr><td><code>Chirp dr Karina-by_M2Boo-K1-2.py</code></td><td>Modelo declarado UV-K5V3/K1, pese a estar dentro del paquete V1</td></tr>
+<tr><td><code>chirp_uvk5_fagci_osfw.py</code></td><td>Driver UV-K5/Fagci, no demuestra compatibilidad con la imagen Karina mas reciente</td></tr>
+</tbody></table></div>
+<p>Los encabezados de los drivers indican GPL v2 o posterior. Esa licencia se refiere a esos archivos, no acredita la licencia del firmware cerrado adjunto. Los drivers declaran 38400 baudios y memoria de datos de <code>0x2000</code> bytes. Los dos derivados F4HWN/Karina declaran escritura de datos hasta <code>0x1D00</code> y calibracion desde <code>0x1E00</code>. Son declaraciones de los drivers, no una prueba de que los tres sirvan para todas las revisiones.</p>
+<p>No se importaron ni ejecutaron estos Python. Un modulo CHIRP ejecuta codigo en el PC; debe revisarse y elegirse para modelo, firmware y version concretos. La presencia de un driver V3 no transforma el binario V1 en firmware V3.</p>
+<h2 id="7-compilacion-modular-parches-y-multiboot">7. Compilacion modular, parches y multiboot</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Concepto</th><th scope="col">Que hace</th><th scope="col">Que no demuestra</th></tr></thead><tbody>
+<tr><td>UVMOD</td><td>Combina parches binarios seleccionados sobre una imagen soportada</td><td>Fuentes de Karina, compilacion C o multiboot</td></tr>
+<tr><td>Opciones Make/CMake</td><td>Incluyen/excluyen codigo y producen una imagen</td><td>Varios firmwares residentes simultaneamente</td></tr>
+<tr><td>Overlays RAM</td><td>Comparten memoria de ejecucion entre secciones</td><td>Slots de firmware completos seleccionables al encender</td></tr>
+<tr><td>Multiboot F4HWN V3</td><td>Guarda imagenes en Flash externa y las gestiona mediante su protocolo</td><td>Compatibilidad con V1 o con una imagen arbitraria</td></tr>
+</tbody></table></div>
+<p>OneOfEleven dispone de fuentes Apache-2.0 y opciones <code>ENABLE_*</code> en Makefile. Entre ellas hay recepcion, espectro/panadapter, interfaz, escaneo y funciones de comunicaciones. Las dependencias existen: el Makefile ajusta, por ejemplo, opciones de UART y la coexistencia de LTO/overlay. No basta con marcar todas. Una base OneOfEleven seria una derivacion de OneOfEleven/DualTachyon, no Karina.</p>
+<h2 id="8-biblioteca-local-multiboot-integrada-en-la-web">8. Biblioteca local Multiboot integrada en la web</h2>
+<p>En Quansheng, seleccionar <strong>Biblioteca local</strong> y elegir la carpeta <code>Documents/Multiboot</code>. El navegador lee unicamente los <code>.bin</code> seleccionados: no se configura una API que lea rutas arbitrarias del equipo ni se suben los archivos a GitHub.</p>
+<p>La inspeccion local encontro 9 archivos que cumplen las comprobaciones actuales:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Edicion</th><th scope="col">Versiones</th><th scope="col">Origen local</th></tr></thead><tbody>
+<tr><td>Fusion</td><td>6.0.0 y 6.1.0</td><td><code>Fusion61/archive</code></td></tr>
+<tr><td>FieldOps</td><td>6.0.0 y 6.1.0</td><td><code>Fusion61/archive</code></td></tr>
+<tr><td>Labs</td><td>6.0.0 y 6.1.0</td><td><code>Fusion61/archive</code></td></tr>
+<tr><td>Transfer</td><td>6.0.0 y 6.1.0</td><td><code>Fusion61/archive</code></td></tr>
+<tr><td>Fusion compilada localmente</td><td>Cadena 6.1.0</td><td><code>Fusion61/build/Fusion/f4hwn.fusion.bin</code></td></tr>
+</tbody></table></div>
+<p>En la prueba del navegador seleccionando la carpeta Multiboot completa se examinaron 71 imagenes: 9 admitidas y 62 bloqueadas. La prueba separada de <code>Fusion61/archive</code> examino 44: 8 admitidas y 36 bloqueadas. Estos resultados corresponden al contenido local inspeccionado y cambiaran al anadir archivos.</p>
+<p>Cada entrada indica su estado o motivo de bloqueo. Se comprueban longitud, vectores PY32, identificacion F4HWN v6.x y nombres de variantes excluidas. Se calcula SHA-256 local. Una cadena de version y unos vectores correctos <strong>no certifican autenticidad, correspondencia con las fuentes ni compatibilidad fisica</strong>. La compilacion local no se presenta como firmada por Armel.</p>
+<p>ARDFv05 contiene fuentes, pero no se encontro una imagen ARDF terminada en sus directorios de firmware inspeccionados; <code>archive</code> contiene imagenes Fusion anteriores y stock. No se ofrece un supuesto ARDF deducido del nombre de carpeta. Las publicaciones ARDF del catalogo siguen siendo solo descarga.</p>
+<p>Preparar una imagen no escribe nada. Instalar sigue requiriendo una conexion compatible, respaldo completo verificado, slot 1-4, confirmacion y CRC final. Main continua protegido. Karina V1 queda bloqueada tambien con un nombre falso F4HWN, porque sus vectores no cumplen el formato PY32.</p>
+<h2 id="9-contrato-necesario-para-una-version-bricohams-reproducible">9. Contrato necesario para una version Bricohams reproducible</h2>
+<p>Este es el trabajo pendiente, no funcionalidades que ya tenga Karina:</p>
+<ol>
+<li>Obtener las fuentes exactas de Karina, licencia, dependencias y herramientas, o aprobar una base abierta alternativa y registrar sus diferencias.</li>
+<li>Elegir hardware por separado. V1 y V3 requieren proyectos/perfiles y binarios diferentes. Para los slots existentes del usuario la base aplicable es PY32, no el binario V1 del paquete.</li>
+<li>Reproducir la compilacion sin cambios antes de modificarla; registrar commit, toolchain, opciones, mapa y hashes. No inventar un SHA del upstream.</li>
+<li>Crear perfiles minimos con dependencias y presupuesto de FLASH/RAM. Rechazar opciones desconocidas y combinaciones que no quepan.</li>
+<li>Mantener identidad/licencia del upstream y anadir marca Bricohams sin alterar artificialmente una cadena para superar la validacion de slots.</li>
+<li>Entregar <code>.bin</code>, mapa, informe de tamano, <code>build-info.json</code> y <code>SHA256SUMS</code> cubriendo tanto firmware como metadatos. No confundir hash con firma.</li>
+<li>Para V3, probar arranque, cambio de CFG, calibracion propia, respaldo, recuperacion y slots contra F4HWN. Para V1, demostrar primero el soporte fisico de almacenamiento y una estrategia de recuperacion del bootloader.</li>
+<li>Publicar solo tras pruebas de banco; documentar limites RF y no habilitar automaticamente emisiones fuera de bandas permitidas.</li>
+</ol>
+<p>La web ya tiene un formulario de opciones para el workflow <code>anatolbricoham/bricohams-firmware</code>; no es un compilador Karina. En esta tarea no se ha ejecutado ese workflow. Se ha anadido un constructor local independiente para F4HWN v6.1.0 y generado las ediciones Bricohams Fusion y Labs. El resto de esta seccion sigue siendo requisito para derivar Karina, no una afirmacion de que las funciones Karina se hayan reimplementado en esos binarios.</p>
+<h2 id="10-recuperacion-y-limites-operativos">10. Recuperacion y limites operativos</h2>
+<p>El <code>readme.txt</code> de rollback describe operaciones que borran datos. No se automatizan ni se recomienda aplicarlas por un fallo USB. Antes de cualquier migracion se necesitan respaldos originales de la unidad, identificacion del hardware y un procedimiento de recuperacion probado.</p>
+<p>La web mantiene las barreras de escritura. No se han tocado los archivos originales del paquete ni la carpeta Multiboot. No se redistribuyen PDF, EXE, calibraciones ni firmware Karina.</p>
+<h2 id="11-fuentes-externas-consultadas">11. Fuentes externas consultadas</h2>
+<ul>
+<li><a href="https://whosmatt.github.io/uvmod/index.html" target="_blank" rel="noopener noreferrer">UVMOD: herramienta</a>.</li>
+<li><a href="https://github.com/whosmatt/uvmod" target="_blank" rel="noopener noreferrer">UVMOD: README</a>.</li>
+<li><a href="https://github.com/OneOfEleven/uv-k5-firmware-custom" target="_blank" rel="noopener noreferrer">OneOfEleven: proyecto</a>.</li>
+<li><a href="https://github.com/OneOfEleven/uv-k5-firmware-custom/blob/main/Makefile" target="_blank" rel="noopener noreferrer">OneOfEleven: Makefile</a>.</li>
+<li><a href="https://github.com/OneOfEleven/uv-k5-firmware-custom/blob/main/firmware.ld" target="_blank" rel="noopener noreferrer">OneOfEleven: linker</a>.</li>
+<li><a href="https://github.com/OneOfEleven/uv-k5-firmware-custom/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">OneOfEleven: licencia Apache-2.0</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">F4HWN V3/UV-K1</a>.</li>
+</ul>
+<p>Las referencias externas se consultaron en su rama publicada durante la inspeccion; no se ha fijado un commit para una nueva derivacion. No se atribuyen sus funciones o licencias al binario Karina sin evidencia.</p></article>
+    <footer><p>Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia. <a href="ayuda-firmwares.html">Volver al indice</a>.</p></footer>
+  </main>
+</body>
+</html>

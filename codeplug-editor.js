@@ -68,6 +68,38 @@
     result[offset + 51] = (result[offset + 51] & ~4) | (channel.rxOnly ? 4 : 0);
     return result;
   }
+  function deleteChannel(image, number) {
+    R.bytes(image, 0x20000);
+    const { bitmap, bit, offset } = position(number);
+    R.assert(image[bitmap] & bit, "El canal OpenGD77 ya esta vacio.");
+    const result = image.slice();
+    const view = R.view(result);
+    function removeReferences(start, count) {
+      const values = Array.from({ length: count }, (_, index) => view.getUint16(start + index * 2, true));
+      if (!values.includes(number)) return;
+      const kept = values.filter(value => value !== number);
+      result.fill(0, start, start + count * 2);
+      kept.forEach((value, index) => view.setUint16(start + index * 2, value, true));
+    }
+    for (let zone = 0; zone < 68; zone++) {
+      if (!(image[0x8010 + (zone >> 3)] & (1 << (zone & 7)))) continue;
+      const base = 0x8030 + zone * 176;
+      if (!R.text(image.subarray(base, base + 16)).trim()) continue;
+      removeReferences(base + 16, 80);
+    }
+    for (let list = 0; list < 64; list++) {
+      if (!(image[0x1790 + (list >> 3)] & (1 << (list & 7)))) continue;
+      const base = 0x17d0 + list * 88;
+      if (!R.text(image.subarray(base, base + 15)).trim()) continue;
+      removeReferences(base + 16, 32);
+      for (const relative of [80, 82, 84]) {
+        if (view.getUint16(base + relative, true) === number) view.setUint16(base + relative, 0, true);
+      }
+    }
+    result[bitmap] &= ~bit;
+    result.fill(255, offset, offset + 56);
+    return result;
+  }
   function appendChannels(image, channels, templateNumber) {
     R.bytes(image, 0x20000);
     R.assert(Array.isArray(channels) && channels.length > 0 && channels.length <= 1024, "Selecciona 1-1024 canales.");
@@ -122,14 +154,17 @@
   function appendContacts(image, contacts) {
     R.bytes(image, 0x20000);
     R.assert(Array.isArray(contacts) && contacts.length > 0 && contacts.length <= 1024, "Selecciona 1-1024 contactos.");
-    const known = new Set(readContacts(image).filter(contact => contact.type === 1).map(contact => contact.id));
+    const known = new Set(readContacts(image).map(contact => `${contact.type}:${contact.id}`));
     const result = image.slice();
     let added = 0;
     let duplicates = 0;
     for (const contact of contacts) {
       R.assert(Number.isInteger(contact.id) && contact.id > 0 && contact.id <= 0xffffff, "ID DMR fuera de 1-16777215.");
       R.assert(/^[\x20-\x7e]{1,16}$/.test(contact.callsign), "Indicativo de contacto: 1-16 caracteres ASCII.");
-      if (known.has(contact.id)) { duplicates++; continue; }
+      const type = contact.type ?? 1;
+      R.assert([0, 1].includes(type), "Contacto DMR: tipo grupo (0) o privado (1).");
+      const key = `${type}:${contact.id}`;
+      if (known.has(key)) { duplicates++; continue; }
       let offset = -1;
       for (let index = 0; index < 1024; index++) {
         const candidate = 0x17620 + index * 24;
@@ -140,8 +175,8 @@
       result.set(new TextEncoder().encode(contact.callsign), offset);
       const digits = String(contact.id).padStart(8, "0");
       for (let index = 0; index < 4; index++) result[offset + 16 + index] = parseInt(digits.slice(index * 2, index * 2 + 2), 16);
-      result.set([1, 0, 0, 1], offset + 20);
-      known.add(contact.id);
+      result.set([type, 0, 0, 1], offset + 20);
+      known.add(key);
       added++;
     }
     return { image: result, added, duplicates };
@@ -270,7 +305,7 @@
       region.set(records.get(name), block.offset + 8 + index * SAT_RECORD));
     return { image: result, added, replaced, total: records.size };
   }
-  Object.assign(R, { readChannels, updateChannel, appendChannels, readContacts, appendContacts, readSatellites, writeSatellites,
+  Object.assign(R, { readChannels, updateChannel, deleteChannel, appendChannels, readContacts, appendContacts, readSatellites, writeSatellites,
     encodeFrequency, decodeFrequency: frequency });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

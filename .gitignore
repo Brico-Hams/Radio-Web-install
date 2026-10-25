@@ -16,4 +16,5 @@ quansheng-rx-channels.csv
 coverage/
 tmp/
 dist/
+firmware-builds/
 studio.html

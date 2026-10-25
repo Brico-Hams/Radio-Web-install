@@ -4,6 +4,7 @@ const R = require("../radio-core.js");
 require("../transports.js");
 require("../backup-store.js");
 require("../quansheng-connector.js");
+require("../quansheng-channels.js");
 require("../gd77-connector.js");
 require("../codeplug-editor.js");
 
@@ -41,7 +42,7 @@ function baseFlash() {
   return flash;
 }
 class QuanshengDevice extends R.BufferedTransport {
-  constructor() { super(); this.flash = baseFlash(); this.commands = []; }
+  constructor() { super(); this.flash = baseFlash(); this.commands = []; this.configuration = new Uint8Array(0xa180).fill(255); }
   async open(baud) { assert.equal(baud, 38400); this.opened = true; }
   async close() { this.opened = false; }
   async write(frame) {
@@ -53,17 +54,28 @@ class QuanshengDevice extends R.BufferedTransport {
       result.set(new TextEncoder().encode(this.version || "F4HWN v6.2.0"));
     } else if (type === 0x051b) {
       const offset = le(data).getUint16(0, true);
-      result = new Uint8Array(20);
+      const length = data[2];
+      result = new Uint8Array(length + 4);
       le(result).setUint16(0, offset, true);
-      result[2] = 16;
-      result.set(this.flash.subarray(0x10000 + offset - 0xb000, 0x10000 + offset - 0xb000 + 16), 4);
+      result[2] = this.badConfiguration && offset < 0xb000 ? length - 1 : length;
+      result.set(offset < 0xb000 ? this.configuration.subarray(offset, offset + length) :
+        this.flash.subarray(0x10000 + offset - 0xb000, 0x10000 + offset - 0xb000 + length), 4);
+    } else if (type === 0x051d) {
+      const offset = le(data).getUint16(0, true);
+      assert.equal(data[2], 8);
+      assert.equal(data[3], 0);
+      assert.equal(data.length, 16);
+      assert.ok(offset + 8 <= 0x8800);
+      if (!this.ignoreConfigurationWrites) this.configuration.set(data.subarray(8), offset);
+      result = data.slice(0, 2);
     } else if (type === 0x0738) {
       const address = le(data).getUint32(0, true);
-      result = new Uint8Array(135);
+      const length = le(data).getUint16(4, true);
+      result = new Uint8Array(length + 7);
       le(result).setUint32(0, address, true);
-      le(result).setUint16(4, 128, true);
+      le(result).setUint16(4, length, true);
       result[6] = this.rejectFlash ? 8 : 0;
-      result.set(this.flash.subarray(address, address + 128), 7);
+      result.set(this.flash.subarray(address, address + length), 7);
     } else if (type === 0x0720) {
       result = new Uint8Array(66);
       result[0] = data[0];
@@ -101,10 +113,6 @@ class QuanshengDevice extends R.BufferedTransport {
       if (this.noApps) return;
       const slot = data[0], base = 0x102000 + slot * 0x2000, header = this.flash.subarray(base, base + 64);
       let status = slot >= (this.appSlots || 16) ? 1 : le(header).getUint32(0, true) !== 0x31504146 ? 2 : 0;
-      if (status === 0 && type === 0x0736) {
-        const size = le(header).getUint32(8, true);
-        status = R.crc32(this.flash.subarray(base + 0x1000, base + 0x1000 + size)) === le(header).getUint32(12, true) ? 0 : 6;
-      }
       result = type === 0x0730 ? new Uint8Array(66) : new Uint8Array(2);
       result[0] = slot; result[1] = status;
       if (type === 0x0730) result.set(header, 2);
@@ -115,6 +123,7 @@ class QuanshengDevice extends R.BufferedTransport {
     } else if (type === 0x0734) {
       assert.equal(le(data).getUint32(8, true), this.timestamp);
       this.flash.set(data.subarray(12), 0x102000 + data[0] * 0x2000 + le(data).getUint32(2, true));
+      if (this.corruptAppWrite) this.flash[0x102000 + data[0] * 0x2000 + le(data).getUint32(2, true)] ^= 1;
       result = Uint8Array.of(data[0], 0);
     } else throw new Error(`Unexpected command ${type.toString(16)}`);
     if (type === 0x0514) this.timestamp = le(data).getUint32(0, true);
@@ -223,6 +232,22 @@ test("Identificacion Quansheng y calibracion exacta 512 bytes", async () => {
   assert.deepEqual(await connector.readCalibration(), device.flash.slice(0x10000, 0x10200));
   assert.equal(device.commands.filter(item => item.type === 0x051b).length, 32);
 });
+test("Biblioteca local de slots valida bytes PY32 y rechaza firmware V1 y variantes no admitidas", () => {
+  const image = baseFlash().slice(0x21000, 0x21400);
+  assert.deepEqual(R.inspectQuanshengSlotImage(image, "f4hwn.fusion.v6.2.0.bin"), { version: "6.2.0", size: 1024 });
+  for (const name of ["firmware.packed.bin", "firmware.sa818.bin", "firmware.beta.bin", "firmware.development.bin", "firmware.rolling.bin", "firmware.app"]) {
+    assert.throws(() => R.inspectQuanshengSlotImage(image, name), /Variante/);
+  }
+  const v1 = image.slice();
+  le(v1).setUint32(4, 0x0000010b, true);
+  assert.throws(() => R.inspectQuanshengSlotImage(v1, "v1_210826_2.bin"), /V1 en V3/);
+  const old = image.slice();
+  old.fill(0, 64, 100);
+  old.set(new TextEncoder().encode("F4HWN v5.2.0"), 64);
+  assert.throws(() => R.inspectQuanshengSlotImage(old), /v6.x/);
+  assert.throws(() => R.inspectQuanshengSlotImage(new Uint8Array(512)), /Vectores/);
+  assert.throws(() => R.inspectQuanshengSlotImage(new Uint8Array(0x1d801)), /limite/);
+});
 test("CRC Flash remoto discrepante aborta respaldo sin habilitar escrituras", async () => {
   const device = new QuanshengDevice(); device.badFlashCRC = true;
   const connector = new R.QuanshengConnector(device);
@@ -294,6 +319,89 @@ test("Acceso Flash no soportado conserva copia parcial y no autoriza escritura",
   const store = new MemoryStore();
   await assert.rejects(new R.BackupManager(store).create(connector), /Labs/);
   assert.equal([...store.records.values()][0].files[0].name, "calibration");
+});
+test("v6.0 guarda calibracion y configuracion, sigue conectado y no intenta Flash no soportada", async () => {
+  const device = new QuanshengDevice(); device.version = "F4HWN v6.0.0";
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const { record, permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  assert.equal(permit, null);
+  assert.equal(record.status, "partial");
+  assert.deepEqual(record.files.map(file => file.name), ["calibration", "configuration"]);
+  assert.deepEqual(record.files[1].bytes, device.configuration);
+  assert.equal(connector.connected, true);
+  assert.match(record.scope, /Solo lectura.*v6.0/);
+  assert.equal(device.commands.some(command => [0x051d, 0x0738].includes(command.type)), false);
+  await assert.rejects(connector.writeConfiguration(device.configuration, device.configuration, permit), /bloqueada/);
+  assert.equal((await connector.listSlots()).length, 5);
+});
+test("lectura configuracion valida offset, tamano y timestamp del protocolo", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K1");
+  assert.deepEqual(await connector.readConfiguration(), device.configuration);
+  const requests = device.commands.filter(command => command.type === 0x051b);
+  assert.equal(requests.length, 323);
+  assert.equal(le(requests[0].data).getUint32(4, true), connector.timestamp);
+  assert.equal(le(requests.at(-1).data).getUint16(0, true), 0xa100);
+  device.badConfiguration = true;
+  await assert.rejects(connector.readConfiguration(), /Respuesta de configuracion incorrecta/);
+});
+test("escribir canales requiere respaldo completo, preserva VFO/calibracion y verifica relectura", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const original = await connector.readConfiguration();
+  const edited = original.slice(); edited[0x4000] = 65; edited[0x8000] = 7;
+  await assert.rejects(connector.writeConfiguration(edited, original, {}), /bloqueada/);
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  const flashBefore = device.flash.slice();
+  assert.equal(await connector.writeConfiguration(edited, original, permit), 2);
+  assert.deepEqual(device.configuration, edited);
+  assert.deepEqual(device.flash, flashBefore);
+  assert.deepEqual(original, new Uint8Array(0xa180).fill(255));
+});
+test("escritura rechaza archivo desfasado o cambios de ajustes sin emitir 051d", async () => {
+  for (const scenario of ["stale", "settings"]) {
+    const device = new QuanshengDevice(); const connector = new R.QuanshengConnector(device);
+    await connector.connect("UV-K1");
+    const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+    const original = device.configuration.slice(); const edited = original.slice();
+    if (scenario === "stale") device.configuration[0] = 1;
+    else edited[0x9000] = 1;
+    await assert.rejects(connector.writeConfiguration(edited, original, permit), /ha cambiado|ajustes estan protegidos/);
+    assert.equal(device.commands.some(command => command.type === 0x051d), false);
+  }
+});
+test("ACK sin persistencia de canales falla en relectura y revoca la sesion", async () => {
+  const device = new QuanshengDevice(); const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K1");
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  const original = device.configuration.slice(); const edited = original.slice(); edited[0x4000] = 65;
+  device.ignoreConfigurationWrites = true;
+  await assert.rejects(connector.writeConfiguration(edited, original, permit), /relectura Quansheng no coincide/);
+  assert.equal(connector.connected, false);
+  assert.equal(R.hasBackup(connector, permit), false);
+});
+test("memorias existentes se desactivan antes de editar y se reactivan al final", async () => {
+  const device = new QuanshengDevice(); const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K1");
+  device.configuration[0x8000] = 2;
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  const original = device.configuration.slice(); const edited = original.slice(); edited[0x4000] = 65;
+  await connector.writeConfiguration(edited, original, permit);
+  const writes = device.commands.filter(command => command.type === 0x051d);
+  assert.deepEqual(writes.map(command => le(command.data).getUint16(0, true)), [0x8000, 0x4000, 0x8000]);
+  assert.equal(writes[0].data[8] & 7, 7);
+  assert.equal(writes.at(-1).data[8], 2);
+  assert.deepEqual(device.configuration, edited);
+});
+test("el editor Beta no extrapola el mapa de canales a una version mayor", async () => {
+  const device = new QuanshengDevice(); device.version = "F4HWN v7.0.0";
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K1");
+  await assert.rejects(connector.readConfiguration(), /solo admite F4HWN v6/);
+  assert.equal(device.commands.some(command => command.type === 0x051b), false);
 });
 test("Quota y corrupcion del almacenamiento bloquean permiso", async () => {
   for (const option of ["quota", "corrupt"]) {
@@ -382,6 +490,8 @@ for (const family of ["MK22", "STM32", "SERIAL"]) {
     const { record, permit } = await new R.BackupManager(store).create(connector);
     assert.equal(permit, null);
     assert.equal(record.status, "partial");
+    assert.match(record.scope, /firmware MCU original NO respaldado/);
+    assert.equal(record.files.some(file => file.name === "base-firmware"), false);
     assert.equal(record.files[0].bytes.length, family === "MK22" ? 4096 : 512);
     assert.equal(record.files[1].bytes.length, 131072);
     for (const part of R.gd77Segments(family)) {
@@ -389,7 +499,10 @@ for (const family of ["MK22", "STM32", "SERIAL"]) {
       assert.equal(record.files[1].bytes[part.end - 1], (part.address + part.end - part.start - 1 + part.mode) & 255);
     }
     assert(device.requests.every(request => [0x43, 0x52].includes(request[0])));
-    await connector.readCodeplug();
+    const before = device.requests.length;
+    await assert.rejects(connector.readCodeplug(permit), /bloqueada/);
+    await assert.rejects(connector.readScreen(permit), /bloqueada/);
+    assert.equal(device.requests.length, before, "No se emiten operaciones adicionales sin firmware respaldado.");
     assert(!device.requests.some(request => request[0] === 0x43 && request[1] === 6), "Leer no debe guardar ajustes/VFO ni reiniciar la radio.");
     await assert.rejects(connector.writeCodeplug(record.files[1].bytes, permit), /bloqueada/);
   });
@@ -413,7 +526,7 @@ test("Conector rechaza operaciones solapadas", async () => {
   await connector.connect();
   let finish;
   const pending = connector.run("Larga", () => new Promise(resolve => { finish = resolve; }));
-  await assert.rejects(connector.readCodeplug(), /otra operacion/);
+  await assert.rejects(connector.run("Otra", async () => {}), /otra operacion/);
   await assert.rejects(connector.disconnect(), /No desconectes/);
   finish(); await pending;
 });
@@ -584,14 +697,14 @@ test("Corrupcion o borrado del respaldo posterior revoca permiso antes de modifi
     assert.equal(device.commands.length, 0);
   }
 });
-test("Captura OpenGD77 usa modo de lectura de pantalla sin escribir", async () => {
+test("Captura OpenGD77 no emite comandos sin respaldo completo del firmware", async () => {
   for (const family of ["MK22", "STM32", "SERIAL"]) {
     const device = new GD77Device(family);
     const connector = new R.GD77Connector(family, device);
     await connector.connect();
-    const screen = await connector.readScreen();
-    assert.equal(screen.length, family === "MK22" ? 1024 : 2560);
-    assert(device.requests.filter(item => item[0] === 0x52).some(item => item[1] === 6));
+    const before = device.requests.length;
+    await assert.rejects(connector.readScreen(), /bloqueada/);
+    assert.equal(device.requests.length, before);
   }
 });
 class GD77WritingDevice extends GD77Device {
@@ -683,6 +796,7 @@ function overlayApp({ name = "FoxHunt", code = new Uint8Array(300).map((_, i) =>
   v.setUint32(8, code.length, true); v.setUint32(12, R.crc32(code), true); v.setUint16(18, flags, true);
   header.set(new TextEncoder().encode(name), 20); header.set(new TextEncoder().encode("1.1"), 36);
   v.setUint32(52, 0x20000280, true); v.setUint16(60, assets.length, true);
+  v.setUint16(62, R.crc32(assets) & 0xffff, true);
   const file = new Uint8Array(64 + code.length + assets.length);
   file.set(header); file.set(code, 64); file.set(assets, 64 + code.length);
   return file;
@@ -692,6 +806,8 @@ test("Apps Labs: el archivo .app se valida antes de tocar la radio", () => {
   assert.equal(app.header.name, "FoxHunt"); assert.equal(app.header.apiMin, 3); assert.equal(app.assets.length, 3);
   const corrupt = overlayApp(); corrupt[100] ^= 1;
   assert.throws(() => R.parseQuanshengApp(corrupt), /CRC/);
+  const corruptAssets = overlayApp({ assets: Uint8Array.of(1, 2, 3) }); corruptAssets[corruptAssets.length - 1] ^= 1;
+  assert.throws(() => R.parseQuanshengApp(corruptAssets), /CRC de los assets/);
   assert.throws(() => R.parseQuanshengApp(overlayApp({ flags: 0 })), /completa/);
   assert.throws(() => R.parseQuanshengApp(overlayApp({ code: new Uint8Array(4097) })), /4 KiB/);
   assert.throws(() => R.parseQuanshengApp(overlayApp().subarray(0, 200)), /tamano/i);
@@ -726,4 +842,16 @@ test("Apps Labs: firmware sin apps se identifica sin escribir", async () => {
   const connector = new R.QuanshengConnector(device); await connector.connect("UV-K1");
   await assert.rejects(connector.listApps(), /Labs/);
   assert(device.commands.every(item => [0x0514, 0x0730].includes(item.type)));
+});
+test("Apps Labs: un ACK positivo no oculta una escritura corrupta ni confirma la cabecera", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  device.commands = [];
+  device.corruptAppWrite = true;
+  await assert.rejects(connector.installApp(1, overlayApp(), permit), /difiere del archivo/);
+  assert.equal(connector.connected, false);
+  assert(!device.commands.some(item => item.type === 0x0734 && le(item.data).getUint32(2, true) === 0));
+  assert(!device.commands.some(item => item.type === 0x0736));
 });

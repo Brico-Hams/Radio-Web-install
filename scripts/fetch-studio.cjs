@@ -31,7 +31,7 @@ async function main(args) {
   const output = args[0] || path.join(root, "studio.html");
   if (fs.existsSync(output)) {
     try { verify(fs.readFileSync(output), lock); console.log(`${output} ya verificado.`); return; }
-    catch { /* stale copy: download the pinned one */ }
+    catch (error) { console.warn(`Studio local no valido: ${error.message} Se descargara la copia fijada.`); }
   }
   const data = verify(await download(lock.commit), lock);
   if (JSON.stringify(scriptHashes(data.toString("utf8"))) !== JSON.stringify(lock.scriptHashes)) throw new Error("Hashes CSP de Studio distintos del lock.");

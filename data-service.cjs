@@ -1,4 +1,6 @@
 "use strict";
+require("./radio-core.js");
+const { normalizeTalkgroups } = require("./planning-core.js");
 class ProviderError extends Error {
   constructor(message, status = 502) { super(message); this.status = status; }
 }
@@ -27,12 +29,28 @@ class DataService {
     return {
       repeaterbookConfigured: /^rbuapp_[A-Za-z0-9_-]+$/.test(this.env.RB_USER_TOKEN || "") &&
         Boolean(this.env.RB_APPROVED_USER_AGENT) && this.env.RB_APPROVED === "yes",
-      notice: "RepeaterBook requiere aprobacion de esta aplicacion y token individual asociado. Nunca pegues credenciales en el navegador."
+      notice: "RepeaterBook requiere aprobacion y token individual. La configuracion del formulario se conserva solo en memoria del servidor hasta reiniciarlo; no se devuelve el token."
     };
+  }
+  configureRepeaterbook(config) {
+    ensure(config && /^rbuapp_[A-Za-z0-9_-]{1,240}$/.test(config.token || ""), "Token RepeaterBook rbuapp_ invalido.");
+    ensure(typeof config.agent === "string" && config.agent.length <= 240 &&
+      !/[\r\n\x00]/.test(config.agent) && /[^\s@]+@[^\s@]+\.[^\s@]+/.test(config.agent),
+    "User-Agent aprobado debe incluir un contacto real.");
+    ensure(config.approved === true, "Debes disponer de aprobacion RepeaterBook para esta aplicacion.");
+    this.env = { ...this.env, RB_USER_TOKEN: config.token, RB_APPROVED_USER_AGENT: config.agent, RB_APPROVED: "yes" };
+    return this.status();
+  }
+  async talkgroups(params) {
+    const prefix = String(params.prefix || "");
+    ensure(/^\d{1,7}$/.test(prefix), "Prefijo TG: 1-7 digitos.");
+    const data = await this.get("https://api.brandmeister.network/v2/talkgroup", 2 * 1024 * 1024);
+    try { return normalizeTalkgroups(data, prefix); }
+    catch (error) { throw new ProviderError(error.message, 502); }
   }
   async get(url, limit = 1024 * 1024, headers = {}, raw = false) {
     const parsed = new URL(url);
-    ensure(parsed.protocol === "https:" && ["radioid.net", "www.repeaterbook.com", "db.satnogs.org", "celestrak.org"].includes(parsed.hostname) &&
+    ensure(parsed.protocol === "https:" && ["radioid.net", "www.repeaterbook.com", "db.satnogs.org", "celestrak.org", "api.brandmeister.network"].includes(parsed.hostname) &&
       !parsed.username && !parsed.password && !parsed.port, "Proveedor no autorizado.");
     ensure(this.active < 4, "Hay consultas en curso. Espera antes de continuar.", 429);
     this.active++;

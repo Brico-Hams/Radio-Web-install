@@ -56,9 +56,26 @@
     R.assert(R.crc32(image) === header.crc, "El CRC del firmware base Main no coincide.");
     return { header, image };
   }
+  function inspectSlotImage(image, fileName = "") {
+    R.bytes(image);
+    R.assert(image.length >= 256 && image.length <= 0x1d800, "Imagen fuera del limite de 118 KiB.");
+    R.assert(!fileName || (/\.bin$/i.test(fileName) && !/packed|sa818|beta|development|rolling/i.test(fileName)),
+      "Variante local no admitida para slots: packed, SA818, beta o desarrollo.");
+    const v = R.view(image);
+    const stack = v.getUint32(0, true);
+    const reset = v.getUint32(4, true);
+    R.assert(stack >= 0x20000000 && stack <= 0x20004000 && (stack & 3) === 0 &&
+      (reset & 1) === 1 && reset >= 0x08002801 && reset < 0x08002800 + image.length,
+    "Vectores de aplicacion PY32 no validos. No uses firmware UV-K5 V1 en V3/UV-K1.");
+    const content = new TextDecoder("ascii").decode(image);
+    const version = content.match(/F4HWN[^\x00\r\n]{0,12}?v(6\.\d+\.\d+)(?![-\w.])/i);
+    R.assert(version && !/dev|rolling/i.test(version[0]),
+      "Solo se admiten imagenes F4HWN estables v6.x reconocibles. No Karina V1, stock, v5 ni desarrollo.");
+    return { version: version[1], size: image.length };
+  }
   // F4HWN Labs overlay apps (App/apps/app_overlay.h): a .app file is the 64-byte FAP1 header,
   // the code (written at slot+0x1000) and optional read-only assets (written at slot+0x100).
-  const APP = Object.freeze({ magic: 0x31504146, codeOffset: 0x1000, assetOffset: 0x100, codeMax: 0x1000, assetMax: 0xf00 });
+  const APP = Object.freeze({ magic: 0x31504146, base: 0x102000, stride: 0x2000, codeOffset: 0x1000, assetOffset: 0x100, codeMax: 0x1000, assetMax: 0xf00 });
   const APP_STATUS = ["Valida", "Hueco fuera de rango", "Vacio", "ABI/API incompatible con este firmware", "Incompleta",
     "Tamano invalido", "CRC invalido", "VMA incorrecta", "Autorizacion rechazada", "Falta una capacidad del firmware"];
   function appHeader(data) {
@@ -68,7 +85,7 @@
       magic: v.getUint32(0, true), version: v.getUint16(4, true), abi: data[6], apiMin: data[7],
       codeSize: v.getUint32(8, true), codeCRC: v.getUint32(12, true), flags: v.getUint16(18, true),
       name: R.text(data.subarray(20, 36)), appVersion: R.text(data.subarray(36, 52)),
-      linkVMA: v.getUint32(52, true), assetSize: v.getUint16(60, true)
+      linkVMA: v.getUint32(52, true), assetSize: v.getUint16(60, true), assetCRC: v.getUint16(62, true)
     };
   }
   function parseApp(bytes) {
@@ -81,9 +98,11 @@
     R.assert(header.assetSize <= APP.assetMax && bytes.length === 64 + header.codeSize + header.assetSize,
       "El tamano del archivo no coincide con la cabecera de la app.");
     const code = bytes.slice(64, 64 + header.codeSize);
+    const assets = bytes.slice(64 + header.codeSize);
     R.assert(R.crc32(code) === header.codeCRC, "CRC del codigo de la app incorrecto: archivo danado.");
+    R.assert(!assets.length || (R.crc32(assets) & 0xffff) === header.assetCRC, "CRC de los assets de la app incorrecto: archivo danado.");
     R.assert(/^[\x20-\x7e]+$/.test(header.name), "Nombre de app no valido.");
-    return { header, headerBytes: bytes.slice(0, 64), code, assets: bytes.slice(64 + header.codeSize) };
+    return { header, headerBytes: bytes.slice(0, 64), code, assets };
   }
   class QuanshengConnector extends R.Connector {
     constructor(transport = new R.SerialTransport()) {
@@ -129,7 +148,79 @@
       const firmware = R.text(response.subarray(0, 16));
       const match = firmware.match(/F4HWN.*v(\d+)(?:\.(\d+))?/i);
       R.assert(match && Number(match[1]) >= 6, `Firmware no compatible: ${firmware}. Se requiere F4HWN v6+.`);
-      this.info = { family: this.family, model: this.model, firmware, hardwareConfirmed: false };
+      this.info = { family: this.family, model: this.model, firmware, hardwareConfirmed: false,
+        legacyReadOnly: Number(match[1]) === 6 && Number(match[2] || 0) === 0 };
+    }
+    async readConfigurationRaw() {
+      R.assert(/^F4HWN.*v6\./i.test(this.info?.firmware || ""), "La gestion de canales Beta solo admite F4HWN v6.x.");
+      const out = new Uint8Array(0xa180);
+      for (let offset = 0; offset < out.length; offset += 128) {
+        const length = Math.min(128, out.length - offset);
+        const request = new Uint8Array(8);
+        R.view(request).setUint16(0, offset, true);
+        request[2] = length;
+        R.view(request).setUint32(4, this.timestamp, true);
+        const data = await this.exchange(0x051b, request);
+        R.assert(data.length === length + 4 && R.view(data).getUint16(0, true) === offset &&
+          data[2] === length, `Respuesta de configuracion incorrecta en 0x${offset.toString(16)}.`);
+        out.set(data.subarray(4), offset);
+        this.progress((offset + length) / out.length, "Leyendo configuracion Quansheng");
+      }
+      return out;
+    }
+    readConfiguration() {
+      return this.run("Leer canales Quansheng", () => this.readConfigurationRaw());
+    }
+    async writeConfiguration(image, original, permit) {
+      R.assertBackup(this, permit);
+      image = R.bytes(image, 0xa180).slice();
+      original = R.bytes(original, 0xa180).slice();
+      await R.verifyBackup(this, permit);
+      return this.run("Escribir canales Quansheng Beta", async () => {
+        R.assert(R.equal(image.subarray(0x8800), original.subarray(0x8800)),
+          "Solo se pueden modificar memorias, nombres y atributos; VFO y ajustes estan protegidos.");
+        R.assert(R.equal(await this.readConfigurationRaw(), original),
+          "La configuracion de la radio ha cambiado. Vuelve a leer antes de escribir.");
+        const attributes = new Map();
+        for (let channel = 0; channel < 1024; channel++) {
+          const record = channel * 16;
+          const name = 0x4000 + record;
+          const attr = 0x8000 + channel * 2;
+          if (R.equal(image.subarray(record, record + 16), original.subarray(record, record + 16)) &&
+            R.equal(image.subarray(name, name + 16), original.subarray(name, name + 16)) &&
+            R.equal(image.subarray(attr, attr + 2), original.subarray(attr, attr + 2))) continue;
+          const block = attr & ~7;
+          if (!attributes.has(block)) attributes.set(block, original.slice(block, block + 8));
+          attributes.get(block)[attr - block] |= 7;
+        }
+        // Hide affected memories until their records and names are persisted.
+        const writes = [];
+        for (const [offset, bytes] of attributes) {
+          if (!R.equal(bytes, original.subarray(offset, offset + 8))) writes.push({ offset, bytes });
+        }
+        for (let offset = 0; offset < 0x8000; offset += 8) {
+          if (!R.equal(image.subarray(offset, offset + 8), original.subarray(offset, offset + 8))) {
+            writes.push({ offset, bytes: image.slice(offset, offset + 8) });
+          }
+        }
+        for (const [offset, bytes] of attributes) {
+          if (!R.equal(bytes, image.subarray(offset, offset + 8))) writes.push({ offset, bytes: image.slice(offset, offset + 8) });
+        }
+        for (const [index, { offset, bytes }] of writes.entries()) {
+          const request = new Uint8Array(16);
+          R.view(request).setUint16(0, offset, true);
+          request[2] = 8;
+          R.view(request).setUint32(4, this.timestamp, true);
+          request.set(bytes, 8);
+          const response = await this.exchange(0x051d, request);
+          R.assert(response.length === 2 && R.view(response).getUint16(0, true) === offset,
+            `Escritura Quansheng rechazada en 0x${offset.toString(16)}.`);
+          this.progress((index + 1) / writes.length, "Escribiendo memorias Quansheng Beta");
+        }
+        R.assert(R.equal(await this.readConfigurationRaw(), image),
+          "La relectura Quansheng no coincide. Escritura parcial o rechazada; conserva el respaldo y no continues.");
+        return writes.length;
+      });
     }
     async readCalibrationRaw() {
       const out = new Uint8Array(512);
@@ -149,18 +240,24 @@
     readCalibration() {
       return this.run("Leer calibracion", () => this.readCalibrationRaw());
     }
+    async readFlashBlockRaw(address, length) {
+      R.assert(Number.isInteger(address) && address >= 0 && Number.isInteger(length) &&
+        length > 0 && length <= 128 && address + length <= 0x200000, "Rango de lectura Flash invalido.");
+      const request = new Uint8Array(10);
+      const v = R.view(request);
+      v.setUint32(0, address, true);
+      v.setUint16(4, length, true);
+      v.setUint32(6, this.timestamp, true);
+      const data = await this.exchange(0x0738, request);
+      R.assert(data.length === length + 7 && R.view(data).getUint32(0, true) === address &&
+        R.view(data).getUint16(4, true) === length && data[6] === 0,
+      `Lectura Flash rechazada en 0x${address.toString(16)}. Se requiere Labs con acceso Flash externa.`);
+      return data.slice(7);
+    }
     async readFlashRaw(progress = () => {}) {
       const out = new Uint8Array(0x200000);
       for (let address = 0; address < out.length; address += 128) {
-        const request = new Uint8Array(10);
-        const v = R.view(request);
-        v.setUint32(0, address, true);
-        v.setUint16(4, 128, true);
-        v.setUint32(6, this.timestamp, true);
-        const data = await this.exchange(0x0738, request);
-        R.assert(data.length === 135 && R.view(data).getUint32(0, true) === address &&
-          R.view(data).getUint16(4, true) === 128 && data[6] === 0, `Lectura Flash rechazada en 0x${address.toString(16)}. Se requiere Labs con acceso Flash externa.`);
-        out.set(data.subarray(7), address);
+        out.set(await this.readFlashBlockRaw(address, 128), address);
         progress((address + 128) / out.length);
       }
       return out;
@@ -185,6 +282,11 @@
         await this.identify();
         const calibration = await this.readCalibrationRaw();
         await emit("calibration", calibration, { address: 0xb000, contains: "Calibracion especifica de esta unidad" });
+        if (this.info.legacyReadOnly) {
+          const configuration = await this.readConfigurationRaw();
+          await emit("configuration", configuration, { address: 0, contains: "Configuracion logica del banco activo; NO es una copia de toda la Flash" });
+          return { complete: false, scope: "Solo lectura: F4HWN v6.0 no admite el respaldo Flash completo requerido. Calibracion y configuracion guardadas; escritura bloqueada. Se requiere Labs v6.1+ con acceso Flash externa y CRC." };
+        }
         this.progress(0, "Flash externa 2 MiB: puede tardar 10-20 minutos a 38400 baudios. No desconectes.");
         const flash = await this.readFlashRaw(value => this.progress(value, "Leyendo Flash externa completa (2 MiB)"));
         const verifiedCRC32 = await this.verifyFlashRaw(flash);
@@ -243,15 +345,7 @@
       R.assertBackup(this, permit);
       this.authSlot(slot);
       image = R.bytes(image).slice();
-      R.assert(image.length >= 256 && image.length <= 0x1d800, "Imagen fuera del limite de 118 KiB.");
-      const v = R.view(image);
-      const stack = v.getUint32(0, true);
-      const reset = v.getUint32(4, true);
-      R.assert(stack >= 0x20000000 && stack <= 0x20004000 && (stack & 3) === 0 &&
-        (reset & 1) === 1 && reset >= 0x08002801 && reset < 0x08002800 + image.length, "Vectores de aplicacion PY32 no validos.");
-      const content = new TextDecoder("ascii").decode(image);
-      const version = content.match(/F4HWN[^\x00\r\n]{0,12}?v(6\.\d+\.\d+)(?![-\w.])/i);
-      R.assert(version && !/dev|rolling/i.test(version[0]), "Solo se admiten imagenes F4HWN estables v6.x reconocibles. No stock, v5 ni desarrollo.");
+      const { version } = inspectSlotImage(image);
       R.assert(/^[\x20-\x7e]{1,15}$/.test(name), "Nombre de slot: 1-15 caracteres ASCII.");
       await R.verifyBackup(this, permit);
       return this.run("Instalar firmware en slot", async () => {
@@ -279,7 +373,7 @@
         hv.setUint32(8, image.length, true);
         hv.setUint32(12, checksum, true);
         header.set(new TextEncoder().encode(name), 16);
-        header.set(new TextEncoder().encode(`v${version[1]}`.slice(0, 15)), 32);
+        header.set(new TextEncoder().encode(`v${version}`.slice(0, 15)), 32);
         await chunk(0, header);
         R.assert(await this.validateRaw(slot) === checksum, "CRC de la imagen escrita distinto al original.");
       });
@@ -334,6 +428,8 @@
           dv.setUint32(8, this.timestamp, true);
           data.set(source, 12);
           await this.slotMutation(0x0734, slot, data);
+          const saved = await this.readFlashBlockRaw(APP.base + slot * APP.stride + offset, source.length);
+          R.assert(R.equal(saved, source), `La app escrita difiere del archivo en 0x${offset.toString(16)}.`);
         };
         for (const [part, base] of [[app.code, APP.codeOffset], [app.assets, APP.assetOffset]]) {
           for (let position = 0; position < part.length; position += 128) {
@@ -352,6 +448,6 @@
       });
     }
   }
-  Object.assign(R, { QuanshengConnector, quanshengPacket: packet, decodeQuanshengPacket: decodePacket, quanshengBaseFromFlash: baseFromFlash, crc16, parseQuanshengApp: parseApp, QUANSHENG_APP_STATUS: APP_STATUS });
+  Object.assign(R, { QuanshengConnector, quanshengPacket: packet, decodeQuanshengPacket: decodePacket, quanshengBaseFromFlash: baseFromFlash, crc16, parseQuanshengApp: parseApp, QUANSHENG_APP_STATUS: APP_STATUS, inspectQuanshengSlotImage: inspectSlotImage });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

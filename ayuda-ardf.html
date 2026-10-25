@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="ARDF Quansheng: ayuda de recepcion y configuracion: ayuda de Bricohams por modelo y version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>ARDF Quansheng: ayuda de recepcion y configuracion | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+</head>
+<body>
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#hardware-versiones-y-limites">Hardware, versiones y limites</a></li><li><a href="#modos-y-ajustes">Modos y ajustes</a></li><li><a href="#puesta-en-marcha-solo-recepcion">Puesta en marcha solo recepcion</a></li><li><a href="#recordatorio-de-ganancia">Recordatorio de ganancia</a></li><li><a href="#distancia-una-estimacion-no-navegacion">Distancia: una estimacion, no navegacion</a></li><li><a href="#correccion-de-reloj">Correccion de reloj</a></li><li><a href="#diferencias-historicas-verificables">Diferencias historicas verificables</a></li><li><a href="#diagnostico">Diagnostico</a></li><li><a href="#fuentes">Fuentes</a></li></ul></nav>
+    <article class="panel"><h1 id="ardf-quansheng-ayuda-de-recepcion-y-configuracion">ARDF Quansheng: ayuda de recepcion y configuracion</h1>
+<p>Revision: 25-10-2026. Evidencia principal: <code>ARDFv05/ARDF.md</code> y repositorio reald V3/UV-K1. Es un resumen original de configuracion, no copia del manual. Los nombres y rangos siguientes corresponden al documento inspeccionado; no se atribuyen sin revision a v0.2/v0.4 o a ramas V1/V2.</p>
+<h2 id="hardware-versiones-y-limites">Hardware, versiones y limites</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Familia</th><th scope="col">Fuente correspondiente</th><th scope="col">Relacion con esta web</th></tr></thead><tbody>
+<tr><td>V1 DP32</td><td>reald/uv-k5-firmware-custom</td><td>No se instala con el conector PY32</td></tr>
+<tr><td>V2</td><td>Proyecto DL9CAT V2 enlazado por reald</td><td>Fuera del catalogo/conector</td></tr>
+<tr><td>V3 / UV-K1 PY32</td><td>reald/uv-k1-k5v3-firmware-custom</td><td>Publicaciones estables reconocidas para descarga</td></tr>
+</tbody></table></div>
+<p>El catalogo reconoce tags <code>ARDF-K5v3_K1-vX.Y[.Z]</code> de la fuente V3, no archivos arbitrarios por contener «ARDF» en el nombre. En esta web siguen siendo <strong>solo descarga</strong>, incluso con vectores PY32: no hay validacion de slots ARDF habilitada. La carpeta ARDFv05 contiene fuentes y archivos heredados; no convierte cada binario de su archive en una compilacion ARDF actual.</p>
+<p>El upstream documenta TX desactivado en sus publicaciones ARDF oficiales. No lo presupongas para una compilacion ajena: comprueba <code>ENABLE_PREVENT_TX</code> y version. El firmware de direccion no convierte la radio en receptor de 80 metros; el documento indica limite inferior del chip de aproximadamente 18 MHz, por lo que no sirve para ARDF de 3.5 MHz.</p>
+<h2 id="modos-y-ajustes">Modos y ajustes</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Ajuste</th><th scope="col">Que controla</th><th scope="col">Eleccion y comprobacion</th></tr></thead><tbody>
+<tr><td>ARDF=OFF</td><td>Operacion fuera de la pantalla/modo ARDF</td><td>No demuestra que TX este compilado ni permitido</td></tr>
+<tr><td>ARDF=DF Simple</td><td>Radiogoniometria simple con ganancia manual</td><td>Para buscar sin ciclos; no requiere corregir reloj de ciclos</td></tr>
+<tr><td>ARDF=ARDF</td><td>Ciclos y presentacion de zorros</td><td>Configurar sincronizacion con el evento real</td></tr>
+<tr><td>Mode=AM</td><td>Demodulacion de señales AM de la actividad</td><td>Coincidir con la señal real; no habilita TX AM</td></tr>
+<tr><td>Step</td><td>Paso de sintonia</td><td>El manual propone 1 kHz; evita que redondee la frecuencia deseada</td></tr>
+<tr><td>Sql</td><td>Squelch</td><td>El manual propone 0 para escuchar continuamente; ajustar volumen con cuidado</td></tr>
+<tr><td>RxMode</td><td>Escucha de VFO</td><td>MAIN ONLY evita alternancia y parpadeo de historial de ganancia</td></tr>
+<tr><td>Ganancia manual</td><td>Sensibilidad/atenuacion por indice</td><td>Menor indice reduce sensibilidad; bajar al acercarse a señal intensa</td></tr>
+<tr><td>NumFox</td><td>Numero de emisores en ciclo</td><td>Documento: 1-10; 0 desactiva temporizacion; default 5</td></tr>
+<tr><td>FoxDur</td><td>Duracion de cada turno</td><td>Documento: default 60 s, rango 1.00-999.99 s; verificar unidades de entrada del build</td></tr>
+<tr><td>EndSig</td><td>Aviso previo al fin de turno</td><td>0 desactiva; documento 1-30 s. Bajar volumen antes de auriculares</td></tr>
+<tr><td>GainRe</td><td>Recordar ganancia por zorro/VFO</td><td>OFF, VFO A, VFO B o BOTH segun documento</td></tr>
+<tr><td>RSS100</td><td>Referencia para estimar distancia</td><td>Cero desactiva; no es calibracion RF de toda la radio</td></tr>
+<tr><td>ClkCor</td><td>Correccion del temporizador interno</td><td>Solo tras medir deriva, no copiar el valor de otra unidad</td></tr>
+<tr><td>SetNav</td><td>Orientacion de teclas K1/K5</td><td>Corregir si UP/DOWN parecen invertidos</td></tr>
+<tr><td>ChSave</td><td>Persistir configuracion de memoria</td><td>Necesario si se trabaja en MR; VFO y MR no son lo mismo</td></tr>
+</tbody></table></div>
+<p>Los cambios por indice de ganancia se describen como aproximadamente 5 dB; no son un atenuador certificado. Una señal muy cercana puede saturar pese a reducir ganancia. Antena, polarizacion, orientacion y entorno importan.</p>
+<h2 id="puesta-en-marcha-solo-recepcion">Puesta en marcha solo recepcion</h2>
+<ol>
+<li>Identificar hardware y firmware ARDF exactos; guardar configuracion original.</li>
+<li>Conectar antena y situar volumen bajo; subir gradualmente, especialmente con auriculares.</li>
+<li>Elegir DF Simple para comprobar recepcion sin reloj.</li>
+<li>Seleccionar modulacion, paso y frecuencia de la señal autorizada del evento.</li>
+<li>Usar MAIN ONLY; comprobar que estas en VFO si introduces una frecuencia.</li>
+<li>Ajustar ganancia y orientacion sin confundir maximo de ruido con señal util.</li>
+<li>Para competicion temporizada, configurar NumFox/FoxDur y sincronizar al ciclo real siguiendo la pantalla/guia de la version instalada.</li>
+<li>Guardar si procede; comprobar al volver a cargar VFO/memoria.</li>
+</ol>
+<p>No se recomiendan secuencias universales de sincronizacion: las teclas y modos pueden cambiar entre versiones. No emitir una señal de prueba fuera de permiso.</p>
+<h2 id="recordatorio-de-ganancia">Recordatorio de ganancia</h2>
+<p>GainRe mantiene valores por zorro al comienzo de su turno. Una configuracion util es VFO A para frecuencia de los zorros con memoria de ganancia, VFO B para baliza continua sin ella. Si NumFox=0 o GainRe no incluye el VFO activo, no esperar una tabla de historial por zorro. El documento advierte que la tabla visible puede tener limites distintos del maximo NumFox: no inferir 10 historiales por mostrar 10 turnos.</p>
+<h2 id="distancia-una-estimacion-no-navegacion">Distancia: una estimacion, no navegacion</h2>
+<p>La prediccion se basa en un modelo aproximado de propagacion y una referencia RSS100 del conjunto emisor-antena-receptor. Terreno, potencia, altura y obstaculos cambian el resultado; no confiar en el numero como distancia real. El manual describe tomar referencia a 100 m del emisor del evento, con señal estable y orientacion conocida. Cero desactiva la funcion. No sustituye cartografia, seguridad personal ni instrucciones del organizador.</p>
+<h2 id="correccion-de-reloj">Correccion de reloj</h2>
+<p>El manual describe deriva del resonador interno. Para el caso concreto de medir cuantos segundos reales transcurren cuando el equipo indica una hora:</p>
+<pre><code>correccion = 6000 - (segundos_reales * 100 / 60)</code></pre>
+<p>El documento da rango -500 a 500 para ClkCor. Esta formula solo aplica al procedimiento de esa version, no a cualquier menu de reloj de otra radio. No es una correccion del oscilador RF ni requiere modificar calibracion RF. Tras cambiarla, repetir una medida y revisar sincronizacion.</p>
+<h2 id="diferencias-historicas-verificables">Diferencias historicas verificables</h2>
+<ul>
+<li>El documento indica que antes de v0.4 SetNav se encontraba en menu oculto; no asumir la misma ubicacion en todas las versiones.</li>
+<li>Para saber que cambia entre v0.2, v0.4, v0.5 y v0.5.1, consultar cada release; una etiqueta mas reciente no demuestra por si sola compatibilidad de datos.</li>
+<li>Usa el modulo CHIRP que acompaña la release. El driver UV-K5 estandar no representa necesariamente sus ajustes ARDF.</li>
+<li>No extrapolar V1/V2 al flasheo V3. El manual advierte que k5prog/k5prog_win V1 no son las herramientas adecuadas para V3.</li>
+</ul>
+<h2 id="diagnostico">Diagnostico</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Problema</th><th scope="col">Comprobacion no destructiva</th></tr></thead><tbody>
+<tr><td>Solo entran tres digitos</td><td>Puede estar en memoria, no VFO</td></tr>
+<tr><td>Cambia la frecuencia introducida</td><td>Revisar Step/raster y limites de banda</td></tr>
+<tr><td>Historial de ganancia parpadea</td><td>Desactivar doble escucha</td></tr>
+<tr><td>No aparece tabla de zorros</td><td>Revisar NumFox y GainRe para el VFO activo</td></tr>
+<tr><td>CHIRP muestra otros ajustes</td><td>Guardar memoria y verificar modulo/version</td></tr>
+<tr><td>Flechas invertidas</td><td>SetNav, no cambiar de firmware por parecido exterior</td></tr>
+<tr><td>Error Header short read</td><td>Cerrar programas, cable/puerto de datos, modo y firmware; no borrar memoria</td></tr>
+<tr><td>Distancia incoherente</td><td>Referencia RSS100, antena, potencia y terreno; no recalibrar RF a ciegas</td></tr>
+</tbody></table></div>
+<h2 id="fuentes">Fuentes</h2>
+<ul>
+<li><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">Proyecto ARDF V3 y UV-K1</a>.</li>
+<li><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/blob/main/ARDF.md" target="_blank" rel="noopener noreferrer">Manual ARDF del proyecto</a>.</li>
+<li><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/releases" target="_blank" rel="noopener noreferrer">Publicaciones ARDF V3</a>.</li>
+<li><a href="https://github.com/reald/uv-k5-firmware-custom" target="_blank" rel="noopener noreferrer">Proyecto ARDF V1</a>.</li>
+<li><a href="ayuda-configuracion.html">Configuracion comun</a>.</li>
+</ul>
+<p>La rama remota puede evolucionar. Para repetir la configuracion registra la version exacta del manual, firmware y driver junto con tu copia.</p></article>
+    <footer><p>Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia. <a href="ayuda-firmwares.html">Volver al indice</a>.</p></footer>
+  </main>
+</body>
+</html>

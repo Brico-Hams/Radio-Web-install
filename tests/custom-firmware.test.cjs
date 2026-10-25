@@ -39,3 +39,18 @@ test("una compilacion solo se acepta si cada archivo coincide con SHA256SUMS", a
   await assert.rejects(R.verifyCustomBuild([{ name: "f4hwn.labs.bin", bytes: bin }]), /Falta SHA256SUMS/);
   await assert.rejects(R.verifyCustomBuild([file("SHA256SUMS", "not a sum line")]), /no valida/);
 });
+test("la imagen seleccionada corresponde a build-info, no al primer binario del manifiesto", async () => {
+  const other = file("other.bin", "other firmware");
+  const intended = file("intended.bin", "intended firmware");
+  const info = file("build-info.json", JSON.stringify({
+    format: "bricohams-firmware-build", firmware: intended.name, preset: "Labs", options: [], upstream: { tag: "v6.3.0" }
+  }));
+  const files = [other, intended, info];
+  const sums = file("SHA256SUMS", files.map(item => `${sha(item.bytes)}  ${item.name}`).join("\n"));
+  const result = await R.verifyCustomBuild([sums, ...files]);
+  assert.equal(result.firmware.name, intended.name);
+  assert.deepEqual(result.firmware.bytes, intended.bytes);
+  await assert.rejects(R.verifyCustomBuild([sums, ...files, other]), /duplicados/);
+  await assert.rejects(R.verifyCustomBuild([file("SHA256SUMS", `${sha(other.bytes)}  other.bin\n`), other]), /Falta build-info/);
+  await assert.rejects(R.verifyCustomBuild([file("SHA256SUMS", `${sha(other.bytes)}  other.bin\n${sha(other.bytes)}  other.bin\n`), other]), /duplicado/);
+});

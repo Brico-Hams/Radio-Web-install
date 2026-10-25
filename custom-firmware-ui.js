@@ -14,13 +14,16 @@
       if (!line.trim()) continue;
       const match = line.match(/^([0-9a-f]{64}) [ *]?(.+)$/i);
       R.assert(match, `Linea de SHA256SUMS no valida: ${line.slice(0, 60)}`);
-      sums.set(match[2].trim(), match[1].toLowerCase());
+      const name = match[2].trim();
+      R.assert(name && !sums.has(name), `Nombre duplicado en SHA256SUMS: ${name}`);
+      sums.set(name, match[1].toLowerCase());
     }
     return sums;
   }
   // files: [{ name, bytes }]. Every file listed in SHA256SUMS must be present and match.
   async function verifyBuild(files) {
     const byName = new Map(files.map(file => [file.name, file.bytes]));
+    R.assert(byName.size === files.length, "Hay archivos con nombres duplicados.");
     R.assert(byName.has("SHA256SUMS"), "Falta SHA256SUMS en los archivos cargados.");
     const sums = parseSums(new TextDecoder().decode(byName.get("SHA256SUMS")));
     R.assert(sums.size > 0, "SHA256SUMS esta vacio.");
@@ -36,8 +39,13 @@
       info = JSON.parse(new TextDecoder().decode(byName.get("build-info.json")));
       R.assert(sums.has("build-info.json"), "build-info.json no esta en SHA256SUMS: compilacion antigua o modificada.");
       R.assert(info.format === "bricohams-firmware-build" && sums.has(info.firmware), "build-info.json no corresponde a esta compilacion.");
+      R.assert(typeof info.firmware === "string" && info.firmware.endsWith(".bin") &&
+        typeof info.preset === "string" && typeof info.upstream?.tag === "string" &&
+        Array.isArray(info.options) && info.options.every(option => typeof option === "string"),
+      "Metadatos de compilacion incompletos.");
     }
-    return { results, info, firmware: results.find(item => item.name.endsWith(".bin")) || null };
+    R.assert(info, "Falta build-info.json en los archivos cargados.");
+    return { results, info, firmware: results.find(item => item.name === info.firmware) };
   }
   function mountCustomFirmware({ page, action, log, useImage }) {
     const catalog = R.F4HWN_OPTIONS;
@@ -47,6 +55,8 @@
     panel.className = "panel operations";
     panel.innerHTML = `<h2>Firmware a medida</h2>
       <p class="muted">Elige una edicion de F4HWN ${catalog.upstream.tag} y activa o desactiva funciones. Se genera la peticion para el workflow <b>Firmware a la carta</b> de GitHub Actions, que compila con la toolchain fijada y entrega el .bin con SHA256SUMS. No todas las combinaciones estan probadas y el firmware debe caber en 118 KiB: grabalo en un slot, nunca en Main.</p>
+      <p class="muted">Alternativa local: el repositorio web incluye <code>npm run build:bricohams</code> para crear Bricohams V3 sobre F4HWN v6.1.0 con opciones <code>--option ENABLE_XXX=ON/OFF</code>. Sigue las instrucciones del README; es una base distinta del catalogo online ${catalog.upstream.tag}, no Karina. Los artefactos locales se comprueban tambien en el formulario inferior.</p>
+      <p class="card-note"><strong>Bricohams BETA:</strong> modulos seleccionados al compilar, no plugins universales. Verificacion de estructura no equivale a prueba fisica. Elige solo las opciones necesarias para tu hardware; las protecciones del protocolo y los respaldos siguen siendo obligatorios.</p>
       <label for="fw-preset">Edicion base</label><select id="fw-preset">${Object.keys(catalog.presets).map(name => `<option${name === "Labs" ? " selected" : ""}>${name}</option>`).join("")}</select>
       <label for="fw-search">Filtrar opciones</label><input id="fw-search" type="search" placeholder="APRS, SPECTRUM, VOX...">
       <div class="table-scroll"><table><thead><tr><th>Activa</th><th>Opcion</th><th>En la edicion</th></tr></thead><tbody id="fw-options"></tbody></table></div>
@@ -108,11 +118,11 @@
       $("fw-use").disabled = !result.firmware;
       log(`Compilacion comprobada: ${result.results.map(item => item.name).join(", ")}.`);
     }));
-    $("fw-use").addEventListener("click", () => {
-      if (!verified?.firmware) return;
+    $("fw-use").addEventListener("click", () => action("Preparar firmware a medida", async () => {
+      R.assert(verified?.firmware, "Primero comprueba una compilacion con firmware.");
       useImage(verified.firmware.bytes, (verified.info?.preset || "Custom").slice(0, 15));
       document.getElementById("radio-operations").scrollIntoView({ block: "start" });
-    });
+    }));
     render();
   }
   Object.assign(R, { customFirmwareRequest, verifyCustomBuild: verifyBuild, mountCustomFirmware });

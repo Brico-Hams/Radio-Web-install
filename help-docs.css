@@ -1,0 +1,66 @@
+.firmware-help {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+  overflow-wrap: anywhere;
+}
+.firmware-help header nav {
+  flex-wrap: wrap;
+}
+.firmware-help header,
+.firmware-help footer {
+  padding: 16px 0;
+}
+.firmware-help .panel {
+  margin-top: 24px;
+  padding: 24px;
+}
+.firmware-help article h2 {
+  margin-top: 36px;
+}
+.firmware-help article h3 {
+  margin-top: 24px;
+}
+.firmware-help article p,
+.firmware-help article li {
+  line-height: 1.7;
+}
+.firmware-help article li {
+  margin: 8px 0;
+}
+.firmware-help article ul,
+.firmware-help article ol {
+  padding-left: 28px;
+}
+.firmware-help pre {
+  overflow-x: auto;
+  padding: 16px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+}
+.firmware-help td,
+.firmware-help th {
+  vertical-align: top;
+  white-space: normal;
+  min-width: 100px;
+}
+.firmware-help .table-scroll {
+  max-height: none;
+}
+.firmware-help table {
+  min-width: 600px;
+}
+.firmware-help pre {
+  overflow-wrap: normal;
+}
+.firmware-help :target {
+  scroll-margin-top: 20px;
+}
+@media (max-width: 600px) {
+  .firmware-help {
+    padding: 12px;
+  }
+  .firmware-help .panel {
+    padding: 16px;
+  }
+}

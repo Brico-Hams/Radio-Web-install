@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Bricohams V3: compilacion modular local: ayuda de Bricohams por modelo y version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Bricohams V3: compilacion modular local | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+</head>
+<body>
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#identidad-y-alcance">Identidad y alcance</a></li><li><a href="#compilar-a-demanda">Compilar a demanda</a></li><li><a href="#fuentes-compilacion-y-reproducibilidad">Fuentes, compilacion y reproducibilidad</a></li><li><a href="#binarios-generados-el-25-10-2026">Binarios generados el 25-10-2026</a></li><li><a href="#uso-en-la-web-y-slots">Uso en la web y slots</a></li><li><a href="#validacion-pendiente-en-hardware">Validacion pendiente en hardware</a></li></ul></nav>
+    <article class="panel"><h1 id="bricohams-v3-compilacion-modular-local">Bricohams V3: compilacion modular local</h1>
+<h2 id="identidad-y-alcance">Identidad y alcance</h2>
+<p><strong>BETA, en validacion y pruebas.</strong> Las nuevas compilaciones declaran <code>stability: &quot;beta&quot;</code> y el alcance de validacion en <code>build-info.json</code>, cubierto por SHA256SUMS. Se conserva <code>hardwareTested: false</code> hasta probar ese binario exacto. La lectura real de una radio con F4HWN v6.0.0 no valida estos firmware Bricohams. El Modo PRO de la web reduce confirmaciones, no cambia modulos, licencias ni protecciones del firmware.</p>
+<p>Edicion independiente de F4HWN para <strong>UV-K5 V3 / UV-K1 PY32</strong>. No es Karina, no admite UV-K5 V1 y no anade un bootloader propio. Reutiliza el multiboot del upstream y conserva su identidad de protocolo <code>F4HWN v6.1.0</code>. La edicion de pantalla pasa a <code>Bricohams</code> mediante una variable CMake, sin parchear el binario.</p>
+<p>Base fijada:</p>
+<ul>
+<li>Repositorio: <a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">https://github.com/armel/uv-k1-k5v3-firmware-custom</a>.</li>
+<li>Commit: <code>f556a96e73c3e423a00cf473aeb37f827cac05a5</code>.</li>
+<li>Version declarada por los presets: <code>v6.1.0</code>.</li>
+<li>Licencia/atribucion: se entregan <code>LICENSE</code> y <code>NOTICE</code> originales.</li>
+<li>Las fuentes locales de referencia estan en <code>Documents\Multiboot\Fusion61</code>. Su cambio no confirmado en <code>App/settings.c</code> se conserva y <strong>no se incluye</strong>.</li>
+</ul>
+<p>Se elige esta base abierta para continuar sobre el hardware V3 y sus slots. Las limitaciones que impiden derivar Karina se documentan en <a href="ayuda-karina.html">KARINA.md</a>. No se han portado sus algoritmos, menus ni controladores.</p>
+<h2 id="compilar-a-demanda">Compilar a demanda</h2>
+<p>Requisitos en PATH: Node.js 22+, Git, CMake 3.22+, Ninja, ARM GNU Toolchain y Python 3 para el comprobador de formatos del upstream. No requiere paquetes Python externos ni instalar dependencias nuevas de npm.</p>
+<p>Configuracion usada y probada en Windows:</p>
+<ul>
+<li>Arm GNU Toolchain 13.3.Rel1, GCC 13.3.1.</li>
+<li>CMake 3.31.8.</li>
+<li>Ninja 1.13.1.</li>
+<li>Python 3.13, detectado por CMake.</li>
+</ul>
+<p>Desde la raiz de este repositorio, en PowerShell:</p>
+<pre><code>npm run build:bricohams -- `
+  --source &#39;C:\Users\anatol.lopez\Documents\Multiboot\Fusion61&#39; `
+  --output &#39;.\firmware-builds\mi-fusion&#39; `
+  --preset Fusion `
+  --option ENABLE_VOX=OFF</code></pre>
+<p>El destino <strong>debe ser nuevo</strong>: no se borra ni sobrescribe una compilacion previa. Si falla una compilacion, se muestra el error y no se entrega un conjunto de artefactos marcado como correcto; usa un nuevo destino al repetirla. Las fuentes y resultados de diagnostico quedan en el destino fallido.</p>
+<p>Para Labs, sustituye <code>--preset Fusion</code> por <code>--preset Labs</code> y usa otro destino. Tambien se aceptan <code>FieldOps</code> y <code>Transfer</code>, aunque no se han compilado esos dos perfiles en esta validacion.</p>
+<p>Cada <code>--option</code> admite exactamente <code>ENABLE_XXX=ON</code> o <code>ENABLE_XXX=OFF</code>. Se pueden repetir argumentos <code>--option</code> para funciones diferentes, pero no repetir el mismo nombre. Las opciones disponibles son las booleanas de los presets del <strong>commit local fijado</strong>, no las del formulario online v6.3.0. No se aceptan claves desconocidas, valores arbitrarios, <code>DEV</code>, otro hardware ni versiones inventadas.</p>
+<p>Para enumerarlas sin compilar:</p>
+<pre><code>$p = Get-Content &#39;C:\Users\anatol.lopez\Documents\Multiboot\Fusion61\CMakePresets.json&#39; -Raw | ConvertFrom-Json
+$p.configurePresets | ForEach-Object { $_.cacheVariables } | Format-List</code></pre>
+<p>El constructor resuelve la herencia de presets y exige mantener activados:</p>
+<ul>
+<li><code>ENABLE_FEAT_F4HWN</code></li>
+<li><code>ENABLE_UART</code></li>
+<li><code>ENABLE_USB</code></li>
+<li><code>ENABLE_FEAT_F4HWN_MULTIBOOT</code></li>
+<li><code>ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY</code></li>
+</ul>
+<p>Estas condiciones conservan el perfil de gestion de slots; no garantizan que cualquier combinacion restante sea util o segura. El linker debe aceptar RAM y Flash, y las comprobaciones del upstream deben pasar. No se reduce el presupuesto ni se omiten comprobaciones para hacer caber una imagen.</p>
+<h2 id="fuentes-compilacion-y-reproducibilidad">Fuentes, compilacion y reproducibilidad</h2>
+<p>El script clona el repositorio <strong>local</strong> en una carpeta separada y extrae el commit fijado. No modifica la carpeta Fusion61, no aplica su diff sin commit, no descarga Karina ni cambia la version para burlar el inspector.</p>
+<p>Se fijan <code>SOURCE_DATE_EPOCH</code> al tiempo del commit, <code>TZ=UTC</code> y <code>LC_ALL=C</code>. Con la toolchain indicada, dos compilaciones Fusion en rutas diferentes produjeron el mismo SHA-256 del <code>.bin</code>. Esto verifica reproducibilidad local del firmware, no identidad byte a byte de ELF, mapas o informes que contienen rutas absolutas, ni reproducibilidad con otra toolchain.</p>
+<p>El constructor:</p>
+<ol>
+<li>Valida argumentos, commit y opciones antes de crear el destino.</li>
+<li>Clona las fuentes y configura CMake en Release.</li>
+<li>Compila con el preset elegido, edicion Bricohams y opciones resueltas.</li>
+<li>Conserva las comprobaciones de formatos y aislamiento del restaurador RAM.</li>
+<li>Comprueba longitud, vectores PY32, version y marca de edicion en el binario.</li>
+<li>Emite artefactos, opciones efectivas, herramientas y hashes.</li>
+</ol>
+<p>El directorio <code>source</code> conserva el checkout usado. La carpeta <code>artifacts</code> contiene firmware, ELF, mapa, <code>size.txt</code>, <code>build-info.json</code>, <code>LICENSE</code>, <code>NOTICE</code> y <code>SHA256SUMS</code>. Todos salvo el propio manifiesto estan incluidos en SHA256SUMS. El hash detecta alteraciones respecto al manifiesto, <strong>no es una firma digital</strong>.</p>
+<h2 id="binarios-generados-el-25-10-2026">Binarios generados el 25-10-2026</h2>
+<p>Ambos tienen <code>ENABLE_VOX=OFF</code>; las demas opciones son las de su preset upstream.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Perfil</th><th scope="col">Binario</th><th scope="col">Bytes RAW</th><th scope="col">RAM segun linker</th><th scope="col">Flash segun linker</th></tr></thead><tbody>
+<tr><td>Fusion</td><td><code>bricohams.fusion.v6.1.0.bin</code></td><td>106808</td><td>12160 / 16384</td><td>105920 / 120832</td></tr>
+<tr><td>Labs</td><td><code>bricohams.labs.v6.1.0.bin</code></td><td>114124</td><td>12544 / 16384</td><td>113236 / 120832</td></tr>
+</tbody></table></div>
+<p>El tamano del RAW incluye la seccion de restauracion RAM y no es identico a la linea FLASH del informe. Ambos RAW estan por debajo del maximo de 120832 bytes. La comprobacion de aislamiento informa 888 bytes y 83 saltos revisados.</p>
+<p>SHA-256:</p>
+<pre><code>65d877114264d8337cdd6e9a5a52dcb85689ac03e02ed0a98b2063bfcc281f23  bricohams.fusion.v6.1.0.bin
+7a4cbb4fc6cd8363c776e2982c10b15e92ef779ec1867f49826556514a47bed4  bricohams.labs.v6.1.0.bin</code></pre>
+<p>Labs conserva <code>ENABLE_FEAT_F4HWN_EXT_FLASH_RW</code> y <code>ENABLE_FEAT_F4HWN_OVERLAY_APPS</code>; Fusion no. La capacidad de respaldo fisico requiere el protocolo compatible de la radio y no se ha probado con hardware. No se han generado nuevas <code>.app</code>: las existentes necesitan ABI/API compatibles.</p>
+<h2 id="uso-en-la-web-y-slots">Uso en la web y slots</h2>
+<p>Los artefactos entregados se copian en:</p>
+<pre><code>Documents\Multiboot\Bricohams\Fusion
+Documents\Multiboot\Bricohams\Labs</code></pre>
+<p>En <strong>Quansheng &gt; Firmware a medida &gt; Comprobar la compilacion descargada</strong>, selecciona juntos <strong>todos</strong> los archivos de una carpeta de artefactos. El verificador exige cada entrada de SHA256SUMS, incluidos mapa, ELF y licencias. Tras comprobarlos, <strong>Usar este firmware</strong> lo prepara en el panel de slots.</p>
+<p>Alternativamente, selecciona <code>Documents\Multiboot</code> en la biblioteca local: los dos <code>.bin</code> aparecen como imagenes adicionales preparables. La biblioteca comprueba estructura y muestra hash, pero no verifica automaticamente el manifiesto contiguo; para ello usa el formulario de compilacion.</p>
+<p>Instalar mantiene respaldo completo, confirmacion y CRC del slot. Usar <strong>slots 1-4, no Main</strong>. No se han escrito ni borrado datos de la radio. Fusion y Labs aqui son builds experimentales locales, no versiones oficiales firmadas ni certificadas en banco. La cadena estable del upstream no cambia ese estado experimental de la derivacion.</p>
+<h2 id="validacion-pendiente-en-hardware">Validacion pendiente en hardware</h2>
+<p>Validacion software completada: 149 pruebas, comprobacion de sintaxis y build Pages correctos. En navegador se verificaron los 7 archivos del manifiesto de cada edicion, se prepararon ambos firmwares y la instalacion permanecio bloqueada sin conexion/respaldo. Al seleccionar Multiboot tras la entrega se examinaron 73 imagenes: 11 admitidas estructuralmente y 62 bloqueadas. No hubo errores JavaScript en esa comprobacion.</p>
+<p>Antes de considerarlo apto para uso operativo siguen pendientes identificacion de la unidad, respaldo original, prueba de arranque y recuperacion, calibracion, menus, RX y cambio de CFG/slots. No se afirma resuelto el error USB anterior. No se publican ni flashean automaticamente estos binarios.</p></article>
+    <footer><p>Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia. <a href="ayuda-firmwares.html">Volver al indice</a>.</p></footer>
+  </main>
+</body>
+</html>

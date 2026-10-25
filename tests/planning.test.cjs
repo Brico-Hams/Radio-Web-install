@@ -4,9 +4,47 @@ const { once } = require("node:events");
 const S = require("satellite.js");
 const R = require("../radio-core.js");
 require("../codeplug-editor.js");
+require("../quansheng-channels.js");
 require("../planning-core.js");
 const { DataService } = require("../data-service.cjs");
 const { createServer } = require("../server.cjs");
+test("configuracion RepeaterBook local valida aprobacion y no devuelve ni altera credenciales de entorno", () => {
+  const env = {};
+  const service = new DataService(fetch, env);
+  assert.throws(() => service.configureRepeaterbook({ token: "bad", agent: "a@b.com", approved: true }), /Token/);
+  assert.throws(() => service.configureRepeaterbook({ token: "rbuapp_test", agent: "app a@b.com", approved: false }), /aprobacion/);
+  assert.throws(() => service.configureRepeaterbook({ token: "rbuapp_test", agent: "app\r\na@b.com", approved: true }), /User-Agent/);
+  const result = service.configureRepeaterbook({ token: "rbuapp_test", agent: "app a@b.com", approved: true });
+  assert.equal(result.repeaterbookConfigured, true);
+  assert.equal(JSON.stringify(result).includes("rbuapp_test"), false);
+  assert.deepEqual(env, {});
+});
+test("grupos BrandMeister usan origen fijo, prefijo y tipo grupo", async () => {
+  const service = new DataService(async url => {
+    assert.equal(url, "https://api.brandmeister.network/v2/talkgroup");
+    return new Response(JSON.stringify({ 91: "Worldwide", 214: "Spain", 21401: "Madrid" }));
+  });
+  const result = await service.talkgroups({ prefix: "214" });
+  assert.deepEqual(result.entries.map(item => [item.id, item.type]), [[214, 0], [21401, 0]]);
+  await assert.rejects(service.talkgroups({ prefix: "" }), /Prefijo/);
+  await assert.rejects(service.talkgroups({ prefix: "999" }), /vacia/);
+});
+test("configuracion HTTP RepeaterBook requiere POST JSON mismo origen y nunca expone token", async () => {
+  const server = createServer({}, new DataService(fetch, {}));
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const options = { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: "rbuapp_example", agent: "test a@b.com", approved: true }) };
+    assert.equal((await fetch(`${base}/api/data/repeaterbook-config`, options)).status, 403);
+    const response = await fetch(`${base}/api/data/repeaterbook-config`, { ...options,
+      headers: { ...options.headers, Origin: base } });
+    assert.equal(response.status, 200);
+    assert.equal((await response.text()).includes("rbuapp_example"), false);
+    assert.equal((await (await fetch(`${base}/api/data/status`)).json()).repeaterbookConfigured, true);
+  } finally { await new Promise(resolve => server.close(resolve)); }
+});
 const orbital = {
   name: "ISS", norad: 25544, source: "https://db.satnogs.org/api/tle/?norad_cat_id=25544",
   tle1: "1 25544U 98067A   26291.78980200  .00007771  00000-0  14938-3 0  9994",
@@ -27,11 +65,146 @@ function blankCodeplug() {
   image.set(R.encodeFrequency("145.50000"), 0x3790 + 20);
   return image;
 }
+test("contactos privados y grupos con igual ID son distintos y ambos se deduplican por tipo", () => {
+  const image = blankCodeplug();
+  const contacts = [{ id: 214, callsign: "PRIVATE", type: 1 }, { id: 214, callsign: "TG214", type: 0 }];
+  const result = R.appendContacts(image, contacts);
+  assert.equal(result.added, 2);
+  assert.deepEqual(R.readContacts(result.image).map(item => item.type), [1, 0]);
+  assert.equal(R.appendContacts(result.image, contacts).duplicates, 2);
+  assert.throws(() => R.appendContacts(image, [{ id: 214, callsign: "BAD", type: 3 }]), /tipo grupo/);
+});
 function repeater(patch = {}) {
   return { Callsign: "EA4TEST", Frequency: "145.60000", "Input Freq": "145.00000", "FM Analog": "Yes", DMR: "No",
     Country: "Spain", State: "Madrid", "Nearest City": "Madrid", PL: "88.5", "Operational Status": "On-air", ...patch };
 }
+test("borrado OpenGD77 limpia zonas, listas y prioridades sin renumerar ni tocar el original", () => {
+  const image = blankCodeplug();
+  image[0x3780] |= 2;
+  image.set(image.subarray(0x3790, 0x3790 + 56), 0x3790 + 56);
+  image.fill(0, 0x8010, 0x8030);
+  image[0x8010] = 1;
+  image.fill(0, 0x8030, 0x8030 + 176);
+  image.set(new TextEncoder().encode("ZONE"), 0x8030);
+  const view = new DataView(image.buffer);
+  [1, 2, 1].forEach((value, index) => view.setUint16(0x8040 + index * 2, value, true));
+  image.fill(0, 0x1790, 0x17d0 + 88);
+  image[0x1790] = 1;
+  image.set(new TextEncoder().encode("SCAN"), 0x17d0);
+  [1, 2, 1].forEach((value, index) => view.setUint16(0x17e0 + index * 2, value, true));
+  view.setUint16(0x17d0 + 80, 1, true);
+  view.setUint16(0x17d0 + 82, 2, true);
+  view.setUint16(0x17d0 + 84, 1, true);
+  const original = image.slice();
+  const result = R.deleteChannel(image, 1);
+  const out = new DataView(result.buffer);
+  assert.deepEqual(image, original);
+  assert.deepEqual(R.readChannels(result).map(channel => channel.number), [2]);
+  assert.equal(out.getUint16(0x8040, true), 2);
+  assert.equal(out.getUint16(0x8042, true), 0);
+  assert.equal(out.getUint16(0x17e0, true), 2);
+  assert.equal(out.getUint16(0x17e2, true), 0);
+  assert.equal(out.getUint16(0x17d0 + 80, true), 0);
+  assert.equal(out.getUint16(0x17d0 + 82, true), 2);
+  assert.equal(out.getUint16(0x17d0 + 84, true), 0);
+  assert.deepEqual(result.subarray(0x3790, 0x3790 + 56), new Uint8Array(56).fill(255));
+  assert.deepEqual(result.subarray(0x3790 + 56, 0x3790 + 112), original.subarray(0x3790 + 56, 0x3790 + 112));
+  assert.deepEqual(result.subarray(0x17620), original.subarray(0x17620));
+  assert.throws(() => R.deleteChannel(result, 1), /vacio/);
+  assert.throws(() => R.deleteChannel(image, 1025), /1-1024/);
+});
+test("borrado OpenGD77 cubre ultimo banco, ultima zona y ultima lista sin modificar las inactivas", () => {
+  let image = blankCodeplug();
+  const base = 0xb1b0 + 6 * (16 + 56 * 128);
+  const offset = base + 16 + 127 * 56;
+  image[base + 15] |= 128;
+  image.set(image.subarray(0x3790, 0x3790 + 56), offset);
+  image.fill(0, 0x8010, 0x8030);
+  image[0x8010 + 8] = 8;
+  const zone = 0x8030 + 67 * 176;
+  image.fill(0, zone, zone + 176);
+  image.set(new TextEncoder().encode("LAST"), zone);
+  const scan = 0x17d0 + 63 * 88;
+  image.fill(0, 0x1790, 0x17d0);
+  image[0x1790 + 7] = 128;
+  image.fill(0, scan, scan + 88);
+  image.set(new TextEncoder().encode("LAST"), scan);
+  const view = new DataView(image.buffer);
+  view.setUint16(zone + 16 + 79 * 2, 1024, true);
+  view.setUint16(scan + 16 + 31 * 2, 1024, true);
+  const result = R.deleteChannel(image, 1024);
+  assert.equal(new DataView(result.buffer).getUint16(zone + 16 + 79 * 2, true), 0);
+  assert.equal(new DataView(result.buffer).getUint16(scan + 16 + 31 * 2, true), 0);
+  assert.deepEqual(result.subarray(0x8030, 0x8030 + 176), image.subarray(0x8030, 0x8030 + 176));
+  assert.deepEqual(result.subarray(0x17d0, 0x17d0 + 88), image.subarray(0x17d0, 0x17d0 + 88));
+});
 const channel = { name: "EA4TEST", rx: "145.60000", tx: "145.00000", mode: 0, colorCode: 0, timeslot: 1 };
+function quanshengConfig() {
+  const image = new Uint8Array(R.QUANSHENG_CONFIG_SIZE).fill(255);
+  image.fill(0, 0, 16);
+  new DataView(image.buffer).setUint32(0, 14550000, true);
+  image[12] = 0x1d;
+  image[13] = 15;
+  image.fill(0, 0x4000, 0x4010);
+  image.set(new TextEncoder().encode("TEMPLATE"), 0x4000);
+  image[0x8000] = 2;
+  image[0x8001] = 0;
+  // Real v6.0 images may retain attributes for erased frequency records.
+  image[0x8002] = 5;
+  image.fill(0, 0xa160, 0xa170);
+  image.set(new TextEncoder().encode("v6.0.0"), 0xa160);
+  return image;
+}
+test("PMR446 ofrece 16 frecuencias exactas, ordenadas y solo RX", () => {
+  const channels = R.pmrChannels();
+  assert.equal(channels.length, 16);
+  assert.equal(channels[0].rx, "446.00625");
+  assert.equal(channels[15].rx, "446.19375");
+  assert.equal(new Set(channels.map(channel => channel.key)).size, 16);
+  assert.ok(channels.every(channel => channel.rxOnly && channel.rx === channel.tx && channel.mode === 0));
+});
+test("Quansheng importa PMR sobre plantilla, reutiliza memorias borradas y protege original y ajustes", () => {
+  const original = quanshengConfig(); const snapshot = original.slice();
+  assert.equal(R.readQuanshengChannels(original).length, 1);
+  const result = R.appendQuanshengChannels(original, R.pmrChannels(), 1);
+  assert.equal(result.added, 16);
+  const channels = R.readQuanshengChannels(result.image);
+  assert.equal(channels.length, 17);
+  assert.equal(channels[1].number, 2);
+  assert.equal(channels[1].rx, "446.00625");
+  assert.ok(channels.slice(1).every(channel => channel.rxOnly && channel.mode === 0));
+  assert.equal(result.image[16 + 12] & 1, 0);
+  assert.equal(result.image[16 + 12] & 2, 2);
+  assert.equal(result.image[16 + 13], 0);
+  assert.deepEqual(result.image.subarray(16 + 8, 16 + 11), new Uint8Array(3));
+  assert.deepEqual(original, snapshot);
+  assert.deepEqual(result.image.subarray(0x8800), original.subarray(0x8800));
+  assert.equal(R.appendQuanshengChannels(result.image, R.pmrChannels(), 1).duplicates, 16);
+});
+test("Quansheng conserva offset de repetidor, fuerza RX-only y limita nombres a diez caracteres", () => {
+  const original = quanshengConfig();
+  const added = R.appendQuanshengChannels(original, [{ ...channel, name: "REPEATER123456" }], 1);
+  const parsed = R.readQuanshengChannels(added.image)[1];
+  assert.equal(parsed.name, "REPEATER12");
+  assert.equal(parsed.rx, "145.60000");
+  assert.equal(parsed.tx, "145.00000");
+  assert.equal(parsed.rxOnly, true);
+  const deleted = R.deleteQuanshengChannel(added.image, parsed.number);
+  assert.equal(R.readQuanshengChannels(deleted).length, 1);
+  assert.equal(R.readQuanshengChannels(added.image).length, 2);
+  assert.equal(deleted[0x8002] & 7, 7);
+  assert.deepEqual(deleted.subarray(0x8800), original.subarray(0x8800));
+});
+test("Quansheng rechaza formato incorrecto, DMR, frecuencias no soportadas y plantilla ausente", () => {
+  const original = quanshengConfig();
+  assert.throws(() => R.readQuanshengChannels(new Uint8Array(512)), /Tamano/);
+  assert.throws(() => R.readQuanshengChannels(new Uint8Array(R.QUANSHENG_CONFIG_SIZE)), /version F4HWN/);
+  assert.throws(() => R.appendQuanshengChannels(original, [channel], 2), /plantilla/);
+  assert.throws(() => R.appendQuanshengChannels(original, [{ ...channel, mode: 1 }], 1), /FM analogicos/);
+  assert.throws(() => R.appendQuanshengChannels(original, [{ ...channel, rx: "27.00000" }], 1), /limita/);
+  assert.throws(() => R.deleteQuanshengChannel(original, 0), /1-1024/);
+  assert.throws(() => R.deleteQuanshengChannel(original, 1024), /vacio/);
+});
 test("append channels clones explicit template, sets free bitmap, preserves all original records and forces RX-only", () => {
   const original = blankCodeplug();
   const snapshot = original.slice();
@@ -191,6 +364,11 @@ test("Doppler channels split a pass into RX-only windows that follow the range r
   const tx = { id: "test", mode: "FM", downlink: 437800000, source: "https://db.satnogs.org" };
   const pass = R.predictPasses(orbital, observer, { start, hours: 24, minimum: 10 }).passes.find(item => !item.partialStart && !item.partialEnd);
   const channels = R.dopplerChannels(orbital, tx, pass, observer, 5);
+  const prepared = R.appendQuanshengChannels(quanshengConfig(), channels, 1);
+  const memories = R.readQuanshengChannels(prepared.image).slice(1);
+  assert.equal(memories.length, 5);
+  assert.deepEqual(memories.map(memory => memory.rx), channels.map(channel => channel.rx));
+  assert.ok(memories.every(memory => memory.rxOnly && memory.rx === memory.tx));
   assert.equal(channels.length, 5);
   const shifts = channels.map(channel => Math.round(Number(channel.rx) * 1e6) - tx.downlink);
   // Approaching at AOS (received above nominal), receding at LOS; ISS at 437.8 MHz stays within about +/-10 kHz.
@@ -209,6 +387,10 @@ test("Doppler channels split a pass into RX-only windows that follow the range r
     const channel = channels[index];
     if (index) assert.equal(channel.from, channels[index - 1].to);
     assert.ok(Math.abs(channel.errorHz - step / 10) < 30, `${channel.errorHz} vs ${step / 10}`);
+    const tunedHz = Number(channel.rx) * 1e6;
+    const endpointErrors = [channel.from, channel.to].map(time =>
+      Math.abs(tx.downlink * (1 - (range(time + 500) - range(time - 500)) / 299792.458) - tunedHz));
+    assert.equal(channel.errorHz, Math.ceil(Math.max(...endpointErrors)));
     for (let time = channel.from; time <= channel.to; time += 2000) {
       assert.ok(Math.abs(received(time) - Number(channel.rx) * 1e6) <= channel.errorHz + 30);
     }

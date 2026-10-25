@@ -11,9 +11,14 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$output"
 # Bricohams Quansheng Studio ships with every installer, downloaded at the commit and SHA-256 pinned in studio.lock.json.
 node "$root/scripts/fetch-studio.cjs"
+node "$root/scripts/build-help.cjs"
 app_files=(
   index.html opengd77.html quansheng.html ayuda.html bricohams-logo.png styles.css
-  app.js radio-core.js transports.js quansheng-connector.js gd77-connector.js
+  ayuda-firmwares.html ayuda-configuracion.html ayuda-quansheng.html help-docs.css
+  ayuda-opciones-f4hwn.html ayuda-presets-f4hwn.html ayuda-ardf.html
+  ayuda-opengd77.html ayuda-opengd77-modelos.html ayuda-karina.html ayuda-bricohams.html
+  ayuda-egzumer.html ayuda-pack-dim0s.html
+  app.js radio-core.js transports.js quansheng-connector.js quansheng-channels.js gd77-connector.js
   backup-store.js codeplug-editor.js radio-ui.js firmware-core.js firmware-catalog.js
   planning-core.js radioid-csv.js planning-ui.js runtime-mode.js server.cjs studio-pin.cjs studio.html studio.lock.json
   firmware-service.cjs data-service.cjs f4hwn-options.js custom-firmware-ui.js

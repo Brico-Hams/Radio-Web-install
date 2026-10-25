@@ -133,6 +133,7 @@ function detail(tool) {
         <p id="model-help" class="model-help" role="status">Selecciona un modelo para consultar su conexion.</p>
         <div class="firmware-note"><strong>Firmware necesario</strong><p>${tool.firmware}</p></div>
         <label class="check"><input id="confirmed" type="checkbox"><span>He comprobado el modelo y el firmware. Autorizo leer la radio y guardar automaticamente copias locales.</span></label>
+        <label class="check"><input id="pro-mode" type="checkbox"><span><strong>Modo PRO (esta sesion)</strong>: autorizo la lectura y las acciones que pulse sin confirmaciones adicionales. Debo seleccionar el modelo correcto. No desactiva respaldos, CRC, permisos USB ni la proteccion de Main.</span></label>
         <button id="radio-connect" class="button primary" type="button" disabled>Conectar y respaldar</button>
         <button id="radio-disconnect" class="button secondary" type="button" disabled>Desconectar</button>
         <p id="radio-status" class="model-help" role="status">Sin conexion.</p>
@@ -150,10 +151,25 @@ function detail(tool) {
         ${page === "quansheng" ? '<div class="bank-map" aria-label="Asociacion predeterminada de slots y bancos"><span>M &rarr; CFG M</span><span>1 &rarr; CFG 1</span><span>2 &rarr; CFG 2</span><span>3 &rarr; CFG 3</span><span>4 &rarr; CFG 4</span></div><p class="card-note">Esquema de referencia; no representa el estado de una radio conectada.</p>' : ""}
       </section>
     </div>
+    ${page === "opengd77" ? `<section class="panel" id="cps-web-capabilities"><h2>OpenGD77 CPS: disponibilidad real en web</h2>
+      <p>Esta web funciona en HTTPS sin instalar el servidor Node. No equivale al CPS completo. Chrome/Edge de escritorio y permiso USB/Serial son necesarios para acceder a una radio; algunos sistemas necesitan un controlador. Abrir el CPS externo no comparte nuestras protecciones.</p>
+      <div class="table-scroll"><table><thead><tr><th>Funcion</th><th>Estado en esta web</th></tr></thead><tbody>
+        <tr><td>Abrir, guardar y editar codeplug estandar 128 KiB</td><td>Disponible en navegador: canales FM/DMR, borrado y referencias de zonas/listas</td></tr>
+        <tr><td>Contactos privados RadioID</td><td>Importar user.csv en navegador. Consulta directa bloqueada por CORS del proveedor; descarga e importacion por API solo en servidor local</td></tr>
+        <tr><td>Salas / grupos BrandMeister</td><td>Consulta e importacion directa en web por prefijo TG. No activa salas ni configura el hotspot</td></tr>
+        <tr><td>Repetidores RepeaterBook</td><td>Importar JSON autorizado en web. Consulta API autenticada necesita servidor; no se exponen tokens en Pages</td></tr>
+        <tr><td>Satelites / TLE / pases / Doppler</td><td>Disponible en navegador con lista publicada, calculo local y edicion de lista SAT o memorias RX</td></tr>
+        <tr><td>Identificacion y respaldo automatico</td><td>Antes de otras operaciones de radio: identificacion, calibracion y codeplug. La copia es parcial: falta firmware MCU original</td></tr>
+        <tr><td>Respaldo del firmware MCU instalado</td><td>NO disponible con protocolo integral verificado por modelo. No se sustituye por firmware descargado ni por el codeplug</td></tr>
+        <tr><td>Leer nuevamente, capturar pantalla, escribir, borrar o restaurar en radio</td><td>Bloqueado sin respaldo integral persistido y verificado, tambien en PRO</td></tr>
+        <tr><td>Flasheo, calibrar/restaurar, voces, base masiva DMR, ajustes generales, editor de zonas completo y canales extendidos</td><td>No implementado aqui; consultar CPS compatible. No se afirma paridad total</td></tr>
+      </tbody></table></div>
+      <p>El firmware comercial de fabrica ya sustituido por OpenGD77 no puede recuperarse leyendo el firmware actualmente instalado. Conserva una copia previa de tu unidad. No se ha validado hardware OpenGD77 en esta sesion.</p>
+    </section>` : ""}
     <section id="radio-operations" class="panel operations" aria-label="Operaciones reales"></section>
     <section class="panel backups-panel"><h2>Copias locales de esta web</h2><p class="muted">Se guardan en IndexedDB en este navegador y origen. Exportalas: borrar datos del navegador elimina las copias locales. Incluyen canales y otros datos privados; no las publiques.</p><button id="refresh-backups" class="button secondary" type="button">Actualizar historial</button><ul id="backup-list"></ul></section>
     <section class="panel"><h2>Registro de operaciones</h2><pre id="radio-log" role="log" aria-label="Registro local"></pre></section>
-    <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Antes de escribir, verifica.</h2><p>Conectores en validacion: pruebas automatizadas con transportes simulados, sin certificacion con hardware fisico. No se afirma paridad completa con las referencias. La seleccion de modelo Quansheng es manual. No cierres ni desconectes durante una operacion.</p></div></aside>
+    <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Beta: antes de escribir, verifica.</h2><p>En fase de validacion: lectura USB probada en una unidad declarada UV-K5 V3 con F4HWN v6.0.0; no se han probado escrituras fisicas ni radios OpenGD77. No es una certificacion de todos los modelos. La seleccion de modelo Quansheng es manual. No cierres ni desconectes durante una operacion.</p></div></aside>
     <section class="sources"><h2>Documentacion de referencia</h2><a href="ayuda.html#drivers">Controladores USB y solucion de errores</a><a href="${tool.url}" ${external}>${tool.action} &nearr;</a>${page === "quansheng" ? `<a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/Multiboot-and-Multiconfig" ${external}>Multiboot y Multiconfig &nearr;</a><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/UV-Studio" ${external}>Guia de UV Studio &nearr;</a><a id="studio-link" href="https://bricohams.github.io/Bricohams-Studio/" ${external}>Bricohams Quansheng Studio (UV-K1 / UV-K5 V3) &nearr;</a>` : ""}</section>`;
 }
 
@@ -166,7 +182,7 @@ document.getElementById("app").innerHTML = `
   </aside>
   <div class="workspace"><header class="topbar">
     <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : helpTemplate ? "Ayuda y soporte" : "Vista general"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
-    <div class="topbar-right"><span id="mode-badge" class="mode-badge"></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span>${current ? '<button id="topbar-connect" class="button primary topbar-connect" type="button" disabled><span aria-hidden="true">⌁</span> Conectar</button>' : ""}</div></header>
+    <div class="topbar-right"><span class="pill">BETA - EN VALIDACION</span><span id="mode-badge" class="mode-badge"></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span>${current ? '<button id="topbar-connect" class="button primary topbar-connect" type="button" disabled><span aria-hidden="true">⌁</span> Conectar</button>' : ""}</div></header>
   <main id="main">${current ? detail(current) : helpTemplate ? "" : home()}</main>
   <footer><span>&copy; 2026 ${BRAND.name} ${BRAND.product} <span class="muted">/ GPL-3.0-or-later / Sin garantia</span></span><span><a href="ayuda.html#inicio">Instalar en local</a> &middot; <a href="ayuda.html">Ayuda y soporte</a> &middot; <a href="${BRAND.repository}" target="_blank" rel="noopener noreferrer">Codigo fuente</a> &middot; No afiliado a OpenGD77, grid.radio, F4HWN ni Quansheng.</span></footer></div>`;
 
@@ -198,6 +214,7 @@ if (helpTemplate) {
 if (current) {
   const model = document.getElementById("model");
   const confirmed = document.getElementById("confirmed");
+  const pro = document.getElementById("pro-mode");
   const launch = document.getElementById("launch");
   const update = () => {
     const selection = current.models.find(([id]) => id === model.value);
@@ -206,10 +223,11 @@ if (current) {
     document.getElementById("model-help").textContent = selection
       ? `${selection[2]} ${available ? "Este navegador expone la API requerida en esta pagina; el sitio original comprobara los permisos." : "La API requerida no esta disponible en esta pagina. Utiliza Chrome o Edge de escritorio y comprueba la conexion en el sitio original (HTTPS)."}`
       : "Selecciona un modelo para consultar su conexion.";
-    launch.disabled = !selection || !confirmed.checked;
+    launch.disabled = !selection || !(confirmed.checked || pro.checked);
   };
   model.addEventListener("change", update);
   confirmed.addEventListener("change", update);
+  pro.addEventListener("change", update);
   if (globalThis.RadioWorkspace) globalThis.RadioWorkspace.mountRadioUI(page);
   launch.addEventListener("click", () => {
     if (launch.disabled) return;

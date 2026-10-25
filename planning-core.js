@@ -200,15 +200,34 @@
     for (let index = 0; index < segments; index++) {
       const from = edges[index], to = edges[index + 1];
       const centre = (level(index) + level(index + 1)) / 2;
-      const errorHz = Math.max(Math.abs(at(from) - centre), Math.abs(at(to) - centre));
       const window = `${new Date(from).toISOString().slice(11, 19)}-${new Date(to).toISOString().slice(11, 19)} UTC`;
       const rx = validMHz((centre / 1000000).toFixed(5));
+      const tunedHz = Number(rx) * 1000000;
+      const errorHz = Math.ceil(Math.max(Math.abs(at(from) - tunedHz), Math.abs(at(to) - tunedHz)));
       channels.push({ ...base, key: `${base.key}:${pass.aos.time}:${index}`, name: asciiName(`${label} ${index + 1}`, 10), rx, tx: rx,
         window, from, to, errorHz: Math.round(errorHz),
         note: `Solo RX. Doppler corregido para ${window} (error max. ${Math.round(errorHz)} Hz). Cambia de memoria al pasar cada ventana.` });
     }
     return channels;
   }
-  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, dopplerChannels, csvCell });
+  function pmrChannels() {
+    return Array.from({ length: 16 }, (_, index) => {
+      const frequency = ((44600625 + index * 1250) / 100000).toFixed(5);
+      return { key: `pmr446:${index + 1}`, name: `PMR${String(index + 1).padStart(2, "0")}`,
+        rx: frequency, tx: frequency, mode: 0, rxOnly: true, narrow: true, source: "PMR446 analogico solo RX" };
+    });
+  }
+  function normalizeTalkgroups(data, prefix) {
+    R.assert(/^\d{1,7}$/.test(String(prefix)), "Prefijo TG: 1-7 digitos.");
+    R.assert(data && typeof data === "object" && !Array.isArray(data), "Lista BrandMeister no reconocida.");
+    const entries = Object.entries(data).filter(([id]) => id.startsWith(prefix)).map(([id, name]) => {
+      R.assert(/^\d+$/.test(id) && Number(id) > 0 && Number(id) <= 0xffffff && typeof name === "string",
+        "Grupo BrandMeister invalido.");
+      return { id: Number(id), callsign: `TG${id}`, name: name.slice(0, 80), type: 0, source: "https://brandmeister.network" };
+    }).sort((a, b) => a.id - b.id);
+    R.assert(entries.length > 0 && entries.length <= 1024, "Seleccion TG vacia o superior a 1024. Ajusta el prefijo.");
+    return { provider: "BrandMeister", entries };
+  }
+  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, dopplerChannels, csvCell, pmrChannels, normalizeTalkgroups });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);
