@@ -611,7 +611,7 @@ static void BH_SPEC_Draw(void)
                 (unsigned)((gain >> bhSpecGainShifts[bhSpecGainField]) & bhSpecGainMax[bhSpecGainField]));
             UI_PrintStringSmallNormal(line, 0, 127, 4);
         } else {
-            sprintf(line, "STEP %luHz %s%u", (unsigned long)(bhSpec.config.step_10hz * 10U),
+            snprintf(line, sizeof(line), "STEP %luHz %s%u", (unsigned long)(bhSpec.config.step_10hz * 10U),
                 bhSpecManualGain ? "MAN" : "ATT", (unsigned)attStep);
             UI_PrintStringSmallNormal(line, 0, 127, 3);
             UI_PrintStringSmallNormal("M=REG *=RX 5=SCAN", 0, 127, 4);
@@ -642,7 +642,7 @@ static void BH_SPEC_Draw(void)
     sprintf(line, "%lu.%05lu %s", (unsigned long)(bhSpecCenter / 100000U),
         (unsigned long)(bhSpecCenter % 100000U), bhSpecPaused ? "HOLD" : bhSpecMulti ? "MULTI" : "SCAN");
     UI_PrintStringSmallNormal(line, 0, 127, 0);
-    sprintf(line, "d%luHz A%u P%u/%u", (unsigned long)(bhSpec.config.step_10hz * 10U),
+    snprintf(line, sizeof(line), "d%luHz A%u P%u/%u", (unsigned long)(bhSpec.config.step_10hz * 10U),
         (unsigned)bhSpec.config.samples_per_bin,
         bhSpecPresets.count ? (unsigned)(bhSpecPresets.selected + 1U) : 0U,
         (unsigned)bhSpecPresets.count);
