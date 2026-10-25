@@ -78,8 +78,14 @@
         </div>
         <label class="check"><input id="plan-location-consent" type="checkbox"><span>Autorizo usar mi posicion para calcular pases localmente. Si exporto el plan, incluira esa posicion.</span></label>
         <div class="operation-buttons"><button id="plan-gps" type="button" class="button secondary">Usar mi ubicacion (pedir permiso)</button><button id="plan-predict" type="button" class="button primary">Calcular proximos pases</button><button id="plan-pass-save" type="button" class="button secondary">Guardar plan de pases JSON</button><button id="plan-tle-save" type="button" class="button secondary">Guardar TLE para herramienta compatible</button></div>
-        <p id="plan-pass-info" role="status">TLE obligatorio con epoca de menos de 7 dias. Precision de muestreo 5 s; cruces refinados a 0,5 s. Sin relieve ni correccion atmosferica. No controla Doppler ni antenas.</p>
+        <p id="plan-pass-info" role="status">TLE obligatorio con epoca de menos de 7 dias. Precision de muestreo 5 s; cruces refinados a 0,5 s. Sin relieve ni correccion atmosferica. No controla antenas; el Doppler se compensa con canales por tramos.</p>
         <div class="table-scroll"><table><thead><tr><th>Inicio UTC</th><th>Maximo UTC</th><th>Fin UTC</th><th>Elevacion max.</th><th>Azimut inicio / fin</th></tr></thead><tbody id="plan-pass-results"></tbody></table></div>
+        <div class="planning-filters">
+          <div><label for="plan-doppler-pass">Pase para canales Doppler</label><select id="plan-doppler-pass"><option value="">Calcula los pases primero</option></select></div>
+          <div><label for="plan-doppler-segments">Canales por pase (1 a 10)</label><input id="plan-doppler-segments" type="number" value="5" min="1" max="10"></div>
+        </div>
+        <div class="operation-buttons"><button id="plan-doppler-stage" type="button" class="button secondary">Preparar canales con Doppler corregido (solo RX)</button></div>
+        <p id="plan-doppler-info" role="status">Una memoria por salto de frecuencia igual del Doppler; las ventanas son mas cortas cerca del maximo. Cambia de memoria a la hora indicada; la radio no sigue el Doppler sola.</p>
       </div>
       <hr><h3>Canales preparados (sin escribir en la radio)</h3>
       ${page !== "quansheng" ? '<label for="plan-template">Plantilla del codeplug abierto: se preservan sus ajustes no importados</label><select id="plan-template"><option value="">Abre o lee un codeplug primero</option></select><button id="plan-template-refresh" type="button" class="button secondary">Actualizar plantillas</button>' : ""}
@@ -200,7 +206,7 @@
       for (const entry of staged.values()) {
         const row = document.createElement("tr");
         cell(row, entry.name); cell(row, `${entry.rx} / ${entry.tx}`); cell(row, entry.mode ? "DMR solo RX" : "FM solo RX");
-        cell(row, entry.source);
+        cell(row, entry.window ? `${entry.source} · Doppler ${entry.window}` : entry.source);
         const remove = document.createElement("button");
         remove.type = "button"; remove.className = "guide-tab"; remove.textContent = "Quitar";
         remove.addEventListener("click", () => { if (busy) return; staged.delete(entry.key); renderStaged(); });
@@ -226,6 +232,7 @@
     function invalidatePrediction() {
       prediction = null;
       $("plan-pass-results").replaceChildren();
+      $("plan-doppler-pass").replaceChildren(new Option("Calcula los pases primero", ""));
       $("plan-pass-info").textContent = "Datos cambiados: vuelve a calcular los pases antes de exportar.";
     }
     function clearOrbit() {
@@ -409,7 +416,19 @@
           `${pass.maximum.elevation.toFixed(1)} grados`, `${pass.aos.azimuth.toFixed(1)} / ${pass.los.azimuth.toFixed(1)}`]) cell(row, value);
         $("plan-pass-results").append(row);
       }
-      $("plan-pass-info").textContent = `${result.passes.length} pases por encima de ${result.minimumElevation} grados en ${result.hours} h desde ${result.start}. Epoca TLE: ${result.epoch}. Horas UTC, no hora local. Sin escritura en la radio ni seguimiento Doppler.`;
+      $("plan-doppler-pass").replaceChildren(new Option(result.passes.length ? "Selecciona un pase" : "Sin pases en la ventana", ""),
+        ...result.passes.map((pass, index) => new Option(`${new Date(pass.aos.time).toISOString().slice(0, 16)} UTC, max. ${pass.maximum.elevation.toFixed(0)} grados`, index)));
+      $("plan-pass-info").textContent = `${result.passes.length} pases por encima de ${result.minimumElevation} grados en ${result.hours} h desde ${result.start}. Epoca TLE: ${result.epoch}. Horas UTC, no hora local. Sin escritura en la radio; para el Doppler prepara canales por tramos.`;
+    });
+    attach("plan-doppler-stage", "Preparar canales Doppler", async () => {
+      requireOrbit(); consentLocation();
+      R.assert(prediction && Date.now() - Date.parse(prediction.start) < 15 * 60000, "Calcula de nuevo los pases (caducidad 15 minutos).");
+      const pass = prediction.passes[Number($("plan-doppler-pass").value)];
+      R.assert($("plan-doppler-pass").value !== "" && pass, "Selecciona un pase.");
+      const entry = transmitters.find(item => item.id === $("plan-tx").value);
+      const channels = R.dopplerChannels(orbital, entry, pass, prediction.observer, Number($("plan-doppler-segments").value));
+      stage(channels);
+      $("plan-doppler-info").textContent = channels.map(channel => `${channel.name}: ${channel.rx} MHz, ${channel.window} (error max. ${channel.errorHz} Hz)`).join("; ");
     });
     attach("plan-pass-save", "Guardar prediccion de pases", async () => {
       requireOrbit(); consentLocation();

@@ -59,7 +59,7 @@
     const rows = [["Location", "Name", "Frequency", "Duplex", "Offset", "Tone", "rToneFreq", "cToneFreq", "DtcsCode", "DtcsPolarity", "RxDtcsCode", "CrossMode", "Mode", "TStep", "Skip", "Comment"]];
     channels.forEach((channel, index) => rows.push([index, asciiName(channel.name, 10), validMHz(channel.rx), "off", "0.000000",
       "", "88.5", "88.5", "023", "NN", "023", "Tone->Tone", "FM", "5.00", "",
-      `RX ONLY. TX nominal ${channel.tx}; tono de proveedor ${channel.tone || "sin dato"}. ${channel.source || ""} ${channel.attribution || ""} ${channel.license || ""}`]));
+      `RX ONLY. ${channel.window ? `Doppler ${channel.window}, error max. ${channel.errorHz} Hz. ` : ""}TX nominal ${channel.tx}; tono de proveedor ${channel.tone || "sin dato"}. ${channel.source || ""} ${channel.attribution || ""} ${channel.license || ""}`]));
     return rows.map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
   }
   function validateTLE(orbital, now = Date.now()) {
@@ -104,6 +104,18 @@
     const age = now - Date.parse(file.fetchedAt);
     return age > 7 * 86400000 ? `Aviso: la lista de satelites tiene ${Math.floor(age / 86400000)} dias (mas de 7 dias); los elementos pueden no ser fiables.` : null;
   }
+  function lookFor(record, observer) {
+    const location = { latitude: observer.latitude * Math.PI / 180, longitude: observer.longitude * Math.PI / 180, height: observer.height };
+    return function look(time) {
+      const date = new Date(time);
+      const state = S.propagate(record, date);
+      R.assert(state && state.position && record.error === 0, "Fallo SGP4: orbita no propagable.");
+      const position = S.eciToEcf(state.position, S.gstime(date));
+      const angles = S.ecfToLookAngles(location, position);
+      R.assert(Number.isFinite(angles.elevation), "Prediccion orbital no finita.");
+      return { time, elevation: angles.elevation * 180 / Math.PI, azimuth: angles.azimuth * 180 / Math.PI, rangeKm: angles.rangeSat };
+    };
+  }
   function predictPasses(orbital, observer, options = {}) {
     const start = options.start ?? Date.now();
     const hours = options.hours ?? 24;
@@ -115,16 +127,7 @@
       Number.isFinite(observer.height) && observer.height >= -0.5 && observer.height <= 9, "Posicion no valida (altura en km).");
     const { record, epoch } = validateTLE(orbital, start);
     R.assert(start + hours * 3600000 - epoch <= 7 * 86400000, "La ventana supera la validez maxima de siete dias del TLE.");
-    const location = { latitude: observer.latitude * Math.PI / 180, longitude: observer.longitude * Math.PI / 180, height: observer.height };
-    function look(time) {
-      const date = new Date(time);
-      const state = S.propagate(record, date);
-      R.assert(state && state.position && record.error === 0, "Fallo SGP4: orbita no propagable.");
-      const position = S.eciToEcf(state.position, S.gstime(date));
-      const angles = S.ecfToLookAngles(location, position);
-      R.assert(Number.isFinite(angles.elevation), "Prediccion orbital no finita.");
-      return { time, elevation: angles.elevation * 180 / Math.PI, azimuth: angles.azimuth * 180 / Math.PI, rangeKm: angles.rangeSat };
-    }
+    const look = lookFor(record, observer);
     function crossing(left, right, rising) {
       while (right - left > 500) {
         const middle = (left + right) / 2;
@@ -166,6 +169,46 @@
       attribution: transmitter.attribution || "SatNOGS DB / Libre Space Foundation (CC BY-SA 4.0).",
       license: transmitter.license || "https://creativecommons.org/licenses/by-sa/4.0/" };
   }
-  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, csvCell });
+  const LIGHT_KM_S = 299792.458;
+  // Received frequency for a downlink at `time`: range rate from a centred 1 s difference (km/s, positive = receding).
+  function dopplerHz(look, downlinkHz, time) {
+    const rangeRate = look(time + 500).rangeKm - look(time - 500).rangeKm;
+    return downlinkHz * (1 - rangeRate / LIGHT_KM_S);
+  }
+  // Splits one pass into equal frequency steps (short windows around closest approach), so every RX-only
+  // memory is within half a step of the received frequency for its whole window.
+  function dopplerChannels(orbital, transmitter, pass, observer, segments = 5) {
+    R.assert(Number.isInteger(segments) && segments >= 1 && segments <= 10, "Entre 1 y 10 canales Doppler por pase.");
+    R.assert(pass && Number.isFinite(pass.aos?.time) && Number.isFinite(pass.los?.time) && pass.los.time > pass.aos.time, "Pase no valido.");
+    const base = satelliteChannel(orbital, transmitter);
+    const { record } = validateTLE(orbital, pass.aos.time);
+    const look = lookFor(record, observer);
+    const at = time => dopplerHz(look, transmitter.downlink, time);
+    const first = at(pass.aos.time), last = at(pass.los.time);
+    // Within one pass the range rate only grows, so the received frequency falls monotonically.
+    R.assert(first > last, "Doppler no monotono en este pase; usa el canal nominal.");
+    const level = index => first + (last - first) * index / segments;
+    const edges = [pass.aos.time];
+    for (let index = 1; index < segments; index++) {
+      let left = edges[index - 1], right = pass.los.time;
+      while (right - left > 500) { const middle = (left + right) / 2; if (at(middle) > level(index)) left = middle; else right = middle; }
+      edges.push((left + right) / 2);
+    }
+    edges.push(pass.los.time);
+    const label = asciiName(orbital.name.replace(/\s*\(.*?\)\s*/g, " ").trim() || orbital.name, 7);
+    const channels = [];
+    for (let index = 0; index < segments; index++) {
+      const from = edges[index], to = edges[index + 1];
+      const centre = (level(index) + level(index + 1)) / 2;
+      const errorHz = Math.max(Math.abs(at(from) - centre), Math.abs(at(to) - centre));
+      const window = `${new Date(from).toISOString().slice(11, 19)}-${new Date(to).toISOString().slice(11, 19)} UTC`;
+      const rx = validMHz((centre / 1000000).toFixed(5));
+      channels.push({ ...base, key: `${base.key}:${pass.aos.time}:${index}`, name: asciiName(`${label} ${index + 1}`, 10), rx, tx: rx,
+        window, from, to, errorHz: Math.round(errorHz),
+        note: `Solo RX. Doppler corregido para ${window} (error max. ${Math.round(errorHz)} Hz). Cambia de memoria al pasar cada ventana.` });
+    }
+    return channels;
+  }
+  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, dopplerChannels, csvCell });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

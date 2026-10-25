@@ -187,6 +187,41 @@ test("SAT channels only support narrow/punctual FM and start RX-only without fab
     assert.throws(() => R.satelliteChannel(orbital, { ...tx, ...patch }));
   }
 });
+test("Doppler channels split a pass into RX-only windows that follow the range rate", () => {
+  const tx = { id: "test", mode: "FM", downlink: 437800000, source: "https://db.satnogs.org" };
+  const pass = R.predictPasses(orbital, observer, { start, hours: 24, minimum: 10 }).passes.find(item => !item.partialStart && !item.partialEnd);
+  const channels = R.dopplerChannels(orbital, tx, pass, observer, 5);
+  assert.equal(channels.length, 5);
+  const shifts = channels.map(channel => Math.round(Number(channel.rx) * 1e6) - tx.downlink);
+  // Approaching at AOS (received above nominal), receding at LOS; ISS at 437.8 MHz stays within about +/-10 kHz.
+  assert.ok(shifts[0] > 3000 && shifts[4] < -3000, shifts.join());
+  for (let index = 1; index < shifts.length; index++) assert.ok(shifts[index] < shifts[index - 1], "monotonic");
+  assert.ok(shifts.every(shift => Math.abs(shift) < 11000));
+  // Cross-check every window against a finer (0.1 s) range difference computed directly with satellite.js:
+  // the memory stays within its declared error, which is half of an equal frequency step.
+  const record = S.twoline2satrec(orbital.tle1, orbital.tle2);
+  const range = time => S.ecfToLookAngles({ latitude: observer.latitude * Math.PI / 180, longitude: observer.longitude * Math.PI / 180, height: observer.height },
+    S.eciToEcf(S.propagate(record, new Date(time)).position, S.gstime(new Date(time)))).rangeSat;
+  const received = time => tx.downlink * (1 - (range(time + 50) - range(time - 50)) / 0.1 / 299792.458);
+  const step = received(pass.aos.time) - received(pass.los.time);
+  assert.equal(channels[0].from, pass.aos.time); assert.equal(channels[4].to, pass.los.time);
+  for (let index = 0; index < channels.length; index++) {
+    const channel = channels[index];
+    if (index) assert.equal(channel.from, channels[index - 1].to);
+    assert.ok(Math.abs(channel.errorHz - step / 10) < 30, `${channel.errorHz} vs ${step / 10}`);
+    for (let time = channel.from; time <= channel.to; time += 2000) {
+      assert.ok(Math.abs(received(time) - Number(channel.rx) * 1e6) <= channel.errorHz + 30);
+    }
+  }
+  for (const channel of channels) {
+    assert.equal(channel.rxOnly, true); assert.equal(channel.tx, channel.rx);
+    assert.ok(channel.name.length <= 10 && channel.errorHz > 0);
+  }
+  assert.equal(new Set(channels.map(channel => channel.key)).size, 5);
+  assert.match(R.channelCSV(channels), /Doppler \d{2}:\d{2}:\d{2}-\d{2}:\d{2}:\d{2} UTC/);
+  for (const segments of [0, 11, 2.5]) assert.throws(() => R.dopplerChannels(orbital, tx, pass, observer, segments));
+  assert.throws(() => R.dopplerChannels(orbital, { ...tx, mode: "USB" }, pass, observer));
+});
 test("RadioID query uses fixed HTTPS origin, escaped country/region and explicit pagination with minimized records", async () => {
   let requested;
   const service = new DataService(async url => {
