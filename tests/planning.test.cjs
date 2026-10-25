@@ -12,6 +12,8 @@ test("configuracion RepeaterBook local valida aprobacion y no devuelve ni altera
   const env = {};
   const service = new DataService(fetch, env);
   assert.throws(() => service.configureRepeaterbook({ token: "bad", agent: "a@b.com", approved: true }), /Token/);
+  assert.throws(() => service.configureRepeaterbook({ token: "ab".repeat(32), agent: "app a@b.com", approved: true }), /Auth V2.*rbuapp_/);
+  assert.throws(() => service.configureRepeaterbook({ token: "rbuapp_test", agent: "a@b.com", approved: true }), /identificar la aplicacion/);
   assert.throws(() => service.configureRepeaterbook({ token: "rbuapp_test", agent: "app a@b.com", approved: false }), /aprobacion/);
   assert.throws(() => service.configureRepeaterbook({ token: "rbuapp_test", agent: "app\r\na@b.com", approved: true }), /User-Agent/);
   const result = service.configureRepeaterbook({ token: "rbuapp_test", agent: "app a@b.com", approved: true });

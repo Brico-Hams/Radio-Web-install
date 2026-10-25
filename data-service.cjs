@@ -33,10 +33,15 @@ class DataService {
     };
   }
   configureRepeaterbook(config) {
+    // Personal "API Tokens (Auth V2)" are 64 hex characters with scope registered_read: export needs rbuapp_/app_.
+    ensure(!/^[0-9a-f]{64}$/i.test(config?.token || ""),
+      "Ese token es personal (API Tokens Auth V2, alcance registered_read) y RepeaterBook no lo admite para exportar repetidores. Necesitas un token rbuapp_ generado en API Apps para una aplicacion aprobada. Si lo has mostrado o compartido, revocalo.");
     ensure(config && /^rbuapp_[A-Za-z0-9_-]{1,240}$/.test(config.token || ""), "Token RepeaterBook rbuapp_ invalido.");
     ensure(typeof config.agent === "string" && config.agent.length <= 240 &&
       !/[\r\n\x00]/.test(config.agent) && /[^\s@]+@[^\s@]+\.[^\s@]+/.test(config.agent),
     "User-Agent aprobado debe incluir un contacto real.");
+    ensure(config.agent.replace(/[^\s();]+@[^\s();]+/, "").replace(/[\s();+]/g, "").length > 0,
+      "User-Agent: RepeaterBook exige identificar la aplicacion ademas del correo, p. ej. \"Aplicacion/1.0 (+https://tu-web; correo)\", tal como se aprobo.");
     ensure(config.approved === true, "Debes disponer de aprobacion RepeaterBook para esta aplicacion.");
     this.env = { ...this.env, RB_USER_TOKEN: config.token, RB_APPROVED_USER_AGENT: config.agent, RB_APPROVED: "yes" };
     return this.status();
