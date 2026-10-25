@@ -10,7 +10,7 @@ if [ ! -f ./app/server.cjs ]; then
   exit 1
 fi
 
-if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) < 22)' >/dev/null 2>&1; then
+if ! command -v node >/dev/null 2>&1 || ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) < 22 ? 1 : 0)' >/dev/null 2>&1; then
   pkg install -y node22
 fi
 

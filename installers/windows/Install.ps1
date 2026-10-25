@@ -9,7 +9,11 @@ if (-not (Test-Path (Join-Path $appSource "server.cjs")) -or -not (Test-Path $no
 }
 
 New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-Copy-Item -Path $appSource -Destination (Join-Path $installRoot "app") -Recurse -Force
+# Copy-Item into an existing folder nests it (app\app) and keeps stale files, so replace it on upgrade.
+# The app folder holds no user data: radio backups live in the browser.
+$appTarget = Join-Path $installRoot "app"
+if (Test-Path $appTarget) { Remove-Item -Path $appTarget -Recurse -Force }
+Copy-Item -Path $appSource -Destination $appTarget -Recurse -Force
 New-Item -ItemType Directory -Path (Join-Path $installRoot "runtime") -Force | Out-Null
 Copy-Item -Path $nodeSource -Destination (Join-Path $installRoot "runtime\node.exe") -Force
 

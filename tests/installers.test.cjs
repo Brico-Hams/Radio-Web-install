@@ -23,12 +23,32 @@ test("el empaquetado crea artefactos para Debian/Raspberry Pi, Arch, FreeBSD y W
 });
 
 test("los lanzadores locales conservan Node 22+ y el servidor solo local", () => {
-  assert.match(read("installers/linux/bricohams-radio"), /process\.versions\.node/);
-  assert.match(read("installers/linux/bricohams-radio"), /127\.0\.0\.1:8787/);
-  assert.doesNotMatch(read("installers/linux/bricohams-radio"), /\/dev\/tcp/);
+  assert.match(read("installers/unix/bricohams-radio"), /process\.versions\.node/);
+  // Node 24+ rejects process.exit(boolean): the version probe must exit with a number.
+  for (const name of ["installers/unix/bricohams-radio", "installers/freebsd/install.sh"]) {
+    assert.doesNotMatch(read(name), /process\.exit\([^)]*< 22\)/, name);
+  }
+  assert.match(read("installers/unix/bricohams-radio"), /127\.0\.0\.1:8787/);
+  assert.doesNotMatch(read("installers/unix/bricohams-radio"), /\/dev\/tcp/);
   assert.match(read("installers/freebsd/install.sh"), /pkg install -y node22/);
   assert.match(read("installers/windows/Start.ps1"), /http:\/\/127\.0\.0\.1:8787/);
   assert.match(read("installers/windows/Install.ps1"), /Programs\\Bricohams Radio Workspace/);
+});
+
+test("Linux y FreeBSD comparten un unico lanzador y Windows reemplaza la app al actualizar", () => {
+  const build = read("scripts/build-installers.sh");
+  assert.equal(build.match(/installers\/unix\/bricohams-radio"/g).length, 3);
+  assert.ok(!fs.existsSync(path.join(root, "installers/freebsd/bricohams-radio")));
+  const launcher = read("installers/unix/bricohams-radio");
+  for (const dir of ["/opt/bricohams-radio-workspace", "/usr/local/libexec/bricohams-radio-workspace"]) {
+    assert.ok(launcher.includes(dir), dir);
+  }
+  assert.ok(read("installers/freebsd/install.sh").includes("/usr/local/libexec/bricohams-radio-workspace"));
+  assert.match(read("installers/windows/Install.ps1"), /Remove-Item -Path \$appTarget -Recurse -Force/);
+  const workflow = read(".github/workflows/release-installers.yml");
+  for (const run of workflow.split(/\n\s+run: /).slice(1)) {
+    assert.doesNotMatch(run.split(/\n\s+- /)[0], /\$\{\{\s*inputs\./, "inputs must reach run scripts through env");
+  }
 });
 
 test("la documentación da instrucciones por sistema y explica la generación por release", () => {

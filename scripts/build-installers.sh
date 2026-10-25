@@ -45,7 +45,7 @@ build_deb() {
   stage_app "$package_root/opt/bricohams-radio-workspace/app"
   tar -xJf "$work/node-v${node_version}-linux-${node_arch}.tar.xz" -C "$work"
   install -m 755 "$work/node-v${node_version}-linux-${node_arch}/bin/node" "$package_root/opt/bricohams-radio-workspace/runtime/node/bin/node"
-  install -D -m 755 "$root/installers/linux/bricohams-radio" "$package_root/usr/bin/bricohams-radio"
+  install -D -m 755 "$root/installers/unix/bricohams-radio" "$package_root/usr/bin/bricohams-radio"
   install -D -m 644 "$root/installers/linux/bricohams-radio.desktop" "$package_root/usr/share/applications/bricohams-radio.desktop"
   mkdir -p "$package_root/DEBIAN"
   cat > "$package_root/DEBIAN/control" <<EOF
@@ -68,7 +68,7 @@ build_deb armhf armv7l
 
 source_root="$work/arch-source/app"
 stage_app "$source_root"
-install -D -m 755 "$root/installers/linux/bricohams-radio" "$work/arch-source/bricohams-radio"
+install -D -m 755 "$root/installers/unix/bricohams-radio" "$work/arch-source/bricohams-radio"
 install -D -m 644 "$root/installers/linux/bricohams-radio.desktop" "$work/arch-source/bricohams-radio.desktop"
 tar -czf "$output/bricohams-radio-workspace-${version#v}-arch-source.tar.gz" -C "$work/arch-source" .
 arch_sha=$(sha256sum "$output/bricohams-radio-workspace-${version#v}-arch-source.tar.gz" | awk '{print $1}')
@@ -97,7 +97,7 @@ tar -czf "$output/bricohams-radio-workspace-${version}-arch.tar.gz" -C "$work/ar
 freebsd_root="$work/freebsd"
 stage_app "$freebsd_root/app"
 install -m 755 "$root/installers/freebsd/install.sh" "$freebsd_root/install.sh"
-install -m 755 "$root/installers/freebsd/bricohams-radio" "$freebsd_root/bricohams-radio"
+install -m 755 "$root/installers/unix/bricohams-radio" "$freebsd_root/bricohams-radio"
 tar -czf "$output/bricohams-radio-workspace-${version}-freebsd-amd64.tar.gz" -C "$freebsd_root" .
 
 download_node "win-x64" "zip"
