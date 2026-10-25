@@ -577,7 +577,8 @@ static bool BH_SPEC_Key(KEY_Code_t key)
 
 static void BH_SPEC_Draw(void)
 {
-    char line[24];
+    // Sized for the worst case GCC derives from the formats (27 chars + NUL), not only validated values.
+    char line[32];
     memset(gFrameBuffer, 0, sizeof(gFrameBuffer));
     if (bhSpecInputActive) {
         char digits[9] = "--------";
