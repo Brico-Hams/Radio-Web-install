@@ -34,13 +34,13 @@ Una compilacion correcta no demuestra que una radio haya arrancado con ella.
 | ANY-03 | Reutilizar bases OpenGD77 y Quansheng | Importaciones de formatos admitidos conservando parametros conocidos | Completar y revisar campos no publicados; no inventar TS/TG |
 | ANY-04 | Aeropuertos si AnyTone admite banda aerea | Importacion de frecuencias RF con fuente AIP y confirmacion manual de AM | Modelo exacto, lista vigente y verificacion de AM/espaciado; no hay base aeroportuaria nacional incluida |
 | CAT-01 | Cambiar frecuencia durante el pase seleccionado | CAT RX habilitado fisicamente, lease de 3 s y seguimiento web con parada segura | Validacion USB/RF real; no es control TX ni seguimiento autonomo dentro de la radio |
-| CAT-02 | Editar frecuencia, subtonos y potencia por canal desde Android | Editor de canales web existente; CAT actual solo controla sintonia RX temporal | Protocolo acotado y validado, aplicacion Android y pruebas de persistencia |
+| CAT-02 | Editar frecuencia, subtonos y potencia por canal desde Android | Editor Android Beta de canales FM F4HWN v6: nombre, RX/TX, CTCSS/DCS RX y TX, potencia, estrecho y bloqueo TX; respaldo completo con CRC de la radio y SHA-256 en disco, escritura por bloques en el orden web y relectura; 10 pruebas host con radio simulada | Ejecucion de las pruebas en CI, prueba OTG real con escritura y relectura en una radio, y persistencia tras reinicio |
 | AND-01 | Aplicacion Android Bricohams | Proyecto Kotlin 0.7.1-beta; SQLite, ADIF, SSTV, estadisticas ARDF, captura de microfono y CAT RX por CDC ACM y adaptadores reconocidos, con pruebas host | Funciones pendientes, instalacion, permisos y prueba OTG/RF de cada cable en telefono |
-| AND-02 | Funciones de satelites tipo Look4sat | SGP4 offline Android, TLE importados, observador manual, pases 24 h y Doppler CAT RX con parada segura | Descargas automaticas, GPS/mapas, matriz telefono/cable/radio y funcionamiento de campo; no se declara paridad Look4sat |
-| AND-03 | SSTV Robot36 | Decodificador WAV y captura de microfono acotada experimental con VIS/paridad, color 320x240 y PNG; pruebas sinteticas de niveles, color y exportacion | Validacion de AudioRecord/ruta fisica y RF, deriva/ruido, decodificacion continua y transmision si procede |
+| AND-02 | Funciones de satelites tipo Look4sat, con interfaz similar | SGP4 offline Android, TLE importados, observador manual, pases 24 h y Doppler CAT RX con parada segura | Interfaz al estilo Look4sat (lista de pases, radar polar, mapa), descargas automaticas de TLE y transpondedores, GPS del observador, matriz telefono/cable/radio y campo; no se declara paridad Look4sat |
+| AND-03 | SSTV Robot36 con CAT contra el firmware Bricohams | Decodificador WAV y captura de microfono acotada experimental con VIS/paridad, color 320x240 y PNG; pruebas sinteticas de niveles, color y exportacion | Recepcion continua sintonizada por CAT Bricohams, validacion de AudioRecord/ruta fisica y RF, deriva/ruido |
 | AND-04 | Interpretar Morse | Texto, WAV PCM y captura de microfono hasta 60 s con decodificacion posterior y tono/velocidad fijos; pruebas sinteticas | AudioRecord real, decodificacion continua, adaptacion y medidas de error con muestras reales |
-| AND-05 | «encriptions» | Termino sin aclarar | Definir la funcion; no se ha supuesto cifrado ni una capacidad inexistente |
-| AND-06 | Libro de guardia tipo HAMRS | Contactos SQLite, busqueda, edicion/borrado, ADIF ASCII con importacion/vista previa, JSON y restauracion transaccional; pruebas host | Validacion en telefono y compatibilidad ampliada de campos/modos ADIF; no se declara paridad HAMRS |
+| AND-05 | «encriptions»: aclarado por el usuario como «SSTVEncrip», interpretado como codificacion y envio SSTV al estilo SSTV Encoder | Sin implementar: solo hay decodificacion Robot36 | Confirmar la interpretacion; codificador Robot36 a audio y envio por la radio con CAT/PTT Bricohams, que hoy no tiene TX |
+| AND-06 | Libro de guardia como HAMRS | Contactos SQLite, busqueda, edicion/borrado, ADIF ASCII con importacion/vista previa, JSON y restauracion transaccional; pruebas host | Flujo e interfaz tipo HAMRS (logbooks por actividad, plantillas POTA/SOTA, entrada rapida), validacion en telefono y ADIF ampliado; no se declara paridad HAMRS |
 | AND-07 | Subida a LoTW | Objetivo documentado; ADIF/TQSL no equivale a subida directa | Firma, certificado, custodia de claves y flujo LoTW verificable desde Android |
 | AND-08 | Estadisticas de caza del zorro con GPS | Firmware exporta resumen; Android guarda sesiones, historial, fijacion puntual con precision/UTC, intervalos por baliza y suma filtrada de segmentos GPS sin unir huecos, previa autorizacion | GPS real, recorrido continuo, mapas, sincronizacion con firmware y estadisticas de campo ampliadas |
 | BRAND-01 | Marca Bricohams y bootlogos | Bienvenida y bitmap monocromo embebido; Android conserva PNG original y acento naranja | Comprobar LCD fisico e interfaz en telefono |
@@ -62,8 +62,9 @@ Una compilacion correcta no demuestra que una radio haya arrancado con ella.
 - Panel ARDF presente y bloqueado sin conexion en navegador.
 - Ninguna de estas imagenes se ha flasheado ni validado fisicamente.
 - Android 0.7: APK y pruebas instrumentadas compiladas. Sesenta y nueve pruebas
-  JVM/Robolectric correctas, incluidas USB/CAT simulado, ADIF, Robot36, SGP4,
-  captura/pantalla de microfono y estadisticas/historial ARDF. Cero errores
+  JVM/Robolectric correctas en CI, incluidas USB/CAT simulado, ADIF, Robot36, SGP4,
+  captura/pantalla de microfono y estadisticas/historial ARDF. Las diez nuevas del
+  editor de canales (CAT-02) quedan pendientes de su primera ejecucion en CI. Cero errores
   y doce avisos lint. Firmas y hashes de las 58 fuentes verificados;
   el manifiesto de cada construccion registra el resultado que le corresponde.
   Las pruebas instrumentadas estan compiladas, no ejecutadas; no hay telefono conectado.

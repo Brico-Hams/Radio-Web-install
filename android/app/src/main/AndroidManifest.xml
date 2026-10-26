@@ -11,6 +11,7 @@
         android:icon="@drawable/bricohams_logo" android:theme="@style/AppTheme"
         android:supportsRtl="true" android:usesCleartextTraffic="false">
         <activity android:name=".CatActivity" android:exported="false" android:launchMode="singleTop" />
+        <activity android:name=".ChannelActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".SstvActivity" android:exported="false" />
         <activity android:name=".LiveAudioActivity" android:exported="false" />
         <activity android:name=".SatelliteActivity" android:exported="false" />

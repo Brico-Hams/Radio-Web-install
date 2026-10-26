@@ -236,13 +236,42 @@ renueva el lease. Si el cable se desconecta no puede garantizarse entrega
 de STOP: se informa del error y el lease restaura nominal solo si el bucle
 de la radio sigue ejecutandose. Comprueba la frecuencia en la radio.
 CRC, XOR y comprobacion de secuencia detectan fallos del protocolo, pero
-no son cifrado ni autenticacion. No hay TX/PTT, escritura de canales,
-subtonos, potencia, firmware, EEPROM ni calibracion.
+no son cifrado ni autenticacion. CAT RX no hace TX/PTT ni toca firmware,
+EEPROM o calibracion. La edicion de canales va aparte, en el editor de canales.
 
 La operacion USB se serializa fuera del hilo de interfaz, conserva los
 bytes sobrantes de paquetes bulk y verifica transferencias parciales.
 No utiliza servicios en segundo plano. Estas funciones tienen pruebas
 con USB simulado; faltan pruebas OTG y RF con telefono/radio reales.
+
+## Editor de canales Quansheng por USB (Beta)
+
+Pantalla «Editar canales Quansheng por USB (Beta)». Es el port Android del
+editor web: mismos comandos F4HWN v6, mismo respaldo y misma escritura con
+relectura. Solo edita canales FM existentes.
+
+1. Elegir el cable (OTG con CDC o adaptador USB-serie reconocido) y conectar.
+   La radio se identifica con `0x0514`. F4HWN v6.0 queda en solo lectura.
+2. Respaldo completo: calibracion de 512 bytes, Flash externa de 2 MiB en
+   bloques de 128 bytes con `0x0738`, CRC-32 comprobado por la radio con
+   `0x073E` y firmware Main validado por su cabecera `FMB1` y CRC. Tarda
+   10-20 minutos a 38400 baudios; la pantalla se mantiene encendida. Se guarda
+   en el almacenamiento privado de la app con `SHA256SUMS`. Exige Labs v6.1+.
+3. Leer canales: configuracion logica de 41344 bytes (`0x051B`).
+4. Elegir canal y editar nombre, RX, TX, tono RX y TX (OFF, CTCSS en Hz como
+   `88.5` o DCS como `D023N` / `D023I`), potencia (USER, LOW1-LOW5, MID, HIGH),
+   banda estrecha y bloqueo de TX. Frecuencias 136-174 y 400-470 MHz en la
+   misma banda, como la web. Los demas bits del canal se conservan.
+5. Aplicar a la copia local: no escribe la radio todavia.
+6. Escribir: confirma, vuelve a verificar el respaldo por SHA-256 y comprueba
+   que la radio sigue igual que al leerla. Oculta los canales afectados,
+   escribe bloques de 8 bytes (`0x051D`), los vuelve a mostrar y relee toda la
+   configuracion. Si la relectura no coincide, se informa y no se da por bueno.
+   VFO, ajustes, calibracion y bancos estan protegidos.
+
+Desconectar, salir de la pantalla o cualquier error cierra la sesion: hay que
+volver a conectar y respaldar antes de escribir. No es una transaccion
+resistente a cortes de alimentacion. Reinicia la radio despues de escribir.
 
 ## Satelites SGP4 y seguimiento de pases
 
@@ -459,8 +488,9 @@ La APK de prueba no es la aplicacion de uso habitual.
 
 ## Validacion realizada y pendiente
 
-Sesenta y nueve pruebas host: cinco de modelos/ADIF, cuatro de importacion
-ADIF, tres de audio, ocho de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT y ocho
+Setenta y nueve pruebas host: cinco de modelos/ADIF, cuatro de importacion
+ADIF, tres de audio, ocho de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT,
+cinco del codec de canales, cinco de memoria/respaldo/escritura Quansheng y ocho
 de USB CDC/serie simulado, tres de nucleo Robot36 y dos de pantalla SSTV,
 tres de SGP4/TLE, cuatro de seguimiento, dos de pantalla de satelites,
 cinco de captura PCM, seis de pantalla de microfono y seis de estadisticas ARDF.
@@ -492,6 +522,11 @@ rechazo de multipuerto/desconocidos, parametros 38400 8N1, lectura en partes,
 propagacion de errores sin repetir SET y cierre si falla la configuracion.
 La prueba integrada recorre pantalla, identificacion, SET RX y STOP antes
 del cierre al ocultar la actividad, usando un dispositivo simulado.
+Canales: lectura de tonos, potencia y flags; edicion que solo cambia los
+bytes del canal; las 50 CTCSS y 104 DCS ida y vuelta; rechazos sin tocar la
+copia. Una radio F4HWN simulada comprueba respaldo completo (CRC de la radio,
+Main, calibracion), SHA-256 en disco, orden de escritura web, relectura y
+bloqueos por ajustes, radio modificada, v6.0, CRC y bloque rechazado.
 ADIF comprueba ida/vuelta, etiquetas dentro de comentarios, cabecera opcional,
 horas en minutos, campos no conservados, registros truncados/invalidos y ASCII.
 SQLite verifica duplicados y rollback con un fallo real de insercion inyectado.
