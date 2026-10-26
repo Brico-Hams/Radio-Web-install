@@ -5,6 +5,9 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
@@ -13,8 +16,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import java.io.IOException
 import java.time.Instant
+import java.time.ZoneId
 import java.util.concurrent.Executors
-import java.util.Locale
 
 class SatelliteActivity : Activity() {
     private val worker = Executors.newSingleThreadExecutor()
@@ -23,6 +26,15 @@ class SatelliteActivity : Activity() {
     private val fields = linkedMapOf<String, EditText>()
     private val controls = ArrayList<Button>()
     private var busy = false
+    private lateinit var radar: PassRadarView
+    private lateinit var detail: TextView
+    private lateinit var openCat: Button
+    private val cards = LinkedHashMap<TextView, PassTrack>()
+    private var selected: PassTrack? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private val ticker = object : Runnable {
+        override fun run() { refresh(); handler.postDelayed(this, 1000) }
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val preferences = getSharedPreferences("satellite-observer", MODE_PRIVATE)
@@ -83,33 +95,22 @@ class SatelliteActivity : Activity() {
                 val saved = fields.mapValues { it.value.text.toString() }
                 val now = System.currentTimeMillis()
                 setBusy(true)
-                results.removeAllViews()
+                clearPasses()
                 worker.execute {
                     try {
-                        val passes = SatelliteOrbit(tle, observer, assets.open("satellite-6.0.1.js").bufferedReader().use { it.readText() },
-                            assets.open("orbital-engine.js").bufferedReader().use { it.readText() }).use { it.predict(now, minimum = minimum) }
+                        val tracks = SatelliteOrbit(tle, observer, assets.open("satellite-6.0.1.js").bufferedReader().use { it.readText() },
+                            assets.open("orbital-engine.js").bufferedReader().use { it.readText() }).use { orbit ->
+                            orbit.predict(now, minimum = minimum).map { pass ->
+                                PassTrack(SatellitePlan(tle, observer, frequency, pass), SatellitePasses.sample(pass) { orbit.look(it) })
+                            }
+                        }
                         val editor = preferences.edit()
                         saved.forEach { (key, value) -> editor.putString(key, value) }
                         check(editor.commit()) { "No se pudieron conservar los parametros locales." }
                         runOnUiThread {
                             if (!isDestroyed) {
-                                status.text = getString(R.string.satellite_results, passes.size, Instant.ofEpochMilli(now).toString())
-                                for (pass in passes) {
-                                    val plan = SatellitePlan(tle, observer, frequency, pass)
-                                    results.addView(TextView(this).apply {
-                                        text = String.format(Locale.ROOT, "%s\nAOS %s\nMax %s (%.1f grados)\nLOS %s\nParcial inicio=%s fin=%s\nObservador %.6f, %.6f, %.3f km; RX %d Hz",
-                                            tle.name, Instant.ofEpochMilli(pass.aos.time), Instant.ofEpochMilli(pass.maximum.time),
-                                            pass.maximum.elevation, Instant.ofEpochMilli(pass.los.time), pass.partialStart, pass.partialEnd,
-                                            observer.latitude, observer.longitude, observer.heightKm, frequency)
-                                    })
-                                    results.addView(Button(this).apply {
-                                        setText(R.string.satellite_open_cat)
-                                        setOnClickListener {
-                                            startActivity(Intent(this@SatelliteActivity, CatActivity::class.java)
-                                                .putExtra("satellite-plan", SatellitePlanJson.encode(plan)))
-                                        }
-                                    })
-                                }
+                                status.text = getString(R.string.satellite_results, tracks.size, Instant.ofEpochMilli(now).toString())
+                                showPasses(tracks)
                             }
                         }
                     } catch (error: IllegalArgumentException) { report(error) }
@@ -121,17 +122,72 @@ class SatelliteActivity : Activity() {
             catch (error: ArithmeticException) { report(error) }
         }
         results = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        radar = PassRadarView(this).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES }
+        detail = TextView(this)
+        openCat = Button(this).apply {
+            setText(R.string.satellite_open_cat)
+            setOnClickListener {
+                val plan = selected?.plan ?: return@setOnClickListener
+                startActivity(Intent(this@SatelliteActivity, CatActivity::class.java)
+                    .putExtra("satellite-plan", SatellitePlanJson.encode(plan)))
+            }
+        }
         layout.addView(results)
         fields.values.forEach { input ->
             input.addTextChangedListener(object : android.text.TextWatcher {
                 override fun beforeTextChanged(value: CharSequence?, start: Int, count: Int, after: Int) = Unit
                 override fun onTextChanged(value: CharSequence?, start: Int, before: Int, count: Int) {
-                    results.removeAllViews()
+                    clearPasses()
                 }
                 override fun afterTextChanged(value: android.text.Editable?) = Unit
             })
         }
         setContentView(ScrollView(this).apply { addView(layout) })
+    }
+    private fun clearPasses() {
+        results.removeAllViews(); cards.clear(); selected = null
+    }
+    private fun showPasses(tracks: List<PassTrack>) {
+        clearPasses()
+        if (tracks.isEmpty()) return
+        results.addView(radar); results.addView(detail); results.addView(openCat)
+        results.addView(TextView(this).apply { setText(R.string.satellite_passes_hint) })
+        val padding = (8 * resources.displayMetrics.density).toInt()
+        for (track in tracks) {
+            val card = TextView(this).apply {
+                setPadding(padding, padding, padding, padding)
+                isClickable = true; isFocusable = true
+                setOnClickListener { select(track) }
+            }
+            cards[card] = track; results.addView(card)
+        }
+        select(tracks.first())
+    }
+    private fun select(track: PassTrack) {
+        selected = track
+        radar.track = track.track
+        refresh()
+    }
+    private fun refresh() {
+        val now = System.currentTimeMillis()
+        val zone = ZoneId.systemDefault()
+        for ((card, track) in cards) {
+            card.text = SatellitePasses.card(track, now, zone)
+            card.isSelected = track == selected
+            card.setBackgroundColor(if (track == selected) 0x3329A0D6 else 0)
+        }
+        val track = selected ?: return
+        radar.now = now
+        detail.text = SatellitePasses.detail(track, now)
+        radar.contentDescription = getString(R.string.satellite_radar_description, detail.text)
+    }
+    override fun onResume() {
+        super.onResume()
+        handler.post(ticker)
+    }
+    override fun onPause() {
+        handler.removeCallbacks(ticker)
+        super.onPause()
     }
     private fun setBusy(value: Boolean) {
         busy = value
@@ -149,7 +205,7 @@ class SatelliteActivity : Activity() {
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null) { status.setText(R.string.satellite_cancelled); return }
         setBusy(true)
-        results.removeAllViews()
+        clearPasses()
         worker.execute {
             try {
                 val bytes = contentResolver.readDocument(uri, 256 * 1024)
