@@ -19,9 +19,10 @@ La version `0.7.1-beta` no sustituye sus funciones completas.
 | Morse desde archivo de audio | WAV PCM mono 16 bits experimental, tono/velocidad configurados |
 | Microfono | Captura en primer plano hasta 60 s y decodificacion posterior Morse/Robot36; sin escucha ni decodificacion continua |
 | USB/CAT RX | CDC ACM y adaptadores USB-serie reconocidos de un puerto, identificacion F4HWN v6+, consulta, sintonia temporal confirmada y STOP; experimental |
+| CAT TX (PTT) | Envio Robot36 con PTT por lease armada en la radio (tecla 9), indicativo obligatorio, limite de 120 s, rechazo por TX lock y bandas; experimental |
 | Satelites | SGP4 offline, catalogo TLE importado, observador manual, prediccion 24 h y seguimiento Doppler RX por CAT durante el pase seleccionado |
-| SSTV Robot36 | Decodificacion experimental de WAV o captura completa con cabecera VIS 8, imagen 320x240 y exportacion PNG; sin TX |
-| Escritura de canales, subtonos y potencia | No implementada en Android; no se habilita una escritura sin respaldo |
+| SSTV Robot36 | Decodificacion de WAV o captura de microfono, tambien con CAT sintonizando, y codificador Robot36 para enviar por PTT CAT; experimental |
+| Escritura de canales, subtonos y potencia | Editor de canales FM F4HWN v6 por USB con respaldo completo y relectura |
 
 La interfaz usa el PNG original Bricohams y acento naranja sobre fondo oscuro.
 El icono mantiene la marca original en lugar de inventar una variante; lint
@@ -236,7 +237,7 @@ renueva el lease. Si el cable se desconecta no puede garantizarse entrega
 de STOP: se informa del error y el lease restaura nominal solo si el bucle
 de la radio sigue ejecutandose. Comprueba la frecuencia en la radio.
 CRC, XOR y comprobacion de secuencia detectan fallos del protocolo, pero
-no son cifrado ni autenticacion. CAT RX no hace TX/PTT ni toca firmware,
+no son cifrado ni autenticacion. CAT RX no hace TX/PTT (eso es CAT TX, aparte) ni toca firmware,
 EEPROM o calibracion. La edicion de canales va aparte, en el editor de canales.
 
 La operacion USB se serializa fuera del hilo de interfaz, conserva los
@@ -402,6 +403,40 @@ por separado como se indica a continuacion. El comportamiento con
 grabaciones RF y rutas de audio fisicas sigue pendiente de validacion.
 Las pruebas sinteticas no sustituyen esas comprobaciones.
 
+## SSTV Robot36 por CAT: recepcion sintonizada y envio con PTT
+
+En la pantalla CAT, debajo de la conexion USB, hay tres acciones SSTV.
+
+**Recibir.** Inicia el Doppler del pase o sintoniza a mano, conecta el altavoz
+de la radio a la entrada de audio del movil y pulsa *Grabar Robot36 (CAT sigue
+sintonizando)*. La grabacion usa la misma captura de 60 s que la pantalla de
+microfono y no detiene el seguimiento CAT, que corre en otro hilo. Pulsa
+*Detener grabacion y decodificar* al acabar la imagen.
+
+**Enviar.** Requiere la imagen Bricohams Satelites con CAT TX v1 (comando
+`0x7B02`, ver `BRICOHAMS-FIRMWARE.md`). Pasos:
+
+1. Escribe el indicativo. **Es obligatorio**: sin uno valido no se abre el
+   selector, y se imprime en la franja inferior de la imagen.
+2. Conecta la salida de audio del movil a la entrada de microfono de la radio.
+   El USB-C de la radio queda para CAT; el movil necesita jack de 3,5 mm o un
+   hub OTG con audio.
+3. En la radio, en SAT RX, pulsa la tecla 9: `CAT TX ARMED`.
+4. Pulsa *Enviar Robot36 por PTT CAT*, elige la imagen (se escala a 320x240) y
+   confirma el dialogo con la frecuencia, el indicativo y la duracion (~37 s).
+
+La app consulta la PTT y no emite si la radio no esta armada, alcanzo el
+limite o rechaza TX. Activa la PTT, espera la confirmacion de la radio y solo
+entonces reproduce el audio, renovando el lease cada 400 ms. Si una renovacion
+falla (tecla pulsada en la radio, limite, bloqueo) o la pantalla pasa a segundo
+plano, corta el audio, suelta la PTT y lo confirma con una relectura. Si la
+relectura falla, la radio suelta la PTT sola a los 1,5 s. El audio se limita a
+110 s, por debajo del corte de 120 s de la radio.
+
+Emite en la frecuencia TX del VFO de la radio, sin correccion Doppler de
+subida, y no se permite durante el seguimiento de un pase. Necesitas licencia
+y una frecuencia autorizada para SSTV. **Sin validacion en radio ni RF.**
+
 ## Captura de microfono Morse y Robot36
 
 Desde Inicio pulsa Recibir Morse / Robot36 con microfono. Selecciona el modo;
@@ -488,10 +523,11 @@ La APK de prueba no es la aplicacion de uso habitual.
 
 ## Validacion realizada y pendiente
 
-Setenta y nueve pruebas host: cinco de modelos/ADIF, cuatro de importacion
+Ochenta y cuatro pruebas host: cinco de modelos/ADIF, cuatro de importacion
 ADIF, tres de audio, ocho de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT,
 cinco del codec de canales, cinco de memoria/respaldo/escritura Quansheng y ocho
-de USB CDC/serie simulado, tres de nucleo Robot36 y dos de pantalla SSTV,
+de USB CDC/serie simulado, cuatro de nucleo Robot36 (incluida ida y vuelta del codificador), dos de pantalla SSTV,
+cuatro de envio SSTV por PTT CAT con radio simulada,
 tres de SGP4/TLE, cuatro de seguimiento, dos de pantalla de satelites,
 cinco de captura PCM, seis de pantalla de microfono y seis de estadisticas ARDF.
 Comprueban SQLite tras cerrar/reabrir, actualizacion/eliminacion,

@@ -18,6 +18,7 @@
     <item name="morse_tone" type="id" />
     <item name="morse_speed" type="id" />
     <item name="cat_frequency" type="id" />
+    <item name="cat_callsign" type="id" />
     <item name="satellite_name" type="id" />
     <item name="satellite_line1" type="id" />
     <item name="satellite_line2" type="id" />

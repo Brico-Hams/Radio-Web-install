@@ -77,4 +77,26 @@ class Robot36Test {
             (sin(2 * PI * 1300 * index / 8000) * 20000).roundToInt().toShort()
         assertThrows(IllegalArgumentException::class.java) { Robot36.decode(badParity) }
     }
+    @Test fun encoderRoundTripsThroughTheDecoderAtTheTransmitRate() {
+        val colors = listOf(0xffffff, 0xffff00, 0x00ffff, 0x00ff00, 0xff00ff, 0xff0000, 0x0000ff, 0x000000)
+        val pixels = IntArray(320 * 240) { index ->
+            val x = index % 320
+            val y = index / 320
+            if (y < 120) colors[x / 40] else { val level = x * 255 / 319; (level shl 16) or (level shl 8) or (255 - level) }
+        } .map { it or (255 shl 24) }.toIntArray()
+        for (rate in listOf(8000, 48000)) {
+            val audio = Robot36.encode(pixels, rate)
+            assertEquals(37.31, audio.size.toDouble() / rate, 0.01)
+            val image = Robot36.decode(PcmAudio(rate, audio))
+            assertEquals(1.01, image.startSeconds, 0.003)
+            for (row in listOf(0, 1, 60, 118, 121, 200, 239)) for (x in listOf(20, 100, 180, 260, 300)) {
+                val expected = pixels[row * 320 + x]
+                val actual = image.pixels[row * 320 + x]
+                for (shift in listOf(0, 8, 16)) assertEquals("rate=$rate row=$row x=$x channel=$shift",
+                    ((expected ushr shift) and 255).toDouble(), ((actual ushr shift) and 255).toDouble(), 15.0)
+            }
+        }
+        assertThrows(IllegalArgumentException::class.java) { Robot36.encode(IntArray(10)) }
+        assertThrows(IllegalArgumentException::class.java) { Robot36.encode(pixels, 44100) }
+    }
 }

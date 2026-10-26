@@ -53,6 +53,10 @@ object QuanshengFrames {
 
 data class CatState(val active: Boolean, val remote: Boolean, val pending: Boolean, val frequency10Hz: Long)
 
+/** CAT TX v1 (0x7B02): PTT leased by the host, armed only on the radio (SAT RX, key 9). */
+data class PttState(val armed: Boolean, val keyed: Boolean, val pending: Boolean, val limit: Boolean,
+    val deniedState: Int, val keyedMs: Long)
+
 class CatProtocol(
     private val transport: RadioBytes,
     private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
@@ -113,6 +117,35 @@ class CatProtocol(
         }
         return CatState(flags and 1 != 0, flags and 2 != 0, flags and 4 != 0, applied)
     }
+    @Synchronized private fun ptt(operation: Int, accepted: Set<Int>): PttState {
+        sequence = (sequence + 1) and 65535
+        val payload = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
+            .put(1).put(operation.toByte()).putShort(sequence.toShort()).putInt(0).array()
+        val response = request(0x7b02, payload, 0x7b03)
+        require(response.size == 16 && response[0].toInt() == 1) { "Respuesta CAT TX v1 invalida." }
+        val view = ByteBuffer.wrap(response).order(ByteOrder.LITTLE_ENDIAN)
+        require(view.getShort(2).toInt() and 65535 == sequence) { "Respuesta CAT TX fuera de secuencia." }
+        require(view.getInt(4) == 8) { "Firmware sin CAT TX v1 (PTT)." }
+        val flags = view.getInt(8)
+        val denied = (flags shr 8) and 255
+        require(flags and 0xffff00e0.toInt() == 0 && denied in 0..5) { "Estado CAT TX incoherente." }
+        val state = PttState(flags and 1 != 0, flags and 2 != 0, flags and 4 != 0, flags and 8 != 0, denied,
+            view.getInt(12).toLong() and 0xffffffffL)
+        val status = response[1].toInt() and 255
+        require(status in accepted) {
+            when (status) {
+                5 -> "PTT no armada: en la radio entra en SAT RX y pulsa la tecla 9."
+                7 -> "La radio rechaza TX (estado $denied: TX lock, banda, bateria o modulacion). Rearma con tecla 9."
+                8 -> "Limite de ${CatTransmitter.RADIO_LIMIT_MS / 1000} s alcanzado: la radio se desarmo. Rearma con tecla 9."
+                else -> "CAT TX rechazado: estado $status."
+            }
+        }
+        return state
+    }
+    @Synchronized fun pttQuery(): PttState = ptt(0, setOf(0, 7))
+    /** Keys up or renews the lease; the radio drops PTT 1.5 s after the last renewal. */
+    @Synchronized fun pttKey(): PttState = ptt(1, setOf(0, 1))
+    @Synchronized fun pttRelease(): PttState = ptt(2, setOf(0, 1))
     @Synchronized fun query(): CatState = exchange(0)
     @Synchronized fun tune(frequency10Hz: Long, permit: () -> Boolean = { true }): CatState {
         require(inBand(frequency10Hz)) { "CAT RX: 136-174 o 400-470 MHz en pasos de 10 Hz." }

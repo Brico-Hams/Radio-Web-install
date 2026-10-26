@@ -4,6 +4,7 @@ import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 data class SstvImage(val pixels: IntArray, val startSeconds: Double, val warning: String)
 
@@ -58,6 +59,51 @@ object Robot36 {
             "Robot36 experimental desde WAV. Imagen 320x240; crominancia compartida por pares de lineas. " +
                 "Sin compensacion de deriva/reloj ni recuperacion de lineas. Ruido, audio o sincronismo pueden alterar colores y detalle; no es una validacion RF.")
     }
+    /** Robot36 (VIS 8) audio for a 320x240 ARGB image, in the exact timing [decode] expects. */
+    fun encode(pixels: IntArray, sampleRate: Int = 48000): ShortArray {
+        require(pixels.size == WIDTH * HEIGHT) { "Robot36 requiere una imagen de 320x240." }
+        require(sampleRate in 8000..48000 && sampleRate % RATE == 0) { "Robot36: 8/16/24/32/40/48 kHz." }
+        val out = ShortArray(((LEAD_MS + 910.0 + HEIGHT * 150.0 + TAIL_MS) * sampleRate / 1000).roundToInt() + 2)
+        var written = 0
+        var clock = 0.0
+        var phase = 0.0
+        fun tone(hz: Double, ms: Double) {
+            clock += ms * sampleRate / 1000
+            val end = clock.roundToInt()
+            while (written < end) {
+                phase = (phase + 2 * PI * hz / sampleRate) % (2 * PI)
+                out[written++] = if (hz > 0) (sin(phase) * 23000).roundToInt().toShort() else 0
+            }
+        }
+        fun pixel(value: Double) = 1500 + value.coerceIn(0.0, 255.0) * 800 / 255
+        tone(0.0, LEAD_MS)
+        tone(1900.0, 300.0); tone(1200.0, 10.0); tone(1900.0, 300.0); tone(1200.0, 30.0)
+        // VIS 8, LSB first (1100 Hz = 1), then even parity and the stop bit.
+        for (bit in 0..6) tone(if ((8 shr bit) and 1 == 1) 1100.0 else 1300.0, 30.0)
+        tone(1100.0, 30.0); tone(1200.0, 30.0)
+        fun rgb(x: Int, y: Int) = pixels[y * WIDTH + x].let { Triple(it shr 16 and 255, it shr 8 and 255, it and 255) }
+        fun luma(x: Int, y: Int) = rgb(x, y).let { (r, g, b) -> 0.299 * r + 0.587 * g + 0.114 * b }
+        for (row in 0 until HEIGHT) {
+            tone(1200.0, 9.0); tone(1500.0, 3.0)
+            for (x in 0 until WIDTH) tone(pixel(luma(x, row)), 88.0 / WIDTH)
+            tone(if (row % 2 == 0) 1500.0 else 2300.0, 4.5); tone(1900.0, 1.5)
+            // Even lines carry R-Y, odd lines B-Y, each averaged over the 2x2 block the decoder shares.
+            val pair = row - row % 2
+            for (x in 0 until WIDTH / 2) {
+                var sum = 0.0
+                for (dy in 0..1) for (dx in 0..1) {
+                    val (r, _, b) = rgb(2 * x + dx, pair + dy)
+                    val y = luma(2 * x + dx, pair + dy)
+                    sum += if (row % 2 == 0) (r - y) / 1.402 else (b - y) / 1.772
+                }
+                tone(pixel(128 + sum / 4), 44.0 / (WIDTH / 2))
+            }
+        }
+        tone(0.0, TAIL_MS)
+        return out.copyOf(written)
+    }
+    private const val LEAD_MS = 100.0
+    private const val TAIL_MS = 300.0
     private fun level(frequency: DoubleArray, position: Double): Double {
         val index = position.toInt()
         val fraction = position - index

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "bricohams/doppler.h"
 #include "bricohams/cat_rx.h"
+#include "bricohams/cat_tx.h"
 #include "scheduler.h"
 
 static uint32_t bhSatDownlink;
@@ -9,6 +10,8 @@ static int32_t bhSatRate;
 static bh_doppler_frequencies bhSatFrequencies;
 static bool bhSatError;
 static bool bhSatCatTimeout;
+
+static void BH_SAT_Draw(void);
 
 static void BH_SAT_Tune(uint32_t frequency)
 {
@@ -35,6 +38,7 @@ static void BH_SAT_Apply(void)
 static void BH_SAT_Start(void)
 {
     bh_cat_stop(&bh_cat_receiver);
+    bh_cat_tx_arm(&bh_cat_transmitter, false);
     bhSatCatTimeout = false;
     bhSatDownlink = gRxVfo->pRX->Frequency;
     bhSatUplink = gRxVfo->pTX->Frequency;
@@ -43,8 +47,49 @@ static void BH_SAT_Start(void)
     BH_SAT_Apply();
 }
 
+/* Modal CAT PTT: the hunt loop's RX metering and Geiger blips must not run while keyed. */
+static void BH_SAT_Transmit(void)
+{
+    const VfoState_t state = FOXHUNT_TxState();
+    bh_cat_tx_keyed(&bh_cat_transmitter, (uint8_t)state, SCHEDULER_GetTick10ms() * 10U);
+    if (state != VFO_STATE_NORMAL)
+        return;
+    AUDIO_AudioPathOff();
+    gCurrentVfo = gTxVfo;
+    BK4819_DisableDTMF(); /* Same TX audio filtering as FUNCTION_Transmit. */
+    RADIO_SetTxParameters();
+    BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
+    BK4819_ExitTxMute(); /* Mic input, fed by the host's audio cable, goes on air. */
+    BH_SAT_Draw();
+    FOXHUNT_BlitScreen();
+    KEY_Code_t held = KEYBOARD_GetKey();
+    while (bh_cat_tx_poll(&bh_cat_transmitter, SCHEDULER_GetTick10ms() * 10U) == BH_CAT_TX_NONE) {
+#if defined(ENABLE_UART) || defined(ENABLE_USB)
+        UART_ServiceCommands();
+#endif
+        const KEY_Code_t key = KEYBOARD_GetKey();
+        if (key != KEY_INVALID && key != held)
+            bh_cat_tx_arm(&bh_cat_transmitter, false); /* Any key on the radio aborts and disarms. */
+        held = key;
+        SYSTEM_DelayMs(10);
+        BACKLIGHT_Update();
+    }
+    BK4819_EnterTxMute();
+    BK4819_ToggleGpioOut(BK4819_GPIO1_PIN29_PA_ENABLE, false);
+    BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
+    RADIO_SetupRegisters(true);
+    bh_cat_tx_unkeyed(&bh_cat_transmitter);
+    kbd.current = KEYBOARD_GetKey(); /* The abort key is not a new hunt key press. */
+    if (!bhSatError)
+        BH_SAT_Tune(bhSatFrequencies.receive_10hz);
+}
+
 static void BH_SAT_Update(void)
 {
+    if (foxLocked && bh_cat_transmitter.armed)
+        bh_cat_tx_arm(&bh_cat_transmitter, false);
+    if (bh_cat_tx_poll(&bh_cat_transmitter, SCHEDULER_GetTick10ms() * 10U) == BH_CAT_TX_KEY)
+        BH_SAT_Transmit();
     if (foxLocked && bh_cat_receiver.active) {
         bh_cat_stop(&bh_cat_receiver);
         bhSatRate = 0;
@@ -68,10 +113,16 @@ static void BH_SAT_Update(void)
 static void BH_SAT_Stop(void)
 {
     bh_cat_stop(&bh_cat_receiver);
+    bh_cat_tx_arm(&bh_cat_transmitter, false);
 }
 
 static bool BH_SAT_Key(KEY_Code_t key)
 {
+    if (key == KEY_9) {
+        /* Local confirmation: only the keypad arms CAT PTT, never the host. */
+        bh_cat_tx_arm(&bh_cat_transmitter, !bh_cat_transmitter.armed && !bhSatError);
+        return true;
+    }
     if (key == KEY_8) {
         if (bh_cat_receiver.active) {
             bh_cat_stop(&bh_cat_receiver);
@@ -110,7 +161,20 @@ static void BH_SAT_Draw(void)
         UI_PrintStringSmallNormal("136-174/400-470", 0, 127, 6);
         return;
     }
-    if (bh_cat_receiver.remote)
+    if (bh_cat_transmitter.keyed) {
+        UI_PrintStringSmallNormal("CAT TX ON AIR", 0, 127, 2);
+        sprintf(line, "TX %lu.%05lu", (unsigned long)(gTxVfo->pTX->Frequency / 100000),
+            (unsigned long)(gTxVfo->pTX->Frequency % 100000));
+        UI_PrintStringSmallNormal(line, 0, 127, 6);
+        return;
+    }
+    if (bh_cat_transmitter.limit)
+        strcpy(line, "CAT TX LIMIT");
+    else if (bh_cat_transmitter.denied_state != 0)
+        strcpy(line, "CAT TX DENIED");
+    else if (bh_cat_transmitter.armed)
+        strcpy(line, "CAT TX ARMED");
+    else if (bh_cat_receiver.remote)
         strcpy(line, "SAT CAT RX");
     else if (bhSatCatTimeout)
         strcpy(line, "CAT TIMEOUT");
