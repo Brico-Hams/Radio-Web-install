@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { once } = require("node:events");
-const { pages, render, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown } = require("../scripts/build-help.cjs");
+const { pages, render, helpImages, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown } = require("../scripts/build-help.cjs");
 const { ALLOWED_FILES, createServer } = require("../server.cjs");
 const root = path.join(__dirname, "..");
 // Generated docs are stored with LF; a Windows checkout with core.autocrlf turns them into CRLF.
@@ -119,6 +119,50 @@ test("el generador escapa HTML y codigo, renderiza tablas y rechaza enlaces ejec
   assert.throws(() => render("[x](javascript:alert)", "AYUDA-FIRMWARES.md"), /Esquema/);
   assert.throws(() => render("```\nsin cerrar", "AYUDA-FIRMWARES.md"), /sin cerrar/);
   assert.throws(() => render("[x](inexistente.md)", "AYUDA-FIRMWARES.md"), /roto/);
+});
+
+test("las imagenes de las guias son locales y llegan a servidor, Pages e instaladores", async () => {
+  const images = helpImages();
+  assert.ok(images.length >= 12, images.join());
+  const installer = read("scripts/build-installers.sh");
+  assert.ok(installer.includes('cp "$root"/docs/atlas/*.jpg "$root"/docs/atlas/*.svg'));
+  for (const image of images) {
+    assert.ok(ALLOWED_FILES.includes(image), `no servida: ${image}`);
+    assert.match(image, /^docs\/atlas\/[a-z0-9-]+\.(jpg|svg)$/);
+  }
+  const output = render("# T\n\n![Mapa](atlas/trama-serie.svg)", "ATLAS-UV-K5-V3.md");
+  assert.match(output.body, /<img src="docs\/atlas\/trama-serie\.svg" alt="Mapa" loading="lazy">/);
+  assert.throws(() => render("![x](https://example.com/a.png)", "ATLAS-UV-K5-V3.md"), /no permitida/);
+  assert.throws(() => render("![x](../package.json)", "ATLAS-UV-K5-V3.md"), /no permitida/);
+  assert.throws(() => render("![x](atlas/no-existe.jpg)", "ATLAS-UV-K5-V3.md"), /rota/);
+  for (const svg of images.filter(name => name.endsWith(".svg"))) assert.doesNotMatch(read(svg), /<script|\son\w+=|href=/i, svg);
+  const server = createServer({}, {});
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    for (const [file, type] of [["docs/atlas/k1-view-a.jpg", "image/jpeg"], ["docs/atlas/bloques-v3.svg", "image/svg+xml"]]) {
+      const response = await fetch(`${base}/${file}`);
+      assert.equal(response.status, 200, file);
+      assert.equal(response.headers.get("content-type"), type);
+    }
+    assert.equal((await fetch(`${base}/docs/ATLAS-UV-K5-V3.md`)).status, 404);
+  } finally { server.close(); }
+});
+
+test("el atlas V3 y la puesta en marcha cubren hardware, protocolo y todas las fases", () => {
+  const atlas = read("docs/ATLAS-UV-K5-V3.md");
+  for (const value of ["PY32F071", "BK4829", "PY25Q16", "0x08002800", "0x1D800", "0x010000", "0x0514", "0x0519",
+    "16 6C 14 E6 2E 91 0D 40 21 35 D5 40 13 03 E9 80", "0x0bc11477", "7.00.07", "13.3.rel1", "Apache-2.0"]) {
+    assert.ok(atlas.includes(value), value);
+  }
+  const quansheng = read("docs/AYUDA-QUANSHENG.md");
+  for (let phase = 0; phase <= 11; phase++) assert.match(quansheng, new RegExp(`^\\| ${phase}\\. `, "m"), `fase ${phase}`);
+  assert.match(quansheng, /## Volver a fabrica y recuperacion/);
+  for (const page of ["ayuda.html", "app.js", "README.md"]) {
+    assert.ok(read(page).includes("puesta-en-marcha-de-0-a-100"), page);
+    assert.ok(/ayuda-atlas-uv-k5-v3\.html|ATLAS-UV-K5-V3\.md/.test(read(page)), page);
+  }
 });
 
 test("las imagenes Bricohams documentan captura RX, multipreset RAM y sus limites Beta", () => {

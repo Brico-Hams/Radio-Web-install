@@ -230,7 +230,9 @@ const read = name => fs.readFileSync(path.join(__dirname, "..", name), "utf8");
 test("pages build copies only the allow-list plus runtime.json and .nojekyll", () => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), "pages-"));
   build(out);
-  const files = fs.readdirSync(out).sort();
+  const files = fs.readdirSync(out, { recursive: true })
+    .map(name => name.replace(/\\/g, "/"))
+    .filter(name => fs.statSync(path.join(out, name)).isFile()).sort();
   assert.deepEqual(files, [...allowed, ".nojekyll", "runtime.json"].sort());
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, "runtime.json"), "utf8")), { mode: "web" });
   fs.rmSync(out, { recursive: true });

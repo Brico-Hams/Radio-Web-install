@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" role="img" aria-label="Diagrama de bloques del UV-K5 V3">
+<style>
+.bg{fill:#111d22}.box{fill:#0b1418;stroke:#8fa7ab;stroke-width:1.4}.mcu{fill:#123a36;stroke:#2bb3a3;stroke-width:2}.rf{fill:#3a2419;stroke:#e08a5a;stroke-width:1.6}
+.t{fill:#e6f1f2;font:600 13px system-ui,sans-serif}.s{fill:#8fa7ab;font:11px ui-monospace,Consolas,monospace}
+.bus{stroke:#e08a5a;stroke-width:2;fill:none}.bus2{stroke:#2bb3a3;stroke-width:2;fill:none}.dash{stroke:#8fa7ab;stroke-width:1.2;stroke-dasharray:4 3;fill:none}
+</style>
+<rect class="bg" width="900" height="520"/>
+<rect class="mcu" x="340" y="180" width="220" height="150" rx="8"/>
+<text class="t" x="450" y="215" text-anchor="middle">PY32F071</text>
+<text class="s" x="450" y="235" text-anchor="middle">Cortex-M0+ 72 MHz</text>
+<text class="s" x="450" y="252" text-anchor="middle">128 KB flash · 16 KB SRAM</text>
+<text class="s" x="450" y="275" text-anchor="middle">BL 10 KB + app 118 KB</text>
+<text class="s" x="450" y="292" text-anchor="middle">USART1 · SPI1/2 · ADC · DAC</text>
+<text class="s" x="450" y="309" text-anchor="middle">USB FS · DMA · TIM6/7</text>
+<rect class="rf" x="40" y="40" width="200" height="110" rx="8"/>
+<text class="t" x="140" y="72" text-anchor="middle">BK4829</text>
+<text class="s" x="140" y="92" text-anchor="middle">transceptor monochip</text>
+<text class="s" x="140" y="108" text-anchor="middle">FM/AM/SSB · CTCSS/DCS</text>
+<text class="s" x="140" y="124" text-anchor="middle">DTMF · FSK · AFC · RSSI</text>
+<rect class="box" x="40" y="190" width="200" height="66" rx="6"/>
+<text class="t" x="140" y="218" text-anchor="middle">PA de RF + filtros</text>
+<text class="s" x="140" y="238" text-anchor="middle">LPF · conmutación TX/RX</text>
+<rect class="box" x="40" y="290" width="200" height="56" rx="6"/>
+<text class="t" x="140" y="315" text-anchor="middle">Antena SMA</text>
+<text class="s" x="140" y="333" text-anchor="middle">50 Ω</text>
+<rect class="box" x="40" y="390" width="200" height="66" rx="6"/>
+<text class="t" x="140" y="418" text-anchor="middle">BK1080</text>
+<text class="s" x="140" y="438" text-anchor="middle">receptor FM broadcast</text>
+<rect class="box" x="660" y="40" width="200" height="66" rx="6"/>
+<text class="t" x="760" y="68" text-anchor="middle">PY25Q16 · 2 MB</text>
+<text class="s" x="760" y="88" text-anchor="middle">canales, ajustes, calib.</text>
+<rect class="box" x="660" y="130" width="200" height="66" rx="6"/>
+<text class="t" x="760" y="158" text-anchor="middle">LCD ST7565 128×64</text>
+<text class="s" x="760" y="178" text-anchor="middle">retroiluminación PWM</text>
+<rect class="box" x="660" y="220" width="200" height="66" rx="6"/>
+<text class="t" x="760" y="248" text-anchor="middle">Teclado 4×4 + laterales</text>
+<text class="s" x="760" y="268" text-anchor="middle">PTT · SIDE1 · SIDE2</text>
+<rect class="box" x="660" y="310" width="200" height="66" rx="6"/>
+<text class="t" x="760" y="338" text-anchor="middle">Amplificador de audio</text>
+<text class="s" x="760" y="358" text-anchor="middle">altavoz · enable PA8</text>
+<rect class="box" x="660" y="400" width="200" height="56" rx="6"/>
+<text class="t" x="760" y="425" text-anchor="middle">Batería + divisor</text>
+<text class="s" x="760" y="443" text-anchor="middle">ADC PB0</text>
+<rect class="box" x="340" y="400" width="220" height="66" rx="6"/>
+<text class="t" x="450" y="428" text-anchor="middle">USB-C · jack Kenwood</text>
+<text class="s" x="450" y="448" text-anchor="middle">USB CDC (PA11/12) · UART (PA9/10)</text>
+<rect class="box" x="340" y="40" width="220" height="66" rx="6"/>
+<text class="t" x="450" y="68" text-anchor="middle">Linterna · LED · SWD</text>
+<text class="s" x="450" y="88" text-anchor="middle">PC13 · PA13/PA14</text>
+<path class="bus" d="M240 95 H300 V215 H340"/><text class="s" x="246" y="118">3 hilos</text><text class="s" x="246" y="131">CS PF9</text><text class="s" x="246" y="144">SCK PB8</text><text class="s" x="246" y="157">SDIO PB9</text>
+<path class="dash" d="M140 150 V190"/><path class="dash" d="M140 256 V290"/>
+<path class="bus" d="M240 423 H300 V300 H340"/><text class="s" x="248" y="416">I²C bit-bang PF5/PF6</text>
+<path class="bus2" d="M560 200 H610 V73 H660"/><text class="s" x="566" y="140">SPI2 + DMA</text>
+<path class="bus2" d="M560 215 H630 V163 H660"/><text class="s" x="590" y="160">SPI1</text>
+<path class="bus2" d="M560 250 H660"/>
+<path class="bus2" d="M560 290 H620 V343 H660"/>
+<path class="bus2" d="M560 315 H600 V428 H660"/>
+<path class="bus2" d="M450 330 V400"/>
+<path class="bus2" d="M450 106 V180"/>
+<path class="dash" d="M240 140 C 300 160, 300 330, 660 343"/><text class="s" x="250" y="170">audio RX</text>
+</svg>

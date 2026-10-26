@@ -10,6 +10,7 @@ function build(outDir = path.join(root, "dist")) {
     const source = name === "satellite.min.js"
       ? path.join(path.dirname(require.resolve("satellite.js/package.json")), "dist", name)
       : path.join(root, name);
+    fs.mkdirSync(path.dirname(path.join(outDir, name)), { recursive: true });
     fs.copyFileSync(source, path.join(outDir, name));
   }
   fs.writeFileSync(path.join(outDir, "runtime.json"), JSON.stringify({ mode: "web" }));

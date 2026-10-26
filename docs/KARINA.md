@@ -60,6 +60,17 @@ Se pueden documentar funciones observadas y preparar una implementacion propia
 sobre una base abierta. No se debe anunciar esa implementacion como Karina
 recompilada ni afirmar equivalencia sin verificarla.
 
+**Busqueda de fuentes (26-10-2026).** No hay codigo fuente publico de Karina.
+El pack Dim0s lo declara firmware cerrado sin repositorio, y en los grupos de
+Telegram en espanol y ruso nadie ha publicado fuentes. Tampoco aparecen en
+GitHub, Codeberg, GitLab, Gitee, GitFlic ni GitVerse. Segun el grupo ruso,
+Karina continua [fagci-mod v1.2.1](https://github.com/fagci/uv-k5-firmware-fagci-mod)
+(Apache-2.0, que permite derivados cerrados) y comparte codigo de espectro con
+[PUNKTRACKER 2.5](https://github.com/Alexuresp/PUNKTRACKER_2.5) (Apache-2.0, V1).
+Esas dos son las bases abiertas para reimplementar sus funciones; `fagci/s0v4`,
+`hawk5` y `k1-fw` no tienen licencia y no se copian. No se decompila el binario
+Karina. Hardware y protocolos del V3 en el [atlas tecnico](ATLAS-UV-K5-V3.md).
+
 ## 2. Metodo y fuentes de evidencia
 
 - Inventario recursivo de la carpeta suministrada, sin ejecutar EXE, drivers ni

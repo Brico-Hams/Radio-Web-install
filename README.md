@@ -106,6 +106,8 @@ Consulta [funciones, permisos, compilacion y limites](docs/ANDROID.md).
 | [Estado de entrega](docs/ESTADO-ENTREGA.md) | Revision de todas las peticiones, evidencias, pendientes y condiciones de publicacion y exportacion |
 | [Ayuda y soporte](ayuda.html) (en la app: <http://127.0.0.1:8787/ayuda.html>) | Primeros pasos, controladores USB (soporte no oficial), errores frecuentes y preguntas frecuentes |
 | [Biblioteca completa de firmware](ayuda-firmwares.html) / [indice Markdown](docs/AYUDA-FIRMWARES.md) | Guias por familia, modelo, revision y version: F4HWN, ARDF, Karina, Bricohams y OpenGD77; menus, configuracion FM/DMR y todas las opciones del catalogo con matriz ON/OFF. Incluida sin red en instaladores y servidor local. Regenerar con `npm run build:help`. |
+| [Quansheng de 0 a 100 %](docs/AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100) | Ruta completa por fases: identificar, copias, elegir y flashear firmware, ajustes basicos, canales, escaneo, multiboot, verificacion y recuperacion |
+| [Atlas tecnico UV-K5 V3 / UV-K1](docs/ATLAS-UV-K5-V3.md) (web: [ayuda-atlas-uv-k5-v3.html](ayuda-atlas-uv-k5-v3.html)) | Hardware por dentro: pinout del PY32F071, flash interna y externa, mapa EEPROM, protocolo serie, bootloader DFU, SWD, compilacion, mods, esquemas, fotos del teardown y repositorios verificados |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Componentes, flujo de datos, modulos y capas de seguridad |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Decisiones de arquitectura y por que se eligio cada tecnologia |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Instalacion, configuracion, actualizacion y despliegues no soportados |
@@ -181,6 +183,8 @@ Ver [alcance web y respaldo obligatorio](docs/AYUDA-OPENGD77.md).
 ### Instaladores locales
 
 Descarga la [ultima Release](https://github.com/Brico-Hams/Radio-Web-install/releases/latest) y su archivo `SHA256SUMS`. Elige un instalador de **Assets**, no los ZIP/tar.gz automaticos de «Source code». [Guia completa de instalacion local](docs/DEPLOYMENT.md#instaladores-locales).
+Tras instalar, para preparar una Quansheng sigue la [puesta en marcha de 0 a 100 %](docs/AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100)
+y consulta el [atlas tecnico UV-K5 V3](docs/ATLAS-UV-K5-V3.md).
 
 - Windows 11 x64: extrae todo `*-windows-x64.zip`, abre PowerShell en esa carpeta y ejecuta `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1`. Node.js incluido, sin administrador; inicia la app desde el menu Inicio.
 - Debian, Ubuntu y Raspberry Pi OS: consulta `dpkg --print-architecture`, descarga **solo** el `.deb` de tu arquitectura (amd64, arm64 o armhf) y ejecuta `sudo apt install ./nombre-del-paquete.deb`. Node.js incluido; armhf requiere CPU ARMv7 o posterior. Abre la app desde el menu o ejecuta `bricohams-radio`.

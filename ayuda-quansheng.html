@@ -15,11 +15,73 @@
   <a class="skip" href="#main">Saltar al contenido</a>
   <main id="main" class="firmware-help">
     <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
-      <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
     </header>
-    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#beta-prueba-usb-real-y-canales">Beta: prueba USB real y canales</a></li><li><a href="#elegir-hardware-antes-de-firmware">Elegir hardware antes de firmware</a></li><li><a href="#matriz-de-versiones-y-formatos">Matriz de versiones y formatos</a></li><li><a href="#que-edicion-elegir">Que edicion elegir</a></li><li><a href="#diccionario-de-menus-de-radio">Diccionario de menus de radio</a></li><li><a href="#rxmode-y-full-watch">RxMode y Full Watch</a></li><li><a href="#slots-y-bancos-cfg-operaciones-distintas">Slots y bancos CFG: operaciones distintas</a></li><li><a href="#labs-y-aplicaciones">Labs y aplicaciones</a></li><li><a href="#problemas-habituales">Problemas habituales</a></li><li><a href="#fuentes-y-mantenimiento">Fuentes y mantenimiento</a></li></ul></nav>
+    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#puesta-en-marcha-de-0-a-100">Puesta en marcha de 0 a 100 %</a></li><li><a href="#volver-a-fabrica-y-recuperacion">Volver a fabrica y recuperacion</a></li><li><a href="#beta-prueba-usb-real-y-canales">Beta: prueba USB real y canales</a></li><li><a href="#elegir-hardware-antes-de-firmware">Elegir hardware antes de firmware</a></li><li><a href="#matriz-de-versiones-y-formatos">Matriz de versiones y formatos</a></li><li><a href="#que-edicion-elegir">Que edicion elegir</a></li><li><a href="#diccionario-de-menus-de-radio">Diccionario de menus de radio</a></li><li><a href="#rxmode-y-full-watch">RxMode y Full Watch</a></li><li><a href="#slots-y-bancos-cfg-operaciones-distintas">Slots y bancos CFG: operaciones distintas</a></li><li><a href="#labs-y-aplicaciones">Labs y aplicaciones</a></li><li><a href="#problemas-habituales">Problemas habituales</a></li><li><a href="#fuentes-y-mantenimiento">Fuentes y mantenimiento</a></li></ul></nav>
     <article class="panel"><h1 id="quansheng-f4hwn-versiones-y-configuracion">Quansheng: F4HWN, versiones y configuracion</h1>
-<p>Revision: 25-10-2026. Base funcional inspeccionada: Fusion61, commit <code>f556a96e73c3e423a00cf473aeb37f827cac05a5</code>; catalogo modular web v6.3.0, commit <code>ca3a4271386049e7b459b215cef0ad0eea1a30ca</code>. Esta guia no atribuye automaticamente las funciones v6.1/v6.3 a v4 o v5.</p>
+<p>Revision: 25-10-2026. Base funcional inspeccionada: Fusion61, commit <code>f556a96e73c3e423a00cf473aeb37f827cac05a5</code>; catalogo modular web v6.3.0, commit <code>ca3a4271386049e7b459b215cef0ad0eea1a30ca</code>. Esta guia no atribuye automaticamente las funciones v6.1/v6.3 a v4 o v5. Como funciona la radio por dentro (pines, memorias, protocolo, bootloader, esquemas y fotos): <a href="ayuda-atlas-uv-k5-v3.html">Atlas tecnico UV-K5 V3</a>.</p>
+<h2 id="puesta-en-marcha-de-0-a-100">Puesta en marcha de 0 a 100 %</h2>
+<p>Ruta completa desde una radio recien sacada de la caja hasta una radio configurada, con copia y verificada. Cada fase indica cuando esta terminada. Las fases 9 y 10 son opcionales.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Fase</th><th scope="col">Que haces</th><th scope="col">Terminada cuando</th><th scope="col">Detalle</th></tr></thead><tbody>
+<tr><td>0. Identificar</td><td>Pegatina bajo la bateria, SysInf y version del bootloader</td><td>Sabes si es UV-K5 V3, UV-K1 u otra revision</td><td><a href="ayuda-atlas-uv-k5-v3.html#versiones-y-como-identificarlas">Versiones</a></td></tr>
+<tr><td>1. Preparar el PC</td><td>Chrome o Edge de escritorio, cable USB-C de datos o cable Kenwood, controlador</td><td>El puerto aparece y ninguna otra aplicacion lo usa</td><td><a href="ayuda.html#drivers">Controladores</a> y <a href="ayuda-configuracion.html#conexion-usb-sin-confundir-modos">USB</a></td></tr>
+<tr><td>2. Copias</td><td>Calibracion (512 bytes), configuracion y, si el firmware lo permite, Flash completa</td><td>Tienes los archivos fuera del navegador con su SHA-256</td><td><a href="ayuda-atlas-uv-k5-v3.html#calibracion">Calibracion</a></td></tr>
+<tr><td>3. Elegir firmware</td><td>Version y edicion (Fusion, FieldOps, Transfer, Labs) para tu hardware</td><td>Archivo <code>.bin</code> descargado de la publicacion oficial con hash comprobado</td><td><a href="#que-edicion-elegir">Ediciones</a> y <a href="#matriz-de-versiones-y-formatos">versiones</a></td></tr>
+<tr><td>4. Flashear</td><td>Radio apagada, PTT pulsado al encender, UV Studio o Bricohams Studio</td><td>La herramienta confirma todas las paginas y la radio reinicia</td><td><a href="ayuda-atlas-uv-k5-v3.html#bootloader-y-flasheo">Bootloader</a></td></tr>
+<tr><td>5. Primer arranque</td><td>Leer SysInf y comprobar la version</td><td>La version coincide con el archivo flasheado</td><td>Seccion siguiente</td></tr>
+<tr><td>6. Ajustes basicos</td><td>Navegacion, bateria, pantalla, squelch, TX y bloqueos</td><td>Los ajustes sobreviven a apagar y encender</td><td>Tabla de ajustes basicos</td></tr>
+<tr><td>7. Canales</td><td>Repetidores, PMR solo RX, satelites y nombres</td><td>Las memorias aparecen y se releen iguales</td><td><a href="#preparar-y-enviar-memorias-fm">Memorias FM</a></td></tr>
+<tr><td>8. Escaneo</td><td>Listas, prioridades y reanudacion</td><td>El escaneo recorre solo las memorias previstas</td><td><a href="#escaneo-prioridades-y-teclas">Escaneo</a></td></tr>
+<tr><td>9. Multiboot (opcional)</td><td>Slots 1-4 y bancos CFG</td><td>Cada slot valida por CRC y arranca</td><td><a href="#slots-y-bancos-cfg-operaciones-distintas">Slots y bancos</a></td></tr>
+<tr><td>10. Labs (opcional)</td><td>Apps superpuestas de la misma publicacion</td><td>La app arranca y vuelve al firmware</td><td><a href="#labs-y-aplicaciones">Labs</a></td></tr>
+<tr><td>11. Verificacion final</td><td>Lista de comprobacion y nueva copia</td><td>Tienes copia del estado final y anotadas las versiones</td><td><a href="ayuda-configuracion.html#lista-de-verificacion-posterior">Lista final</a></td></tr>
+</tbody></table></div>
+<h3 id="fase-4-paso-a-paso-flashear-el-firmware-principal">Fase 4 paso a paso: flashear el firmware principal</h3>
+<ol>
+<li>Guardar las copias de la fase 2. Sin calibracion guardada, no seguir.</li>
+<li>Cerrar CHIRP, CPS, otras pestanas de Studio y la conexion normal de esta web.</li>
+<li>Apagar la radio. Mantener PTT pulsado y encenderla: el LED queda encendido con la pantalla apagada. Soltar PTT y conectar el cable USB-C.</li>
+<li>En <a href="https://armel.github.io/uvstudio/" target="_blank" rel="noopener noreferrer">UV Studio</a> o en <a href="https://brico-hams.github.io/Bricohams-Studio/" target="_blank" rel="noopener noreferrer">Bricohams Studio</a> elegir el puerto. El bootloader debe anunciar <code>7.00.07</code> (UV-K5 V3) o <code>7.02.02</code>/<code>7.03.0x</code> (UV-K1). Otra version: detenerse y comprobar el modelo.</li>
+<li>Elegir el <code>.bin</code> plano de la edicion. Nunca un <code>*.packed.bin</code> (es para el actualizador oficial) ni una imagen V1.</li>
+<li>Confirmar y no tocar la radio ni el cable hasta que todas las paginas esten confirmadas. Si se corta, la radio sigue en modo actualizacion: repetir desde el paso 3 con el mismo archivo.</li>
+<li>La radio reinicia sola. Tras flashear F4HWN, guardar de nuevo la calibracion con UV Studio, como recomienda el proyecto.</li>
+</ol>
+<h3 id="fase-5-primer-arranque">Fase 5: primer arranque</h3>
+<ul>
+<li>Abrir SysInf y anotar version y edicion. Si no coincide con el archivo, no continuar: repetir la fase 4.</li>
+<li>La calibracion no se borra al flashear. Si la bateria marca 0 V o el squelch no se comporta, comprobar que la calibracion es la de esta radio antes de tocar nada.</li>
+<li>Si los menus muestran valores incoherentes despues de cambiar de firmware, usar Reset solo despues de comprobar las copias: su alcance depende del build.</li>
+</ul>
+<h3 id="fase-6-ajustes-basicos-recomendados">Fase 6: ajustes basicos recomendados</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Menu</th><th scope="col">Valor inicial razonable</th><th scope="col">Motivo</th></tr></thead><tbody>
+<tr><td>SetNav</td><td>Segun el modelo (K1 o K5 V3)</td><td>Si las flechas parecen invertidas, es este ajuste</td></tr>
+<tr><td>BatTyp</td><td>Capacidad real de tu bateria</td><td>Indicador de carga correcto</td></tr>
+<tr><td>SetCtr, BLMin, BLMax, BLTime</td><td>Legibles con el menor consumo</td><td>Comodidad y autonomia</td></tr>
+<tr><td>Sql</td><td>3-4 para empezar</td><td>Cierra el ruido sin perder senales debiles</td></tr>
+<tr><td>Step</td><td>Raster del servicio (12.5 o 25 kHz en VHF/UHF)</td><td>Sintonizar canales reales</td></tr>
+<tr><td>RxMode</td><td>MAIN ONLY al empezar</td><td>Saber siempre por donde se transmite</td></tr>
+<tr><td>SetPTT</td><td>Clasico</td><td>OnePush puede seguir emitiendo al soltar</td></tr>
+<tr><td>VOX</td><td>OFF</td><td>Evitar emisiones accidentales</td></tr>
+<tr><td>TxTOut</td><td>60-120 s</td><td>Corta un PTT atascado</td></tr>
+<tr><td>F Lock</td><td>Perfil de tu region</td><td>Limita TX a las bandas que corresponden</td></tr>
+<tr><td>SetLck</td><td>Teclas (y PTT si lo necesitas)</td><td>Evita cambios en el bolsillo</td></tr>
+<tr><td>ChDisp</td><td>Nombre</td><td>Ver el nombre de la memoria en modo MR</td></tr>
+</tbody></table></div>
+<p>Despues de ajustar, apagar y encender para confirmar que se han guardado. El significado de cada menu esta en el <a href="#diccionario-de-menus-de-radio">diccionario de menus</a>.</p>
+<h3 id="fases-7-y-8-canales-y-escaneo">Fases 7 y 8: canales y escaneo</h3>
+<ul>
+<li>Esta web prepara canales sobre una plantilla y los escribe con respaldo y relectura (<a href="#preparar-y-enviar-memorias-fm">memorias FM</a>). Tambien puedes usar el driver CHIRP de cada publicacion de F4HWN o Bricohams Studio.</li>
+<li>Los canales importados nacen con TXLock. Quitarlo solo en canales verificados y autorizados (<a href="ayuda-configuracion.html#diccionario-de-canal-analogico">diccionario de canal</a>).</li>
+<li>Asignar cada memoria a su lista (ScList), elegir prioridades (PriCh1/PriCh2) y el modo de reanudacion (ScnRev). Probar el escaneo con SQL ajustado.</li>
+</ul>
+<h2 id="volver-a-fabrica-y-recuperacion">Volver a fabrica y recuperacion</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Situacion</th><th scope="col">Que hacer</th></tr></thead><tbody>
+<tr><td>Quieres volver al firmware de fabrica</td><td>Restauracion guiada de <a href="https://armel.github.io/uvstudio/" target="_blank" rel="noopener noreferrer">UV Studio</a>: reconstruye la flash externa sin tocar la calibracion. Flashear solo el <code>.bin</code> de fabrica puede dejar el K1 sin arrancar</td></tr>
+<tr><td>La radio no arranca tras flashear</td><td>Entrar en modo actualizacion (PTT al encender) y flashear de nuevo un <code>.bin</code> del modelo correcto</td></tr>
+<tr><td>El bootloader no responde o no aparece el puerto</td><td>Probar otro cable de datos y otro puerto; comprobar que nada mas usa el puerto</td></tr>
+<tr><td>No hay forma de entrar en modo actualizacion</td><td>Recuperacion por SWD con ST-Link (<a href="ayuda-atlas-uv-k5-v3.html#swd-y-recuperacion">SWD</a>). Solo con experiencia</td></tr>
+<tr><td>Calibracion perdida o de otra radio</td><td>Restaurar la copia de la fase 2. No usar calibraciones de otras unidades</td></tr>
+</tbody></table></div>
 <h2 id="beta-prueba-usb-real-y-canales">Beta: prueba USB real y canales</h2>
 <p>Prueba de solo lectura realizada el 25-10-2026 en COM4 (USB CDC VID 36B7 / PID FFFF), modelo declarado por el propietario <strong>UV-K5 V3</strong>. La radio identifica <strong>F4HWN v6.0.0</strong>; no se deduce automaticamente la placa.</p>
 <ul>
@@ -229,6 +291,7 @@
 <li><a href="https://github.com/armel/uv-k5-chirp-driver" target="_blank" rel="noopener noreferrer">Driver CHIRP dedicado</a>.</li>
 <li><a href="ayuda-bricohams.html">Bricohams, hashes y compilacion</a>.</li>
 <li><a href="ayuda-karina.html">Karina V1 y limites de licencia/fuentes</a>.</li>
+<li><a href="ayuda-atlas-uv-k5-v3.html">Atlas tecnico UV-K5 V3: hardware, protocolos y esquemas</a>.</li>
 </ul>
 <p>Para un firmware stock, UVMOD o OneOfEleven consultar su proyecto y hardware exactos: no hay equivalencia de menus/EEPROM garantizada con esta guia. Para los enlaces añadidos por el usuario, ver <a href="ayuda-egzumer.html">Egzumer V1</a> y <a href="ayuda-pack-dim0s.html">pack Dim0s con Karina V3/K1</a>.</p></article>
     <footer><p>Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia. <a href="ayuda-firmwares.html">Volver al indice</a>.</p></footer>

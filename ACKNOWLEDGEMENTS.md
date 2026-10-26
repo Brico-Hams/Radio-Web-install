@@ -28,6 +28,7 @@ Bricohams Radio Workspace es una **implementación independiente con fines de in
 | [SatNOGS DB](https://db.satnogs.org/) | Transmisores y TLE | CC BY-SA 4.0 |
 | [CelesTrak](https://celestrak.org/) | TLE | Términos de CelesTrak |
 | [opengd77.com](https://www.opengd77.com/downloads/) y [GitHub Releases de F4HWN](https://github.com/armel/uv-k1-k5v3-firmware-custom/releases) | Firmware oficial | Licencias de cada proyecto |
+| [armel/k1-teardown](https://github.com/armel/k1-teardown) (F4HWN) | Siete fotos del teardown del UV-K1 en `docs/atlas/`, reducidas a 1600 px | Apache-2.0 |
 
 ## Documentación y herramientas
 

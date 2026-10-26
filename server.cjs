@@ -12,7 +12,12 @@ const ALLOWED_FILES = Object.freeze([
   "ayuda-opciones-f4hwn.html", "ayuda-presets-f4hwn.html", "ayuda-ardf.html",
   "ayuda-opengd77.html", "ayuda-opengd77-modelos.html", "ayuda-karina.html",
   "ayuda-bricohams.html", "ayuda-entrega.html", "ayuda-android.html", "help-docs.css",
-  "ayuda-egzumer.html", "ayuda-pack-dim0s.html"
+  "ayuda-egzumer.html", "ayuda-pack-dim0s.html", "ayuda-atlas-uv-k5-v3.html",
+  "docs/atlas/bloques-v3.svg", "docs/atlas/flash-interna-v3.svg", "docs/atlas/flash-externa-v3.svg",
+  "docs/atlas/trama-serie.svg", "docs/atlas/secuencia-dfu.svg",
+  "docs/atlas/k1-view-a.jpg", "docs/atlas/k1-view-b-recto.jpg", "docs/atlas/k1-view-b-verso.jpg",
+  "docs/atlas/k1-view-c-recto.jpg", "docs/atlas/k1-view-c-verso.jpg", "docs/atlas/k1-view-d-front.jpg",
+  "docs/atlas/k1-view-e-front-back.jpg"
 ]);
 const allowed = new Set(ALLOWED_FILES);
 const { verify: verifyStudio } = require("./studio-pin.cjs");
@@ -177,7 +182,7 @@ return http.createServer(async (request, response) => {
       ? path.join(path.dirname(require.resolve("satellite.js/package.json")), "dist", "satellite.min.js")
       : path.join(__dirname, name);
     const body = await fs.readFile(filename);
-    const type = name.endsWith(".png") ? "image/png" : `${name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript"}; charset=utf-8`;
+    const type = name.endsWith(".png") ? "image/png" : name.endsWith(".jpg") ? "image/jpeg" : name.endsWith(".svg") ? "image/svg+xml" : `${name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript"}; charset=utf-8`;
     response.writeHead(200, { "Content-Type": type, "Content-Length": body.length });
     response.end(request.method === "HEAD" ? undefined : body);
   } catch (error) {

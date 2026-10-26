@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 330" role="img" aria-label="Secuencia de flasheo DFU del PY32F071">
+<style>
+.bg{fill:#111d22}.a{fill:#123a36;stroke:#2bb3a3}.b{fill:#3a2419;stroke:#e08a5a}
+.bus{stroke:#e08a5a;stroke-width:2;fill:none}.bus2{stroke:#2bb3a3;stroke-width:2;fill:none}.dash{stroke:#8fa7ab;stroke-width:1.2;stroke-dasharray:4 3;fill:none}
+.t{fill:#e6f1f2;font:600 13px system-ui,sans-serif}.s{fill:#8fa7ab;font:11px ui-monospace,Consolas,monospace}
+</style>
+<rect class="bg" width="900" height="330"/>
+<rect class="a" x="60" y="20" width="200" height="40" rx="6"/><text class="t" x="160" y="45" text-anchor="middle">PC / navegador</text>
+<rect class="b" x="640" y="20" width="200" height="40" rx="6"/><text class="t" x="740" y="45" text-anchor="middle">Bootloader 7.00.07</text>
+<path class="dash" d="M160 60 V320"/><path class="dash" d="M740 60 V320"/>
+<path class="bus" d="M740 90 H160"/><text class="s" x="450" y="84" text-anchor="middle">0x0518 aviso periódico: UID[16] + versión[16]</text>
+<path class="bus2" d="M160 130 H740"/><text class="s" x="450" y="124" text-anchor="middle">0x0530 saludo: 4 primeros caracteres de la versión (×3)</text>
+<path class="bus2" d="M160 180 H740"/><text class="s" x="450" y="174" text-anchor="middle">0x0519 página: u32 timestamp, u16 página, u16 total, 4 B, 256 B de datos</text>
+<path class="bus" d="M740 220 H160"/><text class="s" x="450" y="214" text-anchor="middle">0x051A confirmación: página (u16 en +4), error (u16 en +6, 0 = OK)</text>
+<text class="s" x="450" y="260" text-anchor="middle">repetir por cada página de 256 B · reintentar si no hay confirmación</text>
+<text class="s" x="450" y="300" text-anchor="middle">al terminar, la radio reinicia en la app nueva (0x08002800)</text>
+</svg>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 200" role="img" aria-label="Formato de trama del protocolo serie Quansheng">
+<style>
+.bg{fill:#111d22}.a{fill:#123a36;stroke:#2bb3a3}.b{fill:#3a2419;stroke:#e08a5a}.dash{stroke:#8fa7ab;stroke-width:1.2;stroke-dasharray:4 3;fill:none}
+.t{fill:#e6f1f2;font:600 13px system-ui,sans-serif}.s{fill:#8fa7ab;font:11px ui-monospace,Consolas,monospace}
+</style>
+<rect class="bg" width="900" height="200"/>
+<rect class="b" x="20" y="50" width="90" height="56"/><text class="t" x="65" y="76" text-anchor="middle">AB CD</text><text class="s" x="65" y="94" text-anchor="middle">cabecera</text>
+<rect class="b" x="110" y="50" width="100" height="56"/><text class="t" x="160" y="76" text-anchor="middle">LEN</text><text class="s" x="160" y="94" text-anchor="middle">u16 LE (par)</text>
+<rect class="a" x="210" y="50" width="100" height="56"/><text class="t" x="260" y="76" text-anchor="middle">TYPE</text><text class="s" x="260" y="94" text-anchor="middle">u16 LE</text>
+<rect class="a" x="310" y="50" width="100" height="56"/><text class="t" x="360" y="76" text-anchor="middle">SIZE</text><text class="s" x="360" y="94" text-anchor="middle">u16 LE</text>
+<rect class="a" x="410" y="50" width="230" height="56"/><text class="t" x="525" y="76" text-anchor="middle">DATOS</text><text class="s" x="525" y="94" text-anchor="middle">SIZE bytes (+1 de relleno)</text>
+<rect class="a" x="640" y="50" width="120" height="56"/><text class="t" x="700" y="76" text-anchor="middle">CRC16</text><text class="s" x="700" y="94" text-anchor="middle">XMODEM, LE</text>
+<rect class="b" x="760" y="50" width="110" height="56"/><text class="t" x="815" y="76" text-anchor="middle">DC BA</text><text class="s" x="815" y="94" text-anchor="middle">pie</text>
+<path class="dash" d="M210 125 H760"/><text class="s" x="485" y="145" text-anchor="middle">bloque XOR con la clave de 16 bytes (índice i mod 16), CRC incluido</text>
+<text class="s" x="215" y="40">el CRC se calcula sobre TYPE+SIZE+DATOS antes de ofuscar</text>
+<text class="s" x="20" y="180">Clave: 16 6C 14 E6 2E 91 0D 40 21 35 D5 40 13 03 E9 80 · CRC-16: polinomio 0x1021, inicial 0, sin reflexión</text>
+</svg>

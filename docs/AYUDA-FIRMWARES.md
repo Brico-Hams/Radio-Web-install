@@ -8,7 +8,8 @@ oficiales ni certifica combinaciones que no se han probado en hardware.
 | Guia | Que resuelve |
 | --- | --- |
 | [Configuracion comun y procedimientos](AYUDA-CONFIGURACION.md) | Frecuencias, FM/DMR, tonos, copias, repetidores, satelites, USB y comprobacion de resultados |
-| [Quansheng F4HWN](AYUDA-QUANSHENG.md) | Hardware V1/V2/V3, versiones v4/v5/v6, ediciones, menus, slots, CFG y apps |
+| [Quansheng F4HWN](AYUDA-QUANSHENG.md) | Puesta en marcha de 0 a 100 %, hardware V1/V2/V3, versiones v4/v5/v6, ediciones, menus, slots, CFG, apps y recuperacion |
+| [Atlas tecnico UV-K5 V3](ATLAS-UV-K5-V3.md) | Como funciona por dentro: pinout PY32F071, memorias, protocolo serie, bootloader, SWD, compilacion, mods, esquemas y fotos |
 | [Todas las opciones de compilacion F4HWN](AYUDA-OPCIONES-F4HWN.md) | Significado de cada opcion del catalogo, dependencias y precauciones |
 | [Valores de los presets F4HWN](F4HWN-PRESETS.md) | Matrices ON/OFF de 18 versiones publicadas v4.3.0-v6.3.0, todos sus presets y perfiles locales v6.1.0 |
 | [ARDF](AYUDA-ARDF.md) | Ganancia manual, ciclos, sincronizacion, distancia y diferencias de hardware |

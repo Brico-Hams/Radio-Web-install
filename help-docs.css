@@ -53,6 +53,21 @@
 .firmware-help pre {
   overflow-wrap: normal;
 }
+.firmware-help figure {
+  margin: 20px 0;
+}
+.firmware-help figure img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.firmware-help figcaption {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: .9em;
+}
 .firmware-help :target {
   scroll-margin-top: 20px;
 }

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 300" role="img" aria-label="Mapa de la flash externa PY25Q16 con firmware de fábrica y con F4HWN multiboot">
+<style>
+.bg{fill:#111d22}.a{fill:#123a36;stroke:#2bb3a3}.b{fill:#3a2419;stroke:#e08a5a}.w{fill:#3b1d12;stroke:#ff9b73}.c{fill:#0b1418;stroke:#1f3238}.box{fill:#0b1418;stroke:#8fa7ab}
+.t{fill:#e6f1f2;font:600 13px system-ui,sans-serif}.s{fill:#8fa7ab;font:11px ui-monospace,Consolas,monospace}
+</style>
+<rect class="bg" width="900" height="300"/>
+<text class="t" x="30" y="30">Firmware de fábrica</text>
+<rect class="a" x="30" y="40" width="55" height="50"/><text class="s" x="34" y="70">config</text>
+<rect class="w" x="85" y="40" width="12" height="50"/>
+<rect class="b" x="97" y="40" width="12" height="50"/>
+<rect class="c" x="109" y="40" width="331" height="50"/>
+<rect class="b" x="440" y="40" width="262" height="50"/><text class="s" x="470" y="70">audio de voz 0x100000–0x196FFF</text>
+<rect class="c" x="702" y="40" width="168" height="50"/>
+<text class="t" x="30" y="140">F4HWN Fusion · multiboot</text>
+<rect class="a" x="30" y="150" width="55" height="50"/><text class="s" x="34" y="180">banco 0</text>
+<rect class="w" x="85" y="150" width="12" height="50"/>
+<rect class="b" x="97" y="150" width="12" height="50"/>
+<rect class="c" x="109" y="150" width="9" height="50"/>
+<rect class="box" x="118" y="150" width="55" height="50"/><text class="s" x="122" y="180">slot 0</text>
+<rect class="box" x="173" y="150" width="55" height="50"/><text class="s" x="177" y="180">slot 1</text>
+<rect class="box" x="228" y="150" width="55" height="50"/><text class="s" x="232" y="180">slot 2</text>
+<rect class="box" x="283" y="150" width="55" height="50"/><text class="s" x="287" y="180">slot 3</text>
+<rect class="box" x="338" y="150" width="55" height="50"/><text class="s" x="342" y="180">slot 4</text>
+<rect class="a" x="393" y="150" width="47" height="50"/><text class="s" x="396" y="172">bancos</text><text class="s" x="396" y="186">1–4</text>
+<rect class="w" x="440" y="150" width="6" height="50"/>
+<rect class="b" x="446" y="150" width="240" height="50"/><text class="s" x="470" y="180">apps superpuestas 0x102000…</text>
+<rect class="c" x="686" y="150" width="184" height="50"/><text class="s" x="690" y="180">reserva Sonic 0x1DE000</text>
+<text class="s" x="30" y="222">0x000000</text><text class="s" x="96" y="240">0x010000 calib.</text><text class="s" x="118" y="258">0x020000</text><text class="s" x="380" y="222">0x0C0000</text><text class="s" x="430" y="240">0x100000 estado A/B</text><text class="s" x="820" y="222">0x1FFFFF</text>
+<text class="s" x="30" y="285">Escala: 1 px ≈ 2,4 KB. Banco 0: config (0x0000–0xA177), calibración (0x010000), logo (0x011000), log RX/TX (0x018000).</text>
+</svg>

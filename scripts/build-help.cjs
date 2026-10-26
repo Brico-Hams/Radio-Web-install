@@ -20,7 +20,8 @@ const pages = Object.freeze({
   "KARINA.md": "ayuda-karina.html",
   "BRICOHAMS-FIRMWARE.md": "ayuda-bricohams.html",
   "ESTADO-ENTREGA.md": "ayuda-entrega.html",
-  "ANDROID.md": "ayuda-android.html"
+  "ANDROID.md": "ayuda-android.html",
+  "ATLAS-UV-K5-V3.md": "ayuda-atlas-uv-k5-v3.html"
 });
 const escape = value => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;")
   .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -135,9 +136,19 @@ function destination(target, source) {
   const resolved = path.resolve(root, "docs", path.dirname(source), file);
   assert(fs.existsSync(resolved), `Enlace local roto en ${source}: ${target}`);
   const relative = path.relative(path.join(root, "docs"), resolved).replace(/\\/g, "/");
+  // App pages next to the generated guides (ayuda.html, quansheng.html) stay local links.
+  if (path.dirname(resolved) === root && resolved.endsWith(".html")) return `${path.basename(resolved)}${anchor ? `#${anchor}` : ""}`;
   return pages[relative]
     ? `${pages[relative]}${anchor ? `#${anchor}` : ""}`
     : `https://github.com/Brico-Hams/Radio-Web-install/blob/main/${path.relative(root, resolved).replace(/\\/g, "/")}${anchor ? `#${anchor}` : ""}`;
+}
+// Images are local files under docs/ only, so pages keep working offline and under img-src 'self'.
+function image(target, source) {
+  assert(/\.(jpg|png|svg)$/i.test(target) && !/^[a-z][a-z0-9+.-]*:/i.test(target), `Imagen no permitida en ${source}: ${target}`);
+  const docs = path.join(root, "docs");
+  const resolved = path.resolve(docs, path.dirname(source), target);
+  assert(resolved.startsWith(docs + path.sep) && fs.existsSync(resolved), `Imagen rota en ${source}: ${target}`);
+  return path.relative(root, resolved).replace(/\\/g, "/");
 }
 function inline(text, source) {
   const tokens = [];
@@ -177,6 +188,13 @@ function render(markdown, source) {
       while (++i < lines.length && !/^```/.test(lines[i])) code.push(lines[i]);
       assert(i < lines.length, `Bloque de codigo sin cerrar: ${source}`);
       out.push(`<pre><code>${escape(code.join("\n"))}</code></pre>`);
+      continue;
+    }
+    const picture = /^!\[([^\]]+)\]\(([^)\s]+)\)$/.exec(line);
+    if (picture) {
+      endParagraph(); endList();
+      const src = escape(image(picture[2], source));
+      out.push(`<figure><a href="${src}"><img src="${src}" alt="${escape(picture[1])}" loading="lazy"></a><figcaption>${escape(picture[1])}</figcaption></figure>`);
       continue;
     }
     const heading = /^(#{1,6}) (.+)$/.exec(line);
@@ -244,7 +262,7 @@ function build() {
   <a class="skip" href="#main">Saltar al contenido</a>
   <main id="main" class="firmware-help">
     <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
-      <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
     </header>
     <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul>${headings.map(item => `<li><a href="#${item.id}">${escape(item.text)}</a></li>`).join("")}</ul></nav>
     <article class="panel">${body}</article>
@@ -258,4 +276,10 @@ function build() {
   console.log(`${Object.keys(pages).length} guias HTML; ${optionNames().length} opciones de interfaz, ${allOptionNames().length} en el historial de ${history.versions.length} versiones.`);
 }
 if (require.main === module) build();
-module.exports = { build, render, pages, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown };
+// Every image referenced by a guide, as a root-relative path: what the server, Pages and installers must ship.
+function helpImages() {
+  return [...new Set(Object.keys(pages).flatMap(source =>
+    [...fs.readFileSync(path.join(root, "docs", source), "utf8").matchAll(/^!\[[^\]]+\]\(([^)\s]+)\)$/gm)]
+      .map(match => image(match[1], source))))].sort();
+}
+module.exports = { build, render, pages, helpImages, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown };

@@ -20,7 +20,7 @@ app_files=(
   ayuda-opciones-f4hwn.html ayuda-presets-f4hwn.html ayuda-ardf.html
   ayuda-opengd77.html ayuda-opengd77-modelos.html ayuda-karina.html ayuda-bricohams.html
   ayuda-entrega.html ayuda-android.html
-  ayuda-egzumer.html ayuda-pack-dim0s.html
+  ayuda-egzumer.html ayuda-pack-dim0s.html ayuda-atlas-uv-k5-v3.html
   app.js radio-core.js transports.js quansheng-connector.js quansheng-channels.js gd77-connector.js
   backup-store.js codeplug-editor.js radio-ui.js firmware-core.js firmware-catalog.js
   planning-core.js radioid-csv.js planning-ui.js runtime-mode.js server.cjs studio-pin.cjs studio.html studio.lock.json
@@ -31,6 +31,9 @@ stage_app() {
   local destination=$1 file
   mkdir -p "$destination"
   for file in "${app_files[@]}"; do cp "$root/$file" "$destination/$file"; done
+  # Diagrams and photos of the UV-K5 V3 atlas, served as docs/atlas/* (same paths as server.cjs).
+  mkdir -p "$destination/docs/atlas"
+  cp "$root"/docs/atlas/*.jpg "$root"/docs/atlas/*.svg "$destination/docs/atlas/"
   mkdir -p "$destination/node_modules"
   cp -R "$root/node_modules/satellite.js" "$destination/node_modules/satellite.js"
 }

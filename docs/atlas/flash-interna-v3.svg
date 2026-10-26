@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 190" role="img" aria-label="Mapa de la flash interna del PY32F071">
+<style>
+.bg{fill:#111d22}.a{fill:#123a36;stroke:#2bb3a3}.w{fill:#3b1d12;stroke:#ff9b73}.c{fill:#0b1418;stroke:#1f3238}
+.t{fill:#e6f1f2;font:600 13px system-ui,sans-serif}.s{fill:#8fa7ab;font:11px ui-monospace,Consolas,monospace}
+</style>
+<rect class="bg" width="900" height="190"/>
+<rect class="w" x="30" y="50" width="90" height="70"/>
+<rect class="a" x="120" y="50" width="560" height="70"/>
+<rect class="c" x="680" y="50" width="190" height="70"/>
+<text class="t" x="75" y="82" text-anchor="middle">Bootloader</text><text class="s" x="75" y="100" text-anchor="middle">10 KB</text>
+<text class="t" x="400" y="82" text-anchor="middle">Aplicación (firmware)</text><text class="s" x="400" y="100" text-anchor="middle">hasta 0x1D800 = 118 KB</text>
+<text class="t" x="775" y="82" text-anchor="middle">libre / 0xFF</text><text class="s" x="775" y="100" text-anchor="middle">según tamaño</text>
+<text class="s" x="30" y="140">0x08000000</text><text class="s" x="104" y="160">0x08002800</text><text class="s" x="790" y="140">0x0801FFFF</text>
+<text class="s" x="30" y="34">Páginas de borrado de 256 B · tabla de vectores de la app en 0x08002800</text>
+</svg>

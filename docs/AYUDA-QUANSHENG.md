@@ -4,6 +4,96 @@ Revision: 25-10-2026. Base funcional inspeccionada: Fusion61, commit
 `f556a96e73c3e423a00cf473aeb37f827cac05a5`; catalogo modular web v6.3.0,
 commit `ca3a4271386049e7b459b215cef0ad0eea1a30ca`.
 Esta guia no atribuye automaticamente las funciones v6.1/v6.3 a v4 o v5.
+Como funciona la radio por dentro (pines, memorias, protocolo, bootloader,
+esquemas y fotos): [Atlas tecnico UV-K5 V3](ATLAS-UV-K5-V3.md).
+
+## Puesta en marcha de 0 a 100 %
+
+Ruta completa desde una radio recien sacada de la caja hasta una radio
+configurada, con copia y verificada. Cada fase indica cuando esta terminada.
+Las fases 9 y 10 son opcionales.
+
+| Fase | Que haces | Terminada cuando | Detalle |
+| --- | --- | --- | --- |
+| 0. Identificar | Pegatina bajo la bateria, SysInf y version del bootloader | Sabes si es UV-K5 V3, UV-K1 u otra revision | [Versiones](ATLAS-UV-K5-V3.md#versiones-y-como-identificarlas) |
+| 1. Preparar el PC | Chrome o Edge de escritorio, cable USB-C de datos o cable Kenwood, controlador | El puerto aparece y ninguna otra aplicacion lo usa | [Controladores](../ayuda.html#drivers) y [USB](AYUDA-CONFIGURACION.md#conexion-usb-sin-confundir-modos) |
+| 2. Copias | Calibracion (512 bytes), configuracion y, si el firmware lo permite, Flash completa | Tienes los archivos fuera del navegador con su SHA-256 | [Calibracion](ATLAS-UV-K5-V3.md#calibracion) |
+| 3. Elegir firmware | Version y edicion (Fusion, FieldOps, Transfer, Labs) para tu hardware | Archivo `.bin` descargado de la publicacion oficial con hash comprobado | [Ediciones](#que-edicion-elegir) y [versiones](#matriz-de-versiones-y-formatos) |
+| 4. Flashear | Radio apagada, PTT pulsado al encender, UV Studio o Bricohams Studio | La herramienta confirma todas las paginas y la radio reinicia | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-y-flasheo) |
+| 5. Primer arranque | Leer SysInf y comprobar la version | La version coincide con el archivo flasheado | Seccion siguiente |
+| 6. Ajustes basicos | Navegacion, bateria, pantalla, squelch, TX y bloqueos | Los ajustes sobreviven a apagar y encender | Tabla de ajustes basicos |
+| 7. Canales | Repetidores, PMR solo RX, satelites y nombres | Las memorias aparecen y se releen iguales | [Memorias FM](#preparar-y-enviar-memorias-fm) |
+| 8. Escaneo | Listas, prioridades y reanudacion | El escaneo recorre solo las memorias previstas | [Escaneo](#escaneo-prioridades-y-teclas) |
+| 9. Multiboot (opcional) | Slots 1-4 y bancos CFG | Cada slot valida por CRC y arranca | [Slots y bancos](#slots-y-bancos-cfg-operaciones-distintas) |
+| 10. Labs (opcional) | Apps superpuestas de la misma publicacion | La app arranca y vuelve al firmware | [Labs](#labs-y-aplicaciones) |
+| 11. Verificacion final | Lista de comprobacion y nueva copia | Tienes copia del estado final y anotadas las versiones | [Lista final](AYUDA-CONFIGURACION.md#lista-de-verificacion-posterior) |
+
+### Fase 4 paso a paso: flashear el firmware principal
+
+1. Guardar las copias de la fase 2. Sin calibracion guardada, no seguir.
+2. Cerrar CHIRP, CPS, otras pestanas de Studio y la conexion normal de esta web.
+3. Apagar la radio. Mantener PTT pulsado y encenderla: el LED queda encendido
+   con la pantalla apagada. Soltar PTT y conectar el cable USB-C.
+4. En [UV Studio](https://armel.github.io/uvstudio/) o en
+   [Bricohams Studio](https://brico-hams.github.io/Bricohams-Studio/) elegir el
+   puerto. El bootloader debe anunciar `7.00.07` (UV-K5 V3) o `7.02.02`/`7.03.0x`
+   (UV-K1). Otra version: detenerse y comprobar el modelo.
+5. Elegir el `.bin` plano de la edicion. Nunca un `*.packed.bin` (es para el
+   actualizador oficial) ni una imagen V1.
+6. Confirmar y no tocar la radio ni el cable hasta que todas las paginas esten
+   confirmadas. Si se corta, la radio sigue en modo actualizacion: repetir desde
+   el paso 3 con el mismo archivo.
+7. La radio reinicia sola. Tras flashear F4HWN, guardar de nuevo la calibracion
+   con UV Studio, como recomienda el proyecto.
+
+### Fase 5: primer arranque
+
+- Abrir SysInf y anotar version y edicion. Si no coincide con el archivo, no
+  continuar: repetir la fase 4.
+- La calibracion no se borra al flashear. Si la bateria marca 0 V o el squelch
+  no se comporta, comprobar que la calibracion es la de esta radio antes de tocar nada.
+- Si los menus muestran valores incoherentes despues de cambiar de firmware,
+  usar Reset solo despues de comprobar las copias: su alcance depende del build.
+
+### Fase 6: ajustes basicos recomendados
+
+| Menu | Valor inicial razonable | Motivo |
+| --- | --- | --- |
+| SetNav | Segun el modelo (K1 o K5 V3) | Si las flechas parecen invertidas, es este ajuste |
+| BatTyp | Capacidad real de tu bateria | Indicador de carga correcto |
+| SetCtr, BLMin, BLMax, BLTime | Legibles con el menor consumo | Comodidad y autonomia |
+| Sql | 3-4 para empezar | Cierra el ruido sin perder senales debiles |
+| Step | Raster del servicio (12.5 o 25 kHz en VHF/UHF) | Sintonizar canales reales |
+| RxMode | MAIN ONLY al empezar | Saber siempre por donde se transmite |
+| SetPTT | Clasico | OnePush puede seguir emitiendo al soltar |
+| VOX | OFF | Evitar emisiones accidentales |
+| TxTOut | 60-120 s | Corta un PTT atascado |
+| F Lock | Perfil de tu region | Limita TX a las bandas que corresponden |
+| SetLck | Teclas (y PTT si lo necesitas) | Evita cambios en el bolsillo |
+| ChDisp | Nombre | Ver el nombre de la memoria en modo MR |
+
+Despues de ajustar, apagar y encender para confirmar que se han guardado.
+El significado de cada menu esta en el [diccionario de menus](#diccionario-de-menus-de-radio).
+
+### Fases 7 y 8: canales y escaneo
+
+- Esta web prepara canales sobre una plantilla y los escribe con respaldo y
+  relectura ([memorias FM](#preparar-y-enviar-memorias-fm)). Tambien puedes usar
+  el driver CHIRP de cada publicacion de F4HWN o Bricohams Studio.
+- Los canales importados nacen con TXLock. Quitarlo solo en canales verificados
+  y autorizados ([diccionario de canal](AYUDA-CONFIGURACION.md#diccionario-de-canal-analogico)).
+- Asignar cada memoria a su lista (ScList), elegir prioridades (PriCh1/PriCh2)
+  y el modo de reanudacion (ScnRev). Probar el escaneo con SQL ajustado.
+
+## Volver a fabrica y recuperacion
+
+| Situacion | Que hacer |
+| --- | --- |
+| Quieres volver al firmware de fabrica | Restauracion guiada de [UV Studio](https://armel.github.io/uvstudio/): reconstruye la flash externa sin tocar la calibracion. Flashear solo el `.bin` de fabrica puede dejar el K1 sin arrancar |
+| La radio no arranca tras flashear | Entrar en modo actualizacion (PTT al encender) y flashear de nuevo un `.bin` del modelo correcto |
+| El bootloader no responde o no aparece el puerto | Probar otro cable de datos y otro puerto; comprobar que nada mas usa el puerto |
+| No hay forma de entrar en modo actualizacion | Recuperacion por SWD con ST-Link ([SWD](ATLAS-UV-K5-V3.md#swd-y-recuperacion)). Solo con experiencia |
+| Calibracion perdida o de otra radio | Restaurar la copia de la fase 2. No usar calibraciones de otras unidades |
 
 ## Beta: prueba USB real y canales
 
@@ -326,6 +416,7 @@ inventario upstream: no probar emisiones en frecuencias de socorro.
 - [Driver CHIRP dedicado](https://github.com/armel/uv-k5-chirp-driver).
 - [Bricohams, hashes y compilacion](BRICOHAMS-FIRMWARE.md).
 - [Karina V1 y limites de licencia/fuentes](KARINA.md).
+- [Atlas tecnico UV-K5 V3: hardware, protocolos y esquemas](ATLAS-UV-K5-V3.md).
 
 Para un firmware stock, UVMOD o OneOfEleven consultar su proyecto y hardware
 exactos: no hay equivalencia de menus/EEPROM garantizada con esta guia.
