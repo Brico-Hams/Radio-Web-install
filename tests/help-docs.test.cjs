@@ -251,7 +251,7 @@ test("Android documenta las funciones reales, permisos y limites de la APK", () 
   for (const name of ["docs/ANDROID.md", "ayuda-android.html"]) {
     const value = read(name);
     for (const marker of ["0.7.1-beta", "SQLite", "WAV PCM", "LoTW", "no ejecutadas",
-      "GPS", "No se fusionan sesiones", "rollback", "Noventa y dos pruebas host", "0x7B02", "Editor de canales Quansheng por USB", "0x051D", "D023N", "60 segundos",
+      "GPS", "No se fusionan sesiones", "rollback", "Noventa y tres pruebas host", "0x7B02", "Editor de canales Quansheng por USB", "0x051D", "D023N", "60 segundos",
       "Estadisticas e historial ARDF", "Haversine", "No es recorrido completo", "222.39016",
       "Captura de microfono Morse y Robot36", "RECORD_AUDIO", "Conceder permiso no graba",
       "2880000", "No se reanuda", "no valida recepcion RF real",

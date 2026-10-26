@@ -712,6 +712,30 @@
             renderQuansheng();
           }));
           cell.append(remove);
+          const copy = document.createElement("button");
+          copy.type = "button";
+          copy.className = "guide-tab";
+          copy.textContent = "Copiar";
+          copy.addEventListener("click", () => action("Copiar canal local Quansheng", async () => {
+            const copied = R.copyQuanshengChannel(image, channel.number);
+            image = copied.image;
+            renderQuansheng();
+            log(`Canal ${channel.number} copiado en la memoria ${copied.number} del archivo local. La radio no se modifica.`);
+          }));
+          cell.append(copy);
+          const move = document.createElement("button");
+          move.type = "button";
+          move.className = "guide-tab";
+          move.textContent = "Mover a...";
+          move.addEventListener("click", () => action("Mover canal local Quansheng", async () => {
+            const answer = root.prompt(`Mover el canal ${channel.number} a la memoria (1-1024). Las intermedias se desplazan una posicion.`, String(channel.number));
+            if (answer === null || answer.trim() === "") return;
+            const target = Number(answer);
+            image = R.moveQuanshengChannel(image, channel.number, target);
+            renderQuansheng();
+            log(`Canal ${channel.number} movido a la memoria ${target} del archivo local. La radio no se modifica.`);
+          }));
+          cell.append(move);
           row.append(cell);
           $("qs-channels").append(row);
         }

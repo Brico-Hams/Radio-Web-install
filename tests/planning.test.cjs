@@ -315,6 +315,27 @@ function quanshengConfig() {
   image.set(new TextEncoder().encode("v6.0.0"), 0xa160);
   return image;
 }
+test("Quansheng copia y mueve memorias byte a byte, incluidos DCS y banderas no editables", () => {
+  const original = R.appendQuanshengChannels(quanshengConfig(), R.pmrChannels().slice(0, 3), 1).image;
+  original[16 + 10] = 0x20; // DCS on TX: not representable in the editor, must survive untouched
+  original[16 + 12] |= 0x21; // reverse + busy lock
+  const memory = (image, number) => [...image.subarray((number - 1) * 16, number * 16),
+    ...image.subarray(0x4000 + (number - 1) * 16, 0x4000 + number * 16), ...image.subarray(0x8000 + (number - 1) * 2, 0x8000 + number * 2)];
+  const copied = R.copyQuanshengChannel(original, 2);
+  assert.equal(copied.number, 5);
+  assert.deepEqual(memory(copied.image, 5), memory(original, 2));
+  assert.equal(R.copyQuanshengChannel(original, 2, 900).number, 900);
+  assert.throws(() => R.copyQuanshengChannel(original, 2, 3), /ocupada/);
+  assert.throws(() => R.copyQuanshengChannel(original, 10), /vacio/);
+  const moved = R.moveQuanshengChannel(original, 2, 4);
+  assert.deepEqual([3, 4, 2].map(number => memory(original, number)), [2, 3, 4].map(number => memory(moved, number)));
+  assert.deepEqual(memory(moved, 1), memory(original, 1));
+  const back = R.moveQuanshengChannel(moved, 4, 2);
+  assert.deepEqual(back, original);
+  assert.deepEqual(moved.subarray(0x8800), original.subarray(0x8800));
+  assert.throws(() => R.moveQuanshengChannel(original, 2, 1025), /1-1024/);
+  assert.throws(() => R.moveQuanshengChannel(original, 10, 2), /vacio/);
+});
 test("PMR446 ofrece 16 frecuencias exactas, ordenadas y solo RX", () => {
   const channels = R.pmrChannels();
   assert.equal(channels.length, 16);

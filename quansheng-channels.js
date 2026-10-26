@@ -165,6 +165,40 @@
     R.view(result).setUint16(attributes, 7, true);
     return result;
   }
+  const occupied = (image, number) => (image[positions(number).attributes] & 7) !== 7;
+  // Copies and moves carry every byte of the memory (tones, DCS, step, flags), not only the fields this editor shows.
+  function copyRaw(result, image, from, to) {
+    const source = positions(from);
+    const target = positions(to);
+    result.set(image.subarray(source.record, source.record + 16), target.record);
+    result.set(image.subarray(source.name, source.name + 16), target.name);
+    result.set(image.subarray(source.attributes, source.attributes + 2), target.attributes);
+  }
+  function copyQuanshengChannel(image, number, target) {
+    configuration(image);
+    R.assert(occupied(image, number), `El canal Quansheng ${number} esta vacio.`);
+    let destination = target;
+    if (destination === undefined) {
+      for (let candidate = number + 1; candidate <= 1024 && !destination; candidate++) if (!occupied(image, candidate)) destination = candidate;
+      for (let candidate = 1; candidate < number && !destination; candidate++) if (!occupied(image, candidate)) destination = candidate;
+      R.assert(destination, "No quedan memorias Quansheng libres para copiar el canal.");
+    }
+    R.assert(!occupied(image, destination), `La memoria ${destination} esta ocupada; borrala o mueve el canal.`);
+    const result = image.slice();
+    copyRaw(result, image, number, destination);
+    return { image: result, number: destination };
+  }
+  // Moves a memory to a position and shifts the ones in between by one, like dragging a row in a list.
+  function moveQuanshengChannel(image, from, to) {
+    configuration(image);
+    positions(to);
+    R.assert(occupied(image, from), `El canal Quansheng ${from} esta vacio.`);
+    const result = image.slice();
+    const step = from < to ? 1 : -1;
+    for (let number = from; number !== to; number += step) copyRaw(result, image, number + step, number);
+    copyRaw(result, image, from, to);
+    return result;
+  }
   function restoreQuanshengChannels(backup, current) {
     readQuanshengChannels(backup);
     readQuanshengChannels(current);
@@ -175,6 +209,7 @@
     return restored;
   }
   Object.assign(R, { QUANSHENG_CONFIG_SIZE: CONFIG_SIZE, readQuanshengChannels, appendQuanshengChannels, restoreQuanshengChannels,
-    updateQuanshengChannel, deleteQuanshengChannel, assignQuanshengScanList, groupQuanshengChannels });
+    updateQuanshengChannel, deleteQuanshengChannel, copyQuanshengChannel, moveQuanshengChannel, assignQuanshengScanList,
+    groupQuanshengChannels });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

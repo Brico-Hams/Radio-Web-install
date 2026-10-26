@@ -64,7 +64,7 @@ Una compilacion correcta no demuestra que una radio haya arrancado con ella.
 - Android 0.7: APK y pruebas instrumentadas compiladas. Sesenta y nueve pruebas
   JVM/Robolectric correctas en CI, incluidas USB/CAT simulado, ADIF, Robot36, SGP4,
   captura/pantalla de microfono y estadisticas/historial ARDF. El 2026-10-26 pasan en local
-  las 92 pruebas host, incluidas las del editor de canales (CAT-02), las de envio SSTV por
+  las 93 pruebas host, incluidas las del editor de canales (CAT-02), las de envio SSTV por
   PTT CAT (AND-05), las de lista y radar de pases (AND-02) y las de libros por actividad (AND-06); falta su primera ejecucion en CI. Cero errores y trece avisos lint. Firmas y hashes de las 58 fuentes verificados;
   el manifiesto de cada construccion registra el resultado que le corresponde.
   Las pruebas instrumentadas estan compiladas, no ejecutadas; no hay telefono conectado.
