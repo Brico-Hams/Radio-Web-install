@@ -78,8 +78,17 @@ recursos de HAMRS y no declara paridad con esa aplicacion.
    para conservar todo el texto. En POTA el nombre propuesto es
    `INDICATIVO@PARQUE-AAAAMMDD.adi`.
 
-No hay aviso de duplicados en la banda, mapas, consulta de indicativos en
-linea ni subida a POTA/SOTA: el archivo se sube a mano. No se pueden renombrar
+Duplicados: al guardar, si el libro ya tiene el mismo indicativo en la misma
+banda ADIF (o la misma frecuencia fuera de bandas) y el mismo modo, se avisa
+antes de escribir nada. En POTA/SOTA solo cuenta como duplicado dentro del
+mismo dia UTC; en General, en todo el libro. No guardar descarta ese registro
+y conserva el formulario; Guardar igualmente lo agrega (por ejemplo, para
+repetir un contacto dudoso). El indicativo se compara exacto: `EA2XYZ` y
+`EA2XYZ/P` son distintos. La importacion ADIF no usa esta regla, sino la de
+campos identicos descrita abajo.
+
+No hay mapas, consulta de indicativos en linea ni subida a POTA/SOTA:
+el archivo se sube a mano. No se pueden renombrar
 ni borrar libros; sus contactos si.
 
 La fecha se interpreta como instante ISO; ADIF la convierte a UTC. Las
@@ -564,7 +573,7 @@ La APK de prueba no es la aplicacion de uso habitual.
 
 ## Validacion realizada y pendiente
 
-Noventa y dos pruebas host: seis de modelos/ADIF, cuatro de importacion
+Noventa y tres pruebas host: siete de modelos/ADIF, cuatro de importacion
 ADIF, tres de audio, doce de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT,
 cinco del codec de canales, cinco de memoria/respaldo/escritura Quansheng y ocho
 de USB CDC/serie simulado, cuatro de nucleo Robot36 (incluida ida y vuelta del codificador), dos de pantalla SSTV,
@@ -611,7 +620,9 @@ migracion desde una base version 1 con respaldo previo, migracion fallida que
 deja la version 1 intacta, contactos separados por libro, claves foraneas y
 copias JSON version 1 y 2. Los libros comprueban referencias POTA/SOTA, BAND
 y los campos de activacion en ADIF; la entrada rapida comprueba UTC
-automatico, RST por modo, frecuencia conservada y libro tras rotacion.
+automatico, RST por modo, frecuencia conservada, libro tras rotacion y el
+aviso de duplicado con No guardar y Guardar igualmente. La regla de duplicados
+se contrasta por indicativo, banda, modo, dia UTC y libro.
 La interfaz prueba busqueda tras rotacion y vista previa con cancelar/aceptar.
 SSTV contrasta geometria 320x240, inicio temporal, niveles de gris a
 8/16/48 kHz y barras RGB/CMY a 8 kHz: error maximo de 12 niveles por canal

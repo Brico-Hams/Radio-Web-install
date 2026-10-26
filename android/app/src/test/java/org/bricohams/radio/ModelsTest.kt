@@ -33,6 +33,25 @@ class ModelsTest {
         }
         Logbook(name = "Casa", kind = "GENERAL", reference = "", stationCall = "").validated()
     }
+    @Test fun dupesMatchCallBandModeAndPerDayForActivations() {
+        val pota = Logbook(id = "pota-1", name = "Parque", kind = "POTA", reference = "EA-0123", stationCall = "EA1ABC")
+        val first = contact().copy(id = "first", logbook = pota.id, frequencyMHz = "14.285", mode = "SSB")
+        val log = listOf(first)
+        val again = first.copy(id = "again", frequencyMHz = "14.300", utc = first.utc.plusSeconds(3600))
+        assertEquals(first, pota.duplicateOf(again, log))
+        assertNull(pota.duplicateOf(first, log))
+        assertNull(pota.duplicateOf(again.copy(frequencyMHz = "7.150"), log))
+        assertNull(pota.duplicateOf(again.copy(mode = "CW"), log))
+        assertNull(pota.duplicateOf(again.copy(call = "EA2XYZ"), log))
+        assertNull(pota.duplicateOf(again.copy(utc = Instant.parse("2026-10-26T00:00:00Z")), log))
+        val general = Logbook(id = "g", name = "Casa", kind = "GENERAL", reference = "", stationCall = "")
+        val home = log.map { it.copy(logbook = "g") }
+        assertNotNull(general.duplicateOf(again.copy(logbook = "g", utc = Instant.parse("2026-12-01T00:00:00Z")), home))
+        assertNull(general.duplicateOf(again, log))
+        val outOfBand = home.map { it.copy(frequencyMHz = "149.000") }
+        assertNotNull(general.duplicateOf(again.copy(logbook = "g", frequencyMHz = "149"), outOfBand))
+        assertNull(general.duplicateOf(again.copy(logbook = "g", frequencyMHz = "149.5"), outOfBand))
+    }
     @Test fun noSilentUnicodeLoss() {
         invalid { Adif.export(listOf(contact().copy(notes = "Espa\u00f1a"))) }
         assertTrue(Adif.export(listOf(contact().copy(notes = "<EOR>"))).contains("<COMMENT:5><EOR>"))

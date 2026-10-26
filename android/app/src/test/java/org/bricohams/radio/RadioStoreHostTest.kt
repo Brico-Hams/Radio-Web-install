@@ -343,10 +343,24 @@ class RadioStoreHostTest {
             }
             assertEquals("", activity.findViewById<EditText>(R.id.contact_call).text.toString())
             assertEquals("14.285", activity.findViewById<EditText>(R.id.contact_frequency).text.toString())
+            fun logAgain(): AlertDialog {
+                activity.findViewById<EditText>(R.id.contact_call).setText("EA2XYZ")
+                activity.findViewById<EditText>(R.id.contact_frequency).setText("14.300")
+                click(activity, "Guardar nuevo contacto")
+                return ShadowAlertDialog.getLatestAlertDialog().also { assertTrue(it.isShowing) }
+            }
+            fun count() = RadioStore(context).use { it.contacts().size }
+            logAgain().getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(1, count())
+            assertEquals("EA2XYZ", activity.findViewById<EditText>(R.id.contact_call).text.toString())
+            logAgain().getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(2, count())
             controller.recreate()
             activity = controller.get()
             assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.TextView>()
-                .any { it.text.startsWith("Libro: Parque (POTA EA-0123, EA1ABC) - 1 contactos") })
+                .any { it.text.startsWith("Libro: Parque (POTA EA-0123, EA1ABC) - 2 contactos") })
             assertEquals("CW", activity.findViewById<android.widget.Spinner>(R.id.contact_mode).selectedItem)
         } finally { controller.pause().stop().destroy() }
     }

@@ -61,6 +61,18 @@ data class Logbook(
         }
         return this
     }
+    /**
+     * Earlier contact that makes [contact] a dupe: same call, band (or exact frequency outside bands) and mode;
+     * POTA/SOTA activations count once per UTC day, General logbooks once overall.
+     */
+    fun duplicateOf(contact: Contact, existing: List<Contact>): Contact? {
+        fun slot(value: Contact) = Adif.band(value.frequencyMHz) ?: value.frequencyMHz.toBigDecimal().stripTrailingZeros().toPlainString()
+        fun day(value: Contact) = value.utc.atZone(ZoneOffset.UTC).toLocalDate()
+        return existing.firstOrNull {
+            it.id != contact.id && it.logbook == id && it.call == contact.call && it.mode == contact.mode &&
+                slot(it) == slot(contact) && (kind == "GENERAL" || day(it) == day(contact))
+        }
+    }
     companion object {
         const val GENERAL = "general"
         val KINDS = listOf("GENERAL", "POTA", "SOTA")

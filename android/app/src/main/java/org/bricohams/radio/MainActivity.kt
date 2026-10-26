@@ -262,11 +262,23 @@ class MainActivity : Activity() {
                 frequencyMHz = frequency.text.toString().trim(),
                 mode = mode.selectedItem.toString(), sent = sent.text.toString().trim(),
                 received = received.text.toString().trim(), notes = notes.text.toString(), logbook = current.id)
-            store.save(if (editing != null) updated.copy(id = editing.id) else updated, editing != null)
-            if (editing == null) { lastFrequency = updated.frequencyMHz; lastMode = updated.mode }
-            editingId = null
-            render()
-            message("${updated.call} guardado en ${current.name} (${updated.utc} UTC).")
+                .let { if (editing != null) it.copy(id = editing.id) else it }.validated()
+            fun commit() {
+                store.save(updated, editing != null)
+                if (editing == null) { lastFrequency = updated.frequencyMHz; lastMode = updated.mode }
+                editingId = null
+                render()
+                message("${updated.call} guardado en ${current.name} (${updated.utc} UTC).")
+            }
+            val duplicate = current.duplicateOf(updated, contacts)
+            if (duplicate == null) commit()
+            else AlertDialog.Builder(this).setTitle("Duplicado: ${updated.call}")
+                .setMessage("Ya consta en ${current.name}: ${duplicate.utc} UTC, " +
+                    "${Adif.band(duplicate.frequencyMHz) ?: duplicate.frequencyMHz + " MHz"} ${duplicate.mode}. " +
+                    (if (current.kind == "GENERAL") "" else "En ${current.kind} cuenta una vez por banda, modo y dia UTC. ") +
+                    "Aun no se ha guardado nada.")
+                .setNegativeButton("No guardar") { _, _ -> message("Duplicado no guardado.") }
+                .setPositiveButton("Guardar igualmente") { _, _ -> userAction(::commit) }.show()
         }
         if (editing != null) {
             button("Cancelar edicion") { editingId = null; render() }
