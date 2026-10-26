@@ -79,10 +79,17 @@ class SatelliteActivityTest {
             }
             click(activity, "Calcular pases de las proximas 24 h")
             waitForWorker(activity)
-            val buttons = views(activity.window.decorView).filterIsInstance<Button>()
-                .filter { it.text == "Seleccionar este pase para CAT RX" }
-            assertTrue(text(activity), buttons.isNotEmpty())
-            buttons.first().performClick()
+            val all = views(activity.window.decorView)
+            val radar = all.filterIsInstance<PassRadarView>().single()
+            val cards = all.filterIsInstance<TextView>().filter { it.isClickable && it.text.contains("\nAOS ") }
+            assertTrue(text(activity), cards.isNotEmpty())
+            assertTrue(cards.first().isSelected)
+            assertTrue(radar.track.size >= 2 && radar.contentDescription.contains("Observador"))
+            cards.last().performClick()
+            assertTrue(cards.last().isSelected)
+            val last = cards.last().text.toString()
+            assertTrue(last, last.contains("Max ") && last.contains("LOS "))
+            click(activity, "Abrir CAT RX y Doppler de este pase")
             val intent = shadowOf(activity).nextStartedActivity
             assertEquals(CatActivity::class.java.name, intent.component?.className)
             val plan = SatellitePlanJson.decode(requireNotNull(intent.getStringExtra("satellite-plan")))
@@ -90,6 +97,8 @@ class SatelliteActivityTest {
             assertEquals(line1, plan.tle.line1)
             assertEquals(SatellitesTest.observer, plan.observer)
             assertEquals(plan, SatellitePlanJson.decode(SatellitePlanJson.encode(plan)))
+            assertEquals(radar.track.first().time, plan.pass.aos.time)
+            assertEquals(radar.track.last().time, plan.pass.los.time)
             controller.recreate()
             assertEquals("145.80000", controller.get().findViewById<EditText>(R.id.satellite_downlink).text.toString())
         } finally { controller.pause().stop().destroy() }

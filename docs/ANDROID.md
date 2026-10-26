@@ -20,7 +20,7 @@ La version `0.7.1-beta` no sustituye sus funciones completas.
 | Microfono | Captura en primer plano hasta 60 s y decodificacion posterior Morse/Robot36; sin escucha ni decodificacion continua |
 | USB/CAT RX | CDC ACM y adaptadores USB-serie reconocidos de un puerto, identificacion F4HWN v6+, consulta, sintonia temporal confirmada y STOP; experimental |
 | CAT TX (PTT) | Envio Robot36 con PTT por lease armada en la radio (tecla 9), indicativo obligatorio, limite de 120 s, rechazo por TX lock y bandas; experimental |
-| Satelites | SGP4 offline, catalogo TLE importado, observador manual, prediccion 24 h y seguimiento Doppler RX por CAT durante el pase seleccionado |
+| Satelites | SGP4 offline, catalogo TLE importado, observador manual, prediccion 24 h, lista de pases con radar polar al estilo Look4sat y seguimiento Doppler RX por CAT durante el pase seleccionado |
 | SSTV Robot36 | Decodificacion de WAV o captura de microfono, tambien con CAT sintonizando, y codificador Robot36 para enviar por PTT CAT; experimental |
 | Escritura de canales, subtonos y potencia | Editor de canales FM F4HWN v6 por USB con respaldo completo y relectura |
 
@@ -334,6 +334,18 @@ sin acceso Java desde el motor, ni navegador/WebView ni conexion a Internet.
    Se muestrea cada 5 s, refinando cruces a intervalos de 500 ms; el maximo
    es muestreado, no una optimizacion continua. AOS/LOS se refieren al umbral
    de elevacion elegido, no necesariamente al horizonte geometrico.
+6. La pantalla sigue el flujo de Look4sat sin compartir su codigo ni sus
+   recursos: una tarjeta por pase con nombre y NORAD, AOS (dia y hora) y LOS
+   en la zona horaria del telefono, duracion, elevacion maxima, azimut de
+   entrada y salida y cuenta atras hasta AOS o LOS, actualizada cada segundo.
+   Arriba, un **radar polar** del pase elegido: norte arriba, este a la
+   derecha, horizonte en el borde y cenit en el centro, con anillos a 0, 30
+   y 60 grados. La trayectoria son 60 muestras SGP4 entre AOS y LOS; verde
+   marca AOS, rojo LOS y naranja la posicion actual, interpolada entre
+   muestras (tambien en el texto de detalle UTC y en la descripcion de
+   accesibilidad). Al calcular se elige el primer pase; toca otra tarjeta
+   para cambiarlo. Solo se predice el satelite introducido, no todo el
+   catalogo.
 
 Solo los parametros de una prediccion correcta se guardan en preferencias
 privadas. Incluyen la ubicacion manual; exportaciones JSON de campo no los
@@ -342,7 +354,7 @@ pero descarta los pases calculados: vuelve a calcularlos.
 
 ### Doppler RX del pase seleccionado
 
-Seleccionar un pase abre CAT con una instantanea de TLE, observador,
+**Abrir CAT RX y Doppler de este pase**, bajo el radar, abre CAT con una instantanea de TLE, observador,
 downlink y ventana. No conecta USB ni envia ordenes por si solo.
 Conecta el dispositivo, entra en SAT RX y habilita CAT con 8 en la radio.
 Pulsa **Iniciar Doppler del pase seleccionado** solo cuando estes dentro
@@ -552,12 +564,12 @@ La APK de prueba no es la aplicacion de uso habitual.
 
 ## Validacion realizada y pendiente
 
-Ochenta y nueve pruebas host: seis de modelos/ADIF, cuatro de importacion
+Noventa y dos pruebas host: seis de modelos/ADIF, cuatro de importacion
 ADIF, tres de audio, doce de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT,
 cinco del codec de canales, cinco de memoria/respaldo/escritura Quansheng y ocho
 de USB CDC/serie simulado, cuatro de nucleo Robot36 (incluida ida y vuelta del codificador), dos de pantalla SSTV,
 cuatro de envio SSTV por PTT CAT con radio simulada,
-tres de SGP4/TLE, cuatro de seguimiento, dos de pantalla de satelites,
+tres de SGP4/TLE, cuatro de seguimiento, dos de pantalla de satelites, tres de lista y radar de pases,
 cinco de captura PCM, seis de pantalla de microfono y seis de estadisticas ARDF.
 Comprueban SQLite tras cerrar/reabrir, actualizacion/eliminacion,
 exportacion JSON, coordenadas nulas/validas, arranque de pantallas,
@@ -614,8 +626,11 @@ Doppler en pasos de 10 Hz. Se verifican checksum, antiguedad, bandas,
 ventana, renovacion sin cambio de frecuencia, cancelacion, reloj discontinuo,
 respuesta tardia/pendiente y errores USB. La prueba combinada aplica
 el Doppler calculado a una radio CAT simulada y restaura nominal con STOP.
-La interfaz importa un catalogo, calcula pases offline, transmite la
-instantanea seleccionada y rechaza un pase vencido sin SET y cerrando USB.
+El radar contrasta la proyeccion polar (norte, este, cenit y bajo horizonte),
+la interpolacion de azimut al cruzar el norte, la trayectoria muestreada
+contra SGP4 (0.5 grados entre muestras) y las cuentas atras de las tarjetas.
+La interfaz importa un catalogo, calcula pases offline, muestra tarjetas y
+radar, cambia de pase con un toque, transmite la instantanea seleccionada y rechaza un pase vencido sin SET y cerrando USB.
 
 Compilan la APK y la APK instrumentada. Lint termina sin errores;
 conserva avisos de versiones mas nuevas de dependencias de prueba, forma

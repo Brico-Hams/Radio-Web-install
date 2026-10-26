@@ -49,7 +49,7 @@
     <string name="sstv_saved">PNG guardado; verifica el archivo en el destino elegido.</string>
     <string name="sstv_error">SSTV no completado: %1$s. Si estabas exportando, descarta el archivo parcial.</string>
     <string name="satellite_intro">Bricohams Beta - Satelites SGP4 sin red.</string>
-    <string name="satellite_help">Importa TLE actuales desde archivo o pega sus dos lineas. Posicion manual del observador, altura en km. Solo downlink puntual FM de VHF/UHF confirmado por ti, sin TX. Prediccion 24 h con TLE de hasta 7 dias; no descarga datos ni verifica el modo del satelite. No hay mapa ni GPS automatico en esta pantalla.</string>
+    <string name="satellite_help">Importa TLE actuales desde archivo o pega sus dos lineas. Posicion manual del observador, altura en km. Solo downlink puntual FM de VHF/UHF confirmado por ti, sin TX. Prediccion 24 h con TLE de hasta 7 dias; no descarga datos ni verifica el modo del satelite. Lista de pases con radar polar del pase elegido; no hay mapa ni GPS automatico en esta pantalla.</string>
     <string name="satellite_name">Nombre del satelite</string>
     <string name="satellite_line1">TLE linea 1 (69 caracteres)</string>
     <string name="satellite_line2">TLE linea 2 (69 caracteres)</string>
@@ -61,7 +61,9 @@
     <string name="satellite_import">Importar catalogo TLE ASCII</string>
     <string name="satellite_predict">Calcular pases de las proximas 24 h</string>
     <string name="satellite_results">%1$d pases. Calculo desde %2$s UTC; maximos muestreados cada 5 s. Los parametros locales se conservan; no son una medida RF.</string>
-    <string name="satellite_open_cat">Seleccionar este pase para CAT RX</string>
+    <string name="satellite_open_cat">Abrir CAT RX y Doppler de este pase</string>
+    <string name="satellite_passes_hint">Toca un pase para verlo en el radar (N arriba, horizonte en el borde, cenit en el centro; verde AOS, rojo LOS, naranja posicion actual). Horas de la lista en la zona del telefono; detalle en UTC.</string>
+    <string name="satellite_radar_description">Radar polar del pase. %1$s</string>
     <string name="satellite_working">Calculando o leyendo TLE; no se ha enviado ninguna orden CAT.</string>
     <string name="satellite_error">Satelites: %1$s. No se inicia seguimiento.</string>
     <string name="satellite_cancelled">Importacion TLE cancelada.</string>
