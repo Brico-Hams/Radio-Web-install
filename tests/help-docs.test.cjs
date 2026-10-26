@@ -165,6 +165,23 @@ test("el atlas V3 y la puesta en marcha cubren hardware, protocolo y todas las f
   }
 });
 
+test("DM-32UV, Karina y enlaces de comunidad documentan fuentes, licencias y la ruta de compilacion", () => {
+  const dm32 = read("docs/DM32UV-FIRMWARE.md");
+  for (const value of ["HR_C7000", "FD6818", "RadioFoundry", "make BOARD=dm32", "hrc7000_codec.py", "serial_loader.py",
+    "BFUV32-V2", "0x0300C000", "PTT + SK1", "uso comercial", "OpenGD77_DM32_20260704.bin", "no publica fuentes"]) {
+    assert.ok(dm32.includes(value), `DM32: ${value}`);
+  }
+  assert.doesNotMatch(dm32, /github\.com\/Brico-Hams\/dm32uv-opengd77-port/, "repositorio privado enlazado");
+  const karina = read("docs/KARINA.md");
+  for (const value of ["## 12. Investigacion de comunidad", "fagci-mod v1.2.1", "PUNKTRACKER", "21.09.2026", "Especificacion funcional"]) {
+    assert.ok(karina.includes(value), `Karina: ${value}`);
+  }
+  const links = read("docs/ENLACES-COMUNIDAD.md");
+  assert.match(links, /K5Quan\/Robzyl_K1_/);
+  assert.doesNotMatch(links, /disk\.yandex|t\.me\//, "sin descargas directas ni grupos");
+  for (const page of ["ayuda-dm32uv.html", "ayuda-enlaces-comunidad.html"]) assert.ok(read("ayuda.html").includes(`href="${page}"`), page);
+});
+
 test("las imagenes Bricohams documentan captura RX, multipreset RAM y sus limites Beta", () => {
   for (const name of ["docs/BRICOHAMS-FIRMWARE.md", "ayuda-bricohams.html"]) {
     const text = read(name);
