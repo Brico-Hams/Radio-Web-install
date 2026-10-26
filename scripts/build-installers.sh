@@ -19,6 +19,7 @@ app_files=(
   ayuda-firmwares.html ayuda-configuracion.html ayuda-quansheng.html help-docs.css
   ayuda-opciones-f4hwn.html ayuda-presets-f4hwn.html ayuda-ardf.html
   ayuda-opengd77.html ayuda-opengd77-modelos.html ayuda-karina.html ayuda-bricohams.html
+  ayuda-anytone.html
   ayuda-entrega.html ayuda-android.html
   ayuda-egzumer.html ayuda-pack-dim0s.html ayuda-atlas-uv-k5-v3.html
   app.js radio-core.js transports.js quansheng-connector.js quansheng-channels.js gd77-connector.js

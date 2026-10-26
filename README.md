@@ -343,7 +343,8 @@ Consulta realizada el 18 de octubre de 2026. Firmware y protocolos pueden cambia
 
 ## Licencia
 
-Copyright (C) 2026 Anatol-Emilio Lopez-Maitchovcow (Bricohams).
+Copyright (C) 2026 Anatol Emilio Lopez Maitchovcow (EA5KAO), Diego Roca (EA5JEF) y Pedro Roca.
+Fundadores y miembros directivos de [Bricohams](https://bricohams.org) ([bricohams.com](https://bricohams.com)).
 
 Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo los terminos de la [GNU General Public License](LICENSE) version 3 o (a tu eleccion) cualquier version posterior (GPL-3.0-or-later). Se distribuye **sin ninguna garantia**. Las dependencias y fuentes de terceros mantienen sus propias licencias: ver [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
 

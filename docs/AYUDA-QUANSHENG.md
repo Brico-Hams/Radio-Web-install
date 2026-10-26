@@ -124,13 +124,18 @@ La radio identifica **F4HWN v6.0.0**; no se deduce automaticamente la placa.
    logica F4HWN v6 de exactamente 41344 bytes, no un firmware ni Flash completa.
 3. Preparar **PMR446 analogicos 1-16 (solo RX)**, repetidores FM o memorias SAT/Doppler
    desde el planificador. Seleccionar una memoria FM existente como plantilla
-   y pulsar **Anadir canales al archivo local abierto**.
+   y pulsar **Anadir canales al archivo local abierto**. Tambien puedes importar
+   canales FM de un CSV CHIRP u OpenGD77 CPS; solo se aceptan frecuencias VHF/UHF
+   soportadas y las filas DMR/otros formatos se excluyen con motivo.
 4. Las nuevas memorias tienen TXLock activo, tonos y DTMF desactivados y Reverse
    desactivado. PMR se prepara estrecho. Solo se importan RX/TX nominales entre
    136-174 o 400-470 MHz; esto no autoriza transmitir. Nombres: primeros 10
    caracteres ASCII. Se omiten duplicados por nombre truncado/frecuencias/modo.
-5. **Borrar del archivo** elimina una memoria de la copia local, sin resetear
-   bancos CFG ni tocar slots. Guardar el binario editado aparte del original.
+5. **Editar** cambia nombre/RX/TX de una memoria FM y **Borrar del archivo**
+   elimina esa memoria de la copia local. La edicion conserva el bloqueo RX y
+   los bytes que no pertenecen a esos campos; ambas operaciones trabajan sobre
+   una copia en memoria. Verifica de nuevo el canal que muestra el parser y
+   guarda el binario editado aparte del original.
 6. **Escribir y releer canales (Beta)** solo se habilita con respaldo completo
    de esta sesion, mediante Labs v6.1+ con lectura Flash y CRC. Verifica que la
    radio siga igual que al leerla, escribe bloques de 8 bytes y relee todo.
@@ -144,6 +149,31 @@ El envio se ha verificado con transporte simulado, **no en hardware**:
 la unidad v6.0 conectada no permite el respaldo completo requerido. No se
 actualiza ni flashea esa unidad como efecto secundario. La tabla orbital SAT
 nativa y el seguimiento continuo no se implementan; SAT/Doppler son memorias FM.
+
+### Multiboot y canales independientes por perfil
+
+El conector solo lee la configuracion logica que presenta la radio arrancada.
+No selecciona slots de firmware ni bancos CFG, ni demuestra que el perfil o
+slot visible corresponda al almacenamiento que se va a escribir. No existe
+una operacion web que distribuya un plan de canales a todos los slots.
+
+Para mantener perfiles separados, arranca manualmente cada perfil/banco que
+quieras administrar y repite el flujo de lectura y exportacion **por separado**.
+Etiqueta cada archivo con modelo/revision, version y perfil de firmware, banco
+CFG si se puede verificar en la radio y fecha; conserva tambien su hash SHA-256.
+Antes de editar otro perfil, guarda y cierra el archivo anterior. Compara las
+lecturas: si el firmware no permite identificar el slot o dos respaldos no
+demuestran aislamiento, trata la separacion como no verificada y no escribas.
+No copies un archivo de un perfil a otro suponiendo que las memorias se
+comparten o se mantienen independientes.
+
+En esta sesion no se hizo una nueva prueba USB. Para la unidad previamente
+documentada (F4HWN v6.0.0), el respaldo disponible sigue siendo parcial y la
+escritura fisica permanece bloqueada. Las nuevas funciones de editar, borrar
+y comprobar canales despues de importarlos son validaciones del archivo local,
+no una prueba de que el firmware los muestre en la pantalla ni de que el cambio
+haya llegado a un slot fisico. Consulta [REMER, aeropuertos y FM comercial](AYUDA-ANYTONE.md)
+para las diferencias entre preparacion local, compatibilidad de parser y prueba RF.
 
 ## Elegir hardware antes de firmware
 

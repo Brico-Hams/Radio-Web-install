@@ -95,14 +95,21 @@ test("licencia, autoria y metadatos del paquete son coherentes", () => {
   assert.equal(pkg.name, "bricohams-radio-workspace");
   assert.equal(lock.name, pkg.name);
   assert.equal(lock.version, pkg.version);
-  assert.match(pkg.author, /Bricohams/);
+  for (const name of ["Anatol Emilio Lopez Maitchovcow", "EA5KAO", "Diego Roca", "EA5JEF", "Pedro Roca"]) {
+    assert.ok(pkg.author.includes(name), name);
+    assert.ok(read("AUTHORS.md").includes(name), name);
+  }
   assert.equal(pkg.repository.url, "git+https://github.com/Brico-Hams/Radio-Web-install.git");
   assert.deepEqual(Object.keys(pkg.dependencies), ["satellite.js"]);
   const license = read("LICENSE");
   assert.match(license, /GNU GENERAL PUBLIC LICENSE\s+Version 3, 29 June 2007/);
   assert.ok(license.length > 30000);
   assert.match(read("README.md"), /GPL-3.0-or-later/);
-  assert.match(read("AUTHORS.md"), /Anatol-Emilio Lopez-Maitchovcow/);
+  for (const site of ["https://bricohams.org", "https://bricohams.com"]) {
+    assert.ok(read("AUTHORS.md").includes(site), site);
+    assert.ok(read("README.md").includes(site), site);
+    assert.ok(read("ayuda.html").includes(site), site);
+  }
 });
 
 test("la documentacion existe, enlaza archivos reales y reconoce las fuentes", () => {

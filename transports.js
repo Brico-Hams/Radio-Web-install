@@ -73,7 +73,13 @@
     async open(baudRate, filters = []) {
       R.assert(this.api, "Web Serial no disponible. Usa Chrome/Edge en localhost o HTTPS.");
       R.assert(!this.port, "El puerto ya esta abierto.");
-      this.port = await this.api.requestPort({ filters });
+      const permitted = typeof this.api.getPorts === "function" ? await this.api.getPorts() : [];
+      const matching = permitted.filter(port => {
+        if (!filters.length) return true;
+        const info = port.getInfo();
+        return filters.some(filter => Object.entries(filter).every(([key, value]) => info[key] === value));
+      });
+      this.port = matching.length === 1 ? matching[0] : await this.api.requestPort({ filters });
       try {
         await this.port.open({ baudRate, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none" });
         this.reader = this.port.readable.getReader();

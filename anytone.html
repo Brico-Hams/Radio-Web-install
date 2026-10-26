@@ -26,6 +26,7 @@
       <h1>Preparador de codeplug para Espana</h1>
       <p>Editor web sin instalacion. Proyecto portable y CSV de intercambio: NO son un archivo RDT
         ni un CSV certificado para importar directamente al CPS AnyTone.</p>
+      <p><a href="ayuda-anytone.html">Leer guia y limites de AnyTone</a></p>
     </section>
     <aside class="notice"><div><h2>Compatibilidad y respaldo</h2>
       <p>No hay programacion USB, flasheo ni respaldo AnyTone implementados. No conectes este editor como
@@ -39,6 +40,8 @@
       <label>Perfil de destino <select id="at-profile"></select></label>
       <label><input id="at-airband" type="checkbox" disabled> He comprobado en el manual del modelo exacto
         la recepcion AM 118-136.99 MHz (no basta cobertura FM). Solo para el perfil Otro.</label>
+      <label><input id="at-fm-broadcast" type="checkbox" disabled> He comprobado en el manual del modelo exacto
+        la recepcion FM comercial 87.5-108 MHz. Solo RX y solo para el perfil Otro.</label>
       <p>Los perfiles no certifican compatibilidad de todas las variantes. Las capacidades AM no se deducen del nombre de familia.</p>
     </section>
     <section class="panel">
@@ -59,7 +62,18 @@
       <p>Usa frecuencias RF verificadas en AIP ENAIRE vigente, no designadores de canal 8.33 kHz.
         Incluye aeropuerto/servicio en name y referencia AIP en source.
         <a href="https://aip.enaire.es/" target="_blank" rel="noopener noreferrer">Consultar AIP ENAIRE</a>.
-        No se incluyen frecuencias de emergencia por defecto.</p>
+        Si cargas una ubicacion, los registros deben incluir coordenadas para filtrarse. Sin ubicacion se importa la lista completa.</p>
+      <button id="at-air-guard" class="button secondary" type="button" disabled>Anadir guardia aeronautica 121.500 MHz (solo RX)</button>
+      <h3>Canales locales por ubicacion</h3>
+      <p>La geolocalizacion solo se solicita al pulsar este boton y se usa en memoria para filtrar archivos locales; no se envia a ningun servidor. Carga listas autorizadas/vigentes con coordenadas.</p>
+      <div class="planning-filters">
+        <label>Radio de proximidad (km) <input id="at-radius" type="number" min="1" max="500" value="50"></label>
+        <button id="at-location" class="button secondary" type="button">Usar ubicacion del navegador</button>
+      </div>
+      <p id="at-location-status" role="status">Sin ubicacion. Puedes importar la lista completa sin filtro.</p>
+      <label>Emisoras FM comerciales: JSON results con name, frequencyMHz, latitude, longitude y source
+        <input id="at-fm-file" type="file" accept=".json" disabled></label>
+      <p>Se filtran localmente por distancia y se preparan solo para recepcion, tras confirmar que el modelo exacto cubre FM comercial. Debe ser una lista con licencia/uso autorizado; esta aplicacion no descarga ni inventa frecuencias locales.</p>
     </section>
     <section class="panel">
       <h2>3. Configurar canales</h2>
@@ -73,6 +87,7 @@
         <label>Talkgroup (0 = pendiente) <input id="at-tg" type="number" min="0" max="16777215" value="0" required></label>
         <label>Zona <input id="at-zone" maxlength="64" value="Espana"></label>
         <label>Ancho de banda <select id="at-bandwidth"><option value="pending">Pendiente de verificar</option><option value="12.5">12.5 kHz</option><option value="25">25 kHz</option></select></label>
+        <label class="check"><input id="at-broadcast" type="checkbox"> FM comercial 87.5-108 MHz (solo RX, requiere capacidad confirmada)</label>
         <label>Procedencia <input id="at-source" required maxlength="500" value="Configuracion manual; pendiente de verificar"></label>
         <button class="button primary" type="submit">Guardar canal (RX)</button>
         <button id="at-cancel" class="button secondary" type="button">Cancelar edicion</button>

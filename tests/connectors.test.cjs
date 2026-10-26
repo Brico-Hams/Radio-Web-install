@@ -816,7 +816,7 @@ test("Revocacion explicita invalida un permiso sin desconectar", async () => {
   R.revokeBackup(connector);
   await assert.rejects(connector.resetBank(1, permit), /bloqueada/);
 });
-test("SerialTransport abre 8N1, lee fragmentos, escribe y libera locks", async () => {
+test("SerialTransport reutiliza el unico puerto autorizado, abre 8N1, lee fragmentos y libera locks", async () => {
   let incoming;
   const sent = [];
   let opened;
@@ -824,12 +824,16 @@ test("SerialTransport abre 8N1, lee fragmentos, escribe y libera locks", async (
   const port = {
     readable: new ReadableStream({ start(controller) { incoming = controller; } }),
     writable: new WritableStream({ write(data) { sent.push(data.slice()); } }),
+    getInfo() { return { usbVendorId: 0x36b7, usbProductId: 0xffff }; },
     async open(options) { opened = options; },
     async close() { closed = true; }
   };
-  const api = { async requestPort() { return port; }, addEventListener() {}, removeEventListener() {} };
+  let prompted = false;
+  const api = { async getPorts() { return [port]; }, async requestPort() { prompted = true; return port; },
+    addEventListener() {}, removeEventListener() {} };
   const transport = new R.SerialTransport(api);
-  await transport.open(38400);
+  await transport.open(38400, [{ usbVendorId: 0x36b7, usbProductId: 0xffff }]);
+  assert.equal(prompted, false);
   assert.deepEqual(opened, { baudRate: 38400, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none" });
   const reading = transport.readExact(4);
   incoming.enqueue(Uint8Array.of(1, 2));

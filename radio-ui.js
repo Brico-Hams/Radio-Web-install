@@ -386,6 +386,11 @@
         <p class="card-note">La lectura y la edicion local no necesitan permiso de escritura. Escribir exige respaldo Flash completo verificado; en v6.0 queda bloqueado. No cambia de banco, no borra slots y no modifica calibracion. No equivale a seguimiento SAT nativo.</p>
         <div class="operation-buttons"><button id="qs-read" data-connected class="button secondary" type="button" disabled>Leer canales del banco activo</button><button id="qs-save" class="button secondary" type="button">Guardar configuracion local</button><button id="qs-write" data-write class="button primary" type="button" disabled>Escribir y releer canales (Beta)</button></div>
         <label for="qs-file">Abrir configuracion logica F4HWN v6 de 41344 bytes (no firmware, Flash completa ni calibracion)</label><input id="qs-file" type="file" accept=".bin">
+        <form id="qs-channel-form" hidden><h3>Editar canal Quansheng</h3>
+        <label for="qs-channel-name">Nombre ASCII (maximo 10 caracteres)</label><input id="qs-channel-name" maxlength="10" required pattern="[ -~]{1,10}">
+        <label for="qs-channel-rx">RX MHz</label><input id="qs-channel-rx" inputmode="decimal" required>
+        <label for="qs-channel-tx">TX nominal MHz (se conserva el bloqueo TX actual)</label><input id="qs-channel-tx" inputmode="decimal" required>
+        <div class="operation-buttons"><button class="button primary" type="submit">Aplicar al archivo local</button><button id="qs-channel-cancel" class="button secondary" type="button">Cancelar</button></div></form>
         <p id="qs-count" role="status">Lee o abre una configuracion para ver los canales.</p>
         <div class="table-scroll"><table><thead><tr><th>Canal</th><th>Nombre</th><th>RX MHz</th><th>TX nominal MHz</th><th>Modo</th><th>TX bloqueada</th><th>Archivo local</th></tr></thead><tbody id="qs-channels"></tbody></table></div>`);
       function renderQuansheng() {
@@ -400,6 +405,20 @@
             row.append(cell);
           }
           const cell = document.createElement("td");
+          const edit = document.createElement("button");
+          edit.type = "button";
+          edit.className = "guide-tab";
+          edit.textContent = "Editar";
+          edit.disabled = channel.mode !== 0;
+          edit.addEventListener("click", () => {
+            editNumber = channel.number;
+            $("qs-channel-name").value = channel.name;
+            $("qs-channel-rx").value = channel.rx;
+            $("qs-channel-tx").value = channel.tx;
+            $("qs-channel-form").hidden = false;
+            $("qs-channel-name").focus();
+          });
+          cell.append(edit);
           const remove = document.createElement("button");
           remove.type = "button";
           remove.className = "guide-tab";
@@ -407,6 +426,8 @@
           remove.addEventListener("click", () => action("Borrar canal local Quansheng", async () => {
             if (!pro.checked && !root.confirm(`Quitar canal ${channel.number} del archivo local? La radio no se modifica.`)) return;
             image = R.deleteQuanshengChannel(image, channel.number);
+            editNumber = null;
+            $("qs-channel-form").hidden = true;
             renderQuansheng();
           }));
           cell.append(remove);
@@ -440,8 +461,29 @@
         const next = new Uint8Array(await file.arrayBuffer());
         R.readQuanshengChannels(next);
         image = next;
+        editNumber = null;
+        $("qs-channel-form").hidden = true;
         renderQuansheng();
       }));
+      $("qs-channel-cancel").addEventListener("click", () => {
+        editNumber = null;
+        $("qs-channel-form").reset();
+        $("qs-channel-form").hidden = true;
+      });
+      $("qs-channel-form").addEventListener("submit", event => {
+        event.preventDefault();
+        action("Actualizar canal Quansheng local", async () => {
+          R.assert(image && editNumber !== null, "Selecciona primero un canal Quansheng.");
+          image = R.updateQuanshengChannel(image, {
+            number: editNumber, name: $("qs-channel-name").value,
+            rx: $("qs-channel-rx").value, tx: $("qs-channel-tx").value
+          });
+          editNumber = null;
+          $("qs-channel-form").reset();
+          $("qs-channel-form").hidden = true;
+          renderQuansheng();
+        });
+      });
     } else {
       operations.innerHTML = `<h2>Codeplug OpenGD77</h2><p class="muted">Al conectar se inicia automaticamente la copia de calibracion y codeplug estandar de 128 KiB. El firmware MCU original no se puede respaldar de forma integral con el protocolo verificado actual: la copia es parcial y bloquea posteriores operaciones de radio, incluso lecturas adicionales. El archivo de la copia se abre para edicion offline. No incluye canales extendidos 1025+.</p>
         <div class="operation-buttons"><button id="read-codeplug" data-connected class="button secondary" type="button" disabled>Leer codeplug</button><button id="write-codeplug" data-write class="button primary" type="button" disabled>Escribir codeplug</button><button id="save-codeplug" class="button secondary" type="button">Guardar binario 128 KiB</button></div>
@@ -543,9 +585,16 @@
       importChannels(channels, template) {
         R.assert(image, page === "quansheng" ? "Abre o lee primero una configuracion Quansheng F4HWN v6." : "Abre o lee primero un codeplug estandar OpenGD77 de 128 KiB.");
         const result = page === "quansheng" ? R.appendQuanshengChannels(image, channels, template) : R.appendChannels(image, channels, template);
+        const decoded = page === "quansheng" ? R.readQuanshengChannels(result.image) : R.readChannels(result.image);
+        for (const entry of channels) {
+          const storedName = entry.name.slice(0, page === "quansheng" ? 10 : 16);
+          R.assert(decoded.some(channel => channel.name === storedName && channel.rx === entry.rx &&
+            channel.tx === entry.tx && channel.mode === entry.mode && channel.rxOnly),
+          `El parser no puede volver a leer el canal ${entry.name}; se conserva el archivo anterior.`);
+        }
         image = result.image;
         renderCodeplug();
-        return result;
+        return { ...result, verified: channels.length };
       },
       importContacts(contacts) {
         R.assert(page === "opengd77" && image, "Abre o lee primero un codeplug estandar OpenGD77 de 128 KiB.");

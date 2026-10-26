@@ -317,6 +317,24 @@ test("Quansheng asigna la banda de F4HWN: 136 MHz es BAND2, 137-174 BAND3 y 400-
     { ...channel, name: "B6", rx: "438.77500", tx: "431.17500" }], 1).image;
   assert.deepEqual([1, 2, 3].map(index => added[0x8000 + index * 2] & 7), [1, 2, 5]);
 });
+
+test("Quansheng actualiza canales locales conservando bloqueo RX y datos no editados", () => {
+  const original = quanshengConfig();
+  const snapshot = original.slice();
+  const updated = R.updateQuanshengChannel(original, {
+    number: 1, name: "LORCA-R4", rx: "146.70000", tx: "146.10000"
+  });
+  const [channel] = R.readQuanshengChannels(updated);
+  assert.equal(channel.name, "LORCA-R4");
+  assert.equal(channel.rx, "146.70000");
+  assert.equal(channel.tx, "146.10000");
+  assert.equal(channel.rxOnly, true);
+  assert.deepEqual(updated.subarray(0x8800), original.subarray(0x8800));
+  assert.deepEqual(original, snapshot);
+  assert.throws(() => R.updateQuanshengChannel(original, { number: 1, name: "INVALID-NAME", rx: "146.7", tx: "146.1" }), /10 caracteres/);
+  assert.throws(() => R.updateQuanshengChannel(original, { number: 1, name: "OK", rx: "146.7", tx: "446.1" }), /misma banda/);
+  assert.throws(() => R.updateQuanshengChannel(original, { number: 2, name: "OK", rx: "146.7", tx: "146.1" }), /existentes/);
+});
 test("Quansheng rechaza formato incorrecto, DMR, frecuencias no soportadas y plantilla ausente", () => {
   const original = quanshengConfig();
   assert.throws(() => R.readQuanshengChannels(new Uint8Array(512)), /Tamano/);
@@ -326,6 +344,41 @@ test("Quansheng rechaza formato incorrecto, DMR, frecuencias no soportadas y pla
   assert.throws(() => R.appendQuanshengChannels(original, [{ ...channel, rx: "27.00000" }], 1), /limita/);
   assert.throws(() => R.deleteQuanshengChannel(original, 0), /1-1024/);
   assert.throws(() => R.deleteQuanshengChannel(original, 1024), /vacio/);
+});
+test("REMER Murcia carga solo 2 m FM compatible y excluye sus frecuencias HF SSB", () => {
+  const remer = R.remerVHFChannels();
+  assert.equal(remer.length, 11);
+  assert.ok(remer.every(entry => entry.mode === 0 && entry.rxOnly && entry.source.includes("usuario")));
+  assert.deepEqual(remer.slice(0, 2).map(entry => [entry.name, entry.rx, entry.tx, entry.tone, entry.city]), [
+    ["LORC-R4-14", "146.70000", "146.10000", "88.5", "Lorca"],
+    ["CARR-R2-22", "146.65000", "146.05000", "156.7", "Carrascoy"]
+  ]);
+  assert.ok(remer.every(entry => Number(entry.rx) >= 136 && Number(entry.rx) <= 174));
+  const hf = R.remerHFChannels();
+  assert.equal(hf.length, 9);
+  assert.ok(hf.every(entry => entry.mode === "SSB" && (Number(entry.frequency) < 30)));
+  const quansheng = R.appendQuanshengChannels(quanshengConfig(), remer, 1);
+  const visible = R.readQuanshengChannels(quansheng.image);
+  assert.equal(visible.length, 12);
+  assert.ok(remer.every(entry => visible.some(channel => channel.name === entry.name.slice(0, 10) &&
+    channel.rx === entry.rx && channel.tx === entry.tx && channel.rxOnly)));
+  assert.throws(() => R.appendQuanshengChannels(quanshengConfig(), hf.map(entry => ({
+    name: `HF${entry.channel}`, rx: entry.frequency, tx: entry.frequency, mode: 0
+  })), 1), /analogicos|limita/);
+});
+test("OpenGD77 puede leer los repetidores REMER VHF anadidos al codeplug sin escribir la radio", () => {
+  const original = blankCodeplug();
+  const entries = R.remerVHFChannels();
+  const result = R.appendChannels(original, entries, 1);
+  const visible = R.readChannels(result.image).slice(1);
+  assert.equal(visible.length, entries.length);
+  assert.ok(visible.every(channel => channel.mode === 0 && channel.rxOnly));
+  assert.deepEqual(visible.map(channel => [channel.name, channel.rx, channel.tx]),
+    entries.map(channel => [channel.name, channel.rx, channel.tx]));
+  for (let index = 0; index < entries.length; index++) {
+    const offset = 0x3790 + (index + 1) * 56;
+    assert.ok(result.image.subarray(offset + 32, offset + 36).every(byte => byte === 255));
+  }
 });
 test("append channels clones explicit template, sets free bitmap, preserves all original records and forces RX-only", () => {
   const original = blankCodeplug();
@@ -428,6 +481,57 @@ test("geographic/text/band filters normalize accents and CHIRP CSV is FM RX-only
   assert.equal(csv.split("\r\n").length, 4);
   assert.equal(R.csvCell('=CMD("x")'), '"\'=CMD(""x"")"');
   assert.throws(() => R.channelCSV([{ ...entries[0], mode: 1 }]), /DMR/);
+});
+test("OpenGD77 CPS Channels.csv imports analog FM only and reports digital and invalid-band exclusions", () => {
+  const csv = "\uFEFFChannel Number,Channel Name,Channel Type,Rx Frequency,Tx Frequency,Bandwidth (kHz),Colour Code,Timeslot,Contact,TG List,RX Tone,TX Tone\r\n" +
+    '1,"EA5, TEST",Analogue,\t145.60000,\t145.00000,12.5,,,,,88.5,88.5\r\n' +
+    "2,DMR-TEST,Digital,438.50000,430.90000,12.5,1,2,None,TODOS-TG,,\r\n" +
+    "3,OUTSIDE,Analogue,50.53000,50.53000,,,,,,,\r\n" +
+    '4,"EA5, TEST",Analogue,145.60000,145.00000,,,,,,,\r\n';
+  const result = R.parseChannelCSV(csv);
+  assert.equal(result.format, "OpenGD77 CPS");
+  assert.equal(result.channels.length, 1);
+  assert.equal(result.channels[0].name, "EA5, TEST");
+  assert.equal(result.channels[0].rx, "145.60000");
+  assert.equal(result.channels[0].tx, "145.00000");
+  assert.equal(result.channels[0].mode, 0);
+  assert.equal(result.channels[0].rxOnly, true);
+  assert.match(result.channels[0].notes, /RX=88\.5/);
+  assert.equal(result.rejected.length, 3);
+  assert.match(result.rejected[0].reason, /DMR omitido/);
+  assert.match(result.rejected[1].reason, /VHF 136-174/);
+  assert.match(result.rejected[2].reason, /duplicado/);
+  const appended = R.appendChannels(blankCodeplug(), result.channels, 1);
+  const stored = R.readChannels(appended.image).find(channel => channel.name === "EA5, TEST");
+  assert.ok(stored);
+  assert.equal(stored.rx, "145.60000");
+  assert.equal(stored.tx, "145.00000");
+  assert.equal(stored.mode, 0);
+  assert.equal(stored.rxOnly, true);
+  assert.throws(() => R.parseChannelCSV("Channel Mode,Channel Name,RX Frequency(MHz),TX Frequency(MHz)\n0,X,145.6,145.0"),
+    /no reconocido/);
+});
+test("CHIRP CSV resolves duplex safely, excludes unsupported modes and handles quoted commas", () => {
+  const csv = 'Location,Name,Frequency,Duplex,Offset,Tone,Mode,Comment\r\n' +
+    '1,"TOWER, NORTH",145.60000,-,0.600,88.5,FM,"source, local"\r\n' +
+    "2,UPLINK,433.50000,+,1.600,,NFM,\r\n" +
+    "3,SPLIT,145.60000,split,145.00000,,FM,\r\n" +
+    "4,SIMPLEX,446.00625,off,0.00000,,FM,\r\n" +
+    "5,DIGITAL,438.50000,off,0.00000,,DV,\r\n" +
+    "6,BAD-OFFSET,145.60000,-,bad,,FM,\r\n";
+  const result = R.parseChannelCSV(csv);
+  assert.equal(result.format, "CHIRP");
+  assert.deepEqual(result.channels.map(channel => [channel.name, channel.rx, channel.tx]), [
+    ["TOWER, NORTH", "145.60000", "145.00000"],
+    ["UPLINK", "433.50000", "435.10000"],
+    ["SPLIT", "145.60000", "145.00000"],
+    ["SIMPLEX", "446.00625", "446.00625"]
+  ]);
+  assert.ok(result.channels.every(channel => channel.mode === 0 && channel.rxOnly));
+  assert.equal(result.rejected.length, 2);
+  assert.match(result.rejected[0].reason, /solo FM\/NFM/);
+  assert.match(result.rejected[1].reason, /Offset CHIRP/);
+  assert.throws(() => R.parseChannelCSV('Name,Frequency,Duplex,Offset,Mode\n"unterminated,145.6,off,0,FM'), /comillas sin cerrar/);
 });
 test("TLE checksums, satellite identity and age are validated without stale fallback", () => {
   assert.ok(R.validateTLE(orbital, start).record);

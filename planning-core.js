@@ -3,6 +3,49 @@
   const R = root.RadioWorkspace;
   const S = typeof module !== "undefined" ? require("satellite.js") : root.satellite;
   const norm = value => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  const remerSource = "Referencia aportada por el usuario: tabla REMER nacional y repetidores de Murcia; fecha no visible, confirmar vigencia con REMER.";
+  const remerVHF = Object.freeze([
+    { repeater: "R4", channel: "14", rx: "146.70000", tx: "146.10000", tone: "88.5", site: "Lorca" },
+    { repeater: "R2", channel: "22", rx: "146.65000", tx: "146.05000", tone: "156.7", site: "Carrascoy" },
+    { repeater: "R3", channel: "23", rx: "146.67500", tx: "146.07500", tone: "91.5", site: "Ricote" },
+    { repeater: "R4", channel: "24", rx: "146.70000", tx: "146.10000", tone: "91.5", site: "Carche" },
+    { repeater: "R2", channel: "32", rx: "146.65000", tx: "146.05000", tone: "103.5", site: "Yecla" },
+    { repeater: "R3", channel: "33", rx: "146.67500", tx: "146.07500", tone: "118.8", site: "Espuña" },
+    { repeater: "R3", channel: "43", rx: "146.67500", tx: "146.07500", tone: "103.5", site: "Cabo Tinoso" },
+    { repeater: "R3", channel: "44", rx: "146.70000", tx: "146.10000", tone: "103.5", site: "San Julian" },
+    { repeater: "R1", channel: "", rx: "146.62500", tx: "146.02500", tone: "", site: "Sin ubicacion indicada" },
+    { repeater: "R5", channel: "", rx: "146.72500", tx: "146.12500", tone: "", site: "Sin ubicacion indicada" },
+    { repeater: "R6", channel: "", rx: "146.75000", tx: "146.15000", tone: "", site: "Sin ubicacion indicada" }
+  ]);
+  const remerHF = Object.freeze([
+    { band: "80 m", channel: "1", frequency: "3.8045" },
+    { band: "40 m", channel: "2", frequency: "6.9930" },
+    { band: "40 m", channel: "2.1", frequency: "7.3025" },
+    { band: "40 m", channel: "2.2", frequency: "7.5430" },
+    { band: "40 m", channel: "2.3", frequency: "7.5445" },
+    { band: "20 m", channel: "3", frequency: "13.9885" },
+    { band: "30 m", channel: "4", frequency: "10.1614" },
+    { band: "15 m", channel: "5", frequency: "21.8700" },
+    { band: "60 m", channel: "6", frequency: "5.3565" }
+  ]);
+  function remerVHFChannels() {
+    const shortSite = value => ({
+      Lorca: "LORC", Carrascoy: "CARR", Ricote: "RIC", Carche: "CARCH",
+      Yecla: "YECLA", Espuna: "ESP", "Cabo Tinoso": "CABO", "San Julian": "SANJ"
+    }[value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")] || value.normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, ""));
+    return remerVHF.map(entry => ({
+      key: `remer:${entry.repeater}:${entry.channel || entry.rx}`,
+      name: `${entry.site === "Sin ubicacion indicada" ? entry.repeater : shortSite(entry.site)}-${entry.repeater}${entry.channel ? `-${entry.channel}` : ""}`,
+      rx: entry.rx, tx: entry.tx, mode: 0, colorCode: 0, timeslot: 1, rxOnly: true,
+      country: "Spain", region: "Murcia", city: entry.site, tone: entry.tone,
+      source: remerSource, zone: "REMER Murcia",
+      notes: `${entry.site}. CTCSS publicado ${entry.tone ? `${entry.tone} Hz` : "no indicado"}; el editor conserva el dato como nota, no programa tonos.`
+    }));
+  }
+  function remerHFChannels() {
+    return remerHF.map(entry => ({ ...entry, mode: "SSB", source: remerSource }));
+  }
   function asciiName(value, length = 16) {
     const name = String(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e]/g, "").trim().slice(0, length);
     R.assert(name.length > 0, "Nombre sin caracteres ASCII utilizables.");
@@ -61,6 +104,110 @@
       "", "88.5", "88.5", "023", "NN", "023", "Tone->Tone", "FM", "5.00", "",
       `RX ONLY. ${channel.window ? `Doppler ${channel.window}, error max. ${channel.errorHz} Hz. ` : ""}TX nominal ${channel.tx}; tono de proveedor ${channel.tone || "sin dato"}. ${channel.source || ""} ${channel.attribution || ""} ${channel.license || ""}`]));
     return rows.map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+  }
+  function parseChannelCSV(text) {
+    R.assert(typeof text === "string" && text.length > 0 && text.length <= 8 * 1024 * 1024,
+      "CSV de canales vacio o superior a 8 MiB.");
+    const rows = [];
+    let row = [];
+    let value = "";
+    let quoted = false;
+    let closedQuote = false;
+    for (let index = 0; index < text.length; index++) {
+      const character = text[index];
+      if (quoted) {
+        if (character === '"' && text[index + 1] === '"') { value += '"'; index++; }
+        else if (character === '"') { quoted = false; closedQuote = true; }
+        else value += character;
+      } else if (closedQuote && character === "\r" && text[index + 1] === "\n") {
+        continue;
+      } else if (character === ",") { row.push(value); value = ""; closedQuote = false; }
+      else if (character === "\n") {
+        row.push(value.replace(/\r$/, "")); value = "";
+        if (row.some(cellValue => cellValue !== "")) rows.push(row);
+        row = [];
+        closedQuote = false;
+        R.assert(rows.length <= 4097, "CSV superior al maximo de 4096 registros.");
+      } else if (closedQuote) R.assert(false, "CSV con caracteres tras una comilla de cierre.");
+      else if (character === '"' && value.length === 0) quoted = true;
+      else if (character === '"') R.assert(false, "CSV con comilla sin escapar.");
+      else value += character;
+    }
+    R.assert(!quoted, "CSV con comillas sin cerrar.");
+    if (row.length || value.length) {
+      row.push(value.replace(/\r$/, ""));
+      if (row.some(cellValue => cellValue !== "")) rows.push(row);
+    }
+    R.assert(rows.length >= 2, "CSV sin filas de canales.");
+    const headers = rows[0].map((header, index) => norm(index === 0 ? header.replace(/^\uFEFF/, "") : header));
+    R.assert(new Set(headers).size === headers.length, "CSV con columnas duplicadas.");
+    const headerIndex = Object.fromEntries(headers.map((header, index) => [header, index]));
+    const column = (record, name) => {
+      const position = headerIndex[norm(name)];
+      return position === undefined ? "" : String(record[position] ?? "").trim();
+    };
+    const openGD77 = ["channel name", "channel type", "rx frequency", "tx frequency"]
+      .every(header => Object.hasOwn(headerIndex, header));
+    const chirp = ["name", "frequency", "duplex", "offset", "mode"]
+      .every(header => Object.hasOwn(headerIndex, header));
+    R.assert(openGD77 || chirp,
+      "Formato CSV no reconocido. Admite OpenGD77 CPS Channels.csv o CHIRP; no convierte exportaciones propietarias.");
+    const channels = [];
+    const rejected = [];
+    const seen = new Set();
+    const parseMHz = (input, label) => {
+      const frequency = String(input).replace(/\s/g, "");
+      R.assert(/^\d{1,3}(?:\.\d{1,5})?$/.test(frequency), `${label}: frecuencia MHz invalida.`);
+      return validMHz(frequency);
+    };
+    for (let index = 1; index < rows.length; index++) {
+      const record = rows[index];
+      try {
+        R.assert(record.length <= headers.length, "La fila tiene mas campos que la cabecera.");
+        let name;
+        let rx;
+        let tx;
+        let notes;
+        if (openGD77) {
+          const type = norm(column(record, "Channel Type"));
+          R.assert(type === "analogue", type === "digital"
+            ? "DMR omitido: contactos, TG Lists y referencias CPS no se migran automaticamente."
+            : "Tipo de canal OpenGD77 no admitido.");
+          name = asciiName(column(record, "Channel Name"), 16);
+          rx = parseMHz(column(record, "Rx Frequency"), "RX");
+          tx = parseMHz(column(record, "Tx Frequency"), "TX");
+          const rxTone = column(record, "RX Tone");
+          const txTone = column(record, "TX Tone");
+          notes = `OpenGD77 CPS CSV; solo RX. Tonos de origen RX=${rxTone || "sin dato"}, TX=${txTone || "sin dato"}; revisar en CPS.`;
+        } else {
+          const mode = norm(column(record, "Mode"));
+          R.assert(mode === "fm" || mode === "nfm", `Modo CHIRP ${mode || "vacio"} no convertido (solo FM/NFM).`);
+          name = asciiName(column(record, "Name"), 16);
+          rx = parseMHz(column(record, "Frequency"), "RX");
+          const duplex = norm(column(record, "Duplex"));
+          const offsetText = column(record, "Offset").replace(/\s/g, "");
+          if (duplex === "off" || duplex === "") tx = rx;
+          else if (duplex === "+" || duplex === "-") {
+            R.assert(/^\d{1,3}(?:\.\d{1,5})?$/.test(offsetText), "Offset CHIRP invalido.");
+            const offset = Number(offsetText);
+            R.assert(offset > 0, "Offset CHIRP debe ser mayor que cero.");
+            tx = parseMHz((Number(rx) + (duplex === "+" ? offset : -offset)).toFixed(5), "TX");
+          } else if (duplex === "split") tx = parseMHz(offsetText, "TX split");
+          else throw new Error(`Duplex CHIRP ${duplex} no admitido.`);
+          const tone = column(record, "Tone");
+          notes = `CHIRP ${mode.toUpperCase()} CSV; solo RX. Tono de origen ${tone || "sin dato"} no programado.`;
+        }
+        const key = `csv:${rx}:${tx}:${name}:${openGD77 ? "opengd77" : "chirp"}`;
+        if (seen.has(key)) { rejected.push({ row: index + 1, reason: "Canal duplicado en el CSV." }); continue; }
+        seen.add(key);
+        channels.push({ key, name, rx, tx, mode: 0, colorCode: 0, timeslot: 1,
+          rxOnly: true, country: "", region: "", city: "", tone: "", zone: openGD77 ? "OpenGD77 CSV" : "CHIRP CSV",
+          source: openGD77 ? "Importacion de OpenGD77 CPS Channels.csv" : "Importacion de CSV CHIRP", notes });
+      } catch (error) {
+        rejected.push({ row: index + 1, reason: error.message });
+      }
+    }
+    return { format: openGD77 ? "OpenGD77 CPS" : "CHIRP", channels, rejected };
   }
   function validateTLE(orbital, now = Date.now()) {
     R.assert(orbital && typeof orbital.tle1 === "string" && typeof orbital.tle2 === "string", "Faltan lineas TLE.");
@@ -303,6 +450,6 @@
     R.assert(entries.length > 0 && entries.length <= 1024, "Seleccion TG vacia o superior a 1024. Ajusta el prefijo.");
     return { provider: "BrandMeister", entries };
   }
-  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, normalizeTalkgroups });
+  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, remerVHFChannels, remerHFChannels, normalizeTalkgroups });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

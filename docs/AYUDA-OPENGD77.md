@@ -21,6 +21,43 @@ No escribe en la radio: la escritura física OpenGD77 sigue bloqueada hasta
 disponer del respaldo MCU completo requerido. La radio Quansheng conectada no
 permite validar hardware OpenGD77.
 
+## Importar repetidores REMER (solo archivo local)
+
+La pestaña REMER del planificador ofrece las frecuencias VHF/FM transcritas de
+la referencia aportada por el usuario. Selecciona las memorias que necesites y
+anadelas al codeplug abierto; la aplicacion vuelve a leerlo con el parser
+OpenGD77 para comprobar que nombre, frecuencias y modo aparecen en la lista.
+Las memorias se preparan solo para recepcion. Los CTCSS publicados quedan como
+nota de referencia: no se codifican ni se verifican tonos en RF.
+
+La lista no acredita que una frecuencia, tono, ubicacion o repetidor siga
+vigente. Confirma la informacion con REMER y las autoridades competentes antes
+de cualquier uso. Las frecuencias HF/SSB de la misma referencia se muestran
+como contexto y no se importan como canales VHF. Que el parser acepte un canal
+solo acredita que la estructura estandar del binario es legible; no prueba que
+el firmware lo muestre tras escribir, que se reciba RF ni que la radio haya
+sido programada. La escritura fisica continua bloqueada.
+
+## Importar canales CSV de CPS o CHIRP
+
+En **Canales preparados**, importa `Channels.csv` exportado desde OpenGD77 CPS
+o un CSV con cabeceras estándar CHIRP (`Name`, `Frequency`, `Duplex`, `Offset`,
+`Mode`). El parser acepta solo canales FM analogicos dentro de VHF 136-174 MHz
+y UHF 400-470 MHz. Para CHIRP resuelve `+`, `-`, `split` y `off`, y rechaza
+frecuencias, offsets o modos que no pueda validar. Los registros se convierten
+en canales solo RX; los tonos de la fuente se anotan, no se programan. Revisa
+la tabla de canales preparados, elige una plantilla FM y guarda el binario
+local para inspeccionarlo antes de usar el CPS.
+
+Las filas digitales/DMR del `Channels.csv` se excluyen expresamente: los
+contactos, grupos TG, listas RX y referencias de zona de `Contacts.csv`,
+`TG_Lists.csv` y `Zones.csv` no se migran con esta importacion. Esos archivos
+son tablas relacionadas, no un codeplug binario independiente. Los CSV
+propietarios de Retevis/RT950 y los `.4rdmf` no se interpretan por su extension
+ni por tener columnas de frecuencias: hacen falta especificaciones verificadas
+para mapear los campos. Una fila excluida aparece con numero de linea y motivo;
+no se descarta en silencio ni se mezcla con el binario.
+
 ## Comprobacion web sin instalacion (25-10-2026)
 
 La interfaz incluye una matriz **OpenGD77 CPS: disponibilidad real en web**.

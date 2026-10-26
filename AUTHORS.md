@@ -1,9 +1,14 @@
 # Autores
 
-## Autor y mantenedor
+## Fundadores y miembros directivos de Bricohams
 
-- **Anatol-Emilio Lopez-Maitchovcow** (Bricohams) — concepción, dirección y mantenimiento.
-  Contacto: [GitHub Issues](https://github.com/Brico-Hams/Radio-Web-install/issues).
+- **Anatol Emilio Lopez Maitchovcow (EA5KAO)** — concepción, dirección y mantenimiento.
+- **Diego Roca (EA5JEF)** — cofundador y miembro directivo.
+- **Pedro Roca** — cofundador y miembro directivo.
+
+Más información sobre Bricohams: [bricohams.org](https://bricohams.org) ·
+[bricohams.com](https://bricohams.com). Contacto del proyecto:
+[GitHub Issues](https://github.com/Brico-Hams/Radio-Web-install/issues).
 
 ## Contribuir
 

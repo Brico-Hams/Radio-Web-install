@@ -17,6 +17,7 @@ const pages = Object.freeze({
   "AYUDA-PACK-DIM0S.md": "ayuda-pack-dim0s.html",
   "AYUDA-OPENGD77.md": "ayuda-opengd77.html",
   "AYUDA-OPENGD77-MODELOS.md": "ayuda-opengd77-modelos.html",
+  "AYUDA-ANYTONE.md": "ayuda-anytone.html",
   "KARINA.md": "ayuda-karina.html",
   "BRICOHAMS-FIRMWARE.md": "ayuda-bricohams.html",
   "ESTADO-ENTREGA.md": "ayuda-entrega.html",

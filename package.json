@@ -4,7 +4,7 @@
   "private": true,
   "description": "Bricohams Radio Workspace: conectores locales OpenGD77 y F4HWN con copias previas verificadas",
   "license": "GPL-3.0-or-later",
-  "author": "Anatol-Emilio Lopez-Maitchovcow (Bricohams)",
+  "author": "Anatol Emilio Lopez Maitchovcow (EA5KAO), Diego Roca (EA5JEF), Pedro Roca (Bricohams)",
   "homepage": "https://github.com/Brico-Hams/Radio-Web-install#readme",
   "repository": {
     "type": "git",

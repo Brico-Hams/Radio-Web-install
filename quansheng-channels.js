@@ -87,6 +87,28 @@
     }
     return { image: result, added, duplicates };
   }
+  function updateQuanshengChannel(image, channel) {
+    configuration(image);
+    R.assert(channel && Number.isInteger(channel.number), "Selecciona un canal Quansheng valido.");
+    const existing = readQuanshengChannels(image).find(item => item.number === channel.number);
+    R.assert(existing && existing.mode === 0, "Solo se editan canales FM existentes.");
+    R.assert(/^[\x20-\x7e]{1,10}$/.test(channel.name), "Nombre Quansheng: 1-10 caracteres ASCII.");
+    const rx = frequency(channel.rx);
+    const tx = frequency(channel.tx);
+    R.assert((rx < 35000000) === (tx < 35000000), "RX y TX deben permanecer en la misma banda.");
+    const { record, name, attributes } = positions(channel.number);
+    const result = image.slice();
+    const view = R.view(result);
+    view.setUint32(record, rx, true);
+    view.setUint32(record + 4, Math.abs(tx - rx), true);
+    result[record + 11] = (result[record + 11] & 0xf0) | (tx > rx ? 1 : tx < rx ? 2 : 0);
+    result[record + 12] |= 64;
+    result.fill(0, name, name + 16);
+    result.set(new TextEncoder().encode(channel.name), name);
+    const band = rx < 17400000 ? 2 : rx < 35000000 ? 3 : rx < 40000000 ? 4 : 5;
+    view.setUint16(attributes, (view.getUint16(attributes, true) & ~7) | band, true);
+    return result;
+  }
   function deleteQuanshengChannel(image, number) {
     configuration(image);
     const { record, name, attributes } = positions(number);
@@ -97,6 +119,7 @@
     R.view(result).setUint16(attributes, 7, true);
     return result;
   }
-  Object.assign(R, { QUANSHENG_CONFIG_SIZE: CONFIG_SIZE, readQuanshengChannels, appendQuanshengChannels, deleteQuanshengChannel });
+  Object.assign(R, { QUANSHENG_CONFIG_SIZE: CONFIG_SIZE, readQuanshengChannels, appendQuanshengChannels,
+    updateQuanshengChannel, deleteQuanshengChannel });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

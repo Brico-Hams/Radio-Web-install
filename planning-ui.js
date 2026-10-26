@@ -13,6 +13,7 @@
       <fieldset id="plan-controls" class="planning-controls">
       <div class="guide-tabs" role="group" aria-label="Tipo de datos">
         <button type="button" class="guide-tab" data-plan-tab="repeaters" aria-pressed="true">Repetidores</button>
+        <button type="button" class="guide-tab" data-plan-tab="remer" aria-pressed="false">REMER</button>
         <button type="button" class="guide-tab" data-plan-tab="contacts" aria-pressed="false" ${page === "quansheng" ? "disabled" : ""}>Contactos DMR</button>
         <button type="button" class="guide-tab" data-plan-tab="sat" aria-pressed="false">SAT / pases</button>
       </div>
@@ -42,6 +43,16 @@
         <p id="plan-rb-info" role="status">Sin consultas. El token individual se configura solo en el entorno del servidor.</p>
         <div class="operation-buttons"><button id="plan-rb-select" type="button" class="button secondary">Seleccionar visibles</button><button id="plan-rb-stage" type="button" class="button primary">Anadir seleccion a canales preparados</button></div>
         <div class="table-scroll"><table><thead><tr><th>Elegir</th><th>Nombre</th><th>RX / TX MHz</th><th>Zona</th><th>Modo / tono</th></tr></thead><tbody id="plan-rb-results"></tbody></table></div>
+      </div>
+      <div id="plan-remer" hidden>
+        <h3>REMER Murcia y repetidores nacionales</h3>
+        <p>Presets transcritos de la tabla que aportaste; la fecha y vigencia no constan. Selecciona solo los repetidores que quieras preparar. Todas las memorias se importan con TX bloqueada. El CTCSS publicado se conserva como nota: esta importacion no programa tonos ni confirma acceso a la red REMER.</p>
+        <p class="card-note">Validacion de formato: canales FM de 2 m (146 MHz), dentro del rango que interpretan F4HWN v6 y el codeplug OpenGD77 estandar. Esto no prueba cobertura RF ni compatibilidad de la variante concreta. La lista se relee tras incorporarla para comprobar que el editor vuelve a mostrar los canales. Para AnyTone se exporta un proyecto/CSV de intercambio, no un archivo CPS nativo.</p>
+        <div class="operation-buttons"><button id="plan-remer-select" type="button" class="button secondary">Seleccionar todos los VHF</button><button id="plan-remer-stage" type="button" class="button primary">Anadir REMER seleccionado a canales preparados</button></div>
+        <div class="table-scroll"><table><thead><tr><th>Elegir</th><th>REMER / canal</th><th>RX / TX MHz</th><th>CTCSS publicado</th><th>Ubicacion</th></tr></thead><tbody id="plan-remer-results"></tbody></table></div>
+        <h3>Frecuencias nacionales REMER en HF (referencia, no importables aquí)</h3>
+        <p>La hoja aportada las identifica para SSB (preferentemente USB). F4HWN de esta aplicacion y el codeplug FM/DMR OpenGD77 no implementan SSB ni validan estas bandas; por eso se muestran solo como referencia y se excluyen de la seleccion para evitar codeplugs ilegibles o radios incapaces de sintonizarlas.</p>
+        <div class="table-scroll"><table><thead><tr><th>Banda</th><th>Canal</th><th>Frecuencia MHz</th><th>Modulacion indicada</th><th>Disponible para importar</th></tr></thead><tbody id="plan-remer-hf"></tbody></table></div>
       </div>
       <div id="plan-contacts" hidden>
         <fieldset id="plan-dmr-auto"><legend>Descarga de contactos y grupos DMR</legend>
@@ -107,6 +118,9 @@
       </div>
       <hr><h3>Canales preparados (sin escribir en la radio)</h3>
       <button id="plan-pmr-stage" type="button" class="button secondary">Preparar PMR446 analogicos 1-16 (solo RX)</button>
+      <label for="plan-channel-csv">Importar lista CSV de canales (OpenGD77 CPS Channels.csv o CHIRP)</label>
+      <input id="plan-channel-csv" type="file" accept=".csv,text/csv">
+      <p class="card-note">Se convierten canales FM dentro de VHF 136-174 / UHF 400-470 MHz. DMR, AM y formatos CSV propietarios se excluyen; contactos, TG Lists, zonas y tonos no se migran automaticamente. El canal se prepara solo para recepcion.</p>
       <label for="plan-template">Plantilla del archivo abierto: se preservan sus ajustes no importados</label><select id="plan-template"><option value="">Abre o lee una configuracion primero</option></select><button id="plan-template-refresh" type="button" class="button secondary">Actualizar plantillas</button>
       <p id="plan-channel-count" role="status">0 canales preparados. Los tonos no se activan automaticamente; revisalos en el editor oficial.</p>
       <div class="table-scroll"><table><thead><tr><th>Nombre</th><th>RX / TX nominal</th><th>Modo</th><th>Fuente</th><th>Quitar</th></tr></thead><tbody id="plan-channel-results"></tbody></table></div>
@@ -217,6 +231,7 @@
       });
     }
     const chosenRepeaters = new Set();
+    const chosenREMER = new Set();
     const chosenContacts = new Map();
     const staged = new Map();
     function notify(message) { $("plan-status").textContent = message; log(message); }
@@ -291,6 +306,28 @@
       }
       $("plan-rb-info").textContent = `${visibleRepeaters().length} visibles de ${repeaters.length}; ${rbRejected.length} excluidos. ${rbRejected.slice(0, 4).map(item => `#${item.index}: ${item.reason}`).join(" | ")} Data courtesy of RepeaterBook.com.`;
     }
+    function renderREMER() {
+      $("plan-remer-results").replaceChildren();
+      for (const entry of R.remerVHFChannels()) {
+        const row = document.createElement("tr");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = chosenREMER.has(entry.key);
+        checkbox.setAttribute("aria-label", `Elegir REMER ${entry.name} ${entry.rx}`);
+        checkbox.addEventListener("change", () => checkbox.checked ? chosenREMER.add(entry.key) : chosenREMER.delete(entry.key));
+        cell(row, "").append(checkbox);
+        cell(row, entry.name);
+        cell(row, `${entry.rx} / ${entry.tx}`);
+        cell(row, entry.tone ? `${entry.tone} Hz (nota; no se programa)` : "No indicado");
+        cell(row, entry.city);
+        $("plan-remer-results").append(row);
+      }
+      $("plan-remer-hf").replaceChildren(...R.remerHFChannels().map(entry => {
+        const row = document.createElement("tr");
+        for (const value of [entry.band, entry.channel, entry.frequency, "SSB (USB preferente)", "No: fuera de banda/modo soportados"]) cell(row, value);
+        return row;
+      }));
+    }
     function visibleContacts() {
       // Country/state were applied by RadioID; local text never hides missing-state records by assumption.
       return R.filterRecords(contactResult?.entries || [], { query: $("plan-query").value });
@@ -364,8 +401,8 @@
     }
     panel.querySelectorAll("[data-plan-tab]").forEach(button => button.addEventListener("click", () => {
       currentTab = button.dataset.planTab;
-      for (const tab of ["repeaters", "contacts", "sat"]) $(`plan-${tab}`).hidden = tab !== currentTab;
-      $("plan-geographic").hidden = currentTab === "sat";
+      for (const tab of ["repeaters", "remer", "contacts", "sat"]) $(`plan-${tab}`).hidden = tab !== currentTab;
+      $("plan-geographic").hidden = currentTab === "sat" || currentTab === "remer";
       panel.querySelectorAll("[data-plan-tab]").forEach(item => item.setAttribute("aria-pressed", item === button));
     }));
     $("plan-query").addEventListener("input", () => { renderRepeaters(); renderContacts(); });
@@ -417,6 +454,13 @@
     attach("plan-rb-stage", "Preparar repetidores seleccionados", async () => {
       requireRB();
       stage(visibleRepeaters().filter(entry => chosenRepeaters.has(entry.key)));
+    });
+    $("plan-remer-select").addEventListener("click", () => {
+      for (const entry of R.remerVHFChannels()) chosenREMER.add(entry.key);
+      renderREMER();
+    });
+    attach("plan-remer-stage", "Preparar canales REMER seleccionados", async () => {
+      stage(R.remerVHFChannels().filter(entry => chosenREMER.has(entry.key)));
     });
     async function loadContacts(pageNumber, fresh = false) {
       R.assert(page !== "quansheng", "Esta radio no admite contactos DMR.");
@@ -476,10 +520,24 @@
     });
     if ($("plan-template-refresh")) attach("plan-template-refresh", "Actualizar plantillas", refreshTemplates);
     attach("plan-pmr-stage", "Preparar PMR446 solo RX", async () => { stage(R.pmrChannels()); });
+    $("plan-channel-csv").addEventListener("change", () => {
+      const input = $("plan-channel-csv");
+      perform("Importar CSV local de canales", async () => {
+        const file = input.files[0];
+        R.assert(file && file.size > 0 && file.size <= 8 * 1024 * 1024, "Selecciona un CSV de hasta 8 MiB.");
+        const result = R.parseChannelCSV(await file.text());
+        R.assert(result.channels.length > 0,
+          `${result.format}: no hay canales FM importables. ${result.rejected.length} filas excluidas; ${result.rejected.slice(0, 3).map(item => `fila ${item.row}: ${item.reason}`).join(" | ")}`);
+        const added = result.channels.filter(entry => !staged.has(entry.key)).length;
+        stage(result.channels);
+        const exclusions = result.rejected.slice(0, 3).map(item => `fila ${item.row}: ${item.reason}`).join(" | ");
+        notify(`${result.format}: ${added} canales FM anadidos a la preparacion; ${result.channels.length - added} duplicados de la sesion; ${result.rejected.length} filas excluidas.${exclusions ? ` ${exclusions}` : ""} Solo RX; guarda y revisa el archivo. No se escribe en la radio.`);
+      }).catch(() => {}).finally(() => { input.value = ""; });
+    });
     if ($("plan-channels-add")) attach("plan-channels-add", "Anadir canales al codeplug local", async () => {
       const result = importChannels([...staged.values()], Number($("plan-template").value));
       refreshTemplates();
-      notify(`${result.added} canales anadidos; ${result.duplicates} duplicados omitidos. Solo RX. Guarda el binario en el editor; no se ha instalado en la radio.`);
+      notify(`${result.added} canales anadidos; ${result.duplicates} duplicados omitidos. Parser binario: ${result.verified} canales releidos y visibles. Solo RX; guarda el archivo. No se ha escrito en la radio.`);
     });
     if ($("plan-qs-load")) attach("plan-qs-load", "Cargar SAT Doppler en archivo Quansheng", async () => {
       const channels = [...staged.values()].filter(entry => entry.source?.includes("satnogs") || entry.window || entry.norad);
@@ -660,10 +718,11 @@
     })
       .catch(error => { $("plan-status").textContent = `ERROR: ${error.message}`; });
     model.addEventListener("change", () => {
-      staged.clear(); chosenRepeaters.clear(); chosenContacts.clear();
+      staged.clear(); chosenRepeaters.clear(); chosenREMER.clear(); chosenContacts.clear();
       renderStaged(); renderContacts(); refreshTemplates();
       notify("Destino cambiado: canales preparados y seleccion de contactos vaciados para no mezclar modelos.");
     });
+    renderREMER();
     return {
       setBusy(value) { busy = value; uiBusy = value; $("plan-controls").disabled = value || Boolean(tracker); },
       refreshTemplates
