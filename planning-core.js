@@ -3,6 +3,49 @@
   const R = root.RadioWorkspace;
   const S = typeof module !== "undefined" ? require("satellite.js") : root.satellite;
   const norm = value => String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  function bricohamsRepeaterChannels() {
+    return [
+      { name: "U75-MUR", rx: "438.77500", tx: "431.17500", narrow: true, city: "Carrascoy", callsign: "ED5YBF" },
+      { name: "R0-MUR", rx: "145.60000", tx: "145.00000", narrow: false, city: "Sierra Espuna", callsign: "ED5YAK" },
+      { name: "U70-MUR", rx: "438.65000", tx: "431.05000", narrow: true, city: "Sierra Espuna", callsign: "ED5YAL" }
+    ].map(channel => ({ ...channel, key: `bricohams:${channel.name}`, mode: 0, rxOnly: true, region: "Murcia",
+      zone: "Bricohams Murcia", tone: "", source: "PRESET_CSV del ZIP Bricohams-Studio aportado por el usuario; vigencia no confirmada.",
+      notes: `${channel.callsign}; CTCSS publicado 77.0 Hz, no programado; solo RX. Verificar frecuencia y actividad.` }));
+  }
+  function murciaAirportTemplate() {
+    const airports = [
+      { icao: "LEMI", airport: "Region de Murcia", latitude: 37.803, longitude: -1.125,
+        services: [["TWR", "121.325", "121.330"], ["GMC", "121.750", "121.755"], ["APP", "130.300", ""], ["APP BACKUP", "125.025", ""]] },
+      { icao: "LELC", airport: "San Javier", latitude: 37.775, longitude: -0.812,
+        services: [["TWR", "124.425", ""], ["GMC", "121.600", ""], ["APP", "130.300", ""], ["ATIS", "128.600", "128.605"]] },
+      { icao: "LEAL", airport: "Alicante-Elche", latitude: 38.282, longitude: -0.558,
+        services: [["TWR", "118.150", "118.155"], ["CLR", "119.850", "119.855"], ["GMC", "130.650", "130.655"],
+          ["APP I", "118.800", ""], ["APP H", "120.400", ""], ["ATIS", "120.075", "120.080"]] }
+    ];
+    const results = airports.flatMap(({ services, ...airport }) => services.map(([service, frequencyMHz, channelDesignator]) => ({
+      ...airport, name: `${airport.icao}-${service.replace(/ /g, "-")}`, service, frequencyMHz, channelDesignator,
+      mode: "AM", rxOnly: true, source: `AIP ENAIRE AD 2.18 https://aip.enaire.es/AIP/contenido_AIP/AD/AD2/${airport.icao}/LE_AD_2_${airport.icao}_en.pdf`,
+      notes: "Portadora RF, no designador de canal. Coordenadas aproximadas del aerodromo para filtro geografico. Verificar AIP/NOTAM antes de usar."
+    })));
+    results.push({ name: "GUARDIA-1215", airport: "General", service: "Emergencia, solo escucha", frequencyMHz: "121.500",
+      channelDesignator: "", mode: "AM", rxOnly: true,
+      source: "AIP ENAIRE AD 2.18 https://aip.enaire.es/AIP/contenido_AIP/AD/AD2/LEMI/LE_AD_2_LEMI_en.pdf",
+      notes: "No transmitir ni usar para comunicaciones rutinarias." });
+    return { format: "bricohams-airport-template", version: 1, checkedAt: "2026-10-26", results };
+  }
+  function murciaBroadcastTemplate() {
+    const stations = [
+      ["Carrascoy", "105.3"], ["Ricote", "106.1"], ["Murcia", "99.9"], ["Cartagena", "104.6"],
+      ["Lorca", "101.1"], ["Aguilas", "105.9"], ["Caravaca", "91.1"], ["Cehegin", "100.7"],
+      ["Jumilla", "90.9"], ["La Paca", "102.9"], ["Mazarron", "93.8"], ["Yecla", "91.6"], ["Cieza", "88.6"]
+    ].map(([city, frequencyMHz]) => ({ station: "Onda Regional", city, frequencyMHz }));
+    stations.push({ station: "OR Musica", city: "Carrascoy", frequencyMHz: "105.9" },
+      { station: "OR Musica", city: "Ricote", frequencyMHz: "96.5" });
+    return { format: "bricohams-broadcast-template", version: 1, checkedAt: "2026-10-26",
+      results: stations.map(row => ({ ...row, name: `${row.station} ${row.city}`, region: "Murcia",
+        mode: "WFM", rxOnly: true, source: "https://www.orm.es/donde-escucharnos/",
+        notes: "Radiodifusion FM, no FM estrecha de comunicaciones. Usar receptor FM comercial. Sin coordenadas de transmisor verificadas; no usar como listado por proximidad." })) };
+  }
   const remerSource = "Referencia aportada por el usuario: tabla REMER nacional y repetidores de Murcia; fecha no visible, confirmar vigencia con REMER.";
   const remerVHF = Object.freeze([
     { repeater: "R4", channel: "14", rx: "146.70000", tx: "146.10000", tone: "88.5", site: "Lorca" },
@@ -101,8 +144,8 @@
     R.assert(channels.length > 0 && channels.every(channel => channel.mode === 0), "CSV CHIRP: solo canales FM, nunca DMR.");
     const rows = [["Location", "Name", "Frequency", "Duplex", "Offset", "Tone", "rToneFreq", "cToneFreq", "DtcsCode", "DtcsPolarity", "RxDtcsCode", "CrossMode", "Mode", "TStep", "Skip", "Comment"]];
     channels.forEach((channel, index) => rows.push([index, asciiName(channel.name, 10), validMHz(channel.rx), "off", "0.000000",
-      "", "88.5", "88.5", "023", "NN", "023", "Tone->Tone", "FM", "5.00", "",
-      `RX ONLY. ${channel.window ? `Doppler ${channel.window}, error max. ${channel.errorHz} Hz. ` : ""}TX nominal ${channel.tx}; tono de proveedor ${channel.tone || "sin dato"}. ${channel.source || ""} ${channel.attribution || ""} ${channel.license || ""}`]));
+      "", "88.5", "88.5", "023", "NN", "023", "Tone->Tone", channel.narrow ? "NFM" : "FM", "5.00", "",
+      `RX ONLY. ${channel.window ? `Doppler ${channel.window}, error max. ${channel.errorHz} Hz. ` : ""}TX nominal ${channel.tx}; tono de proveedor ${channel.tone || "sin dato"}. ${channel.source || ""} ${channel.notes || ""} ${channel.attribution || ""} ${channel.license || ""}`]));
     return rows.map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
   }
   function parseChannelCSV(text) {
@@ -156,7 +199,7 @@
     const rejected = [];
     const seen = new Set();
     const parseMHz = (input, label) => {
-      const frequency = String(input).replace(/\s/g, "");
+      const frequency = String(input).replace(/\s/g, "").replace(/(\.\d{1,5})0+$/, "$1");
       R.assert(/^\d{1,3}(?:\.\d{1,5})?$/.test(frequency), `${label}: frecuencia MHz invalida.`);
       return validMHz(frequency);
     };
@@ -185,7 +228,7 @@
           name = asciiName(column(record, "Name"), 16);
           rx = parseMHz(column(record, "Frequency"), "RX");
           const duplex = norm(column(record, "Duplex"));
-          const offsetText = column(record, "Offset").replace(/\s/g, "");
+          const offsetText = column(record, "Offset").replace(/\s/g, "").replace(/(\.\d{1,5})0+$/, "$1");
           if (duplex === "off" || duplex === "") tx = rx;
           else if (duplex === "+" || duplex === "-") {
             R.assert(/^\d{1,3}(?:\.\d{1,5})?$/.test(offsetText), "Offset CHIRP invalido.");
@@ -201,13 +244,36 @@
         if (seen.has(key)) { rejected.push({ row: index + 1, reason: "Canal duplicado en el CSV." }); continue; }
         seen.add(key);
         channels.push({ key, name, rx, tx, mode: 0, colorCode: 0, timeslot: 1,
-          rxOnly: true, country: "", region: "", city: "", tone: "", zone: openGD77 ? "OpenGD77 CSV" : "CHIRP CSV",
+          rxOnly: true, narrow: openGD77
+            ? (column(record, "Bandwidth") ? norm(column(record, "Bandwidth")) === "12.5" : undefined)
+            : norm(column(record, "Mode")) === "nfm",
+          country: column(record, "Country"), region: column(record, "Region") || column(record, "State"),
+          city: column(record, "City"), tone: "", zone: column(record, "Zone") || (openGD77 ? "OpenGD77 CSV" : "CHIRP CSV"),
           source: openGD77 ? "Importacion de OpenGD77 CPS Channels.csv" : "Importacion de CSV CHIRP", notes });
       } catch (error) {
         rejected.push({ row: index + 1, reason: error.message });
       }
     }
     return { format: openGD77 ? "OpenGD77 CPS" : "CHIRP", channels, rejected };
+  }
+  function validateSatellitePlan(plan, now = Date.now()) {
+    R.assert(plan?.format === "radio-workspace-satellite-plan" && plan.version === 1, "Formato de plan de pases no reconocido.");
+    validateTLE(plan.orbital, now);
+    const prediction = plan.prediction;
+    const observer = prediction?.observer;
+    R.assert(observer && Number.isFinite(observer.latitude) && Math.abs(observer.latitude) <= 90 &&
+      Number.isFinite(observer.longitude) && Math.abs(observer.longitude) <= 180 &&
+      Number.isFinite(observer.height) && observer.height >= -0.5 && observer.height <= 9,
+    "Posicion del plan de pases invalida.");
+    R.assert([24, 48].includes(prediction.hours) && Number.isFinite(prediction.minimumElevation) &&
+      prediction.minimumElevation >= 0 && prediction.minimumElevation <= 60, "Ventana/elevacion del plan de pases invalida.");
+    if (plan.transmitter) {
+      R.assert(typeof plan.transmitter.id === "string" && plan.transmitter.id.length > 0 &&
+        typeof plan.transmitter.name === "string", "Identificacion de frecuencia del plan invalida.");
+      satelliteChannel(plan.orbital, plan.transmitter);
+    }
+    return { orbital: plan.orbital, observer, hours: prediction.hours, minimum: prediction.minimumElevation,
+      transmitter: plan.transmitter || null };
   }
   function validateTLE(orbital, now = Date.now()) {
     R.assert(orbital && typeof orbital.tle1 === "string" && typeof orbital.tle2 === "string", "Faltan lineas TLE.");
@@ -450,6 +516,6 @@
     R.assert(entries.length > 0 && entries.length <= 1024, "Seleccion TG vacia o superior a 1024. Ajusta el prefijo.");
     return { provider: "BrandMeister", entries };
   }
-  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, remerVHFChannels, remerHFChannels, normalizeTalkgroups });
+  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, remerVHFChannels, remerHFChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

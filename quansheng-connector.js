@@ -140,6 +140,7 @@
     constructor(transport = new R.SerialTransport()) {
       super(transport);
       this.family = "quansheng";
+      this.transport.quanshengUSBPadding = true;
       this.catSequence = 0;
     }
     async connect(model) {
@@ -152,17 +153,20 @@
         return this.info;
       });
     }
-    async exchange(type, data, expected = type + 1, timeout = 4000) {
+    async exchange(type, data, expected = type + 1, timeout = 4000, recoverableTimeout = false) {
       await this.transport.write(packet(type, data));
+      return this.receiveResponse(expected, timeout, recoverableTimeout);
+    }
+    async receiveResponse(expected, timeout = 4000, recoverableTimeout = false) {
       const deadline = Date.now() + timeout;
       let previous = 0;
       while (Date.now() < deadline) {
-        const byte = (await this.transport.readExact(1, Math.max(1, deadline - Date.now())))[0];
+        const byte = (await this.transport.readExact(1, Math.max(1, deadline - Date.now()), !recoverableTimeout))[0];
         if (previous !== 0xab || byte !== 0xcd) { previous = byte; continue; }
-        const length = await this.transport.readExact(2, Math.max(1, deadline - Date.now()));
+        const length = await this.transport.readExact(2, Math.max(1, deadline - Date.now()), !recoverableTimeout);
         const size = R.view(length).getUint16(0, true);
         R.assert(size >= 4 && size <= 512, "Longitud de paquete F4HWN fuera de rango.");
-        const rest = await this.transport.readExact(size + 4, Math.max(1, deadline - Date.now()));
+        const rest = await this.transport.readExact(size + 4, Math.max(1, deadline - Date.now()), !recoverableTimeout);
         const frame = new Uint8Array(size + 8);
         frame.set([0xab, 0xcd, ...length]);
         frame.set(rest, 4);
@@ -223,7 +227,9 @@
       return this.run("Detener CAT RX Bricohams Beta", () => this.catChange(2, 0));
     }
     async catChange(operation, frequency10Hz) {
-      R.assert((await this.catExchange(0)).active, "Entra primero en SAT RX del firmware Bricohams compatible y habilita CAT con 8.");
+      const initial = await this.catExchange(0);
+      if (operation === 2 && !initial.active) return initial;
+      R.assert(initial.active, "Entra primero en SAT RX del firmware Bricohams compatible y habilita CAT con 8.");
       await this.catExchange(operation, frequency10Hz);
       for (let attempt = 0; attempt < 10; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 75));
@@ -434,20 +440,29 @@
       }
       return out;
     }
-    async verifyFlashRaw(flash) {
+    async flashRangeCRCRaw(address, length) {
+      R.assert(Number.isInteger(address) && Number.isInteger(length) && address >= 0 &&
+        length > 0 && length <= 4096 && address + length <= 0x200000, "Rango CRC Flash invalido.");
       const request = new Uint8Array(12);
       const v = R.view(request);
-      v.setUint32(0, 0, true);
-      v.setUint32(4, flash.length, true);
+      v.setUint32(0, address, true);
+      v.setUint32(4, length, true);
       v.setUint32(8, this.timestamp, true);
-      this.progress(1, "Verificando CRC-32 de toda la Flash en la radio");
       const response = await this.exchange(0x073e, request, 0x073f, 30000);
-      R.assert(response.length === 13 && R.view(response).getUint32(0, true) === 0 &&
-        R.view(response).getUint32(4, true) === flash.length && response[12] === 0,
-      "La radio no pudo verificar toda la Flash. Se requiere Labs con CRC de lectura fisica.");
-      const checksum = R.view(response).getUint32(8, true);
-      R.assert(checksum === R.crc32(flash), "El CRC de la Flash leida no coincide con la radio. No se habilitara escritura.");
-      return checksum;
+      R.assert(response.length === 13 && R.view(response).getUint32(0, true) === address &&
+        R.view(response).getUint32(4, true) === length && response[12] === 0,
+      `CRC Flash rechazado en 0x${address.toString(16)}. Se requiere Labs con CRC de lectura fisica.`);
+      return R.view(response).getUint32(8, true);
+    }
+    async verifyFlashRaw(flash) {
+      flash = R.bytes(flash, 0x200000);
+      for (let address = 0; address < flash.length; address += 4096) {
+        const checksum = await this.flashRangeCRCRaw(address, 4096);
+        R.assert(checksum === R.crc32(flash.subarray(address, address + 4096)),
+          `El CRC de la Flash leida no coincide con la radio. Sector 0x${address.toString(16)}. No se habilitara escritura.`);
+        this.progress((address + 4096) / flash.length, "Verificando CRC-32 de los 512 sectores Flash en la radio");
+      }
+      return R.crc32(flash);
     }
     async backup(emit) {
       return this.run("Respaldo automatico", async () => {
@@ -491,8 +506,20 @@
       return this.run("Verificar CRC del slot", () => this.validateRaw(slot));
     }
     async slotMutation(type, slot, data) {
-      const response = await this.exchange(type, data, type + 1, [0x0722, 0x0728, 0x0732].includes(type) ? 35000 : 5000);
-      R.assert(response.length === 2 && response[0] === slot && response[1] === 0, `Operacion de slot rechazada: ${response[1]}.`);
+      const retryable = type === 0x0724 || type === 0x0734;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const response = await this.exchange(type, data, type + 1,
+            [0x0722, 0x0728, 0x0732].includes(type) ? 35000 : retryable ? 1500 : 5000, retryable);
+          R.assert(response.length === 2 && response[0] === slot && response[1] === 0, `Operacion de slot rechazada: ${response[1]}.`);
+          return;
+        } catch (error) {
+          // Only identical NOR writes are idempotent; never retry erase/reset.
+          if (!retryable || error.code !== "READ_TIMEOUT" || this.transport.error || attempt >= 4) throw error;
+          this.progress(0, `Respuesta perdida: reintentando bloque identico (${attempt + 1}/4).`);
+          await new Promise(resolve => setTimeout(resolve, 60));
+        }
+      }
     }
     authSlot(slot) {
       R.assert(Number.isInteger(slot) && slot >= 1 && slot <= 4, "Main esta protegido: solo se pueden modificar slots 1-4.");
@@ -514,12 +541,12 @@
       return this.run("Restablecer banco de configuracion", () => this.slotMutation(0x0728, slot, data));
     }
     async writeSlot(slot, image, name, permit) {
-      R.assertBackup(this, permit);
+      R.assertSlotReplacement(this, permit);
       this.authSlot(slot);
       image = R.bytes(image).slice();
       const { version } = inspectSlotImage(image);
       R.assert(/^[\x20-\x7e]{1,15}$/.test(name), "Nombre de slot: 1-15 caracteres ASCII.");
-      await R.verifyBackup(this, permit);
+      await R.verifySlotReplacement(this, permit, slot, image, name);
       return this.run("Instalar firmware en slot", async () => {
         const checksum = R.crc32(image);
         await this.slotMutation(0x0722, slot, this.authSlot(slot));
@@ -575,6 +602,63 @@
       data[0] = slot;
       R.view(data).setUint32(2, this.timestamp, true);
       return data;
+    }
+    async readApp(slot) {
+      this.authApp(slot);
+      return this.run("Exportar app", async () => {
+        const info = await this.appInfoRaw(slot);
+        R.assert([0, 3, 9].includes(info.status), "La app no esta completa o el hueco esta vacio.");
+        R.assert(info.codeSize > 0 && info.codeSize <= APP.codeMax && info.assetSize <= APP.assetMax,
+          "Tamano de app fuera de limites.");
+        const result = new Uint8Array(64 + info.codeSize + info.assetSize);
+        result.set(await this.readFlashBlockRaw(APP.base + slot * APP.stride, 64));
+        let done = 64;
+        for (const [offset, size] of [[APP.codeOffset, info.codeSize], [APP.assetOffset, info.assetSize]]) {
+          for (let position = 0; position < size; position += 128) {
+            const count = Math.min(128, size - position);
+            result.set(await this.readFlashBlockRaw(APP.base + slot * APP.stride + offset + position, count), done);
+            done += count;
+          }
+        }
+        parseApp(result);
+        return result;
+      });
+    }
+    async moveApp(source, destination, permit, acknowledgement) {
+      R.assertBackup(this, permit);
+      this.authApp(source);
+      this.authApp(destination);
+      R.assert(source !== destination && acknowledgement === `MOVER APP ${source + 1} A ${destination + 1}`,
+        "Confirma el movimiento entre dos huecos distintos.");
+      await R.verifyBackup(this, permit);
+      const apps = await this.listApps();
+      R.assert(apps.some(app => app.slot === destination && app.status === 2),
+        "El destino debe ser un hueco vacio; no se reemplaza otra app.");
+      const bytes = await this.readApp(source);
+      const installed = await this.installApp(destination, bytes, permit);
+      R.assert(R.equal(await this.readApp(destination), bytes), "Destino distinto al origen; no se borra la app original.");
+      await this.deleteApp(source, permit);
+      const remaining = await this.listApps();
+      R.assert(remaining.find(app => app.slot === source)?.status === 2,
+        "El origen no aparece vacio; la copia de destino se conserva. Consulta las apps.");
+      return installed;
+    }
+    async deleteAllApps(permit, acknowledgement) {
+      R.assertBackup(this, permit);
+      R.assert(acknowledgement === "BORRAR TODAS LAS APPS", "Confirma el borrado global de apps.");
+      await R.verifyBackup(this, permit);
+      const apps = await this.listApps();
+      R.assert(apps.length > 0 && apps.every(app => app.status !== 1), "No hay inventario de apps valido.");
+      let deleted = 0;
+      for (const app of apps) {
+        if (app.status === 2) continue;
+        await this.deleteApp(app.slot, permit);
+        deleted++;
+        this.progress(deleted / apps.length, `Borrando apps: ${deleted}`);
+      }
+      R.assert((await this.listApps()).every(app => app.status === 2),
+        "Quedan apps tras el borrado global. Conserva el respaldo y consulta los huecos.");
+      return { deleted };
     }
     async deleteApp(slot, permit) {
       R.assertBackup(this, permit);

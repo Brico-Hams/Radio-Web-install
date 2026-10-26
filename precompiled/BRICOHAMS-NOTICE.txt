@@ -1,0 +1,7 @@
+Bricohams integration code and independent modules: GPL-3.0-or-later (BRICOHAMS-LICENSE).
+Upstream components retain their Apache-2.0 LICENSE and NOTICE.
+The source checkout alongside artifacts contains the applied integration and brandingSources.
+Bricohams boot artwork: monochrome adaptation of the project bricohams-logo.png; source SHA256 in bootlogo.h.
+Original artwork: Bricohams Studio assets/logo-bricohams.png, commit 767edd66028d10f859346190d0c8044bd8e5a2b2.
+Artwork attribution does not grant trademark rights or relicense third-party artwork.
+Not Karina; no hardware validation. Keep all notices on redistribution.

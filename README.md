@@ -4,6 +4,50 @@
 
 Dos espacios con conectores propios WebUSB/Web Serial, operaciones locales y respaldo automatico antes de habilitar escrituras.
 
+## Quansheng: catalogo precompilado, visor y registro RF
+
+- Nueve imagenes v6.1.0 servidas con la web: Bricohams ARDF, Satellite,
+  Spectrum, Labs y Fusion, mas F4HWN oficial Fusion, FieldOps, Transfer y Labs.
+  No requieren compilar ni elegir una carpeta. Se comprueban SHA-256, tamano
+  y estructura antes de preparar un slot; instalar sigue requiriendo respaldo.
+- Visor LCD al principio, inicio automatico al conectar, pausa antes de
+  cualquier operacion y captura PNG. El puerto se comparte sin dos lectores.
+- Teclado remoto corto/largo, sin PTT, con respaldo completo, habilitacion
+  manual y confirmacion por tecla. F1/F2 pueden ejecutar funciones de emision
+  segun la radio; envio UART no equivale a ejecucion confirmada.
+- Reinicio nativo con confirmacion literal, sin reintentos ni cambio de slot;
+  cierra el puerto y revoca permisos. Comprobar manualmente el arranque.
+- Registro RF v2 al final con historial y exportacion CSV segura. Solo datos
+  recibidos del firmware; no se inventan fechas UTC ni mediciones calibradas.
+- Catalogo de seis apps Labs upstream v6.1.0 con SHA-256, FAP1 y ABI/API
+  verificados: preparar o descargar no instala ni ejecuta. Incluye SystemInfo,
+  BroadcastFM y cuatro juegos/demos; no balizas ni apps de socorro.
+- Mantenimiento nativo: logo PNG/BIN, backup/restore de calibracion y Flash
+  externa, con relectura y proteccion del sector de calibracion.
+- Asistente nativo de fabrica en dos pasos: Flash stock verificada y DFU
+  por modelo, con respaldo completo y confirmaciones expresas. Las imagenes
+  stock se descargan de enlaces oficiales fijados y se validan por SHA-256.
+  Probado en simulacion; no se ha restaurado de fabrica la unidad fisica.
+- Panel de herramientas propias con accesos internos, sin delegar operaciones
+  a UV Studio: DFU principal v6/v7, mantenimiento, apps, slots y RF.
+- DFU principal PY32: BIN v6 o paquete v7 FWAT/FWA1, con respaldo y dos
+  confirmaciones. No sincroniza Main externo ni certifica arranque.
+- Recursos externos v7: CRC y Build ID deben coincidir con el firmware
+  activo; cabecera al final y validacion del firmware. Se instalan por separado
+  despues del DFU y de crear un respaldo nuevo. Soporte probado en simulacion.
+- Filtros RF locales por nombre/frecuencia/evento y exportacion CSV/JSON,
+  sin inventar hora UTC de los eventos ni mediciones RF calibradas.
+- Se grabaron los cuatro slots Bricohams de la unidad de pruebas el
+  26-10-2026, con CRC y conservacion de Main/configuracion/calibracion.
+  Arranque y pruebas funcionales manuales por slot siguen pendientes.
+  El visor recibio 24 tramas LCD y una RF por COM4 con DTR activo;
+  no se recibio historial RF almacenado.
+
+Catalogo y licencias en `precompiled/`; regeneracion por el mantenedor:
+`npm run publish:firmware`. Requiere las cinco compilaciones locales fijadas
+y acceso a la publicacion oficial, no es un requisito del usuario final.
+Instrucciones y limites en [ayuda Quansheng](docs/AYUDA-QUANSHENG.md).
+
 ## AnyTone Beta: preparacion web
 
 La nueva [seccion AnyTone](anytone.html) prepara un **proyecto portable**, no un
@@ -62,7 +106,8 @@ pase. Requiere habilitacion fisica y se ha probado con transporte simulado,
 no en RF. No inicia automaticamente pases futuros ni carga TLE en el MCU.
 El constructor exige imagenes separadas.
 No es Karina ni equivalencia del 100 %. Las imagenes actuales miden
-113960 bytes (ARDF con estadisticas) y 113868 bytes (Satelites con CAT), sin instalarlas en la radio;
+113960 bytes (ARDF con estadisticas) y 113868 bytes (Satelites con CAT);
+ambas se grabaron en slots y verificaron por CRC, con arranque manual pendiente;
 ocho suites C nativas comprueban los nucleos y adaptadores con RF simulado.
 La tercera imagen, `--module spectrum`, conecta el nucleo propio al receptor
 y pantalla: 128 puntos RSSI, peak hold, promedio, pausa y ocho presets RAM.
@@ -72,7 +117,7 @@ con sintonia por paso, entrada directa RX, audio y ajuste de ganancia RX;
 no transmite ni edita calibracion. Permite centrar nuevas ventanas y
 recorrer circularmente los presets RAM, con hasta 16 exclusiones exactas
 de sesion y busqueda CTCSS/DCS opcional en captura FM, sin guardar tonos.
-La imagen con bootlogo y transferencia de presets mide 118044 bytes. Permite
+La imagen precompilada con bootlogo y transferencia de presets mide 118040 bytes. Permite
 conservar los presets en archivos BHSP locales y recuperarlos a RAM con el
 barrido pausado, validacion atomica y relectura; no escribe EEPROM.
 La deteccion real sigue
@@ -204,7 +249,7 @@ Comprueba el SHA-256 antes de instalar. Los lanzadores abren el navegador predet
 | DM-32 / UV008 con OpenGD77 | Las mismas operaciones a 115200 baudios con Web Serial | Igual: escritura bloqueada | No boot ROM, microcodigo ni flasheo del firmware stock. |
 | Quansheng UV-K1 / UV-K5 V3 PY32F071 con F4HWN v6+ | Identificacion, calibracion 512 B, consulta de slots y CRC | Instalar/borrar slots 1-4 y restablecer bancos 1-4, **solo tras copia completa verificada** | El respaldo Flash fisico requiere Labs v6.1+ con comandos 0x0738. En otras ediciones se conserva la calibracion y se bloquean escrituras si no puede completarse. |
 
-No hay paridad completa con grid.radio ni UV Studio. No se implementan aqui flasheo DFU, restauracion de calibracion, ejecucion remota de aplicaciones Labs, visor Quansheng, cuentas ni edicion de zonas. La gestion de archivos `.app` se describe mas abajo. Cambiar firmware en Multiboot o seleccionar SetCfg se hace en la propia radio; no hay un comando remoto inventado.
+No hay paridad completa con grid.radio ni UV Studio. Visor, teclado y reinicio Quansheng, restauracion de calibracion/Flash, DFU stock, DFU principal y recursos externos tienen implementacion nativa independiente. DFU stock esta fijado a hashes/modelos; el principal valida BIN v6 PY32 o paquete v7 FWAT/FWA1 y no sincroniza Main externo. Recursos v7 se instalan por separado con respaldo nuevo y Build ID coincidente; no hay instalacion automatica ni soporte de recursos en slots inactivos. Apps Labs permite catalogo, exportar, instalar, mover a un hueco vacio y borrar individual/global con verificacion. No se ejecutan apps automaticamente, ni se implementan cuentas o edicion de zonas. La gestion de archivos `.app` se describe mas abajo. Cambiar firmware en Multiboot o seleccionar SetCfg se hace en la propia radio; no hay un comando remoto inventado. Las licencias de binarios de terceros permanecen: codigo independiente no equivale a ausencia garantizada de riesgos legales.
 
 ## Codeplug: contactos, repetidores y satelites
 

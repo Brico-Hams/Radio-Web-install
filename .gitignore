@@ -4,6 +4,7 @@ node_modules/
 .env.*
 *.log
 *.bin
+!precompiled/*.bin
 *.g77
 *.rwb.json
 *.provenance.json
@@ -17,6 +18,8 @@ coverage/
 tmp/
 dist/
 firmware-builds/
+firmware/ARDFv05/
+firmware/Fusion61/
 studio.html
 android/.gradle/
 android/.kotlin/

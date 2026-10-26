@@ -5,8 +5,14 @@ const { FirmwareService, TARGETS } = require("./firmware-service.cjs");
 const { DataService } = require("./data-service.cjs");
 const ALLOWED_FILES = Object.freeze([
   "anytone.html", "anytone-core.js", "anytone-ui.js",
+  "precompiled-catalog.js", "quansheng-factory.js", "precompiled/catalog.json", "precompiled/LICENSE.txt",
+  "precompiled/APACHE-2.0.txt", "precompiled/NOTICE.txt", "precompiled/BRICOHAMS-NOTICE.txt",
+  "precompiled/apps/catalog.json",
+  ...["SystemInfo", "BroadcastFM", "Cube3D", "Tetris", "Breakout", "Minesweeper"].map(id => `precompiled/apps/${id}.app`),
+  ...["bricohams-ardf", "bricohams-satellite", "bricohams-spectrum", "bricohams-labs", "bricohams-fusion",
+    "f4hwn-fusion", "f4hwn-fieldops", "f4hwn-transfer", "f4hwn-labs"].map(id => `precompiled/${id}.bin`),
   "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "bricohams-logo.png", "styles.css", "app.js", "radio-core.js",
-  "transports.js", "quansheng-connector.js", "quansheng-channels.js", "gd77-connector.js", "backup-store.js",
+  "transports.js", "quansheng-connector.js", "quansheng-channels.js", "quansheng-live.js", "quansheng-tools.js", "gd77-connector.js", "backup-store.js",
   "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js", "f4hwn-options.js", "custom-firmware-ui.js",
   "ayuda-firmwares.html", "ayuda-configuracion.html", "ayuda-quansheng.html",
   "ayuda-opciones-f4hwn.html", "ayuda-presets-f4hwn.html", "ayuda-ardf.html",
@@ -183,7 +189,8 @@ return http.createServer(async (request, response) => {
       ? path.join(path.dirname(require.resolve("satellite.js/package.json")), "dist", "satellite.min.js")
       : path.join(__dirname, name);
     const body = await fs.readFile(filename);
-    const type = name.endsWith(".png") ? "image/png" : name.endsWith(".jpg") ? "image/jpeg" : name.endsWith(".svg") ? "image/svg+xml" : `${name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript"}; charset=utf-8`;
+    const type = name.endsWith(".bin") ? "application/octet-stream" : name.endsWith(".json") ? "application/json; charset=utf-8" :
+      name.endsWith(".txt") ? "text/plain; charset=utf-8" : name.endsWith(".png") ? "image/png" : name.endsWith(".jpg") ? "image/jpeg" : name.endsWith(".svg") ? "image/svg+xml" : `${name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript"}; charset=utf-8`;
     response.writeHead(200, { "Content-Type": type, "Content-Length": body.length });
     response.end(request.method === "HEAD" ? undefined : body);
   } catch (error) {

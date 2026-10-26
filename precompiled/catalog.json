@@ -1,0 +1,980 @@
+{
+  "format": "bricohams-precompiled-catalog",
+  "version": 1,
+  "license": "GPL-3.0-or-later",
+  "licensePath": "precompiled/LICENSE.txt",
+  "entries": [
+    {
+      "id": "bricohams-ardf",
+      "name": "bricohams-ardf.bin",
+      "edition": "BH ARDF",
+      "publisher": "Bricohams",
+      "version": "v6.1.0",
+      "size": 113960,
+      "sha256": "f6dca1967e83c6b699439b45cf6051a5558cd20dd7fc1ed81bcbada9593a8be5",
+      "path": "precompiled/bricohams-ardf.bin",
+      "targets": [
+        "UV-K1",
+        "UV-K5-V3"
+      ],
+      "stability": "beta",
+      "hardwareBootTested": false,
+      "license": "GPL-3.0-or-later AND Apache-2.0",
+      "source": "https://github.com/Brico-Hams/Radio-Web-install",
+      "upstream": {
+        "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+        "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+        "tag": "v6.1.0"
+      },
+      "build": {
+        "format": "bricohams-firmware-build",
+        "version": 1,
+        "firmware": "bricohams.fieldops.ardf.v6.1.0.bin",
+        "preset": "FieldOps",
+        "edition": "Bricohams",
+        "hardware": [
+          "UV-K5 V3",
+          "UV-K1"
+        ],
+        "upstream": {
+          "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+          "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+          "tag": "v6.1.0"
+        },
+        "options": [
+          "ENABLE_FEAT_F4HWN_BEACON=OFF",
+          "ENABLE_VOX=OFF"
+        ],
+        "effectiveOptions": {
+          "DEV": false,
+          "ENABLE_LTO": false,
+          "ENABLE_NO_HEAP": true,
+          "ENABLE_FMRADIO": true,
+          "ENABLE_UART": true,
+          "ENABLE_USB": true,
+          "ENABLE_AIRCOPY": false,
+          "ENABLE_AIRCOPY_UART": false,
+          "ENABLE_AIRCOPY_FLASH": false,
+          "ENABLE_NOAA": false,
+          "ENABLE_VOICE": false,
+          "ENABLE_VOX": false,
+          "ENABLE_TX1750": true,
+          "ENABLE_PWRON_PASSWORD": false,
+          "ENABLE_DTMF_CALLING": false,
+          "ENABLE_FLASHLIGHT": true,
+          "ENABLE_SPECTRUM": true,
+          "ENABLE_BIG_FREQ": true,
+          "ENABLE_SMALL_BOLD": true,
+          "ENABLE_CUSTOM_MENU_LAYOUT": true,
+          "ENABLE_KEEP_MEM_NAME": true,
+          "ENABLE_WIDE_RX": true,
+          "ENABLE_F_CAL_MENU": false,
+          "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+          "ENABLE_BOOT_BEEPS": false,
+          "ENABLE_SHOW_CHARGE_LEVEL": false,
+          "ENABLE_REVERSE_BAT_SYMBOL": false,
+          "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+          "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+          "ENABLE_FASTER_CHANNEL_SCAN": true,
+          "ENABLE_RSSI_BAR": true,
+          "ENABLE_AUDIO_BAR": true,
+          "ENABLE_COPY_CHAN_TO_VFO": true,
+          "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+          "ENABLE_BYP_RAW_DEMODULATORS": false,
+          "ENABLE_SCAN_RANGES": true,
+          "ENABLE_EXTRA_UART_CMD": false,
+          "ENABLE_FEAT_F4HWN": true,
+          "ENABLE_FEAT_F4HWN_FULL_WATCH": true,
+          "ENABLE_FEAT_F4HWN_GAME": false,
+          "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+          "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+          "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+          "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+          "ENABLE_FEAT_F4HWN_SLEEP": true,
+          "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+          "ENABLE_FEAT_F4HWN_NARROWER": true,
+          "ENABLE_FEAT_F4HWN_INV": true,
+          "ENABLE_FEAT_F4HWN_CTR": true,
+          "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+          "ENABLE_FEAT_F4HWN_VOL": true,
+          "ENABLE_FEAT_F4HWN_AUDIO": true,
+          "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+          "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+          "ENABLE_FEAT_F4HWN_PMR": true,
+          "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+          "ENABLE_FEAT_F4HWN_CA": true,
+          "ENABLE_FEAT_F4HWN_DEBUG": false,
+          "ENABLE_FEAT_F4HWN_QRCODE": true,
+          "ENABLE_FEAT_F4HWN_MEM": true,
+          "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+          "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+          "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+          "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+          "ENABLE_FEAT_F4HWN_BEAM": false,
+          "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+          "ENABLE_FEAT_F4HWN_BEACON": false,
+          "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+          "ENABLE_FEAT_F4HWN_LOGO": true,
+          "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+          "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": true,
+          "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+          "ENABLE_AGC_SHOW_DATA": false,
+          "ENABLE_UART_RW_BK_REGS": false,
+          "ENABLE_SWD": true,
+          "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": false
+        },
+        "sourceDateEpoch": 1791342406,
+        "toolchain": {
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\r\nCopyright (C) 2023 Free Software Foundation, Inc.\r\nThis is free software; see the source for copying conditions.  There is NO\r\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "ninja": "1.13.1"
+        },
+        "imageBytes": 113960,
+        "sourceChangesIncluded": false,
+        "hardwareTested": false,
+        "derivedFromKarina": false,
+        "modules": [
+          "ardf"
+        ],
+        "moduleSources": [
+          {
+            "file": "App/bricohams/ardf.c",
+            "sha256": "1f475083af35de22e90b3f3d118c60fa8001fe25a6d09984d9540b83f6558520"
+          },
+          {
+            "file": "App/bricohams/ardf.h",
+            "sha256": "448cf598d8d061853c5e49b3cee0dba82d3e8650ddfee5689f38370d49b1ca6e"
+          },
+          {
+            "file": "App/bricohams/ardf_foxhunt.inc",
+            "sha256": "5fa7121bd880e04da8b7c6cc564fc34fe3ddfd081ce74151df607058f4a65bdc"
+          },
+          {
+            "file": "App/CMakeLists.txt",
+            "sha256": "c486ceb2abfcb018ca118c06fc3a90b079e7e7da939e35b3fe199fb22dae1eb4"
+          },
+          {
+            "file": "App/scheduler.c",
+            "sha256": "61559a5aa94b8faff0206311b214e9afd9002e61c4193dd53bd952c4130f2723"
+          },
+          {
+            "file": "App/scheduler.h",
+            "sha256": "678c9670d36d0342dfccaa30b6171439fa041f02b0275e5108c5be2a9b8bcb4e"
+          },
+          {
+            "file": "App/app/foxhunt.c",
+            "sha256": "a24b4a16c2567090e989b691f74d65e1785c985414715d86e44fd417d47333db"
+          },
+          {
+            "file": "App/app/uart.c",
+            "sha256": "816c2b3c1a2c91c67a161a765fd7d3cbc0fd4400cd066a890e1501f6300592be"
+          }
+        ],
+        "brandingSources": [
+          {
+            "file": "App/ui/welcome.c",
+            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+          },
+          {
+            "file": "App/bricohams/bootlogo.h",
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
+          }
+        ],
+        "integrationTestedOnHardware": false,
+        "ardfStatistics": {
+          "version": 1,
+          "command": 31520,
+          "reply": 31521,
+          "snapshotBytes": 140,
+          "manualObservationKey": "8",
+          "persistentWrites": false,
+          "hardwareValidated": false
+        },
+        "stability": "beta",
+        "validation": "Structural checks only; physical validation pending"
+      }
+    },
+    {
+      "id": "bricohams-satellite",
+      "name": "bricohams-satellite.bin",
+      "edition": "BH Satellite",
+      "publisher": "Bricohams",
+      "version": "v6.1.0",
+      "size": 113868,
+      "sha256": "f32de9974cd5b72d9add863ea644648426cbc91a8dbe80089849e16e8c892ab3",
+      "path": "precompiled/bricohams-satellite.bin",
+      "targets": [
+        "UV-K1",
+        "UV-K5-V3"
+      ],
+      "stability": "beta",
+      "hardwareBootTested": false,
+      "license": "GPL-3.0-or-later AND Apache-2.0",
+      "source": "https://github.com/Brico-Hams/Radio-Web-install",
+      "upstream": {
+        "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+        "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+        "tag": "v6.1.0"
+      },
+      "build": {
+        "format": "bricohams-firmware-build",
+        "version": 1,
+        "firmware": "bricohams.fieldops.satellite.v6.1.0.bin",
+        "preset": "FieldOps",
+        "edition": "Bricohams",
+        "hardware": [
+          "UV-K5 V3",
+          "UV-K1"
+        ],
+        "upstream": {
+          "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+          "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+          "tag": "v6.1.0"
+        },
+        "options": [
+          "ENABLE_FEAT_F4HWN_BEACON=OFF",
+          "ENABLE_VOX=OFF"
+        ],
+        "effectiveOptions": {
+          "DEV": false,
+          "ENABLE_LTO": false,
+          "ENABLE_NO_HEAP": true,
+          "ENABLE_FMRADIO": true,
+          "ENABLE_UART": true,
+          "ENABLE_USB": true,
+          "ENABLE_AIRCOPY": false,
+          "ENABLE_AIRCOPY_UART": false,
+          "ENABLE_AIRCOPY_FLASH": false,
+          "ENABLE_NOAA": false,
+          "ENABLE_VOICE": false,
+          "ENABLE_VOX": false,
+          "ENABLE_TX1750": true,
+          "ENABLE_PWRON_PASSWORD": false,
+          "ENABLE_DTMF_CALLING": false,
+          "ENABLE_FLASHLIGHT": true,
+          "ENABLE_SPECTRUM": true,
+          "ENABLE_BIG_FREQ": true,
+          "ENABLE_SMALL_BOLD": true,
+          "ENABLE_CUSTOM_MENU_LAYOUT": true,
+          "ENABLE_KEEP_MEM_NAME": true,
+          "ENABLE_WIDE_RX": true,
+          "ENABLE_F_CAL_MENU": false,
+          "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+          "ENABLE_BOOT_BEEPS": false,
+          "ENABLE_SHOW_CHARGE_LEVEL": false,
+          "ENABLE_REVERSE_BAT_SYMBOL": false,
+          "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+          "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+          "ENABLE_FASTER_CHANNEL_SCAN": true,
+          "ENABLE_RSSI_BAR": true,
+          "ENABLE_AUDIO_BAR": true,
+          "ENABLE_COPY_CHAN_TO_VFO": true,
+          "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+          "ENABLE_BYP_RAW_DEMODULATORS": false,
+          "ENABLE_SCAN_RANGES": true,
+          "ENABLE_EXTRA_UART_CMD": false,
+          "ENABLE_FEAT_F4HWN": true,
+          "ENABLE_FEAT_F4HWN_FULL_WATCH": true,
+          "ENABLE_FEAT_F4HWN_GAME": false,
+          "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+          "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+          "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+          "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+          "ENABLE_FEAT_F4HWN_SLEEP": true,
+          "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+          "ENABLE_FEAT_F4HWN_NARROWER": true,
+          "ENABLE_FEAT_F4HWN_INV": true,
+          "ENABLE_FEAT_F4HWN_CTR": true,
+          "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+          "ENABLE_FEAT_F4HWN_VOL": true,
+          "ENABLE_FEAT_F4HWN_AUDIO": true,
+          "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+          "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+          "ENABLE_FEAT_F4HWN_PMR": true,
+          "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+          "ENABLE_FEAT_F4HWN_CA": true,
+          "ENABLE_FEAT_F4HWN_DEBUG": false,
+          "ENABLE_FEAT_F4HWN_QRCODE": true,
+          "ENABLE_FEAT_F4HWN_MEM": true,
+          "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+          "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+          "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+          "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+          "ENABLE_FEAT_F4HWN_BEAM": false,
+          "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+          "ENABLE_FEAT_F4HWN_BEACON": false,
+          "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+          "ENABLE_FEAT_F4HWN_LOGO": true,
+          "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+          "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": true,
+          "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+          "ENABLE_AGC_SHOW_DATA": false,
+          "ENABLE_UART_RW_BK_REGS": false,
+          "ENABLE_SWD": true,
+          "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": false
+        },
+        "sourceDateEpoch": 1791342406,
+        "toolchain": {
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\r\nCopyright (C) 2023 Free Software Foundation, Inc.\r\nThis is free software; see the source for copying conditions.  There is NO\r\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "ninja": "1.13.1"
+        },
+        "imageBytes": 113868,
+        "sourceChangesIncluded": false,
+        "hardwareTested": false,
+        "derivedFromKarina": false,
+        "modules": [
+          "satellite"
+        ],
+        "moduleSources": [
+          {
+            "file": "App/bricohams/doppler.c",
+            "sha256": "8eee2300fa329a7759ef8ce8b3b8f28184f372883643f3101496cabc7518334b"
+          },
+          {
+            "file": "App/bricohams/doppler.h",
+            "sha256": "afb6cf8fa13d148163135389599b13d3769a8c32ed642a2b46ef56f1521296df"
+          },
+          {
+            "file": "App/bricohams/satellite_foxhunt.inc",
+            "sha256": "d9fb81c8a652ae40a26fdf867b93db7dd6b3b2db7e6789b24186163be2679da0"
+          },
+          {
+            "file": "App/bricohams/cat_rx.c",
+            "sha256": "2a89f591013fafe3c4a3e09ee407a455f3760dc108a023f234a2e232c92ee54a"
+          },
+          {
+            "file": "App/bricohams/cat_rx.h",
+            "sha256": "dd23ef17629f69e1cfa03d5f1347f3e2ba2b604d64ef993f471f5632c6eabbe3"
+          },
+          {
+            "file": "App/CMakeLists.txt",
+            "sha256": "c6d3ef0b151f481d7702d2565977295db5db7dfa0b86f763633324c7878f745f"
+          },
+          {
+            "file": "App/scheduler.c",
+            "sha256": "065c669a6285ee2e4ed6974ae454d9a6e089793c1b6e794bec41e55b0dda2039"
+          },
+          {
+            "file": "App/scheduler.h",
+            "sha256": "67e6035e47cb9c56d8ef72f15f9b3794c2cea34b71c158da72f0d99d229a0664"
+          },
+          {
+            "file": "App/app/foxhunt.c",
+            "sha256": "a18a68123bc602187b11591efe0f1dc76a05d72b5bdd0873df4078d7754c23bb"
+          },
+          {
+            "file": "App/app/uart.c",
+            "sha256": "31d97b716e943f7b8fb5b9ec0713171e4fc2ccee1de72b32c3c60e0accbe384b"
+          }
+        ],
+        "brandingSources": [
+          {
+            "file": "App/ui/welcome.c",
+            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+          },
+          {
+            "file": "App/bricohams/bootlogo.h",
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
+          }
+        ],
+        "integrationTestedOnHardware": false,
+        "catRx": {
+          "version": 1,
+          "command": 31488,
+          "reply": 31489,
+          "leaseMilliseconds": 3000,
+          "physicalEnableKey": "8",
+          "persistentWrites": false,
+          "transmitControl": false,
+          "hardwareValidated": false
+        },
+        "stability": "beta",
+        "validation": "Structural checks only; physical validation pending"
+      }
+    },
+    {
+      "id": "bricohams-spectrum",
+      "name": "bricohams-spectrum.bin",
+      "edition": "BH Spectrum",
+      "publisher": "Bricohams",
+      "version": "v6.1.0",
+      "size": 118040,
+      "sha256": "1fc3498869e4e77a668427825a5e88bb3226983820e9735a2143988fb21afd6a",
+      "path": "precompiled/bricohams-spectrum.bin",
+      "targets": [
+        "UV-K1",
+        "UV-K5-V3"
+      ],
+      "stability": "beta",
+      "hardwareBootTested": false,
+      "license": "GPL-3.0-or-later AND Apache-2.0",
+      "source": "https://github.com/Brico-Hams/Radio-Web-install",
+      "upstream": {
+        "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+        "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+        "tag": "v6.1.0"
+      },
+      "build": {
+        "format": "bricohams-firmware-build",
+        "version": 1,
+        "firmware": "bricohams.fieldops.spectrum.v6.1.0.bin",
+        "preset": "FieldOps",
+        "edition": "Bricohams",
+        "hardware": [
+          "UV-K5 V3",
+          "UV-K1"
+        ],
+        "upstream": {
+          "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+          "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+          "tag": "v6.1.0"
+        },
+        "options": [
+          "ENABLE_FEAT_F4HWN_BEACON=OFF",
+          "ENABLE_VOX=OFF"
+        ],
+        "effectiveOptions": {
+          "DEV": false,
+          "ENABLE_LTO": false,
+          "ENABLE_NO_HEAP": true,
+          "ENABLE_FMRADIO": true,
+          "ENABLE_UART": true,
+          "ENABLE_USB": true,
+          "ENABLE_AIRCOPY": false,
+          "ENABLE_AIRCOPY_UART": false,
+          "ENABLE_AIRCOPY_FLASH": false,
+          "ENABLE_NOAA": false,
+          "ENABLE_VOICE": false,
+          "ENABLE_VOX": false,
+          "ENABLE_TX1750": true,
+          "ENABLE_PWRON_PASSWORD": false,
+          "ENABLE_DTMF_CALLING": false,
+          "ENABLE_FLASHLIGHT": true,
+          "ENABLE_SPECTRUM": true,
+          "ENABLE_BIG_FREQ": true,
+          "ENABLE_SMALL_BOLD": true,
+          "ENABLE_CUSTOM_MENU_LAYOUT": true,
+          "ENABLE_KEEP_MEM_NAME": true,
+          "ENABLE_WIDE_RX": true,
+          "ENABLE_F_CAL_MENU": false,
+          "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+          "ENABLE_BOOT_BEEPS": false,
+          "ENABLE_SHOW_CHARGE_LEVEL": false,
+          "ENABLE_REVERSE_BAT_SYMBOL": false,
+          "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+          "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+          "ENABLE_FASTER_CHANNEL_SCAN": true,
+          "ENABLE_RSSI_BAR": true,
+          "ENABLE_AUDIO_BAR": true,
+          "ENABLE_COPY_CHAN_TO_VFO": true,
+          "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+          "ENABLE_BYP_RAW_DEMODULATORS": false,
+          "ENABLE_SCAN_RANGES": true,
+          "ENABLE_EXTRA_UART_CMD": false,
+          "ENABLE_FEAT_F4HWN": true,
+          "ENABLE_FEAT_F4HWN_FULL_WATCH": true,
+          "ENABLE_FEAT_F4HWN_GAME": false,
+          "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+          "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+          "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+          "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+          "ENABLE_FEAT_F4HWN_SLEEP": true,
+          "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+          "ENABLE_FEAT_F4HWN_NARROWER": true,
+          "ENABLE_FEAT_F4HWN_INV": true,
+          "ENABLE_FEAT_F4HWN_CTR": true,
+          "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+          "ENABLE_FEAT_F4HWN_VOL": true,
+          "ENABLE_FEAT_F4HWN_AUDIO": true,
+          "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+          "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+          "ENABLE_FEAT_F4HWN_PMR": true,
+          "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+          "ENABLE_FEAT_F4HWN_CA": true,
+          "ENABLE_FEAT_F4HWN_DEBUG": false,
+          "ENABLE_FEAT_F4HWN_QRCODE": true,
+          "ENABLE_FEAT_F4HWN_MEM": true,
+          "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+          "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+          "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+          "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+          "ENABLE_FEAT_F4HWN_BEAM": false,
+          "ENABLE_FEAT_F4HWN_FOXHUNT": true,
+          "ENABLE_FEAT_F4HWN_BEACON": false,
+          "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+          "ENABLE_FEAT_F4HWN_LOGO": true,
+          "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+          "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": true,
+          "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+          "ENABLE_AGC_SHOW_DATA": false,
+          "ENABLE_UART_RW_BK_REGS": false,
+          "ENABLE_SWD": true,
+          "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": false
+        },
+        "sourceDateEpoch": 1791342406,
+        "toolchain": {
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\r\nCopyright (C) 2023 Free Software Foundation, Inc.\r\nThis is free software; see the source for copying conditions.  There is NO\r\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "ninja": "1.13.1"
+        },
+        "imageBytes": 118040,
+        "sourceChangesIncluded": false,
+        "hardwareTested": false,
+        "derivedFromKarina": false,
+        "modules": [
+          "spectrum"
+        ],
+        "moduleSources": [
+          {
+            "file": "App/bricohams/spectrum.c",
+            "sha256": "767d96d57dc8d40edd5b03b091e7a5f91157cf6df8b075fa3726a58c8e206c54"
+          },
+          {
+            "file": "App/bricohams/spectrum.h",
+            "sha256": "346f10b4aeda84b67f38cf72224da48b02f2df756232a4294b72a75334fb7e64"
+          },
+          {
+            "file": "App/bricohams/spectrum_foxhunt.inc",
+            "sha256": "3fb45552691b35d394ad6b24f6e24a91ddb657670c1eadded706a8d6b5d3b068"
+          },
+          {
+            "file": "App/bricohams/presets.c",
+            "sha256": "4cc03959fa0da880193707961fafaa53381105c38c9a312d244aebbd908a466f"
+          },
+          {
+            "file": "App/bricohams/presets.h",
+            "sha256": "565c47611a2f3feecb2c5d7744bc8fe10a2f8d83d245b6bf5930f7315a39680c"
+          },
+          {
+            "file": "App/CMakeLists.txt",
+            "sha256": "e3bc188b93e3edc8b77faec4eea97139361c6a3d25f00cf4477d88dd108288e5"
+          },
+          {
+            "file": "App/scheduler.c",
+            "sha256": "4080bde872eb35ca4b227a38753eff9827bc2692d20cee97732d227687ee5566"
+          },
+          {
+            "file": "App/scheduler.h",
+            "sha256": "a9e0a67c5471cf60f7266568ab7bd9cf05d25eb824785436a797c70a32e69077"
+          },
+          {
+            "file": "App/app/foxhunt.c",
+            "sha256": "d3fbffd1ab14012e15a11c9d7c7e0186f9a471de52daeb7ee244f48f3b90ea3e"
+          },
+          {
+            "file": "App/app/uart.c",
+            "sha256": "e38718e2085455e29a7fbd7d74d945fe2490431615247cad0db9b6b929d04938"
+          }
+        ],
+        "brandingSources": [
+          {
+            "file": "App/ui/welcome.c",
+            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+          },
+          {
+            "file": "App/bricohams/bootlogo.h",
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
+          }
+        ],
+        "integrationTestedOnHardware": false,
+        "spectrumPresets": {
+          "version": 1,
+          "command": 31504,
+          "reply": 31505,
+          "blobBytes": 208,
+          "chunkBytes": 104,
+          "pausedScanRequired": true,
+          "persistentWrites": false,
+          "hardwareValidated": false
+        },
+        "stability": "beta",
+        "validation": "Structural checks only; physical validation pending"
+      }
+    },
+    {
+      "id": "bricohams-labs",
+      "name": "bricohams-labs.bin",
+      "edition": "BH Labs",
+      "publisher": "Bricohams",
+      "version": "v6.1.0",
+      "size": 114124,
+      "sha256": "7a4cbb4fc6cd8363c776e2982c10b15e92ef779ec1867f49826556514a47bed4",
+      "path": "precompiled/bricohams-labs.bin",
+      "targets": [
+        "UV-K1",
+        "UV-K5-V3"
+      ],
+      "stability": "beta",
+      "hardwareBootTested": false,
+      "license": "GPL-3.0-or-later AND Apache-2.0",
+      "source": "https://github.com/Brico-Hams/Radio-Web-install",
+      "upstream": {
+        "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+        "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+        "tag": "v6.1.0"
+      },
+      "build": {
+        "format": "bricohams-firmware-build",
+        "version": 1,
+        "firmware": "bricohams.labs.v6.1.0.bin",
+        "preset": "Labs",
+        "edition": "Bricohams",
+        "hardware": [
+          "UV-K5 V3",
+          "UV-K1"
+        ],
+        "upstream": {
+          "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+          "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+          "tag": "v6.1.0"
+        },
+        "options": [
+          "ENABLE_VOX=OFF"
+        ],
+        "effectiveOptions": {
+          "DEV": false,
+          "ENABLE_LTO": false,
+          "ENABLE_NO_HEAP": true,
+          "ENABLE_FMRADIO": true,
+          "ENABLE_UART": true,
+          "ENABLE_USB": true,
+          "ENABLE_AIRCOPY": true,
+          "ENABLE_AIRCOPY_UART": false,
+          "ENABLE_AIRCOPY_FLASH": false,
+          "ENABLE_NOAA": false,
+          "ENABLE_VOICE": false,
+          "ENABLE_VOX": false,
+          "ENABLE_TX1750": true,
+          "ENABLE_PWRON_PASSWORD": false,
+          "ENABLE_DTMF_CALLING": false,
+          "ENABLE_FLASHLIGHT": true,
+          "ENABLE_SPECTRUM": true,
+          "ENABLE_BIG_FREQ": true,
+          "ENABLE_SMALL_BOLD": true,
+          "ENABLE_CUSTOM_MENU_LAYOUT": true,
+          "ENABLE_KEEP_MEM_NAME": true,
+          "ENABLE_WIDE_RX": true,
+          "ENABLE_F_CAL_MENU": false,
+          "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+          "ENABLE_BOOT_BEEPS": false,
+          "ENABLE_SHOW_CHARGE_LEVEL": false,
+          "ENABLE_REVERSE_BAT_SYMBOL": false,
+          "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+          "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+          "ENABLE_FASTER_CHANNEL_SCAN": true,
+          "ENABLE_RSSI_BAR": true,
+          "ENABLE_AUDIO_BAR": true,
+          "ENABLE_COPY_CHAN_TO_VFO": true,
+          "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+          "ENABLE_BYP_RAW_DEMODULATORS": false,
+          "ENABLE_SCAN_RANGES": true,
+          "ENABLE_EXTRA_UART_CMD": false,
+          "ENABLE_FEAT_F4HWN": true,
+          "ENABLE_FEAT_F4HWN_FULL_WATCH": true,
+          "ENABLE_FEAT_F4HWN_GAME": false,
+          "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+          "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+          "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+          "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+          "ENABLE_FEAT_F4HWN_SLEEP": true,
+          "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+          "ENABLE_FEAT_F4HWN_NARROWER": true,
+          "ENABLE_FEAT_F4HWN_INV": true,
+          "ENABLE_FEAT_F4HWN_CTR": true,
+          "ENABLE_FEAT_F4HWN_RESCUE_OPS": true,
+          "ENABLE_FEAT_F4HWN_VOL": true,
+          "ENABLE_FEAT_F4HWN_AUDIO": true,
+          "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+          "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+          "ENABLE_FEAT_F4HWN_PMR": true,
+          "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+          "ENABLE_FEAT_F4HWN_CA": true,
+          "ENABLE_FEAT_F4HWN_DEBUG": false,
+          "ENABLE_FEAT_F4HWN_QRCODE": true,
+          "ENABLE_FEAT_F4HWN_MEM": true,
+          "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+          "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+          "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+          "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+          "ENABLE_FEAT_F4HWN_BEAM": false,
+          "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+          "ENABLE_FEAT_F4HWN_BEACON": false,
+          "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+          "ENABLE_FEAT_F4HWN_LOGO": true,
+          "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+          "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": true,
+          "ENABLE_FEAT_F4HWN_OVERLAY_APPS": true,
+          "ENABLE_AGC_SHOW_DATA": false,
+          "ENABLE_UART_RW_BK_REGS": false,
+          "ENABLE_SWD": true,
+          "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": true,
+          "ENABLE_FEAT_F4HWN_OVERLAY_BEAM": true,
+          "ENABLE_FEAT_F4HWN_OVERLAY_INFO": true
+        },
+        "sourceDateEpoch": 1791342406,
+        "toolchain": {
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\r\nCopyright (C) 2023 Free Software Foundation, Inc.\r\nThis is free software; see the source for copying conditions.  There is NO\r\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "ninja": "1.13.1"
+        },
+        "imageBytes": 114124,
+        "sourceChangesIncluded": false,
+        "hardwareTested": false,
+        "derivedFromKarina": false
+      }
+    },
+    {
+      "id": "bricohams-fusion",
+      "name": "bricohams-fusion.bin",
+      "edition": "BH Fusion",
+      "publisher": "Bricohams",
+      "version": "v6.1.0",
+      "size": 106808,
+      "sha256": "65d877114264d8337cdd6e9a5a52dcb85689ac03e02ed0a98b2063bfcc281f23",
+      "path": "precompiled/bricohams-fusion.bin",
+      "targets": [
+        "UV-K1",
+        "UV-K5-V3"
+      ],
+      "stability": "beta",
+      "hardwareBootTested": false,
+      "license": "GPL-3.0-or-later AND Apache-2.0",
+      "source": "https://github.com/Brico-Hams/Radio-Web-install",
+      "upstream": {
+        "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+        "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+        "tag": "v6.1.0"
+      },
+      "build": {
+        "format": "bricohams-firmware-build",
+        "version": 1,
+        "firmware": "bricohams.fusion.v6.1.0.bin",
+        "preset": "Fusion",
+        "edition": "Bricohams",
+        "hardware": [
+          "UV-K5 V3",
+          "UV-K1"
+        ],
+        "upstream": {
+          "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+          "commit": "f556a96e73c3e423a00cf473aeb37f827cac05a5",
+          "tag": "v6.1.0"
+        },
+        "options": [
+          "ENABLE_VOX=OFF"
+        ],
+        "effectiveOptions": {
+          "DEV": false,
+          "ENABLE_LTO": false,
+          "ENABLE_NO_HEAP": true,
+          "ENABLE_FMRADIO": true,
+          "ENABLE_UART": true,
+          "ENABLE_USB": true,
+          "ENABLE_AIRCOPY": false,
+          "ENABLE_AIRCOPY_UART": false,
+          "ENABLE_AIRCOPY_FLASH": false,
+          "ENABLE_NOAA": false,
+          "ENABLE_VOICE": false,
+          "ENABLE_VOX": false,
+          "ENABLE_TX1750": true,
+          "ENABLE_PWRON_PASSWORD": false,
+          "ENABLE_DTMF_CALLING": false,
+          "ENABLE_FLASHLIGHT": true,
+          "ENABLE_SPECTRUM": true,
+          "ENABLE_BIG_FREQ": true,
+          "ENABLE_SMALL_BOLD": true,
+          "ENABLE_CUSTOM_MENU_LAYOUT": true,
+          "ENABLE_KEEP_MEM_NAME": true,
+          "ENABLE_WIDE_RX": true,
+          "ENABLE_F_CAL_MENU": false,
+          "ENABLE_CTCSS_TAIL_PHASE_SHIFT": false,
+          "ENABLE_BOOT_BEEPS": false,
+          "ENABLE_SHOW_CHARGE_LEVEL": false,
+          "ENABLE_REVERSE_BAT_SYMBOL": false,
+          "ENABLE_NO_CODE_SCAN_TIMEOUT": false,
+          "ENABLE_SQUELCH_MORE_SENSITIVE": true,
+          "ENABLE_FASTER_CHANNEL_SCAN": true,
+          "ENABLE_RSSI_BAR": true,
+          "ENABLE_AUDIO_BAR": true,
+          "ENABLE_COPY_CHAN_TO_VFO": true,
+          "ENABLE_REDUCE_LOW_MID_TX_POWER": false,
+          "ENABLE_BYP_RAW_DEMODULATORS": false,
+          "ENABLE_SCAN_RANGES": true,
+          "ENABLE_EXTRA_UART_CMD": false,
+          "ENABLE_FEAT_F4HWN": true,
+          "ENABLE_FEAT_F4HWN_FULL_WATCH": true,
+          "ENABLE_FEAT_F4HWN_GAME": false,
+          "ENABLE_FEAT_F4HWN_K5VIEWER": true,
+          "ENABLE_FEAT_F4HWN_SPECTRUM": true,
+          "ENABLE_FEAT_F4HWN_RX_TX_TIMER": true,
+          "ENABLE_FEAT_F4HWN_CHARGING_C": false,
+          "ENABLE_FEAT_F4HWN_SLEEP": true,
+          "ENABLE_FEAT_F4HWN_RESUME_STATE": true,
+          "ENABLE_FEAT_F4HWN_NARROWER": true,
+          "ENABLE_FEAT_F4HWN_INV": true,
+          "ENABLE_FEAT_F4HWN_CTR": true,
+          "ENABLE_FEAT_F4HWN_RESCUE_OPS": false,
+          "ENABLE_FEAT_F4HWN_VOL": true,
+          "ENABLE_FEAT_F4HWN_AUDIO": true,
+          "ENABLE_FEAT_F4HWN_AUDIO_SCOPE": true,
+          "ENABLE_FEAT_F4HWN_RESET_VFO": true,
+          "ENABLE_FEAT_F4HWN_PMR": true,
+          "ENABLE_FEAT_F4HWN_GMRS_FRS_MURS": true,
+          "ENABLE_FEAT_F4HWN_CA": true,
+          "ENABLE_FEAT_F4HWN_DEBUG": false,
+          "ENABLE_FEAT_F4HWN_QRCODE": true,
+          "ENABLE_FEAT_F4HWN_MEM": true,
+          "ENABLE_FEAT_F4HWN_SCAN_PROGRESS": true,
+          "ENABLE_FEAT_F4HWN_SCAN_FASTER": true,
+          "ENABLE_FEAT_F4HWN_SCAN_RSSI": true,
+          "ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE": true,
+          "ENABLE_FEAT_F4HWN_BEAM": false,
+          "ENABLE_FEAT_F4HWN_FOXHUNT": false,
+          "ENABLE_FEAT_F4HWN_BEACON": false,
+          "ENABLE_FEAT_F4HWN_ACTION_PICKER": true,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG": true,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP": false,
+          "ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER": true,
+          "ENABLE_FEAT_F4HWN_LOGO": true,
+          "ENABLE_FEAT_F4HWN_LOGO_SAV": true,
+          "ENABLE_FEAT_F4HWN_MENU_CAT": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG": true,
+          "ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY": true,
+          "ENABLE_FEAT_F4HWN_OVERLAY_APPS": false,
+          "ENABLE_AGC_SHOW_DATA": false,
+          "ENABLE_UART_RW_BK_REGS": false,
+          "ENABLE_SWD": true,
+          "ENABLE_FEAT_F4HWN_EXT_FLASH_RW": false
+        },
+        "sourceDateEpoch": 1791342406,
+        "toolchain": {
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\r\nCopyright (C) 2023 Free Software Foundation, Inc.\r\nThis is free software; see the source for copying conditions.  There is NO\r\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "ninja": "1.13.1"
+        },
+        "imageBytes": 106808,
+        "sourceChangesIncluded": false,
+        "hardwareTested": false,
+        "derivedFromKarina": false
+      }
+    },
+    {
+      "id": "f4hwn-fieldops",
+      "name": "f4hwn-fieldops.bin",
+      "edition": "F4HWN fieldops",
+      "publisher": "Armel F4HWN",
+      "version": "v6.1.0",
+      "size": 113784,
+      "sha256": "559382a70218b39da30affa7468161870ae298d2ba19718df744f91163498fff",
+      "path": "precompiled/f4hwn-fieldops.bin",
+      "targets": [
+        "UV-K1",
+        "UV-K5-V3"
+      ],
+      "stability": "upstream-stable",
+      "hardwareBootTested": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.1.0",
+      "originalURL": "https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/download/v6.1.0/f4hwn.fieldops.v6.1.0.bin",
+      "upstream": {
+        "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+        "tag": "v6.1.0"
+      }
+    },
+    {
+      "id": "f4hwn-fusion",
+      "name": "f4hwn-fusion.bin",
+      "edition": "F4HWN fusion",
+      "publisher": "Armel F4HWN",
+      "version": "v6.1.0",
+      "size": 107644,
+      "sha256": "4458bd5e55461394b5c91efa768e5f8ba676204c776875c1391c97346188fe70",
+      "path": "precompiled/f4hwn-fusion.bin",
+      "targets": [
+        "UV-K1",
+        "UV-K5-V3"
+      ],
+      "stability": "upstream-stable",
+      "hardwareBootTested": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.1.0",
+      "originalURL": "https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/download/v6.1.0/f4hwn.fusion.v6.1.0.bin",
+      "upstream": {
+        "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+        "tag": "v6.1.0"
+      }
+    },
+    {
+      "id": "f4hwn-labs",
+      "name": "f4hwn-labs.bin",
+      "edition": "F4HWN labs",
+      "publisher": "Armel F4HWN",
+      "version": "v6.1.0",
+      "size": 114920,
+      "sha256": "7f6f453243a4dc938c0e2751c962d7d214bce8ca9be605264363e0bd918b52a5",
+      "path": "precompiled/f4hwn-labs.bin",
+      "targets": [
+        "UV-K1",
+        "UV-K5-V3"
+      ],
+      "stability": "upstream-stable",
+      "hardwareBootTested": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.1.0",
+      "originalURL": "https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/download/v6.1.0/f4hwn.labs.v6.1.0.bin",
+      "upstream": {
+        "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+        "tag": "v6.1.0"
+      }
+    },
+    {
+      "id": "f4hwn-transfer",
+      "name": "f4hwn-transfer.bin",
+      "edition": "F4HWN transfer",
+      "publisher": "Armel F4HWN",
+      "version": "v6.1.0",
+      "size": 115784,
+      "sha256": "a800b83c71f77a04ec120b4280224922459f04175ea7f1821dc9cbd8c647edd1",
+      "path": "precompiled/f4hwn-transfer.bin",
+      "targets": [
+        "UV-K1",
+        "UV-K5-V3"
+      ],
+      "stability": "upstream-stable",
+      "hardwareBootTested": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.1.0",
+      "originalURL": "https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/download/v6.1.0/f4hwn.transfer.v6.1.0.bin",
+      "upstream": {
+        "repository": "https://github.com/armel/uv-k1-k5v3-firmware-custom",
+        "tag": "v6.1.0"
+      }
+    }
+  ]
+}

@@ -258,6 +258,12 @@ El destino debe ser un ZIP nuevo. En Windows se usa `tar.exe` (bsdtar);
 Linux/FreeBSD necesitan `zip`. La herramienta utiliza un directorio temporal
 propio y lo limpia al terminar, incluso ante errores.
 
+Si no hay instaladores de escritorio reconstruidos, sustituye `--installers`
+por `--without-installers`. Es una omision explicita solo para instantaneas
+Beta: el manifiesto registra `desktopInstallersIncluded: false` y no hay
+carpeta `installers`. No se reutilizan paquetes antiguos como si fueran nuevos.
+La APK indicada con `--android` si se incluye y verifica independientemente.
+
 Contenido:
 
 - `android`, cuando se indica `--android`: APK Beta debug, APK de pruebas,

@@ -1,0 +1,17 @@
+Bricohams Android Beta
+
+Project: Radio-Web-install / Bricohams
+License: GPL-3.0-or-later. See LICENSE.txt distributed with this application.
+
+Kotlin standard library
+Copyright 2010-2024 JetBrains s.r.o. and Kotlin Programming Language contributors.
+Licensed under the Apache License, Version 2.0.
+See LICENSE-APACHE-2.0.txt distributed with this application.
+Source: https://github.com/JetBrains/kotlin/tree/v2.0.21
+
+Android platform APIs are supplied by the device; the Android SDK, JDK,
+Gradle, JUnit, Robolectric and AndroidX Test are build/test tools and are
+not application features or bundled Android SDK runtimes.
+
+The original Bricohams logo is preserved. This application is not affiliated
+with Look4sat, Robot36, HAMRS, LoTW or radio manufacturers.

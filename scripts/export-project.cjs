@@ -24,6 +24,8 @@ function safeRelative(name) {
 
 function projectSource(name) {
   safeRelative(name);
+  if (/^precompiled\/apps\/(?:catalog\.json|(?:SystemInfo|BroadcastFM|Cube3D|Tetris|Breakout|Minesweeper)\.app)$/.test(name)) return true;
+  if (/^precompiled\/(?:catalog\.json|(?:LICENSE|APACHE-2\.0|NOTICE|BRICOHAMS-NOTICE)\.txt|(?:bricohams-(?:ardf|satellite|spectrum|labs|fusion)|f4hwn-(?:fusion|fieldops|transfer|labs))\.bin)$/.test(name)) return true;
   const parts = name.split("/");
   if (parts.some(part => privateName.test(part)) || privateFile.test(name)) return false;
   if (name === "studio.html") return false;
@@ -160,9 +162,12 @@ function copyAndroid(directory, projectSnapshot, destination) {
     signing: info.signing, sourceHashesVerified: declared.length, packages: required.filter(name => name.endsWith(".apk")) };
 }
 
-async function exportProject({ project = root, firmware, installers, android, output, beta }) {
+async function exportProject({ project = root, firmware, installers, withoutInstallers = false, android, output, beta }) {
   if (!beta) throw new Error("La matriz de entrega sigue incompleta. Indica --beta para exportar una instantanea de desarrollo.");
-  if (!firmware || !installers || !output) throw new Error("Se requieren --firmware, --installers y --output.");
+  if (!firmware || !output || (!installers && !withoutInstallers)) {
+    throw new Error("Se requieren --firmware, --output y --installers o --without-installers.");
+  }
+  if (installers && withoutInstallers) throw new Error("--installers y --without-installers son excluyentes.");
   if (!output.toLowerCase().endsWith(".zip")) throw new Error("El destino debe terminar en .zip.");
   if (fs.existsSync(output)) throw new Error(`El destino ya existe: ${output}`);
   const stage = fs.mkdtempSync(path.join(os.tmpdir(), "bricohams-export-"));
@@ -189,14 +194,14 @@ async function exportProject({ project = root, firmware, installers, android, ou
         path.join(content, "firmware", entry.name)) });
     }
     if (!builds.length) throw new Error("No hay compilaciones Bricohams verificables.");
-    const packages = checksumFiles(installers);
-    if (!packages.some(name => name.endsWith("-windows-x64.zip")) ||
+    const packages = withoutInstallers ? [] : checksumFiles(installers);
+    if (!withoutInstallers && (!packages.some(name => name.endsWith("-windows-x64.zip")) ||
         !packages.some(name => name.endsWith("-amd64.deb")) ||
         !packages.some(name => name.endsWith("-arm64.deb")) ||
         !packages.some(name => name.endsWith("-armhf.deb")) ||
         !packages.some(name => name.endsWith("-arch.tar.gz")) ||
         !packages.some(name => name.endsWith("-arch-source.tar.gz")) ||
-        !packages.some(name => name.endsWith("-freebsd-amd64.tar.gz"))) {
+        !packages.some(name => name.endsWith("-freebsd-amd64.tar.gz")))) {
       throw new Error("Faltan instalables de alguna plataforma en SHA256SUMS.");
     }
     for (const name of packages) {
@@ -204,10 +209,13 @@ async function exportProject({ project = root, firmware, installers, android, ou
         throw new Error(`Archivo no reconocido como instalable: ${name}`);
       }
     }
-    for (const name of ["SHA256SUMS", ...packages]) copyFile(path.join(installers, name), path.join(content, "installers", name));
-    checksumFiles(path.join(content, "installers"));
+    if (!withoutInstallers) {
+      for (const name of ["SHA256SUMS", ...packages]) copyFile(path.join(installers, name), path.join(content, "installers", name));
+      checksumFiles(path.join(content, "installers"));
+    }
     const manifest = { format: "bricohams-project-export", version: 1, status: "incomplete-beta",
-      createdAt: new Date().toISOString(), revision, dirty, builds, excludedBuilds, packages, android: androidBuild,
+      createdAt: new Date().toISOString(), revision, dirty, builds, excludedBuilds, packages,
+      desktopInstallersIncluded: !withoutInstallers, android: androidBuild,
       warning: "Development snapshot, not a completed release or hardware validation. Installer provenance must be checked separately.",
       files: inventory(content) };
     const json = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
@@ -237,6 +245,7 @@ if (require.main === module) {
     for (let index = 0; index < args.length; index++) {
       const argument = args[index];
       if (argument === "--beta") options.beta = true;
+      else if (argument === "--without-installers") options.withoutInstallers = true;
       else if (["--firmware", "--installers", "--android", "--output"].includes(argument) && args[index + 1] && !args[index + 1].startsWith("--")) {
         options[argument.slice(2)] = path.resolve(args[++index]);
       } else throw new Error(`Argumento no reconocido o sin valor: ${argument}`);
