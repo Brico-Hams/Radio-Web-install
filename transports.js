@@ -29,7 +29,7 @@
     notify() {
       if (this.pending) this.pending();
     }
-    async readExact(length, timeout = 4000) {
+    async readExact(length, timeout = 4000, fatalTimeout = true) {
       R.assert(Number.isInteger(length) && length > 0 && length <= 1048576, "Longitud de lectura invalida.");
       R.assert(!this.pending, "Lecturas simultaneas no permitidas.");
       if (this.error) throw this.error;
@@ -38,7 +38,8 @@
           const timer = setTimeout(() => {
             this.pending = null;
             const error = new Error(`Tiempo agotado: recibidos ${this.buffer.length}/${length} bytes.`);
-            this.fail(error);
+            error.code = "READ_TIMEOUT";
+            if (fatalTimeout) this.fail(error);
             reject(error);
           }, timeout);
           this.pending = () => {
@@ -82,6 +83,9 @@
       this.port = matching.length === 1 ? matching[0] : await this.api.requestPort({ filters });
       try {
         await this.port.open({ baudRate, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none" });
+        if (this.quanshengUSBPadding && typeof this.port.setSignals === "function") {
+          await this.port.setSignals({ dataTerminalReady: true });
+        }
         this.reader = this.port.readable.getReader();
         this.writer = this.port.writable.getWriter();
         this.opened = true;
@@ -112,6 +116,8 @@
     async write(data) {
       R.assert(this.opened && !this.error, "Puerto serie no disponible.");
       await this.writer.write(R.bytes(data));
+      // F4HWN USB CDC can hold an exact 64-byte packet until the next byte.
+      if (this.quanshengUSBPadding && data.length % 64 === 0) await this.writer.write(Uint8Array.of(0));
     }
     async close() {
       this.opened = false;

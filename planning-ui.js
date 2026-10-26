@@ -1,7 +1,7 @@
 (function (root) {
   "use strict";
   const R = root.RadioWorkspace;
-  function mountPlanningUI({ page, model, action, download, log, importChannels, importContacts, importSatellites, readSatellites, templates, cat = null }) {
+  function mountPlanningUI({ page, model, action, download, saveFile = download, log, importChannels, importContacts, importSatellites, readSatellites, templates, cat = null }) {
     const panel = document.createElement("section");
     panel.id = "planning-panel";
     panel.className = "panel operations planning-panel";
@@ -11,6 +11,12 @@
         ? "Quansheng es analogico: no admite contactos DMR. Puedes anadir canales FM a la configuracion F4HWN v6 abierta, o exportar CSV CHIRP. Escritura Beta solo con respaldo Flash completo; v6.0 permanece en solo lectura. SAT se prepara como memorias FM, no como lista orbital nativa."
         : "Anade contactos privados (max. 1024 en total), canales y satelites (lista SAT, max. 25) a tu binario estandar abierto. No es la base masiva de indicativos DMR. Se preservan los registros existentes. Escribir en la radio sigue bloqueado sin respaldo MCU completo."}</p>
       <fieldset id="plan-controls" class="planning-controls">
+      <details><summary>Plantillas Murcia: aeropuertos, frecuencias aereas y radiodifusion FM</summary>
+        <p>Solo consulta y exportacion: no se convierten a FM VHF/UHF ni se escriben en el banco de canales. AM requiere receptor compatible; FM comercial requiere su receptor de radiodifusion. Las plantillas no prueban que tu firmware pueda programarlas. Verifica AIP/NOTAM y emisoras vigentes. Fuentes consultadas el 26-10-2026.</p>
+        <div class="operation-buttons"><button id="plan-airports-save" type="button" class="button secondary">Descargar aeropuertos y guardia AM (JSON)</button><button id="plan-broadcast-save" type="button" class="button secondary">Descargar FM Murcia (JSON)</button><button id="plan-remer-save" type="button" class="button secondary">Descargar REMER VHF solo RX (CHIRP CSV)</button></div>
+        <p>AM: Murcia LEMI, San Javier LELC, Alicante-Elche LEAL y guardia 121.500 MHz. Se muestra la portadora RF y, cuando procede, el designador 8.33 kHz por separado. FM Murcia: seleccion de Onda Regional y OR Musica; no es un catalogo exhaustivo de cadenas comerciales ni se filtra por ubicacion.</p>
+        <div class="table-scroll"><table><thead><tr><th>Plantilla / servicio</th><th>RF MHz</th><th>Designador</th><th>Modo RX</th><th>Fuente</th></tr></thead><tbody id="plan-regional-templates"></tbody></table></div>
+      </details>
       <div class="guide-tabs" role="group" aria-label="Tipo de datos">
         <button type="button" class="guide-tab" data-plan-tab="repeaters" aria-pressed="true">Repetidores</button>
         <button type="button" class="guide-tab" data-plan-tab="remer" aria-pressed="false">REMER</button>
@@ -38,7 +44,10 @@
         </div>
         <label class="check"><input id="plan-rb-consent" type="checkbox"><span>Tengo autorizacion para usar estos datos de RepeaterBook en la programacion personal de mi radio.</span></label>
         <div class="operation-buttons"><button id="plan-rb-query" type="button" class="button secondary">Consultar RepeaterBook autorizado</button><button id="plan-rb-status" type="button" class="button secondary">Comprobar configuracion de acceso</button></div>
-        <label for="plan-rb-file">O importar una exportacion JSON RepeaterBook obtenida con autorizacion (max. 8 MiB)</label><input id="plan-rb-file" type="file" accept=".json,application/json">
+        <label for="plan-rb-file">Importar repetidores: JSON RepeaterBook autorizado o CSV CHIRP / OpenGD77 (max. 8 MiB)</label><input id="plan-rb-file" type="file" accept=".json,.csv,application/json,text/csv">
+        <p>El JSON se muestra para seleccionar y filtrar. Un CSV compatible pasa directamente a Canales preparados; no necesita token RepeaterBook. Los formatos CPS propietarios no se interpretan por su extension.</p>
+        <div class="operation-buttons"><button id="plan-bricohams-load" type="button" class="button secondary">Preparar 3 repetidores Bricohams Murcia</button><button id="plan-bricohams-download" type="button" class="button secondary">Descargar fichero preconfigurado CHIRP CSV</button></div>
+        <p>Preset del ZIP Bricohams Studio aportado: ED5YBF, ED5YAK y ED5YAL. Vigencia no confirmada; solo RX, sin programar CTCSS. No es el catalogo nacional RepeaterBook. El CSV bloquea TX con Duplex off y conserva TX nominal en el comentario.</p>
         <p id="plan-rb-web-notice" role="status" hidden>La consulta API RepeaterBook requiere servidor y aprobacion. Sin instalar nada puedes importar aqui un JSON obtenido con autorizacion. No se pide ni guarda el token en Pages. <a id="plan-rb-release" href="#" target="_blank" rel="noopener noreferrer" hidden>Version instalada para consulta API</a></p>
         <p id="plan-rb-info" role="status">Sin consultas. El token individual se configura solo en el entorno del servidor.</p>
         <div class="operation-buttons"><button id="plan-rb-select" type="button" class="button secondary">Seleccionar visibles</button><button id="plan-rb-stage" type="button" class="button primary">Anadir seleccion a canales preparados</button></div>
@@ -103,6 +112,7 @@
         </div>
         <label class="check"><input id="plan-location-consent" type="checkbox"><span>Autorizo usar mi posicion para calcular pases localmente. Si exporto el plan, incluira esa posicion.</span></label>
         <div class="operation-buttons"><button id="plan-gps" type="button" class="button secondary">Usar mi ubicacion (pedir permiso)</button><button id="plan-predict" type="button" class="button primary">Calcular proximos pases</button><button id="plan-pass-save" type="button" class="button secondary">Guardar plan de pases JSON</button><button id="plan-tle-save" type="button" class="button secondary">Guardar TLE para herramienta compatible</button></div>
+        <label for="plan-pass-file">Reabrir plan de pases JSON guardado (incluye posicion; recalcula horarios actuales)</label><input id="plan-pass-file" type="file" accept=".json,application/json">
         <p id="plan-pass-info" role="status">TLE obligatorio con epoca de menos de 7 dias. Precision de muestreo 5 s; cruces refinados a 0,5 s. Sin relieve ni correccion atmosferica. No controla antenas; el Doppler se compensa con canales por tramos.</p>
         <div class="table-scroll"><table><thead><tr><th>Inicio UTC</th><th>Maximo UTC</th><th>Fin UTC</th><th>Elevacion max.</th><th>Azimut inicio / fin</th></tr></thead><tbody id="plan-pass-results"></tbody></table></div>
         <div class="planning-filters">
@@ -122,6 +132,9 @@
       <input id="plan-channel-csv" type="file" accept=".csv,text/csv">
       <p class="card-note">Se convierten canales FM dentro de VHF 136-174 / UHF 400-470 MHz. DMR, AM y formatos CSV propietarios se excluyen; contactos, TG Lists, zonas y tonos no se migran automaticamente. El canal se prepara solo para recepcion.</p>
       <label for="plan-template">Plantilla del archivo abierto: se preservan sus ajustes no importados</label><select id="plan-template"><option value="">Abre o lee una configuracion primero</option></select><button id="plan-template-refresh" type="button" class="button secondary">Actualizar plantillas</button>
+      ${page === "quansheng" ? `<label for="plan-scan-group">Agrupacion de escaneo Quansheng</label><select id="plan-scan-group"><option value="none">Una lista para todo el lote</option><option value="zone">Por zona del canal</option><option value="region">Por provincia / region</option><option value="city">Por localidad</option></select>
+      <label for="plan-scan-list">Lista unica (0 ninguna, 1-24, 25 todas)</label><input id="plan-scan-list" type="number" min="0" max="25" value="25">
+      <p>Por defecto las memorias participan en todas las listas. Agrupar asigna numeros 1-24 libres sin reemplazar listas existentes. Si faltan datos geograficos, se informa y no se cambia el archivo.</p>` : ""}
       <p id="plan-channel-count" role="status">0 canales preparados. Los tonos no se activan automaticamente; revisalos en el editor oficial.</p>
       <div class="table-scroll"><table><thead><tr><th>Nombre</th><th>RX / TX nominal</th><th>Modo</th><th>Fuente</th><th>Quitar</th></tr></thead><tbody id="plan-channel-results"></tbody></table></div>
       <div class="operation-buttons"><button id="plan-channels-add" type="button" class="button primary">Anadir canales al archivo local abierto</button>${page === "quansheng" ? '<button id="plan-chirp-save" type="button" class="button secondary">Exportar canales FM CSV CHIRP (solo RX)</button>' : ""}<button id="plan-channel-save" type="button" class="button secondary">Guardar proyecto de canales JSON</button></div>
@@ -190,10 +203,11 @@
             await stopTracking("Pase finalizado");
             return;
           }
+          const startedAt = Date.now();
           const result = await (first ? current.start() : current.step());
           if (tracker !== current || catStopping || !result) return;
           catStatus(`${prediction.name}: RX ${(result.frequency10Hz / 100000).toFixed(5)} MHz; elevacion ${result.elevation.toFixed(1)} grados; ${new Date(result.time).toISOString()}. Solo RX, confirmacion software.`);
-          catTimer = setTimeout(() => tickCat(), 750);
+          catTimer = setTimeout(() => tickCat(), Math.max(0, 750 - (Date.now() - startedAt)));
         } catch (error) { await stopTracking("Seguimiento interrumpido", error); }
       }
       $("plan-cat-start").addEventListener("click", () => {
@@ -382,8 +396,12 @@
     function refreshTemplates() {
       if (!$("plan-template")) return;
       const channels = templates();
-      $("plan-template").replaceChildren(new Option("Selecciona canal plantilla con el mismo modo del lote", ""),
-        ...channels.filter(channel => [0, 1].includes(channel.mode)).map(channel => new Option(`${channel.number}: ${channel.name} (${channel.mode ? "DMR" : "FM"})`, channel.number)));
+      const previous = $("plan-template").value;
+      const compatible = channels.filter(channel => [0, 1].includes(channel.mode));
+      $("plan-template").replaceChildren(new Option(compatible.length ? "Selecciona canal plantilla con el mismo modo del lote" : "Abre o lee una configuracion con un canal FM plantilla", ""),
+        ...compatible.map(channel => new Option(`${channel.number}: ${channel.name} (${channel.mode ? "DMR" : "FM"})`, channel.number)));
+      if (compatible.some(channel => String(channel.number) === previous)) $("plan-template").value = previous;
+      else if (page === "quansheng" && compatible.length) $("plan-template").value = String(compatible[0].number);
     }
     function invalidatePrediction() {
       prediction = null;
@@ -424,6 +442,42 @@
       const status = await request("status");
       notify(`${status.repeaterbookConfigured ? "Entorno configurado; la aprobacion se comprueba al consultar." : "Acceso sin configurar."} ${status.notice}`);
     });
+    attach("plan-bricohams-load", "Preparar repetidores Bricohams Murcia", async () => {
+      stage(R.bricohamsRepeaterChannels());
+    });
+    for (const row of [...R.murciaAirportTemplate().results, ...R.murciaBroadcastTemplate().results]) {
+      const tr = document.createElement("tr");
+      for (const value of [row.name, row.frequencyMHz, row.channelDesignator || "-", row.mode]) {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.append(td);
+      }
+      const td = document.createElement("td");
+      const link = document.createElement("a");
+      link.href = row.source.replace(/^AIP ENAIRE AD 2\.18 /, "");
+      link.textContent = row.mode === "AM" ? "AIP ENAIRE AD 2.18" : "Onda Regional";
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      td.append(link);
+      tr.append(td);
+      $("plan-regional-templates").append(tr);
+    }
+    attach("plan-airports-save", "Descargar plantilla aeronautica", async () => {
+      download("bricohams-aeropuertos-murcia-alicante-rx.json", JSON.stringify(R.murciaAirportTemplate(), null, 2), "application/json");
+      notify("Descarga de plantilla AM solicitada; no importada como FM ni escrita en la radio.");
+    });
+    attach("plan-broadcast-save", "Descargar plantilla FM Murcia", async () => {
+      download("bricohams-fm-murcia-rx.json", JSON.stringify(R.murciaBroadcastTemplate(), null, 2), "application/json");
+      notify("Descarga de plantilla de radiodifusion solicitada. Sin escritura en la radio; usar receptor FM comercial.");
+    });
+    attach("plan-remer-save", "Descargar plantilla REMER", async () => {
+      download("bricohams-remer-vhf-rx.csv", R.channelCSV(R.remerVHFChannels()), "text/csv;charset=utf-8");
+      notify("Descarga REMER solicitada: 11 canales VHF solo RX; tonos no programados, verificar vigencia.");
+    });
+    attach("plan-bricohams-download", "Descargar repetidores Bricohams Murcia", async () => {
+      download("bricohams-repetidores-murcia-rx.csv", R.channelCSV(R.bricohamsRepeaterChannels()), "text/csv;charset=utf-8");
+      notify("Descarga CSV solicitada; comprueba Descargas. Preset no verificado en RF, no escrito en la radio.");
+    });
     attach("plan-rb-config-save", "Configurar RepeaterBook local", async () => {
       R.assert((await R.runtime).mode === "local", "La configuracion de API requiere la version instalada.");
       try {
@@ -442,12 +496,19 @@
       acceptRepeaters(await request("repeaters", { country: $("plan-country").value, region: $("plan-region").value,
         stateId: $("plan-state-id").value, mode: $("plan-mode").value }));
     });
-    $("plan-rb-file").addEventListener("change", () => perform("Importar JSON RepeaterBook autorizado", async () => {
-      requireRB();
-      const file = $("plan-rb-file").files[0];
-      R.assert(file && file.size > 0 && file.size <= 8 * 1024 * 1024, "Archivo JSON: 1 byte a 8 MiB.");
-      acceptRepeaters(JSON.parse(await file.text()));
-    }));
+    $("plan-rb-file").addEventListener("change", () => {
+      const input = $("plan-rb-file");
+      perform("Importar fichero local de repetidores", async () => {
+        const file = input.files[0];
+        R.assert(file && file.size > 0 && file.size <= 8 * 1024 * 1024, "Archivo: 1 byte a 8 MiB.");
+        const text = await file.text();
+        if (!text.trimStart().startsWith("{")) importCSV(text);
+        else {
+          requireRB();
+          acceptRepeaters(JSON.parse(text));
+        }
+      }).finally(() => { input.value = ""; });
+    });
     attach("plan-rb-select", "Seleccionar repetidores visibles", async () => {
       visibleRepeaters().forEach(entry => chosenRepeaters.add(entry.key)); renderRepeaters();
     });
@@ -520,29 +581,39 @@
     });
     if ($("plan-template-refresh")) attach("plan-template-refresh", "Actualizar plantillas", refreshTemplates);
     attach("plan-pmr-stage", "Preparar PMR446 solo RX", async () => { stage(R.pmrChannels()); });
+    function importCSV(text) {
+      const result = R.parseChannelCSV(text);
+      R.assert(result.channels.length > 0,
+        `${result.format}: no hay canales FM importables. ${result.rejected.length} filas excluidas; ${result.rejected.slice(0, 3).map(item => `fila ${item.row}: ${item.reason}`).join(" | ")}`);
+      const added = result.channels.filter(entry => !staged.has(entry.key)).length;
+      stage(result.channels);
+      const exclusions = result.rejected.slice(0, 3).map(item => `fila ${item.row}: ${item.reason}`).join(" | ");
+      notify(`${result.format}: ${added} canales FM anadidos a la preparacion; ${result.channels.length - added} duplicados de la sesion; ${result.rejected.length} filas excluidas.${exclusions ? ` ${exclusions}` : ""} Solo RX; pulsa Anadir canales al archivo local abierto y despues Guarda configuracion local.`);
+    }
     $("plan-channel-csv").addEventListener("change", () => {
       const input = $("plan-channel-csv");
       perform("Importar CSV local de canales", async () => {
         const file = input.files[0];
         R.assert(file && file.size > 0 && file.size <= 8 * 1024 * 1024, "Selecciona un CSV de hasta 8 MiB.");
-        const result = R.parseChannelCSV(await file.text());
-        R.assert(result.channels.length > 0,
-          `${result.format}: no hay canales FM importables. ${result.rejected.length} filas excluidas; ${result.rejected.slice(0, 3).map(item => `fila ${item.row}: ${item.reason}`).join(" | ")}`);
-        const added = result.channels.filter(entry => !staged.has(entry.key)).length;
-        stage(result.channels);
-        const exclusions = result.rejected.slice(0, 3).map(item => `fila ${item.row}: ${item.reason}`).join(" | ");
-        notify(`${result.format}: ${added} canales FM anadidos a la preparacion; ${result.channels.length - added} duplicados de la sesion; ${result.rejected.length} filas excluidas.${exclusions ? ` ${exclusions}` : ""} Solo RX; guarda y revisa el archivo. No se escribe en la radio.`);
-      }).catch(() => {}).finally(() => { input.value = ""; });
+        importCSV(await file.text());
+      }).finally(() => { input.value = ""; });
     });
+    function channelOptions() {
+      R.assert($("plan-template").value !== "", "Abre o lee una configuracion y selecciona un canal plantilla. Una imagen de firmware no es una configuracion de canales.");
+      if (page !== "quansheng") return {};
+      R.assert($("plan-scan-list").value !== "", "Introduce una lista de escaneo entre 0 y 25.");
+      return { groupBy: $("plan-scan-group").value, scanList: Number($("plan-scan-list").value) };
+    }
     if ($("plan-channels-add")) attach("plan-channels-add", "Anadir canales al codeplug local", async () => {
-      const result = importChannels([...staged.values()], Number($("plan-template").value));
+      const options = channelOptions();
+      const result = importChannels([...staged.values()], Number($("plan-template").value), options);
       refreshTemplates();
-      notify(`${result.added} canales anadidos; ${result.duplicates} duplicados omitidos. Parser binario: ${result.verified} canales releidos y visibles. Solo RX; guarda el archivo. No se ha escrito en la radio.`);
+      notify(`${result.added} canales anadidos; ${result.duplicates} duplicados omitidos (conservan sus listas). Parser binario: ${result.verified} canales releidos y visibles. ${result.groups?.map(group => `${group.name}: lista ${group.list} para canales nuevos`).join("; ") || ""} Solo RX; guarda el archivo. No se ha escrito en la radio.`);
     });
     if ($("plan-qs-load")) attach("plan-qs-load", "Cargar SAT Doppler en archivo Quansheng", async () => {
       const channels = [...staged.values()].filter(entry => entry.source?.includes("satnogs") || entry.window || entry.norad);
       R.assert(channels.length > 0, "Prepara primero canales SAT o Doppler desde un pase calculado.");
-      const result = importChannels(channels, Number($("plan-template").value));
+      const result = importChannels(channels, Number($("plan-template").value), channelOptions());
       refreshTemplates();
       notify(`${result.added} memorias SAT/Doppler cargadas en la configuracion Quansheng local; ${result.duplicates} duplicadas. Guarda el binario. No se ha escrito la radio.`);
     });
@@ -623,7 +694,7 @@
       invalidatePrediction();
       notify(`Posicion obtenida solo para este navegador. Precision declarada: ${Math.round(position.coords.accuracy)} m. ${position.coords.altitude === null ? "Sin altitud GPS: se usa 0 m, revisala." : ""}`);
     });
-    attach("plan-predict", "Calcular pases localmente", async () => {
+    function calculatePasses() {
       requireOrbit(); consentLocation();
       const numeric = id => { R.assert($(id).value.trim() !== "", "Introduce todas las coordenadas y parametros."); return Number($(id).value); };
       const result = R.predictPasses(orbital, { latitude: numeric("plan-lat"), longitude: numeric("plan-lon"), height: numeric("plan-alt") / 1000 },
@@ -640,6 +711,32 @@
       $("plan-doppler-pass").replaceChildren(new Option(result.passes.length ? "Selecciona un pase" : "Sin pases en la ventana", ""),
         ...result.passes.map((pass, index) => new Option(`${new Date(pass.aos.time).toISOString().slice(0, 16)} UTC, max. ${pass.maximum.elevation.toFixed(0)} grados`, index)));
       $("plan-pass-info").textContent = `${result.passes.length} pases por encima de ${result.minimumElevation} grados en ${result.hours} h desde ${result.start}. Epoca TLE: ${result.epoch}. Horas UTC, no hora local. Sin escritura en la radio; para el Doppler prepara canales por tramos.`;
+    }
+    attach("plan-predict", "Calcular pases localmente", calculatePasses);
+    $("plan-pass-file").addEventListener("change", () => {
+      const input = $("plan-pass-file");
+      perform("Reabrir plan de pases", async () => {
+        consentLocation();
+        const file = input.files[0];
+        R.assert(file && file.size > 0 && file.size <= 1024 * 1024, "Selecciona un plan JSON de hasta 1 MiB.");
+        const plan = R.validateSatellitePlan(JSON.parse(await file.text()));
+        clearOrbit();
+        orbital = plan.orbital;
+        $("plan-norad").value = String(orbital.norad);
+        $("plan-sat-preset").value = "";
+        $("plan-lat").value = plan.observer.latitude;
+        $("plan-lon").value = plan.observer.longitude;
+        $("plan-alt").value = plan.observer.height * 1000;
+        $("plan-hours").value = plan.hours;
+        $("plan-elevation").value = plan.minimum;
+        transmitters = plan.transmitter ? [plan.transmitter] : [];
+        $("plan-tx").replaceChildren(new Option("Selecciona frecuencia FM", ""),
+          ...transmitters.map(entry => new Option(`${entry.name}: ${(entry.downlink / 1000000).toFixed(5)} MHz`, entry.id)));
+        if (plan.transmitter) $("plan-tx").value = plan.transmitter.id;
+        $("plan-tle-info").textContent = `${orbital.name} / ${orbital.norad}. TLE del plan local validado; no se ha consultado ningun proveedor.`;
+        calculatePasses();
+        notify("Plan reabierto y pases recalculados para la hora actual. No se instala en la radio ni graba audio.");
+      }).finally(() => { input.value = ""; });
     });
     attach("plan-doppler-stage", "Preparar canales Doppler", async () => {
       requireOrbit(); consentLocation();
@@ -653,9 +750,12 @@
     });
     attach("plan-pass-save", "Guardar prediccion de pases", async () => {
       requireOrbit(); consentLocation();
-      R.assert(prediction && Date.now() - Date.parse(prediction.start) < 15 * 60000, "Calcula de nuevo los pases (caducidad 15 minutos).");
-      download(`sat-${orbital.norad}-passes.json`, JSON.stringify({ format: "radio-workspace-satellite-plan", version: 1,
-        orbital, prediction, warning: "Contiene tu posicion. Plan local, no formato de instalacion SAT nativo." }, null, 2), "application/json");
+      R.assert(prediction, "Calcula primero los pases.");
+      const result = await saveFile(`sat-${orbital.norad}-passes.json`, JSON.stringify({ format: "radio-workspace-satellite-plan", version: 1,
+        orbital, prediction, transmitter: transmitters.find(entry => entry.id === $("plan-tx").value) || null,
+        warning: "Contiene tu posicion. Plan local, no formato de instalacion SAT nativo ni grabacion de audio." }, null, 2), "application/json");
+      notify(result === "saved" ? "Plan de pases escrito y cerrado en el archivo elegido. Contiene tu posicion." :
+        "Descarga del plan solicitada. Comprueba Descargas; el navegador no confirma que se haya guardado. Contiene tu posicion.");
     });
     attach("plan-tle-save", "Guardar elementos orbitales", async () => {
       requireOrbit();

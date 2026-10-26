@@ -254,6 +254,51 @@ test("borrado OpenGD77 cubre ultimo banco, ultima zona y ultima lista sin modifi
   assert.deepEqual(result.subarray(0x17d0, 0x17d0 + 88), image.subarray(0x17d0, 0x17d0 + 88));
 });
 const channel = { name: "EA4TEST", rx: "145.60000", tx: "145.00000", mode: 0, colorCode: 0, timeslot: 1 };
+test("preset Bricohams Murcia produce CSV importable y canales solo RX", () => {
+  const preset = R.bricohamsRepeaterChannels();
+  assert.equal(preset.length, 3);
+  assert.ok(preset.every(channel => channel.rxOnly && channel.mode === 0 && channel.source.includes("ZIP")));
+  const parsed = R.parseChannelCSV(R.channelCSV(preset));
+  assert.deepEqual(parsed.rejected, []);
+  assert.deepEqual(parsed.channels.map(channel => [channel.name, channel.rx, channel.tx]),
+    preset.map(channel => [channel.name, channel.rx, channel.rx]));
+  assert.ok(parsed.channels.every(channel => channel.rxOnly));
+  assert.deepEqual(parsed.channels.map(channel => channel.narrow), [true, false, true]);
+  assert.match(R.channelCSV(preset), /77.0 Hz/);
+  const imported = R.appendQuanshengChannels(quanshengConfig(), parsed.channels, 1);
+  assert.equal(imported.added, 3);
+});
+test("plantillas regionales separan portadora, designador AM y radiodifusion FM", () => {
+  const air = R.murciaAirportTemplate();
+  assert.equal(air.results.length, 15);
+  assert.ok(air.results.every(row => row.mode === "AM" && row.rxOnly && /AIP ENAIRE.*https:/.test(row.source)));
+  assert.equal(air.results.find(row => row.name === "LEMI-TWR").frequencyMHz, "121.325");
+  assert.equal(air.results.find(row => row.name === "LEMI-TWR").channelDesignator, "121.330");
+  assert.equal(air.results.find(row => row.name === "LEAL-ATIS").frequencyMHz, "120.075");
+  const fm = R.murciaBroadcastTemplate();
+  assert.equal(fm.results.length, 15);
+  assert.ok(fm.results.every(row => row.mode === "WFM" && row.rxOnly && Number(row.frequencyMHz) >= 87.5 && Number(row.frequencyMHz) <= 108));
+  assert.equal(fm.results.find(row => row.city === "Murcia").frequencyMHz, "99.9");
+  assert.throws(() => R.channelCSV(air.results), /solo canales FM/);
+  assert.throws(() => R.channelCSV(fm.results), /solo canales FM/);
+  const remer = R.parseChannelCSV(R.channelCSV(R.remerVHFChannels()));
+  assert.equal(remer.channels.length, 11);
+  assert.ok(remer.channels.every(channel => channel.rxOnly));
+});
+test("Restore Quansheng copia solo canales, conserva ajustes y exige version identica", () => {
+  const current = quanshengConfig();
+  const backup = R.appendQuanshengChannels(current, R.pmrChannels(), 1).image;
+  backup[0x9000] ^= 1;
+  const snapshot = current.slice();
+  const restored = R.restoreQuanshengChannels(backup, current);
+  assert.equal(R.readQuanshengChannels(restored).length, 17);
+  assert.deepEqual(restored.subarray(0x8800), current.subarray(0x8800));
+  assert.deepEqual(current, snapshot);
+  assert.throws(() => R.restoreQuanshengChannels(new Uint8Array(8), current), /41344|Tamano|bytes/i);
+  const other = backup.slice();
+  other.set(new TextEncoder().encode("v6.1.0"), 0xa160);
+  assert.throws(() => R.restoreQuanshengChannels(other, current), /misma version/);
+});
 function quanshengConfig() {
   const image = new Uint8Array(R.QUANSHENG_CONFIG_SIZE).fill(255);
   image.fill(0, 0, 16);
@@ -288,6 +333,7 @@ test("Quansheng importa PMR sobre plantilla, reutiliza memorias borradas y prote
   assert.equal(channels[1].number, 2);
   assert.equal(channels[1].rx, "446.00625");
   assert.ok(channels.slice(1).every(channel => channel.rxOnly && channel.mode === 0));
+  assert.ok(channels.slice(1).every(channel => channel.scanList === 25 && !channel.scanExcluded));
   assert.equal(result.image[16 + 12] & 1, 0);
   assert.equal(result.image[16 + 12] & 2, 2);
   assert.equal(result.image[16 + 13], 0);
@@ -334,6 +380,65 @@ test("Quansheng actualiza canales locales conservando bloqueo RX y datos no edit
   assert.throws(() => R.updateQuanshengChannel(original, { number: 1, name: "INVALID-NAME", rx: "146.7", tx: "146.1" }), /10 caracteres/);
   assert.throws(() => R.updateQuanshengChannel(original, { number: 1, name: "OK", rx: "146.7", tx: "446.1" }), /misma banda/);
   assert.throws(() => R.updateQuanshengChannel(original, { number: 2, name: "OK", rx: "146.7", tx: "146.1" }), /existentes/);
+});
+test("Quansheng edita bandas limite y listas sin alterar otros atributos ni ajustes", () => {
+  const original = quanshengConfig();
+  original[0x8000] |= 0x98;
+  original[0x8001] = 4;
+  for (const [rx, band] of [["136.50000", 1], ["137.00000", 2], ["174.00000", 3], ["400.00000", 5], ["470.00000", 6]]) {
+    const edited = R.updateQuanshengChannel(original, { number: 1, name: "EDGE", rx, tx: rx, scanList: 7 });
+    assert.equal(edited[0x8000] & 7, band);
+    assert.equal(edited[0x8000] & 0x18, 0x18);
+    assert.equal(edited[0x8000] & 128, 0);
+    assert.equal(R.readQuanshengChannels(edited)[0].scanList, 7);
+    assert.deepEqual(edited.subarray(0x8800), original.subarray(0x8800));
+  }
+  const assigned = R.assignQuanshengScanList(original, [1], 25);
+  assert.equal(R.readQuanshengChannels(assigned)[0].scanList, 25);
+  assert.equal(original[0x8001], 4);
+  assert.throws(() => R.assignQuanshengScanList(original, [2], 1), /no existe/);
+  assert.throws(() => R.assignQuanshengScanList(original, [1], 26), /Lista Quansheng/);
+  assert.throws(() => R.assignQuanshengScanList(original, [], 1), /Selecciona canales/);
+});
+test("Quansheng agrupa por zona o geografia en listas libres y rechaza datos incompletos", () => {
+  const image = quanshengConfig();
+  image[0x8001] = 1;
+  const input = [{ ...channel, region: "Murcia" }, { ...channel, name: "EA4OTRO", region: "Madrid" },
+    { ...channel, name: "EA4MAS", region: "Murcia" }];
+  const grouped = R.groupQuanshengChannels(image, input, "region");
+  assert.deepEqual(grouped.groups, [{ name: "Murcia", list: 2 }, { name: "Madrid", list: 3 }]);
+  assert.deepEqual(grouped.channels.map(entry => entry.scanList), [2, 3, 2]);
+  const added = R.appendQuanshengChannels(image, grouped.channels, 1);
+  assert.deepEqual(R.readQuanshengChannels(added.image).slice(1).map(entry => entry.scanList), [2, 3, 2]);
+  assert.ok(input.every(entry => entry.scanList === undefined));
+  assert.throws(() => R.groupQuanshengChannels(image, [channel], "city"), /no contiene city/);
+  const many = Array.from({ length: 24 }, (_, index) => ({ ...channel, region: String(index) }));
+  assert.throws(() => R.groupQuanshengChannels(image, many, "region"), /No quedan listas/);
+});
+test("Quansheng no omite un duplicado TX habilitado y respeta ancho FM del CSV", () => {
+  const original = quanshengConfig();
+  const existing = R.readQuanshengChannels(original)[0];
+  const result = R.appendQuanshengChannels(original, [{ ...existing, rxOnly: true, narrow: false }], 1);
+  assert.equal(result.added, 1);
+  assert.equal(R.readQuanshengChannels(result.image)[1].rxOnly, true);
+  assert.equal(R.readQuanshengChannels(result.image)[1].narrow, false);
+  assert.throws(() => R.appendQuanshengChannels(original, [{ ...channel, tx: "446.00000" }], 1), /misma banda/);
+});
+test("plan de pases guardado valida posicion, TLE y frecuencia para recalcular sin confiar en horarios", () => {
+  const prediction = R.predictPasses(orbital, observer, { start, hours: 24, minimum: 10 });
+  const plan = { format: "radio-workspace-satellite-plan", version: 1, orbital, prediction,
+    transmitter: { id: "fm", name: "ISS FM", downlink: 145800000, mode: "FM" } };
+  const loaded = R.validateSatellitePlan(JSON.parse(JSON.stringify(plan)), start);
+  assert.deepEqual(loaded.observer, observer);
+  assert.equal(loaded.hours, 24);
+  assert.equal(loaded.transmitter.downlink, 145800000);
+  assert.equal(R.predictPasses(loaded.orbital, loaded.observer,
+    { start, hours: loaded.hours, minimum: loaded.minimum }).passes.length, prediction.passes.length);
+  assert.equal(R.validateSatellitePlan({ ...plan, transmitter: null }, start).transmitter, null);
+  assert.throws(() => R.validateSatellitePlan({ ...plan, version: 2 }, start), /Formato/);
+  assert.throws(() => R.validateSatellitePlan({ ...plan, prediction: { ...prediction, observer: { ...observer, latitude: 91 } } }, start), /Posicion/);
+  assert.throws(() => R.validateSatellitePlan({ ...plan, transmitter: { ...plan.transmitter, mode: "USB" } }, start), /puntuales/);
+  assert.throws(() => R.validateSatellitePlan(plan, start + 10 * 86400000), /TLE/);
 });
 test("Quansheng rechaza formato incorrecto, DMR, frecuencias no soportadas y plantilla ausente", () => {
   const original = quanshengConfig();
@@ -510,6 +615,15 @@ test("OpenGD77 CPS Channels.csv imports analog FM only and reports digital and i
   assert.equal(stored.rxOnly, true);
   assert.throws(() => R.parseChannelCSV("Channel Mode,Channel Name,RX Frequency(MHz),TX Frequency(MHz)\n0,X,145.6,145.0"),
     /no reconocido/);
+});
+test("CSV acepta ceros decimales finales sin redondear frecuencias u offsets", () => {
+  const result = R.parseChannelCSV("Name,Frequency,Duplex,Offset,Mode\nVALID,145.600000,-,0.600000,FM\nPMR,446.006250,off,0,NFM\nBAD-RX,145.600001,off,0,FM\nBAD-OFFSET,145.600000,-,0.600001,FM");
+  assert.deepEqual(result.channels.map(channel => [channel.rx, channel.tx]), [
+    ["145.60000", "145.00000"], ["446.00625", "446.00625"]
+  ]);
+  assert.equal(result.rejected.length, 2);
+  assert.match(result.rejected[0].reason, /frecuencia MHz invalida/);
+  assert.match(result.rejected[1].reason, /Offset CHIRP invalido/);
 });
 test("CHIRP CSV resolves duplex safely, excludes unsupported modes and handles quoted commas", () => {
   const csv = 'Location,Name,Frequency,Duplex,Offset,Tone,Mode,Comment\r\n' +

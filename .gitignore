@@ -4,6 +4,7 @@ node_modules/
 .env.*
 *.log
 *.bin
+!precompiled/*.bin
 # Open-licence example firmware ships with its LICENSE (docs/EJEMPLOS.md)
 !examples/firmware/**/*.bin
 *.g77
@@ -19,6 +20,8 @@ coverage/
 tmp/
 dist/
 firmware-builds/
+firmware/ARDFv05/
+firmware/Fusion61/
 studio.html
 android/.gradle/
 android/.kotlin/

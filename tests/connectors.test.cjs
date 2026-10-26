@@ -4,7 +4,9 @@ const R = require("../radio-core.js");
 require("../transports.js");
 require("../backup-store.js");
 require("../quansheng-connector.js");
+require("../quansheng-tools.js");
 require("../quansheng-channels.js");
+require("../planning-core.js");
 require("../gd77-connector.js");
 require("../codeplug-editor.js");
 
@@ -152,15 +154,23 @@ class QuanshengDevice extends R.BufferedTransport {
       result = new Uint8Array(length + 4);
       le(result).setUint16(0, offset, true);
       result[2] = this.badConfiguration && offset < 0xb000 ? length - 1 : length;
+      const physical = offset >= 0xc000 ? 0x11000 + offset - 0xc000 : 0x10000 + offset - 0xb000;
       result.set(offset < 0xb000 ? this.configuration.subarray(offset, offset + length) :
-        this.flash.subarray(0x10000 + offset - 0xb000, 0x10000 + offset - 0xb000 + length), 4);
+        this.flash.subarray(physical, physical + length), 4);
     } else if (type === 0x051d) {
       const offset = le(data).getUint16(0, true);
       assert.equal(data[2], 8);
-      assert.equal(data[3], 0);
       assert.equal(data.length, 16);
-      assert.ok(offset + 8 <= 0x8800);
-      if (!this.ignoreConfigurationWrites) this.configuration.set(data.subarray(8), offset);
+      if (offset < 0xb000) {
+        assert.equal(data[3], 0);
+        assert.ok(offset + 8 <= 0x8800);
+        if (!this.ignoreConfigurationWrites) this.configuration.set(data.subarray(8), offset);
+      } else {
+        assert.equal(data[3], 1);
+        assert.ok(offset >= 0xb000 && offset + 8 <= 0xb200 || offset >= 0xc000 && offset + 8 <= 0xc408);
+        const physical = offset >= 0xc000 ? 0x11000 + offset - 0xc000 : 0x10000 + offset - 0xb000;
+        if (!this.ignoreProtectedWrites) this.flash.set(data.subarray(8), physical);
+      }
       result = data.slice(0, 2);
     } else if (type === 0x0738) {
       const address = le(data).getUint32(0, true);
@@ -180,9 +190,28 @@ class QuanshengDevice extends R.BufferedTransport {
       result = new Uint8Array(13);
       const address = le(data).getUint32(0, true);
       const length = le(data).getUint32(4, true);
+      assert.ok(length > 0 && length <= 4096, "Firmware CRC command accepts at most one 4 KiB sector");
       le(result).setUint32(0, address, true);
       le(result).setUint32(4, length, true);
-      le(result).setUint32(8, R.crc32(this.flash.subarray(address, address + length)) ^ (this.badFlashCRC ? 1 : 0), true);
+      le(result).setUint32(8, R.crc32(this.flash.subarray(address, address + length)) ^
+        (this.badFlashCRC || this.badFlashCRCAddress === address ? 1 : 0), true);
+    } else if (type === 0x073a) {
+      const address = le(data).getUint32(0, true);
+      assert.notEqual(address, 0x10000);
+      assert.equal(address % 4096, 0);
+      assert.equal(le(data).getUint32(4, true), this.timestamp);
+      this.flash.fill(255, address, address + 4096);
+      result = new Uint8Array(5);
+      le(result).setUint32(0, address, true);
+    } else if (type === 0x073c) {
+      const address = le(data).getUint32(0, true);
+      const size = le(data).getUint16(4, true);
+      assert.ok(address >= 0x11000 || address + size <= 0x10000);
+      assert.equal(le(data).getUint32(6, true), this.timestamp);
+      if (!this.ignoreFlashWrite) this.flash.set(data.subarray(10), address);
+      result = new Uint8Array(7);
+      le(result).setUint32(0, address, true);
+      le(result).setUint16(4, size, true);
     } else if (type === 0x0722) {
       this.flash.fill(255, 0x20000 + data[0] * 0x20000, 0x40000 + data[0] * 0x20000);
       result = Uint8Array.of(data[0], 0);
@@ -262,6 +291,17 @@ test("CAT RX rechaza frecuencias invalidas antes de enviar y no acepta estado pe
   device.catStuck = true;
   await assert.rejects(connector.setCatReceive(14580000), /sigue pendiente/);
   assert.equal(connector.connected, false);
+  await connector.disconnect();
+});
+test("CAT STOP es idempotente si el operador ya salio de SAT RX", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const state = await connector.stopCatReceive();
+  assert.equal(state.active, false);
+  assert.equal(state.remote, false);
+  assert.equal(connector.connected, true);
+  assert.ok(device.commands.filter(command => command.type === 0x7b00).every(command => command.data[1] === 0));
   await connector.disconnect();
 });
 test("CAT RX rechaza respuestas corruptas, capacidades desconocidas y errores del firmware", async () => {
@@ -378,6 +418,178 @@ class MemoryStore {
     return record;
   }
 }
+test("logo nativo convierte exactamente ST7565 sin invertir filas, columnas ni transparencia", () => {
+  const pixels = new Uint8Array(128 * 64 * 4).fill(255);
+  pixels.set([0, 0, 0, 255], 0);
+  pixels.set([0, 0, 0, 255], (8 * 128 + 127) * 4);
+  pixels.set([0, 0, 0, 0], (63 * 128 + 127) * 4);
+  const logo = R.packQuanshengLogo(pixels);
+  assert.equal(logo.length, 1032);
+  assert.equal(new TextDecoder().decode(logo.subarray(0, 8)), "F4HWNLGO");
+  assert.equal(logo[8], 1);
+  assert.equal(logo[8 + 128 + 127], 1);
+  assert.equal(logo[1031], 0, "transparent pixels are white");
+  const result = R.unpackQuanshengLogo(logo);
+  assert.deepEqual([...result.slice(0, 4)], [0, 0, 0, 255]);
+  assert.deepEqual([...result.slice(4, 8)], [255, 255, 255, 255]);
+  assert.throws(() => R.unpackQuanshengLogo(new Uint8Array(1032)), /logo/);
+  assert.throws(() => R.packQuanshengLogo(new Uint8Array(3)), /Tamano/);
+});
+test("reinicio nativo exige respaldo/confirmacion, no reintenta y no afirma arranque", async () => {
+  for (const failure of [false, true]) {
+    const device = new QuanshengDevice();
+    const connector = new R.QuanshengConnector(device);
+    await connector.connect("UV-K5-V3");
+    await assert.rejects(connector.requestReboot({}, "REINICIAR RADIO"), /respaldo/);
+    const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+    let requests = 0;
+    const original = device.write.bind(device);
+    device.write = async frame => {
+      const command = R.decodeQuanshengPacket(frame);
+      if (command.type !== 0x05dd) return original(frame);
+      requests++;
+      assert.equal(command.data.length, 0);
+      if (failure) throw new Error("USB disconnected during write");
+    };
+    await assert.rejects(connector.requestReboot(permit, ""), /Confirma/);
+    assert.equal(requests, 0);
+    if (failure) await assert.rejects(connector.requestReboot(permit, "REINICIAR RADIO"), /USB disconnected/);
+    else assert.deepEqual(await connector.requestReboot(permit, "REINICIAR RADIO"),
+      { requested: true, acknowledged: false, manualBootPending: true });
+    assert.equal(requests, 1);
+    assert.equal(connector.connected, false);
+    assert.equal(R.hasBackup(connector, permit), false);
+    await connector.disconnect();
+  }
+});
+test("logo nativo escribe solo 1032 bytes con cabecera al final y verifica datos vecinos", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const original = device.flash.slice();
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  const logo = R.packQuanshengLogo(new Uint8Array(128 * 64 * 4).fill(255));
+  logo[20] = 85;
+  await connector.writeBootLogo(logo, permit);
+  assert.deepEqual(await connector.readBootLogo(), logo);
+  const writes = device.commands.filter(item => item.type === 0x051d);
+  assert.equal(writes.length, 129);
+  assert.equal(le(writes.at(-1).data).getUint16(0, true), 0xc000);
+  const expected = original.slice();
+  expected.set(logo, 0x11000);
+  assert.deepEqual(device.flash, expected);
+  assert.ok(R.hasBackup(connector, permit));
+  await connector.disconnect();
+});
+test("calibracion nativa exige confirmacion e invalida permiso despues de relectura", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const original = device.flash.slice();
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  const calibration = original.slice(0x10000, 0x10200);
+  calibration[200] ^= 1;
+  await assert.rejects(connector.restoreCalibration(calibration, permit, ""), /Confirma/);
+  assert.equal(device.commands.filter(item => item.type === 0x051d).length, 0);
+  await connector.restoreCalibration(calibration, permit, "RESTAURAR CALIBRACION DE ESTA RADIO");
+  assert.deepEqual(await connector.readCalibration(), calibration);
+  const expected = original.slice();
+  expected.set(calibration, 0x10000);
+  assert.deepEqual(device.flash, expected);
+  assert.equal(R.hasBackup(connector, permit), false);
+  await connector.disconnect();
+});
+test("herramientas protegidas rechazan permisos falsos, archivos invalidos y copias corruptas antes de escribir", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const logo = R.packQuanshengLogo(new Uint8Array(128 * 64 * 4).fill(255));
+  await assert.rejects(connector.writeBootLogo(logo, {}), /respaldo/);
+  await assert.rejects(connector.restoreCalibration(new Uint8Array(512), {}, ""), /respaldo/);
+  await assert.rejects(connector.restoreExternalFlash(device.flash, {}, ""), /respaldo/);
+  const store = new MemoryStore();
+  const { permit } = await new R.BackupManager(store).create(connector);
+  await assert.rejects(connector.restoreCalibration(new Uint8Array(512), permit,
+    "RESTAURAR CALIBRACION DE ESTA RADIO"), /Calibracion/);
+  await assert.rejects(connector.writeBootLogo(new Uint8Array(1032), permit), /logo/);
+  store.corrupt = true;
+  await assert.rejects(connector.writeBootLogo(logo, permit), /corrupta/);
+  assert.equal(device.commands.filter(item => [0x051d, 0x073a, 0x073c].includes(item.type)).length, 0);
+  await connector.disconnect();
+});
+test("restore Flash nativo conserva sector completo de calibracion y escribe estados al final", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  const before = device.flash.slice();
+  const target = before.slice();
+  target[0x5010] = 45;
+  target.fill(19, 0x10000, 0x11000);
+  target[0x100040] = 7;
+  target[0x101040] = 9;
+  await assert.rejects(connector.restoreExternalFlash(target, permit, ""), /Confirma/);
+  assert.equal(device.commands.filter(item => item.type === 0x073a).length, 0);
+  await connector.restoreExternalFlash(target, permit, "RESTAURAR FLASH DE ESTA RADIO");
+  const expected = target.slice();
+  expected.set(before.subarray(0x10000, 0x11000), 0x10000);
+  assert.deepEqual(device.flash, expected);
+  const erased = device.commands.filter(item => item.type === 0x073a).map(item => le(item.data).getUint32(0, true));
+  assert.deepEqual(erased, [0x5000, 0x100000, 0x101000]);
+  assert.equal(R.hasBackup(connector, permit), false);
+  assert.equal(device.commands.some(item => item.type === 0x05dd), false);
+  await connector.disconnect();
+});
+test("restore Flash detecta escritura perdida y no continua con sectores posteriores", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  const target = device.flash.slice();
+  target[0x5000] = 42;
+  target[0x6000] = 43;
+  device.ignoreFlashWrite = true;
+  await assert.rejects(connector.restoreExternalFlash(target, permit, "RESTAURAR FLASH DE ESTA RADIO"), /sector.*distinta/);
+  const erased = device.commands.filter(item => item.type === 0x073a).map(item => le(item.data).getUint32(0, true));
+  assert.deepEqual(erased, [0x5000]);
+  assert.equal(connector.connected, false);
+  await connector.disconnect();
+});
+test("logo y calibracion detectan escritura ignorada, no devuelven exito", async () => {
+  for (const type of ["logo", "calibration"]) {
+    const device = new QuanshengDevice();
+    const connector = new R.QuanshengConnector(device);
+    await connector.connect("UV-K5-V3");
+    const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+    device.ignoreProtectedWrites = true;
+    if (type === "logo") {
+      const logo = R.packQuanshengLogo(new Uint8Array(128 * 64 * 4).fill(255));
+      await assert.rejects(connector.writeBootLogo(logo, permit), /relectura/);
+    } else {
+      const calibration = device.flash.slice(0x10000, 0x10200);
+      calibration[0] ^= 1;
+      await assert.rejects(connector.restoreCalibration(calibration, permit,
+        "RESTAURAR CALIBRACION DE ESTA RADIO"), /relectura/);
+    }
+    assert.equal(connector.connected, false);
+    await connector.disconnect();
+  }
+});
+test("Flash fisica rechaza rangos protegidos, tramas entre paginas y legacy sin enviar comandos", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const count = device.commands.length;
+  await assert.rejects(connector.eraseFlashSectorRaw(0x10000), /protegido/);
+  await assert.rejects(connector.eraseFlashSectorRaw(1), /invalido/);
+  await assert.rejects(connector.writeFlashChunkRaw(0xffc0, new Uint8Array(128)), /protegido/);
+  await assert.rejects(connector.writeFlashChunkRaw(0x10000, new Uint8Array(128)), /protegido/);
+  await assert.rejects(connector.writeFlashChunkRaw(0x11ff0, new Uint8Array(128)), /invalido/);
+  connector.info.legacyReadOnly = true;
+  assert.throws(() => connector.readExternalFlash(), /no disponible/);
+  assert.equal(device.commands.length, count);
+  await connector.disconnect();
+});
 class GD77Device extends R.BufferedTransport {
   constructor(family) {
     super();
@@ -481,14 +693,29 @@ test("Biblioteca local de slots valida bytes PY32 y rechaza firmware V1 y varian
   assert.throws(() => R.inspectQuanshengSlotImage(new Uint8Array(512)), /Vectores/);
   assert.throws(() => R.inspectQuanshengSlotImage(new Uint8Array(0x1d801)), /limite/);
 });
-test("CRC Flash remoto discrepante aborta respaldo sin habilitar escrituras", async () => {
-  const device = new QuanshengDevice(); device.badFlashCRC = true;
+test("CRC Flash remoto discrepante al final aborta respaldo sin habilitar escrituras", async () => {
+  const device = new QuanshengDevice(); device.badFlashCRCAddress = 0x1ff000;
   const connector = new R.QuanshengConnector(device);
   await connector.connect("UV-K1");
   const store = new MemoryStore();
   await assert.rejects(new R.BackupManager(store).create(connector), /CRC de la Flash/);
   assert.deepEqual([...store.records.values()][0].files.map(file => file.name), ["calibration"]);
   await assert.rejects(connector.eraseSlot(1, {}), /bloqueada/);
+});
+test("CRC Flash completo verifica exactamente 512 sectores de 4 KiB y no admite rangos mayores", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K1");
+  assert.equal(await connector.verifyFlashRaw(device.flash), R.crc32(device.flash));
+  const commands = device.commands.filter(command => command.type === 0x073e);
+  assert.equal(commands.length, 512);
+  for (const [index, command] of commands.entries()) {
+    assert.equal(le(command.data).getUint32(0, true), index * 4096);
+    assert.equal(le(command.data).getUint32(4, true), 4096);
+    assert.equal(le(command.data).getUint32(8, true), connector.timestamp);
+  }
+  await assert.rejects(connector.flashRangeCRCRaw(0, 4097), /Rango CRC/);
+  assert.equal(device.commands.filter(command => command.type === 0x073e).length, 512);
 });
 test("Rechazar Quansheng anterior a v6 sin modificar dispositivo", async () => {
   const device = new QuanshengDevice(); device.version = "F4HWN v5.0.0";
@@ -683,6 +910,51 @@ test("Main, imagenes invalidas, versiones v5 y nombres invalidos no se borran", 
   await assert.rejects(connector.writeSlot(1, new Uint8Array(256), "Test", permit), /Vectores/);
   assert.equal(device.commands.length, 0);
 });
+test("permiso legacy explicito solo instala las imagenes y slots autorizados una vez", async () => {
+  const device = new QuanshengDevice(); device.version = "F4HWN v6.0.0";
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const store = new MemoryStore(), manager = new R.BackupManager(store);
+  const image = device.flash.slice(0x21000, 0x21400);
+  const selection = [{ slot: 2, image, name: "BH Labs" }];
+  await assert.rejects(manager.authorizeSlotReplacement(connector, selection, ""), /aceptar expresamente/);
+  await assert.rejects(manager.authorizeSlotReplacement(connector, [{ slot: 0, image, name: "Main" }],
+    "REEMPLAZAR SLOTS SIN RESPALDO DE FIRMWARE"), /Main protegido/);
+  const { record, permit } = await manager.authorizeSlotReplacement(connector, selection,
+    "REEMPLAZAR SLOTS SIN RESPALDO DE FIRMWARE");
+  assert.equal(record.status, "partial");
+  assert.equal(R.hasBackup(connector, permit), false);
+  await assert.rejects(connector.eraseSlot(2, permit), /bloqueada/);
+  await assert.rejects(connector.resetBank(2, permit), /bloqueada/);
+  await assert.rejects(connector.deleteApp(0, permit), /bloqueada/);
+  await assert.rejects(connector.writeConfiguration(device.configuration, device.configuration, permit), /bloqueada/);
+  await assert.rejects(connector.writeSlot(1, image, "BH Labs", permit), /autorizacion explicita/);
+  const wrong = image.slice(); wrong[200] ^= 1;
+  await assert.rejects(connector.writeSlot(2, wrong, "BH Labs", permit), /autorizacion explicita/);
+  await assert.rejects(connector.writeSlot(2, image, "Other", permit), /autorizacion explicita/);
+  assert.equal(device.commands.some(command => [0x0722, 0x0724].includes(command.type)), false);
+  const before = device.flash.slice();
+  await connector.writeSlot(2, image, "BH Labs", permit);
+  assert.equal(await connector.validateSlot(2), R.crc32(image));
+  assert.deepEqual(device.flash.slice(0, 0x60000), before.slice(0, 0x60000));
+  assert.deepEqual(device.flash.slice(0x80000), before.slice(0x80000));
+  await assert.rejects(connector.writeSlot(2, image, "BH Labs", permit), /autorizacion explicita/);
+  await connector.disconnect();
+  await assert.rejects(R.verifySlotReplacement(connector, permit, 2, image, "BH Labs"), /bloqueada/);
+});
+test("corrupcion de copia parcial revoca permiso limitado antes de borrar", async () => {
+  const device = new QuanshengDevice(); device.version = "F4HWN v6.0.0";
+  const connector = new R.QuanshengConnector(device); await connector.connect("UV-K5-V3");
+  const store = new MemoryStore();
+  const image = device.flash.slice(0x21000, 0x21400);
+  const { permit } = await new R.BackupManager(store).authorizeSlotReplacement(connector,
+    [{ slot: 1, image, name: "BH ARDF" }], "REEMPLAZAR SLOTS SIN RESPALDO DE FIRMWARE");
+  store.corrupt = true;
+  await assert.rejects(connector.writeSlot(1, image, "BH ARDF", permit), /corrupta/);
+  assert.equal(device.commands.some(command => command.type === 0x0722), false);
+  await assert.rejects(R.verifySlotReplacement(connector, permit, 1, image, "BH ARDF"), /bloqueada/);
+  await connector.disconnect();
+});
 test("Borrado firmware y reset de banco son comandos diferentes y preservan Main/calibracion", async () => {
   const device = new QuanshengDevice(); const connector = new R.QuanshengConnector(device);
   await connector.connect("UV-K1");
@@ -693,6 +965,129 @@ test("Borrado firmware y reset de banco son comandos diferentes y preservan Main
   assert.deepEqual(device.commands.slice(-2).map(item => item.type), [0x0722, 0x0728]);
   assert.deepEqual(device.flash.slice(0x20000, 0x40000), before.slice(0x20000, 0x40000));
   assert.deepEqual(device.flash.slice(0x10000, 0x11000), before.slice(0x10000, 0x11000));
+});
+test("simulacion multiboot completa: cuatro slots, CFG independientes, CRUD, listas y CAT sin hardware", async () => {
+  const device = new QuanshengDevice();
+  device.version = "F4HWN v6.1.0";
+  const banks = [0, 1, 2, 3, 4].map(bank => {
+    const address = bank === 0 ? 0 : 0xb0000 + bank * 0x10000;
+    const image = device.flash.subarray(address, address + R.QUANSHENG_CONFIG_SIZE);
+    image.fill(255);
+    image.fill(0, 0, 16);
+    le(image).setUint32(0, 14550000, true);
+    image[12] = 0x1d;
+    image[13] = 15;
+    image.fill(0, 0x4000, 0x4010);
+    image.set(new TextEncoder().encode(`CFG${bank}`), 0x4000);
+    image[0x8000] = 2;
+    image[0x8001] = 0;
+    image.fill(0, 0xa160, 0xa170);
+    image.set(new TextEncoder().encode("v6.1.0"), 0xa160);
+    return image;
+  });
+  const protectedMain = device.flash.slice(0x20000, 0x40000);
+  const protectedCalibration = device.flash.slice(0x10000, 0x10200);
+  const mainBank = banks[0].slice();
+  const editions = ["Labs", "ARDF", "Satellite", "Spectrum"];
+  const completed = new Map();
+  for (const [index, edition] of editions.entries()) {
+    const slot = index + 1;
+    // Manual boot/SetCfg is a fixture action, not an invented UART command.
+    const bank = [0, 4, 2, 1, 3][slot];
+    device.configuration = banks[bank];
+    const otherBanks = banks.map(image => image.slice());
+    const connector = new R.QuanshengConnector(device);
+    try {
+      await connector.connect("UV-K5-V3");
+      const original = await connector.readConfiguration();
+      await assert.rejects(connector.writeSlot(slot, protectedMain.slice(0x1000, 0x1400), edition, null), /bloqueada/);
+      const store = new MemoryStore();
+      const { record, permit } = await new R.BackupManager(store).create(connector);
+      assert.equal(record.status, "complete");
+      assert.deepEqual(record.files.find(file => file.name === "external-flash").bytes, device.flash);
+      const firmware = protectedMain.slice(0x1000, 0x1400);
+      firmware.set(new TextEncoder().encode(`Bricohams ${edition}`), 128);
+      device.commands = [];
+      await connector.writeSlot(slot, firmware, edition, permit);
+      assert.equal(await connector.validateSlot(slot), R.crc32(firmware));
+      assert.deepEqual(device.flash.slice(0x21000 + slot * 0x20000, 0x21400 + slot * 0x20000), firmware);
+      const slotWrites = device.commands.filter(command => command.type === 0x0724);
+      assert.equal(le(slotWrites.at(-1).data).getUint32(2, true), 0);
+      for (const [previousSlot, previous] of completed) {
+        assert.equal(await connector.validateSlot(previousSlot), previous.crc);
+      }
+      assert.deepEqual(await connector.readConfiguration(), original);
+      const csv = R.parseChannelCSV("Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPolarity,Mode,TStep,Skip,Comment\n0,SIM-RPT,145.600000,-,0.600000,,88.5,88.5,023,NN,FM,12.50,,Simulated repeater\n");
+      assert.deepEqual(csv.rejected, []);
+      const repeaters = csv.channels;
+      const groups = R.groupQuanshengChannels(original, [
+        ...R.pmrChannels().map(channel => ({ ...channel, region: "PMR" })),
+        ...R.remerVHFChannels().map(channel => ({ ...channel, region: "REMER" })),
+        ...repeaters.map(channel => ({ ...channel, region: "SIMULATION" }))
+      ], "region");
+      const imported = R.appendQuanshengChannels(original, groups.channels, 1);
+      assert.equal(imported.added, 28);
+      await connector.writeConfiguration(imported.image, original, permit);
+      let readback = await connector.readConfiguration();
+      assert.deepEqual(readback, imported.image);
+      assert.equal(R.readQuanshengChannels(readback).length, 29);
+      const selected = R.readQuanshengChannels(readback).find(channel => channel.name === "SIM-RPT");
+      assert.ok(selected);
+      const edited = R.updateQuanshengChannel(readback, {
+        ...selected, name: `S${slot}-EDIT`, rx: "145.62500", tx: "145.02500", scanList: slot
+      });
+      await connector.writeConfiguration(edited, readback, permit);
+      readback = await connector.readConfiguration();
+      assert.equal(R.readQuanshengChannels(readback).find(channel => channel.number === selected.number).rx, "145.62500");
+      const assigned = R.assignQuanshengScanList(readback, [selected.number], 24);
+      await connector.writeConfiguration(assigned, readback, permit);
+      readback = await connector.readConfiguration();
+      assert.equal(R.readQuanshengChannels(readback).find(channel => channel.number === selected.number).scanList, 24);
+      const removed = R.deleteQuanshengChannel(readback, selected.number);
+      await connector.writeConfiguration(removed, readback, permit);
+      readback = await connector.readConfiguration();
+      assert.equal(R.readQuanshengChannels(readback).length, 28);
+      assert.equal(R.readQuanshengChannels(readback).some(channel => channel.number === selected.number), false);
+      const restored = R.appendQuanshengChannels(readback, [{
+        ...repeaters[0], name: `S${slot}-RPT`, scanList: 24
+      }], 1);
+      assert.equal(restored.added, 1);
+      await connector.writeConfiguration(restored.image, readback, permit);
+      readback = await connector.readConfiguration();
+      const channels = R.readQuanshengChannels(readback);
+      assert.equal(channels.length, 29);
+      assert.ok(channels.slice(1).every(channel => channel.rxOnly && channel.scanList > 0));
+      assert.equal(channels.filter(channel => channel.name.startsWith("PMR")).length, 16);
+      assert.deepEqual(readback.subarray(0x8800), original.subarray(0x8800));
+      assert.throws(() => R.appendQuanshengChannels(readback, [{
+        name: "AIR-SIM", rx: "121.50000", tx: "121.50000", mode: 1, rxOnly: true
+      }], 1), /FM analogicos/);
+      if (edition === "Satellite") {
+        const flashBeforeCAT = device.flash.slice();
+        device.catActive = true;
+        assert.equal((await connector.setCatReceive(14580000)).appliedFrequency10Hz, 14580000);
+        await connector.stopCatReceive();
+        device.catActive = false;
+        await connector.stopCatReceive();
+        assert.deepEqual(device.flash, flashBeforeCAT);
+      }
+      for (let other = 0; other < banks.length; other++) {
+        if (other !== bank) assert.deepEqual(banks[other], otherBanks[other]);
+      }
+      assert.deepEqual(device.flash.slice(0x20000, 0x40000), protectedMain);
+      assert.deepEqual(device.flash.slice(0x10000, 0x10200), protectedCalibration);
+      assert.deepEqual(banks[0], mainBank);
+      assert.equal(device.commands.some(command => command.type === 0x0728), false);
+      completed.set(slot, { bank, image: readback.slice(), crc: R.crc32(firmware) });
+      R.assertBackup(connector, permit);
+      await connector.disconnect();
+      assert.equal(R.hasBackup(connector, permit), false);
+    } finally {
+      if (connector.connected) await connector.disconnect();
+    }
+  }
+  assert.equal(completed.size, 4);
+  for (const result of completed.values()) assert.deepEqual(banks[result.bank], result.image);
 });
 test("Permiso no reutilizable en otra radio, tras revocacion o tras desconectar", async () => {
   const first = new R.QuanshengConnector(new QuanshengDevice()); await first.connect("UV-K1");
@@ -1038,6 +1433,112 @@ function overlayApp({ name = "FoxHunt", code = new Uint8Array(300).map((_, i) =>
   file.set(header); file.set(code, 64); file.set(assets, 64 + code.length);
   return file;
 }
+function assetFixture() {
+  const pack = new Uint8Array(337).fill(19);
+  le(pack).setUint32(0, 0x31415746, true);
+  le(pack).setUint16(4, 1, true);
+  le(pack).setUint16(6, 32, true);
+  le(pack).setUint32(8, pack.length - 32, true);
+  le(pack).setUint32(12, R.crc32(pack.subarray(32)), true);
+  return pack;
+}
+test("v7 package parser validates nested lengths, vectors, version and both CRCs", () => {
+  const image = baseFlash().slice(0x21000, 0x21400);
+  image[71] = 55;
+  const pack = assetFixture();
+  const file = new Uint8Array(image.length + pack.length + 16);
+  file.set(image); file.set(pack, image.length);
+  const tail = file.length - 16;
+  le(file).setUint32(tail, 0x54415746, true);
+  le(file).setUint32(tail + 4, image.length, true);
+  le(file).setUint32(tail + 8, pack.length, true);
+  le(file).setUint32(tail + 12, R.crc32(file.subarray(0, tail)), true);
+  const parsed = R.inspectQuanshengFirmwarePackage(file);
+  assert.equal(parsed.version, "7.2.0");
+  assert.deepEqual(parsed.image, image);
+  assert.deepEqual(parsed.pack, pack);
+  assert.equal(parsed.assets.buildId, "13".repeat(16));
+  const corrupt = file.slice(); corrupt[300] ^= 1;
+  assert.throws(() => R.inspectQuanshengFirmwarePackage(corrupt), /CRC FWAT/);
+  assert.throws(() => R.inspectQuanshengFirmwarePackage(image), /paquete v7/);
+  const badPack = pack.slice(); badPack[100] ^= 1;
+  assert.throws(() => R.inspectQuanshengAssetPack(badPack), /CRC/);
+  assert.throws(() => R.inspectQuanshengAssetPack(new Uint8Array(0x4001)), /limites/);
+  assert.equal(R.inspectQuanshengFirmwarePackage(baseFlash().slice(0x21000, 0x21400)).version, "6.2.0");
+});
+test("v7 assets enforce identity, consent, header-last ordering and explicit programming/validation failures", async () => {
+  for (const scenario of ["wrong-build", "success", "rejected", "not-loaded", "timeout"]) {
+    const wrongBuild = scenario === "wrong-build";
+    const device = new QuanshengDevice();
+    const connector = new R.QuanshengConnector(device);
+    await connector.connect("UV-K5-V3");
+    const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+    connector.info.firmware = "F4HWN v7.0.0";
+    const pack = assetFixture();
+    const operations = [];
+    const original = device.write.bind(device);
+    const saved = new Uint8Array(pack.length).fill(255);
+    let validated = false;
+    let writesAttempted = 0;
+    const exchange = connector.exchange.bind(connector);
+    connector.exchange = async (type, ...args) => {
+      if (type === 0x0754 && scenario === "timeout") {
+        writesAttempted++;
+        throw Object.assign(new Error("asset timeout"), { code: "READ_TIMEOUT" });
+      }
+      return exchange(type, ...args);
+    };
+    device.write = async frame => {
+      const { type, data } = R.decodeQuanshengPacket(frame);
+      if (type < 0x0750 || type > 0x0756) return original(frame);
+      operations.push({ type, data: data.slice() });
+      let result;
+      if (type === 0x0750) {
+        result = new Uint8Array(52);
+        result[0] = 2; result[2] = 2; result[3] = validated && scenario !== "not-loaded" ? 1 : 0;
+        result.fill(wrongBuild ? 20 : 19, 36, 52);
+      } else {
+        assert.equal(data[0], 2);
+        result = Uint8Array.of(2, 0);
+        if (type === 0x0754) {
+          if (scenario === "rejected") {
+            result[1] = 8;
+            device.push(response(type + 1, result));
+            return;
+          }
+          assert.equal(le(data).getUint32(8, true), connector.timestamp);
+          saved.set(data.subarray(12), le(data).getUint32(2, true));
+        }
+        if (type === 0x0756) { assert.deepEqual(saved, pack); validated = true; }
+      }
+      device.push(response(type + 1, result));
+    };
+    await assert.rejects(connector.installFirmwareAssets(pack, {}, "RECURSOS UV-K5-V3"), /respaldo/);
+    await assert.rejects(connector.installFirmwareAssets(pack, permit, ""), /Confirma/);
+    if (wrongBuild) {
+      await assert.rejects(connector.installFirmwareAssets(pack, permit, "RECURSOS UV-K5-V3"), /Build ID/);
+      assert(operations.every(item => item.type === 0x0750));
+    } else if (scenario === "success") {
+      const result = await connector.installFirmwareAssets(pack, permit, "RECURSOS UV-K5-V3");
+      assert.equal(result.firmwareValidated, true);
+      assert.equal(result.physicalBootTested, false);
+      const writes = operations.filter(item => item.type === 0x0754);
+      assert.equal(le(writes[0].data).getUint32(2, true), 32);
+      assert.equal(le(writes.at(-1).data).getUint32(2, true), 0);
+      assert.equal(R.hasBackup(connector, permit), false);
+    } else {
+      await assert.rejects(connector.installFirmwareAssets(pack, permit, "RECURSOS UV-K5-V3"),
+        scenario === "rejected" ? /rechazada/ : scenario === "not-loaded" ? /cargados/ : /timeout/);
+      assert.equal(R.hasBackup(connector, permit), false);
+      if (scenario === "timeout") assert.equal(writesAttempted, 5);
+      if (scenario === "rejected") {
+        assert.equal(operations.filter(item => item.type === 0x0754).length, 1);
+        assert(!operations.some(item => item.type === 0x0756));
+      }
+    }
+    await connector.disconnect();
+  }
+});
 test("Apps Labs: el archivo .app se valida antes de tocar la radio", () => {
   const app = R.parseQuanshengApp(overlayApp({ assets: Uint8Array.of(9, 9, 9) }));
   assert.equal(app.header.name, "FoxHunt"); assert.equal(app.header.apiMin, 3); assert.equal(app.assets.length, 3);
@@ -1079,6 +1580,94 @@ test("Apps Labs: firmware sin apps se identifica sin escribir", async () => {
   const connector = new R.QuanshengConnector(device); await connector.connect("UV-K1");
   await assert.rejects(connector.listApps(), /Labs/);
   assert(device.commands.every(item => [0x0514, 0x0730].includes(item.type)));
+});
+test("Apps Labs: exportar y mover conserva codigo/assets y borra origen solo tras verificar destino", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  const file = overlayApp({ assets: new Uint8Array(401).fill(19) });
+  await connector.installApp(2, file, permit);
+  assert.deepEqual(await connector.readApp(2), file);
+  await assert.rejects(connector.moveApp(2, 4, permit, ""), /Confirma/);
+  const before = device.flash.slice();
+  device.commands = [];
+  await connector.moveApp(2, 4, permit, "MOVER APP 3 A 5");
+  assert.deepEqual(await connector.readApp(4), file);
+  const apps = await connector.listApps();
+  assert.equal(apps[2].status, 2);
+  assert.equal(apps[4].status, 0);
+  const erases = device.commands.filter(command => command.type === 0x0732);
+  assert.deepEqual(erases.map(command => command.data[0]), [4, 2]);
+  const sourceErase = device.commands.findIndex(command => command.type === 0x0732 && command.data[0] === 2);
+  assert(device.commands.slice(0, sourceErase).some(command => command.type === 0x0736 && command.data[0] === 4));
+  assert.deepEqual(device.flash.slice(0, 0x102000), before.slice(0, 0x102000));
+  await connector.disconnect();
+});
+test("Apps Labs: mover rechaza destino ocupado sin borrados y fallo de copia conserva origen", async () => {
+  for (const occupied of [true, false]) {
+    const device = new QuanshengDevice();
+    const connector = new R.QuanshengConnector(device);
+    await connector.connect("UV-K5-V3");
+    const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+    await connector.installApp(1, overlayApp(), permit);
+    if (occupied) await connector.installApp(3, overlayApp({ name: "Second" }), permit);
+    const origin = device.flash.slice(0x104000, 0x106000);
+    device.commands = [];
+    device.corruptAppWrite = !occupied;
+    await assert.rejects(connector.moveApp(1, 3, permit, "MOVER APP 2 A 4"), occupied ? /vacio/ : /difiere/);
+    assert.deepEqual(device.flash.slice(0x104000, 0x106000), origin);
+    assert(!device.commands.some(command => command.type === 0x0732 && command.data[0] === 1));
+    if (occupied) assert(!device.commands.some(command => command.type === 0x0732));
+    await connector.disconnect();
+  }
+});
+test("Apps Labs: borrado global exige confirmacion, limita huecos y verifica que todos quedan vacios", async () => {
+  const device = new QuanshengDevice();
+  device.appSlots = 48;
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  await connector.installApp(0, overlayApp(), permit);
+  await connector.installApp(47, overlayApp(), permit);
+  const protectedBytes = device.flash.slice(0, 0x102000);
+  device.commands = [];
+  await assert.rejects(connector.deleteAllApps({}, "BORRAR TODAS LAS APPS"), /respaldo/);
+  await assert.rejects(connector.deleteAllApps(permit, ""), /Confirma/);
+  assert(!device.commands.some(command => command.type === 0x0732));
+  assert.deepEqual(await connector.deleteAllApps(permit, "BORRAR TODAS LAS APPS"), { deleted: 2 });
+  assert.deepEqual(device.commands.filter(command => command.type === 0x0732).map(command => command.data[0]), [0, 47]);
+  assert((await connector.listApps()).every(app => app.status === 2));
+  assert.deepEqual(device.flash.slice(0, 0x102000), protectedBytes);
+  await connector.disconnect();
+});
+test("Apps Labs: exportacion rechaza codigo corrupto sin mutar Flash", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  await connector.installApp(0, overlayApp(), permit);
+  device.flash[0x103010] ^= 1;
+  device.commands = [];
+  await assert.rejects(connector.readApp(0), /CRC/);
+  assert(device.commands.every(command => [0x0730, 0x0738].includes(command.type)));
+  await connector.disconnect();
+});
+test("Apps Labs: ACK de borrado sin borrar no se presenta como exito global", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const { permit } = await new R.BackupManager(new MemoryStore()).create(connector);
+  await connector.installApp(0, overlayApp(), permit);
+  const write = device.write.bind(device);
+  device.write = async frame => {
+    const command = R.decodeQuanshengPacket(frame);
+    if (command.type === 0x0732) device.push(response(0x0733, Uint8Array.of(command.data[0], 0)));
+    else await write(frame);
+  };
+  await assert.rejects(connector.deleteAllApps(permit, "BORRAR TODAS LAS APPS"), /Quedan apps/);
+  assert.equal((await connector.listApps())[0].status, 0);
+  await connector.disconnect();
 });
 test("Apps Labs: un ACK positivo no oculta una escritura corrupta ni confirma la cabecera", async () => {
   const device = new QuanshengDevice();

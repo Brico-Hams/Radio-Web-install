@@ -2,6 +2,7 @@
   "use strict";
   const R = root.RadioWorkspace;
   const permits = new WeakMap();
+  const slotPermits = new WeakMap();
   const revoked = new WeakSet();
   R.revokeBackup = connector => revoked.add(connector);
   R.hasBackup = (connector, permit) => {
@@ -28,6 +29,43 @@
     } catch (error) {
       revoked.add(connector);
       throw new Error(`Escritura bloqueada al verificar el respaldo: ${error.message}`, { cause: error });
+    }
+  };
+  // Separate, single-use authority: never grants channel, app, erase or CFG access.
+  R.assertSlotReplacement = (connector, permit) => {
+    if (R.hasBackup(connector, permit)) return;
+    const receipt = slotPermits.get(permit);
+    R.assert(receipt && receipt.connector === connector && receipt.session === connector.session &&
+      connector.connected && !connector.transport.error && !revoked.has(connector),
+      "Escritura bloqueada: falta autorizacion especifica de slot de esta sesion.");
+  };
+  R.verifySlotReplacement = async (connector, permit, slot, image, name) => {
+    R.assertSlotReplacement(connector, permit);
+    if (permits.has(permit)) return R.verifyBackup(connector, permit);
+    const receipt = slotPermits.get(permit);
+    R.assert(receipt && receipt.connector === connector && receipt.session === connector.session &&
+      connector.connected && !connector.transport.error && !revoked.has(connector),
+    "Escritura bloqueada: falta autorizacion especifica de slot de esta sesion.");
+    const expected = receipt.images.find(item => item.slot === slot);
+    R.assert(expected && !expected.used && expected.name === name && expected.size === image.length &&
+      expected.sha256 === await R.sha256(image), "Slot, nombre o imagen fuera de la autorizacion explicita.");
+    try {
+      const record = await receipt.store.get(receipt.recordId);
+      R.assert(record && record.status === "partial" &&
+        JSON.stringify(record.slotReplacement) === JSON.stringify(receipt.audit) &&
+        record.files.length === receipt.hashes.length, "Autorizacion o copia parcial modificada.");
+      for (const saved of receipt.hashes) {
+        const file = record.files.find(item => item.name === saved.name);
+        R.assert(file && file.bytes.length === saved.size && await R.sha256(file.bytes) === saved.sha256,
+          "Copia parcial ausente o corrupta.");
+      }
+      R.assert(connector.connected && connector.session === receipt.session &&
+        !connector.transport.error && !revoked.has(connector), "La sesion ha cambiado.");
+      R.assert(!expected.used, "Autorizacion de slot ya consumida.");
+      expected.used = true;
+    } catch (error) {
+      revoked.add(connector);
+      throw error;
     }
   };
   class BackupStore {
@@ -59,6 +97,36 @@
   }
   class BackupManager {
     constructor(store) { this.store = store; }
+    async authorizeSlotReplacement(connector, images, acknowledgement) {
+      R.assert(acknowledgement === "REEMPLAZAR SLOTS SIN RESPALDO DE FIRMWARE",
+        "Debes aceptar expresamente la perdida de las imagenes actuales sin copia recuperable.");
+      R.assert(connector.family === "quansheng" && connector.info?.legacyReadOnly,
+        "Esta autorizacion limitada es solo para Quansheng legacy con copia parcial.");
+      R.assert(Array.isArray(images) && images.length > 0 && images.length <= 4, "Seleccion de slots invalida.");
+      const entries = [];
+      for (const item of images) {
+        R.assert(Number.isInteger(item.slot) && item.slot >= 1 && item.slot <= 4 &&
+          !entries.some(entry => entry.slot === item.slot), "Solo slots 1-4 sin duplicados; Main protegido.");
+        const bytes = R.bytes(item.image);
+        R.inspectQuanshengSlotImage(bytes);
+        R.assert(/^[\x20-\x7e]{1,15}$/.test(item.name), "Nombre de slot invalido.");
+        entries.push({ slot: item.slot, name: item.name, size: bytes.length, sha256: await R.sha256(bytes) });
+      }
+      const { record } = await this.create(connector);
+      R.assert(record.status === "partial" &&
+        record.files.some(file => file.name === "calibration") &&
+        record.files.some(file => file.name === "configuration"), "Falta copia parcial de esta sesion.");
+      const audit = { acknowledgement, createdAt: new Date().toISOString(), images: entries };
+      record.slotReplacement = audit;
+      await this.store.put(record);
+      const saved = await this.store.get(record.id);
+      R.assert(JSON.stringify(saved?.slotReplacement) === JSON.stringify(audit), "No se guardo la autorizacion.");
+      const permit = Object.freeze({});
+      slotPermits.set(permit, { connector, session: connector.session, store: this.store, recordId: record.id,
+        audit, images: entries.map(entry => ({ ...entry, used: false })),
+        hashes: record.files.map(file => ({ name: file.name, size: file.bytes.length, sha256: file.sha256 })) });
+      return { record, permit };
+    }
     async create(connector, onRecord = () => {}) {
       const session = connector.session;
       const record = {

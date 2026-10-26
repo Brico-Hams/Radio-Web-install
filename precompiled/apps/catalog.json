@@ -1,0 +1,90 @@
+{
+  "format": "bricohams-precompiled-apps",
+  "version": 1,
+  "entries": [
+    {
+      "id": "SystemInfo",
+      "path": "precompiled/apps/SystemInfo.app",
+      "size": 5344,
+      "sha256": "aec8dce24c5b216844f09730141556bca2bc072cdf0313097b64cf38fe1fc38a",
+      "name": "SystemInfo",
+      "version": "1.1",
+      "abi": 1,
+      "apiMin": 2,
+      "firmwareRelease": "v6.1.0",
+      "hardwareBootTested": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/archive/apps/v6.1.0/SystemInfo.app"
+    },
+    {
+      "id": "BroadcastFM",
+      "path": "precompiled/apps/BroadcastFM.app",
+      "size": 2415,
+      "sha256": "634344cae2abad79f8a923cfe610a68327f4c9fa17f6300a339770f627320943",
+      "name": "BroadcastFM",
+      "version": "1.1",
+      "abi": 1,
+      "apiMin": 2,
+      "firmwareRelease": "v6.1.0",
+      "hardwareBootTested": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/archive/apps/v6.1.0/BroadcastFM.app"
+    },
+    {
+      "id": "Cube3D",
+      "path": "precompiled/apps/Cube3D.app",
+      "size": 3744,
+      "sha256": "2360a1dc25580c361af00f6b1f03dabf5f097a1f8401f48323e2ba4f0f899889",
+      "name": "Cube3D",
+      "version": "1.2",
+      "abi": 1,
+      "apiMin": 2,
+      "firmwareRelease": "v6.1.0",
+      "hardwareBootTested": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/archive/apps/v6.1.0/Cube3D.app"
+    },
+    {
+      "id": "Tetris",
+      "path": "precompiled/apps/Tetris.app",
+      "size": 3936,
+      "sha256": "d0392f7559fa5f4909901b80b7bd6f35592f1ffef0592d392d54f6a87a91b9f0",
+      "name": "Tetris",
+      "version": "1.1",
+      "abi": 1,
+      "apiMin": 2,
+      "firmwareRelease": "v6.1.0",
+      "hardwareBootTested": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/archive/apps/v6.1.0/Tetris.app"
+    },
+    {
+      "id": "Breakout",
+      "path": "precompiled/apps/Breakout.app",
+      "size": 3043,
+      "sha256": "3f28a7d6535c38386dbcaa3e7aece5db0d43790dce23dc8831cb73211d7ec299",
+      "name": "Breakout",
+      "version": "1.1",
+      "abi": 1,
+      "apiMin": 2,
+      "firmwareRelease": "v6.1.0",
+      "hardwareBootTested": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/archive/apps/v6.1.0/Breakout.app"
+    },
+    {
+      "id": "Minesweeper",
+      "path": "precompiled/apps/Minesweeper.app",
+      "size": 3926,
+      "sha256": "4858c5e48a6fb7a16f9382fda4527fc52f33d62a87c305dde38368c609f2d1c1",
+      "name": "Minesweeper",
+      "version": "1.1",
+      "abi": 1,
+      "apiMin": 2,
+      "firmwareRelease": "v6.1.0",
+      "hardwareBootTested": false,
+      "license": "Apache-2.0",
+      "source": "https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/archive/apps/v6.1.0/Minesweeper.app"
+    }
+  ]
+}

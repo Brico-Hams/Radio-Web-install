@@ -1,0 +1,46 @@
+diff --git a/App/settings.c b/App/settings.c
+index a062b6f..a326f4b 100644
+--- a/App/settings.c
++++ b/App/settings.c
+@@ -824,8 +824,12 @@ void SETTINGS_FactoryReset(bool bIsAll)
+     uint8_t Data8[0x10];
+     PY25Q16_ReadBuffer(0x00A000, Data8, sizeof(Data8));
+ 
+-    // SET_NAV to false
+-    Data8[4] &= (uint8_t)~0x40;  // Clear bit 6 (SET_NAV) for UV-K1 by default
++#ifdef ENABLE_ARDF
++    // ARDF builds target UV-K5 V3 and default to UP/DOWN navigation.
++    Data8[4] |= 0x40u;
++#else
++    Data8[4] &= (uint8_t)~0x40u;
++#endif
+ 
+     #ifdef ENABLE_FEAT_F4HWN_RESCUE_OPS
+         // MENU_LOCK & KEY_LOCK to 0
+@@ -843,7 +847,11 @@ void SETTINGS_FactoryReset(bool bIsAll)
+     PY25Q16_WriteBuffer(0x00A000, Data8, sizeof(Data8), false);
+ 
+     // Keep RAM consistent with the persisted defaults.
++#ifdef ENABLE_ARDF
++    gEeprom.SET_NAV = true;
++#else
+     gEeprom.SET_NAV = false;
++#endif
+     #ifdef ENABLE_FEAT_F4HWN_RESCUE_OPS
+         gEeprom.MENU_LOCK = 0;
+     #endif
+@@ -853,6 +861,14 @@ void SETTINGS_FactoryReset(bool bIsAll)
+         RADIO_InitInfo(&gEeprom.VfoInfo[0], FREQ_CHANNEL_FIRST + BAND3_137MHz, 14550000);
+         RADIO_InitInfo(&gEeprom.VfoInfo[1], FREQ_CHANNEL_FIRST + BAND6_400MHz, 43350000);
+ 
++#ifdef ENABLE_ARDF
++        for (uint8_t vfo = 0; vfo < 2; vfo++) {
++            gEeprom.VfoInfo[vfo].STEP_SETTING = STEP_1kHz;
++            gEeprom.VfoInfo[vfo].StepFrequency = gStepFrequencyTable[STEP_1kHz];
++            gEeprom.VfoInfo[vfo].Modulation = MODULATION_AM;
++        }
++#endif
++
+         gEeprom.ScreenChannel[0] = FREQ_CHANNEL_FIRST + BAND3_137MHz;
+         gEeprom.ScreenChannel[1] = FREQ_CHANNEL_FIRST + BAND6_400MHz;
+         gEeprom.MrChannel[0]     = MR_CHANNEL_FIRST;

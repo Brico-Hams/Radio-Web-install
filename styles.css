@@ -32,3 +32,11 @@ nav.help-toc{display:block}nav.help-toc a{display:inline;padding:0;border-radius
 .steps{gap:2px}.steps a{padding:9px 14px}.step-num{display:grid;place-items:center;width:22px;height:22px;border:1px solid var(--mint);border-radius:50%;color:var(--mint);font:11px ui-monospace,Consolas,monospace;flex-shrink:0}
 .panel{scroll-margin-top:96px}.panel:focus{outline:none}.detail-hero .pill{margin-left:8px}.detail-hero>p.eyebrow{color:var(--mint);font-size:10px}
 @media(max-width:760px){.local-badge,.crumb{display:none}.sidebar .steps a{flex:1 1 auto;justify-content:flex-start}}
+.qs-live-screen {
+  width: min(100%, 640px);
+  height: auto;
+  image-rendering: pixelated;
+  background: #b2d197;
+  border: 8px solid #162b1f;
+  border-radius: 8px;
+}

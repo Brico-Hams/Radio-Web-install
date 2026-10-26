@@ -1,11 +1,247 @@
 # Quansheng: F4HWN, versiones y configuracion
 
-Revision: 25-10-2026. Base funcional inspeccionada: Fusion61, commit
+Revision: 26-10-2026. Base funcional inspeccionada: Fusion61, commit
 `f556a96e73c3e423a00cf473aeb37f827cac05a5`; catalogo modular web v6.3.0,
 commit `ca3a4271386049e7b459b215cef0ad0eea1a30ca`.
 Esta guia no atribuye automaticamente las funciones v6.1/v6.3 a v4 o v5.
 Como funciona la radio por dentro (pines, memorias, protocolo, bootloader,
 esquemas y fotos): [Atlas tecnico UV-K5 V3](ATLAS-UV-K5-V3.md).
+
+## Visor en directo y registro RF
+
+El visor aparece al principio de Quansheng. Se inicia al terminar la conexion:
+inmediatamente en **Conectar solo lectura / CAT**, o despues del respaldo en
+**Conectar y respaldar**. Requiere una imagen con K5Viewer habilitado y sin
+bloqueo que impida el protocolo. Si no recibe tramas en diez segundos lo
+indica y se detiene; no simula la pantalla.
+
+- LCD real de 128 x 64, captura PNG y estado de los LED comunicado por el firmware.
+- Una sola conexion y un solo lector. Cualquier operacion pausa primero el
+  visor, deja terminar las tramas y despues ejecuta el comando. **Iniciar visor
+  y registro RF** lo reanuda. **Pausar visor** conserva la ultima captura.
+- El registro RF aparece al final. Recibe RF Log **v2** e historial del firmware,
+  elimina duplicados por secuencia y conserva como maximo 512 entradas en RAM.
+  Requiere RF Log habilitado: ausencia de datos no significa ausencia de senales.
+- **Exportar registro RF CSV** descarga secuencia, RX/TX/encendido, frecuencia,
+  duracion, numero/nombre de memoria, medidor bruto y bateria. No se atribuye
+  fecha UTC a registros que no la incluyen. Los valores del medidor no son
+  mediciones calibradas de potencia. El CSV neutraliza formulas de hojas de calculo.
+- Al reconectar se vacia la vista anterior para no mezclar radios. Exporta antes.
+  Detener el visor no borra el registro persistente de la radio.
+
+Referencia del protocolo: UV Studio, revision
+`e7aa946f6de002559e1aaf3f91765db7fc2ed567`, `k5viewer.js` y `rf-log.js`.
+La implementacion local no envia PTT, teclas, reboot ni ordenes persistentes.
+La prueba COM4 del 26-10-2026 recibio **24 tramas LCD y una trama RF** del
+firmware que seguia arrancado, sin datos incompletos. Fue necesario habilitar
+DTR USB; Web Serial lo establece explicitamente para Quansheng. La radio no
+envio entradas RF almacenadas, por lo que no se atribuye validacion fisica a
+un historial no recibido. El parser de historial, la exclusion mutua, la
+pantalla web y el CSV se comprobaron ademas con tramas de prueba. Debe estar
+habilitado K5Viewer en el firmware activo.
+
+## Catalogo precompilado sin herramientas de compilacion
+
+La web incluye nueve imagenes v6.1.0: Bricohams ARDF, Satellite, Spectrum,
+Labs y Fusion, y las oficiales F4HWN Fusion, FieldOps, Transfer y Labs.
+No requiere seleccionar una carpeta. Es el mismo catalogo en servidor local
+y en la exportacion estatica. No es una descarga dinamica de cualquier URL.
+
+1. Seleccionar UV-K1 o UV-K5 V3 y la imagen del catalogo.
+2. Confirmar modelo y condicion Beta de las derivadas Bricohams.
+3. **Descargar, verificar y preparar para slot** comprueba tamano, SHA-256 y
+   estructura PY32 antes de habilitar la imagen. **Descargar BIN y manifiesto**
+   permite guardarla sin preparar ni escribir.
+4. Seleccionar slot 1-4, nombre y **Instalar y verificar CRC**. Las protecciones
+   de respaldo siguen vigentes; Main, CFG y calibracion no se borran.
+5. Arrancar manualmente cada slot y comprobar SysInf y funciones.
+
+Las imagenes Bricohams siguen siendo **Beta sin validacion de arranque
+completa**, incluso cuando su escritura en Flash se haya verificado por CRC.
+El catalogo conserva los metadatos originales: no convierte una prueba
+estructural en certificacion de hardware. Para otras versiones sigue
+disponible el catalogo de publicaciones oficiales; las variantes incompatibles
+con slots son solo descarga.
+
+Mantenimiento: `npm run publish:firmware` verifica las cinco compilaciones
+locales fijadas por SHA-256 y obtiene la publicacion oficial v6.1.0 con los
+hashes de GitHub. Solo tras validar todos los archivos escribe el catalogo.
+Se distribuyen las licencias GPL Bricohams y Apache upstream y sus avisos.
+Las opciones, hashes de fuentes integradas y commit upstream estan en cada
+entrada de `precompiled/catalog.json`; el constructor y los modulos fuente
+estan en este repositorio. No se incluyen configuraciones ni calibraciones
+de usuarios en el catalogo.
+
+### Grabacion fisica verificada el 26-10-2026
+
+En la unidad UV-K5 V3 declarada por su propietario se grabaron:
+
+| Slot | Imagen | CRC verificado en radio |
+| --- | --- | --- |
+| 1 | BH ARDF | `47f33dcc` |
+| 2 | BH Labs | `273d232d` |
+| 3 | BH Satellite | `96d5b68b` |
+| 4 | BH Spectrum | `702b5c07` |
+
+Main/Fusion, configuracion activa y calibracion se verificaron sin cambios.
+No se enviaron resets CFG, borrados de apps ni reinicios durante la grabacion.
+Posteriormente el propietario arranco BH Labs manualmente y se verificaron
+lecturas reales, como se detalla abajo. **El arranque de ARDF, Satellite y
+Spectrum y las pruebas de escritura de canales siguen sin validar**:
+los CRC no prueban ejecucion.
+Se detectaron respuestas perdidas y un bloqueo USB CDC con tramas de 64 bytes
+exactos. El transporte Quansheng agrega un byte nulo fuera de esas tramas y
+reintenta hasta cuatro veces solo el mismo bloque NOR (como UV Studio);
+nunca reintenta automaticamente borrados, resets ni rechazos del firmware.
+
+### Opciones avanzadas y alcance de la restauracion
+
+El panel **Herramientas propias Bricohams** contiene accesos internos a
+teclado/reinicio, firmware principal DFU v6/v7, backup/restore de calibracion,
+descarga/instalacion de logo, backup/restore Flash, catalogo/orden/borrado de
+apps, slots y filtros/exportacion RF. No abre UV Studio, no carga sus scripts
+ni delega estas operaciones a otra web. Los enlaces de procedencia y licencia
+de binarios se mantienen: no son dependencias de ejecucion de la interfaz.
+La restauracion stock reconstruye Flash externa y necesita el paso DFU,
+con imagenes distintas para UV-K1/UV-K5 V3, conservando calibracion propia.
+No se confunde con **Restablecer banco CFG**, que solo borra un banco.
+
+Hay paneles nativos de mantenimiento y fabrica/DFU con implementacion propia
+del protocolo publicado, sin copiar la interfaz ni el codigo de UV Studio.
+No hay paridad completa entre versiones: los slots y canales conservan su
+flujo v6; el DFU admite BIN v6 y paquetes v7 FWAT/FWA1. Recursos v7 solo se
+instalan en el firmware activo con Build ID coincidente y respaldo nuevo.
+Todo el soporte v7 se ha probado en simulacion, no en esta radio fisica.
+Pausar el visor antes de iniciar seguimiento CAT: ambos comparten el puerto.
+CAT y el visor quedan bloqueados mientras haya una recuperacion de fabrica
+pendiente.
+
+**Firmware principal / DFU propio:** seleccionar BIN F4HWN v6.x PY32 de
+256 bytes a 118 KiB, o paquete v7 con trailer FWAT y recursos FWA1.
+El paquete se separa localmente: solo la imagen interna se envia a DFU.
+Se comprueban limites, longitudes exactas, CRC del paquete y CRC de recursos.
+V7 sin paquete completo y versiones desconocidas se rechazan.
+La imagen se comprueba por vectores, version y SHA-256,
+pero esto no garantiza procedencia ni compatibilidad fisica. Se exige respaldo
+completo y la frase `FIRMWARE PRINCIPAL UV-K5-V3` o `FIRMWARE PRINCIPAL UV-K1`.
+Preparar no escribe; guarda una copia inmutable en memoria, bloquea otras
+operaciones y habilita el boton DFU. Desconectar aqui, entrar manualmente en
+DFU con PTT y confirmar `DFU PRINCIPAL UV-K5-V3` o `DFU PRINCIPAL UV-K1`.
+No cerrar la pagina ni cambiar de radio entre pasos.
+
+Este flujo reemplaza firmware interno, no bootloader; no borra Flash externa
+ni sincroniza la imagen Main externa del multiboot. El selector multiboot
+puede restaurar otra imagen al arrancar: revisar slots y verificar manualmente.
+No garantiza rollback. Se verifican bootloader, identificacion consistente,
+numero de pagina y estado de cada ACK. No hay relectura DFU: finalizar
+paginas no equivale a validar arranque o RF. Si falla, conservar la pagina,
+el respaldo y la misma radio para reintentar. Solo probado en simulacion.
+
+**Recursos externos v7:** tras DFU, arrancar normalmente el firmware v7 y
+conectar con respaldo completo nuevo (si no puede completarse, la escritura
+queda bloqueada). La pantalla puede estar vacia mientras faltan recursos.
+Seleccionar el mismo paquete completo o su FWA1 en **Recursos externos v7**.
+Comprobar el archivo sin escribir y confirmar `RECURSOS UV-K5-V3` o
+`RECURSOS UV-K1` para instalar. Se consulta el slot activo y Build ID por
+`0x0750`; un Build ID diferente detiene el proceso antes de borrar.
+
+Se borra solo la zona de recursos del slot activo por `0x0752`, se escribe
+en bloques de hasta 128 bytes por `0x0754` y la cabecera FWA1 de 32 bytes
+se escribe al final. Solo se reintenta un bloque identico ante timeout
+(maximo cuatro reintentos), nunca borrados ni rechazos. `0x0756` valida
+recursos y la consulta final debe indicar slot/Build ID iguales, estado
+valido y recursos cargados. Se revoca el permiso despues de cualquier intento
+de borrado: reconectar y respaldar de nuevo. No se ofrece relectura fisica
+de una zona cuya direccion no esta publicada aqui; el resultado es validacion
+del firmware, no prueba de pantalla o arranque. Una interrupcion puede dejar
+recursos incompletos: conservar paquete y respaldo para recuperar. No se
+instalan recursos en slots inactivos ni se utiliza el mapa v6 para v7.
+
+**Registro RF propio:** filtrar por nombre de memoria, frecuencia MHz y
+evento RX/TX/encendido. Los filtros solo cambian la vista, nunca eliminan
+el historial recibido. Exportar la seleccion en CSV o todo el registro en
+JSON `bricohams-rf-log` v1. `exportedAt` es la hora de exportacion, no la hora
+de los eventos; `eventUTCProvided` y `calibratedRF` son falsos. No se inventan
+fechas UTC, RSSI calibrado ni analisis de espectro a partir del historial.
+
+**Autoria y derechos:** la implementacion de estas herramientas es propia
+de Bricohams, pero firmware, apps y recursos de terceros conservan sus
+licencias y atribuciones. Reescribir la web no convierte esos archivos en
+obra propia ni garantiza ausencia de reclamaciones. No se eliminan avisos
+Apache/GPL ni se redistribuyen las imagenes stock dentro de la web.
+
+**Teclado remoto nativo:** en el visor, requiere respaldo completo de la
+conexion actual, habilitacion manual y confirmacion de cada tecla. Ofrece
+digitos, MENU, arriba/abajo, EXIT, asterisco, almohadilla y F1/F2, con
+pulsacion corta o larga; no incluye PTT ni atajos globales. Las teclas pueden
+modificar ajustes y F1/F2 ejecutar funciones de emision segun su asignacion.
+No asumir solo RX. Cada envio deshabilita de nuevo el teclado. Se informa
+solo del envio UART, sin inventar un ACK de ejecucion; comprobar la LCD.
+Se bloquea al pausar, perder permiso/conexion, iniciar CAT o recuperar fabrica.
+
+**Reinicio nativo:** exige respaldo completo y escribir `REINICIAR RADIO`,
+incluso en modo avanzado. Pausa el visor, envia una sola orden `0x05DD`,
+revoca permisos y cierra la conexion. No reintenta ni afirma recibir ACK o
+haber arrancado; verificar la radio y reconectar para respaldar de nuevo.
+No cambia el slot ni el banco CFG y puede perder estado transitorio.
+Teclado y reinicio se han probado en simulacion, no sobre la radio fisica.
+
+**Mantenimiento nativo:** permite descargar/instalar logo BIN ST7565 o
+PNG exacto de 128 x 64, exportar/restaurar los 512 bytes de calibracion y
+exportar/restaurar Flash externa de 2 MiB. Las escrituras requieren respaldo
+completo de la conexion actual y confirmacion explicita. El logo se relee
+y se comprueban los datos vecinos. La restauracion Flash conserva todo el
+sector de calibracion actual, omite sectores iguales y escribe los sectores
+de estado multiboot al final. Tanto Backup como Restore verifican los 512
+sectores de 4 KiB mediante el CRC fisico del firmware: el comando `0x073E`
+no admite consultar los 2 MiB de una sola vez. El CRC global guardado se
+calcula localmente sobre la imagen cuyos sectores ya se han comparado.
+Restaurar calibracion o Flash revoca el permiso de escritura: reconectar.
+No importar calibracion de otra radio.
+
+**Fabrica nativa, irreversible:** no es el reset CFG. Seleccionar el modelo
+exacto y descargar los dos BIN stock desde los enlaces del asistente. Se
+validan tamano y SHA-256 contra la revision oficial fijada
+`e7aa946f6de002559e1aaf3f91765db7fc2ed567`; no se redistribuyen esos BIN.
+
+1. Exportar fuera del navegador el respaldo completo y verificar los dos BIN.
+2. Con la misma radio conectada normalmente, confirmar `FABRICA UV-K5-V3`
+   o `FABRICA UV-K1`. El paso 1 reemplaza slots, todos los bancos de canales,
+   apps y registros, pero conserva el sector completo de calibracion.
+3. Esperar la verificacion completa de Flash. No cerrar ni recargar la pagina:
+   la autorizacion del paso 2 existe solo en memoria. No arrancar normalmente
+   antes de completar ambos pasos y no cambiar de radio.
+4. Pulsar Desconectar; apagar la radio y mantener PTT al encender para DFU
+   (LED encendido, pantalla apagada). Soltar PTT, seleccionar el paso 2 y
+   confirmar `DFU UV-K5-V3` o `DFU UV-K1`.
+5. El asistente verifica bootloader y confirmacion de cada pagina. Solo acepta
+   bootloader `7.00.07` para V3, y `7.02.02` o `7.03.xx` para K1.
+   Los reintentos se limitan a la misma pagina ante timeout, nunca a rechazos.
+   DFU no permite relectura: paginas confirmadas no prueban el arranque.
+6. Arrancar manualmente y comprobar version, recepcion y funcionamiento.
+   Si falla el paso 2, conservar la pagina y repetirlo con la misma imagen.
+   Si falla el paso 1, no intentar DFU ni arrancar normalmente: conservar el
+   respaldo, desconectar aqui y usar la recuperacion oficial.
+
+El mantenimiento y DFU se han probado con dispositivos simulados. Los
+cuatro archivos stock oficiales se descargaron y validaron con el
+verificador de produccion. **No se ha ejecutado una restauracion de fabrica,
+calibracion, logo ni Flash completa en la radio fisica durante estas pruebas.**
+
+| Opcion UV Studio | En esta web | Acceso oficial adicional |
+| --- | --- | --- |
+| Visor LCD, captura, teclado corto/largo y reinicio | Nativo, comparte conexion; modificaciones con confirmacion | Visor oficial |
+| Registro RF, historial, filtros, CSV/JSON | Nativo, v2; exportacion local | Otras visualizaciones |
+| Catalogo precompilado | Nativo, nueve imagenes fijadas y catalogo dinamico | Catalogo del editor |
+| Slots 1-4, borrar, CRC | Nativo con respaldo | Opciones adicionales del editor |
+| CFG 1-4 | Reset nativo separado del firmware | Seleccion del banco desde la radio |
+| Apps Labs | Catalogo de seis apps, listar, exportar, instalar, mover a vacio, borrar individual/global y verificar nativos | Catalogo ampliado |
+| Calibracion | Backup/restore nativo, confirmacion y relectura | Restore oficial |
+| Flash externa | Backup/restore nativo, sector de calibracion protegido | Restore oficial |
+| Firmware principal | DFU nativo BIN v6 o paquete v7 FWAT/FWA1 | No sincroniza Main externo |
+| Assets v7 | Nativos, solo slot activo con Build ID, respaldo y validacion firmware | No slots inactivos ni relectura fisica |
+| Logo | Descargar/instalar nativo BIN o PNG 128 x 64 | Editor oficial |
+| Fabrica stock y DFU | Asistente nativo, dos pasos y hashes/modelos fijados | Recuperacion oficial |
 
 ## Puesta en marcha de 0 a 100 %
 
@@ -97,6 +333,30 @@ El significado de cada menu esta en el [diccionario de menus](#diccionario-de-me
 
 ## Beta: prueba USB real y canales
 
+### BH Labs arrancado: verificacion real del 26-10-2026
+
+Tras seleccionar manualmente el slot 2, COM4 identifica **F4HWN v6.1.0**.
+Se verificaron los CRC de Main y los cuatro slots Bricohams de la tabla
+anterior, y se leyeron 38 canales del banco activo de BH Labs.
+
+El primer respaldo revelo que `0x073E` rechaza un rango de 2 MiB:
+el firmware limita cada consulta CRC a 4 KiB. Tras corregir la web, se
+completo y persistio el respaldo de los 2 MiB, verificando sus 512 sectores.
+Tambien se guardaron la calibracion de 512 bytes y Main de 120832 bytes.
+La calibracion conserva el SHA-256 anterior
+`f9c537df7a1764b31c73b3021dae69a1a654e267315f8c58c12bc4a3f1dd1a1b`.
+Se consultaron 16 huecos de apps y se reconstruyo y exporto Tetris desde
+la Flash fisica, validando el formato y los CRC del archivo.
+
+La configuracion activa se releyo sin cambios. Sobre una copia local de
+esa lectura real se comprobo crear, editar y borrar un canal RX-only,
+manteniendo los 38 canales originales y los ajustes protegidos. **No se
+escribieron canales, apps, firmware, calibracion ni recursos durante esta
+verificacion.** El CRUD escrito sobre la radio y el aislamiento fisico de
+los otros bancos no quedan demostrados por esta prueba de lectura.
+
+### Lecturas historicas con Main/Fusion v6.0.0
+
 Prueba de solo lectura realizada el 25-10-2026 en COM4 (USB CDC
 VID 36B7 / PID FFFF), modelo declarado por el propietario **UV-K5 V3**.
 La radio identifica **F4HWN v6.0.0**; no se deduce automaticamente la placa.
@@ -115,27 +375,49 @@ La radio identifica **F4HWN v6.0.0**; no se deduce automaticamente la placa.
 - No se han escrito ni borrado canales fisicos, firmware, slots o calibracion.
   No se han hecho pruebas RF ni pruebas de hardware OpenGD77.
 
+Repeticion de lectura el **26-10-2026**: COM4 responde F4HWN v6.0.0 y devuelve
+41344 bytes con 200 memorias. Sobre una copia de esa lectura se verifican
+16 PMR nuevos (216 canales), edicion, asignacion de lista y borrado local,
+sin cambiar bytes desde `0x8800` en adelante. El navegador tambien abre esa
+lectura real y relee los 16 PMR incorporados. No se envio ninguna escritura
+persistente. CAT no se probo contra ese firmware: no implementa el comando
+CAT v1 de la imagen Bricohams Satelites.
+
 ### Preparar y enviar memorias FM
 
-1. Seleccionar UV-K5 V3 o UV-K1 segun el equipo. Conectar normalmente o activar
-   [Modo PRO](AYUDA-CONFIGURACION.md) antes de conectar.
+1. Seleccionar UV-K5 V3 o UV-K1 segun el equipo y confirmar el modelo. Para leer
+   sin esperar la Flash completa, usar **Conectar solo lectura / CAT**. Esta
+   sesion no crea respaldo ni habilita escrituras persistentes. La conexion
+   normal conserva el respaldo automatico obligatorio para escribir.
 2. Pulsar **Leer canales del banco activo**. En v6.0 se muestran automaticamente
-   desde la copia parcial. Para trabajar sin radio, abrir una configuracion
+   desde la copia parcial; tras una copia completa tambien se lee la
+   configuracion activa. Para trabajar sin radio, abrir una configuracion
    logica F4HWN v6 de exactamente 41344 bytes, no un firmware ni Flash completa.
 3. Preparar **PMR446 analogicos 1-16 (solo RX)**, repetidores FM o memorias SAT/Doppler
    desde el planificador. Seleccionar una memoria FM existente como plantilla
-   y pulsar **Anadir canales al archivo local abierto**. Tambien puedes importar
+   y pulsar **Anadir canales al archivo local abierto**. La primera plantilla
+   FM se selecciona al abrir el archivo y se conserva al actualizar la tabla.
+   Una configuracion sin memorias FM necesita una plantilla valida de su
+   propio firmware; no se generan registros arbitrarios. Tambien puedes importar
    canales FM de un CSV CHIRP u OpenGD77 CPS; solo se aceptan frecuencias VHF/UHF
-   soportadas y las filas DMR/otros formatos se excluyen con motivo.
+   soportadas y las filas DMR/otros formatos se excluyen con motivo. El campo
+   de fichero de repetidores acepta esos mismos CSV y los lleva directamente
+   a Canales preparados. El JSON RepeaterBook requiere confirmar autorizacion
+   y pasa primero por la tabla de seleccion.
 4. Las nuevas memorias tienen TXLock activo, tonos y DTMF desactivados y Reverse
    desactivado. PMR se prepara estrecho. Solo se importan RX/TX nominales entre
    136-174 o 400-470 MHz; esto no autoriza transmitir. Nombres: primeros 10
-   caracteres ASCII. Se omiten duplicados por nombre truncado/frecuencias/modo.
+   caracteres ASCII. Se omiten duplicados solo si la memoria equivalente ya
+   tiene TX bloqueada; no se considera valida una coincidencia que permita TX.
 5. **Editar** cambia nombre/RX/TX de una memoria FM y **Borrar del archivo**
-   elimina esa memoria de la copia local. La edicion conserva el bloqueo RX y
+   elimina esa memoria de la copia local. La edicion activa el bloqueo TX y conserva
    los bytes que no pertenecen a esos campos; ambas operaciones trabajan sobre
    una copia en memoria. Verifica de nuevo el canal que muestra el parser y
-   guarda el binario editado aparte del original.
+   pulsa **Guardar configuracion local** y guarda el binario editado aparte del
+   original. Cuando Chrome/Edge ofrece selector de archivo, la web escribe y
+   cierra el archivo antes de confirmar. En navegadores sin ese selector solo
+   solicita una descarga: comprobar Descargas y no confundir la solicitud con
+   un guardado confirmado. Guardar proyecto JSON o CSV no sustituye este binario.
 6. **Escribir y releer canales (Beta)** solo se habilita con respaldo completo
    de esta sesion, mediante Labs v6.1+ con lectura Flash y CRC. Verifica que la
    radio siga igual que al leerla, escribe bloques de 8 bytes y relee todo.
@@ -148,7 +430,150 @@ La radio identifica **F4HWN v6.0.0**; no se deduce automaticamente la placa.
 El envio se ha verificado con transporte simulado, **no en hardware**:
 la unidad v6.0 conectada no permite el respaldo completo requerido. No se
 actualiza ni flashea esa unidad como efecto secundario. La tabla orbital SAT
-nativa y el seguimiento continuo no se implementan; SAT/Doppler son memorias FM.
+nativa no se instala: SAT/Doppler son memorias FM. El seguimiento continuo
+CAT RX requiere especificamente la imagen Bricohams Satelites con CAT v1.
+
+### Simular el ciclo multiboot sin escribir en USB
+
+La regresion automatizada se ejecuta con:
+
+```powershell
+node --test --test-name-pattern="simulacion multiboot completa" tests\connectors.test.cjs
+```
+
+Usa exclusivamente un transporte en memoria: no abre Web Serial, COM ni USB.
+Simula cuatro instalaciones con imagenes de prueba, respaldo completo y permiso
+por sesion, cabecera escrita al final y CRC de cada slot. Selecciona manualmente
+en el modelo bancos CFG distintos del numero de slot, para no confundir ambos.
+En cada banco importa 16 PMR, 11 REMER y un repetidor CSV ficticio; escribe,
+relee, edita, cambia lista, borra y reutiliza la memoria. Comprueba aislamiento
+de bancos, Main, calibracion y ajustes protegidos. En Satelites simula CAT RX y
+STOP sin cambios persistentes. Rechaza AM, que este importador no convierte.
+
+Los CSV admiten ceros decimales finales como `145.600000` y offset `0.600000`,
+sin redondear valores que necesitan mas de cinco decimales significativos.
+Los repetidores de prueba no son un directorio de frecuencias reales vigente.
+Esta simulacion no ejecuta el firmware compilado, no prueba arranque, RF,
+pantalla, audio ni el aislamiento fisico de bancos de la radio conectada.
+No desbloquea escrituras ni sustituye el respaldo completo de esa unidad.
+
+### Botones Backup y Restore de canales
+
+#### Sustitucion excepcional de firmware legacy autorizada
+
+La API avanzada `BackupManager.authorizeSlotReplacement` permite autorizar
+exclusivamente instalaciones de firmware en slots 1-4 para F4HWN legacy con
+respaldo parcial, despues de aceptar literalmente
+`REEMPLAZAR SLOTS SIN RESPALDO DE FIRMWARE`. Esta aceptacion significa perder
+las imagenes anteriores sin copia recuperable; sus CRC no son un respaldo.
+No se activa por conectar, por PRO ni por importar un archivo.
+
+Antes de emitir esa autorizacion se leen y persisten calibracion y configuracion
+de la sesion actual. El registro parcial conserva la aceptacion, slots, nombres,
+tamanos y SHA-256 exactos de las imagenes. Cada instalacion verifica de nuevo
+ese registro y consume una sola autorizacion para esa imagen y slot.
+Un permiso asi no habilita borrar slots por separado, Main, restaurar Flash,
+escribir canales, restablecer CFG ni instalar/borrar aplicaciones.
+La web normal mantiene sus requisitos de respaldo completo.
+
+Esta via sigue el protocolo de instalacion de UV Studio: borrado de un slot,
+bloques de imagen, cabecera al final y CRC. No constituye respaldo completo ni
+prueba de arranque. Si falla la escritura o la verificacion, detenerse y no
+arrancar ese slot. Probar cada imagen manualmente y conservar Main intacto.
+
+**Backup del banco activo** realiza una lectura nueva y guarda el binario de
+41344 bytes con fecha y SHA-256. No descarga la edicion local en su lugar ni
+reemplaza esa edicion. El resultado distingue archivo escrito de descarga
+solicitada. Es una copia logica, no un respaldo de Flash, firmware o calibracion.
+
+**Restore: abrir copia de canales** requiere conectar y leer primero el banco
+destino. Valida tamano, estructura y version identica; copia solo memorias,
+nombres y atributos hasta `0x8800` sobre la lectura del destino. Conserva sus
+ajustes y pide confirmacion antes de sustituir la edicion local. Puede recuperar
+canales con TX habilitada: revisar antes de escribir. No escribe por si solo:
+para enviar se usa **Escribir y releer canales**, con sus requisitos de respaldo
+completo, confirmacion y relectura. No importa copias Flash ni paquetes de UV Studio.
+
+### Plantillas regionales y ficheros preconfigurados
+
+En Repetidores, **Preparar 3 repetidores Bricohams Murcia** incorpora ED5YBF
+Carrascoy, ED5YAK y ED5YAL Sierra Espuna, transcritos del `PRESET_CSV` del ZIP
+Bricohams Studio aportado. Se puede descargar el fichero CHIRP CSV sin depender
+de servicios externos. Todo es solo RX; el CSV usa Duplex off y TX nominal en
+comentarios. La vigencia no esta confirmada y el CTCSS no se programa.
+
+**Plantillas Murcia** muestra y descarga por separado:
+
+- Aeropuertos LEMI, LELC y LEAL y guardia 121.500 MHz: 15 servicios AM en JSON.
+  Portadoras RF y designadores 8.33 kHz se mantienen separados. Fuente:
+  [AIP ENAIRE](https://aip.enaire.es/), AD 2.18 de cada aeropuerto,
+  consultada el 26-10-2026. Las coordenadas son aproximadas del aerodromo.
+  Confirmar AIP y NOTAM vigentes, no usar la plantilla para operacion aeronautica.
+- FM Murcia: 15 entradas de Onda Regional y OR Musica, tomadas de
+  [Donde escucharnos](https://www.orm.es/donde-escucharnos/), consultada el
+  26-10-2026. Es una seleccion de radiodifusion, no todas las cadenas comerciales.
+  No hay coordenadas verificadas de transmisores ni filtrado por proximidad.
+- REMER: descarga de los 11 canales VHF ya disponibles, en CSV solo RX.
+  Seleccion y preparacion individual siguen en la pestana REMER.
+
+AM y radiodifusion WFM son plantillas de consulta/exportacion, no se convierten
+a FM de comunicaciones. El editor de memorias Quansheng actual no las instala;
+se requiere receptor y formato compatibles. Las descargas no prueban recepcion,
+actividad ni escritura en hardware.
+
+### Listas de escaneo por zona o geografia
+
+Las nuevas memorias participan por defecto en todas las listas (valor 25);
+no quedan con participacion cero. Puedes elegir una lista unica 1-24 para
+el lote, cero para no participar, o agrupar por zona, provincia/region o
+localidad. La agrupacion reserva listas numericas libres sin reemplazar
+listas existentes. Si falta el campo elegido o no hay listas libres, se
+rechaza el lote sin modificar la imagen. No se infiere una provincia por
+la frecuencia ni se usa geolocalizacion implicitamente.
+
+REMER incluye su zona; RepeaterBook conserva region/localidad. Un CSV puede
+incluir columnas adicionales `Zone`, `Region`/`State`, `City` y `Country`.
+Sin ellas puedes usar lista unica o la zona generica del formato CSV.
+El informe indica el numero asignado a cada grupo nuevo: anotarlo antes de
+cerrar. No cambia nombres de lista, prioridades, ALL/MIX ni ajustes globales.
+Los duplicados omitidos conservan su lista anterior.
+
+Para cambiar canales existentes, marcarlos en la tabla, elegir **Asignar
+seleccion a lista** y pulsar **Aplicar lista al archivo local**. Tambien
+puedes editar la lista de una memoria individual. La asignacion elimina
+su marca de exclusion del escaneo, pero conserva frecuencias, tonos, modos
+y bloqueo TX. Guardar el binario y verificar ScList en la radio despues de
+una escritura autorizada. No son zonas DMR ni varios grupos simultaneos por
+canal; cada memoria tiene un numero de participacion nativo.
+
+### Pases guardados y CAT RX
+
+**Guardar plan de pases JSON** conserva TLE, posicion, horarios y la frecuencia
+FM seleccionada. **Reabrir plan de pases JSON** requiere consentimiento para
+usar la posicion del archivo, valida los datos y recalcula horarios para la
+hora actual sin consultar proveedores. Los horarios antiguos no se usan para
+controlar CAT. Un TLE caducado se rechaza: actualizar elementos y recalcular.
+Los planes antiguos sin frecuencia se pueden abrir, pero hay que consultar
+y seleccionar de nuevo la frecuencia FM.
+
+Para llevar un pase a la configuracion: seleccionar frecuencia y pase,
+**Preparar canales con Doppler corregido**, **Cargar SAT / Doppler preparados**
+y **Guardar configuracion local**. Guardar horarios no instala TLE en el
+firmware. Estas opciones no graban audio de la radio.
+
+Para CAT: conectar en solo lectura, arrancar manualmente la imagen Bricohams
+Satelites correcta, entrar en SAT RX, pulsar 8 y marcar la confirmacion de
+firmware en el panel. No intentar CAT sobre F4HWN original, ARDF o Espectro:
+no implementan el comando privado. Seleccionar un pase actualmente visible y
+mantener la pagina en primer plano. Las ordenes RX caducan a los 3 segundos;
+la cadencia del navegador descuenta el tiempo de respuesta de cada orden.
+Detener no envia una nueva sintonia si SAT RX ya esta desactivado.
+
+Las pruebas automatizadas y de navegador comprueban PMR, edicion, listas y
+exportacion sobre datos sinteticos y sobre la configuracion leida de la unidad.
+La lectura USB real no equivale a verificar escritura, pantalla o RF. Sin
+respaldo completo y banco inequivoque no se declara verificada la escritura
+fisica ni se modifican slots o calibracion.
 
 ### Multiboot y canales independientes por perfil
 
@@ -412,11 +837,52 @@ La base inspeccionada documenta 16 huecos y apps de radio, APRS, SSTV,
 diagnostico y demos. El conjunto cambia entre releases; no todas las apps
 estan disponibles ni son compatibles con todos los builds.
 
+**Catalogo de apps Labs precompiladas:** incluye SystemInfo, BroadcastFM,
+Cube3D, Tetris, Breakout y Minesweeper, de la publicacion upstream v6.1.0.
+Se sirven junto con la web, tambien en la exportacion estatica, sin compilar.
+Son Apache-2.0 y conservan autoria original; no se renombran como propias.
+Se comprueban SHA-256, tamano, FAP1, nombre, version, ABI y API minima.
+Todas requieren ABI 1 y API minima 2; confirmar compatibilidad con el Labs
+activo. No hay certificacion de arranque en esta unidad.
+
+Seleccionar modelo y app, confirmar compatibilidad y pulsar **Verificar y
+preparar app**. Esto solo prepara el archivo: consultar huecos, seleccionar
+destino y pulsar **Instalar app y verificar** por separado. Tambien se puede
+descargar el archivo y su manifiesto. No se instalan ni ejecutan apps
+automaticamente. El catalogo de pruebas excluye balizas y apps de socorro;
+el catalogo completo sigue en UV Studio. No es una garantia de aislamiento:
+toda app nativa tiene acceso a la radio.
+
+El mantenedor regenera este catalogo con
+`node scripts/publish-firmware.cjs --apps-only`: solo acepta los seis
+archivos archivados y hashes fijados; rechaza cualquier cambio.
+
 El conector comprueba FAP1, limites de codigo/recursos y CRC de recursos, y
 relee bloques escritos. La aceptacion de cabecera no demuestra que una app
 pueda ejecutarse: ABI, API y capacidades pueden rechazarla al cargar/ejecutar.
 Usa firmware y apps de la misma publicacion. Instalar una app de origen
 desconocido equivale a dar codigo nativo acceso a la radio.
+
+**Exportar app del hueco** reconstruye el archivo FAP1 desde cabecera,
+codigo y recursos fisicos y verifica sus CRC antes de solicitar la descarga.
+Necesita firmware con lectura Flash fisica; no es una descarga del catalogo.
+
+**Mover app al hueco vacio** permite reordenar sin sobrescribir otra app.
+Seleccionar origen y destino vacio, y escribir la confirmacion mostrada.
+Primero instala/relee/verifica el destino; solo despues borra el origen y
+comprueba que queda vacio. No es atomico: una interrupcion puede dejar dos
+copias, o una copia de destino incompleta con el origen intacto. Conservar
+el respaldo y consultar de nuevo los huecos antes de reintentar. Para
+intercambiar dos apps ocupadas, usar un tercer hueco vacio como temporal.
+No ejecuta ninguna app ni certifica compatibilidad ABI/API.
+
+**Borrar todas las apps** exige respaldo completo y la frase
+`BORRAR TODAS LAS APPS`, tambien en modo avanzado. Se consulta el numero
+real de huecos (16 o 48 segun firmware), se borran solo los ocupados y se
+comprueba que todos quedan vacios. Un error detiene el proceso sin afirmar
+exito global; el borrado parcial no se revierte automaticamente. No toca
+canales, configuracion, firmware ni calibracion. Estas operaciones nuevas
+se han verificado con radio simulada; no se han ejecutado en la unidad fisica.
 
 APRS TX requiere configuracion legal de indicativo/SSID, posicion y ruta.
 No transmite esta web por cargar un `.app`; no se configuran balizas automaticas

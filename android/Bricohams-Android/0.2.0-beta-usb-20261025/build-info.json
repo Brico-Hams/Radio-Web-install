@@ -1,0 +1,176 @@
+{
+  "format": "bricohams-android-build",
+  "version": 1,
+  "applicationId": "org.bricohams.radio",
+  "applicationVersion": "0.2.0-beta",
+  "stability": "beta",
+  "signing": "debug",
+  "minimumApi": 26,
+  "targetApi": 35,
+  "revision": "f7bd6125893385dd517fecd105967f241a65991f",
+  "dirty": true,
+  "builtAt": "2026-10-25T17:00:11.9065740Z",
+  "hostTests": 28,
+  "testFailures": 0,
+  "lintErrors": 0,
+  "lintWarnings": 16,
+  "instrumentationTestsExecuted": false,
+  "hardwareTested": false,
+  "sourceHashes": [
+    {
+      "file": "android/app/build.gradle.kts",
+      "sha256": "4566374ab4a8ae37b218c4611550df303356307da1c0ce622f9e1ec8666ce3ea"
+    },
+    {
+      "file": "android/app/src/androidTest/java/org/bricohams/radio/RadioStoreTest.kt",
+      "sha256": "f493a4a25020f63982ed5a0ea4fdd516c2b5e40bb501b9f3271f6a164bfdce1c"
+    },
+    {
+      "file": "android/app/src/main/AndroidManifest.xml",
+      "sha256": "a171fb9f60b0b108527827600f28453f413592be5585799f9447801c93fa45b8"
+    },
+    {
+      "file": "android/app/src/main/assets/LICENSE-APACHE-2.0.txt",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "file": "android/app/src/main/assets/LICENSE-USB-SERIAL-MIT.txt",
+      "sha256": "9fa168fd2de1a7845ccbf5ae7aa8e5e200074923110fede9161ad6e1afdc753b"
+    },
+    {
+      "file": "android/app/src/main/assets/LICENSE.txt",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+    },
+    {
+      "file": "android/app/src/main/assets/NOTICE.txt",
+      "sha256": "86ed676151b9fad655ffa22c06ebe74499dc13dad94dea6da47aef79dcd5e549"
+    },
+    {
+      "file": "android/app/src/main/java/org/bricohams/radio/CatActivity.kt",
+      "sha256": "5c48c92ad25213a92318cd8fea15d5687ee85b8a989f51b2821c5f9a401cda06"
+    },
+    {
+      "file": "android/app/src/main/java/org/bricohams/radio/CatProtocol.kt",
+      "sha256": "3c2baeb6ac87b3e800294283f635481d0e3251ace2e3df49d06b69ef1631a4b4"
+    },
+    {
+      "file": "android/app/src/main/java/org/bricohams/radio/CdcRadio.kt",
+      "sha256": "ea5ca313705e2c54f7b0343d71a422179172cf1da9eae2b1318798f0c94f843d"
+    },
+    {
+      "file": "android/app/src/main/java/org/bricohams/radio/MainActivity.kt",
+      "sha256": "a48827563855e3876b1eb6c65ad8c11e1f12e6a0e2996cf840650d3fc867381a"
+    },
+    {
+      "file": "android/app/src/main/java/org/bricohams/radio/Models.kt",
+      "sha256": "2a59aee584b38bc2ca3b3b40ddf61d4ba114b6a293b98db160dfa08afcf04d73"
+    },
+    {
+      "file": "android/app/src/main/java/org/bricohams/radio/MorseAudio.kt",
+      "sha256": "88736b42379875c52dac0c91db592d48e138f2fab4020fc467edfb55fe4eb56f"
+    },
+    {
+      "file": "android/app/src/main/java/org/bricohams/radio/RadioReadBuffer.kt",
+      "sha256": "2b9e52d20a472300f26ef813cd2cc88b4b9f32ac74f63613f7b2fc16641dddac"
+    },
+    {
+      "file": "android/app/src/main/java/org/bricohams/radio/RadioStore.kt",
+      "sha256": "e4f13183b7d5ee2f9536f3530030f28602228512a4141b52f268ddee5213d635"
+    },
+    {
+      "file": "android/app/src/main/java/org/bricohams/radio/SerialRadio.kt",
+      "sha256": "316e3a16a42d6230ccd494edcd29ff0aba41e6e85a441c951eede3ec670a29cc"
+    },
+    {
+      "file": "android/app/src/main/res/drawable-nodpi/bricohams_logo.png",
+      "sha256": "0e1bec16953129cfc9c946d24e56347ddfb38878137ba43c7e84729acf811c87"
+    },
+    {
+      "file": "android/app/src/main/res/values/ids.xml",
+      "sha256": "0bcddf029aa9955d4a99254fe0117fb564869e6708c278a3253a998bf188f8e8"
+    },
+    {
+      "file": "android/app/src/main/res/values/strings.xml",
+      "sha256": "2245ea501ef2c2f5fb38230b89b628d60d05a44b580dde2a07ffe09ff11105a9"
+    },
+    {
+      "file": "android/app/src/main/res/values/styles.xml",
+      "sha256": "74d531986182a57ab3f5ccebab5b6f215476466002329416439aa3a34c568e4f"
+    },
+    {
+      "file": "android/app/src/main/res/xml/data_extraction_rules.xml",
+      "sha256": "c582632948c89b414e42c677753afdc81219ae4edd1c30396b3d171979fe30fe"
+    },
+    {
+      "file": "android/app/src/test/java/org/bricohams/radio/CatActivityTest.kt",
+      "sha256": "93120056472e34ee69b26b17668224a7e6675e0913e2d94a63d3cdac35f18345"
+    },
+    {
+      "file": "android/app/src/test/java/org/bricohams/radio/CatProtocolTest.kt",
+      "sha256": "89e88c165c72632747ddf1a0895e8f3669df0ed4c5a527cd9f133e83da71d9a8"
+    },
+    {
+      "file": "android/app/src/test/java/org/bricohams/radio/CdcRadioTest.kt",
+      "sha256": "49fc5a8f6f465a8412a5758cd9d96d3d208a55b7acb185c86bc4fe56a074a950"
+    },
+    {
+      "file": "android/app/src/test/java/org/bricohams/radio/ModelsTest.kt",
+      "sha256": "01aa17cce184d1d0a14c3a795006292c4146de8de987b1c55e3ff0471be278dd"
+    },
+    {
+      "file": "android/app/src/test/java/org/bricohams/radio/MorseAudioTest.kt",
+      "sha256": "4257c1b267d6e8b4bc70585ea526c352795d4a75eaec13a7b13b9770847ba3f9"
+    },
+    {
+      "file": "android/app/src/test/java/org/bricohams/radio/RadioStoreHostTest.kt",
+      "sha256": "9ff6b1e40685053292e67884a5014c081e739f646b94f1c124b6f1a9bf907f51"
+    },
+    {
+      "file": "android/build.gradle.kts",
+      "sha256": "bfb8bad8df538d435011ea283ca8bc67f524b83bfc34353c2c9b793e709ee175"
+    },
+    {
+      "file": "android/gradle.properties",
+      "sha256": "a74247bbe3312c9702fe0dcef373262cd361af1b57bf5711553d2c0ea7f0b24a"
+    },
+    {
+      "file": "android/gradle/wrapper/gradle-wrapper.jar",
+      "sha256": "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17"
+    },
+    {
+      "file": "android/gradle/wrapper/gradle-wrapper.properties",
+      "sha256": "40ad196c886842d44adb88e1c64445c55720cf0855fa0c5585f35449e7fc2385"
+    },
+    {
+      "file": "android/gradlew",
+      "sha256": "a3648413b47ef77af21d5ebc36c687c7d103aaef3e17f33de7d4f080a6f300a3"
+    },
+    {
+      "file": "android/gradlew.bat",
+      "sha256": "57931b17dd228e5c24dac90e815d0bf82477e831a4618dfab4136f5446b42a9f"
+    },
+    {
+      "file": "android/settings.gradle.kts",
+      "sha256": "eb08c9f6d9e0254c35a9633bb1f79ac0d77661fc76890f981766da65e1d35831"
+    }
+  ],
+  "capabilities": [
+    "local-logbook",
+    "adif-export-ascii",
+    "json-export-import",
+    "ardf-manual-observations",
+    "foreground-gps-fix",
+    "morse-text",
+    "morse-wav-experimental",
+    "usb-cdc-cat-rx-experimental",
+    "usb-uart-known-single-port-adapters"
+  ],
+  "unavailable": [
+    "satellite-tracking",
+    "sstv",
+    "live-audio-morse",
+    "channel-programming",
+    "lotw-signing-upload",
+    "continuous-gps-track"
+  ]
+}

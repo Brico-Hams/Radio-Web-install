@@ -90,12 +90,14 @@ test("Android exige APK, licencias, pruebas y correspondencia exacta de las fuen
 test("la exportacion excluye configuracion privada, respaldos, caches y datos descargados", () => {
   for (const name of ["README.md", "LICENSE", "scripts/export-project.cjs", "firmware/bricohams/ardf.c",
     "docs/ESTADO-ENTREGA.md", "anytone.html", "android/app/src/main/AndroidManifest.xml",
-    "android/gradle/wrapper/gradle-wrapper.jar", "data/satellites.config.json"]) assert.equal(projectSource(name), true, name);
+    "android/gradle/wrapper/gradle-wrapper.jar", "data/satellites.config.json",
+    "precompiled/apps/catalog.json", "precompiled/apps/SystemInfo.app"]) assert.equal(projectSource(name), true, name);
   for (const name of [".env", ".env.local", ".git/config", ".vscode/settings.json",
     "node_modules/dependency/index.js", "firmware-builds/test/file.c", "dist/app.js", "radio.g77",
     "backup.rwb.json", "radio.bin", "certificate.p12", "docs/private.key", "data/users.json",
     "data/satellites.json", "studio.html", "tests/tmp/file.json", "android/.gradle/cache",
-    "android/local.properties", "android/app/build/app.apk", "android/release.jks"]) assert.equal(projectSource(name), false, name);
+    "android/local.properties", "android/app/build/app.apk", "android/release.jks",
+    "precompiled/apps/private.app", "precompiled/apps/EPIRB406.app"]) assert.equal(projectSource(name), false, name);
   for (const name of ["../secret", "/absolute", "C:/secret", "docs\\secret", "docs/../secret", "docs//file", "docs/file\nname", ""]) {
     assert.throws(() => safeRelative(name), /Ruta/);
   }
@@ -183,6 +185,21 @@ test("el ZIP Beta conserva fuentes, historial y artefactos verificables y no sob
   assert(info.files.some(file => file.file.endsWith("source/App/ardf.c")));
   assert(info.files.some(file => file.file.endsWith(`artifacts/${filename}`)));
   execFileSync("git", ["-C", project, "bundle", "verify", path.join(exported, "history.bundle")], { stdio: "pipe" });
+  const withoutOutput = path.join(directory, "without-installers.zip");
+  await assert.rejects(exportProject({ ...options, beta: true, withoutInstallers: true, output: withoutOutput }), /excluyentes/);
+  await assert.rejects(exportProject({ ...options, beta: true, installers: undefined, output: withoutOutput }), /--installers/);
+  const without = await exportProject({ ...options, beta: true, installers: undefined,
+    withoutInstallers: true, output: withoutOutput });
+  assert.equal(without.packages, 0);
+  assert.equal(without.android.applicationVersion, "0.7.0-beta");
+  const withoutExtract = path.join(directory, "without-extracted");
+  fs.mkdirSync(withoutExtract);
+  if (process.platform === "win32") execFileSync("tar", ["-xf", withoutOutput, "-C", withoutExtract]);
+  else execFileSync("unzip", ["-q", withoutOutput, "-d", withoutExtract]);
+  const withoutInfo = JSON.parse(fs.readFileSync(path.join(withoutExtract, "Bricohams", "export-info.json")));
+  assert.equal(withoutInfo.desktopInstallersIncluded, false);
+  assert.deepEqual(withoutInfo.packages, []);
+  assert.equal(fs.existsSync(path.join(withoutExtract, "Bricohams", "installers")), false);
   await assert.rejects(exportProject({ ...options, beta: true }), /ya existe/);
   fs.unlinkSync(output);
   write(source, "App/ardf.c", "tampered");

@@ -57,8 +57,8 @@ const tools = {
     tag: "F4HWN",
     icon: "UV",
     description: "Consulta y verifica slots de UV-K1 y UV-K5 V3 compatibles. Modifica slots y bancos solo tras respaldar la calibracion, la Flash externa y Main.",
-    url: "https://armel.github.io/uvstudio/",
-    action: "Abrir UV Studio",
+    url: "#qs-native-menu",
+    action: "Abrir herramientas Bricohams",
     firmware: "Multiboot requiere F4HWN v6.0.0 o posterior con soporte Multiboot. No es compatible con cualquier UV-K5.",
     models: [
       ["UV-K1", "Quansheng UV-K1 (PY32F071)", "Web Serial. Cable USB-C de datos o cable USB-serie compatible de doble conector."],
@@ -68,9 +68,9 @@ const tools = {
     guides: [
       ["Multiboot", [
         "Haz una copia de calibracion y de los canales. Para una copia completa de Flash externa se necesita Labs v6.1.0 o posterior.",
-        "Inicia normalmente con F4HWN compatible. Abre UV Studio y entra en Firmware Slots; no uses DFU para gestionar slots.",
+        "Inicia normalmente con F4HWN compatible. Usa Consultar slots en esta web; no uses DFU para gestionar slots.",
         "Elige un firmware F4HWN estable v6.x compatible, un slot del 1 al 4 y, opcionalmente, un nombre de hasta 15 caracteres.",
-        "Write to slot borra, escribe y verifica el CRC. No desconectes el cable. El limite de imagen por slot es 118 KiB.",
+        "Instalar y verificar CRC borra, escribe y verifica el slot. No desconectes el cable. El limite de imagen por slot es 118 KiB.",
         "Para cambiar de firmware, apaga y enciende manteniendo solo MENU (M), no PTT. Selecciona el slot y confirma dos veces con M.",
         "Main (M) esta protegido. No apagues durante Init Main ni durante Writing / Verify."
       ]],
@@ -229,7 +229,7 @@ if (current) {
     const api = selection && (page === "quansheng" || selection[0] === "SERIAL") ? "serial" : "usb";
     const available = api in navigator;
     document.getElementById("model-help").textContent = selection
-      ? `${selection[2]} ${available ? "Este navegador expone la API requerida en esta pagina; el sitio original comprobara los permisos." : "La API requerida no esta disponible en esta pagina. Utiliza Chrome o Edge de escritorio y comprueba la conexion en el sitio original (HTTPS)."}`
+      ? `${selection[2]} ${available ? "Este navegador expone la API requerida; se solicitaran permisos al conectar." : "La API requerida no esta disponible. Utiliza Chrome o Edge de escritorio en localhost o HTTPS."}`
       : "Selecciona un modelo para consultar su conexion.";
     launch.disabled = !selection || !(confirmed.checked || pro.checked);
   };
@@ -239,6 +239,14 @@ if (current) {
   if (globalThis.RadioWorkspace) globalThis.RadioWorkspace.mountRadioUI(page);
   launch.addEventListener("click", () => {
     if (launch.disabled) return;
+    if (page === "quansheng") {
+      const panel = document.getElementById("qs-native-menu");
+      panel.tabIndex = -1;
+      panel.scrollIntoView({ block: "start" });
+      panel.focus({ preventScroll: true });
+      document.getElementById("launch-status").textContent = "Herramientas propias en esta pagina. No se ha abierto otra web ni conectado la radio.";
+      return;
+    }
     window.open(current.url, "_blank", "noopener,noreferrer");
     const status = document.getElementById("launch-status");
     status.textContent = "Si el navegador bloqueo la nueva pestana, utiliza este enlace: ";

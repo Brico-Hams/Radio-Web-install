@@ -16,10 +16,12 @@
   "scripts": {
     "start": "node server.cjs",
     "precheck": "node --check anytone-core.js && node --check anytone-ui.js",
+    "postcheck": "node --check quansheng-live.js && node --check quansheng-tools.js && node --check quansheng-factory.js && node --check precompiled-catalog.js && node --check scripts/publish-firmware.cjs",
     "build:pages": "node scripts/build-help.cjs && node scripts/build-pages.cjs",
-    "test": "node --test tests/connectors.test.cjs tests/firmware.test.cjs tests/planning.test.cjs tests/site.test.cjs tests/web-mode.test.cjs tests/installers.test.cjs tests/export-project.test.cjs tests/custom-firmware.test.cjs tests/bricohams-build.test.cjs tests/help-docs.test.cjs tests/anytone.test.cjs",
+    "test": "node --test tests/connectors.test.cjs tests/quansheng-live.test.cjs tests/quansheng-factory.test.cjs tests/firmware.test.cjs tests/planning.test.cjs tests/site.test.cjs tests/web-mode.test.cjs tests/installers.test.cjs tests/export-project.test.cjs tests/custom-firmware.test.cjs tests/bricohams-build.test.cjs tests/help-docs.test.cjs tests/anytone.test.cjs",
     "check": "node --check app.js && node --check radio-ui.js && node --check transports.js && node --check gd77-connector.js && node --check quansheng-connector.js && node --check quansheng-channels.js && node --check backup-store.js && node --check codeplug-editor.js && node --check radio-core.js && node --check runtime-mode.js && node --check firmware-core.js && node --check firmware-catalog.js && node --check firmware-service.cjs && node --check data-service.cjs && node --check planning-core.js && node --check radioid-csv.js && node --check planning-ui.js && node --check server.cjs && node --check scripts/fetch-satellites.cjs && node --check scripts/build-pages.cjs && node --check scripts/fetch-studio.cjs && node --check studio-pin.cjs && node --check f4hwn-options.js && node --check custom-firmware-ui.js && node --check scripts/f4hwn-options.cjs && node --check scripts/build-help.cjs && node --check scripts/fetch-help-presets.cjs",
     "fetch:studio": "node scripts/fetch-studio.cjs",
+    "publish:firmware": "node scripts/publish-firmware.cjs --official",
     "build:bricohams": "node scripts/build-bricohams.cjs",
     "export:project": "node scripts/export-project.cjs",
     "build:help": "node scripts/build-help.cjs"
