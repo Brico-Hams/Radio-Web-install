@@ -11,6 +11,10 @@
     <item name="contact_received" type="id" />
     <item name="contact_notes" type="id" />
     <item name="contact_search" type="id" />
+    <item name="logbook_name" type="id" />
+    <item name="logbook_kind" type="id" />
+    <item name="logbook_reference" type="id" />
+    <item name="logbook_station" type="id" />
     <item name="session_name" type="id" />
     <item name="fox_number" type="id" />
     <item name="observation_notes" type="id" />

@@ -51,7 +51,9 @@ object AdifImport {
                 require(fields.isNotEmpty()) { "Registro ADIF vacio." }
                 require(contacts.size < 50000) { "ADIF supera 50000 contactos." }
                 contacts.add(contact(fields, contacts.size + 1))
-                ignored.addAll(fields.keys - supported)
+                // BAND is derived from FREQ on export, so only a contradicting BAND is information that would be lost.
+                val derivedBand = fields["BAND"]?.trim().equals(Adif.band(fields["FREQ"]?.trim() ?: ""), ignoreCase = true)
+                ignored.addAll(fields.keys - supported - if (derivedBand) setOf("BAND") else emptySet())
                 fields = linkedMapOf()
                 headerEnded = true
                 recordEnded = true

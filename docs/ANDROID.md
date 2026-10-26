@@ -9,8 +9,8 @@ La version `0.7.1-beta` no sustituye sus funciones completas.
 
 | Funcion | Estado |
 | --- | --- |
-| Contactos del libro de guardia | Crear, buscar, consultar, editar y borrar con confirmacion; SQLite local |
-| Intercambio de contactos | ADIF ASCII exportacion/importacion con vista previa, JSON UTF-8 y restauracion de copia JSON |
+| Contactos del libro de guardia | Libros por actividad (General, POTA, SOTA) con entrada rapida: indicativo, frecuencia/banda, modo y RST, UTC automatico; buscar, editar y borrar con confirmacion; SQLite local |
+| Intercambio de contactos | ADIF ASCII por libro (BAND, STATION_CALLSIGN, MY_POTA_REF/MY_SOTA_REF), importacion con vista previa al libro actual, JSON UTF-8 y restauracion de copia JSON |
 | LoTW | Exportar ADIF para TQSL en ordenador; no hay firma ni subida desde Android |
 | ARDF | Sesiones persistentes, balizas 1-10, historial, contadores, intervalos por baliza y suma filtrada de segmentos GPS |
 | GPS | Posicion puntual del telefono, con precision y hora de la fijacion, previa autorizacion |
@@ -44,6 +44,10 @@ telemetria, permiso INTERNET, servicio de ubicacion en segundo plano ni
 subida de datos. La copia automatica y transferencia de datos del sistema
 estan desactivadas en el manifiesto/reglas de extraccion.
 **Exporta antes de desinstalar:** desinstalar borra los datos locales.
+Al actualizar desde una version sin libros (esquema SQLite 1), la aplicacion
+copia primero la base intacta a `bricohams-v1-backup.db` en su carpeta privada
+y despues migra en una transaccion: los contactos existentes pasan al libro
+General. Si la migracion falla, la base queda en la version 1 sin cambios.
 La restauracion JSON se inicia desde Inicio y nunca elimina datos existentes.
 
 Las exportaciones usan el selector de archivos Android; no requieren acceso
@@ -54,12 +58,29 @@ No se pide ni almacena un certificado LoTW.
 
 ## Libro de guardia
 
-1. Abre Guardia e introduce indicativo, UTC ISO, frecuencia MHz, modo,
-   informes enviado/recibido y notas.
-2. Guarda el contacto. La lista muestra los 50 ultimos; exportar incluye todos.
-3. Editar abre el contacto con su ID original; guardar no crea un duplicado.
-   Eliminar requiere confirmacion y no puede deshacerse.
-4. Exporta ADIF para intercambio/TQSL o JSON para conservar todo el texto.
+Los contactos se agrupan en libros por actividad, al estilo de un cuaderno
+de campo: un libro General (siempre existe) y los que crees con plantilla
+General, POTA o SOTA. Es una implementacion propia; no usa codigo ni
+recursos de HAMRS y no declara paridad con esa aplicacion.
+
+1. Abre Guardia. Arriba se muestra el libro actual; Cambiar de libro elige otro.
+2. Para una activacion, al final de la seccion crea un libro: nombre,
+   plantilla, referencia (POTA `EA-0123`, SOTA `EA4/MD-001`; vacia en General)
+   y tu indicativo de estacion, obligatorio en POTA/SOTA. Queda seleccionado.
+3. Entrada rapida: indicativo, frecuencia MHz, modo y RST. Al cambiar de modo,
+   un RST sin tocar pasa a 59 (fonia) o 599 (CW/RTTY). Deja UTC vacio y se
+   usa la hora actual al pulsar Guardar, en segundos. Tras guardar se vacian
+   indicativo y notas y se conservan frecuencia y modo para el siguiente QSO.
+4. La lista muestra los 50 ultimos del libro con su banda ADIF; exportar
+   incluye todo el libro. Editar abre el contacto con su ID original; guardar
+   no crea un duplicado. Eliminar requiere confirmacion y no puede deshacerse.
+5. Exporta ADIF de este libro para intercambio/TQSL/POTA/SOTA o JSON completo
+   para conservar todo el texto. En POTA el nombre propuesto es
+   `INDICATIVO@PARQUE-AAAAMMDD.adi`.
+
+No hay aviso de duplicados en la banda, mapas, consulta de indicativos en
+linea ni subida a POTA/SOTA: el archivo se sube a mano. No se pueden renombrar
+ni borrar libros; sus contactos si.
 
 La fecha se interpreta como instante ISO; ADIF la convierte a UTC. Las
 frecuencias admitidas por el formulario, 0.1-1300 MHz, no son autorizacion
@@ -67,7 +88,10 @@ para transmitir. Los modos de una entrada no afirman que la radio los soporte.
 Los formularios aun sin guardar se descartan al cambiar de seccion.
 La rotacion conserva los campos de la seccion actual mediante el estado Android.
 
-ADIF incluye CALL, QSO_DATE, TIME_ON, FREQ, MODE, RST_SENT, RST_RCVD y COMMENT.
+ADIF incluye CALL, QSO_DATE, TIME_ON, BAND, FREQ, MODE, RST_SENT, RST_RCVD y
+COMMENT; en libros con indicativo de estacion, STATION_CALLSIGN, y en POTA o
+SOTA, MY_POTA_REF o MY_SOTA_REF. BAND se deduce de FREQ con la tabla ADIF 3.1.4
+y se omite fuera de bandas (por ejemplo 149 MHz).
 La exportacion ASCII rechaza notas con acentos, saltos de linea u otros
 caracteres no admitidos: no los elimina ni los sustituye silenciosamente.
 JSON conserva UTF-8. La exportacion no certifica que LoTW acepte un contacto;
@@ -75,17 +99,18 @@ firma, subida, respuesta del servicio y confirmacion son pasos distintos.
 
 ### Buscar contactos
 
-Desde Guardia introduce parte del indicativo, notas, modo, frecuencia o UTC
+Desde Guardia introduce, dentro del libro actual, parte del indicativo, notas, modo, frecuencia o UTC
 y pulsa Buscar contactos. La comparacion no distingue mayusculas; no elimina
 acentos ni interpreta rangos/expresiones regulares. Se muestran el total
 coincidente y las 50 coincidencias mas recientes. Mostrar todos los contactos
 quita el filtro. La busqueda aplicada sobrevive a rotacion; pulsar Buscar
 vuelve a crear el formulario y descarta cambios de edicion aun no guardados.
-Exportar siempre incluye todos los contactos, no solo las coincidencias.
+Exportar ADIF siempre incluye todo el libro, no solo las coincidencias.
 
 ### Importar ADIF con vista previa
 
-Desde Guardia pulsa Importar ADIF (vista previa). El selector permite cualquier
+Desde Guardia pulsa Importar ADIF a este libro (vista previa); los contactos
+se agregan al libro seleccionado. El selector permite cualquier
 archivo, pero se valida ADIF de texto ASCII, hasta 16 MiB y 50000 contactos.
 Se limita cada cabecera o registro a 512 campos.
 No admite ADX/XML, UTF-8 ni otros formatos binarios. La lectura respeta la
@@ -98,7 +123,10 @@ FREQ en MHz, MODE, RST_SENT y RST_RCVD. COMMENT es opcional. Se aplican los
 mismos limites de contactos que al introducirlos a mano; modos como FT8
 no se convierten silenciosamente a otros. Una hora HHMM se representa con
 segundos 00. El formato no conserva fracciones de segundo al exportar.
-No se deduce frecuencia desde BAND ni se inventan informes ausentes.
+No se deduce frecuencia desde BAND ni se inventan informes ausentes. Un BAND
+que coincide con el deducido de FREQ se considera conservado; si contradice
+FREQ se avisa como campo no conservado. MY_POTA_REF, MY_SOTA_REF y
+STATION_CALLSIGN se avisan como no conservados: elige antes el libro adecuado.
 
 La vista previa muestra el numero de contactos y **campos no conservados**,
 por ejemplo BAND, SUBMODE, GRIDSQUARE o datos de confirmacion LoTW. Los
@@ -110,8 +138,8 @@ y longitudes truncadas son errores explicitos.
 
 Al aceptar se agrega todo en una transaccion SQLite. Si falla una insercion,
 se revierte el conjunto. Se omiten registros cuyos campos conservados sean
-identicos a otro existente o del mismo archivo: indicativo, instante UTC,
-frecuencia numerica normalizada, modo, ambos informes y notas. Si alguno
+identicos a otro existente o del mismo archivo: libro, indicativo, instante
+UTC, frecuencia numerica normalizada, modo, ambos informes y notas. Si alguno
 difiere se agrega un nuevo contacto, nunca se sobrescribe por indicativo/hora.
 Los IDs internos se generan de nuevo; no se usan IDs externos de ADIF.
 Reimportar el mismo contenido no duplica los contactos identicos. Campos
@@ -126,7 +154,8 @@ el libro antes de repetirla. No hay servicio de importacion persistente.
 ### Restaurar una copia JSON
 
 Desde Inicio, pulsa Importar copia JSON Bricohams y selecciona una copia
-version 1 exportada por esta aplicacion. El archivo admite hasta 16 MiB
+version 2 (con libros) o version 1 (anterior; sus contactos van al libro
+General) exportada por esta aplicacion. La exportacion actual es version 2. El archivo admite hasta 16 MiB
 y 50000 registros por tabla. Se valida UTF-8, formato, campos, IDs,
 contactos, fechas, coordenadas y referencias entre sesiones/observaciones.
 No importa ADIF ni JSON de otras aplicaciones.
@@ -523,8 +552,8 @@ La APK de prueba no es la aplicacion de uso habitual.
 
 ## Validacion realizada y pendiente
 
-Ochenta y cuatro pruebas host: cinco de modelos/ADIF, cuatro de importacion
-ADIF, tres de audio, ocho de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT,
+Ochenta y nueve pruebas host: seis de modelos/ADIF, cuatro de importacion
+ADIF, tres de audio, doce de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT,
 cinco del codec de canales, cinco de memoria/respaldo/escritura Quansheng y ocho
 de USB CDC/serie simulado, cuatro de nucleo Robot36 (incluida ida y vuelta del codificador), dos de pantalla SSTV,
 cuatro de envio SSTV por PTT CAT con radio simulada,
@@ -565,7 +594,12 @@ Main, calibracion), SHA-256 en disco, orden de escritura web, relectura y
 bloqueos por ajustes, radio modificada, v6.0, CRC y bloque rechazado.
 ADIF comprueba ida/vuelta, etiquetas dentro de comentarios, cabecera opcional,
 horas en minutos, campos no conservados, registros truncados/invalidos y ASCII.
-SQLite verifica duplicados y rollback con un fallo real de insercion inyectado.
+SQLite verifica duplicados y rollback con un fallo real de insercion inyectado,
+migracion desde una base version 1 con respaldo previo, migracion fallida que
+deja la version 1 intacta, contactos separados por libro, claves foraneas y
+copias JSON version 1 y 2. Los libros comprueban referencias POTA/SOTA, BAND
+y los campos de activacion en ADIF; la entrada rapida comprueba UTC
+automatico, RST por modo, frecuencia conservada y libro tras rotacion.
 La interfaz prueba busqueda tras rotacion y vista previa con cancelar/aceptar.
 SSTV contrasta geometria 320x240, inicio temporal, niveles de gris a
 8/16/48 kHz y barras RGB/CMY a 8 kHz: error maximo de 12 niveles por canal

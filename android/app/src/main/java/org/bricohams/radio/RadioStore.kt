@@ -11,27 +11,78 @@ import java.time.Instant
 import java.time.format.DateTimeFormatterBuilder
 import java.util.UUID
 
-class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", null, 1), java.io.Closeable {
+class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", null, 2), java.io.Closeable {
     private val orderedUtc = DateTimeFormatterBuilder().appendInstant(9).toFormatter()
     override fun close() = super.close()
+    private fun createLogbooks(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE logbooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+            reference TEXT NOT NULL, station_call TEXT NOT NULL, created TEXT NOT NULL)""")
+        // Fixed values so the default logbook compares equal across devices when JSON copies are merged.
+        db.insertOrThrow("logbooks", null, ContentValues().apply {
+            put("id", Logbook.GENERAL); put("name", "General"); put("kind", "GENERAL"); put("reference", "")
+            put("station_call", ""); put("created", orderedUtc.format(Instant.EPOCH))
+        })
+    }
+    private fun createContacts(db: SQLiteDatabase, table: String) =
+        db.execSQL("""CREATE TABLE $table (id TEXT PRIMARY KEY, call TEXT NOT NULL, utc TEXT NOT NULL,
+            frequency TEXT NOT NULL, mode TEXT NOT NULL, sent TEXT NOT NULL, received TEXT NOT NULL, notes TEXT NOT NULL,
+            logbook TEXT NOT NULL REFERENCES logbooks(id))""")
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("""CREATE TABLE contacts (id TEXT PRIMARY KEY, call TEXT NOT NULL, utc TEXT NOT NULL,
-            frequency TEXT NOT NULL, mode TEXT NOT NULL, sent TEXT NOT NULL, received TEXT NOT NULL, notes TEXT NOT NULL)""")
+        createLogbooks(db)
+        createContacts(db, "contacts")
         db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, started TEXT NOT NULL)")
         db.execSQL("""CREATE TABLE observations (id TEXT PRIMARY KEY, session TEXT NOT NULL REFERENCES sessions(id),
             fox INTEGER NOT NULL, utc TEXT NOT NULL, notes TEXT NOT NULL, latitude REAL, longitude REAL,
             accuracy REAL, fix_utc TEXT)""")
     }
-    override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true) }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        error("Migracion de base de datos no definida: $oldVersion -> $newVersion")
+    override fun onConfigure(db: SQLiteDatabase) {
+        db.setForeignKeyConstraintsEnabled(true)
+        // Runs before onUpgrade's transaction: copy the untouched v1 file so a failed or unwanted migration is recoverable.
+        if (db.version == 1) {
+            val busy = db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { it.moveToFirst() && it.getInt(0) != 0 }
+            check(!busy) { "Base de datos ocupada; no se pudo respaldar antes de migrar." }
+            val source = java.io.File(db.path)
+            val backup = source.resolveSibling("bricohams-v1-backup.db")
+            // An existing backup comes from an earlier attempt whose migration rolled back: it already holds this v1 data.
+            if (!backup.exists()) {
+                val partial = source.resolveSibling("bricohams-v1-backup.db.tmp")
+                source.copyTo(partial, overwrite = true)
+                check(partial.length() == source.length() && partial.renameTo(backup)) { "Respaldo previo a la migracion incompleto." }
+            }
+        }
     }
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        check(oldVersion == 1 && newVersion == 2) { "Migracion de base de datos no definida: $oldVersion -> $newVersion" }
+        // SQLiteOpenHelper wraps this in one transaction: any failure leaves the v1 schema and rows intact.
+        createLogbooks(db)
+        createContacts(db, "contacts_v2")
+        db.execSQL("""INSERT INTO contacts_v2 SELECT id, call, utc, frequency, mode, sent, received, notes, '${Logbook.GENERAL}'
+            FROM contacts""")
+        db.execSQL("DROP TABLE contacts")
+        db.execSQL("ALTER TABLE contacts_v2 RENAME TO contacts")
+    }
+    fun createLogbook(logbook: Logbook): Logbook {
+        logbook.validated()
+        writableDatabase.insertOrThrow("logbooks", null, ContentValues().apply {
+            put("id", logbook.id); put("name", logbook.name); put("kind", logbook.kind); put("reference", logbook.reference)
+            put("station_call", logbook.stationCall); put("created", orderedUtc.format(Instant.now()))
+        })
+        return logbook
+    }
+    fun logbooks(): List<Logbook> =
+        readableDatabase.rawQuery("SELECT id, name, kind, reference, station_call FROM logbooks ORDER BY created, rowid", null).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(Logbook(cursor.getString(0), cursor.getString(1), cursor.getString(2),
+                    cursor.getString(3), cursor.getString(4)))
+            }
+        }
     fun save(contact: Contact, replaceExisting: Boolean = false) {
         contact.validated()
         val values = ContentValues().apply {
             put("id", contact.id); put("call", contact.call); put("utc", orderedUtc.format(contact.utc))
             put("frequency", contact.frequencyMHz); put("mode", contact.mode)
             put("sent", contact.sent); put("received", contact.received); put("notes", contact.notes)
+            put("logbook", contact.logbook)
         }
         if (replaceExisting) {
             check(writableDatabase.update("contacts", values, "id = ?", arrayOf(contact.id)) == 1) {
@@ -45,7 +96,7 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
     fun importAdif(contacts: List<Contact>): Pair<Int, Int> {
         require(contacts.size in 1..50000) { "Importacion ADIF: entre 1 y 50000 contactos." }
         fun key(contact: Contact) = listOf(contact.call, contact.utc.toString(), contact.frequencyMHz.toBigDecimal().stripTrailingZeros().toPlainString(),
-            contact.mode, contact.sent, contact.received, contact.notes)
+            contact.mode, contact.sent, contact.received, contact.notes, contact.logbook)
         val db = writableDatabase
         db.beginTransaction()
         try {
@@ -64,11 +115,13 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
             db.endTransaction()
         }
     }
-    fun contacts(): List<Contact> = readableDatabase.rawQuery("SELECT * FROM contacts ORDER BY utc DESC", null).use { cursor ->
+    fun contacts(logbook: String? = null): List<Contact> = readableDatabase.rawQuery(
+        "SELECT id, call, utc, frequency, mode, sent, received, notes, logbook FROM contacts" +
+            (if (logbook == null) "" else " WHERE logbook = ?") + " ORDER BY utc DESC", logbook?.let { arrayOf(it) }).use { cursor ->
         buildList {
             while (cursor.moveToNext()) add(Contact(
                 cursor.getString(0), cursor.getString(1), Instant.parse(cursor.getString(2)), cursor.getString(3),
-                cursor.getString(4), cursor.getString(5), cursor.getString(6), cursor.getString(7)
+                cursor.getString(4), cursor.getString(5), cursor.getString(6), cursor.getString(7), cursor.getString(8)
             ))
         }
     }
@@ -118,7 +171,7 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
         }
     }
     private fun rows(table: String): JSONArray {
-        require(table in setOf("contacts", "sessions", "observations"))
+        require(table in setOf("logbooks", "contacts", "sessions", "observations"))
         return readableDatabase.rawQuery("SELECT * FROM $table ORDER BY rowid", null).use { cursor ->
             JSONArray().apply {
                 while (cursor.moveToNext()) put(JSONObject().apply {
@@ -140,10 +193,10 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
         db.beginTransactionNonExclusive()
         try {
             val result = JSONObject().apply {
-                put("format", "bricohams-android-field-data"); put("version", 1)
+                put("format", "bricohams-android-field-data"); put("version", 2)
                 put("exportedAt", Instant.now().toString())
                 put("warning", "Manual observations; phone positions are not beacon locations. Contains personal location data.")
-                put("contacts", rows("contacts")); put("sessions", rows("sessions")); put("observations", rows("observations"))
+                put("logbooks", rows("logbooks")); put("contacts", rows("contacts")); put("sessions", rows("sessions")); put("observations", rows("observations"))
             }.toString(2)
             db.setTransactionSuccessful()
             return result
@@ -162,11 +215,13 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
         val db = writableDatabase
         db.beginTransaction()
         try {
-            require(snapshot.getString("format") == "bricohams-android-field-data" && snapshot.get("version") == 1) {
-                "Formato de copia no admitido; usa JSON exportado por Bricohams Android version 1."
+            val version = snapshot.get("version")
+            require(snapshot.getString("format") == "bricohams-android-field-data" && (version == 1 || version == 2)) {
+                "Formato de copia no admitido; usa JSON exportado por Bricohams Android version 1 o 2."
             }
             var inserted = 0
-            for (table in listOf("contacts", "sessions", "observations")) {
+            // Version 1 copies predate logbooks: their contacts go to the default General logbook.
+            for (table in listOf("logbooks", "contacts", "sessions", "observations").drop(if (version == 1) 1 else 0)) {
                 val rows = snapshot.getJSONArray(table)
                 require(rows.length() <= 50000) { "Demasiados registros en $table (maximo 50000)." }
                 val seen = HashSet<String>()
@@ -175,18 +230,29 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
                     val id = row.getString("id")
                     require(id.matches(Regex("[A-Za-z0-9-]{1,64}")) && seen.add(id)) { "ID invalido o duplicado en $table." }
                     val columns = when (table) {
-                        "contacts" -> setOf("id", "call", "utc", "frequency", "mode", "sent", "received", "notes")
+                        "logbooks" -> setOf("id", "name", "kind", "reference", "station_call", "created")
+                        "contacts" -> setOf("id", "call", "utc", "frequency", "mode", "sent", "received", "notes") +
+                            (if (version == 1) emptySet() else setOf("logbook"))
                         "sessions" -> setOf("id", "name", "started")
                         else -> setOf("id", "session", "fox", "utc", "notes", "latitude", "longitude", "accuracy", "fix_utc")
                     }
                     require(row.keys().asSequence().toSet() == columns) { "Campos inesperados o ausentes en $table." }
                     val values = ContentValues()
                     when (table) {
+                        "logbooks" -> {
+                            Logbook(id, row.getString("name"), row.getString("kind"), row.getString("reference"),
+                                row.getString("station_call")).validated()
+                            columns.forEach { values.put(it, row.getString(it)) }
+                            values.put("created", orderedUtc.format(Instant.parse(row.getString("created"))))
+                        }
                         "contacts" -> {
+                            val logbook = if (version == 1) Logbook.GENERAL else row.getString("logbook")
                             Contact(id, row.getString("call"), Instant.parse(row.getString("utc")), row.getString("frequency"),
-                                row.getString("mode"), row.getString("sent"), row.getString("received"), row.getString("notes")).validated()
+                                row.getString("mode"), row.getString("sent"), row.getString("received"), row.getString("notes"),
+                                logbook).validated()
                             columns.forEach { values.put(it, row.getString(it)) }
                             values.put("utc", orderedUtc.format(Instant.parse(row.getString("utc"))))
+                            values.put("logbook", logbook)
                         }
                         "sessions" -> {
                             require(row.getString("name").isNotBlank() && row.getString("name").length <= 120) { "Nombre de sesion invalido." }
@@ -214,7 +280,7 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
                     }
                     val existing = db.query(table, null, "id = ?", arrayOf(id), null, null, null).use { cursor ->
                         if (!cursor.moveToFirst()) null
-                        else columns.associateWith { column ->
+                        else values.keySet().associateWith { column ->
                             val position = cursor.getColumnIndexOrThrow(column)
                             // getString() renders REAL with %g ("40", 6 digits); compare the exact double as ContentValues does.
                             when (cursor.getType(position)) {
@@ -228,7 +294,7 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
                         db.insertOrThrow(table, null, values)
                         inserted++
                     } else {
-                        require(columns.all { existing[it] == values.getAsString(it) }) {
+                        require(values.keySet().all { existing[it] == values.getAsString(it) }) {
                             "Conflicto de ID en $table: $id. No se sobrescriben registros existentes."
                         }
                     }

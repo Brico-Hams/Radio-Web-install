@@ -16,7 +16,7 @@ class AdifImportTest {
     @Test fun headerlessCaseInsensitiveTypedFieldsAndMinuteTimes() {
         val file = Adif.export(listOf(contact.copy(notes = ""))).substringAfter("<EOH>\n")
             .replace("<CALL:", "<call:").replace("<TIME_ON:6>160102", "<time_on:4:T>1601")
-            .replace("<EOR>", "<BAND:2>2M<APP_EXAMPLE:3>abc<eor>")
+            .replace("<BAND:2>2m", "").replace("<EOR>", "<BAND:4>70CM<APP_EXAMPLE:3>abc<eor>")
         val preview = parse(file)
         assertEquals(Instant.parse("2026-10-25T16:01:00Z"), preview.contacts.single().utc)
         assertEquals(setOf("BAND", "APP_EXAMPLE"), preview.ignoredFields)

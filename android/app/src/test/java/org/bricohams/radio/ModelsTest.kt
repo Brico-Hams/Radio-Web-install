@@ -13,8 +13,25 @@ class ModelsTest {
     @Test fun adifFieldsAndUtc() {
         val adif = Adif.export(listOf(contact()))
         assertEquals("Bricohams Beta\n<ADIF_VER:5>3.1.4<PROGRAMID:9>Bricohams<EOH>\n" +
-            "<CALL:8>EA1ABC/P<QSO_DATE:8>20261025<TIME_ON:6>160001<FREQ:7>145.500" +
+            "<CALL:8>EA1ABC/P<QSO_DATE:8>20261025<TIME_ON:6>160001<BAND:2>2m<FREQ:7>145.500" +
             "<MODE:2>FM<RST_SENT:2>59<RST_RCVD:2>57<COMMENT:8>Portable<EOR>\n", adif)
+    }
+    @Test fun logbookAdifCarriesActivationReferenceAndBand() {
+        val pota = Logbook(id = "pota-1", name = "Parque", kind = "POTA", reference = "EA-0123", stationCall = "EA1ABC/P")
+        val sota = pota.copy(kind = "SOTA", reference = "EA4/MD-001")
+        val inPark = contact().copy(logbook = pota.id, frequencyMHz = "14.285", mode = "SSB")
+        val adif = Adif.export(listOf(inPark), pota)
+        assertTrue(adif.contains("<BAND:3>20m<FREQ:6>14.285"))
+        assertTrue(adif.contains("<STATION_CALLSIGN:8>EA1ABC/P<MY_POTA_REF:7>EA-0123<EOR>"))
+        assertTrue(Adif.export(listOf(inPark), sota).contains("<MY_SOTA_REF:10>EA4/MD-001<EOR>"))
+        invalid { Adif.export(listOf(contact()), pota) }
+        assertFalse(Adif.export(listOf(contact().copy(frequencyMHz = "149"))).contains("<BAND"))
+        assertEquals("23cm", Adif.band("1300")); assertEquals("160m", Adif.band("1.8")); assertNull(Adif.band("2.1"))
+        for (bad in listOf(pota.copy(reference = "EA-12"), pota.copy(stationCall = ""), sota.copy(reference = "EA-0123"),
+            pota.copy(kind = "GENERAL"), pota.copy(kind = "WWFF"), pota.copy(name = " "), pota.copy(id = "bad id"))) {
+            invalid { bad.validated() }
+        }
+        Logbook(name = "Casa", kind = "GENERAL", reference = "", stationCall = "").validated()
     }
     @Test fun noSilentUnicodeLoss() {
         invalid { Adif.export(listOf(contact().copy(notes = "Espa\u00f1a"))) }

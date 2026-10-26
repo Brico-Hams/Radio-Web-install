@@ -15,7 +15,8 @@ data class Contact(
     val mode: String,
     val sent: String,
     val received: String,
-    val notes: String
+    val notes: String,
+    val logbook: String = Logbook.GENERAL
 ) {
     fun validated(): Contact {
         require(call.matches(Regex("[A-Z0-9/]{3,20}")) && call.any(Char::isLetter) && call.any(Char::isDigit)) {
@@ -30,7 +31,39 @@ data class Contact(
         require(utc >= Instant.parse("1900-01-01T00:00:00Z") && utc < Instant.parse("2100-01-01T00:00:00Z")) {
             "Fecha fuera del intervalo admitido (1900-2099)."
         }
+        require(logbook.matches(Regex("[A-Za-z0-9-]{1,64}"))) { "Libro de guardia invalido." }
         return this
+    }
+}
+
+/** Activity logbook; POTA/SOTA templates carry the activator's park or summit reference. */
+data class Logbook(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val kind: String,
+    val reference: String,
+    val stationCall: String
+) {
+    fun validated(): Logbook {
+        require(id.matches(Regex("[A-Za-z0-9-]{1,64}"))) { "ID de libro invalido." }
+        require(name.isNotBlank() && name.length <= 120 && name.all { it.code in 32..126 }) {
+            "Nombre de libro requerido (ASCII, maximo 120 caracteres)."
+        }
+        require(kind in KINDS) { "Plantilla de libro no admitida." }
+        when (kind) {
+            "POTA" -> require(reference.matches(Regex("[A-Z0-9]{1,4}-[0-9]{4,5}"))) { "Referencia POTA invalida (ejemplo EA-0123)." }
+            "SOTA" -> require(reference.matches(Regex("[A-Z0-9]{1,4}/[A-Z0-9]{2}-[0-9]{3}"))) { "Referencia SOTA invalida (ejemplo EA4/MD-001)." }
+            else -> require(reference.isEmpty()) { "El libro General no lleva referencia." }
+        }
+        require(if (kind == "GENERAL" && stationCall.isEmpty()) true else
+            stationCall.matches(Regex("[A-Z0-9/]{3,20}")) && stationCall.any(Char::isLetter) && stationCall.any(Char::isDigit)) {
+            "Indicativo de estacion invalido (obligatorio en POTA/SOTA)."
+        }
+        return this
+    }
+    companion object {
+        const val GENERAL = "general"
+        val KINDS = listOf("GENERAL", "POTA", "SOTA")
     }
 }
 
@@ -51,18 +84,36 @@ object Adif {
         }
         return "<$name:${value.length}>$value"
     }
-    fun export(contacts: List<Contact>): String = buildString {
+    // ADIF 3.1.4 band enumeration (lower/upper MHz, inclusive) within the 0.1-1300 MHz range the log accepts.
+    private val bands = listOf(
+        "2190m 0.1357 0.1378", "630m 0.472 0.479", "560m 0.501 0.504", "160m 1.8 2.0", "80m 3.5 4.0",
+        "60m 5.06 5.45", "40m 7.0 7.3", "30m 10.1 10.15", "20m 14.0 14.35", "17m 18.068 18.168",
+        "15m 21.0 21.45", "12m 24.89 24.99", "10m 28.0 29.7", "8m 40 45", "6m 50 54", "5m 54.000001 69.9",
+        "4m 70 71", "2m 144 148", "1.25m 222 225", "70cm 420 450", "33cm 902 928", "23cm 1240 1300"
+    ).map { it.split(" ").let { (name, low, high) -> name to BigDecimal(low)..BigDecimal(high) } }
+    fun band(frequencyMHz: String): String? = frequencyMHz.toBigDecimalOrNull()?.let { frequency ->
+        bands.firstOrNull { frequency in it.second }?.first
+    }
+    fun export(contacts: List<Contact>, logbook: Logbook? = null): String = buildString {
         append("Bricohams Beta\n<ADIF_VER:5>3.1.4<PROGRAMID:9>Bricohams<EOH>\n")
+        logbook?.validated()
         for (contact in contacts) {
             contact.validated()
+            require(logbook == null || contact.logbook == logbook.id) { "Contacto de otro libro en la exportacion." }
             append(field("CALL", contact.call))
             append(field("QSO_DATE", date.format(contact.utc)))
             append(field("TIME_ON", time.format(contact.utc)))
+            band(contact.frequencyMHz)?.let { append(field("BAND", it)) }
             append(field("FREQ", contact.frequencyMHz))
             append(field("MODE", contact.mode))
             append(field("RST_SENT", contact.sent))
             append(field("RST_RCVD", contact.received))
             if (contact.notes.isNotEmpty()) append(field("COMMENT", contact.notes))
+            if (logbook != null && logbook.stationCall.isNotEmpty()) append(field("STATION_CALLSIGN", logbook.stationCall))
+            when (logbook?.kind) {
+                "POTA" -> append(field("MY_POTA_REF", logbook.reference))
+                "SOTA" -> append(field("MY_SOTA_REF", logbook.reference))
+            }
             append("<EOR>\n")
         }
     }

@@ -9,7 +9,10 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.database.sqlite.SQLiteDatabase
+import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -30,8 +33,11 @@ import java.io.ByteArrayInputStream
 @Config(sdk = [28])
 class RadioStoreHostTest {
     private val context get() = RuntimeEnvironment.getApplication()
-    @Before fun cleanDatabase() { context.deleteDatabase("bricohams.db") }
-    @After fun removeFixture() { context.deleteDatabase("bricohams.db") }
+    @Before fun cleanDatabase() { removeFixture() }
+    @After fun removeFixture() {
+        context.deleteDatabase("bricohams.db")
+        context.getDatabasePath("bricohams-v1-backup.db").delete()
+    }
 
     @Test fun sqlitePersistsUnicodeAndNullableGpsAcrossReopen() {
         val contact = Contact(call = "EA1ABC", utc = Instant.parse("2026-10-25T16:00:00Z"),
@@ -50,7 +56,7 @@ class RadioStoreHostTest {
             assertEquals(listOf(session to "Campo"), store.sessions())
             assertEquals("Baliza 1: 1 observaciones\nBaliza 2: 1 observaciones", store.observationCounts(session))
             val exported = JSONObject(store.export())
-            assertEquals(1, exported.getInt("version"))
+            assertEquals(2, exported.getInt("version"))
             val observations = exported.getJSONArray("observations")
             assertEquals(2, observations.length())
             assertTrue(observations.getJSONObject(0).isNull("latitude"))
@@ -194,7 +200,7 @@ class RadioStoreHostTest {
     @Test fun adifPreviewWarnsBeforeSavingAndCancelLeavesDatabaseUntouched() {
         val contact = Contact(call = "EA1ABC", utc = Instant.parse("2026-10-25T16:00:00Z"),
             frequencyMHz = "145.500", mode = "FM", sent = "59", received = "59", notes = "")
-        val file = Adif.export(listOf(contact)).replace("<EOR>", "<BAND:2>2M<EOR>")
+        val file = Adif.export(listOf(contact)).replace("<EOR>", "<STATE:2>MD<EOR>")
         val uri = Uri.parse("content://test/bricohams.adi")
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
@@ -219,7 +225,7 @@ class RadioStoreHostTest {
             var dialog = ShadowAlertDialog.getLatestAlertDialog()
             val dialogText = views(dialog.window!!.decorView).filterIsInstance<android.widget.TextView>()
                 .joinToString("\n") { it.text }
-            assertTrue(dialogText.contains("Campos NO conservados: BAND"))
+            assertTrue(dialogText.contains("Campos NO conservados: STATE."))
             RadioStore(context).use { assertTrue(it.contacts().isEmpty()) }
             dialog.getButton(AlertDialog.BUTTON_NEGATIVE).performClick()
             RadioStore(context).use { assertTrue(it.contacts().isEmpty()) }
@@ -232,6 +238,116 @@ class RadioStoreHostTest {
                     .any { it.text.contains("ADIF importado: 1 contactos nuevos") }
             }
             RadioStore(context).use { assertEquals(contact.copy(id = it.contacts().single().id), it.contacts().single()) }
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    private fun createV1Database(extraSql: String? = null) {
+        SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath("bricohams.db").apply { parentFile!!.mkdirs() }, null).use { db ->
+            db.execSQL("""CREATE TABLE contacts (id TEXT PRIMARY KEY, call TEXT NOT NULL, utc TEXT NOT NULL,
+                frequency TEXT NOT NULL, mode TEXT NOT NULL, sent TEXT NOT NULL, received TEXT NOT NULL, notes TEXT NOT NULL)""")
+            db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, name TEXT NOT NULL, started TEXT NOT NULL)")
+            db.execSQL("""CREATE TABLE observations (id TEXT PRIMARY KEY, session TEXT NOT NULL REFERENCES sessions(id),
+                fox INTEGER NOT NULL, utc TEXT NOT NULL, notes TEXT NOT NULL, latitude REAL, longitude REAL,
+                accuracy REAL, fix_utc TEXT)""")
+            db.execSQL("""INSERT INTO contacts VALUES ('old-1', 'EA1ABC', '2026-10-25T16:00:00.000000000Z', '145.500', 'FM',
+                '59', '57', 'Antiguo')""")
+            extraSql?.let(db::execSQL)
+            db.version = 1
+        }
+    }
+    private fun v1Contacts(file: File) = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+        assertEquals(1, db.version)
+        db.rawQuery("SELECT id, notes FROM contacts", null).use { buildList { while (it.moveToNext()) add(it.getString(0) to it.getString(1)) } }
+    }
+
+    @Test fun v1MigrationBacksUpFirstAndMovesContactsToGeneralLogbook() {
+        createV1Database()
+        RadioStore(context).use { store ->
+            assertEquals(listOf(Contact("old-1", "EA1ABC", Instant.parse("2026-10-25T16:00:00Z"), "145.500", "FM", "59", "57",
+                "Antiguo", Logbook.GENERAL)), store.contacts())
+            assertEquals(listOf(Logbook.GENERAL), store.logbooks().map { it.id })
+            assertEquals(2, store.readableDatabase.version)
+            store.save(store.contacts().single().copy(notes = "Migrado"), replaceExisting = true)
+        }
+        assertEquals(listOf("old-1" to "Antiguo"), v1Contacts(context.getDatabasePath("bricohams-v1-backup.db")))
+    }
+
+    @Test fun failedV1MigrationRollsBackAndKeepsBackup() {
+        createV1Database("CREATE TABLE logbooks (blocking TEXT)")
+        assertThrows(android.database.sqlite.SQLiteException::class.java) { RadioStore(context).use { it.contacts() } }
+        assertEquals(listOf("old-1" to "Antiguo"), v1Contacts(context.getDatabasePath("bricohams.db")))
+        assertEquals(listOf("old-1" to "Antiguo"), v1Contacts(context.getDatabasePath("bricohams-v1-backup.db")))
+    }
+
+    @Test fun logbooksSeparateContactsAndJsonCopiesKeepThem() {
+        val contact = Contact(call = "EA1ABC", utc = Instant.parse("2026-10-25T16:00:00Z"),
+            frequencyMHz = "14.285", mode = "SSB", sent = "59", received = "59", notes = "")
+        val (pota, snapshot) = RadioStore(context).use { store ->
+            val pota = store.createLogbook(Logbook(name = "Parque", kind = "POTA", reference = "EA-0123", stationCall = "EA1ABC"))
+            store.save(contact)
+            store.save(contact.copy(id = "in-park", logbook = pota.id, notes = "Parque"))
+            assertEquals(listOf("in-park"), store.contacts(pota.id).map { it.id })
+            assertEquals(2, store.contacts().size)
+            assertThrows(android.database.sqlite.SQLiteException::class.java) { store.save(contact.copy(id = "x", logbook = "missing")) }
+            // The same QSO in another logbook is a different activation record, not a duplicate.
+            assertEquals(1 to 0, store.importAdif(listOf(contact.copy(logbook = pota.id))))
+            assertTrue(Adif.export(store.contacts(pota.id), pota).contains("<MY_POTA_REF:7>EA-0123"))
+            pota to store.export()
+        }
+        context.deleteDatabase("bricohams.db")
+        RadioStore(context).use { store ->
+            assertEquals(4, store.importSnapshot(snapshot))
+            assertEquals(listOf("General", "Parque"), store.logbooks().map { it.name })
+            assertEquals(2, store.contacts(pota.id).size)
+            assertEquals(0, store.importSnapshot(snapshot))
+            val v1 = JSONObject().put("format", "bricohams-android-field-data").put("version", 1)
+                .put("contacts", JSONArray().put(JSONObject().put("id", "v1-contact").put("call", "EA2XYZ")
+                    .put("utc", "2026-10-20T10:00:00Z").put("frequency", "7.100").put("mode", "SSB")
+                    .put("sent", "59").put("received", "59").put("notes", "")))
+                .put("sessions", JSONArray()).put("observations", JSONArray()).toString()
+            assertEquals(1, store.importSnapshot(v1))
+            assertEquals(Logbook.GENERAL, store.contacts().single { it.id == "v1-contact" }.logbook)
+            assertEquals(0, store.importSnapshot(v1))
+            val badLogbook = JSONObject(snapshot)
+            badLogbook.getJSONArray("logbooks").getJSONObject(1).put("reference", "nope")
+            assertThrows(IllegalArgumentException::class.java) { store.importSnapshot(badLogbook.toString()) }
+        }
+    }
+
+    @Test fun quickEntryFillsUtcKeepsFrequencyAndSavesToSelectedPotaLogbook() {
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        try {
+            var activity = controller.get()
+            click(activity, "Guardia")
+            activity.findViewById<EditText>(R.id.logbook_name).setText("Parque")
+            activity.findViewById<android.widget.Spinner>(R.id.logbook_kind).setSelection(1)
+            activity.findViewById<EditText>(R.id.logbook_reference).setText("ea-0123")
+            activity.findViewById<EditText>(R.id.logbook_station).setText("ea1abc")
+            click(activity, "Crear libro")
+            activity.findViewById<EditText>(R.id.contact_call).setText("ea2xyz")
+            activity.findViewById<EditText>(R.id.contact_frequency).setText("14.285")
+            activity.findViewById<android.widget.Spinner>(R.id.contact_mode).setSelection(2)
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals("599", activity.findViewById<EditText>(R.id.contact_sent).text.toString())
+            val before = Instant.now().minusSeconds(1)
+            click(activity, "Guardar nuevo contacto")
+            val after = Instant.now()
+            RadioStore(context).use { store ->
+                val pota = store.logbooks().single { it.kind == "POTA" }
+                assertEquals(Logbook(pota.id, "Parque", "POTA", "EA-0123", "EA1ABC"), pota)
+                val saved = store.contacts(pota.id).single()
+                assertEquals("EA2XYZ", saved.call)
+                assertEquals("CW", saved.mode)
+                assertTrue(saved.utc in before..after)
+                assertTrue(store.contacts(Logbook.GENERAL).isEmpty())
+            }
+            assertEquals("", activity.findViewById<EditText>(R.id.contact_call).text.toString())
+            assertEquals("14.285", activity.findViewById<EditText>(R.id.contact_frequency).text.toString())
+            controller.recreate()
+            activity = controller.get()
+            assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.TextView>()
+                .any { it.text.startsWith("Libro: Parque (POTA EA-0123, EA1ABC) - 1 contactos") })
+            assertEquals("CW", activity.findViewById<android.widget.Spinner>(R.id.contact_mode).selectedItem)
         } finally { controller.pause().stop().destroy() }
     }
 

@@ -29,7 +29,11 @@ import android.widget.TextView
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 import kotlin.concurrent.thread
 
@@ -41,6 +45,9 @@ class MainActivity : Activity() {
     private var sessionId: String? = null
     private var editingId: String? = null
     private var contactSearch = ""
+    private var logbookId = Logbook.GENERAL
+    private var lastFrequency = ""
+    private var lastMode = "FM"
     private var adifImportBusy = false
     private var exportKind: String? = null
     private var audioTone = 700
@@ -83,6 +90,9 @@ class MainActivity : Activity() {
         sessionId = savedInstanceState?.getString("session")
         editingId = savedInstanceState?.getString("editing")
         contactSearch = savedInstanceState?.getString("contactSearch") ?: ""
+        logbookId = savedInstanceState?.getString("logbook") ?: Logbook.GENERAL
+        lastFrequency = savedInstanceState?.getString("lastFrequency") ?: ""
+        lastMode = savedInstanceState?.getString("lastMode") ?: "FM"
         exportKind = savedInstanceState?.getString("export")
         audioTone = savedInstanceState?.getInt("tone", 700) ?: 700
         audioSpeed = savedInstanceState?.getInt("speed", 15) ?: 15
@@ -207,35 +217,56 @@ class MainActivity : Activity() {
                 }.show()
         }
     }
+    private fun spinner(identifier: Int, values: List<String>, selected: String) = Spinner(this).apply {
+        id = identifier
+        adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, values)
+        setSelection(values.indexOf(selected).coerceAtLeast(0))
+        content.addView(this)
+    }
+    private fun describe(logbook: Logbook) =
+        if (logbook.kind == "GENERAL") logbook.name else "${logbook.name} (${logbook.kind} ${logbook.reference}, ${logbook.stationCall})"
+    private fun rstFor(mode: String) = if (mode == "CW" || mode == "RTTY") "599" else "59"
     private fun logbook() {
-        val contacts = store.contacts()
+        val logbooks = store.logbooks()
+        val current = logbooks.find { it.id == logbookId } ?: logbooks.first().also { logbookId = it.id; editingId = null }
+        val contacts = store.contacts(current.id)
         val editing = editingId?.let { identifier ->
             requireNotNull(contacts.find { it.id == identifier }) { "El contacto seleccionado ya no existe." }
         }
-        text("Libro de guardia: ${contacts.size} contactos")
-        val call = input("Indicativo", R.id.contact_call, editing?.call ?: "")
-        val utc = input("UTC ISO (ejemplo 2026-10-25T16:00:00Z)", R.id.contact_utc, editing?.utc?.toString() ?: Instant.now().toString())
-        val frequency = input("Frecuencia MHz", R.id.contact_frequency, editing?.frequencyMHz ?: "", numeric = true)
-        val modes = listOf("FM", "SSB", "CW", "AM", "RTTY", "SSTV", "DMR", "DIGITALVOICE")
-        val mode = Spinner(this).apply {
-            id = R.id.contact_mode
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
-                modes)
-            setSelection(modes.indexOf(editing?.mode ?: "FM"))
-            content.addView(this)
+        text("Libro: ${describe(current)} - ${contacts.size} contactos")
+        button("Cambiar de libro (${logbooks.size})") {
+            AlertDialog.Builder(this).setTitle("Libros de guardia")
+                .setItems(logbooks.map(::describe).toTypedArray()) { _, index ->
+                    logbookId = logbooks[index].id; editingId = null; contactSearch = ""; render()
+                }.show()
         }
-        val sent = input("Informe enviado", R.id.contact_sent, editing?.sent ?: "59")
-        val received = input("Informe recibido", R.id.contact_received, editing?.received ?: "59")
+        val call = input("Indicativo", R.id.contact_call, editing?.call ?: "")
+        val frequency = input("Frecuencia MHz", R.id.contact_frequency, editing?.frequencyMHz ?: lastFrequency, numeric = true)
+        val modes = listOf("FM", "SSB", "CW", "AM", "RTTY", "SSTV", "DMR", "DIGITALVOICE")
+        val mode = spinner(R.id.contact_mode, modes, editing?.mode ?: lastMode)
+        val sent = input("RST enviado", R.id.contact_sent, editing?.sent ?: rstFor(lastMode))
+        val received = input("RST recibido", R.id.contact_received, editing?.received ?: rstFor(lastMode))
+        // Quick entry: switching mode swaps untouched default reports (59 phone, 599 CW/RTTY); edits keep stored reports.
+        if (editing == null) mode.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                for (field in listOf(sent, received)) if (field.text.toString() in setOf("59", "599")) field.setText(rstFor(modes[position]))
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
+        val utc = input("UTC ISO (vacio = hora actual al guardar)", R.id.contact_utc, editing?.utc?.toString() ?: "")
         val notes = input("Notas", R.id.contact_notes, editing?.notes ?: "")
         button(if (editing == null) "Guardar nuevo contacto" else "Guardar cambios del contacto") {
+            val utcText = utc.text.toString().trim()
             val updated = Contact(call = call.text.toString().trim().uppercase(Locale.ROOT),
-                utc = Instant.parse(utc.text.toString().trim()), frequencyMHz = frequency.text.toString().trim(),
+                utc = if (utcText.isEmpty()) Instant.now().truncatedTo(ChronoUnit.SECONDS) else Instant.parse(utcText),
+                frequencyMHz = frequency.text.toString().trim(),
                 mode = mode.selectedItem.toString(), sent = sent.text.toString().trim(),
-                received = received.text.toString().trim(), notes = notes.text.toString())
+                received = received.text.toString().trim(), notes = notes.text.toString(), logbook = current.id)
             store.save(if (editing != null) updated.copy(id = editing.id) else updated, editing != null)
+            if (editing == null) { lastFrequency = updated.frequencyMHz; lastMode = updated.mode }
             editingId = null
             render()
-            message("Contacto guardado en el telefono.")
+            message("${updated.call} guardado en ${current.name} (${updated.utc} UTC).")
         }
         if (editing != null) {
             button("Cancelar edicion") { editingId = null; render() }
@@ -248,8 +279,8 @@ class MainActivity : Activity() {
                     } }.show()
             }
         }
-        button("Exportar ADIF (ASCII)") { export("adif") }
-        button("Importar ADIF (vista previa)") {
+        button("Exportar ADIF de este libro (ASCII)") { export("adif") }
+        button("Importar ADIF a este libro (vista previa)") {
             require(!adifImportBusy) { "Ya hay una importacion ADIF en curso." }
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"
@@ -258,7 +289,7 @@ class MainActivity : Activity() {
         button("Exportar JSON completo (con acentos)") { export("json") }
         text("LoTW: esta APK exporta ADIF. La firma y subida deben realizarse con TQSL en un ordenador; no hay subida LoTW desde Android.")
         text("Los formularios sin guardar se descartan al cambiar de seccion.")
-        val search = input("Buscar indicativo, notas, modo o frecuencia", R.id.contact_search, contactSearch)
+        val search = input("Buscar en este libro: indicativo, notas, modo o frecuencia", R.id.contact_search, contactSearch)
         button("Buscar contactos") { contactSearch = search.text.toString().trim(); render() }
         button("Mostrar todos los contactos") { contactSearch = ""; render() }
         val filtered = contacts.filter {
@@ -267,10 +298,24 @@ class MainActivity : Activity() {
         }
         text("${filtered.size} coincidencias; orden UTC mas reciente primero.")
         for (contact in filtered.take(50)) {
-            text("${contact.call} - ${contact.utc}\n${contact.frequencyMHz} MHz ${contact.mode} ${contact.sent}/${contact.received}\n${contact.notes}")
+            val band = Adif.band(contact.frequencyMHz)?.let { " ($it)" } ?: ""
+            text("${contact.call} - ${contact.utc}\n${contact.frequencyMHz} MHz$band ${contact.mode} ${contact.sent}/${contact.received}\n${contact.notes}")
             button("Editar ${contact.call} (${contact.utc})") { editingId = contact.id; render() }
         }
-        if (filtered.size > 50) text("Se muestran las 50 coincidencias mas recientes; la exportacion incluye todos los contactos, no solo la busqueda.")
+        if (filtered.size > 50) text("Se muestran las 50 coincidencias mas recientes; la exportacion incluye todo el libro, no solo la busqueda.")
+        text("Nuevo libro de actividad: General, POTA (parque, ejemplo EA-0123) o SOTA (cumbre, ejemplo EA4/MD-001). POTA y SOTA exigen tu indicativo de estacion; el ADIF lleva MY_POTA_REF o MY_SOTA_REF.")
+        val bookName = input("Nombre del libro", R.id.logbook_name)
+        val kind = spinner(R.id.logbook_kind, Logbook.KINDS, "GENERAL")
+        val reference = input("Referencia de parque o cumbre (vacio en General)", R.id.logbook_reference)
+        val station = input("Mi indicativo de estacion", R.id.logbook_station, current.stationCall)
+        button("Crear libro") {
+            val created = store.createLogbook(Logbook(name = bookName.text.toString().trim(), kind = kind.selectedItem.toString(),
+                reference = reference.text.toString().trim().uppercase(Locale.ROOT),
+                stationCall = station.text.toString().trim().uppercase(Locale.ROOT)))
+            logbookId = created.id; editingId = null; contactSearch = ""
+            render()
+            message("Libro ${created.name} creado y seleccionado.")
+        }
     }
     private fun ardf() {
         val sessions = store.sessions()
@@ -399,12 +444,17 @@ class MainActivity : Activity() {
     }
     private fun export(kind: String) {
         require(exportKind == null) { "Ya hay una exportacion pendiente." }
-        if (kind == "adif") Adif.export(store.contacts())
+        val book = store.logbooks().single { it.id == logbookId }
+        if (kind == "adif") Adif.export(store.contacts(book.id), book)
         exportKind = kind
+        // POTA expects activator uploads named CALL@PARK-YYYYMMDD.adi.
+        val adifName = if (book.kind == "POTA") "${book.stationCall.replace('/', '_')}@${book.reference}-" +
+            LocalDate.now(ZoneOffset.UTC).format(DateTimeFormatter.BASIC_ISO_DATE) + ".adi"
+            else "bricohams-${book.name.replace(Regex("[^A-Za-z0-9-]+"), "_")}.adi"
         startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = if (kind == "adif") "text/plain" else "application/json"
-            putExtra(Intent.EXTRA_TITLE, if (kind == "adif") "bricohams-log.adi" else "bricohams-field-data.json")
+            putExtra(Intent.EXTRA_TITLE, if (kind == "adif") adifName else "bricohams-field-data.json")
         }, 20)
     }
     @Deprecated("Platform callback")
@@ -421,6 +471,7 @@ class MainActivity : Activity() {
                 return
             }
             adifImportBusy = true
+            val book = logbookId
             message("Validando ADIF; no se ha guardado ningun contacto.")
             thread(name = "bricohams-adif-preview") {
                 try {
@@ -429,11 +480,11 @@ class MainActivity : Activity() {
                         if (isDestroyed || isFinishing) return@runOnUiThread
                         val warnings = if (preview.ignoredFields.isEmpty()) "Todos los campos de contactos son compatibles."
                             else "Campos NO conservados: ${preview.ignoredFields.joinToString(", ")}. El original no se modifica."
-                        AlertDialog.Builder(this).setTitle("Importar ${preview.contacts.size} contactos ADIF")
+                        AlertDialog.Builder(this).setTitle("Importar ${preview.contacts.size} contactos ADIF al libro actual")
                             .setMessage("$warnings\n\nSe comparan todos los campos conservados: identicos se omiten; diferencias se agregan sin sobrescribir. No combina contactos por indicativo/hora. Exporta antes una copia JSON. Solo se guarda al aceptar.")
                             .setNegativeButton("Cancelar") { _, _ -> adifImportBusy = false; message("Importacion ADIF cancelada sin cambios.") }
                             .setOnCancelListener { adifImportBusy = false; message("Importacion ADIF cancelada sin cambios.") }
-                            .setPositiveButton("Importar") { _, _ -> saveAdif(preview) }.show()
+                            .setPositiveButton("Importar") { _, _ -> saveAdif(preview, book) }.show()
                     }
                 } catch (error: IllegalArgumentException) {
                     adifImportError(error.message ?: "ADIF invalido.")
@@ -516,10 +567,12 @@ class MainActivity : Activity() {
             return
         }
         message("Exportando datos...")
+        val book = logbookId
         thread(name = "bricohams-export") {
             try {
                 val value = RadioStore(applicationContext).use { exportStore ->
-                    if (kind == "adif") Adif.export(exportStore.contacts()) else exportStore.export()
+                    if (kind == "adif") Adif.export(exportStore.contacts(book), exportStore.logbooks().single { it.id == book })
+                    else exportStore.export()
                 }
                 val stream = contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Proveedor sin flujo de escritura.")
                 stream.bufferedWriter(Charsets.UTF_8).use { it.write(value) }
@@ -538,11 +591,13 @@ class MainActivity : Activity() {
     private fun exportError(value: String) {
         runOnUiThread { if (!isDestroyed) message(value) }
     }
-    private fun saveAdif(preview: AdifPreview) {
+    private fun saveAdif(preview: AdifPreview, book: String) {
         message("Guardando ADIF en una transaccion...")
         thread(name = "bricohams-adif-save") {
             try {
-                val (inserted, skipped) = RadioStore(applicationContext).use { it.importAdif(preview.contacts) }
+                val (inserted, skipped) = RadioStore(applicationContext).use { importStore ->
+                    importStore.importAdif(preview.contacts.map { it.copy(logbook = book) })
+                }
                 runOnUiThread {
                     adifImportBusy = false
                     if (!isDestroyed) {
@@ -567,6 +622,7 @@ class MainActivity : Activity() {
         outState.putString("tab", tab); outState.putString("session", sessionId); outState.putString("export", exportKind)
         outState.putString("editing", editingId)
         outState.putString("contactSearch", contactSearch)
+        outState.putString("logbook", logbookId); outState.putString("lastFrequency", lastFrequency); outState.putString("lastMode", lastMode)
         outState.putInt("tone", audioTone); outState.putInt("speed", audioSpeed); outState.putString("audioResult", audioResult)
         super.onSaveInstanceState(outState)
     }
