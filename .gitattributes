@@ -1,0 +1,2 @@
+# Pinned third-party sources and licences ship byte for byte (SHA-256 checked in tests): never convert line endings.
+android/app/src/main/assets/** -text
