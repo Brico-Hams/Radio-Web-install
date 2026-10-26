@@ -88,6 +88,7 @@ del VFO usando `RADIO_SetupRegisters`. Debe verificarse en hardware.
 | 5 | Velocidad cero: restablece la frecuencia RX nominal |
 | 6 | Aumentar velocidad radial 500 m/s (alejamiento es positivo) |
 | 8 | Habilitar CAT RX temporal / deshabilitar y volver a RX nominal; requiere VFO valido |
+| 9 | Armar / desarmar la PTT CAT (CAT TX v1) para enviar SSTV desde la app |
 | 2 | Audio existente Fox Hunt: silencio, pitidos, audio recibido; comienza con ajuste upstream guardado |
 | EXIT | Salir y restaurar la configuracion RF del VFO |
 
@@ -107,7 +108,7 @@ La compilacion con etiqueta SAT RX midio 112320 bytes, RAM 12352/16384 y Flash
 Los tests del adaptador simulan las primitivas RF: comprueban signos,
 limites, frecuencia aplicada, ausencia de cambios TX/VFO y recuperacion
 tras error. No certifican recepcion, audio ni restauracion fisica.
-El modo es de recepcion, pero el resto del firmware conserva TX upstream.
+El modo es de recepcion salvo la PTT CAT armada con 9 (ver CAT TX); el resto del firmware conserva TX upstream.
 No es un firmware globalmente bloqueado para TX ni un equipo full-duplex.
 
 #### CAT RX Bricohams v1 implementado
@@ -177,6 +178,68 @@ pendiente de aplicado y comprueba el resultado mediante consultas acotadas.
 No hace reintentos SET ni renovaciones automaticas. Un fallo invalida la
 conexion segun el flujo existente y exige reconectar. No son funciones de
 programacion persistente y no conceden permiso para escribir sin respaldo.
+
+#### CAT TX Bricohams v1 (PTT por lease)
+
+Anadido el 2026-10-26 para enviar SSTV desde la app Android. Es una PTT remota
+para una fuente de audio externa conectada a la entrada de microfono de la
+radio; no cambia frecuencia, potencia, subtonos, EEPROM ni Flash. El firmware
+no genera el audio: la app reproduce Robot36 por un cable a la entrada de
+microfono mientras mantiene la PTT.
+
+Seguridad, por orden:
+
+1. **Confirmacion en la radio.** Solo la tecla 9 en SAT RX arma la PTT
+   (`CAT TX ARMED`); el host no puede armarla. Bloquear el teclado, salir de
+   SAT RX o pulsar 9 de nuevo la desarma.
+2. **Lease de 1500 ms.** El host renueva la orden KEY; si deja de hacerlo, la
+   radio suelta la PTT sola. Una orden KEY en cola caduca igual.
+3. **Limite de 120 s por emision.** Al llegar, la radio suelta la PTT, se desarma
+   y muestra `CAT TX LIMIT`; hay que volver a armar con 9.
+4. **Bandas y TX lock de la radio.** Antes de emitir se aplican las mismas
+   comprobaciones que la baliza Fox Hunt (`FOXHUNT_TxState`): TX lock por banda,
+   bateria baja o tension alta y modulacion FM. Si falla, `CAT TX DENIED` y
+   ninguna orden KEY vuelve a funcionar hasta rearmar con 9.
+5. **Cualquier tecla aborta.** Durante la emision el bucle es modal: no corre la
+   medida RX ni los pitidos Geiger de Fox Hunt, solo UART y teclado. Cualquier
+   tecla nueva suelta la PTT y desarma.
+6. **Indicativo obligatorio.** La app no transmite sin un indicativo valido y lo
+   imprime en la imagen Robot36.
+
+Emite en la frecuencia TX del VFO de entrada (con su desplazamiento), sin
+correccion Doppler de subida. El LED rojo se enciende como en la PTT normal y
+la pantalla muestra `CAT TX ON AIR` y la frecuencia TX. Mientras se emite, las
+ordenes CAT RX se aceptan pero se aplican al volver a RX.
+
+Contrato: comando privado `0x7B02`, respuesta `0x7B03`, little-endian.
+
+| Offset solicitud | Bytes | Contenido |
+| --- | ---: | --- |
+| 0 | 1 | Version 1 |
+| 1 | 1 | 0 QUERY, 1 KEY (activar o renovar el lease), 2 UNKEY |
+| 2 | 2 | Secuencia, repetida en la respuesta |
+| 4 | 4 | Reservado, cero obligatorio |
+
+| Offset respuesta | Bytes | Contenido |
+| --- | ---: | --- |
+| 0 | 1 | Version 1 |
+| 1 | 1 | Estado |
+| 2 | 2 | Secuencia; cero si la longitud no permite procesar la solicitud |
+| 4 | 4 | Capacidades 8: PTT con lease; sin frecuencia, potencia ni escritura persistente |
+| 8 | 4 | Flags: bit 0 armada, bit 1 emitiendo, bit 2 KEY pendiente, bit 3 limite alcanzado; bits 8-15 estado VFO del rechazo |
+| 12 | 4 | Milisegundos emitiendo, cero si no emite |
+
+Estados: 0 correcto (KEY: ya emitiendo), 1 en cola (KEY pendiente o UNKEY
+pendiente de aplicar), 2 longitud o reservado, 3 version, 4 operacion,
+5 no armada, 7 rechazada por la radio, 8 limite de 120 s. UNKEY se acepta
+siempre. Las capacidades de CAT RX siguen siendo 7: CAT TX es un endpoint aparte.
+
+Comprobado el 2026-10-26: `cat_tx_test` (protocolo, lease, limite, rechazo) y
+`satellite_adapter_test` (arme por tecla, emision modal, aborto por tecla,
+rechazo, limite, desarme por bloqueo y salida) pasan con las primitivas RF
+simuladas. La imagen F4HWN v6.1.0 Fusion con `--module satellite` y
+`ENABLE_FEAT_F4HWN_FOXHUNT=ON` compila sin avisos: Flash 113212/120832,
+RAM 12384/16384. **Sin validacion en radio ni medida RF.**
 
 En **Quansheng > Operaciones** hay un panel CAT RX Beta para consultar,
 sintonizar durante un lease y volver a nominal. Su estado es la ultima

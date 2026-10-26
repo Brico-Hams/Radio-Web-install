@@ -181,7 +181,7 @@ La asociación está documentada por el proyecto y por la etiqueta del catálogo
 
 ### «El conector reconoce DM32, ¿ya se puede programar?»
 
-La etiqueta está prevista como tipo 11 y transporte SERIAL. No hay destino de firmware DM32 en `TARGETS`. No se ha confirmado aquí un paquete oficial ni todas las funciones. La web no concede permiso de escritura, aunque una identificación y lectura lleguen a completarse.
+La etiqueta está prevista como tipo 11 y transporte SERIAL. No hay destino de firmware DM32 en `TARGETS`. No se ha confirmado aquí un paquete oficial ni todas las funciones. La web no concede permiso de escritura, aunque una identificación y lectura lleguen a completarse. Estado de OpenGD77 en el DM-32, instalación, copias y cómo compilar un firmware abierto: [guía DM-32UV](DM32UV-FIRMWARE.md).
 
 ### «Hay un ZIP oficial para MD2017: ¿por qué no figura al principio del manual?»
 

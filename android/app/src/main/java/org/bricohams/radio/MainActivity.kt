@@ -187,11 +187,12 @@ class MainActivity : Activity() {
     private fun home() {
         text("Bricohams Android 0.7.1 Beta")
         text("Disponible sin red: libro de guardia local con busqueda, importacion ADIF con vista previa, exportacion ADIF/JSON, sesiones ARDF y observaciones GPS puntuales, Morse de texto y WAV PCM experimental.")
-        text("CAT RX experimental por USB OTG, CDC y adaptadores USB-serie reconocidos. Satelites SGP4 offline con TLE importados, observador manual, pases y seguimiento Doppler RX. SSTV Robot36 desde WAV con PNG. Captura de microfono Morse/Robot36 de hasta 60 s y decodificacion posterior. Pendientes: escritura de canales y subida firmada a LoTW.")
+        text("CAT RX experimental por USB OTG, CDC y adaptadores USB-serie reconocidos. Satelites SGP4 offline con TLE importados, observador manual, pases y seguimiento Doppler RX. SSTV Robot36 desde WAV con PNG. Captura de microfono Morse/Robot36 de hasta 60 s y decodificacion posterior. Editor Beta de canales Quansheng F4HWN v6 (frecuencia, subtonos y potencia) con respaldo completo y relectura. Pendiente: subida firmada a LoTW.")
         text("Las observaciones ARDF son manuales. La posicion es la del telefono, no la de una baliza. No se graba un recorrido ni se localiza en segundo plano.")
         text("No se recogen ni transmiten datos. El JSON incluye posiciones y contactos: compartelo solo con quien corresponda.")
         button("Exportar todos los datos JSON") { export("json") }
         button("Abrir CAT RX USB experimental") { startActivity(Intent(this, CatActivity::class.java)) }
+        button("Editar canales Quansheng por USB (Beta)") { startActivity(Intent(this, ChannelActivity::class.java)) }
         button("Abrir SSTV Robot36 desde WAV") { startActivity(Intent(this, SstvActivity::class.java)) }
         button("Recibir Morse / Robot36 con microfono") { startActivity(Intent(this, LiveAudioActivity::class.java)) }
         button("Abrir satelites SGP4 y pases") { startActivity(Intent(this, SatelliteActivity::class.java)) }

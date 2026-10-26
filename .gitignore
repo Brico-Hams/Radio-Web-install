@@ -5,6 +5,8 @@ node_modules/
 *.log
 *.bin
 !precompiled/*.bin
+# Open-licence example firmware ships with its LICENSE (docs/EJEMPLOS.md)
+!examples/firmware/**/*.bin
 *.g77
 *.rwb.json
 *.provenance.json

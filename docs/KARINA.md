@@ -355,3 +355,56 @@ EXE, calibraciones ni firmware Karina.
 Las referencias externas se consultaron en su rama publicada durante la
 inspeccion; no se ha fijado un commit para una nueva derivacion. No se atribuyen
 sus funciones o licencias al binario Karina sin evidencia.
+
+## 12. Investigacion de comunidad (26-10-2026)
+
+Busquedas dirigidas en los grupos de Telegram «QuanSheng UV-K5 en espanol» y
+«Quansheng uv-k5, uv-k5 (8), kr5plus», en GitHub, Codeberg, GitLab, Gitee, GitVerse
+y GitFlic (con sesion iniciada), y en el pack de Dim0s. Sin autores ni datos personales.
+
+### Codigo fuente
+
+| Evidencia | Fuente |
+| --- | --- |
+| «ссылки на репозиторий нет, прошивка закрытая» (no hay repositorio, firmware cerrado); builds en `t.me/quansheng_V3_K1` | `Karina/информация.txt` del [pack Dim0s](https://github.com/Dim0s/quansheng-UV-K5v3-K1-firmware-pack) |
+| «Karina no tiene github, publica las versiones en su foro ruso» | Grupo en espanol |
+| Karina es «la continuacion directa de fagci b5» y Punktracker comparte su codigo de espectro | Grupo ruso |
+| Tema «Karina mod Fagci based» (creado 22-02-2024) y canal del desarrollador «k5fw» | Grupo ruso |
+| Ninguna forja publica contiene Karina; GitFlic y GitVerse no tienen proyectos Quansheng | Busquedas del 26-10-2026 |
+
+Conclusion: **no hay fuentes publicas de Karina**. La base abierta mas cercana es
+[fagci-mod v1.2.1](https://github.com/fagci/uv-k5-firmware-fagci-mod) (Apache-2.0, que
+permite derivados cerrados) y [PUNKTRACKER 2.5](https://github.com/Alexuresp/PUNKTRACKER_2.5)
+(Apache-2.0, V1, con AFC Doppler). `fagci/s0v4`, `hawk5` y `k1-fw` no tienen licencia:
+se pueden leer, no copiar. Decompilar el binario de Karina para reconstruir su fuente
+seria obra derivada; la ley europea solo permite decompilar para interoperabilidad.
+
+### Versiones V3/K1 del pack Dim0s
+
+`21.09.2026` (actual) y antiguas `23.03.2026`, `11.04.2026`, `10.05.2026`, `22.05.2026`,
+`14.06.2026`, `28.06.2026`, `27.07.26`, `29.07.26`, `01.08.26`, `06.08.26`, `11.08.26`,
+`15.08.26` (pruebas), `21.08.2026` y `testfsk7`. Los `.packed` son solo para el flasheador
+oficial; los demas, para flasheadores abiertos.
+
+### Especificacion funcional para una reimplementacion limpia
+
+Resumen propio del `информация.txt` y del registro de cambios del pack, sin copiar codigo:
+
+| Funcion | Comportamiento descrito |
+| --- | --- |
+| Espectro multibanda | Varias bandas a la vez (aerea, marina, LPD, PMR, propias). «Delay» (2400 por defecto, 1100 recomendado) y «Turbo»; mas rapido cuanto mas alto el squelch sobre el ruido |
+| Aceleraciones | Desde 21.09.26 permanentes (antes ligadas a Roger 5); AM con xtal 3 en Roger 5 |
+| Volumen dinamico | Pulsacion larga en 9 (aparece «D») |
+| Balizas y autorrespuesta | F + pulsacion larga en 1/2/3; baliza con FN2 largo, duracion segun TxTime |
+| Generador de tono AM | Incluido |
+| Captura de largo alcance | SQL=3, SAVE=1:3, Roger=3 y pulsacion larga en 1 (mas consumo) |
+| Tres presets de estado | Calibracion, canales y ajustes; seleccion con 0/1/2 al encender |
+| Recepcion | Autocaptura con filtro de ruido, medidas CTCSS/DCS mas largas, cierre lento del squelch en AM, LNA ajustable |
+| Flasheo | Sobre firmware de fabrica; tras flashear, PTT+EXIT al encender para borrar, cargar la calibracion original y despues la de Karina |
+| CHIRP | Solo la pestana de canales: cambiar «Parametros» rompe la baliza y puede bloquear la radio |
+| Fallos conocidos | Primera memoria sin nombre en el espectro, frecuencias erroneas en modo EXP multibanda, flechas invertidas en el menu del K1 |
+
+Ruta recomendada: partir de F4HWN V3 (Apache-2.0), portar el espectro desde fagci-mod y
+PUNKTRACKER, implementar estas funciones como codigo propio y publicarlo abierto. El hardware
+y los protocolos del V3 estan en el [atlas tecnico](ATLAS-UV-K5-V3.md) y el catalogo de
+repositorios en [enlaces de la comunidad](ENLACES-COMUNIDAD.md).

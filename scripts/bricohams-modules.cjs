@@ -29,7 +29,7 @@ function integrateModule(work, module) {
   const define = `BRICOHAMS_ENABLE_${module.toUpperCase()}`;
   const core = ardf ? "ardf" : spectrum ? "spectrum" : "doppler";
   const sources = [`${core}.c`, `${core}.h`, `${module}_foxhunt.inc`];
-  if (module === "satellite") sources.push("cat_rx.c", "cat_rx.h");
+  if (module === "satellite") sources.push("cat_rx.c", "cat_rx.h", "cat_tx.c", "cat_tx.h");
   if (spectrum) sources.push("presets.c", "presets.h");
   const root = path.join(__dirname, "..");
   const staged = new Map();
@@ -38,7 +38,7 @@ function integrateModule(work, module) {
     const content = staged.get(file) ?? fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n");
     staged.set(file, replaceOnce(content, before, after, name));
   };
-  change("CMakeLists.txt", "add_library(App INTERFACE)", `add_library(App INTERFACE)\ntarget_compile_definitions(App INTERFACE ${define})\ntarget_sources(App INTERFACE bricohams/${core}.c${spectrum ? " bricohams/presets.c" : module === "satellite" ? " bricohams/cat_rx.c" : ""})`);
+  change("CMakeLists.txt", "add_library(App INTERFACE)", `add_library(App INTERFACE)\ntarget_compile_definitions(App INTERFACE ${define})\ntarget_sources(App INTERFACE bricohams/${core}.c${spectrum ? " bricohams/presets.c" : module === "satellite" ? " bricohams/cat_rx.c bricohams/cat_tx.c" : ""})`);
   for (const name of ["scheduler.c", "scheduler.h"])
     change(name, "#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS", `#if defined(ENABLE_FEAT_F4HWN_OVERLAY_APPS) || defined(${define})`);
   change("app/foxhunt.c", '#include "app/foxhunt.h"', `#include "app/foxhunt.h"\n\n#ifdef ${define}\nstatic void BH_${prefix}_Draw(void);\nstatic bool BH_${prefix}_Key(KEY_Code_t key);\n#endif`);
@@ -52,7 +52,7 @@ function integrateModule(work, module) {
     `#ifdef ${define}\n#include "bricohams/${module}_foxhunt.inc"\n#endif\n\nvoid APP_RunFoxHunt(void)\n{\n    FOXHUNT_Begin();\n#ifdef ${define}\n    BH_${prefix}_Start();\n#endif`);
   change("app/foxhunt.c", "        FOXHUNT_HandleKeys();", `        #ifdef ${define}\n        BH_${prefix}_Update();\n        #endif\n        FOXHUNT_HandleKeys();`);
   if (module === "satellite") {
-    change("app/uart.c", '#include "app/uart.h"', '#include "app/uart.h"\n#include "bricohams/cat_rx.h"\n#include "scheduler.h"');
+    change("app/uart.c", '#include "app/uart.h"', '#include "app/uart.h"\n#include "bricohams/cat_rx.h"\n#include "bricohams/cat_tx.h"\n#include "scheduler.h"');
     change("app/uart.c", "        case 0x0514:",
       `        case 0x7B00: /* Bricohams CAT RX v1, private experimental command. */
         {
@@ -63,6 +63,19 @@ function integrateModule(work, module) {
             Reply.Header.ID = 0x7B01;
             Reply.Header.Size = BH_CAT_REPLY_SIZE;
             bh_cat_request(&bh_cat_receiver, pUART_Command->Data,
+                pUART_Command->Header.Size, SCHEDULER_GetTick10ms() * 10U, Reply.Data);
+            SendReply(Port, &Reply, sizeof(Reply));
+            break;
+        }
+        case 0x7B02: /* Bricohams CAT TX v1: leased PTT, armed only on the radio keypad. */
+        {
+            struct __attribute__((packed)) {
+                Header_t Header;
+                uint8_t Data[BH_CAT_TX_REPLY_SIZE];
+            } Reply;
+            Reply.Header.ID = 0x7B03;
+            Reply.Header.Size = BH_CAT_TX_REPLY_SIZE;
+            bh_cat_tx_request(&bh_cat_transmitter, pUART_Command->Data,
                 pUART_Command->Header.Size, SCHEDULER_GetTick10ms() * 10U, Reply.Data);
             SendReply(Port, &Reply, sizeof(Reply));
             break;

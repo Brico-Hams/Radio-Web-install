@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef enum { KEY_INVALID, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_PTT } KEY_Code_t;
+typedef enum { KEY_INVALID, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_PTT, KEY_9 } KEY_Code_t;
 typedef struct { uint32_t Frequency; } frequency_t;
 typedef struct { frequency_t *pRX; frequency_t *pTX; } vfo_t;
 static frequency_t rx = {43500000}, tx = {14500000};
@@ -32,6 +32,49 @@ static void UI_PrintStringSmallNormal(const char *text, unsigned left, unsigned 
 {
     (void)left; (void)right;
     snprintf(line == 2 ? line2 : line6, 32, "%s", text);
+}
+#include "bricohams/cat_tx.h"
+#define ENABLE_UART
+typedef enum { VFO_STATE_NORMAL = 0, VFO_STATE_BUSY, VFO_STATE_BAT_LOW, VFO_STATE_TX_DISABLE } VfoState_t;
+#define BK4819_GPIO1_PIN29_PA_ENABLE 29U
+#define BK4819_GPIO5_PIN1_RED 1U
+static vfo_t *gTxVfo = &vfo;
+static vfo_t *gCurrentVfo;
+static VfoState_t tx_state;
+static KEY_Code_t pressed;
+static struct { KEY_Code_t current; } kbd;
+static bool red_led;
+static unsigned dtmf_off, keyups, mutes, unmutes, pa_off, restores, services, press_after;
+static bool on_air;
+static uint32_t renew_until;
+static char tx_line2[32], tx_line6[32];
+static VfoState_t FOXHUNT_TxState(void) { return tx_state; }
+static void AUDIO_AudioPathOff(void) {}
+static void RADIO_SetTxParameters(void) { keyups++; on_air = true; }
+static void BK4819_ExitTxMute(void) { unmutes++; }
+static void BK4819_EnterTxMute(void) { mutes++; }
+static void BK4819_DisableDTMF(void) { dtmf_off++; }
+static void BK4819_ToggleGpioOut(unsigned pin, bool on)
+{
+    if (pin == 29U && !on) { pa_off++; on_air = false; }
+    if (pin == 1U) red_led = on;
+}
+static void RADIO_SetupRegisters(bool full) { (void)full; restores++; }
+static KEY_Code_t KEYBOARD_GetKey(void) { return pressed; }
+static void BACKLIGHT_Update(void) {}
+static bool tx_led;
+static void FOXHUNT_BlitScreen(void) { strcpy(tx_line2, line2); strcpy(tx_line6, line6); tx_led = red_led; }
+/* Scripted host for the modal TX loop: each service is one 10 ms pass; renew the lease until renew_until. */
+static void UART_ServiceCommands(void)
+{
+    static const uint8_t renew[BH_CAT_TX_REQUEST_SIZE] = {1, 1, 0, 0, 0, 0, 0, 0};
+    uint8_t reply[BH_CAT_TX_REPLY_SIZE];
+    services++;
+    tick++;
+    if (tick * 10U < renew_until)
+        bh_cat_tx_request(&bh_cat_transmitter, renew, sizeof(renew), tick * 10U, reply);
+    if (press_after != 0 && services == press_after)
+        pressed = KEY_3;
 }
 #include "bricohams/satellite_foxhunt.inc"
 
@@ -133,6 +176,75 @@ int main(void)
     bh_cat_request(&bh_cat_receiver, request, sizeof(request), 10001, reply);
     CHECK(reply[1] == 5);
     foxLocked = false;
+
+    /* CAT PTT: armed only on the keypad, held by a lease, gated by the radio's TX checks. */
+    BH_SAT_Start();
+    uint8_t ptt[BH_CAT_TX_REQUEST_SIZE] = {1, 1, 0, 0, 0, 0, 0, 0};
+    uint8_t ptt_reply[BH_CAT_TX_REPLY_SIZE];
+    tick = 20000;
+    bh_cat_tx_request(&bh_cat_transmitter, ptt, sizeof(ptt), tick * 10U, ptt_reply);
+    BH_SAT_Update();
+    CHECK(ptt_reply[1] == BH_CAT_TX_NOT_ARMED && keyups == 0);
+    CHECK(BH_SAT_Key(KEY_9) && bh_cat_transmitter.armed);
+    BH_SAT_Draw();
+    CHECK(strcmp(line2, "CAT TX ARMED") == 0);
+    renew_until = (tick + 300U) * 10U;
+    bh_cat_tx_request(&bh_cat_transmitter, ptt, sizeof(ptt), tick * 10U, ptt_reply);
+    CHECK(ptt_reply[1] == BH_CAT_TX_QUEUED && keyups == 0);
+    const unsigned before_tx = tunes;
+    BH_SAT_Update();
+    CHECK(keyups == 1 && unmutes == 1 && mutes == 1 && pa_off == 1 && restores == 1 && !on_air);
+    CHECK(gCurrentVfo == gTxVfo && dtmf_off == 1 && tx_led && !red_led);
+    CHECK(strcmp(tx_line2, "CAT TX ON AIR") == 0 && strcmp(tx_line6, "TX 145.00000") == 0);
+    /* Lease: last renewal at 2.99 s, PTT dropped 1.5 s later. */
+    CHECK(tick == 20000U + 449U);
+    CHECK(!bh_cat_transmitter.keyed && bh_cat_transmitter.armed);
+    CHECK(tunes == before_tx + 1 && tuned_frequency == 43500000);
+
+    /* Any key on the radio aborts and disarms; the key is not replayed to the hunt. */
+    services = 0; press_after = 50; renew_until = UINT32_MAX;
+    bh_cat_tx_request(&bh_cat_transmitter, ptt, sizeof(ptt), tick * 10U, ptt_reply);
+    BH_SAT_Update();
+    CHECK(keyups == 2 && pa_off == 2 && !on_air && services == 50);
+    CHECK(!bh_cat_transmitter.armed && kbd.current == KEY_3);
+    pressed = KEY_INVALID; press_after = 0; renew_until = 0;
+
+    /* TX lock / band / battery refusal stays until re-armed on the radio. */
+    BH_SAT_Key(KEY_9);
+    tx_state = VFO_STATE_TX_DISABLE;
+    bh_cat_tx_request(&bh_cat_transmitter, ptt, sizeof(ptt), tick * 10U, ptt_reply);
+    BH_SAT_Update();
+    CHECK(keyups == 2 && bh_cat_transmitter.denied_state == VFO_STATE_TX_DISABLE);
+    BH_SAT_Draw();
+    CHECK(strcmp(line2, "CAT TX DENIED") == 0);
+    bh_cat_tx_request(&bh_cat_transmitter, ptt, sizeof(ptt), tick * 10U, ptt_reply);
+    CHECK(ptt_reply[1] == BH_CAT_TX_DENIED);
+    tx_state = VFO_STATE_NORMAL;
+    BH_SAT_Key(KEY_9);
+    CHECK(!bh_cat_transmitter.armed);
+    BH_SAT_Key(KEY_9);
+    CHECK(bh_cat_transmitter.armed && bh_cat_transmitter.denied_state == 0);
+
+    /* Time cap: a host that never stops renewing is cut at 120 s and disarmed. */
+    renew_until = UINT32_MAX;
+    const uint32_t cap_start = tick;
+    bh_cat_tx_request(&bh_cat_transmitter, ptt, sizeof(ptt), tick * 10U, ptt_reply);
+    BH_SAT_Update();
+    CHECK(keyups == 3 && !on_air && bh_cat_transmitter.limit && !bh_cat_transmitter.armed);
+    CHECK((tick - cap_start) * 10U == BH_CAT_TX_MAX_MS);
+    BH_SAT_Draw();
+    CHECK(strcmp(line2, "CAT TX LIMIT") == 0);
+    renew_until = 0;
+
+    /* Keypad lock and leaving the screen both disarm. */
+    BH_SAT_Key(KEY_9);
+    foxLocked = true;
+    BH_SAT_Update();
+    CHECK(!bh_cat_transmitter.armed);
+    foxLocked = false;
+    BH_SAT_Key(KEY_9);
+    BH_SAT_Stop();
+    CHECK(!bh_cat_transmitter.armed && keyups == 3);
     puts("Satellite adapter checks passed with mocked RF calls; no hardware validation");
     return EXIT_SUCCESS;
 }

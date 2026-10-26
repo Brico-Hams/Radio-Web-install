@@ -20,6 +20,7 @@ const ALLOWED_FILES = Object.freeze([
   "ayuda-anytone.html",
   "ayuda-bricohams.html", "ayuda-entrega.html", "ayuda-android.html", "help-docs.css",
   "ayuda-egzumer.html", "ayuda-pack-dim0s.html", "ayuda-atlas-uv-k5-v3.html",
+  "ayuda-dm32uv.html", "ayuda-enlaces-comunidad.html", "ayuda-binarios-terceros.html", "ayuda-ejemplos.html",
   "docs/atlas/bloques-v3.svg", "docs/atlas/flash-interna-v3.svg", "docs/atlas/flash-externa-v3.svg",
   "docs/atlas/trama-serie.svg", "docs/atlas/secuencia-dfu.svg",
   "docs/atlas/k1-view-a.jpg", "docs/atlas/k1-view-b-recto.jpg", "docs/atlas/k1-view-b-verso.jpg",

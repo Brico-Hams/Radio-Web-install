@@ -22,7 +22,11 @@ const pages = Object.freeze({
   "BRICOHAMS-FIRMWARE.md": "ayuda-bricohams.html",
   "ESTADO-ENTREGA.md": "ayuda-entrega.html",
   "ANDROID.md": "ayuda-android.html",
-  "ATLAS-UV-K5-V3.md": "ayuda-atlas-uv-k5-v3.html"
+  "ATLAS-UV-K5-V3.md": "ayuda-atlas-uv-k5-v3.html",
+  "DM32UV-FIRMWARE.md": "ayuda-dm32uv.html",
+  "ENLACES-COMUNIDAD.md": "ayuda-enlaces-comunidad.html",
+  "BINARIOS-TERCEROS.md": "ayuda-binarios-terceros.html",
+  "EJEMPLOS.md": "ayuda-ejemplos.html"
 });
 const escape = value => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;")
   .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");

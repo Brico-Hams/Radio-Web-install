@@ -19,7 +19,12 @@
     <string name="live_image_lost">La imagen se perdio al recrear la pantalla. Decodifica una captura nueva.</string>
     <string name="app_name">Bricohams Beta</string>
     <string name="cat_intro">USB/CAT experimental, solo Bricohams SAT RX v1. Sin prueba fisica Android.</string>
-    <string name="cat_help">Bricohams Beta - USB OTG: CDC ACM y adaptadores reconocidos CH34x, CP210x, FTDI o Prolific de un puerto. En la radio: SAT RX y tecla 8. Sin TX, canales, EEPROM ni calibracion. La sintonia caduca a los 3 s sin renovar.</string>
+    <string name="cat_help">Bricohams Beta - USB OTG: CDC ACM y adaptadores reconocidos CH34x, CP210x, FTDI o Prolific de un puerto. En la radio: SAT RX y tecla 8 para CAT RX. Sin canales, EEPROM ni calibracion. La sintonia caduca a los 3 s sin renovar.</string>
+    <string name="cat_sstv_record">Grabar Robot36 (CAT sigue sintonizando)</string>
+    <string name="cat_sstv_stop">Detener grabacion y decodificar</string>
+    <string name="cat_sstv_sending">Transmitiendo Robot36 por PTT CAT...</string>
+    <string name="cat_sstv_recording">Grabando Robot36 (max. 60 s). El Doppler o la sintonia CAT siguen activos. Pulsa Detener al acabar la imagen.</string>
+    <string name="cat_sstv_help">SSTV Robot36. RX: inicia el Doppler o sintoniza, conecta el altavoz de la radio al microfono del movil y graba. TX: cable de audio del movil a la entrada de microfono de la radio; en la radio arma la PTT CAT con la tecla 9 en SAT RX. Emite en la frecuencia TX del VFO, respeta TX lock y bandas, corta a los 120 s, y cualquier tecla de la radio aborta. Indicativo obligatorio: se imprime en la imagen. Requiere licencia y una frecuencia autorizada para SSTV.</string>
     <string name="cat_frequency_label">Frecuencia RX MHz (hasta 5 decimales)</string>
     <string name="cat_invalid_frequency">Introduce MHz en pasos de 10 Hz, VHF 136-174 o UHF 400-470.</string>
     <string name="cat_no_devices">No hay dispositivo USB reconocido de un puerto. Comprueba OTG, cable y firmware. No se sustituye por un dispositivo arbitrario.</string>

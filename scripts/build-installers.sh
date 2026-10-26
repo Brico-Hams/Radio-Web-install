@@ -22,6 +22,7 @@ app_files=(
   ayuda-anytone.html
   ayuda-entrega.html ayuda-android.html
   ayuda-egzumer.html ayuda-pack-dim0s.html ayuda-atlas-uv-k5-v3.html
+  ayuda-dm32uv.html ayuda-enlaces-comunidad.html ayuda-binarios-terceros.html ayuda-ejemplos.html
   app.js radio-core.js transports.js quansheng-connector.js quansheng-channels.js gd77-connector.js
   backup-store.js codeplug-editor.js radio-ui.js firmware-core.js firmware-catalog.js
   planning-core.js radioid-csv.js planning-ui.js runtime-mode.js server.cjs studio-pin.cjs studio.html studio.lock.json

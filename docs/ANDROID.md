@@ -19,9 +19,10 @@ La version `0.7.1-beta` no sustituye sus funciones completas.
 | Morse desde archivo de audio | WAV PCM mono 16 bits experimental, tono/velocidad configurados |
 | Microfono | Captura en primer plano hasta 60 s y decodificacion posterior Morse/Robot36; sin escucha ni decodificacion continua |
 | USB/CAT RX | CDC ACM y adaptadores USB-serie reconocidos de un puerto, identificacion F4HWN v6+, consulta, sintonia temporal confirmada y STOP; experimental |
+| CAT TX (PTT) | Envio Robot36 con PTT por lease armada en la radio (tecla 9), indicativo obligatorio, limite de 120 s, rechazo por TX lock y bandas; experimental |
 | Satelites | SGP4 offline, catalogo TLE importado, observador manual, prediccion 24 h y seguimiento Doppler RX por CAT durante el pase seleccionado |
-| SSTV Robot36 | Decodificacion experimental de WAV o captura completa con cabecera VIS 8, imagen 320x240 y exportacion PNG; sin TX |
-| Escritura de canales, subtonos y potencia | No implementada en Android; no se habilita una escritura sin respaldo |
+| SSTV Robot36 | Decodificacion de WAV o captura de microfono, tambien con CAT sintonizando, y codificador Robot36 para enviar por PTT CAT; experimental |
+| Escritura de canales, subtonos y potencia | Editor de canales FM F4HWN v6 por USB con respaldo completo y relectura |
 
 La interfaz usa el PNG original Bricohams y acento naranja sobre fondo oscuro.
 El icono mantiene la marca original en lugar de inventar una variante; lint
@@ -236,13 +237,42 @@ renueva el lease. Si el cable se desconecta no puede garantizarse entrega
 de STOP: se informa del error y el lease restaura nominal solo si el bucle
 de la radio sigue ejecutandose. Comprueba la frecuencia en la radio.
 CRC, XOR y comprobacion de secuencia detectan fallos del protocolo, pero
-no son cifrado ni autenticacion. No hay TX/PTT, escritura de canales,
-subtonos, potencia, firmware, EEPROM ni calibracion.
+no son cifrado ni autenticacion. CAT RX no hace TX/PTT (eso es CAT TX, aparte) ni toca firmware,
+EEPROM o calibracion. La edicion de canales va aparte, en el editor de canales.
 
 La operacion USB se serializa fuera del hilo de interfaz, conserva los
 bytes sobrantes de paquetes bulk y verifica transferencias parciales.
 No utiliza servicios en segundo plano. Estas funciones tienen pruebas
 con USB simulado; faltan pruebas OTG y RF con telefono/radio reales.
+
+## Editor de canales Quansheng por USB (Beta)
+
+Pantalla «Editar canales Quansheng por USB (Beta)». Es el port Android del
+editor web: mismos comandos F4HWN v6, mismo respaldo y misma escritura con
+relectura. Solo edita canales FM existentes.
+
+1. Elegir el cable (OTG con CDC o adaptador USB-serie reconocido) y conectar.
+   La radio se identifica con `0x0514`. F4HWN v6.0 queda en solo lectura.
+2. Respaldo completo: calibracion de 512 bytes, Flash externa de 2 MiB en
+   bloques de 128 bytes con `0x0738`, CRC-32 comprobado por la radio con
+   `0x073E` y firmware Main validado por su cabecera `FMB1` y CRC. Tarda
+   10-20 minutos a 38400 baudios; la pantalla se mantiene encendida. Se guarda
+   en el almacenamiento privado de la app con `SHA256SUMS`. Exige Labs v6.1+.
+3. Leer canales: configuracion logica de 41344 bytes (`0x051B`).
+4. Elegir canal y editar nombre, RX, TX, tono RX y TX (OFF, CTCSS en Hz como
+   `88.5` o DCS como `D023N` / `D023I`), potencia (USER, LOW1-LOW5, MID, HIGH),
+   banda estrecha y bloqueo de TX. Frecuencias 136-174 y 400-470 MHz en la
+   misma banda, como la web. Los demas bits del canal se conservan.
+5. Aplicar a la copia local: no escribe la radio todavia.
+6. Escribir: confirma, vuelve a verificar el respaldo por SHA-256 y comprueba
+   que la radio sigue igual que al leerla. Oculta los canales afectados,
+   escribe bloques de 8 bytes (`0x051D`), los vuelve a mostrar y relee toda la
+   configuracion. Si la relectura no coincide, se informa y no se da por bueno.
+   VFO, ajustes, calibracion y bancos estan protegidos.
+
+Desconectar, salir de la pantalla o cualquier error cierra la sesion: hay que
+volver a conectar y respaldar antes de escribir. No es una transaccion
+resistente a cortes de alimentacion. Reinicia la radio despues de escribir.
 
 ## Satelites SGP4 y seguimiento de pases
 
@@ -373,6 +403,40 @@ por separado como se indica a continuacion. El comportamiento con
 grabaciones RF y rutas de audio fisicas sigue pendiente de validacion.
 Las pruebas sinteticas no sustituyen esas comprobaciones.
 
+## SSTV Robot36 por CAT: recepcion sintonizada y envio con PTT
+
+En la pantalla CAT, debajo de la conexion USB, hay tres acciones SSTV.
+
+**Recibir.** Inicia el Doppler del pase o sintoniza a mano, conecta el altavoz
+de la radio a la entrada de audio del movil y pulsa *Grabar Robot36 (CAT sigue
+sintonizando)*. La grabacion usa la misma captura de 60 s que la pantalla de
+microfono y no detiene el seguimiento CAT, que corre en otro hilo. Pulsa
+*Detener grabacion y decodificar* al acabar la imagen.
+
+**Enviar.** Requiere la imagen Bricohams Satelites con CAT TX v1 (comando
+`0x7B02`, ver `BRICOHAMS-FIRMWARE.md`). Pasos:
+
+1. Escribe el indicativo. **Es obligatorio**: sin uno valido no se abre el
+   selector, y se imprime en la franja inferior de la imagen.
+2. Conecta la salida de audio del movil a la entrada de microfono de la radio.
+   El USB-C de la radio queda para CAT; el movil necesita jack de 3,5 mm o un
+   hub OTG con audio.
+3. En la radio, en SAT RX, pulsa la tecla 9: `CAT TX ARMED`.
+4. Pulsa *Enviar Robot36 por PTT CAT*, elige la imagen (se escala a 320x240) y
+   confirma el dialogo con la frecuencia, el indicativo y la duracion (~37 s).
+
+La app consulta la PTT y no emite si la radio no esta armada, alcanzo el
+limite o rechaza TX. Activa la PTT, espera la confirmacion de la radio y solo
+entonces reproduce el audio, renovando el lease cada 400 ms. Si una renovacion
+falla (tecla pulsada en la radio, limite, bloqueo) o la pantalla pasa a segundo
+plano, corta el audio, suelta la PTT y lo confirma con una relectura. Si la
+relectura falla, la radio suelta la PTT sola a los 1,5 s. El audio se limita a
+110 s, por debajo del corte de 120 s de la radio.
+
+Emite en la frecuencia TX del VFO de la radio, sin correccion Doppler de
+subida, y no se permite durante el seguimiento de un pase. Necesitas licencia
+y una frecuencia autorizada para SSTV. **Sin validacion en radio ni RF.**
+
 ## Captura de microfono Morse y Robot36
 
 Desde Inicio pulsa Recibir Morse / Robot36 con microfono. Selecciona el modo;
@@ -459,9 +523,11 @@ La APK de prueba no es la aplicacion de uso habitual.
 
 ## Validacion realizada y pendiente
 
-Sesenta y nueve pruebas host: cinco de modelos/ADIF, cuatro de importacion
-ADIF, tres de audio, ocho de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT y ocho
-de USB CDC/serie simulado, tres de nucleo Robot36 y dos de pantalla SSTV,
+Ochenta y cuatro pruebas host: cinco de modelos/ADIF, cuatro de importacion
+ADIF, tres de audio, ocho de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT,
+cinco del codec de canales, cinco de memoria/respaldo/escritura Quansheng y ocho
+de USB CDC/serie simulado, cuatro de nucleo Robot36 (incluida ida y vuelta del codificador), dos de pantalla SSTV,
+cuatro de envio SSTV por PTT CAT con radio simulada,
 tres de SGP4/TLE, cuatro de seguimiento, dos de pantalla de satelites,
 cinco de captura PCM, seis de pantalla de microfono y seis de estadisticas ARDF.
 Comprueban SQLite tras cerrar/reabrir, actualizacion/eliminacion,
@@ -492,6 +558,11 @@ rechazo de multipuerto/desconocidos, parametros 38400 8N1, lectura en partes,
 propagacion de errores sin repetir SET y cierre si falla la configuracion.
 La prueba integrada recorre pantalla, identificacion, SET RX y STOP antes
 del cierre al ocultar la actividad, usando un dispositivo simulado.
+Canales: lectura de tonos, potencia y flags; edicion que solo cambia los
+bytes del canal; las 50 CTCSS y 104 DCS ida y vuelta; rechazos sin tocar la
+copia. Una radio F4HWN simulada comprueba respaldo completo (CRC de la radio,
+Main, calibracion), SHA-256 en disco, orden de escritura web, relectura y
+bloqueos por ajustes, radio modificada, v6.0, CRC y bloque rechazado.
 ADIF comprueba ida/vuelta, etiquetas dentro de comentarios, cabecera opcional,
 horas en minutos, campos no conservados, registros truncados/invalidos y ASCII.
 SQLite verifica duplicados y rollback con un fallo real de insercion inyectado.

@@ -52,11 +52,12 @@
 <tr><td>5</td><td>Velocidad cero: restablece la frecuencia RX nominal</td></tr>
 <tr><td>6</td><td>Aumentar velocidad radial 500 m/s (alejamiento es positivo)</td></tr>
 <tr><td>8</td><td>Habilitar CAT RX temporal / deshabilitar y volver a RX nominal; requiere VFO valido</td></tr>
+<tr><td>9</td><td>Armar / desarmar la PTT CAT (CAT TX v1) para enviar SSTV desde la app</td></tr>
 <tr><td>2</td><td>Audio existente Fox Hunt: silencio, pitidos, audio recibido; comienza con ajuste upstream guardado</td></tr>
 <tr><td>EXIT</td><td>Salir y restaurar la configuracion RF del VFO</td></tr>
 </tbody></table></div>
 <p>Limite manual +/-12 km/s, sin wrap. La velocidad y frecuencia corregida se muestran en pantalla. <code>SAT INVALID VFO</code> significa entrada nominal o correccion fuera de rango: no se realiza la nueva escritura RF y se mantiene la ultima sintonia aceptada; tecla 5 restablece cero si el nominal es valido. Cambiar de canal/frecuencia nominal requiere salir y volver a entrar. Las teclas nuevas respetan el bloqueo de teclado y no usan F como inversor. No hay TLE, seleccion automatica de satelite, reloj UTC, SGP4 ni prediccion del pase dentro de la radio. Se proporciona manualmente una velocidad radial correcta de un predictor externo, o una frecuencia RX absoluta por el nuevo CAT experimental. No se deduce de RSSI.</p>
-<p>La compilacion con etiqueta SAT RX midio 112320 bytes, RAM 12352/16384 y Flash 111432/120832; cualquier cambio posterior debe volver a medirse. Los tests del adaptador simulan las primitivas RF: comprueban signos, limites, frecuencia aplicada, ausencia de cambios TX/VFO y recuperacion tras error. No certifican recepcion, audio ni restauracion fisica. El modo es de recepcion, pero el resto del firmware conserva TX upstream. No es un firmware globalmente bloqueado para TX ni un equipo full-duplex.</p>
+<p>La compilacion con etiqueta SAT RX midio 112320 bytes, RAM 12352/16384 y Flash 111432/120832; cualquier cambio posterior debe volver a medirse. Los tests del adaptador simulan las primitivas RF: comprueban signos, limites, frecuencia aplicada, ausencia de cambios TX/VFO y recuperacion tras error. No certifican recepcion, audio ni restauracion fisica. El modo es de recepcion salvo la PTT CAT armada con 9 (ver CAT TX); el resto del firmware conserva TX upstream. No es un firmware globalmente bloqueado para TX ni un equipo full-duplex.</p>
 <h4 id="cat-rx-bricohams-v1-implementado">CAT RX Bricohams v1 implementado</h4>
 <p>La imagen <code>Satellite-CAT-final-20261025</code> mide 113868 bytes RAW, RAM 12384/16384 y Flash 112980/120832. Incluye bootlogo Bricohams y un endpoint experimental propio, no compatibilidad con protocolos CAT de Kenwood/Yaesu ni soporte CAT de otras ediciones F4HWN.</p>
 <p>En SAT RX, pulsa 8 con el teclado desbloqueado: <code>CAT READY RX</code>. Una orden valida muestra <code>SAT CAT RX</code>. Las teclas 4/5/6 deshabilitan CAT y devuelven el control al Doppler manual; 8 lo deshabilita y restaura la frecuencia RX nominal de entrada. Bloquear el teclado cancela CAT y vuelve a RX nominal. Salir del modo elimina el estado CAT antes de restaurar el VFO por el flujo upstream. Volver a entrar exige habilitar de nuevo con 8.</p>
@@ -80,6 +81,35 @@
 </tbody></table></div>
 <p>Estados: 0 consulta correcta, 1 en cola, 2 longitud/campos incorrectos, 3 version no soportada, 4 operacion no soportada, 5 CAT no habilitado, 6 frecuencia fuera de banda. Todo error conserva el estado anterior. SET/STOP devuelven 1: <strong>no significa aplicado</strong>. El bucle RX aplica el cambio validado, actualiza frecuencia reportada y limpia el bit pendiente. Un SET posterior antes de aplicar sustituye al anterior, no crea una cola sin limite. STOP solicita RX nominal y termina el lease, sin deshabilitar la posibilidad de otra orden mientras siga habilitado fisicamente.</p>
 <p>El conector web expone <code>getCatStatus</code>, <code>setCatReceive(frequency10Hz)</code> y <code>stopCatReceive</code>. Valida secuencia/version/capacidades, diferencia estado pendiente de aplicado y comprueba el resultado mediante consultas acotadas. No hace reintentos SET ni renovaciones automaticas. Un fallo invalida la conexion segun el flujo existente y exige reconectar. No son funciones de programacion persistente y no conceden permiso para escribir sin respaldo.</p>
+<h4 id="cat-tx-bricohams-v1-ptt-por-lease">CAT TX Bricohams v1 (PTT por lease)</h4>
+<p>Anadido el 2026-10-26 para enviar SSTV desde la app Android. Es una PTT remota para una fuente de audio externa conectada a la entrada de microfono de la radio; no cambia frecuencia, potencia, subtonos, EEPROM ni Flash. El firmware no genera el audio: la app reproduce Robot36 por un cable a la entrada de microfono mientras mantiene la PTT.</p>
+<p>Seguridad, por orden:</p>
+<ol>
+<li><strong>Confirmacion en la radio.</strong> Solo la tecla 9 en SAT RX arma la PTT (<code>CAT TX ARMED</code>); el host no puede armarla. Bloquear el teclado, salir de SAT RX o pulsar 9 de nuevo la desarma.</li>
+<li><strong>Lease de 1500 ms.</strong> El host renueva la orden KEY; si deja de hacerlo, la radio suelta la PTT sola. Una orden KEY en cola caduca igual.</li>
+<li><strong>Limite de 120 s por emision.</strong> Al llegar, la radio suelta la PTT, se desarma y muestra <code>CAT TX LIMIT</code>; hay que volver a armar con 9.</li>
+<li><strong>Bandas y TX lock de la radio.</strong> Antes de emitir se aplican las mismas comprobaciones que la baliza Fox Hunt (<code>FOXHUNT_TxState</code>): TX lock por banda, bateria baja o tension alta y modulacion FM. Si falla, <code>CAT TX DENIED</code> y ninguna orden KEY vuelve a funcionar hasta rearmar con 9.</li>
+<li><strong>Cualquier tecla aborta.</strong> Durante la emision el bucle es modal: no corre la medida RX ni los pitidos Geiger de Fox Hunt, solo UART y teclado. Cualquier tecla nueva suelta la PTT y desarma.</li>
+<li><strong>Indicativo obligatorio.</strong> La app no transmite sin un indicativo valido y lo imprime en la imagen Robot36.</li>
+</ol>
+<p>Emite en la frecuencia TX del VFO de entrada (con su desplazamiento), sin correccion Doppler de subida. El LED rojo se enciende como en la PTT normal y la pantalla muestra <code>CAT TX ON AIR</code> y la frecuencia TX. Mientras se emite, las ordenes CAT RX se aceptan pero se aplican al volver a RX.</p>
+<p>Contrato: comando privado <code>0x7B02</code>, respuesta <code>0x7B03</code>, little-endian.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Offset solicitud</th><th scope="col">Bytes</th><th scope="col">Contenido</th></tr></thead><tbody>
+<tr><td>0</td><td>1</td><td>Version 1</td></tr>
+<tr><td>1</td><td>1</td><td>0 QUERY, 1 KEY (activar o renovar el lease), 2 UNKEY</td></tr>
+<tr><td>2</td><td>2</td><td>Secuencia, repetida en la respuesta</td></tr>
+<tr><td>4</td><td>4</td><td>Reservado, cero obligatorio</td></tr>
+</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">Offset respuesta</th><th scope="col">Bytes</th><th scope="col">Contenido</th></tr></thead><tbody>
+<tr><td>0</td><td>1</td><td>Version 1</td></tr>
+<tr><td>1</td><td>1</td><td>Estado</td></tr>
+<tr><td>2</td><td>2</td><td>Secuencia; cero si la longitud no permite procesar la solicitud</td></tr>
+<tr><td>4</td><td>4</td><td>Capacidades 8: PTT con lease; sin frecuencia, potencia ni escritura persistente</td></tr>
+<tr><td>8</td><td>4</td><td>Flags: bit 0 armada, bit 1 emitiendo, bit 2 KEY pendiente, bit 3 limite alcanzado; bits 8-15 estado VFO del rechazo</td></tr>
+<tr><td>12</td><td>4</td><td>Milisegundos emitiendo, cero si no emite</td></tr>
+</tbody></table></div>
+<p>Estados: 0 correcto (KEY: ya emitiendo), 1 en cola (KEY pendiente o UNKEY pendiente de aplicar), 2 longitud o reservado, 3 version, 4 operacion, 5 no armada, 7 rechazada por la radio, 8 limite de 120 s. UNKEY se acepta siempre. Las capacidades de CAT RX siguen siendo 7: CAT TX es un endpoint aparte.</p>
+<p>Comprobado el 2026-10-26: <code>cat_tx_test</code> (protocolo, lease, limite, rechazo) y <code>satellite_adapter_test</code> (arme por tecla, emision modal, aborto por tecla, rechazo, limite, desarme por bloqueo y salida) pasan con las primitivas RF simuladas. La imagen F4HWN v6.1.0 Fusion con <code>--module satellite</code> y <code>ENABLE_FEAT_F4HWN_FOXHUNT=ON</code> compila sin avisos: Flash 113212/120832, RAM 12384/16384. <strong>Sin validacion en radio ni medida RF.</strong></p>
 <p>En <strong>Quansheng &gt; Operaciones</strong> hay un panel CAT RX Beta para consultar, sintonizar durante un lease y volver a nominal. Su estado es la ultima respuesta, no telemetria continua. El seguimiento de pases web se describe abajo; Android tiene un cliente USB experimental con seguimiento orbital SGP4. Los controles se deshabilitan sin conexion o durante otra operacion. Probarlo requiere arrancar la nueva imagen: conectarse al firmware original no la instala ni activa CAT.</p>
 <p>Las ocho suites C incluyen protocolo, rangos, longitudes invalidas, secuencia reflejada, caducidad con rollover, ausencia de renovacion por consulta, cancelacion local/bloqueo y flujo del adaptador con RF simulado. Las pruebas JavaScript simulan el transporte, respuestas pendientes, secuencia incorrecta y errores: no sustituyen una prueba CAT USB/radio. El manifiesto incluye <code>catRx</code> y hashes del codigo aplicado. No se ha flasheado ni certificado el funcionamiento fisico.</p>
 <h4 id="seguimiento-de-pase-web-implementado-sobre-cat-rx">Seguimiento de pase web implementado sobre CAT RX</h4>
