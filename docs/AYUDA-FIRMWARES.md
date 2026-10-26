@@ -19,6 +19,8 @@ oficiales ni certifica combinaciones que no se han probado en hardware.
 | [OpenGD77: radios y revisiones](AYUDA-OPENGD77-MODELOS.md) | Modelos, alias, revisiones, variantes y diferencia entre catalogo e identificacion |
 | [Karina](KARINA.md) | Inventario, funciones documentadas, busqueda del codigo fuente (cerrado), especificacion para reimplementarla y fuentes |
 | [Baofeng DM-32UV](DM32UV-FIRMWARE.md) | Hardware HR_C7000/FD6818, estado y licencia de OpenGD77, instalacion, como compilar RadioFoundry y protocolo del bootloader |
+| [Ejemplos](EJEMPLOS.md) | Firmwares abiertos F4HWN v6.3.0 y moto con su licencia, canales PMR446 de ejemplo y scripts de analisis |
+| [Binarios de terceros](BINARIOS-TERCEROS.md) | SHA-256 y origen de Karina, firmwares DM-32UV oficiales y parcheados, OpenGD77 DM32 e imagenes de fabrica del K1/K5 V3, sin redistribuirlos |
 | [Repositorios de la comunidad](ENLACES-COMUNIDAD.md) | Catalogo verificado de repositorios Quansheng y DM-32UV, enlaces caidos recuperados y busqueda en otras forjas |
 | [Bricohams V3](BRICOHAMS-FIRMWARE.md) | Compilacion local reproducible de Fusion y Labs y artefactos entregados |
 

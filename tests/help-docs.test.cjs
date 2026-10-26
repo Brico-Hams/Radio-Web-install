@@ -165,6 +165,26 @@ test("el atlas V3 y la puesta en marcha cubren hardware, protocolo y todas las f
   }
 });
 
+test("los ejemplos solo incluyen binarios abiertos con licencia y hashes correctos", () => {
+  const { createHash } = require("node:crypto");
+  const base = path.join(root, "examples", "firmware");
+  for (const dir of fs.readdirSync(base)) {
+    const files = fs.readdirSync(path.join(base, dir));
+    assert.ok(files.includes("LICENSE") && files.includes("SHA256SUMS"), dir);
+    const sums = read(`examples/firmware/${dir}/SHA256SUMS`).trim().split("\n").map(line => line.split(/\s+\*?/));
+    for (const [hash, name] of sums) {
+      assert.equal(createHash("sha256").update(fs.readFileSync(path.join(base, dir, name))).digest("hex"), hash, `${dir}/${name}`);
+    }
+    for (const file of files.filter(name => /\.(bin|uf2)$/.test(name))) assert.ok(sums.some(([, name]) => name === file), `sin hash: ${file}`);
+  }
+  assert.match(read("examples/firmware/f4hwn-v6.3.0/LICENSE"), /Apache License/);
+  const index = read("docs/BINARIOS-TERCEROS.md");
+  for (const value of ["03107b6f600e7fa95105af8324cff349c0f17fe30db249c14d11e79baa8da97a", "21.09.2026.zip",
+    "f8484c13c994e920649d7b7bc2b98a98a76cfd0836865e5995a00627fc0c2887", "OpenGD77_DM32_20260704.bin"]) assert.ok(index.includes(value), value);
+  assert.doesNotMatch(index, /radio-firmware-archive/, "no se enlaza el repositorio privado");
+  for (const page of ["ayuda-ejemplos.html", "ayuda-binarios-terceros.html"]) assert.ok(read("ayuda.html").includes(`href="${page}"`), page);
+});
+
 test("DM-32UV, Karina y enlaces de comunidad documentan fuentes, licencias y la ruta de compilacion", () => {
   const dm32 = read("docs/DM32UV-FIRMWARE.md");
   for (const value of ["HR_C7000", "FD6818", "RadioFoundry", "make BOARD=dm32", "hrc7000_codec.py", "serial_loader.py",

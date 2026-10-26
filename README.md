@@ -110,6 +110,7 @@ Consulta [funciones, permisos, compilacion y limites](docs/ANDROID.md).
 | [Atlas tecnico UV-K5 V3 / UV-K1](docs/ATLAS-UV-K5-V3.md) (web: [ayuda-atlas-uv-k5-v3.html](ayuda-atlas-uv-k5-v3.html)) | Hardware por dentro: pinout del PY32F071, flash interna y externa, mapa EEPROM, protocolo serie, bootloader DFU, SWD, compilacion, mods, esquemas, fotos del teardown y repositorios verificados |
 | [Baofeng DM-32UV](docs/DM32UV-FIRMWARE.md) (web: [ayuda-dm32uv.html](ayuda-dm32uv.html)) | Hardware HR_C7000/FD6818, estado y licencia de OpenGD77 en el DM-32, instalacion y copias, como compilar el firmware abierto RadioFoundry y protocolo del bootloader |
 | [Karina](docs/KARINA.md) / [repositorios de la comunidad](docs/ENLACES-COMUNIDAD.md) | Busqueda del codigo fuente de Karina (cerrado), especificacion funcional para reimplementarla y catalogo verificado de repositorios Quansheng y DM-32UV |
+| [Ejemplos](docs/EJEMPLOS.md) / [hashes de terceros](docs/BINARIOS-TERCEROS.md) | `examples/`: firmwares abiertos (F4HWN v6.3.0, moto) con su licencia, canales PMR446 y scripts de analisis; indice de SHA-256 y origen de los binarios de terceros, que no se redistribuyen |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Componentes, flujo de datos, modulos y capas de seguridad |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Decisiones de arquitectura y por que se eligio cada tecnologia |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Instalacion, configuracion, actualizacion y despliegues no soportados |
