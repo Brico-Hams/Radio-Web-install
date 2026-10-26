@@ -52,7 +52,9 @@ function integrateModule(work, module) {
     `#ifdef ${define}\n#include "bricohams/${module}_foxhunt.inc"\n#endif\n\nvoid APP_RunFoxHunt(void)\n{\n    FOXHUNT_Begin();\n#ifdef ${define}\n    BH_${prefix}_Start();\n#endif`);
   change("app/foxhunt.c", "        FOXHUNT_HandleKeys();", `        #ifdef ${define}\n        BH_${prefix}_Update();\n        #endif\n        FOXHUNT_HandleKeys();`);
   if (module === "satellite") {
-    change("app/uart.c", '#include "app/uart.h"', '#include "app/uart.h"\n#include "bricohams/cat_rx.h"\n#include "bricohams/cat_tx.h"\n#include "scheduler.h"');
+    // The side-key action opens the SAT RX screen, so the menu calls it that too.
+    change("ui/menu.c", 'X(ACTION_OPT_FOXHUNT,        "FOX HUNT")', 'X(ACTION_OPT_FOXHUNT,        "SAT RX")');
+    change("app/uart.c", '#include "app/uart.h"','#include "app/uart.h"\n#include "bricohams/cat_rx.h"\n#include "bricohams/cat_tx.h"\n#include "scheduler.h"');
     change("app/uart.c", "        case 0x0514:",
       `        case 0x7B00: /* Bricohams CAT RX v1, private experimental command. */
         {

@@ -75,7 +75,11 @@ usan pantallas/teclas diferentes del mismo modo residente. El nombre del
 binario incluye el modulo, evitando confundir las imagenes.
 
 El adaptador `satellite_foxhunt.inc` toma RX y TX nominales del VFO/canal
-seleccionado al entrar en Fox Hunt y muestra `SAT RX`. Requiere ambas
+seleccionado al entrar en Fox Hunt y muestra `SAT RX`. En esta imagen la
+accion de tecla lateral se llama tambien **SAT RX** (antes «FOX HUNT»):
+asignala en MENU a F1Shrt, F1Long, F2Shrt, F2Long o M Long y pulsa esa tecla
+para abrir la pantalla; desde ella, la tecla 8 habilita CAT RX y la 9 arma
+CAT TX. Requiere ambas
 frecuencias dentro de las bandas admitidas. No cambia los datos de VFO
 ni la frecuencia TX; el resultado de uplink calculado no se aplica al
 transmisor. Cambia exclusivamente la sintonia RX y su filtro mediante las
