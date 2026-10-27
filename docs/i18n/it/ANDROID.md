@@ -2,6 +2,11 @@
 
 ## Ambito dell'APK
 
+La schermata principale offre **Lingua del sistema**, **Español**, **English (US)**,
+**Français** e **Deutsch**. La scelta viene salvata localmente e applicata a tutte le
+schermate, inclusi canali USB, CAT, satelliti e SSTV. Nominativi, nomi dei canali e file
+utente non vengono tradotti; il marchio rimane Bricohams.
+
 Internet è usato solo su richiesta per aggiornamenti HTTPS di TLE/frequenze da CelesTrak e SatNOGS, senza inviare dati personali. L’importazione offline resta disponibile. Questa revisione conserva le funzioni 0.8.0 e prepara APK 0.8.1-beta, versionCode 10. Test, lint e compilazione richiedono JDK 17 e SDK 35; questa integrazione non li ha superati localmente con Java 8. La CI deve verificare la nuova APK prima della distribuzione.
 
 Al successivo push del tag v0.5.2, Android Beta allega entrambe le APK 0.8.1-beta (app debug e test strumentati) e SHA256SUMS-android alla release creata dagli installer. Nessuna pubblicazione locale.

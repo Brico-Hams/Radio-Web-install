@@ -9,6 +9,19 @@ schematics, and photos), see [UV-K5 V3 technical atlas](ATLAS-UV-K5-V3.md).
 
 ## Live viewer and RF log
 
+In **Channels**, the two tables appear side by side on desktop and stacked on mobile.
+Select the compatible model and authorize reading in **Backups and connection**.
+Return to **Channels** and click **Connect and read channels (read-only)**: the left
+column shows the active bank without write permission. On the right, choose PMR446,
+REMER VHF, or Bricohams Murcia repeaters and click **Prepare template for dragging**.
+Channels prepared from CSV and other catalogs appear here too. Drag a row or selection
+to the left, or use **Copy selection** and **Paste here**. Catalog channels are inserted
+RX only using an existing FM memory as a template; AM and DMR are not converted.
+Dragging changes only the local copy. Save it before rereading: replacing it requires
+confirmation. Physical writes still require a complete Flash backup, confirmation,
+and rereading. The new channel connection does not start the viewer automatically,
+so it does not occupy the port during reading.
+
 The viewer appears at the top of the Quansheng section. It starts when the
 connection completes: immediately with **Connect read-only / CAT**, or after
 the backup with **Connect and back up**. It requires an image with K5Viewer

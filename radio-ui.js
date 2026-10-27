@@ -73,6 +73,7 @@
       const api = page === "quansheng" || model.value === "SERIAL" ? "serial" : "usb";
       $("radio-connect").disabled = busy || Boolean(connector) || !model.value || !(confirmation.checked || pro.checked) || !(api in navigator) || !root.isSecureContext;
       if ($("qs-connect-readonly")) $("qs-connect-readonly").disabled = $("radio-connect").disabled;
+      if ($("qs-connect-channels")) $("qs-connect-channels").disabled = $("radio-connect").disabled;
       $("radio-disconnect").disabled = busy || catTracking || !connector;
       model.disabled = busy || Boolean(connector);
       confirmation.disabled = busy || Boolean(connector);
@@ -100,6 +101,7 @@
       if (factoryControls?.pending()) {
         $("radio-connect").disabled = true;
         $("qs-connect-readonly").disabled = true;
+        $("qs-connect-channels").disabled = true;
         $("qs-live-start").disabled = true;
         model.disabled = true;
         document.querySelectorAll("[data-connected], [data-write]").forEach(button => { button.disabled = true; });
@@ -649,7 +651,8 @@
       operations.insertAdjacentHTML("beforeend", `<hr><h2>Canales Quansheng - Beta</h2>
         <p>Configuracion F4HWN v6 de 41344 bytes del banco activo (1024 memorias). Importa PMR, repetidores y memorias SAT FM desde el panel de preparacion usando una plantilla FM. Todo se anade solo RX, sin tonos ni senalizacion DTMF heredados; nombres limitados a 10 caracteres.</p>
         <p class="card-note">La lectura y la edicion local no necesitan permiso de escritura. Escribir exige respaldo Flash completo verificado; en v6.0 queda bloqueado. No cambia de banco, no borra slots y no modifica calibracion. No equivale a seguimiento SAT nativo.</p>
-        <div class="operation-buttons"><button id="qs-read" data-connected class="button secondary" type="button" disabled>Leer canales del banco activo</button><button id="qs-save" class="button secondary" type="button">Guardar configuracion local</button><button id="qs-write" data-write class="button primary" type="button" disabled>Escribir y releer canales (Beta)</button></div>
+        <div class="operation-buttons"><button id="qs-connect-channels" class="button primary" type="button" disabled>Conectar y leer canales (solo lectura)</button><button id="qs-read" data-connected class="button secondary" type="button" disabled>Leer canales del banco activo</button><button id="qs-save" class="button secondary" type="button">Guardar configuracion local</button><button id="qs-write" data-write class="button primary" type="button" disabled>Escribir y releer canales (Beta)</button></div>
+        <p>Selecciona el modelo y autoriza la lectura en Copias y conexion. Conectar y leer muestra el banco activo en la columna izquierda sin crear permiso de escritura. Prepara una plantilla a la derecha y arrastra sus filas a la izquierda; los cambios quedan en el archivo local hasta escribir con respaldo completo.</p>
         <h3>Backup / Restore de canales</h3>
         <p>Backup lee de nuevo el banco activo y guarda una copia original, sin reemplazar tu edicion local. No es una copia Flash completa. Restore prepara las memorias del archivo sobre el banco leido, conserva sus ajustes y exige la misma version. Puede recuperar canales con TX habilitada: revisalos antes de escribir. No cambia slots, apps ni calibracion.</p>
         <div class="operation-buttons"><button id="qs-backup" data-connected class="button secondary" type="button" disabled>Backup del banco activo</button><button id="qs-restore" class="button secondary" type="button">Restore: abrir copia de canales</button></div>
@@ -682,6 +685,9 @@
             <div class="operation-buttons"><button id="qs-add-open" class="button secondary" type="button">Anadir canal</button><button id="qs-radio-copy" class="button secondary" type="button">Copiar seleccion</button><button id="qs-radio-paste" class="button secondary" type="button">Pegar aqui</button></div>
             <div id="qs-radio-zone" class="table-scroll qs-drop" tabindex="0" aria-label="Canales del walkie: arrastra o pega aqui"><table><thead><tr><th>Mover</th><th>Elegir</th><th>Canal</th><th>Nombre</th><th>RX MHz</th><th>TX nominal MHz</th><th>Modo</th><th>TX bloqueada</th><th>Escaneo</th><th>Archivo local</th></tr></thead><tbody id="qs-channels"></tbody></table></div></section>
           <section class="qs-table-box" aria-labelledby="qs-loadable-title"><h3 id="qs-loadable-title">Canales para cargar</h3>
+            <label for="qs-template-source">Plantillas de canales</label><select id="qs-template-source"><option value="pmr">PMR446 analogicos 1-16 (solo RX)</option><option value="remer">REMER VHF (solo RX)</option><option value="bricohams">Repetidores Bricohams Murcia (solo RX)</option></select>
+            <button id="qs-template-prepare" class="button secondary" type="button">Preparar plantilla para arrastrar</button>
+            <label class="check"><input id="qs-loadable-select-all" type="checkbox"> Seleccionar todos los canales para cargar</label>
             <p class="card-note">Los preparados en Canales y Satelites (repetidores, REMER, PMR446, SAT y Doppler, aeropuertos, FM, CSV) y los que copies del walkie.</p>
             <div class="operation-buttons"><button id="qs-loadable-copy" class="button secondary" type="button">Copiar seleccion</button><button id="qs-loadable-paste" class="button secondary" type="button">Pegar aqui</button><button id="qs-loadable-load" class="button secondary" type="button">Cargar seleccion al final del walkie</button></div>
             <div id="qs-loadable-zone" class="table-scroll qs-drop" tabindex="0" aria-label="Canales para cargar: arrastra o pega aqui"><table><thead><tr><th>Mover</th><th>Elegir</th><th>Nombre</th><th>RX MHz</th><th>TX MHz</th><th>Origen</th><th></th></tr></thead><tbody id="qs-loadable"></tbody></table></div>
@@ -828,6 +834,8 @@
       }
       renderLoadable = function () {
         const items = loadableItems();
+        const selected = new Set(loadableSelection());
+        $("qs-loadable-select-all").checked = false;
         $("qs-loadable").replaceChildren();
         for (const item of items) {
           const row = document.createElement("tr");
@@ -841,6 +849,7 @@
           const box = document.createElement("input");
           box.type = "checkbox";
           box.dataset.qsLoadable = item.key;
+          box.checked = selected.has(item.key);
           box.setAttribute("aria-label", `Seleccionar ${item.name}`);
           choose.append(box);
           row.append(handle, choose);
@@ -864,6 +873,15 @@
         $("qs-loadable-count").textContent = items.length ? `${items.length} canales para cargar.` :
           "Sin canales para cargar: preparalos en Canales o Satelites, o copia canales del walkie.";
       };
+      $("qs-template-prepare").addEventListener("click", () => {
+        if (busy || catTracking) return;
+        const source = $("qs-template-source").value;
+        if (source === "remer") $("plan-remer-select").click();
+        $({ pmr: "plan-pmr-stage", remer: "plan-remer-stage", bricohams: "plan-bricohams-load" }[source]).click();
+      });
+      $("qs-loadable-select-all").addEventListener("change", () => {
+        document.querySelectorAll("[data-qs-loadable]").forEach(input => { input.checked = $("qs-loadable-select-all").checked; });
+      });
       const loadableByKeys = keys => loadableItems().filter(item => keys.includes(item.key));
       function copyFrom(source) {
         const items = source === "radio" ? radioItems(radioSelection()) : loadableByKeys(loadableSelection());
@@ -1003,10 +1021,25 @@
         renderQuansheng();
         log(`${numbers.length} canales asignados a la lista ${$("qs-scan-list").value}. Guarda la configuracion local.`);
       });
-      attach("qs-read", "Leer configuracion Quansheng", async () => {
-        image = await connector.readConfiguration();
-        originalConfiguration = image.slice();
+      async function readRadioChannels() {
+        const snapshot = await connector.readConfiguration();
+        R.readQuanshengChannels(snapshot);
+        image = snapshot;
+        originalConfiguration = snapshot.slice();
+        editNumber = null;
+        $("qs-channel-form").hidden = true;
         renderQuansheng();
+      }
+      const replaceLocalChannels = () => !image || root.confirm("Leer la radio reemplazara la edicion local de canales. Guarda primero los cambios que quieras conservar. Continuar?");
+      attach("qs-connect-channels", "Conectar y leer canales Quansheng", async () => {
+        if (!replaceLocalChannels()) return;
+        await connectRadio(false);
+        autoLivePending = false;
+        await readRadioChannels();
+      });
+      attach("qs-read", "Leer configuracion Quansheng", async () => {
+        if (!replaceLocalChannels()) return;
+        await readRadioChannels();
       });
       attach("qs-save", "Guardar configuracion Quansheng", async () => {
         R.assert(image, "Lee o abre primero una configuracion Quansheng.");

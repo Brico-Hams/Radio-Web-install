@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="language_label">Langue de Bricohams</string>
+    <string name="language_system">Langue du système</string>
+    <string name="language_save_error">Impossible d\'enregistrer la langue. Réessayez.</string>
     <string name="live_intro">Bricohams - réception audio Bêta</string>
     <string name="live_limits">Microphone au premier plan, PCM mono 48 kHz, 60 s maximum en mémoire. L\'audio n\'est ni enregistré ni transmis. Appuyez sur arrêter pour décoder. Robot36 nécessite l\'en-tête complet et au moins 37 s : démarrez avant la transmission. Sans PTT, TX ni décodage continu ; testez d\'abord avec un audio connu.</string>
     <string name="live_tone">Tonalité Morse (300 à 1200 Hz)</string>

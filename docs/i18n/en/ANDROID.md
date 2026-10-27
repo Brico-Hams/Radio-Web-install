@@ -2,6 +2,11 @@
 
 ## APK scope
 
+The main screen offers **System language**, **Español**, **English (US)**, **Français**,
+and **Deutsch**. The choice is saved locally and applies to every screen, including USB
+channels, CAT, satellites, and SSTV. Switching languages does not translate callsigns,
+channel names, or user files; the branding remains Bricohams.
+
 The app uses Internet only when you request HTTPS TLE/frequency updates from CelesTrak and SatNOGS. No personal data is uploaded. Offline import remains available. This revision preserves the 0.8.0 features and prepares 0.8.1-beta APKs, versionCode 10. Android tests, lint and builds require JDK 17 and SDK 35; this integration has not passed them locally with Java 8. CI must verify the new APK before distribution.
 
 On a later v0.5.2 tag push, Android Beta attaches both 0.8.1-beta APKs (debug app and instrumented tests) and SHA256SUMS-android to the release created by the installer workflow. Nothing is published locally.

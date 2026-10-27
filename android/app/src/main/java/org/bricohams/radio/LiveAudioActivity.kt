@@ -23,7 +23,7 @@ import java.io.IOException
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 
-class LiveAudioActivity : Activity() {
+class LiveAudioActivity : LocalizedActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var status: TextView

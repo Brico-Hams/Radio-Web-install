@@ -2,6 +2,11 @@
 
 ## Alcance de la APK
 
+La pantalla principal permite elegir **Idioma del sistema**, **Español**, **English (US)**,
+**Français** o **Deutsch**. La seleccion se guarda localmente y se aplica a todas las
+pantallas, incluidos canales USB, CAT, satelites y SSTV. Cambiar el idioma no traduce
+indicativos, nombres de canales ni archivos del usuario; la marca sigue siendo Bricohams.
+
 La [validacion integral V3/Android](VALIDACION-INTEGRAL-V3-ANDROID.md) distingue
 pruebas host de ensayos en telefono/radio e incluye la matriz de contactos,
 canales por slot y CAT. La auditoria esta en curso, no certificada.

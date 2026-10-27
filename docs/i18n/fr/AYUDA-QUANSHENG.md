@@ -9,6 +9,20 @@ schémas et photos) : [Atlas technique UV-K5 V3](ATLAS-UV-K5-V3.md).
 
 ## Visualiseur en direct et journal RF
 
+Dans **Canaux**, les deux tables sont côte à côte sur ordinateur et empilées sur mobile.
+Choisissez le modèle compatible et autorisez la lecture dans **Sauvegardes et connexion**.
+Revenez à **Canaux** et cliquez sur **Connecter et lire les canaux (lecture seule)** :
+la colonne gauche affiche la banque active sans autorisation d'écriture. À droite,
+choisissez PMR446, REMER VHF ou les relais Bricohams Murcie, puis **Préparer le modèle
+à glisser**. Les canaux préparés depuis CSV et les autres catalogues y figurent aussi.
+Glissez une ligne ou une sélection vers la gauche, ou utilisez **Copier la sélection**
+et **Coller ici**. Les canaux du catalogue sont insérés en réception seule à partir
+d'une mémoire FM existante ; AM et DMR ne sont pas convertis. Seule la copie locale
+change. Enregistrez-la avant de relire : son remplacement demande confirmation.
+L'écriture physique exige toujours une sauvegarde Flash complète, une confirmation
+et une relecture. Cette connexion ne démarre pas automatiquement le visualiseur,
+pour ne pas occuper le port pendant la lecture.
+
 Le visualiseur apparaît au début de la section Quansheng. Il démarre à la fin de la connexion :
 immédiatement avec **Connecter en lecture seule / CAT**, ou après la sauvegarde avec
 **Connecter et sauvegarder**. Il nécessite une image avec K5Viewer activé et sans

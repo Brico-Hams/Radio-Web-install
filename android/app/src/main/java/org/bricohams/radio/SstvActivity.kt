@@ -14,7 +14,7 @@ import android.widget.TextView
 import java.io.IOException
 import java.util.concurrent.Executors
 
-class SstvActivity : Activity() {
+class SstvActivity : LocalizedActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var status: TextView
     private lateinit var image: ImageView

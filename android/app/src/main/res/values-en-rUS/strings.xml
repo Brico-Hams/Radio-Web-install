@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="language_label">Bricohams language</string>
+    <string name="language_system">System language</string>
+    <string name="language_save_error">Could not save the language. Please try again.</string>
     <string name="live_intro">Bricohams - audio reception Beta</string>
     <string name="live_limits">Foreground microphone, mono PCM 48 kHz, up to 60 s in memory. Audio is neither saved nor transmitted. Press stop to decode. Robot36 needs the full header and at least 37 s: start before the transmission. No PTT, TX or continuous decoding; test with known audio first.</string>
     <string name="live_tone">Morse tone (300 to 1200 Hz)</string>

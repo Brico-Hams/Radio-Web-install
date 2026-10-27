@@ -9,6 +9,20 @@ Schaltpläne und Fotos): [Technischer Atlas UV-K5 V3](ATLAS-UV-K5-V3.md).
 
 ## Live-Viewer und RF-Protokoll
 
+Unter **Kanäle** stehen die beiden Tabellen am Desktop nebeneinander und mobil untereinander.
+Unter **Sicherungen und Verbindung** das kompatible Modell wählen und Lesen erlauben.
+Zurück unter **Kanäle** auf **Verbinden und Kanäle lesen (nur Lesen)** klicken: Links
+erscheint die aktive Bank ohne Schreibberechtigung. Rechts PMR446, REMER VHF oder
+Bricohams-Murcia-Relais wählen und **Vorlage zum Ziehen vorbereiten** anklicken.
+Aus CSV und anderen Katalogen vorbereitete Kanäle erscheinen ebenfalls dort.
+Zeilen oder eine Auswahl nach links ziehen oder **Auswahl kopieren** und **Hier einfügen**
+verwenden. Katalogkanäle werden nur für RX aus einer bestehenden FM-Speichervorlage
+eingefügt; AM und DMR werden nicht umgewandelt. Nur die lokale Kopie ändert sich.
+Vor erneutem Lesen speichern: Ersetzen benötigt eine Bestätigung. Schreiben ins Gerät
+erfordert weiterhin vollständige Flash-Sicherung, Bestätigung und erneutes Lesen.
+Die neue Kanalverbindung startet den Viewer nicht automatisch, damit der Port beim
+Lesen frei bleibt.
+
 Der Viewer erscheint am Anfang des Quansheng-Bereichs. Er startet nach Abschluss der Verbindung:
 sofort bei **Nur-Leseverbindung / CAT verbinden** oder nach der Sicherung bei
 **Verbinden und sichern**. Er benötigt ein Image mit aktiviertem K5Viewer und ohne

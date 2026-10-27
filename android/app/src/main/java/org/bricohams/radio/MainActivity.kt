@@ -37,7 +37,7 @@ import java.time.temporal.ChronoUnit
 import java.util.Locale
 import kotlin.concurrent.thread
 
-class MainActivity : Activity() {
+class MainActivity : LocalizedActivity() {
     private lateinit var store: RadioStore
     private lateinit var content: LinearLayout
     private lateinit var status: TextView
@@ -117,6 +117,23 @@ class MainActivity : Activity() {
             adjustViewBounds = true
             contentDescription = "Bricohams"
         }, LinearLayout.LayoutParams(dp(180), dp(67)))
+        layout.addView(TextView(this).apply { setText(R.string.language_label); labelFor = R.id.app_language })
+        layout.addView(Spinner(this).apply {
+            id = R.id.app_language
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf(getString(R.string.language_system), "Español", "English (US)", "Français", "Deutsch"))
+            setSelection(AppLanguage.tags.indexOf(AppLanguage.selected(this@MainActivity)).coerceAtLeast(0))
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    val tag = AppLanguage.tags[position]
+                    if (tag != AppLanguage.selected(this@MainActivity)) userAction {
+                        AppLanguage.save(this@MainActivity, tag)
+                        recreate()
+                    }
+                }
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            }
+        })
         val nav = LinearLayout(this)
         for ((name, label) in TABS) {
             nav.addView(Button(this).apply {

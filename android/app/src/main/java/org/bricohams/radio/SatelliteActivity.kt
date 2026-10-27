@@ -40,7 +40,7 @@ import java.util.Locale
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 
-class SatelliteActivity : Activity() {
+class SatelliteActivity : LocalizedActivity() {
     companion object {
         /** Host tests replace this; the app downloads over HTTPS only when the user asks. */
         internal var fetch: (String, Int) -> ByteArray = SatelliteSources::fetch

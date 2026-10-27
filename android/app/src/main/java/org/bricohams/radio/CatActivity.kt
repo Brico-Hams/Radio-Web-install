@@ -31,7 +31,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-class CatActivity : Activity() {
+class CatActivity : LocalizedActivity() {
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val audioWorker = Executors.newSingleThreadExecutor()
     private lateinit var callsign: EditText

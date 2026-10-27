@@ -9,6 +9,19 @@ schemi e foto): [Atlante tecnico UV-K5 V3](ATLAS-UV-K5-V3.md).
 
 ## Visualizzatore in diretta e registro RF
 
+In **Canali**, le due tabelle sono affiancate su desktop e impilate su mobile.
+Seleziona il modello compatibile e autorizza la lettura in **Backup e connessione**.
+Torna in **Canali** e premi **Connetti e leggi canali (sola lettura)**: la colonna
+sinistra mostra il banco attivo senza permesso di scrittura. A destra scegli PMR446,
+REMER VHF o ripetitori Bricohams Murcia e prepara il modello da trascinare.
+Sono disponibili anche i canali preparati da CSV e dagli altri cataloghi.
+Trascina una riga o una selezione a sinistra, oppure usa copia e incolla.
+I canali del catalogo vengono inseriti solo RX usando una memoria FM esistente
+come modello; AM e DMR non vengono convertiti. Cambia soltanto la copia locale.
+Salvala prima di rileggere: la sostituzione richiede conferma. La scrittura fisica
+richiede ancora backup Flash completo, conferma e rilettura. La nuova connessione
+non avvia automaticamente il visualizzatore, per lasciare libera la porta durante la lettura.
+
 Il visualizzatore compare all'inizio della sezione Quansheng. Si avvia al termine della connessione:
 subito con **Connetti in sola lettura / CAT**, oppure dopo il backup con
 **Connetti e crea backup**. Richiede un'immagine con K5Viewer abilitato e senza

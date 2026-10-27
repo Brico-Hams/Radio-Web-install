@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <item name="app_language" type="id" />
     <item name="live_mode" type="id" />
     <item name="live_tone" type="id" />
     <item name="live_speed" type="id" />

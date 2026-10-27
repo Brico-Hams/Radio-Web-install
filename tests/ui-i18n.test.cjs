@@ -62,6 +62,18 @@ test("dynamic catalog messages preserve parameter values and Spanish is lossless
     "WebUSB. On Windows, check the WinUSB driver specified by the CPS. This browser provides the required API; permissions will be requested when connecting.");
 });
 
+test("Quansheng channel templates, dragging and read-only workflow are localized", () => {
+  for (const locale of ["en-US", "fr", "de"]) {
+    for (const label of ["Conectar y leer canales (solo lectura)", "Plantillas de canales",
+      "Preparar plantilla para arrastrar", "Seleccionar todos los canales para cargar",
+      "Arrastra al walkie para insertar", "Seleccionar canal 12", "16 canales para cargar."]) {
+      assert.notEqual(I.translate(label, locale), label, `${locale}: ${label}`);
+    }
+    assert.ok(I.translate("Seleccionar canal 12", locale).includes("12"));
+    assert.ok(I.translate("16 canales para cargar.", locale).startsWith("16"));
+  }
+});
+
 test("all authored static native tool controls have translations or explicit technical names", () => {
   const catalog = new Set(rows.map(row => row[0]));
   const technical = new Set(["AnyTone Beta", "MHz", "RX", "TX", "CAT RX Bricohams Beta", "Slot", "Bytes", "CRC",

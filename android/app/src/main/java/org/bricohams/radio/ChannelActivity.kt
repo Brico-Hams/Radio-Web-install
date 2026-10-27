@@ -26,7 +26,7 @@ import java.io.IOException
 import java.util.concurrent.Executors
 
 /** Quansheng F4HWN v6 channel editor (frequency, sub-tones, power) with full backup and re-read, as the web editor. */
-class ChannelActivity : Activity() {
+class ChannelActivity : LocalizedActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private val manager by lazy { getSystemService(USB_SERVICE) as UsbManager }
     private lateinit var status: TextView
