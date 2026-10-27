@@ -47,7 +47,7 @@ Una compilacion correcta no demuestra que una radio haya arrancado con ella.
 | BRAND-02 | Naranja corporativo al terminar y probar | Paleta documentada; logo corporativo conservado | Migracion final web/Android, contraste y regresiones visuales |
 | DOC-01 | Documentacion natural sin personalizacion de IA | Revision editorial de autorias visibles y relatos conversacionales | Mantener estilo tecnico directo; conservar licencias y atribuciones legales |
 | REL-01 | Push a main al terminar | Autorizacion de publicacion registrada | Cerrar requisitos o acordar expresamente una entrega parcial; ejecutar push y comprobar CI/Pages |
-| REL-02 | Nuevos instalables con todas las caracteristicas | Cadena existente para Windows, Debian/Raspberry Pi, Arch y FreeBSD; la Release v0.5.0 (instaladores, firmware Bricohams v6.1.0 y APK 0.8.0-beta) se genera en CI desde la etiqueta de esta revision | Probar contenido y arranque de cada instalable; APK firmada solo con clave de depuracion |
+| REL-02 | Nuevos instalables con todas las caracteristicas | Cadena existente para Windows, Debian/Raspberry Pi, Arch y FreeBSD; la Release v0.5.1 (instaladores, firmware Bricohams v6.1.0 y APK 0.8.0-beta) se genera en CI desde la etiqueta de esta revision; v0.5.0 quedo como etiqueta sin Release por un pin de Studio con CRLF | Probar contenido y arranque de cada instalable; APK firmada solo con clave de depuracion |
 | REL-03 | ZIP con proyecto, firmware, instalables y evolutivos | Exportador de desarrollo preparado con verificacion de integridad y exclusiones | Ejecutarlo con todos los artefactos de entrega y comprobar extraccion; no sustituye funciones pendientes |
 
 ## Evidencia de software mas reciente
