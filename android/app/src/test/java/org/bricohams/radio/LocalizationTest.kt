@@ -64,8 +64,8 @@ class LocalizationTest {
         val satellite = Robolectric.buildActivity(SatelliteActivity::class.java).setup()
         try {
             val activity = satellite.get()
-            views(activity.window.decorView).filterIsInstance<Button>()
-                .single { it.text == context.getString(R.string.satellite_tab_settings) }.performClick()
+            views(activity.window.decorView).filterIsInstance<TextView>()
+                .single { it.isClickable && it.text == context.getString(R.string.satellite_tab_settings) }.performClick()
             for ((id, value) in listOf(R.id.satellite_latitude to "91", R.id.satellite_longitude to "0",
                 R.id.satellite_height to "0")) {
                 activity.findViewById<EditText>(id).setText(value)
