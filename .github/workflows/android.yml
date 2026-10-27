@@ -31,7 +31,28 @@ jobs:
       - name: Check wrapper integrity
         run: echo "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17  android/gradle/wrapper/gradle-wrapper.jar" | sha256sum --check
       - name: Build APK, lint and run host tests
-        run: bash android/gradlew -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
+        run: bash android/gradlew -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon 2>&1 | tee android-build.log
+      - name: Report build failure
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f android-build.log ]; then
+            message="$(tail -n 80 android-build.log)"
+            message="${message//'%'/'%25'}"
+            message="${message//$'\r'/'%0D'}"
+            message="${message//$'\n'/'%0A'}"
+            echo "::error title=Android build diagnostics::$message"
+          fi
+      - name: Preserve build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-build-diagnostics
+          path: |
+            android-build.log
+            android/app/build/reports
+            android/app/build/test-results
+          if-no-files-found: warn
       - name: Hash debug artifacts
         run: |
           cd android/app/build/outputs/apk

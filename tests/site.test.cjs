@@ -14,6 +14,12 @@ const docs = ["README.md", "AUTHORS.md", "ACKNOWLEDGEMENTS.md", "SUPPORT.md", "S
 const helpSections = ["inicio", "funcionamiento", "opengd77", "quansheng", "codeplug", "firmware",
   "copias", "drivers", "errores", "faq", "soporte", "creditos"];
 
+test("la entrada principal identifica una unica URL publica oficial", () => {
+  const html = read("index.html");
+  assert.equal((html.match(/rel="canonical"/g) || []).length, 1);
+  assert.match(html, /<link rel="canonical" href="https:\/\/brico-hams\.github\.io\/Radio-Web-install\/">/);
+});
+
 async function withServer(run) {
   const server = createServer({}, {});
   server.listen(0, "127.0.0.1");

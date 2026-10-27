@@ -4,6 +4,8 @@ Two deployments are supported: **local** (a Node server on the computer connecte
 
 ## Requirements
 
+The official public entry point is <https://brico-hams.github.io/Radio-Web-install/>. Share this URL, not old copies or local previews. `index.html` declares this canonical URL; tool and help pages are sections of the same site, not alternative versions.
+
 - Node.js 22 or later **only for running from source, Arch, and FreeBSD**. The `.deb` packages and Windows ZIP include Node.
 - Git only for cloning and updating an installation from source.
 - Desktop Chrome, Edge, or Brave, for WebUSB/Web Serial. Firefox and Safari are not supported.
