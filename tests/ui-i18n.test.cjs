@@ -66,7 +66,8 @@ test("Quansheng channel templates, dragging and read-only workflow are localized
   for (const locale of ["en-US", "fr", "de"]) {
     for (const label of ["Conectar y leer canales (solo lectura)", "Plantillas de canales",
       "Preparar plantilla para arrastrar", "Seleccionar todos los canales para cargar",
-      "Arrastra al walkie para insertar", "Seleccionar canal 12", "16 canales para cargar."]) {
+      "Arrastra al walkie para insertar", "Seleccionar canal 12", "16 canales para cargar.",
+      "Descargar canales del walkie (copia original)", "2 canales movidos en el archivo local. La radio no se modifica."]) {
       assert.notEqual(I.translate(label, locale), label, `${locale}: ${label}`);
     }
     assert.ok(I.translate("Seleccionar canal 12", locale).includes("12"));
@@ -160,8 +161,9 @@ test("Pages links retain relative paths, other query parameters and fragments", 
   assert.equal(I.localizedURL("ayuda-android.de.html?x=1#mapa", base, "en-US"), "ayuda-android.en.html?x=1#mapa");
   assert.equal(I.localizedURL("ayuda-referencias.fr.html", base, "es"), "ayuda-referencias.html");
   assert.equal(I.localizedURL("../ayuda-despliegue.html", base, "de"), "../ayuda-despliegue.de.html");
+  assert.equal(I.localizedURL("ayuda.html#drivers", base, "fr"), "ayuda.fr.html#drivers");
   for (const href of ["#planning-panel", "?q=a", "https://grid.radio/opengd77/", "studio.html",
-    "ayuda.html#drivers", "precompiled/catalog.json", "https://elsewhere.invalid/index.html"]) {
+    "precompiled/catalog.json", "https://elsewhere.invalid/index.html"]) {
     assert.equal(I.localizedURL(href, base, "fr"), href);
   }
 });

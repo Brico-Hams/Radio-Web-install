@@ -123,7 +123,7 @@
 <p>Wenn dein Drucker Bohrungen zu eng ausführt, ändere die Konstanten <code>BOOM</code>, <code>ROD</code> und <code>M3_TAP</code> in <code>generar_stl.py</code> und generiere die Teile erneut.</p>
 <p>Das Skript prüft, ob jede STL ein geschlossener, einteiliger Körper ist. Volumen- und Maßangaben stehen in <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/piezas.json" target="_blank" rel="noopener noreferrer">piezas.json</a>.</p>
 <h2 id="metodo-de-calculo-y-verificacion">Berechnungsmethode und Validierung</h2>
-<p>Dateien unter <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/README.md" target="_blank" rel="noopener noreferrer">hardware/antenas</a>:</p>
+<p>Dateien unter <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/README.de.md" target="_blank" rel="noopener noreferrer">hardware/antenas</a>:</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Skript</th><th scope="col">Funktion</th></tr></thead><tbody>
 <tr><td><code>mom.py</code></td><td>Eigener Solver für dünne Drähte mit Momentenmethode (Harrington): Knotenströme, segmentweise Lasten, reduzierter Kern und analytisch integrierter statischer Term</td></tr>
 <tr><td><code>disenar.py</code></td><td>Optimiert die Maße mit Nelder-Mead auf maximalen Gewinn mit SWR ≤ 1,3-1,35 und Vorwärts/Rückwärts ≥ 15 dB, prüft die Dualbandkombination und den Teileabstand und schreibt <code>resultados.json</code></td></tr>

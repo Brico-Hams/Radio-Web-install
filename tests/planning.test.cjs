@@ -361,6 +361,35 @@ test("Quansheng copia y mueve memorias byte a byte, incluidos DCS y banderas no 
   assert.throws(() => R.moveQuanshengChannel(original, 2, 1025), /1-1024/);
   assert.throws(() => R.moveQuanshengChannel(original, 10, 2), /vacio/);
 });
+test("Quansheng arrastra selecciones ordenadas antes o despues sin perder bytes ni modificar ajustes", () => {
+  const original = R.appendQuanshengChannels(quanshengConfig(), R.pmrChannels().slice(0, 5), 1).image;
+  original[26] = 0x20;
+  original[28] |= 0x21;
+  const snapshot = original.slice();
+  const memory = (image, number) => R.readQuanshengMemory(image, number);
+  for (const [numbers, target, placement, expected] of [
+    [[4, 2], 6, "before", [1, 3, 5, 2, 4, 6]],
+    [[4, 2], 6, "after", [1, 3, 5, 6, 2, 4]],
+    [[6, 4], 1, "before", [4, 6, 1, 2, 3, 5]],
+    [[6, 4], 1, "after", [1, 4, 6, 2, 3, 5]]
+  ]) {
+    const result = R.moveQuanshengChannels(original, numbers, target, placement);
+    expected.forEach((source, index) => assert.deepEqual(memory(result, index + 1), memory(original, source)));
+    assert.deepEqual(result.subarray(0x8800), original.subarray(0x8800));
+    assert.deepEqual(R.readQuanshengChannels(result).map(channel => channel.number), [1, 2, 3, 4, 5, 6]);
+  }
+  assert.deepEqual(R.moveQuanshengChannels(original, [2, 4], 4), original);
+  const last = R.moveQuanshengChannels(original, [2, 4], 1024, "after");
+  assert.deepEqual(memory(last, 1023), memory(original, 2));
+  assert.deepEqual(memory(last, 1024), memory(original, 4));
+  assert.equal(R.readQuanshengChannels(last).length, 6);
+  assert.deepEqual(original, snapshot);
+  for (const numbers of [[], [2, 2], [0], [1025], [7]]) {
+    assert.throws(() => R.moveQuanshengChannels(original, numbers, 1));
+  }
+  assert.throws(() => R.moveQuanshengChannels(original, [1], 0), /1-1024/);
+  assert.throws(() => R.moveQuanshengChannels(original, [1], 3, "invalid"), /antes o despues/);
+});
 test("PMR446 ofrece 16 frecuencias exactas, ordenadas y solo RX", () => {
   const channels = R.pmrChannels();
   assert.equal(channels.length, 16);

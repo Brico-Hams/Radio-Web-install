@@ -335,6 +335,7 @@ function showView(name, focus = null) {
 }
 function setupViews() {
   const operations = document.getElementById("radio-operations");
+  document.getElementById("planning-panel").before(operations);
   const groups = [[/^CAT RX/, "cat"], [/ARDF/, "ardf"], [/Espectro/, "espectro"], [/Slots/, "slots"], [/^Apps/, "apps"], [/^Canales/, "canales"]];
   let group = null;
   for (const node of [...operations.children]) {
@@ -347,19 +348,32 @@ function setupViews() {
     group.append(node);
   }
   document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
+  const viewFor = target => {
+    if (target.closest("#plan-sat, #plan-sat-map")) return "satelites";
+    if (target === operations) return "canales";
+    return Object.keys(VIEWS).find(name => VIEWS[name].some(selector =>
+      selector !== "#radio-operations" && target.closest(selector)));
+  };
+  const navigate = hash => {
+    let id;
+    try { id = decodeURIComponent(hash.slice(1)); }
+    catch (error) { console.warn("Bricohams: invalid section URL", error); return false; }
+    const target = document.getElementById(id);
+    const view = target && viewFor(target);
+    if (!view) return false;
+    showView(view, target);
+    if (location.hash) history.replaceState(history.state, "", location.pathname + location.search);
+    return true;
+  };
   // In-page links (tool menu, help shortcuts) switch to the view that holds their target instead of scrolling the page.
   document.getElementById("main").addEventListener("click", event => {
     const link = event.target.closest('a[href^="#"]');
-    const target = link && link.getAttribute("href").length > 1 && document.getElementById(decodeURIComponent(link.getAttribute("href").slice(1)));
-    if (!target) return;
-    const view = Object.keys(VIEWS).find(name => VIEWS[name].some(selector => target.closest(selector) && selector !== "#radio-operations"));
-    if (!view) return;
-    event.preventDefault();
-    showView(view, target);
+    if (link && navigate(link.getAttribute("href"))) event.preventDefault();
   });
   // Panels mounted later (live viewer, RF log) follow the current view.
   new MutationObserver(() => { if (currentView) applyView(currentView); }).observe(document.getElementById("main"), { childList: true });
-  showView("conexion");
+  if (!navigate(location.hash)) showView("conexion");
+  window.addEventListener("hashchange", () => navigate(location.hash));
 }
 
 (globalThis.RadioWorkspace?.runtime ?? Promise.resolve({ mode: "web" })).then(({ mode }) => {

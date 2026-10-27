@@ -126,7 +126,7 @@
 <p>If your printer closes the holes, change the <code>BOOM</code>, <code>ROD</code>, and <code>M3_TAP</code> constants in <code>generar_stl.py</code> and regenerate the parts.</p>
 <p>The script checks that each STL is a single, watertight solid. Volume and dimension data are in <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/piezas.json" target="_blank" rel="noopener noreferrer">piezas.json</a>.</p>
 <h2 id="metodo-de-calculo-y-verificacion">Calculation method and verification</h2>
-<p>Files in <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/README.md" target="_blank" rel="noopener noreferrer">hardware/antenas</a>:</p>
+<p>Files in <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/README.en.md" target="_blank" rel="noopener noreferrer">hardware/antenas</a>:</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Script</th><th scope="col">What it does</th></tr></thead><tbody>
 <tr><td><code>mom.py</code></td><td>Custom thin-wire method-of-moments solver (Harrington): node currents, segment loads, reduced kernel, and analytically integrated static term</td></tr>
 <tr><td><code>disenar.py</code></td><td>Optimizes dimensions with Nelder-Mead for maximum gain with SWR ≤ 1,3-1,35 and front/back ≥ 15 dB; verifies the dual-band combination and part spacing, and writes <code>resultados.json</code></td></tr>

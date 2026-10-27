@@ -14,6 +14,38 @@ const docs = ["README.md", "AUTHORS.md", "ACKNOWLEDGEMENTS.md", "SUPPORT.md", "S
 const helpSections = ["inicio", "funcionamiento", "opengd77", "quansheng", "codeplug", "firmware",
   "copias", "drivers", "errores", "faq", "soporte", "creditos"];
 
+test("documentacion auxiliar actual ofrece cuatro idiomas y referencias locales existentes", () => {
+  const sources = ["AUTHORS.md", "ACKNOWLEDGEMENTS.md", "SUPPORT.md", "SECURITY.md",
+    "hardware/antenas/README.md", "precompiled/sources/README.md", "test-bench/schema.md"];
+  for (const source of sources) {
+    const headings = read(source).match(/^#{1,6} /gm);
+    for (const locale of ["", "en", "fr", "de"]) {
+      const file = source.replace(/\.md$/, `${locale ? `.${locale}` : ""}.md`);
+      const text = read(file);
+      assert.equal((text.match(/^#{1,6} /gm) || []).length, headings.length, file);
+      for (const label of ["Español", "English (US)", "Français", "Deutsch"]) assert.ok(text.includes(`[${label}]`), file);
+      for (const [, href] of text.matchAll(/\]\(([^)]+)\)/g)) {
+        if (/^(?:https?:|#)/.test(href)) continue;
+        const target = path.resolve(root, path.dirname(file), href.split("#")[0]);
+        assert.ok(fs.existsSync(target), `${file}: ${href}`);
+      }
+    }
+  }
+  const example = file => JSON.parse(read(file).match(/```json\s+([\s\S]*?)```/)[1]);
+  const original = example("test-bench/schema.md");
+  for (const locale of ["en", "fr", "de"]) {
+    const translated = example(`test-bench/schema.${locale}.md`);
+    for (const field of ["id", "family", "radios", "version", "sources"]) {
+      assert.deepEqual(translated.firmware[field], original.firmware[field], `${locale}: ${field}`);
+    }
+    const sourceTest = original.sections[0].tests[0];
+    const translatedTest = translated.sections[0].tests[0];
+    for (const field of ["id", "menu", "path", "values", "risk", "variants"]) {
+      assert.deepEqual(translatedTest[field], sourceTest[field], `${locale}: ${field}`);
+    }
+  }
+});
+
 test("la entrada principal identifica una unica URL publica oficial", () => {
   const html = read("index.html");
   assert.equal((html.match(/rel="canonical"/g) || []).length, 1);

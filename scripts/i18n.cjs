@@ -1,9 +1,10 @@
 "use strict";
 // Checks translations against the Spanish original and fixes their relative links.
-// Usage: node scripts/i18n.cjs [--fix] [--strict] [--lang en,de] [--files AYUDA-QUANSHENG.md,README.md]
+// Usage: node scripts/i18n.cjs [--fix] [--strict] [--lang en,de] [--files ayuda.html,AYUDA-QUANSHENG.md,README.md]
 const fs = require("node:fs");
 const path = require("node:path");
-const { pages, TRANSLATIONS, relink, checkParity, checkOptionCoverage, translatedPath } = require("./build-help.cjs");
+const { pages, TRANSLATIONS, relink, checkParity, checkOptionCoverage, translatedPath,
+  HELP_LANGS, helpCenterFile, renderHelpCenter } = require("./build-help.cjs");
 const root = path.join(__dirname, "..");
 // F4HWN-PRESETS.md is generated per language by build-help.cjs, so it is never translated by hand.
 const DOCUMENTS = Object.freeze([
@@ -25,9 +26,27 @@ function run() {
   const langs = option("--lang") || TRANSLATIONS;
   const files = option("--files");
   const documents = files ? DOCUMENTS.filter(name => files.includes(path.basename(name))) : DOCUMENTS;
-  if (files && documents.length !== files.length) throw new Error(`Documento desconocido en --files: ${files.join(", ")}`);
+  const help = !files || files.includes("ayuda.html");
+  if (files && documents.length + Number(help) !== files.length) throw new Error(`Documento desconocido en --files: ${files.join(", ")}`);
   let failures = 0;
   let missing = 0;
+  if (help) {
+    const original = fs.readFileSync(path.join(root, "ayuda.html"), "utf8").replace(/\r\n/g, "\n");
+    for (const lang of langs.filter(code => HELP_LANGS.includes(code))) {
+      const target = helpCenterFile(lang);
+      try {
+        const generated = renderHelpCenter(original, lang);
+        const file = path.join(root, target);
+        if (fix) fs.writeFileSync(file, generated);
+        if (!fs.existsSync(file)) { missing++; console.log(`FALTA  ${lang} ${target}`); continue; }
+        if (fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n") !== generated) throw new Error("HTML desactualizado; ejecuta npm run build:help");
+        console.log(`OK     ${lang} ${target}`);
+      } catch (error) {
+        failures++;
+        console.log(`ERROR  ${lang} ${target}\n  - ${error.message}`);
+      }
+    }
+  }
   for (const document of documents) {
     const file = path.join(root, document);
     let text = fs.readFileSync(file, "utf8");

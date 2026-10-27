@@ -106,6 +106,13 @@
         model.disabled = true;
         document.querySelectorAll("[data-connected], [data-write]").forEach(button => { button.disabled = true; });
       }
+      if ($("qs-channel-model")) {
+        $("qs-channel-model").value = model.value;
+        $("qs-channel-model").disabled = model.disabled;
+        $("qs-channel-consent").checked = confirmation.checked;
+        $("qs-channel-consent").disabled = confirmation.disabled;
+        $("qs-channel-disconnect").disabled = $("radio-disconnect").disabled;
+      }
     };
     async function action(label, operation) {
       if (busy) return;
@@ -651,11 +658,14 @@
       operations.insertAdjacentHTML("beforeend", `<hr><h2>Canales Quansheng - Beta</h2>
         <p>Configuracion F4HWN v6 de 41344 bytes del banco activo (1024 memorias). Importa PMR, repetidores y memorias SAT FM desde el panel de preparacion usando una plantilla FM. Todo se anade solo RX, sin tonos ni senalizacion DTMF heredados; nombres limitados a 10 caracteres.</p>
         <p class="card-note">La lectura y la edicion local no necesitan permiso de escritura. Escribir exige respaldo Flash completo verificado; en v6.0 queda bloqueado. No cambia de banco, no borra slots y no modifica calibracion. No equivale a seguimiento SAT nativo.</p>
-        <div class="operation-buttons"><button id="qs-connect-channels" class="button primary" type="button" disabled>Conectar y leer canales (solo lectura)</button><button id="qs-read" data-connected class="button secondary" type="button" disabled>Leer canales del banco activo</button><button id="qs-save" class="button secondary" type="button">Guardar configuracion local</button><button id="qs-write" data-write class="button primary" type="button" disabled>Escribir y releer canales (Beta)</button></div>
-        <p>Selecciona el modelo y autoriza la lectura en Copias y conexion. Conectar y leer muestra el banco activo en la columna izquierda sin crear permiso de escritura. Prepara una plantilla a la derecha y arrastra sus filas a la izquierda; los cambios quedan en el archivo local hasta escribir con respaldo completo.</p>
+        <label for="qs-channel-model">Modelo / familia de hardware</label><select id="qs-channel-model"></select>
+        <label class="check"><input id="qs-channel-consent" type="checkbox"><span>He comprobado el modelo y el firmware. Autorizo leer la radio y guardar automaticamente copias locales.</span></label>
+        <p id="qs-channel-status" role="status">Sin conexion.</p><progress id="qs-channel-progress" max="1" value="0" aria-label="Progreso de la operacion"></progress>
+        <div class="operation-buttons"><button id="qs-connect-channels" class="button primary" type="button" disabled>Conectar y leer canales (solo lectura)</button><button id="qs-read" data-connected class="button secondary" type="button" disabled>Leer canales del banco activo</button><button id="qs-channel-disconnect" class="button secondary" type="button" disabled>Desconectar</button><button id="qs-save" class="button secondary" type="button">Guardar configuracion local</button><button id="qs-write" data-write class="button primary" type="button" disabled>Escribir y releer canales (Beta)</button></div>
+        <p>Selecciona aqui el modelo y autoriza la lectura. Conectar y leer muestra los canales del walkie a la izquierda; Descargar guarda una copia original. Edita, anade canales o arrastra una seleccion antes o despues de otra fila. Prepara las plantillas a la derecha. Solo Escribir modifica la radio y requiere respaldo completo.</p>
         <h3>Backup / Restore de canales</h3>
         <p>Backup lee de nuevo el banco activo y guarda una copia original, sin reemplazar tu edicion local. No es una copia Flash completa. Restore prepara las memorias del archivo sobre el banco leido, conserva sus ajustes y exige la misma version. Puede recuperar canales con TX habilitada: revisalos antes de escribir. No cambia slots, apps ni calibracion.</p>
-        <div class="operation-buttons"><button id="qs-backup" data-connected class="button secondary" type="button" disabled>Backup del banco activo</button><button id="qs-restore" class="button secondary" type="button">Restore: abrir copia de canales</button></div>
+        <div class="operation-buttons"><button id="qs-backup" data-connected class="button secondary" type="button" disabled>Descargar canales del walkie (copia original)</button><button id="qs-restore" class="button secondary" type="button">Restore: abrir copia de canales</button></div>
         <input id="qs-restore-file" type="file" accept=".bin" hidden>
         <p id="qs-backup-result" role="status">Sin backup de canales en esta vista.</p>
         <label for="qs-file">Abrir configuracion logica F4HWN v6 de 41344 bytes (no firmware, Flash completa ni calibracion)</label><input id="qs-file" type="file" accept=".bin">
@@ -675,6 +685,7 @@
         <label for="qs-add-name">Nombre ASCII (maximo 10 caracteres)</label><input id="qs-add-name" maxlength="10" required pattern="[ -~]{1,10}">
         <label for="qs-add-rx">RX MHz</label><input id="qs-add-rx" inputmode="decimal" required>
         <label for="qs-add-tx">TX nominal MHz (vacio = igual que RX)</label><input id="qs-add-tx" inputmode="decimal">
+        <label for="qs-add-scan">Lista de escaneo (0 ninguna, 1-24, 25 todas)</label><input id="qs-add-scan" type="number" min="0" max="25" value="25" required>
         <p class="card-note">Se crea solo RX sobre la plantilla FM, como el resto de canales anadidos desde esta web.</p>
         <div class="operation-buttons"><button class="button primary" type="submit">Anadir al archivo local</button><button id="qs-add-cancel" class="button secondary" type="button">Cancelar</button></div></form>
         <dialog id="qs-place-dialog" class="qs-dialog"><form method="dialog"><p id="qs-place-text"></p>
@@ -693,8 +704,29 @@
             <div id="qs-loadable-zone" class="table-scroll qs-drop" tabindex="0" aria-label="Canales para cargar: arrastra o pega aqui"><table><thead><tr><th>Mover</th><th>Elegir</th><th>Nombre</th><th>RX MHz</th><th>TX MHz</th><th>Origen</th><th></th></tr></thead><tbody id="qs-loadable"></tbody></table></div>
             <p id="qs-loadable-count" role="status"></p></section>
         </div>`);
+      $("qs-channel-model").replaceChildren(...[...model.options].map(option => option.cloneNode(true)));
+      $("qs-channel-model").addEventListener("change", () => {
+        model.value = $("qs-channel-model").value;
+        model.dispatchEvent(new Event("change"));
+      });
+      $("qs-channel-consent").addEventListener("change", () => {
+        confirmation.checked = $("qs-channel-consent").checked;
+        confirmation.dispatchEvent(new Event("change"));
+      });
+      $("qs-channel-disconnect").addEventListener("click", () => $("radio-disconnect").click());
+      const channelStatus = () => {
+        $("qs-channel-status").textContent = status.textContent;
+        $("qs-channel-status").dataset.error = status.dataset.error || "";
+        $("qs-channel-progress").value = $("radio-progress").value;
+      };
+      new MutationObserver(channelStatus).observe(status, { subtree: true, childList: true, characterData: true,
+        attributes: true, attributeFilter: ["data-error"] });
+      new MutationObserver(channelStatus).observe($("radio-progress"), { attributes: true, attributeFilter: ["value"] });
+      channelStatus();
       function renderQuansheng() {
         const channels = R.readQuanshengChannels(image);
+        editNumber = null;
+        $("qs-channel-form").hidden = true;
         $("qs-select-all").checked = false;
         $("qs-channels").replaceChildren();
         for (const channel of channels) {
@@ -816,7 +848,12 @@
       }
       function endPosition() {
         const channels = R.readQuanshengChannels(image);
-        return channels.length ? Math.min(1024, channels[channels.length - 1].number + 1) : 1;
+        const last = channels.at(-1)?.number ?? 0;
+        if (last < 1024) return last + 1;
+        const occupied = new Set(channels.map(channel => channel.number));
+        const free = Array.from({ length: 1024 }, (_, index) => index + 1).find(number => !occupied.has(number));
+        R.assert(free, "No quedan memorias Quansheng libres para anadir canales.");
+        return free;
       }
       function insertItems(items, position) {
         R.assert(image, "Lee o abre primero los canales del walkie.");
@@ -921,7 +958,7 @@
           if (target === "radio") {
             const number = Number(row.dataset.number);
             const chosen = radioSelection();
-            dragging = { source: "radio", numbers: chosen.includes(number) ? chosen : [number], grabbed: number };
+            dragging = { source: "radio", numbers: chosen.includes(number) ? chosen : [number] };
           } else {
             const chosen = loadableSelection();
             dragging = { source: "loadable", keys: chosen.includes(row.dataset.key) ? chosen : [row.dataset.key] };
@@ -954,10 +991,11 @@
             } else if (drag.source === "radio") {
               R.assert(row, "Suelta el canal sobre la fila de la posicion que quieres.");
               const to = Number(row.dataset.number);
-              if (to === drag.grabbed) return;
-              image = R.moveQuanshengChannel(image, drag.grabbed, to);
+              if (drag.numbers.includes(to)) return;
+              const placement = event.clientY > row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2 ? "after" : "before";
+              image = R.moveQuanshengChannels(image, drag.numbers, to, placement);
               renderQuansheng();
-              log(`Canal ${drag.grabbed} movido a la memoria ${to} del archivo local; los intermedios se desplazan una posicion.`);
+              log(`${drag.numbers.length} canales movidos en el archivo local. La radio no se modifica.`);
             } else insertItems(loadableByKeys(drag.keys), row ? Number(row.dataset.number) : endPosition());
           });
         });
@@ -994,7 +1032,7 @@
           R.assert(image, "Lee o abre primero los canales del walkie.");
           const rx = $("qs-add-rx").value.trim();
           const entry = { key: "nuevo", name: $("qs-add-name").value, rx, tx: $("qs-add-tx").value.trim() || rx, mode: 0 };
-          const memory = R.plannedQuanshengMemory(image, entry, templateNumber(), 25);
+          const memory = R.plannedQuanshengMemory(image, entry, templateNumber(), Number($("qs-add-scan").value));
           let position = $("qs-add-number").value ? Number($("qs-add-number").value) : endPosition();
           R.assert(Number.isInteger(position) && position >= 1 && position <= 1024, "Numero de memoria entre 1 y 1024.");
           const existing = R.readQuanshengChannels(image).find(channel => channel.number === position);

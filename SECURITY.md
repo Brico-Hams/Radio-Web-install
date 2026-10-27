@@ -1,5 +1,7 @@
 # Política de seguridad
 
+[Español](SECURITY.md) · [English (US)](SECURITY.en.md) · [Français](SECURITY.fr.md) · [Deutsch](SECURITY.de.md)
+
 ## Versiones con soporte
 
 Solo la rama `main` más reciente.

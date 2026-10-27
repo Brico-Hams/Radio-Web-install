@@ -148,7 +148,7 @@ VersionCode 11 preserves the 0.8.0 activity logbooks (General/POTA/SOTA), quick 
 | Document | Contents |
 | --- | --- |
 | [Delivery status](docs/i18n/en/ESTADO-ENTREGA.md) | Review of all requests, evidence, outstanding items, and publication and export conditions |
-| [Help and support](ayuda.html) (in the app: <http://127.0.0.1:8787/ayuda.html>) | Getting started, USB drivers (unofficial support), common errors, and frequently asked questions |
+| [Help and support](ayuda.en.html) (in the app: <http://127.0.0.1:8787/ayuda.html>) | Getting started, USB drivers (unofficial support), common errors, and frequently asked questions |
 | [Complete firmware library](ayuda-firmwares.en.html) / [Markdown index](docs/i18n/en/AYUDA-FIRMWARES.md) | Guides by family, model, revision, and version: F4HWN, ARDF, Karina, Bricohams, and OpenGD77; menus, FM/DMR configuration, and every catalog option with an ON/OFF matrix. Included offline in installers and the local server. Regenerate with `npm run build:help`. |
 | [Quansheng from 0 to 100%](docs/i18n/en/AYUDA-QUANSHENG.md#getting-started-from-0-to-100) | Complete phased path: identify, backups, choose and flash firmware, basic settings, channels, scanning, multiboot, verification, and recovery |
 | [UV-K5 V3 / UV-K1 technical atlas](docs/i18n/en/ATLAS-UV-K5-V3.md) (web: [ayuda-atlas-uv-k5-v3.html](ayuda-atlas-uv-k5-v3.en.html)) | Internal hardware: PY32F071 pinout, internal and external Flash, EEPROM map, serial protocol, DFU bootloader, SWD, build, mods, schematics, teardown photos, and verified repositories |
@@ -159,9 +159,9 @@ VersionCode 11 preserves the 0.8.0 activity logbooks (General/POTA/SOTA), quick 
 | [docs/DECISIONS.md](docs/i18n/en/DECISIONS.md) | Architecture decisions and why each technology was chosen |
 | [docs/DEPLOYMENT.md](docs/i18n/en/DEPLOYMENT.md) | Installation, configuration, updates, and unsupported deployments |
 | [docs/BRANDING.md](docs/i18n/en/BRANDING.md) | Bricohams brand: logo, palette, typography, and tone |
-| [AUTHORS.md](AUTHORS.md) | Authors |
-| [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | Acknowledgments, sources, and third-party licenses |
-| [SUPPORT.md](SUPPORT.md) / [SECURITY.md](SECURITY.md) | Support and private vulnerability reporting |
+| [AUTHORS.md](AUTHORS.en.md) | Authors |
+| [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.en.md) | Acknowledgments, sources, and third-party licenses |
+| [SUPPORT.md](SUPPORT.en.md) / [SECURITY.md](SECURITY.en.md) | Support and private vulnerability reporting |
 
 ## Getting started
 
@@ -234,7 +234,7 @@ and consult the [UV-K5 V3 technical atlas](docs/i18n/en/ATLAS-UV-K5-V3.md).
 
 All installers include **Bricohams Quansheng Studio** (UV-K1 / UV-K5 V3 with F4HWN Fusion 6), from the [Brico-Hams/Bricohams-Studio](https://github.com/Brico-Hams/Bricohams-Studio) repository. It opens at <http://127.0.0.1:8787/studio.html> or from the Quansheng workspace. The copy is downloaded when packaging, at the commit and SHA-256 pinned in `studio.lock.json`, and the server checks it again before serving. It is served with its own CSP that only allows its scripts by hash and prevents it from connecting to the network. From source, run `npm run fetch:studio` once. In web mode, the link opens the [public Studio page](https://brico-hams.github.io/Bricohams-Studio/).
 
-Check the SHA-256 before installing. Launchers open the default browser and keep the server running in the background only on `127.0.0.1:8787`. If your default browser is incompatible, open that address in Chrome, Edge, or Brave. Closing the tab does not stop the server; it does not start automatically after reboot. Always use the same browser, profile, and origin to preserve your backups. USB drivers are configured separately: [Help](ayuda.html#drivers). WebUSB/Web Serial support in Chromium is not guaranteed on FreeBSD.
+Check the SHA-256 before installing. Launchers open the default browser and keep the server running in the background only on `127.0.0.1:8787`. If your default browser is incompatible, open that address in Chrome, Edge, or Brave. Closing the tab does not stop the server; it does not start automatically after reboot. Always use the same browser, profile, and origin to preserve your backups. USB drivers are configured separately: [Help](ayuda.en.html#drivers). WebUSB/Web Serial support in Chromium is not guaranteed on FreeBSD.
 
 ## Actual support status
 
@@ -385,6 +385,6 @@ Lookup performed on October 18, 2026. Firmware and protocols may change; unknown
 Copyright (C) 2026 Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF and Pedro Roca.
 Founders and board members of [Bricohams](https://bricohams.org) ([bricohams.com](https://bricohams.com)).
 
-This program is free software: you may redistribute it and/or modify it under the terms of the [GNU General Public License](LICENSE) version 3 or (at your option) any later version (GPL-3.0-or-later). It is distributed **without any warranty**. Dependencies and third-party sources retain their own licenses: see [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+This program is free software: you may redistribute it and/or modify it under the terms of the [GNU General Public License](LICENSE) version 3 or (at your option) any later version (GPL-3.0-or-later). It is distributed **without any warranty**. Dependencies and third-party sources retain their own licenses: see [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.en.md).
 
 Bricohams is not affiliated with OpenGD77, grid.radio, F4HWN, Quansheng, RadioID, RepeaterBook, SatNOGS, or CelesTrak. The trademarks belong to their owners.

@@ -1,5 +1,7 @@
 # Esquema del banco de pruebas
 
+[Español](schema.md) · [English (US)](schema.en.md) · [Français](schema.fr.md) · [Deutsch](schema.de.md)
+
 Cada familia de firmware tiene un fragmento `sources/<id>.es.json`. `scripts/test-bench.cjs` los une en `catalog.es.json` y comprueba que las traducciones `catalog.<lang>.json` tengan los mismos ids, el mismo campo `menu` y los mismos huecos.
 
 ```json

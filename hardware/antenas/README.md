@@ -1,5 +1,7 @@
 # Antenas de satélite Bricohams
 
+[Español](README.md) · [English (US)](README.en.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
+
 Diseños propios de Bricohams: una Yagi bibanda de mano 2 m/70 cm y un dipolo
 en V horizontal de 2 m. Incluye cuatro piezas imprimibles en `stl/`.
 

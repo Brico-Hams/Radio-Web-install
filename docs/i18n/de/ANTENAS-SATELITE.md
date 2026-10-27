@@ -181,7 +181,7 @@ Volumen- und Maßangaben stehen in [piezas.json](../../../hardware/antenas/pieza
 
 ## Berechnungsmethode und Validierung
 
-Dateien unter [hardware/antenas](../../../hardware/antenas/README.md):
+Dateien unter [hardware/antenas](../../../hardware/antenas/README.de.md):
 
 | Skript | Funktion |
 | --- | --- |

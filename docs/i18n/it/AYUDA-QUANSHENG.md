@@ -10,8 +10,8 @@ schemi e foto): [Atlante tecnico UV-K5 V3](ATLAS-UV-K5-V3.md).
 ## Visualizzatore in diretta e registro RF
 
 In **Canali**, le due tabelle sono affiancate su desktop e impilate su mobile.
-Seleziona il modello compatibile e autorizza la lettura in **Backup e connessione**.
-Torna in **Canali** e premi **Connetti e leggi canali (sola lettura)**: la colonna
+Seleziona il modello compatibile e autorizza la lettura direttamente in **Canali**.
+Premi **Connetti e leggi canali (sola lettura)**: la colonna
 sinistra mostra il banco attivo senza permesso di scrittura. A destra scegli PMR446,
 REMER VHF o ripetitori Bricohams Murcia e prepara il modello da trascinare.
 Sono disponibili anche i canali preparati da CSV e dagli altri cataloghi.
@@ -481,6 +481,14 @@ Non abilita scritture né sostituisce il backup completo di quell'unità.
 ### Sezioni della pagina e tabelle dei canali
 
 I passi laterali (Backup e connessione, Canali, Satelliti, Firmware, Strumenti) mostrano solo la sezione scelta. I collegamenti strumenti aprono la sezione della destinazione.
+
+I vecchi collegamenti con frammento aprono la vista corrispondente e il frammento viene rimosso dall'URL. Il menu laterale scorre autonomamente nelle finestre basse. Le modifiche ai canali restano al cambio di vista; l'editor precede i cataloghi di preparazione.
+
+Trascina una riga selezionata per spostare l'intera selezione nel suo ordine originale, oppure una riga non selezionata per spostare solo quel canale. Rilascia nella metà superiore della riga di destinazione per inserire prima, oppure nella metà inferiore per inserire dopo. Tutti i byte vengono conservati, inclusi toni, DCS e attributi non modificabili.
+
+**Scarica canali della radio (backup originale)** rilegge e salva il banco attivo senza sostituire le modifiche locali. **Salva configurazione locale** salva la versione modificata. Modello, consenso alla lettura, stato, avanzamento e disconnessione sono disponibili in Canali.
+
+**Aggiungi canale** richiede numero memoria, nome, RX, TX nominale e lista di scansione (0, 1-24 o 25). Lascia il numero vuoto per aggiungere in fondo, oppure in uno spazio libero se la memoria 1024 è occupata. Per un numero occupato scegli **Prima**, **Dopo** o **Annulla**; annullare non modifica il file. I nuovi canali sono solo RX e usano un modello FM esistente. Solo **Scrivi e rileggi canali** modifica la radio, con backup completo verificato.
 
 Due tabelle: **Canali della radio**, letti dal banco attivo o dal file, e **Canali da caricare**, preparati da ripetitori, REMER, PMR446, SAT/Doppler, aeroporti, FM/CSV o copie dalla radio. Trascina una riga per spostarla e far scorrere le intermedie. Dalla tabella da caricare alla radio si inserisce prima della destinazione, o in fondo nell’area vuota. La copia dalla radio conserva ogni byte, DCS incluso. Usa Copia selezione / Incolla qui, o Ctrl+C / Ctrl+V con la tabella attiva. Incolla nella radio inserisce prima della prima selezione o in fondo senza selezione. Scorrono solo memorie contigue fino al primo spazio; le successive restano invariate. Modifiche locali, nessuna scrittura USB.
 

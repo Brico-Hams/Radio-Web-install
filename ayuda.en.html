@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Help, frequently asked questions, drivers, and support for Bricohams Radio Workspace.">
+  <title>Help and support | Bricohams Radio Workspace</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="radio-core.js" defer></script>
+  <script src="runtime-mode.js" defer></script>
+  <script src="app.js" defer></script>
+  <script src="ui-translations.js" defer></script>
+  <script src="ui-i18n.js" defer></script>
+  <link rel="alternate" hreflang="es" href="ayuda.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda.en.html">
+  <link rel="alternate" hreflang="fr" href="ayuda.fr.html">
+  <link rel="alternate" hreflang="de" href="ayuda.de.html">
+</head>
+<body data-page="ayuda">
+  <a class="skip" href="#main">Skip to content</a>
+  <div id="app"></div>
+  <template id="help-content">
+    <a class="back" href="index.html?lang=en-US">&larr; Back to workspaces</a>
+    <nav class="languages" aria-label="Help language"><span translate="no"><a href="ayuda.html" hreflang="es" lang="es">Español</a> · <a href="ayuda.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda.fr.html" hreflang="fr" lang="fr">Français</a> · <a href="ayuda.de.html" hreflang="de" lang="de">Deutsch</a></span></nav>
+    <section class="detail-hero"><span class="eyebrow accent">HELP CENTER</span><h1>Help and support<span>Bricohams Radio Workspace</span></h1>
+      <p>How the app works, how to troubleshoot errors, which USB drivers you need, and how to get help. The drivers in this guide are <strong>unofficial community support</strong>: manufacturers and firmware projects do not endorse them through this app.</p></section>
+    <div class="help-search"><label for="help-filter">Search help</label><input id="help-filter" type="search" placeholder="E.g., WinUSB, CRC, RepeaterBook, TLE" maxlength="60" autocomplete="off"><p id="help-filter-status" role="status" class="card-note"></p></div>
+    <section class="panel help-section" id="manuales" data-help><h2>Firmware, models, and configuration library</h2>
+      <p><a href="ayuda-referencias.en.html">Documentation and references: complete index by language</a> · <a href="ayuda-referencias.en.html" lang="en-US">English (US)</a> · <a href="ayuda-referencias.fr.html" lang="fr">Français</a> · <a href="ayuda-referencias.de.html" lang="de">Deutsch</a> · <a href="ayuda-referencias.it.html" lang="it">Italiano</a></p>
+      <p><a href="ayuda-firmwares.en.html">Open the full library</a>: guides by version and hardware, explanations of settings, and the website’s actual limitations.</p>
+            <p>Documentation in other languages: <a href="ayuda-firmwares.en.html" hreflang="en" lang="en">English (US)</a> · <a href="ayuda-firmwares.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-firmwares.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-firmwares.fr.html" hreflang="fr" lang="fr">Français</a></p>      <ul><li><a href="ayuda-configuracion.en.html">Common settings, repeaters, satellites, and USB</a></li>
+        <li><a href="ayuda-quansheng.en.html#puesta-en-marcha-de-0-a-100">Quansheng: getting started from 0 to 100%</a> · <a href="ayuda-quansheng.en.html">F4HWN: versions, menus, slots, CFG, and recovery</a></li>
+        <li><a href="ayuda-atlas-uv-k5-v3.en.html">UV-K5 V3 / UV-K1 technical atlas: pinout, memory, protocol, bootloader, schematics, and photos</a></li>
+        <li><a href="ayuda-validacion-v3-android.en.html">V3/Android audit in progress: contacts, per-slot banks, CAT, hardware compatibility, and pending evidence</a></li>
+        <li><a href="ayuda-opciones-f4hwn.en.html">All F4HWN build options</a> · <a href="ayuda-presets-f4hwn.en.html">ON/OFF values by edition</a></li>
+        <li><a href="ayuda-ardf.en.html">ARDF: gain, cycles, and configuration</a></li>
+        <li><a href="ayuda-egzumer.en.html">Original Egzumer: V1 source code and options</a> · <a href="ayuda-pack-dim0s.en.html">Dim0s pack and Karina V3/UV-K1</a></li>
+        <li><a href="ayuda-opengd77.en.html">OpenGD77: FM/DMR configuration</a> · <a href="ayuda-opengd77-modelos.en.html">Models, aliases, and revisions</a></li>
+        <li><a href="ayuda-dm32uv.en.html">Baofeng DM-32UV: OpenGD77, RadioFoundry, and building firmware</a></li>
+        <li><a href="ayuda-anytone.en.html">AnyTone: local channels, airports, and broadcast FM</a></li>
+        <li><a href="ayuda-karina.en.html">Karina: technical dossier, source code, and specification</a> · <a href="ayuda-enlaces-comunidad.en.html">Community repositories</a></li>
+        <li><a href="ayuda-ejemplos.en.html">Examples: open-source firmware, channels, and scripts</a> · <a href="ayuda-binarios-terceros.en.html">Third-party binary hash index</a></li>
+        <li><a href="ayuda-bricohams.en.html">Bricohams V3: modular build</a></li>
+        <li><a href="ayuda-iniciacion-satelite.en.html">Getting started with satellites using BH Satélite</a> · <a href="ayuda-antenas-satelite.en.html">Satellite antennas: simulated designs and STL parts</a></li>
+        <li><a href="ayuda-entrega.en.html">Delivery status: features and outstanding work</a></li></ul>
+        <p><a href="ayuda-android.en.html">Android Bricohams Beta: installation, local data, GPS, and Morse WAV</a></p>
+        <p><a href="ayuda-arquitectura.en.html">Architecture</a> · <a href="ayuda-decisiones.en.html">Technical decisions</a> · <a href="ayuda-despliegue.en.html">Installation and deployment</a> · <a href="ayuda-marca.en.html">Bricohams branding</a></p>
+    </section>
+    <nav class="help-toc panel" aria-label="Help contents"><h2>Contents</h2><ol>
+      <li><a href="#inicio">Quick start</a></li><li><a href="#funcionamiento">How it works</a></li><li><a href="#opengd77">OpenGD77</a></li>
+      <li><a href="#quansheng">Quansheng F4HWN</a></li><li><a href="#codeplug">Contacts, repeaters, and satellites</a></li><li><a href="#firmware">Official firmware</a></li>
+      <li><a href="#copias">Backups and recovery</a></li><li><a href="#drivers">Drivers (unofficial)</a></li><li><a href="#errores">Troubleshooting</a></li>
+      <li><a href="#faq">Frequently asked questions</a></li><li><a href="#soporte">Support</a></li><li><a href="#creditos">Credits and license</a></li></ol></nav>
+
+    <section id="inicio" class="panel help-section" data-help><h2>1. Quick start</h2>
+      <h3>Install the local version</h3>
+      <p>Download the file for your system and <code>SHA256SUMS</code> from <a href="https://github.com/Brico-Hams/Radio-Web-install/releases/latest" target="_blank" rel="noopener noreferrer">the latest release</a>. Do not select the automatically generated “Source code” archives unless you want to install from source. Verify the SHA-256 before running the installer.</p>
+      <ul>
+        <li><strong>Windows 11 x64:</strong> extract the entire ZIP <code>*-windows-x64.zip</code>, open PowerShell in the extracted folder, and run <code>powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1</code>. No administrator privileges or separate Node installation are required. Launch <strong>Bricohams Radio Workspace</strong> from the Start menu.</li>
+        <li><strong>Debian, Ubuntu, and Raspberry Pi OS:</strong> check <code>dpkg --print-architecture</code>, download only the matching <code>.deb</code> (amd64, arm64, or armhf), and run <code>sudo apt install ./nombre-del-paquete.deb</code>. Node is included. Launch the app from the menu or with <code>bricohams-radio</code>. 32-bit ARM requires ARMv7 or later.</li>
+        <li><strong>Arch Linux:</strong> extract <code>*-arch.tar.gz</code>, install <code>base-devel</code> and <code>nodejs</code> with pacman, review the <code>PKGBUILD</code> and run <code>makepkg -si</code> as a regular user. Then launch <code>bricohams-radio</code>.</li>
+        <li><strong>FreeBSD 14 amd64:</strong> extract <code>*-freebsd-amd64.tar.gz</code>, enter that folder, and run <code>su -c './install.sh'</code>. Install Node 22 with <code>pkg</code> if needed. Run <code>bricohams-radio</code> as a regular user. WebUSB/Web Serial access depends on Chromium support and is not guaranteed.</li>
+      </ul>
+      <p>The launchers open <code>http://127.0.0.1:8787</code> and leave the server running in the background, without automatically starting it at login. Closing the tab does not stop the server. Always use the same browser, profile, and address to retain your backups. USB drivers are configured separately: see <a href="#drivers">Drivers</a>.</p>
+      <p>The complete guide covers SHA-256 verification, updates, shutdown, and uninstallation in <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/docs/DEPLOYMENT.md#instaladores-locales" target="_blank" rel="noopener noreferrer">Local installation and deployment</a>.</p>
+      <h3>Alternative: run from source</h3>
+      <ol class="guide-steps">
+        <li>Install <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">Node.js 22 or later</a>.</li>
+        <li>In the project folder, run <code>npm ci --ignore-scripts</code> and then <code>npm start</code>.</li>
+        <li>Open <code>http://127.0.0.1:8787</code> in <strong>desktop Chrome, Edge, or Brave</strong>. If you enter <code>localhost</code>, the server redirects you to that address to avoid separate backup storage; other IP addresses are rejected for security.</li>
+        <li>Choose your family (OpenGD77 or Quansheng) and exact model, check the confirmation box or enable <strong>PRO mode</strong> for this session, and click <strong>Connect and back up</strong>. PRO avoids repeated confirmations; it does not remove browser permissions, backups, or CRC checks. The entire project is in <strong>Beta / validation</strong>.</li>
+        <li>Wait for the automatic backup to finish and export the <code>.rwb.json</code>. No writes are enabled without a verified backup.</li>
+      </ol>
+      <p class="card-note">Firefox and Safari do not provide WebUSB/Web Serial. Private windows may delete backups when closed.</p>
+    </section>
+
+    <section id="funcionamiento" class="panel help-section" data-help><h2>2. How it works</h2>
+      <p><strong>Two modes.</strong> The top badge shows “Web · GitHub Pages” (a static site, no server) or “Local · installed” (a Node server on your computer). In both modes, the radio, backups, and edits stay in your browser. Differences in web mode:</p>
+      <ul class="feature-list">
+        <li><strong>Firmware</strong>: download the file from the official source (the button takes you there) and load it using <em>Load the downloaded file</em>. F4HWN is verified by size and published SHA-256; OpenGD77 is checked by name and ZIP format, and its SHA-256 is calculated only locally because the publisher does not publish a hash.</li>
+        <li><strong>RadioID contacts</strong>: download <code>user.csv</code> from radioid.net and load it into the app (max. 100 MiB). It is filtered by the selected country and area, and at most 5,000 contacts are displayed; narrow the area if there are more. Files not from RadioID are rejected.</li>
+        <li><strong>Optional profile</strong>: callsign and 7-digit DMR ID, stored only in this browser; your entry is marked “(you).” You can delete it at any time.</li>
+        <li><strong>RepeaterBook</strong>: unavailable in web mode; requires the local version and an approved token configured in the server environment.</li>
+        <li><strong>Satellites</strong>: come from a daily list generated from SatNOGS (ISS 25544, SO-50 27607, AO-91 43017, PO-101 43678). A warning appears if it is more than 7 days old. Data: SatNOGS DB / Libre Space Foundation, <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>.</li>
+      </ul>
+      <p>The app has two parts that run on your computer (local mode):</p>
+      <ul class="feature-list">
+        <li><strong>Browser</strong>: communicates with the radio over USB (WebUSB) or a serial port (Web Serial), stores backups in IndexedDB, and edits files locally.</li>
+        <li><strong>Local Node server</strong> (only <code>127.0.0.1</code>): serves the website and acts as a controlled intermediary to official sources (firmware, RadioID, RepeaterBook, SatNOGS, CelesTrak). It never receives your backups, calibration, or codeplugs.</li>
+      </ul>
+      <p>Protection workflow: <strong>connect &rarr; identify &rarr; automatic backup &rarr; SHA-256 verification &rarr; write permission tied to that connection</strong>. Before every destructive operation, the backup is read and checked again. Disconnecting, changing radios, or deleting the backup revokes permission.</p>
+    </section>
+
+    <section id="opengd77" class="panel help-section" data-help><h2>3. OpenGD77</h2>
+      <ul class="feature-list">
+        <li><strong>MK22</strong> (GD-77, DM-1801, RD-5R) and <strong>STM32</strong> (MD-UV380, MD-9600, MD-2017, DM-1701): WebUSB. On Windows they require WinUSB (see <a href="#drivers">drivers</a>).</li>
+        <li><strong>DM-32 / UV008</strong>: Web Serial at 115200 baud, no additional driver on Windows 10/11.</li>
+        <li>Reads identification, calibration, and standard 128 KiB codeplugs. Edit channels, add channels from templates, RadioID contacts, and the SAT list (max. 25).</li>
+        <li><strong>Writing to the radio is blocked</strong> because there is no verified method to back up the microcontroller’s entire firmware. Save the binary and write it with the official CPS if you choose to do so.</li>
+      </ul>
+    </section>
+
+    <section id="quansheng" class="panel help-section" data-help><h2>4. Quansheng UV-K1 / UV-K5 V3 with F4HWN</h2>
+      <ul class="feature-list">
+        <li>Only PY32F071 with F4HWN v6 or later and Multiboot. Not suitable for older UV-K5 models or factory firmware.</li>
+        <li>Web Serial at 38400 baud through a USB-C data cable or USB-to-serial programming cable.</li>
+        <li>Automatic backup: calibration, the full 2 MiB external Flash (requires <strong>Labs v6.1+</strong> with hardware CRC), and the <code>Main</code>image. The 2 MiB backup may take 10–20 minutes.</li>
+        <li>With a verified backup: install/erase slots 1–4 and reset CFG banks 1–4. <code>Main</code> is never a target.</li>
+        <li>Switch slots on the radio: power on while holding <kbd>M</kbd> (not PTT), choose the slot, and confirm twice.</li>
+      </ul>
+    </section>
+
+    <section id="codeplug" class="panel help-section" data-help><h2>5. Contacts, repeaters, and satellites</h2>
+      <ul class="feature-list">
+        <li><strong>RadioID contacts</strong> (OpenGD77 only): search by country and state, browse pages, select, and add to the open codeplug. Duplicates are skipped.</li>
+        <li><strong>RepeaterBook repeaters</strong>: requires RepeaterBook to approve this app and issue you an individual <code>rbuapp_</code>token, configured only on the server. Alternative: import an authorized JSON export. All new channels are <strong>RX only</strong>.</li>
+        <li><strong>Satellites</strong>: choose a NORAD ID, update the TLE (SatNOGS or CelesTrak), look up FM frequencies, and calculate passes locally using your position (with consent). In OpenGD77 you can load it into the native SAT list; in Quansheng you can add FM memories to the F4HWN v6 configuration or export CHIRP CSV and TLE. Beta writes require a full backup; F4HWN v6.0 remains read-only.</li>
+      </ul>
+    </section>
+
+    <section id="firmware" class="panel help-section" data-help><h2>6. Official firmware</h2>
+      <p>Only stable releases are downloaded from <a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases" target="_blank" rel="noopener noreferrer">Armel’s GitHub (F4HWN)</a>, with the publisher’s SHA-256, and from <a href="https://www.opengd77.com/downloads/" target="_blank" rel="noopener noreferrer">opengd77.com</a> (no published hash: calculated locally). Downloading does not install anything or unlock writes. Always check the model and hardware revision.</p>
+    </section>
+
+    <section id="copias" class="panel help-section" data-help><h2>7. Backups and recovery</h2>
+      <ul class="feature-list">
+        <li>Backups live in this browser’s IndexedDB for <code>http://127.0.0.1:8787</code>. Clearing site data deletes them: <strong>always export</strong> the <code>.rwb.json</code>.</li>
+        <li>The <code>.rwb.json</code> contains a manifest, Base64-encoded files, and their SHA-256 hashes. Store it privately: it includes personal data and your radio’s unique calibration.</li>
+        <li>This app does not restore calibration automatically. For recovery, use each project’s official tools with these files.</li>
+      </ul>
+    </section>
+
+    <section id="drivers" class="panel help-section" data-help><h2>8. USB drivers (unofficial support)</h2>
+      <p class="notice-inline"><strong>Warning:</strong> this section provides community guidance, not manufacturer support. Download drivers only from the linked official websites. Changing a driver may prevent another program from seeing the radio; all changes can be reversed in Device Manager.</p>
+      <div class="table-scroll"><table><thead><tr><th>Device / cable</th><th>Windows 10/11</th><th>Linux</th><th>macOS</th></tr></thead><tbody>
+        <tr><td>OpenGD77 MK22 / STM32 (USB <code>1FC9:0094</code>)</td><td>WinUSB with <a href="https://zadig.akeo.ie/" target="_blank" rel="noopener noreferrer">Zadig</a></td><td>udev rule (below)</td><td>Not validated</td></tr>
+        <tr><td>DM-32 / UV008 (USB serial)</td><td>Built in (usbser)</td><td>Built in (cdc_acm) + group <code>dialout</code></td><td>Built in</td></tr>
+        <tr><td>UV-K1 / UV-K5 V3 over USB-C</td><td>Built in (usbser)</td><td>Built in + <code>dialout</code></td><td>Built in</td></tr>
+        <tr><td>Kenwood K1 cable with CH340/CH341</td><td><a href="https://www.wch-ic.com/downloads/CH341SER_EXE.html" target="_blank" rel="noopener noreferrer">WCH CH341SER</a></td><td>Built in (ch341)</td><td>Usually built in; otherwise WCH</td></tr>
+        <tr><td>Cable with CP210x</td><td><a href="https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers" target="_blank" rel="noopener noreferrer">Silicon Labs VCP</a></td><td>Built in (cp210x)</td><td>Silicon Labs VCP</td></tr>
+        <tr><td>Cable with PL2303</td><td><a href="https://www.prolific.com.tw/US/ShowProduct.aspx?p_id=225" target="_blank" rel="noopener noreferrer">Prolific</a> (counterfeit chips do not work)</td><td>Built in (pl2303)</td><td>Prolific</td></tr>
+      </tbody></table></div>
+      <h3>Windows: WinUSB for OpenGD77 (MK22/STM32)</h3>
+      <ol class="guide-steps">
+        <li>Turn on the radio running OpenGD77 in normal mode (not bootloader) and connect it.</li>
+        <li>Open Zadig, select <em>Options &rarr; List All Devices</em> and choose the device with USB ID <code>1FC9 0094</code>. Check the ID before continuing: selecting another device could disable your keyboard, mouse, or drive.</li>
+        <li>Select <strong>WinUSB</strong> and click <em>Replace Driver</em>. Disconnect and reconnect the radio.</li>
+        <li><strong>Revert</strong>: Device Manager &rarr; device &rarr; <em>Uninstall device</em> with the delete-driver option checked &rarr; reconnect. Do this if the desktop CPS no longer sees the COM port.</li>
+      </ol>
+      <h3>Linux: permissions</h3>
+      <p>Create <code>/etc/udev/rules.d/70-opengd77.rules</code> with:</p>
+      <pre class="help-code">SUBSYSTEM=="usb", ATTRS{idVendor}=="1fc9", ATTRS{idProduct}=="0094", MODE="0660", TAG+="uaccess"</pre>
+      <p>Then run <code>sudo udevadm control --reload-rules</code> and reconnect. For serial ports, add your user to <code>dialout</code> (Debian/Ubuntu) or <code>uucp</code> (Arch) and log out. If WebUSB reports it cannot claim the interface, the kernel’s <code>cdc_acm</code> driver is using it; this combination has not been validated by the project.</p>
+      <h3>Check the cable</h3>
+      <p>Many USB-C cables are charging-only. If no new port appears when connecting, try another data cable and another direct USB port (no hub).</p>
+    </section>
+
+    <section id="errores" class="panel help-section" data-help><h2>9. Troubleshooting</h2>
+      <div class="table-scroll"><table><thead><tr><th>On-screen message or symptom</th><th>Likely cause</th><th>What to do</th></tr></thead><tbody>
+        <tr><td><samp>Solo se permite el origen local.</samp></td><td>You opened another IP address, a proxy, or a request with a different origin.</td><td>Use exactly <code>http://127.0.0.1:8787</code>.</td></tr>
+        <tr><td><samp>WebUSB no disponible.</samp> <samp>Web Serial no disponible.</samp></td><td>Unsupported browser, private window, or file opened as <code>file://</code>.</td><td>Desktop Chrome/Edge/Brave through the local server.</td></tr>
+        <tr><td><em>The radio does not appear in the browser’s device picker.</em></td><td>Charging-only cable, radio turned off, missing driver, or another program has the port open.</td><td>Close CPS/CHIRP/UV Studio, check the <a href="#drivers">drivers</a> and the cable.</td></tr>
+        <tr><td><samp>No se encontro una interfaz CDC OpenGD77 normal.</samp></td><td>Radio in bootloader/DFU mode or running firmware other than OpenGD77.</td><td>Restart the radio in normal mode.</td></tr>
+        <tr><td><samp>Error al configurar CDC. Comprueba el controlador USB.</samp></td><td>Windows without WinUSB for <code>1FC9:0094</code>.</td><td>Install WinUSB with Zadig.</td></tr>
+        <tr><td><samp>Cable USB desconectado.</samp> <samp>Cable serie desconectado.</samp> <samp>La radio cerro el puerto.</samp></td><td>Loose connector, USB power saving, or radio turned off.</td><td>Reconnect and retry; a new backup will be required.</td></tr>
+        <tr><td><samp>CRC UART incorrecto.</samp> <samp>Trama UART demasiado corta.</samp></td><td>Cable noise, mismatched baud rate, or non-F4HWN firmware.</td><td>Try another cable or port; confirm F4HWN v6+.</td></tr>
+        <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Transmission error or firmware without hardware CRC (not Labs v6.1+).</td><td>Retry. Use Labs v6.1+ for a full backup. Writes remain blocked.</td></tr>
+        <tr><td><samp>Main no inicializado o cabecera no compatible.</samp></td><td>The radio does not have a valid Main image.</td><td>Writing will not be enabled. Consult the F4HWN documentation.</td></tr>
+        <tr><td><samp>IndexedDB no disponible</samp> <samp>La copia no se pudo confirmar en disco.</samp></td><td>Private window, full disk, or blocked storage.</td><td>Use a regular window, free disk space, and allow site storage.</td></tr>
+        <tr><td><samp>Base de copias bloqueada por otra pestana.</samp></td><td>Another app tab is open.</td><td>Close the other tabs and reload.</td></tr>
+        <tr><td><samp>El archivo debe tener exactamente 131072 bytes.</samp></td><td>You opened a CPS JSON file, firmware, or an extended binary.</td><td>Open a standard 128 KiB binary codeplug.</td></tr>
+        <tr><td><samp>RepeaterBook no configurado</samp></td><td>Approval or the individual token is missing on the server.</td><td>Request approval (see <a href="#codeplug">codeplug</a>) or import an authorized JSON file.</td></tr>
+        <tr><td><samp>RepeaterBook limito el acceso: espera al menos 15 minutos</samp></td><td>The provider returned HTTP 429 (request limit).</td><td>Wait at least 15 minutes; there are no automatic retries.</td></tr>
+        <tr><td><samp>TLE caducado (&gt;7 dias) o con epoca futura</samp></td><td>Outdated orbital elements.</td><td>Update the orbital elements or switch providers.</td></tr>
+        <tr><td><samp>La fuente oficial respondio HTTP</samp></td><td>GitHub or opengd77.com is unavailable or rate-limiting requests.</td><td>Try again later; no mirrors are used.</td></tr>
+        <tr><td><em>The automatic backup download does not appear.</em></td><td>The browser blocked multiple downloads.</td><td>Allow downloads for the site and retry from the history.</td></tr>
+      </tbody></table></div>
+      <p>Messages in monospace are preserved exactly as shown in the Spanish UI (without accents) for troubleshooting. Symptoms in italics do not have a specific message.</p>
+    </section>
+
+    <section id="faq" class="panel help-section" data-help><h2>10. Frequently asked questions</h2>
+      <details><summary>Why can’t I write the codeplug to my OpenGD77 radio?</summary><p>The app’s policy requires a complete, verified firmware backup before any write, and OpenGD77 does not provide a complete microcontroller dump over this protocol. You can edit and save the binary and write it with the official CPS at your own risk.</p></details>
+      <details><summary>Is my data sent to any server?</summary><p>No. Backups, calibration, and codeplugs stay in your browser in both modes. In local mode, queries you initiate (country/area, NORAD, firmware model) go to official providers through the local server. In web mode, the browser only contacts api.github.com directly for the F4HWN catalog (GitHub sees your IP); RadioID data comes from the <code>user.csv</code> you load, and satellites come from the site’s own static file.</p></details>
+      <details><summary>Can I use it on a phone or publish it on the Internet?</summary><p>The local server listens only on <code>127.0.0.1</code>; do not expose it on a network. To use it without installing anything, use web mode on GitHub Pages (see <a href="#funcionamiento">How it works</a>). Android Chrome does not generally provide Web Serial.</p></details>
+      <details><summary>Does it work with GitHub Pages?</summary><p>Yes, in web mode: radio access, backups, and editing work the same way; firmware and RadioID’s <code>user.csv</code> are loaded manually, satellites come from a daily list, and RepeaterBook is unavailable. See <a href="#funcionamiento">How it works</a>.</p></details>
+      <details><summary>How long does a Quansheng backup take?</summary><p>The 2 MiB external Flash takes 10–20 minutes or longer at 38400 baud. Do not disconnect or put the computer to sleep.</p></details>
+      <details><summary>Can I install factory firmware or firmware for another radio?</summary><p>No. Only stable F4HWN v6.x images are accepted in slots 1–4. OpenGD77 and factory firmware are not flashed.</p></details>
+      <details><summary>Why don’t imported channels transmit?</summary><p>They are created RX-only and without tones to avoid unauthorized transmissions. Check frequencies, tones, Color Code, Time Slot, and your license before enabling TX with the CPS.</p></details>
+      <details><summary>How do I load satellites into OpenGD77?</summary><p>Open or read the codeplug, go to SAT / passes, update the TLE, look up frequencies, choose an FM frequency, and click Load satellite into SAT list. Save the binary.</p></details>
+      <details><summary>Do I need an amateur radio license?</summary><p>To transmit on amateur radio bands, yes, according to your country’s regulations. Listening and programming do not transmit.</p></details>
+      <details><summary>What happens if power fails while writing a slot?</summary><p>The slot may become invalid; Main is not touched. Boot into Main and repeat the installation. No software guarantees recovery from electrical failures.</p></details>
+      <details><summary>Is it affiliated with OpenGD77, grid.radio, F4HWN, or Quansheng?</summary><p>No. It is an independent Bricohams project that interoperates with their public formats.</p></details>
+    </section>
+
+    <section id="soporte" class="panel help-section" data-help><h2>11. Support</h2>
+      <p>Community support, without warranty, on <a href="https://github.com/Brico-Hams/Radio-Web-install/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a>. Include:</p>
+      <ul class="feature-list"><li>Operating system, browser and version, Node version.</li><li>Exact radio model, revision, and firmware.</li><li>Steps to reproduce and the text of the Operations log.</li></ul>
+      <p><strong>Never publish</strong> RepeaterBook tokens, <code>.rwb.json</code>files, calibration, codeplugs containing personal data, or your location. For vulnerabilities, follow <code>SECURITY.md</code> and do not open a public issue.</p>
+    </section>
+
+    <section id="creditos" class="panel help-section" data-help><h2>12. Credits and license</h2>
+      <p>&copy; 2026 Anatol Emilio Lopez Maitchovcow (EA5KAO), Diego Roca (EA5JEF), and Pedro Roca, founders and board members of Bricohams. More information at <a href="https://bricohams.org" target="_blank" rel="noopener noreferrer">bricohams.org</a> and <a href="https://bricohams.com" target="_blank" rel="noopener noreferrer">bricohams.com</a>. Code licensed under <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GPL-3.0-or-later</a>, without warranty. Authors in <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/AUTHORS.md" target="_blank" rel="noopener noreferrer">AUTHORS.md</a>; sources, third-party licenses, and acknowledgments in <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/ACKNOWLEDGEMENTS.md" target="_blank" rel="noopener noreferrer">ACKNOWLEDGEMENTS.md</a>.</p>
+      <p>Thanks to OpenGD77, grid.radio, F4HWN/Armel, egzumer, DualTachyon, RadioID, RepeaterBook, SatNOGS/Libre Space Foundation, CelesTrak, and satellite.js. Data courtesy of RepeaterBook.com.</p>
+    </section>
+  </template>
+  <noscript>Enable JavaScript to use search. Help is also available in <a href="https://github.com/Brico-Hams/Radio-Web-install" target="_blank" rel="noopener noreferrer">the repository</a>.</noscript>
+</body>
+</html>

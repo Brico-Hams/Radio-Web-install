@@ -5,7 +5,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { once } = require("node:events");
 const { pages, render, helpImages, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown,
-  LANGS, TRANSLATIONS, localized, checkParity, translatedPath, relink, markdownHeadingIds } = require("../scripts/build-help.cjs");
+  LANGS, TRANSLATIONS, localized, checkParity, translatedPath, relink, markdownHeadingIds,
+  HELP_LANGS, helpCenterFile, renderHelpCenter } = require("../scripts/build-help.cjs");
 const { ALLOWED_FILES, createServer } = require("../server.cjs");
 const root = path.join(__dirname, "..");
 // Generated docs are stored with LF; a Windows checkout with core.autocrlf turns them into CRLF.
@@ -423,4 +424,83 @@ test("las referencias del original espanol tambien tienen anclas Markdown valida
     assert.deepEqual(checkParity(text, file, text, file, "es"), [], document);
     assert.equal(relink(text, file, file, "es"), text, document);
   }
+});
+
+test("el centro completo de ayuda se genera reproduciblemente en cuatro idiomas sin resumir secciones", () => {
+  assert.deepEqual(HELP_LANGS, ["es", "en", "fr", "de"]);
+  const original = read("ayuda.html");
+  const protectedContent = html => [...html.matchAll(/<(code|pre|kbd|samp)\b[^>]*>[\s\S]*?<\/\1>/g)].map(match => match[0]);
+  const sections = html => [...html.matchAll(/<(?:section|nav|details|summary|h[1-6])\b[^>]*>/g)]
+    .map(match => match[0].replace(/aria-label="[^"]*"/g, 'aria-label=""'));
+  const externalLinks = html => [...html.matchAll(/href="(https?:[^"]+)"/g)].map(match => match[1]);
+  for (const lang of HELP_LANGS) {
+    const file = helpCenterFile(lang);
+    const html = read(file);
+    assert.equal(html, renderHelpCenter(original, lang), `${file}: HTML reproducible`);
+    assert.match(html, new RegExp(`<html lang="${lang === "en" ? "en-US" : lang}">`));
+    assert.deepEqual(sections(html), sections(original), `${file}: todas las secciones y preguntas`);
+    assert.deepEqual(protectedContent(html), protectedContent(original), `${file}: comandos, diagnosticos y protocolos exactos`);
+    assert.deepEqual(externalLinks(html), externalLinks(original), `${file}: fuentes y licencias`);
+    assert.ok(html.includes('id="help-filter"'), `${file}: buscador conservado`);
+    assert.ok(html.includes('src="ui-i18n.js"'), `${file}: interfaz localizada`);
+    for (const code of HELP_LANGS) {
+      assert.ok(html.includes(`hreflang="${code === "en" ? "en-US" : code}" href="${helpCenterFile(code)}"`));
+    }
+    if (lang !== "es") {
+      assert.ok(html.includes(`href="index.html?lang=${lang === "en" ? "en-US" : lang}"`));
+      for (const guide of Object.values(pages)) {
+        assert.ok(html.includes(`href="${localized(guide, lang)}"`), `${file}: guia localizada ${guide}`);
+      }
+      assert.throws(() => renderHelpCenter(original.replace("Cómo funciona la aplicación", "Nueva explicacion sin traducir"), lang), /Falta traducir ayuda/);
+      assert.throws(() => renderHelpCenter(original.replace("Buscar en la ayuda", "Firmware"), lang), /Traducciones de ayuda sin usar/);
+    }
+  }
+  assert.equal(helpCenterFile("it"), "ayuda.html", "el italiano conserva su centro de ayuda original");
+  assert.throws(() => renderHelpCenter(original, "it"), /Idioma de ayuda no soportado/);
+});
+
+test("los centros de ayuda y los indices conservan idioma, consultas y anclas sin perder el italiano", () => {
+  const { localizedURL } = require("../ui-i18n.js");
+  const base = "https://example.invalid/Radio-Web-install/index.html";
+  for (const lang of HELP_LANGS) {
+    const locale = lang === "en" ? "en-US" : lang;
+    for (const source of ["ayuda.html", "ayuda.en.html", "ayuda.fr.html", "ayuda.de.html"]) {
+      assert.equal(localizedURL(`${source}?x=1&lang=es#drivers`, base, locale),
+        `${helpCenterFile(lang)}?x=1&lang=${locale}#drivers`);
+    }
+    const file = helpCenterFile(lang);
+    for (const [, link] of read(file).matchAll(/(?:href|src)="([^"]+)"/g)) {
+      if (/^https?:/.test(link)) continue;
+      const [target, anchor] = link.split("#");
+      const resolved = target.split("?")[0] || file;
+      assert.ok(ALLOWED_FILES.includes(resolved), `${file}: recurso no servido ${link}`);
+      assert.ok(fs.existsSync(path.join(root, resolved)), `${file}: recurso inexistente ${link}`);
+      if (anchor && anchor !== "main") assert.ok(read(resolved).includes(`id="${anchor}"`), `${file}: ancla inexistente ${link}`);
+    }
+  }
+  for (const lang of LANGS) {
+    assert.ok(read(localized("ayuda-referencias.html", lang)).includes(`href="${helpCenterFile(lang)}"`));
+    assert.ok(read("ayuda.html").includes(`href="${localized("ayuda-firmwares.html", lang)}"`));
+    const html = render("[Drivers](../ayuda.html#drivers)", "DEPLOYMENT.md", { lang }).body;
+    assert.ok(html.includes(`href="${helpCenterFile(lang)}#drivers"`));
+  }
+});
+
+test("el servidor y todos los instaladores sirven los cuatro centros completos de ayuda", async () => {
+  const installer = read("scripts/build-installers.sh");
+  const server = createServer({}, {});
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  try {
+    const base = `http://127.0.0.1:${server.address().port}`;
+    for (const lang of HELP_LANGS) {
+      const file = helpCenterFile(lang);
+      assert.ok(installer.includes(file), `instalador omite ${file}`);
+      const response = await fetch(`${base}/${file}?lang=${lang === "en" ? "en-US" : lang}`);
+      assert.equal(response.status, 200, file);
+      assert.match(response.headers.get("content-type"), /text\/html/);
+      assert.equal((await response.text()).replace(/\r\n/g, "\n"), read(file));
+    }
+    assert.equal((await fetch(`${base}/docs/i18n/help-center.json`)).status, 404, "los recursos de traduccion no se exponen");
+  } finally { server.close(); }
 });

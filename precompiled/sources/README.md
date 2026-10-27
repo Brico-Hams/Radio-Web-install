@@ -1,5 +1,7 @@
 # Fuentes locales de firmware
 
+[Español](README.md) · [English (US)](README.en.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
+
 Estos paquetes conservan las fuentes, licencias y avisos de sus proyectos
 originales. No son firmware stock ni copias de memoria de una radio.
 

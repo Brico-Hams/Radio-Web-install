@@ -1,5 +1,7 @@
 # Autores
 
+[Español](AUTHORS.md) · [English (US)](AUTHORS.en.md) · [Français](AUTHORS.fr.md) · [Deutsch](AUTHORS.de.md)
+
 ## Fundadores y miembros directivos de Bricohams
 
 - **Anatol Emilio Lopez Maitchovcow (EA5KAO)** — concepción, dirección y mantenimiento.

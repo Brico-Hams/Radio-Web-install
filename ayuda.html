@@ -12,12 +12,19 @@
   <script src="radio-core.js" defer></script>
   <script src="runtime-mode.js" defer></script>
   <script src="app.js" defer></script>
+  <script src="ui-translations.js" defer></script>
+  <script src="ui-i18n.js" defer></script>
+  <link rel="alternate" hreflang="es" href="ayuda.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda.en.html">
+  <link rel="alternate" hreflang="fr" href="ayuda.fr.html">
+  <link rel="alternate" hreflang="de" href="ayuda.de.html">
 </head>
 <body data-page="ayuda">
   <a class="skip" href="#main">Saltar al contenido</a>
   <div id="app"></div>
   <template id="help-content">
     <a class="back" href="index.html">&larr; Volver a los espacios</a>
+    <nav class="languages" aria-label="Idioma de la ayuda"><span translate="no"><a href="ayuda.html" hreflang="es" lang="es">Español</a> · <a href="ayuda.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda.fr.html" hreflang="fr" lang="fr">Français</a> · <a href="ayuda.de.html" hreflang="de" lang="de">Deutsch</a></span></nav>
     <section class="detail-hero"><span class="eyebrow accent">CENTRO DE AYUDA</span><h1>Ayuda y soporte<span>Bricohams Radio Workspace</span></h1>
       <p>Cómo funciona la aplicación, cómo resolver errores, qué controladores USB necesitas y cómo pedir ayuda. Los controladores de esta guía son <strong>soporte no oficial de la comunidad</strong>: los fabricantes y los proyectos de firmware no los respaldan a través de esta aplicación.</p></section>
     <div class="help-search"><label for="help-filter">Buscar en la ayuda</label><input id="help-filter" type="search" placeholder="Ej.: WinUSB, CRC, RepeaterBook, TLE" maxlength="60" autocomplete="off"><p id="help-filter-status" role="status" class="card-note"></p></div>

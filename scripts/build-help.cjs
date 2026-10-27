@@ -43,33 +43,95 @@ const UI = Object.freeze({
     toc: "En esta guia", tocLabel: "Contenido de esta guia", languages: "Idioma", description: "ayuda de Bricohams por modelo y version.",
     footer: "Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia.", back: "Volver al indice", notice: "",
     references: "Documentacion y referencias", referenceNote: "Todas las guias de esta lista estan disponibles en los cinco idiomas. Los enlaces entre guias conservan el idioma elegido. Los repositorios, manuales y fuentes externas conservan su idioma original; no se afirma que sus autores ofrezcan traducciones.",
-    support: "Ayuda y preguntas frecuentes (espanol)", readme: "Presentacion del proyecto", document: "Documento", versions: "Versiones por idioma" },
-  en: { name: "English (US)", skip: "Skip to content", help: "Help", app: "App help (Spanish)", library: "Firmware library",
+    support: "Ayuda y preguntas frecuentes", readme: "Presentacion del proyecto", document: "Documento", versions: "Versiones por idioma" },
+  en: { name: "English (US)", skip: "Skip to content", help: "Help", app: "App help", library: "Firmware library",
     toc: "In this guide", tocLabel: "Contents of this guide", languages: "Language", description: "Bricohams help by model and version.",
     footer: "Document generated from the versioned Markdown. Check the sources and limits of each guide.", back: "Back to the index",
     notice: "Translation of the Spanish original. If there is any discrepancy, the Spanish version prevails.",
     references: "Documentation and references", referenceNote: "All guides in this list are available in five languages. Links between guides preserve the selected language. External repositories, manuals, and sources retain their original language; we do not claim their authors provide translations.",
-    support: "Help and frequently asked questions (Spanish)", readme: "Project overview", document: "Document", versions: "Language versions" },
-  de: { name: "Deutsch", skip: "Zum Inhalt springen", help: "Hilfe", app: "App-Hilfe (Spanisch)", library: "Firmware-Bibliothek",
+    support: "Help and frequently asked questions", readme: "Project overview", document: "Document", versions: "Language versions" },
+  de: { name: "Deutsch", skip: "Zum Inhalt springen", help: "Hilfe", app: "App-Hilfe", library: "Firmware-Bibliothek",
     toc: "In dieser Anleitung", tocLabel: "Inhalt dieser Anleitung", languages: "Sprache", description: "Bricohams-Hilfe nach Modell und Version.",
     footer: "Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung.", back: "Zurück zum Index",
     notice: "Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.",
     references: "Dokumentation und Referenzen", referenceNote: "Alle Anleitungen dieser Liste sind in fünf Sprachen verfügbar. Links zwischen Anleitungen behalten die gewählte Sprache bei. Externe Repositories, Handbücher und Quellen behalten ihre Originalsprache; Übersetzungen durch deren Autoren werden nicht zugesichert.",
-    support: "Hilfe und häufige Fragen (Spanisch)", readme: "Projektübersicht", document: "Dokument", versions: "Sprachversionen" },
+    support: "Hilfe und häufige Fragen", readme: "Projektübersicht", document: "Dokument", versions: "Sprachversionen" },
   it: { name: "Italiano", skip: "Vai al contenuto", help: "Aiuto", app: "Aiuto dell'app (spagnolo)", library: "Libreria firmware",
     toc: "In questa guida", tocLabel: "Contenuto di questa guida", languages: "Lingua", description: "aiuto Bricohams per modello e versione.",
     footer: "Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida.", back: "Torna all'indice",
     notice: "Traduzione dell'originale spagnolo. In caso di discrepanza prevale la versione spagnola.",
     references: "Documentazione e riferimenti", referenceNote: "Tutte le guide in questo elenco sono disponibili in cinque lingue. I collegamenti tra le guide conservano la lingua scelta. Repository, manuali e fonti esterne mantengono la lingua originale; non si afferma che i loro autori offrano traduzioni.",
     support: "Aiuto e domande frequenti (spagnolo)", readme: "Presentazione del progetto", document: "Documento", versions: "Versioni linguistiche" },
-  fr: { name: "Français", skip: "Aller au contenu", help: "Aide", app: "Aide de l'application (espagnol)", library: "Bibliothèque de firmware",
+  fr: { name: "Français", skip: "Aller au contenu", help: "Aide", app: "Aide de l'application", library: "Bibliothèque de firmware",
     toc: "Dans ce guide", tocLabel: "Contenu de ce guide", languages: "Langue", description: "aide Bricohams par modèle et version.",
     footer: "Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide.", back: "Retour à l'index",
     notice: "Traduction de l'original espagnol. En cas de divergence, la version espagnole fait foi.",
     references: "Documentation et références", referenceNote: "Tous les guides de cette liste sont disponibles en cinq langues. Les liens entre guides conservent la langue choisie. Les dépôts, manuels et sources externes gardent leur langue originale ; nous ne prétendons pas que leurs auteurs proposent des traductions.",
-    support: "Aide et questions fréquentes (espagnol)", readme: "Présentation du projet", document: "Document", versions: "Versions linguistiques" }
+    support: "Aide et questions fréquentes", readme: "Présentation du projet", document: "Document", versions: "Versions linguistiques" }
 });
 const localized = (file, lang) => lang === "es" ? file : file.replace(/\.html$/, `.${lang}.html`);
+const HELP_LANGS = Object.freeze(["es", "en", "fr", "de"]);
+const SIBLING_DOCUMENTS = Object.freeze(["AUTHORS.md", "ACKNOWLEDGEMENTS.md", "SUPPORT.md", "SECURITY.md",
+  "hardware/antenas/README.md", "precompiled/sources/README.md", "test-bench/schema.md"]);
+const helpCenterFile = lang => localized("ayuda.html", lang === "it" ? "es" : lang);
+// The Spanish HTML is the only structural source. Every prose unit must have an
+// explicit translation; commands, exact diagnostics and third-party names stay verbatim.
+function renderHelpCenter(original, lang) {
+  assert(HELP_LANGS.includes(lang), `Idioma de ayuda no soportado: ${lang}`);
+  if (lang === "es") return original;
+  const resource = require("../docs/i18n/help-center.json");
+  assert.deepEqual(resource.languages, ["en-US", "fr", "de"]);
+  const position = ["en", "fr", "de"].indexOf(lang) + 1;
+  const entries = new Map(resource.translations.map(row => {
+    assert(row.length === 4 && row.every(value => typeof value === "string" && value.trim()), `Traduccion incompleta: ${row[0]}`);
+    assert(row.slice(1).every(value => !/[<>]/.test(value)), `HTML no permitido en traduccion: ${row[0]}`);
+    return [row[0], row[position]];
+  }));
+  assert(entries.size === resource.translations.length, "Texto duplicado en traducciones de ayuda");
+  const verbatim = new Set(resource.verbatim);
+  const used = new Set();
+  const translate = text => {
+    const source = text.trim();
+    if (!/[\p{L}]/u.test(source) || verbatim.has(source)) return text;
+    assert(entries.has(source), `Falta traducir ayuda/${lang}: ${source}`);
+    used.add(source);
+    return text.replace(/\S(?:[\s\S]*\S)?/, entries.get(source));
+  };
+  const stack = [];
+  const voidTags = new Set(["meta", "link", "input", "br", "img", "hr"]);
+  let html = original.replace(/<!--[\s\S]*?-->|<[^>]+>|[^<]+/g, token => {
+    if (!token.startsWith("<")) {
+      return stack.some(tag => ["code", "pre", "kbd", "samp", "script", "style"].includes(tag)) ? token : translate(token);
+    }
+    const tag = /^<\/?([\w-]+)/.exec(token)?.[1];
+    if (!tag) return token;
+    if (token.startsWith("</")) stack.splice(stack.lastIndexOf(tag));
+    else if (!voidTags.has(tag)) stack.push(tag);
+    token = token.replace(/(aria-label|placeholder)="([^"]*)"/g, (_, name, value) =>
+      `${name}="${translate(value).replace(/"/g, "&quot;")}"`);
+    if (tag === "meta" && /name="description"/.test(token)) {
+      token = token.replace(/content="([^"]*)"/, (_, value) => `content="${translate(value).replace(/"/g, "&quot;")}"`);
+    }
+    if (tag === "a" && !/\s(?:hreflang|lang)=/.test(token)) {
+      token = token.replace(/href="([^"]+)"/, (_, href) => {
+        const [file, hash] = href.split("#");
+        const target = /^ayuda(?:-[\w-]+)?\.html$/.test(file) ? localized(file, lang)
+          : /^(index|quansheng|opengd77|anytone)\.html$/.test(file) ? `${file}?lang=${lang === "en" ? "en-US" : lang}` : file;
+        return `href="${target}${hash === undefined ? "" : `#${hash}`}"`;
+      });
+    }
+    return token;
+  });
+  assert.equal(used.size, entries.size, `Traducciones de ayuda sin usar: ${[...entries.keys()].filter(key => !used.has(key)).join(" | ")}`);
+  html = html.replace('<html lang="es">', `<html lang="${lang === "en" ? "en-US" : lang}">`);
+  return html;
+}
+function buildHelpCenters() {
+  const original = fs.readFileSync(path.join(root, "ayuda.html"), "utf8").replace(/\r\n/g, "\n");
+  for (const lang of HELP_LANGS.filter(code => code !== "es")) {
+    fs.writeFileSync(path.join(root, helpCenterFile(lang)), renderHelpCenter(original, lang));
+  }
+}
 const escape = value => String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;")
   .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 const slug = value => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -265,11 +327,11 @@ function destination(target, source, lang = "es") {
   assert(fs.existsSync(resolved), `Enlace local roto en ${source}: ${target}`);
   const relative = path.relative(path.join(root, "docs"), resolved).replace(/\\/g, "/");
   const page = pages[relative.replace(/^i18n\/[a-z]{2}\//, "")];
-  // App pages next to the generated guides (ayuda.html, quansheng.html) stay local links.
+  // App pages and the full help center stay local and preserve the guide language.
   if (path.dirname(resolved) === root && resolved.endsWith(".html")) {
     const name = path.basename(resolved);
     const nativeLocale = lang === "en" ? "en-US" : lang;
-    return `${name}${lang !== "it" && /^(index|quansheng|opengd77|anytone)\.html$/.test(name) ? `?lang=${nativeLocale}` : ""}${anchor ? `#${anchor}` : ""}`;
+    return `${name === "ayuda.html" ? helpCenterFile(lang) : name}${lang !== "it" && /^(index|quansheng|opengd77|anytone)\.html$/.test(name) ? `?lang=${nativeLocale}` : ""}${anchor ? `#${anchor}` : ""}`;
   }
   const found = canonical(target, path.join(root, "docs", source));
   const original = page && path.join(root, "docs", relative.replace(/^i18n\/[a-z]{2}\//, ""));
@@ -427,7 +489,8 @@ const repoPath = file => path.relative(root, file).replace(/\\/g, "/");
 // Repository path of a link target with translations folded onto their Spanish original.
 // A link to a sibling translation that is not written yet still counts when its Spanish original exists.
 const fold = relative => relative.replace(/^docs\/i18n\/[a-z]{2}\//, "docs/").replace(/^README\.[a-z]{2}\.md$/, "README.md")
-  .replace(/^(ayuda-[^/]+)\.(en|de|it|fr)\.html$/, "$1.html");
+  .replace(/^(ayuda(?:-[^/]+)?)\.(en|de|it|fr)\.html$/, "$1.html")
+  .replace(/^(.*)\.(en|fr|de)\.md$/, (match, name) => SIBLING_DOCUMENTS.includes(`${name}.md`) ? `${name}.md` : match);
 const exists = resolved => fs.existsSync(resolved) || (fold(repoPath(resolved)) !== repoPath(resolved) &&
   translatable(fold(repoPath(resolved))) && fs.existsSync(path.join(root, fold(repoPath(resolved)))));
 function canonical(target, fromFile, fallbackFile) {
@@ -448,10 +511,15 @@ function canonical(target, fromFile, fallbackFile) {
   }
   return { path: original, anchor };
 }
-const translatable = relative => relative === "README.md" || (relative.startsWith("docs/") && Object.hasOwn(pages, relative.slice(5)));
+const translatable = relative => relative === "README.md" || SIBLING_DOCUMENTS.includes(relative) ||
+  (relative.startsWith("docs/") && Object.hasOwn(pages, relative.slice(5)));
 function translatedPath(relative, lang) {
   if (lang === "es") return relative;
   if (relative === "README.md") return `README.${lang}.md`;
+  if (SIBLING_DOCUMENTS.includes(relative)) {
+    const sibling = relative.replace(/\.md$/, `.${lang}.md`);
+    return fs.existsSync(path.join(root, sibling)) ? sibling : relative;
+  }
   return `docs/i18n/${lang}/${relative.slice(5)}`;
 }
 // Rewrites link and image targets of a translation so they work from its own folder and point to sibling translations.
@@ -460,7 +528,7 @@ function relink(markdown, esFile, trFile, lang) {
     if (isExternal(target)) return target;
     const found = canonical(target, trFile, esFile);
     if (!found) return target;
-    const destination = translatable(found.path) ? translatedPath(found.path, lang)
+    const destination = found.path === "ayuda.html" ? helpCenterFile(lang) : translatable(found.path) ? translatedPath(found.path, lang)
       : /^ayuda-.+\.html$/.test(found.path) ? localized(found.path, lang) : found.path;
     const destinationFile = path.join(root, destination);
     let anchor = found.anchor;
@@ -562,6 +630,7 @@ ${alternates}
 `;
 }
 function build() {
+  buildHelpCenters();
   const docs = path.join(root, "docs");
   for (const lang of LANGS) {
     const options = path.join(docs, sourceFor("AYUDA-OPCIONES-F4HWN.md", lang));
@@ -591,7 +660,7 @@ function build() {
         }).join("\n");
         const readme = lang === "es" ? "README.md" : `README.${lang}.md`;
         const body = `<h1>${escape(ui.references)}</h1><p>${escape(ui.referenceNote)}</p>
-<p><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/${readme}">${escape(ui.readme)}</a> · <a href="ayuda.html">${escape(ui.support)}</a></p>
+<p><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/${readme}">${escape(ui.readme)}</a> · <a href="${helpCenterFile(lang)}">${escape(ui.support)}</a></p>
 <div class="table-scroll"><table><thead><tr><th scope="col">${escape(ui.document)}</th><th scope="col">${escape(ui.versions)}</th></tr></thead><tbody>${rows}</tbody></table></div>`;
         fs.writeFileSync(path.join(root, localized("ayuda-referencias.html", lang)), pageHtml({
           lang, file: "ayuda-referencias.html", title: ui.references, body, headings: []
@@ -613,4 +682,5 @@ function helpImages() {
       .map(match => image(match[1], source))))].sort();
 }
 module.exports = { build, render, pages, helpImages, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown,
+  HELP_LANGS, helpCenterFile, renderHelpCenter, buildHelpCenters,
   LANGS, TRANSLATIONS, UI, localized, sourceFor, structure, headingIds, markdownHeadingIds, relink, checkParity, translatedPath };

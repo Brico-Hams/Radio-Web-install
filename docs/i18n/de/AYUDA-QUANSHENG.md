@@ -10,8 +10,8 @@ Schaltpläne und Fotos): [Technischer Atlas UV-K5 V3](ATLAS-UV-K5-V3.md).
 ## Live-Viewer und RF-Protokoll
 
 Unter **Kanäle** stehen die beiden Tabellen am Desktop nebeneinander und mobil untereinander.
-Unter **Sicherungen und Verbindung** das kompatible Modell wählen und Lesen erlauben.
-Zurück unter **Kanäle** auf **Verbinden und Kanäle lesen (nur Lesen)** klicken: Links
+Direkt unter **Kanäle** das kompatible Modell wählen und Lesen erlauben.
+Auf **Verbinden und Kanäle lesen (nur Lesen)** klicken: Links
 erscheint die aktive Bank ohne Schreibberechtigung. Rechts PMR446, REMER VHF oder
 Bricohams-Murcia-Relais wählen und **Vorlage zum Ziehen vorbereiten** anklicken.
 Aus CSV und anderen Katalogen vorbereitete Kanäle erscheinen ebenfalls dort.
@@ -421,6 +421,14 @@ Sie schaltet keine Schreibvorgänge frei und ersetzt nicht die vollständige Sic
 ### Seitenabschnitte und Kanaltabellen
 
 Die seitlichen Schritte (Sicherungen und Verbindung, Kanäle, Satelliten, Firmware, Werkzeuge) zeigen nur den gewählten Abschnitt. Werkzeuglinks öffnen den Abschnitt ihres Ziels.
+
+Alte Fragmentlinks öffnen die passende Ansicht; anschließend wird das Fragment aus der URL entfernt. Die Seitenleiste lässt sich bei niedrigen Fenstern separat scrollen. Kanaländerungen bleiben beim Ansichtswechsel erhalten; der Kanaleditor steht vor den Planungskatalogen.
+
+Eine ausgewählte Zeile ziehen, um die gesamte Auswahl in ursprünglicher Reihenfolge zu verschieben; eine nicht ausgewählte Zeile verschiebt nur diesen Kanal. In der oberen Hälfte der Zielzeile ablegen für davor, in der unteren für danach. Alle Speicherbytes einschließlich Tönen, DCS und nicht bearbeitbaren Attributen bleiben erhalten.
+
+**Funkgerätekanäle herunterladen (Originalsicherung)** liest und speichert die aktive Bank erneut, ohne lokale Änderungen zu ersetzen. **Lokale Konfiguration speichern** speichert die bearbeitete Version. Modellwahl, Lesebestätigung, Status, Fortschritt und Trennen sind direkt unter Kanäle verfügbar.
+
+**Kanal hinzufügen** fragt Speichernummer, Name, RX, nominelle TX und Scanliste (0, 1-24 oder 25) ab. Ohne Nummer wird am Ende angefügt, oder eine freie Lücke verwendet, falls Speicher 1024 belegt ist. Bei belegter Nummer **Davor**, **Danach** oder **Abbrechen** wählen; Abbrechen ändert die Datei nicht. Neue Kanäle sind nur für RX und verwenden eine vorhandene FM-Vorlage. Nur **Schreiben und Kanäle erneut lesen** ändert das Funkgerät, mit vollständiger verifizierter Sicherung.
 
 Zwei Tabellen: **Funkgerätekanäle** aus der aktiven Bank oder Datei und **Zu ladende Kanäle** aus Repeatern, REMER, PMR446, SAT/Doppler, Flughäfen, FM/CSV oder Funkgerätkopien. Ziehen einer Zeile verschiebt die Zwischenzeilen. Aus der Ladetabelle ins Funkgerät wird vor dem Ziel eingefügt, in leerem Bereich angehängt. Kopien vom Funkgerät erhalten jedes Byte einschließlich DCS. Auswahl kopieren / Hier einfügen oder Ctrl+C / Ctrl+V bei fokussierter Tabelle verwenden. Einfügen ins Funkgerät erfolgt vor der ersten Auswahl, sonst am Ende. Nur zusammenhängende Speicher bis zur ersten Lücke werden verschoben, spätere bleiben unverändert. Lokale Bearbeitung, keine USB-Schreibvorgänge.
 

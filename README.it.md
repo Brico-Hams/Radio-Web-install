@@ -162,9 +162,9 @@ VersionCode 11 conserva i libri 0.8.0 (Generale/POTA/SOTA), inserimento rapido, 
 | [docs/DECISIONS.md](docs/i18n/it/DECISIONS.md) | Decisioni architetturali e motivi della scelta di ogni tecnologia |
 | [docs/DEPLOYMENT.md](docs/i18n/it/DEPLOYMENT.md) | Installazione, configurazione, aggiornamento e distribuzioni non supportate |
 | [docs/BRANDING.md](docs/i18n/it/BRANDING.md) | Marchio Bricohams: logo, palette, tipografia e tono |
-| [AUTHORS.md](AUTHORS.md) | Autori |
-| [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | Riconoscimenti, fonti e licenze di terzi |
-| [SUPPORT.md](SUPPORT.md) / [SECURITY.md](SECURITY.md) | Supporto e segnalazione privata di vulnerabilità |
+| [AUTHORS.md](AUTHORS.md) | Autori (originale spagnolo) |
+| [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | Riconoscimenti, fonti e licenze di terzi (originale spagnolo) |
+| [SUPPORT.md](SUPPORT.md) / [SECURITY.md](SECURITY.md) | Supporto e segnalazione privata di vulnerabilità (originali spagnoli) |
 ## Avvio
 
 ### Provider nella versione installata

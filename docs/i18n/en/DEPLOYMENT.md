@@ -186,7 +186,7 @@ node scripts/i18n.cjs --fix --strict
 npm run build:help
 ```
 
-`--fix` adjusts relative link and image paths for each translation's folder and points them to the sibling translation. It also repairs anchors for translated Markdown headings; HTML help keeps stable anchors across languages. Validation includes architecture, branding, decisions, and deployment. The reference index is generated from every guide's translated title and links each language version, including U.S. English. External sources retain the language published by their authors; the legacy FAQ center is identified as Spanish. If the translated text and original disagree, Spanish takes precedence.
+`--fix` adjusts relative link and image paths for each translation's folder and points them to the sibling translation. It also repairs anchors for translated Markdown headings; HTML help keeps stable anchors across languages. Validation includes architecture, branding, decisions, and deployment. The reference index is generated from every guide's translated title and links each language version, including U.S. English. The complete help and FAQ center is available in Spanish, U.S. English, French, and German; its translations are generated from the Spanish HTML and versioned translation resources. Strict validation also checks complete coverage and that the generated HTML is up to date. Italian guides and the index remain available; their help-center link uses the Spanish original. Commands and exact diagnostic messages are preserved for troubleshooting. External sources retain the language published by their authors. If the translated text and original disagree, Spanish takes precedence.
 
 ## Automatic startup (optional, from source)
 

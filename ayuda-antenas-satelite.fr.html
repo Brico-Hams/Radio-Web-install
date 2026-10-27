@@ -163,7 +163,7 @@
 <p>Si votre imprimante referme les trous, modifiez les constantes <code>BOOM</code>, <code>ROD</code> et <code>M3_TAP</code> de <code>generar_stl.py</code>, puis régénérez les pièces.</p>
 <p>Le script vérifie que chaque STL est un solide fermé et monobloc. Les données de volume et de dimensions sont dans <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/piezas.json" target="_blank" rel="noopener noreferrer">piezas.json</a>.</p>
 <h2 id="metodo-de-calculo-y-verificacion">Méthode de calcul et vérification</h2>
-<p>Fichiers dans <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/README.md" target="_blank" rel="noopener noreferrer">hardware/antenas</a> :</p>
+<p>Fichiers dans <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/README.fr.md" target="_blank" rel="noopener noreferrer">hardware/antenas</a> :</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Script</th><th scope="col">Fonction</th></tr></thead><tbody>
 <tr><td><code>mom.py</code></td><td>Solveur propriétaire de fils fins par méthode des moments (Harrington) : courants aux nœuds, charges par segment, noyau réduit et terme statique intégré analytiquement</td></tr>
 <tr><td><code>disenar.py</code></td><td>Optimise les dimensions avec Nelder-Mead pour un gain maximal avec ROS ≤ 1,3-1,35 et rapport avant/arrière ≥ 15 dB, vérifie la combinaison bibande et l’espacement des pièces, puis écrit <code>resultados.json</code></td></tr>

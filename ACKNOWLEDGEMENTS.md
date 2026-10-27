@@ -1,5 +1,7 @@
 # Reconocimientos y fuentes
 
+[Español](ACKNOWLEDGEMENTS.md) · [English (US)](ACKNOWLEDGEMENTS.en.md) · [Français](ACKNOWLEDGEMENTS.fr.md) · [Deutsch](ACKNOWLEDGEMENTS.de.md)
+
 Bricohams Radio Workspace es una **implementación independiente con fines de interoperabilidad**. Se estudiaron formatos y protocolos documentados o publicados. El catálogo precompilado distribuye imágenes F4HWN v6.1.0 y derivadas Bricohams: conserva la licencia Apache-2.0 y el NOTICE upstream, junto con GPL-3.0-or-later para las aportaciones Bricohams. Los hashes, procedencia y opciones están en `precompiled/catalog.json`; los avisos y ambas licencias acompañan a los binarios. No existe afiliación ni respaldo de los proyectos citados. Las marcas pertenecen a sus propietarios.
 
 ## Referencias de protocolo y formato

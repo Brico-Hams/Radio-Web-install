@@ -178,7 +178,7 @@ dimension data are in [piezas.json](../../../hardware/antenas/piezas.json).
 
 ## Calculation method and verification
 
-Files in [hardware/antenas](../../../hardware/antenas/README.md):
+Files in [hardware/antenas](../../../hardware/antenas/README.en.md):
 
 | Script | What it does |
 | --- | --- |

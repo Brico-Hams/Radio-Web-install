@@ -32,7 +32,7 @@
 <li>Node.js 22 or later <strong>only for running from source, Arch, and FreeBSD</strong>. The <code>.deb</code> packages and Windows ZIP include Node.</li>
 <li>Git only for cloning and updating an installation from source.</li>
 <li>Desktop Chrome, Edge, or Brave, for WebUSB/Web Serial. Firefox and Safari are not supported.</li>
-<li>The USB drivers required by the radio: see <a href="ayuda.html#drivers">Help › Drivers</a>.</li>
+<li>The USB drivers required by the radio: see <a href="ayuda.en.html#drivers">Help › Drivers</a>.</li>
 </ul>
 <h2 id="instalacion-desde-el-codigo-fuente">Installing from source</h2>
 <pre><code>git clone https://github.com/Brico-Hams/Radio-Web-install.git
@@ -105,7 +105,7 @@ bricohams-radio</code></pre>
 <ul>
 <li>Always open <a href="http://127.0.0.1:8787" target="_blank" rel="noopener noreferrer">http://127.0.0.1:8787</a> in the same browser and profile: backups belong to that origin, not the installation folder. The badge should show <strong>Local · installed</strong>.</li>
 <li>Launchers start the server in the background; closing the tab does not stop it. No automatic startup at login is configured. From source, <code>npm start</code> stays in the terminal and is stopped with <code>Ctrl+C</code>.</li>
-<li>The installer does not configure USB drivers or permissions. See <a href="ayuda.html#drivers">Help › Drivers</a>: WinUSB where applicable on Windows; udev rules and the <code>dialout</code>/<code>uucp</code> group depending on the Linux distribution. Log out and back in after changing groups, and do not run the browser as root.</li>
+<li>The installer does not configure USB drivers or permissions. See <a href="ayuda.en.html#drivers">Help › Drivers</a>: WinUSB where applicable on Windows; udev rules and the <code>dialout</code>/<code>uucp</code> group depending on the Linux distribution. Log out and back in after changing groups, and do not run the browser as root.</li>
 <li>If the port is occupied, identify the process before stopping it. On Windows: <code>Get-NetTCPConnection -LocalPort 8787 -State Listen | Select-Object OwningProcess</code>, then <code>Get-Process -Id &lt;PID&gt;</code> and, only if it is the Bricohams server, <code>Stop-Process -Id &lt;PID&gt;</code>. On Linux use <code>ss -lptn &#39;sport = :8787&#39;</code>; on FreeBSD, <code>sockstat -4 -l</code>. Confirm the PID&#39;s command and user, and stop only that process with <code>kill &lt;PID&gt;</code>.</li>
 <li>Linux/FreeBSD logs are in <code>${XDG_STATE_HOME:-$HOME/.local/state}/bricohams-radio/server.log</code>. On Windows, if startup fails, run <code>&amp; &quot;$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\runtime\node.exe&quot; &quot;$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\app\server.cjs&quot;</code> from PowerShell to see the error.</li>
 <li>Internet access is not needed to serve the interface and edit local files. Provider queries and firmware downloads do require it.</li>
@@ -136,7 +136,7 @@ npm start</code></pre>
 <p>When changing a Spanish document, update all four translations and check that headings, code blocks, inline code, table rows, images, and links are retained:</p>
 <pre><code>node scripts/i18n.cjs --fix --strict
 npm run build:help</code></pre>
-<p><code>--fix</code> adjusts relative link and image paths for each translation&#39;s folder and points them to the sibling translation. It also repairs anchors for translated Markdown headings; HTML help keeps stable anchors across languages. Validation includes architecture, branding, decisions, and deployment. The reference index is generated from every guide&#39;s translated title and links each language version, including U.S. English. External sources retain the language published by their authors; the legacy FAQ center is identified as Spanish. If the translated text and original disagree, Spanish takes precedence.</p>
+<p><code>--fix</code> adjusts relative link and image paths for each translation&#39;s folder and points them to the sibling translation. It also repairs anchors for translated Markdown headings; HTML help keeps stable anchors across languages. Validation includes architecture, branding, decisions, and deployment. The reference index is generated from every guide&#39;s translated title and links each language version, including U.S. English. The complete help and FAQ center is available in Spanish, U.S. English, French, and German; its translations are generated from the Spanish HTML and versioned translation resources. Strict validation also checks complete coverage and that the generated HTML is up to date. Italian guides and the index remain available; their help-center link uses the Spanish original. Commands and exact diagnostic messages are preserved for troubleshooting. External sources retain the language published by their authors. If the translated text and original disagree, Spanish takes precedence.</p>
 <h2 id="arranque-automatico-opcional-desde-codigo-fuente">Automatic startup (optional, from source)</h2>
 <p>Installers already start in the background when the launcher is opened, but not at login. These examples are for a repository copy with Node installed; adapt the paths and do not combine them with another server on the same port.</p>
 <p>On Windows, as a scheduled task at login:</p>

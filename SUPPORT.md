@@ -1,5 +1,7 @@
 # Soporte
 
+[Español](SUPPORT.md) · [English (US)](SUPPORT.en.md) · [Français](SUPPORT.fr.md) · [Deutsch](SUPPORT.de.md)
+
 1. Lee la [página de ayuda](ayuda.html) (en la aplicación: <http://127.0.0.1:8787/ayuda.html>): primeros pasos, controladores, errores frecuentes y preguntas frecuentes.
 2. Busca en las [incidencias existentes](https://github.com/Brico-Hams/Radio-Web-install/issues).
 3. Si no está resuelto, abre una incidencia nueva con:

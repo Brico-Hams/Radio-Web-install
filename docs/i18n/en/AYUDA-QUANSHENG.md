@@ -10,8 +10,8 @@ schematics, and photos), see [UV-K5 V3 technical atlas](ATLAS-UV-K5-V3.md).
 ## Live viewer and RF log
 
 In **Channels**, the two tables appear side by side on desktop and stacked on mobile.
-Select the compatible model and authorize reading in **Backups and connection**.
-Return to **Channels** and click **Connect and read channels (read-only)**: the left
+Select the compatible model and authorize reading directly in **Channels**.
+Click **Connect and read channels (read-only)**: the left
 column shows the active bank without write permission. On the right, choose PMR446,
 REMER VHF, or Bricohams Murcia repeaters and click **Prepare template for dragging**.
 Channels prepared from CSV and other catalogs appear here too. Drag a row or selection
@@ -480,6 +480,14 @@ not unlock writes or replace the full backup required for that unit.
 ### Page sections and channel tables
 
 Sidebar steps (Backups and connection, Channels, Satellites, Firmware, Tools) show only the selected section; tools-menu links open the section containing their target.
+
+Legacy fragment links open the corresponding view and the fragment is removed from the URL. The sidebar scrolls independently in short windows. Channel edits survive switching views, and the channel editor appears before the planning catalogs.
+
+Drag a selected row to move the entire selection in its original order, or drag an unselected row to move just that channel. Drop on the upper half of the destination row to place it before, or the lower half to place it after. All memory bytes, including tones, DCS, and uneditable attributes, are preserved.
+
+**Download radio channels (original backup)** rereads and saves the active bank without replacing your local edits. **Save local configuration** saves the edited version. Model selection, reading consent, status, progress, and disconnect are available directly in Channels.
+
+**Add channel** asks for a memory number, name, RX, nominal TX, and scan list (0, 1-24, or 25). Leave the number empty to append, or use a free gap if memory 1024 is occupied. If the requested number is occupied, choose **Before**, **After**, or **Cancel**; cancellation leaves the file unchanged. New channels are RX only and use an existing FM template. Only **Write and reread channels** changes the radio, with a complete verified backup.
 
 Channels has two tables: **Radio channels**, read from the active bank or opened file, and **Channels to load**, prepared by repeaters, REMER, PMR446, SAT/Doppler, airports, FM/CSV or copied from the radio. Drag a row to reorder; intermediate rows shift. Drag from the load table into the radio to insert before the target, or append in an empty area. Copying from the radio preserves every byte, including DCS. Select rows and use Copy selection / Paste here, or Ctrl+C / Ctrl+V with the table focused. Radio paste inserts before the first selected row or appends if none is selected. Only contiguous memories up to the first gap shift; later memories remain unchanged. These are local edits, not USB writes.
 

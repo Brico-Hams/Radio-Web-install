@@ -69,7 +69,7 @@ VersionCode 11 conserve les carnets 0.8.0 (Général/POTA/SOTA), saisie rapide, 
 | Document | Contenu |
 | --- | --- |
 | [État de livraison](docs/i18n/fr/ESTADO-ENTREGA.md) | Revue de toutes les demandes, éléments de preuve, points en attente et conditions de publication et d’exportation |
-| [Aide et assistance](ayuda.html) (dans l’application : <http://127.0.0.1:8787/ayuda.html>) | Premiers pas, pilotes USB (assistance non officielle), erreurs fréquentes et FAQ |
+| [Aide et assistance](ayuda.fr.html) (dans l’application : <http://127.0.0.1:8787/ayuda.html>) | Premiers pas, pilotes USB (assistance non officielle), erreurs fréquentes et FAQ |
 | [Bibliothèque complète de firmware](ayuda-firmwares.fr.html) / [index Markdown](docs/i18n/fr/AYUDA-FIRMWARES.md) | Guides par famille, modèle, révision et version : F4HWN, ARDF, Karina, Bricohams et OpenGD77 ; menus, configuration FM/DMR et toutes les options du catalogue avec matrice ON/OFF. Incluse hors ligne dans les installateurs et le serveur local. Régénérer avec `npm run build:help`. |
 | [Quansheng de 0 à 100 %](docs/i18n/fr/AYUDA-QUANSHENG.md#mise-en-service-de-0-à-100-) | Parcours complet par étapes : identification, sauvegardes, choix et flashage du firmware, réglages de base, canaux, balayage, multiboot, vérification et récupération |
 | [Atlas technique UV-K5 V3 / UV-K1](docs/i18n/fr/ATLAS-UV-K5-V3.md) (web : [aide-atlas-uv-k5-v3.html](ayuda-atlas-uv-k5-v3.fr.html)) | Vue interne du matériel : brochage PY32F071, Flash interne et externe, carte EEPROM, protocole série, bootloader DFU, SWD, compilation, mods, schémas, photos du démontage et dépôts vérifiés |
@@ -80,9 +80,9 @@ VersionCode 11 conserve les carnets 0.8.0 (Général/POTA/SOTA), saisie rapide, 
 | [docs/DECISIONS.md](docs/i18n/fr/DECISIONS.md) | Décisions d’architecture et raisons du choix de chaque technologie |
 | [docs/DEPLOYMENT.md](docs/i18n/fr/DEPLOYMENT.md) | Installation, configuration, mise à jour et déploiements non pris en charge |
 | [docs/BRANDING.md](docs/i18n/fr/BRANDING.md) | Marque Bricohams : logo, palette, typographie et ton |
-| [AUTHORS.md](AUTHORS.md) | Auteurs |
-| [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | Remerciements, sources et licences tierces |
-| [SUPPORT.md](SUPPORT.md) / [SECURITY.md](SECURITY.md) | Assistance et signalement privé des vulnérabilités |
+| [AUTHORS.md](AUTHORS.fr.md) | Auteurs |
+| [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.fr.md) | Remerciements, sources et licences tierces |
+| [SUPPORT.md](SUPPORT.fr.md) / [SECURITY.md](SECURITY.fr.md) | Assistance et signalement privé des vulnérabilités |
 
 ## Démarrage
 
@@ -135,7 +135,7 @@ et consultez l’[atlas technique UV-K5 V3](docs/i18n/fr/ATLAS-UV-K5-V3.md).
 
 Tous les installateurs comprennent **Bricohams Quansheng Studio** (UV-K1 / UV-K5 V3 avec F4HWN Fusion 6), depuis le dépôt [Brico-Hams/Bricohams-Studio](https://github.com/Brico-Hams/Bricohams-Studio). Ouvrez-le sur <http://127.0.0.1:8787/studio.html> ou depuis l’espace Quansheng. La copie est téléchargée lors de la création du package, au commit et avec le SHA-256 épinglés dans `studio.lock.json` ; le serveur la vérifie de nouveau avant de la fournir. Elle est servie avec sa propre CSP, qui n’autorise que les scripts identifiés par hash et lui interdit tout accès réseau. Depuis le code source, exécutez une fois `npm run fetch:studio`. En mode web, le lien renvoie vers la [page publique de Studio](https://brico-hams.github.io/Bricohams-Studio/).
 
-Vérifiez le SHA-256 avant l’installation. Les lanceurs ouvrent le navigateur par défaut et n’exécutent le serveur en arrière-plan que sur `127.0.0.1:8787`. Si votre navigateur par défaut n’est pas compatible, ouvrez cette adresse dans Chrome, Edge ou Brave. Fermer l’onglet n’arrête pas le serveur ; aucun démarrage automatique n’a lieu après le redémarrage de l’ordinateur. Utilisez toujours le même navigateur, profil et origine pour conserver vos sauvegardes. Configurez les pilotes USB séparément : [Aide](ayuda.html#drivers). La prise en charge de WebUSB/Web Serial par Chromium n’est pas garantie sous FreeBSD.
+Vérifiez le SHA-256 avant l’installation. Les lanceurs ouvrent le navigateur par défaut et n’exécutent le serveur en arrière-plan que sur `127.0.0.1:8787`. Si votre navigateur par défaut n’est pas compatible, ouvrez cette adresse dans Chrome, Edge ou Brave. Fermer l’onglet n’arrête pas le serveur ; aucun démarrage automatique n’a lieu après le redémarrage de l’ordinateur. Utilisez toujours le même navigateur, profil et origine pour conserver vos sauvegardes. Configurez les pilotes USB séparément : [Aide](ayuda.fr.html#drivers). La prise en charge de WebUSB/Web Serial par Chromium n’est pas garantie sous FreeBSD.
 
 ## État réel de la prise en charge
 
@@ -285,6 +285,6 @@ Consultation effectuée le 18 octobre 2026. Les firmwares et protocoles peuvent 
 Copyright (C) 2026 Anatol Emilio Lopez Maitchovcow (EA5KAO), Diego Roca (EA5JEF) et Pedro Roca.
 Fondateurs et membres du conseil d’administration de [Bricohams](https://bricohams.org) ([bricohams.com](https://bricohams.com)).
 
-Ce programme est un logiciel libre : vous pouvez le redistribuer et/ou le modifier selon les termes de la [GNU General Public License](LICENSE), version 3 ou, à votre choix, toute version ultérieure (GPL-3.0-or-later). Il est distribué **sans aucune garantie**. Les dépendances et sources tierces conservent leurs licences respectives : voir [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+Ce programme est un logiciel libre : vous pouvez le redistribuer et/ou le modifier selon les termes de la [GNU General Public License](LICENSE), version 3 ou, à votre choix, toute version ultérieure (GPL-3.0-or-later). Il est distribué **sans aucune garantie**. Les dépendances et sources tierces conservent leurs licences respectives : voir [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.fr.md).
 
 Bricohams n’est affilié ni à OpenGD77, grid.radio, F4HWN, Quansheng, RadioID, RepeaterBook, SatNOGS ni à CelesTrak. Les marques appartiennent à leurs propriétaires.

@@ -10,8 +10,8 @@ esquemas y fotos): [Atlas tecnico UV-K5 V3](ATLAS-UV-K5-V3.md).
 ## Visor en directo y registro RF
 
 En **Canales**, las dos tablas se muestran una junto a otra en escritorio y apiladas
-en movil. En **Copias y conexion**, selecciona el modelo compatible y autoriza la
-lectura. Vuelve a **Canales** y pulsa **Conectar y leer canales (solo lectura)**:
+en movil. En la propia pantalla **Canales**, selecciona el modelo compatible y
+autoriza la lectura. Pulsa **Conectar y leer canales (solo lectura)**:
 la columna izquierda muestra las memorias del banco activo sin permiso de escritura.
 En la derecha, elige PMR446, REMER VHF o repetidores Bricohams Murcia y pulsa
 **Preparar plantilla para arrastrar**. Tambien aparecen los canales preparados
@@ -487,12 +487,17 @@ No desbloquea escrituras ni sustituye el respaldo completo de esa unidad.
 Los pasos de la barra lateral (Copias y conexion, Canales, Satelites, Firmware y
 Herramientas) muestran **solo esa seccion**, sin saltar por la pagina. Los
 enlaces del menu de herramientas abren la seccion que contiene su destino.
+Los enlaces antiguos con fragmento abren esa vista y se retira el fragmento de
+la URL. El menu lateral tiene desplazamiento propio en ventanas bajas.
+Los canales y las ediciones se conservan al cambiar de seccion.
 
 En **Canales** hay dos tablas:
 
 - **Canales del walkie**: lo leido con *Leer canales del banco activo* o el
-  archivo abierto. Arrastra una fila sobre otra para moverla; las intermedias
-  se desplazan una posicion.
+  archivo abierto. Marca varias filas para moverlas juntas en su orden original,
+  o arrastra una sola. Suelta en la mitad superior de otra fila para colocarlas
+  antes, o en la mitad inferior para colocarlas despues. Se conservan todos
+  los bytes de memoria, incluidos tonos, DCS y atributos no editables.
 - **Canales para cargar**: los preparados en Canales y Satelites (repetidores,
   REMER, PMR446, SAT y Doppler, aeropuertos, FM y CSV) mas las copias de
   canales del walkie.
@@ -510,9 +515,15 @@ En **Canales** hay dos tablas:
 Al insertar, solo se desplazan las memorias contiguas hasta el primer hueco;
 las de despues del hueco no cambian.
 
-**Anadir canal** pide numero, nombre, RX y TX. Si el numero ya esta ocupado,
+**Descargar canales del walkie (copia original)** relee y guarda el banco activo
+sin reemplazar la edicion local. **Guardar configuracion local** guarda la
+version editada. Estado, progreso y desconexion estan disponibles en Canales.
+
+**Anadir canal** pide numero, nombre, RX, TX y lista de escaneo (0, 1-24 o 25).
+Si dejas el numero vacio se usa el final, o un hueco libre si la ultima memoria
+esta ocupada. Si el numero ya esta ocupado,
 pregunta si el canal nuevo va **antes** o **despues** del existente y desplaza
-el resto. Los canales de catalogo y los nuevos se crean solo RX sobre la
+el resto; **Cancelar** no cambia el archivo. Los canales de catalogo y los nuevos se crean solo RX sobre la
 plantilla FM, como el resto de importaciones de esta web.
 
 Nada se escribe en la radio hasta pulsar *Escribir y releer canales*, que

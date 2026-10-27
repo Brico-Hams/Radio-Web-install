@@ -10,8 +10,8 @@ schémas et photos) : [Atlas technique UV-K5 V3](ATLAS-UV-K5-V3.md).
 ## Visualiseur en direct et journal RF
 
 Dans **Canaux**, les deux tables sont côte à côte sur ordinateur et empilées sur mobile.
-Choisissez le modèle compatible et autorisez la lecture dans **Sauvegardes et connexion**.
-Revenez à **Canaux** et cliquez sur **Connecter et lire les canaux (lecture seule)** :
+Choisissez le modèle compatible et autorisez la lecture directement dans **Canaux**.
+Cliquez sur **Connecter et lire les canaux (lecture seule)** :
 la colonne gauche affiche la banque active sans autorisation d'écriture. À droite,
 choisissez PMR446, REMER VHF ou les relais Bricohams Murcie, puis **Préparer le modèle
 à glisser**. Les canaux préparés depuis CSV et les autres catalogues y figurent aussi.
@@ -470,6 +470,14 @@ Elle n’autorise pas les écritures et ne remplace pas la sauvegarde complète 
 ### Sections de la page et tables de canaux
 
 Les étapes latérales (Sauvegardes et connexion, Canaux, Satellites, Firmware, Outils) affichent uniquement la section choisie. Le menu outils ouvre la section de sa cible.
+
+Les anciens liens avec fragment ouvrent la vue correspondante, puis le fragment est retiré de l'URL. Le menu latéral défile indépendamment dans les fenêtres basses. Les modifications des canaux sont conservées lors des changements de vue ; l'éditeur précède les catalogues de préparation.
+
+Glissez une ligne sélectionnée pour déplacer toute la sélection dans son ordre initial, ou une ligne non sélectionnée pour déplacer uniquement ce canal. Déposez dans la moitié supérieure de la ligne cible pour placer avant, ou dans la moitié inférieure pour placer après. Tous les octets sont conservés, y compris tonalités, DCS et attributs non modifiables.
+
+**Télécharger les canaux du talkie (sauvegarde originale)** relit et sauvegarde la banque active sans remplacer les modifications locales. **Enregistrer la configuration locale** sauvegarde la version modifiée. Modèle, autorisation de lecture, état, progression et déconnexion sont disponibles dans Canaux.
+
+**Ajouter un canal** demande numéro de mémoire, nom, RX, TX nominale et liste de balayage (0, 1-24 ou 25). Sans numéro, ajout à la fin, ou dans un emplacement libre si la mémoire 1024 est occupée. Pour un numéro occupé, choisissez **Avant**, **Après** ou **Annuler** ; annuler ne modifie pas le fichier. Les nouveaux canaux sont en réception seule sur un modèle FM existant. Seul **Écrire et relire les canaux** modifie la radio, avec une sauvegarde complète vérifiée.
 
 Deux tables : **Canaux de la radio**, lus depuis la banque active ou le fichier, et **Canaux à charger**, préparés depuis répéteurs, REMER, PMR446, SAT/Doppler, aéroports, FM/CSV ou copiés de la radio. Glisser une ligne la déplace et décale les intermédiaires. Depuis la table à charger vers la radio, insertion avant la cible ou à la fin en zone vide. La copie radio conserve tous les octets, DCS compris. Sélectionnez et utilisez Copier la sélection / Coller ici, ou Ctrl+C / Ctrl+V avec le focus dans la table. Coller dans la radio insère avant la première sélection ou à la fin sans sélection. Seules les mémoires contiguës jusqu’au premier trou se décalent ; les suivantes restent intactes. Modifications locales, pas d’écriture USB.
 

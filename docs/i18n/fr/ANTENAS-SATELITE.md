@@ -178,7 +178,7 @@ Les données de volume et de dimensions sont dans
 
 ## Méthode de calcul et vérification
 
-Fichiers dans [hardware/antenas](../../../hardware/antenas/README.md) :
+Fichiers dans [hardware/antenas](../../../hardware/antenas/README.fr.md) :
 
 | Script | Fonction |
 | --- | --- |

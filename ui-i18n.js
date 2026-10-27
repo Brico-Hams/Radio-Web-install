@@ -17,7 +17,13 @@
   let locale = resolveLocale(root.location?.search || "", (() => {
     try { return root.localStorage; } catch { return null; }
   })());
-  const entries = root.BricohamsUITranslations || [];
+  const helpPage = /\/ayuda(?:\.(en|fr|de))?\.html$/.exec(root.location?.pathname || "");
+  if (helpPage && !normalize(new URLSearchParams(root.location.search).get("lang"))) {
+    locale = normalize(helpPage[1] || "es");
+  }
+  const entries = [...(root.BricohamsUITranslations || []),
+    ['{0} secciones coinciden con "{1}".', '{0} sections match "{1}".',
+      '{0} sections correspondent à « {1} ».', '{0} Abschnitte stimmen mit „{1}“ überein.']];
   const catalog = new Map(entries.map(([source, ...translations]) => [canonical(source), translations]));
   const sourceByTranslation = new Map(entries.flatMap(([source, ...translations]) => translations.map(value => [canonical(value), source])));
   const patterns = entries.filter(([source]) => /\{\d+\}/.test(source)).map(([source, ...translations]) => ({
@@ -62,8 +68,9 @@
       url.searchParams.set("lang", language);
       return `${file}${url.search}${url.hash}`;
     }
-    if (/\/ayuda-[^/]+\.html$/.test(url.pathname)) {
+    if (/\/ayuda(?:-[^/]+|\.(?:en|fr|de))?\.html$/.test(url.pathname)) {
       const suffix = language === "en-US" ? "en" : language;
+      if (url.searchParams.has("lang")) url.searchParams.set("lang", language);
       return `${file.replace(/(?:\.(?:en|fr|de|it))?\.html$/, suffix === "es" ? ".html" : `.${suffix}.html`)}${url.search}${url.hash}`;
     }
     return href;
@@ -96,7 +103,8 @@
         saved[name] = { source, output };
         if (output !== current) node.setAttribute(name, output);
       }
-      if (node.tagName === "A" && node.hasAttribute("href")) {
+      if (node.tagName === "A" && node.hasAttribute("href") &&
+          !node.hasAttribute("hreflang") && !node.hasAttribute("lang")) {
         const href = node.getAttribute("href");
         const localized = localizedURL(href, document.baseURI);
         if (href !== localized) node.setAttribute("href", localized);
@@ -140,6 +148,12 @@
       if (!next) return;
       locale = next;
       try { root.localStorage.setItem(key, locale); } catch { /* URL remains available when storage is denied. */ }
+      if (helpPage && locale !== document.documentElement.lang) {
+        const url = new URL(localizedURL(root.location.href, document.baseURI, locale));
+        url.searchParams.set("lang", locale);
+        root.location.assign(url.href);
+        return;
+      }
       try {
         const url = new URL(root.location.href);
         url.searchParams.set("lang", locale);
