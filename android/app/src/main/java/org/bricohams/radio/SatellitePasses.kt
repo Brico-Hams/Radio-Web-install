@@ -82,7 +82,7 @@ class PassRadarView(context: Context) : View(context) {
     private val grid = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = density; color = ink; alpha = 110 }
     private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ink; textSize = 13 * density; textAlign = Paint.Align.CENTER }
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 3 * density; color = Color.rgb(41, 157, 214)
+        style = Paint.Style.STROKE; strokeWidth = 3 * density; color = Brand.ORANGE
     }
     private val dot = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()

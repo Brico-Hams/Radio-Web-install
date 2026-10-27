@@ -38,6 +38,7 @@ class CatActivity : Activity() {
     private lateinit var sstvStatus: TextView
     private lateinit var picture: ImageView
     private var capture: LiveAudio? = null
+    private var passRecorder: PassRecorder? = null
     private val manager by lazy { getSystemService(USB_SERVICE) as UsbManager }
     private lateinit var status: TextView
     private var requested: UsbDevice? = null
@@ -146,6 +147,8 @@ class CatActivity : Activity() {
                         suspendConnection("Seguimiento detenido. Se intenta STOP y se cierra USB; reconecta antes de iniciar otra sesion.")
                     }
                 })
+                content.addView(Button(this).apply { setText(R.string.cat_pass_record); setOnClickListener { startPassRecording(plan) } })
+                content.addView(Button(this).apply { setText(R.string.cat_pass_record_stop); setOnClickListener { passRecorder?.stop() } })
             } catch (error: IllegalArgumentException) {
                 status.text = getString(R.string.cat_plan_error, error.message)
             }
@@ -282,8 +285,37 @@ class CatActivity : Activity() {
                 }
             }.show()
     }
+    private fun startPassRecording(plan: SatellitePlan) {
+        if (capture != null || passRecorder != null || !foreground) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 71)
+            return
+        }
+        if (System.currentTimeMillis() >= plan.pass.los.time) { sstvStatus.setText(R.string.cat_pass_over); return }
+        val stamp = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", java.util.Locale.ROOT)
+            .withZone(java.time.ZoneOffset.UTC).format(java.time.Instant.now())
+        val file = java.io.File(java.io.File(filesDir, "recordings"), "$stamp-${plan.tle.norad}.wav")
+        val recorder = PassRecorder(file, plan.pass.los.time)
+        passRecorder = recorder
+        sstvStatus.setText(R.string.cat_pass_recording)
+        audioWorker.execute {
+            val message = try {
+                val samples = recorder.record()
+                getString(R.string.cat_pass_saved, file.name, samples / PassRecorder.RATE / 60, samples / PassRecorder.RATE % 60)
+            } catch (error: CancellationException) {
+                getString(R.string.cat_pass_saved, file.name, 0, 0)
+            } catch (error: IOException) {
+                getString(R.string.sstv_error, error.message)
+            } catch (error: IllegalStateException) {
+                getString(R.string.sstv_error, error.message)
+            } catch (error: SecurityException) {
+                getString(R.string.sstv_error, error.message)
+            }
+            runOnUiThread { if (passRecorder === recorder) passRecorder = null; if (!isDestroyed) sstvStatus.text = message }
+        }
+    }
     private fun startReceive() {
-        if (capture != null || !foreground) return
+        if (capture != null || passRecorder != null || !foreground) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 71)
             return
@@ -484,6 +516,7 @@ class CatActivity : Activity() {
         foreground = false
         unregisterReceiver(detachReceiver)
         capture?.cancel()
+        passRecorder?.stop()
         suspendConnection("CAT suspendido. Volver requiere elegir y conectar USB de nuevo.")
         super.onStop()
     }

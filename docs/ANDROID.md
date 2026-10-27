@@ -20,7 +20,7 @@ La version `0.7.1-beta` no sustituye sus funciones completas.
 | Microfono | Captura en primer plano hasta 60 s y decodificacion posterior Morse/Robot36; sin escucha ni decodificacion continua |
 | USB/CAT RX | CDC ACM y adaptadores USB-serie reconocidos de un puerto, identificacion F4HWN v6+, consulta, sintonia temporal confirmada y STOP; experimental |
 | CAT TX (PTT) | Envio Robot36 con PTT por lease armada en la radio (tecla 9), indicativo obligatorio, limite de 120 s, rechazo por TX lock y bandas; experimental |
-| Satelites | SGP4 offline, catalogo TLE importado, observador manual, prediccion 24 h, lista de pases con radar polar al estilo Look4sat y seguimiento Doppler RX por CAT durante el pase seleccionado |
+| Satelites | Pantalla Bricohams al estilo Look4sat: TLE de CelesTrak y frecuencias de SatNOGS descargados a peticion (o TLE importado), pases 24 h de los satelites elegidos con cuenta atras, radar polar, mapa mundial offline con huellas y trazas, Doppler RX por CAT, grabacion del pase a WAV y busqueda de imagenes Robot36 en la grabacion |
 | SSTV Robot36 | Decodificacion de WAV o captura de microfono, tambien con CAT sintonizando, y codificador Robot36 para enviar por PTT CAT; experimental |
 | Escritura de canales, subtonos y potencia | Editor de canales FM F4HWN v6 por USB con respaldo completo y relectura |
 
@@ -314,52 +314,62 @@ resistente a cortes de alimentacion. Reinicia la radio despues de escribir.
 
 ## Satelites SGP4 y seguimiento de pases
 
-Desde Inicio abre Satelites SGP4 y pases. El motor es **satellite.js 6.0.1**
-(MIT), la misma distribucion UMD usada en la web, ejecutada mediante
-**Rhino 1.7.15** (MPL 2.0). Las licencias, avisos y enlaces al codigo fuente
-de ambas dependencias estan incluidos. El archivo del motor tiene SHA-256
+Desde Inicio abre Satelites SGP4 y pases. La pantalla sigue el flujo de
+Look4sat con diseno y codigo propios (no reutiliza su codigo ni recursos) y
+los colores y el logo de Bricohams: cabecera con cuenta atras al siguiente
+AOS o LOS y cuatro pestanas, **Pases**, **Mapa**, **Satelites** y **Ajustes**.
+
+El motor es **satellite.js 6.0.1** (MIT), la misma distribucion UMD usada en
+la web, ejecutada mediante **Rhino 1.7.15** (MPL 2.0). Las licencias, avisos
+y enlaces al codigo fuente estan incluidos. El archivo del motor tiene SHA-256
 `91fdd46e9523c6b232d24ff69fd5e9cade8471d20624a154df7d9c91dc212639`.
-No se evalua JavaScript del catalogo: solo se carga codigo fijo de assets,
-sin acceso Java desde el motor, ni navegador/WebView ni conexion a Internet.
+Un solo contexto Rhino sirve a todos los satelites; solo se evalua codigo
+fijo de assets, nunca contenido descargado, y el motor no tiene acceso Java.
 
-1. Importa un catalogo ASCII TLE de dos o tres lineas por satelite, hasta
-   256 KiB y 256 satelites. Se admiten nombres con prefijo `0 ` y pares sin
-   nombre. Se verifican longitud 69, checksum y NORAD numerico coincidente.
-   No se admiten Alpha-5 ni NORAD repetidos en un catalogo. Tambien puedes
-   pegar manualmente las lineas y nombre.
-2. Introduce latitud/longitud en grados y altura sobre WGS84 en **km**,
-   entre -0.5 y 9 km. La posicion es manual: no usa el GPS ARDF, mapas ni
-   una posicion historica oculta. Comprueba por separado coordenadas y unidades.
-3. Introduce el downlink nominal **FM puntual** en MHz, en pasos de 10 Hz
-   dentro de 136-174 o 400-470 MHz. Confirma por una fuente actual que es el
-   modo y frecuencia correctos; el TLE no contiene la configuracion de radio.
-   No se deduce un uplink ni se soportan transpondedores lineales en este flujo.
-4. Elige elevacion minima de 0 a 60 grados y calcula las proximas **24 h**.
-   Los TLE se rechazan si tienen mas de siete dias o epoca mas de 24 h futura;
-   toda la ventana debe quedar dentro de esa validez. Actualiza el archivo
-   por tu cuenta: no hay descarga de TLE ni base de frecuencias automatica.
-5. Cada resultado muestra AOS, maximo, LOS, observador, downlink y si el
-   pase esta cortado al inicio/final de la ventana. Los instantes son UTC.
-   Se muestrea cada 5 s, refinando cruces a intervalos de 500 ms; el maximo
-   es muestreado, no una optimizacion continua. AOS/LOS se refieren al umbral
-   de elevacion elegido, no necesariamente al horizonte geometrico.
-6. La pantalla sigue el flujo de Look4sat sin compartir su codigo ni sus
-   recursos: una tarjeta por pase con nombre y NORAD, AOS (dia y hora) y LOS
-   en la zona horaria del telefono, duracion, elevacion maxima, azimut de
-   entrada y salida y cuenta atras hasta AOS o LOS, actualizada cada segundo.
-   Arriba, un **radar polar** del pase elegido: norte arriba, este a la
-   derecha, horizonte en el borde y cenit en el centro, con anillos a 0, 30
-   y 60 grados. La trayectoria son 60 muestras SGP4 entre AOS y LOS; verde
-   marca AOS, rojo LOS y naranja la posicion actual, interpolada entre
-   muestras (tambien en el texto de detalle UTC y en la descripcion de
-   accesibilidad). Al calcular se elige el primer pase; toca otra tarjeta
-   para cambiarlo. Solo se predice el satelite introducido, no todo el
-   catalogo.
+1. **Datos.** En Ajustes, **Actualizar TLE y frecuencias** descarga por HTTPS
+   el grupo amateur de CelesTrak (hasta 256 KiB) y los transmisores de
+   SatNOGS DB (hasta 16 MiB; CC BY-SA 4.0). Solo se descarga al pulsar; no
+   hay descargas en segundo plano. Se conservan los transmisores vivos y
+   activos de satelites del catalogo cuya bajada cae en 136-174 o 400-470 MHz
+   en pasos de 10 Hz. Si SatNOGS falla se guardan los TLE nuevos con las
+   frecuencias anteriores y se avisa. **Importar archivo TLE** sigue
+   disponible sin red. Ambos se guardan en archivos privados de la app con
+   escritura atomica. Se verifican longitud 69, checksum y NORAD; no se
+   admiten Alpha-5 ni NORAD repetidos. Los TLE caducan a los siete dias.
+2. **Observador.** Latitud y longitud en grados y altura sobre WGS84 en
+   **km** (-0.5 a 9). **Usar ultima posicion GPS** pide permiso de ubicacion
+   y copia la ultima posicion conocida del GPS o la red, con su antiguedad y
+   precision; revisala y pulsa **Guardar y calcular pases**. Elevacion
+   minima de 0 a 60 grados.
+3. **Satelites.** Lista con busqueda por nombre o NORAD, casillas y atajos
+   **Todos**, **Con RX** (los que tienen bajada en banda de la radio) y
+   **Ninguno**. Tras la primera descarga se eligen los que tienen bajada RX.
+4. **Pases.** Se calculan las proximas **24 h** de los satelites elegidos y
+   la lista se va llenando satelite a satelite. Cada tarjeta muestra NORAD,
+   nombre, elevacion maxima, dia y horas de AOS y LOS en la zona del
+   telefono, azimut de entrada y salida, modos de SatNOGS, cuenta atras y una
+   barra de progreso durante el pase. El muestreo es de 5 s, con cruces
+   refinados a 500 ms; muy por debajo del horizonte el paso crece, acotado
+   para que la elevacion no pueda cruzar el umbral dentro de un salto (bajo el
+   horizonte la elevacion cambia menos de 0.3 grados/s incluso a 200 km), y
+   en multiplos de 5 s para conservar la rejilla de la web. AOS y LOS se
+   refieren al umbral de elevacion elegido.
+5. **Detalle del pase.** Al tocar una tarjeta o la cabecera: radar polar
+   (norte arriba, horizonte en el borde, cenit en el centro; verde AOS, rojo
+   LOS, naranja la posicion actual interpolada entre 60 muestras SGP4),
+   azimut, elevacion, distancia y Doppler aproximado en vivo, instantes UTC y
+   lista de bajadas de SatNOGS para elegir, o una frecuencia escrita a mano.
+   **Conectar CAT: Doppler, SSTV y grabacion** abre CAT con ese pase y bajada.
+6. **Mapa.** Mapa mundial offline (costas de Natural Earth 1:110m, dominio
+   publico) con los satelites elegidos, su huella de cobertura (donde estan
+   sobre 0 grados), tu posicion y la traza de 45 min antes y despues del
+   satelite seleccionado. Toca un satelite para seleccionarlo. Se actualiza
+   cada 5 s mientras esta visible.
 
-Solo los parametros de una prediccion correcta se guardan en preferencias
-privadas. Incluyen la ubicacion manual; exportaciones JSON de campo no los
-incluyen. Cambiar un campo invalida la lista visible. Rotar conserva campos,
-pero descarta los pases calculados: vuelve a calcularlos.
+La posicion, la eleccion de satelites y la ultima bajada elegida por
+satelite se guardan en preferencias privadas; exportaciones JSON de campo
+no las incluyen. No se deduce un uplink ni se soportan transpondedores
+lineales: el CAT de la radio solo corrige la bajada.
 
 ### Doppler RX del pase seleccionado
 
@@ -389,6 +399,23 @@ sesion nueva. Si falla STOP se notifica, sin afirmar restauracion. El lease
 solo ayuda mientras el firmware siga ejecutando su bucle. La pantalla
 muestra calculos y la ultima confirmacion, no una medida RF ni posicion real
 verificada. Falta validar el conjunto telefono/cable/firmware/radio en campo.
+
+### Grabar el pase y buscar SSTV
+
+En la pantalla CAT de un pase, **Grabar pase completo (WAV hasta LOS)** graba
+el microfono (conecta el altavoz de la radio) mientras sigue el Doppler. El
+audio se captura a 48 kHz y se guarda diezmado 3:1 (media de tres muestras)
+a **WAV 16 kHz mono** en el almacenamiento privado de la app, unos 1.9 MB por
+minuto. Para en LOS, a las dos horas, con **Detener grabacion del pase** o al
+salir de la pantalla; la cabecera WAV queda valida aunque haya un error.
+No es compatible con la recepcion Robot36 de 60 s a la vez.
+
+En Satelites, Ajustes, **Grabaciones de pases** lista cada WAV con duracion y
+tamano. **SSTV** recorre la grabacion en ventanas de 60 s cada 23 s (asi
+cualquier imagen Robot36 de 37 s cae entera en alguna), decodifica cada una,
+descarta duplicados a menos de 10 s y guarda las imagenes PNG junto al WAV.
+**Exportar** copia el WAV donde elijas y **Borrar** elimina el WAV y sus PNG
+tras confirmar. No hay otros modos SSTV ni medida de calidad de la senal.
 
 ## Morse WAV experimental
 
@@ -573,12 +600,13 @@ La APK de prueba no es la aplicacion de uso habitual.
 
 ## Validacion realizada y pendiente
 
-Noventa y tres pruebas host: siete de modelos/ADIF, cuatro de importacion
+Cien pruebas host: siete de modelos/ADIF, cuatro de importacion
 ADIF, tres de audio, doce de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT,
 cinco del codec de canales, cinco de memoria/respaldo/escritura Quansheng y ocho
 de USB CDC/serie simulado, cuatro de nucleo Robot36 (incluida ida y vuelta del codificador), dos de pantalla SSTV,
 cuatro de envio SSTV por PTT CAT con radio simulada,
-tres de SGP4/TLE, cuatro de seguimiento, dos de pantalla de satelites, tres de lista y radar de pases,
+cuatro de SGP4/TLE y motor compartido, cuatro de seguimiento, dos de pantalla de satelites, tres de lista y radar de pases,
+dos de descarga y catalogo, dos de mapa, dos de grabacion de pases,
 cinco de captura PCM, seis de pantalla de microfono y seis de estadisticas ARDF.
 Comprueban SQLite tras cerrar/reabrir, actualizacion/eliminacion,
 exportacion JSON, coordenadas nulas/validas, arranque de pantallas,
@@ -640,12 +668,26 @@ el Doppler calculado a una radio CAT simulada y restaura nominal con STOP.
 El radar contrasta la proyeccion polar (norte, este, cenit y bajo horizonte),
 la interpolacion de azimut al cruzar el norte, la trayectoria muestreada
 contra SGP4 (0.5 grados entre muestras) y las cuentas atras de las tarjetas.
-La interfaz importa un catalogo, calcula pases offline, muestra tarjetas y
-radar, cambia de pase con un toque, transmite la instantanea seleccionada y rechaza un pase vencido sin SET y cerrando USB.
+El motor compartido contrasta dos observadores en un mismo contexto Rhino,
+la posicion subsatelite (altitud y latitud de la ISS) y que los pases sigan
+coincidiendo con la web tras el paso adaptativo. La descarga comprueba el
+recorte de nombres de CelesTrak, el filtrado de SatNOGS (vivo, activo, en
+banda, NORAD del catalogo), JSON roto, solo HTTPS y la ida y vuelta de los
+archivos privados. El mapa contrasta proyeccion, huella de la ISS (20.4
+grados de arco a 420 km), corte en el antimeridiano y el contorno incluido.
+La grabacion usa una fuente PCM simulada: para en LOS, diezma 3:1, deja una
+cabecera WAV valida y encuentra una imagen Robot36 insertada a los 50 s de
+una grabacion de 125 s; tambien se comprueban las ventanas y un WAV ajeno.
+La interfaz descarga un catalogo simulado, calcula pases, abre el detalle
+con radar y bajadas de SatNOGS, transmite el plan a CAT, rechaza una bajada
+fuera de banda, muestra el mapa, filtra y deselecciona satelites, valida el
+observador y borra una grabacion y sus PNG tras confirmar. CAT rechaza un
+pase vencido sin SET y cerrando USB. No se ha descargado de los servidores
+reales en las pruebas ni se ha probado la grabacion con AudioRecord real.
 
 Compilan la APK y la APK instrumentada. Lint termina sin errores;
 conserva avisos de versiones mas nuevas de dependencias de prueba, forma
-del icono original y tipografia. No se suprimen ni se consideran fallos funcionales.
+del icono original, tipografia, plurales y palabras escritas sin tilde. No se suprimen ni se consideran fallos funcionales.
 
 No hay telefono Android conectado ni emulador ejecutado en esta validacion.
 Las pruebas instrumentadas estan compiladas, **no ejecutadas**.

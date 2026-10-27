@@ -55,4 +55,22 @@ class SatellitesTest {
         assertThrows(IllegalArgumentException::class.java) { ObserverPosition(Double.NaN, 0.0, 0.0).validated() }
         assertThrows(IllegalArgumentException::class.java) { ObserverPosition(0.0, 181.0, 0.0).validated() }
     }
+    @Test fun sharedEngineServesSeveralOrbitsAndGivesSubpoints() {
+        OrbitalEngine(File("src/main/assets/satellite-6.0.1.js").readText(), File("src/main/assets/orbital-engine.js").readText()).use { engine ->
+            val first = SatelliteOrbit(tle, observer, engine)
+            val second = SatelliteOrbit(tle, ObserverPosition(-33.45, -70.66, 0.5), engine)
+            val time = 1792390010000
+            assertEquals(17.4611507668, first.look(time).elevation, 0.00001)
+            assertNotEquals(first.look(time).elevation, second.look(time).elevation, 1.0)
+            val point = first.geo(time)
+            assertEquals(point, second.geo(time))
+            assertTrue(point.altitudeKm in 380.0..450.0 && kotlin.math.abs(point.latitude) <= 52.0)
+            second.close()
+            assertEquals(17.4611507668, first.look(time).elevation, 0.00001)
+            val started = System.nanoTime()
+            val passes = first.predict(start)
+            println("predict 24 h: ${(System.nanoTime() - started) / 1_000_000} ms, ${passes.size} passes")
+            assertEquals(1792389865781L.toDouble(), passes.first().aos.time.toDouble(), 500.0)
+        }
+    }
 }
