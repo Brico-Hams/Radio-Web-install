@@ -42,9 +42,11 @@ import java.util.concurrent.Executors
 
 class SatelliteActivity : LocalizedActivity() {
     companion object {
-        /** Host tests replace this; the app downloads over HTTPS only when the user asks. */
+        /** Host tests replace the HTTPS catalogue transport. */
         internal var fetch: (String, Int) -> ByteArray = SatelliteSources::fetch
         private const val DEFAULT_DOWNLINK = 145800000L
+        private const val CATALOG_REFRESH_MS = 86400000L
+        private const val RETRY_DELAY_MS = 900000L
     }
     private enum class Page { PASSES, MAP, SATELLITES, SETTINGS, DETAIL }
     private data class OrbitKey(val tle: Tle, val observer: ObserverPosition)
@@ -76,6 +78,8 @@ class SatelliteActivity : LocalizedActivity() {
     private var mapSelected: Int? = null
     private var pendingExport: File? = null
     private var ticks = 0
+    private var downloading = false
+    private var refreshingMap = false
     @Volatile private var generation = 0
     // Worker thread only: one Rhino context for every satellite.
     private var engine: OrbitalEngine? = null
@@ -157,7 +161,7 @@ class SatelliteActivity : LocalizedActivity() {
         }
         setContentView(root)
         loadCatalog()
-        show(Page.PASSES)
+        show(if (observer() == null) Page.MAP else Page.PASSES)
     }
 
     private fun page(key: Page, build: LinearLayout.() -> Unit) {
@@ -198,16 +202,23 @@ class SatelliteActivity : LocalizedActivity() {
         } catch (error: IllegalArgumentException) {
             catalog = emptyList(); transmitters = emptyMap()
             report(error)
+        } catch (error: IOException) {
+            catalog = emptyList(); transmitters = emptyMap()
+            report(error)
         }
-        if (selected.isEmpty() && catalog.isNotEmpty()) {
+        if (!preferences.contains("selected") && catalog.isNotEmpty()) {
             selected.addAll(catalog.map { it.norad }.filter { it in transmitters }.ifEmpty { catalog.map { it.norad }.take(20) })
             saveSelection()
         }
         selected.retainAll(catalog.map { it.norad }.toSet())
+        generation++
+        passes = emptyList()
         dirty = true
     }
     private fun saveSelection() {
         preferences.edit().putString("selected", selected.joinToString(",")).apply()
+        generation++
+        passes = emptyList()
         dirty = true
     }
     private fun observer(): ObserverPosition? = try {
@@ -279,7 +290,12 @@ class SatelliteActivity : LocalizedActivity() {
             val upcoming = passes.filter { it.plan.pass.los.time > now }.take(200)
             if (upcoming.isEmpty()) {
                 addView(Brand.text(this@SatelliteActivity, 15f, Brand.MUTED).apply {
-                    setText(if (catalog.isEmpty()) R.string.satellite_no_catalog else R.string.satellite_no_passes)
+                    setText(when {
+                        catalog.isEmpty() -> R.string.satellite_no_catalog
+                        observer() == null -> R.string.satellite_no_observer
+                        selected.isEmpty() -> R.string.satellite_none_selected
+                        else -> R.string.satellite_no_passes
+                    })
                     setPadding(0, Brand.dp(this@SatelliteActivity, 24), 0, 0)
                 })
                 if (catalog.isEmpty()) addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_download), true) { download() })
@@ -415,35 +431,61 @@ class SatelliteActivity : LocalizedActivity() {
             addView(map)
             addView(mapInfo.apply { setPadding(0, Brand.dp(this@SatelliteActivity, 10), 0, 0) })
             addView(Brand.text(this@SatelliteActivity, 12f, Brand.MUTED).apply { setText(R.string.satellite_map_hint) })
+            if (observer() == null) addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_no_observer)) {
+                show(Page.SETTINGS)
+            })
+            if (catalog.isEmpty()) addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_download), true) { download() })
         }
         refreshMap()
     }
     private fun refreshMap() {
-        val observer = observer() ?: return
+        if (refreshingMap) return
+        val observer = observer()
+        map.observer = observer
         val chosen = catalog.filter { it.norad in selected }
-        if (chosen.isEmpty()) return
+        if (chosen.isEmpty()) {
+            map.satellites = emptyList()
+            map.selected = null
+            mapInfo.setText(if (catalog.isEmpty()) R.string.satellite_no_catalog else R.string.satellite_none_selected)
+            return
+        }
         val focus = mapSelected?.takeIf { it in selected } ?: nextPass()?.plan?.tle?.norad ?: chosen.first().norad
         val token = generation
+        refreshingMap = true
         worker.execute {
             val now = System.currentTimeMillis()
+            val errors = ArrayList<String>()
             val points = chosen.mapNotNull { tle ->
                 try {
-                    val orbit = orbit(tle, observer)
+                    // Geocentric positions do not depend on an observer; this reference is never shown as the user's location.
+                    val orbit = orbit(tle, observer ?: ObserverPosition(0.0, 0.0, 0.0))
                     val track = if (tle.norad == focus) (-45..45).map { orbit.geo(now + it * 60000L) } else emptyList()
                     MapSatellite(tle.norad, tle.name, orbit.geo(now), track)
-                } catch (error: IllegalArgumentException) { null }
+                } catch (error: IllegalArgumentException) {
+                    errors.add("${tle.name}: ${errorText(error)}"); null
+                } catch (error: IOException) {
+                    errors.add("${tle.name}: ${errorText(error)}"); null
+                }
             }
             runOnUiThread {
-                if (isDestroyed || token != generation) return@runOnUiThread
+                refreshingMap = false
+                if (isDestroyed) return@runOnUiThread
+                if (token != generation) {
+                    if (page == Page.MAP) refreshMap()
+                    return@runOnUiThread
+                }
                 map.observer = observer
                 map.satellites = points
                 map.selected = focus
                 val chosenPoint = points.firstOrNull { it.norad == focus }
-                mapInfo.text = if (chosenPoint == null) "" else getString(R.string.satellite_map_info, chosenPoint.norad, chosenPoint.name,
+                val info = if (chosenPoint == null) "" else getString(R.string.satellite_map_info, chosenPoint.norad, chosenPoint.name,
                     chosenPoint.point.latitude, chosenPoint.point.longitude, chosenPoint.point.altitudeKm,
                     passes.firstOrNull { it.plan.tle.norad == focus && it.plan.pass.los.time > now }?.let {
                         SatellitePasses.countdown(it.plan.pass, now, this@SatelliteActivity)
                     } ?: getString(R.string.satellite_map_no_pass))
+                mapInfo.text = listOfNotNull(info.takeIf { it.isNotBlank() }, errors.firstOrNull()?.let {
+                    getString(R.string.satellite_error, it)
+                }).joinToString("\n")
             }
         }
     }
@@ -540,6 +582,17 @@ class SatelliteActivity : LocalizedActivity() {
                 catch (error: IllegalStateException) { report(error) }
             })
             heading(R.string.satellite_data)
+            addView(CheckBox(this@SatelliteActivity).apply {
+                setText(R.string.satellite_auto_update)
+                setTextColor(Brand.TEXT)
+                buttonTintList = android.content.res.ColorStateList.valueOf(Brand.ORANGE)
+                isChecked = preferences.getBoolean("auto-update", true)
+                setOnCheckedChangeListener { _, checked ->
+                    if (!preferences.edit().putBoolean("auto-update", checked).commit()) {
+                        status.setText(R.string.satellite_preferences_error)
+                    } else if (checked) updateCatalogIfNeeded()
+                }
+            })
             addView(Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply {
                 text = if (catalog.isEmpty()) getString(R.string.satellite_no_catalog) else getString(R.string.satellite_data_state, catalog.size,
                     transmitters.values.sumOf { it.size }, Instant.ofEpochMilli(store.updated).toString())
@@ -617,7 +670,17 @@ class SatelliteActivity : LocalizedActivity() {
         addView(result)
     }
 
+    private fun updateCatalogIfNeeded() {
+        val now = System.currentTimeMillis()
+        if (preferences.getBoolean("auto-update", true) &&
+            (catalog.isEmpty() || now - store.updated >= CATALOG_REFRESH_MS) &&
+            now - preferences.getLong("update-attempt", 0) >= RETRY_DELAY_MS) download()
+    }
+
     private fun download() {
+        if (downloading) return
+        downloading = true
+        preferences.edit().putLong("update-attempt", System.currentTimeMillis()).apply()
         status.setText(R.string.satellite_downloading)
         audioWorker.execute {
             try {
@@ -635,12 +698,13 @@ class SatelliteActivity : LocalizedActivity() {
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     loadCatalog()
+                    if (page != Page.DETAIL) show(page)
                     status.text = getString(R.string.satellite_downloaded, catalog.size, transmitters.values.sumOf { it.size }, warning)
-                    if (page == Page.SETTINGS || page == Page.PASSES) show(page)
                 }
             } catch (error: IOException) { report(error) }
             catch (error: IllegalArgumentException) { report(error) }
             catch (error: SecurityException) { report(error) }
+            finally { runOnUiThread { downloading = false } }
         }
     }
 
@@ -704,6 +768,7 @@ class SatelliteActivity : LocalizedActivity() {
 
     override fun onResume() {
         super.onResume()
+        updateCatalogIfNeeded()
         handler.post(ticker)
     }
     override fun onPause() {
@@ -740,8 +805,8 @@ class SatelliteActivity : LocalizedActivity() {
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     loadCatalog()
+                    if (page != Page.DETAIL) show(page)
                     status.text = getString(R.string.satellite_imported, catalog.size)
-                    if (page == Page.SETTINGS) show(Page.SETTINGS)
                 }
             } catch (error: IllegalArgumentException) { report(error) }
             catch (error: IOException) { report(error) }

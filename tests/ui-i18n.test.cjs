@@ -122,22 +122,22 @@ test("Android translations preserve resource IDs and redesigned satellite format
   assert.doesNotMatch(satellite, /satellite_predict|satellite_line1/);
 });
 
-test("Android 0.8.1 packaging and tag release artifacts match versionCode 10", () => {
+test("Android 0.8.2 packaging and tag release artifacts match versionCode 11", () => {
   const gradle = read("android/app/build.gradle.kts");
-  assert.match(gradle, /versionCode = 10\b/);
-  assert.match(gradle, /versionName = "0\.8\.1-beta"/);
+  assert.match(gradle, /versionCode = 11\b/);
+  assert.match(gradle, /versionName = "0\.8\.2-beta"/);
   const workflow = read(".github/workflows/android.yml");
   const script = read("scripts/build-android.ps1");
   assert.match(workflow, /tags: \["v\*"\]/);
   assert.match(workflow, /java-version: "17"/);
   assert.match(workflow, /needs: build/);
   assert.match(workflow, /gh release upload "\$TAG"/);
-  for (const name of ["bricohams-android-0.8.1-beta-debug.apk", "bricohams-android-0.8.1-beta-androidTest.apk"]) {
+  for (const name of ["bricohams-android-0.8.2-beta-debug.apk", "bricohams-android-0.8.2-beta-androidTest.apk"]) {
     assert.ok(workflow.includes(`upload/${name}`));
     assert.ok(script.includes(name));
   }
-  assert.match(script, /applicationVersion = '0\.8\.1-beta'/);
-  assert.match(script, /applicationVersionCode = 10\b/);
+  assert.match(script, /applicationVersion = '0\.8\.2-beta'/);
+  assert.match(script, /applicationVersionCode = 11\b/);
   assert.doesNotMatch(workflow + script, /0\.8\.0-beta|0\.7\.1-beta/);
 });
 

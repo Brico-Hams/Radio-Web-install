@@ -12,17 +12,18 @@ pruebas host de ensayos en telefono/radio e incluye la matriz de contactos,
 canales por slot y CAT. La auditoria esta en curso, no certificada.
 
 Aplicacion nativa Kotlin para Android 8.0/API 26 o posterior, sin servidor
-ni cuentas. Solo usa Internet cuando pides actualizar TLE y frecuencias de
-satelites. Es una implementacion independiente: no
+ni cuentas. Al abrir Satelites actualiza automaticamente TLE y frecuencias
+por HTTPS si no hay catalogo o tiene al menos 24 h; se puede desactivar en
+Ajustes. No envia tu ubicacion a CelesTrak ni SatNOGS. Es una implementacion independiente: no
 incluye codigo ni recursos de Look4sat, Robot36 o HAMRS.
-La version `0.8.1-beta` no sustituye sus funciones completas.
+La version `0.8.2-beta` no sustituye sus funciones completas.
 
 Esta revision conserva las funciones de 0.8.0 y prepara APK nuevas con
-versionCode 10. La compilacion, lint y pruebas Android de esta integracion
+versionCode 11. La compilacion, lint y pruebas Android de esta integracion
 requieren JDK 17 y SDK 35; no se han ejecutado con exito en el entorno local
 con Java 8. La CI debe verificarlas antes de distribuir la APK.
 Al publicar mas adelante la etiqueta v0.5.2, Android Beta adjuntara la APK
-debug y la APK instrumentada 0.8.1-beta con SHA256SUMS-android a la Release
+debug y la APK instrumentada 0.8.2-beta con SHA256SUMS-android a la Release
 creada por el flujo de instaladores. No se publica nada desde el entorno local.
 
 | Funcion | Estado |
@@ -38,7 +39,7 @@ creada por el flujo de instaladores. No se publica nada desde el entorno local.
 | Microfono | Captura en primer plano hasta 60 s y decodificacion posterior Morse/Robot36; sin escucha ni decodificacion continua |
 | USB/CAT RX | CDC ACM y adaptadores USB-serie reconocidos de un puerto, identificacion F4HWN v6+, consulta, sintonia temporal confirmada y STOP; experimental |
 | CAT TX (PTT) | Envio Robot36 con PTT por lease armada en la radio (tecla 9), indicativo obligatorio, limite de 120 s, rechazo por TX lock y bandas; experimental |
-| Satelites | Pantalla Bricohams al estilo Look4sat: TLE de CelesTrak y frecuencias de SatNOGS descargados a peticion (o TLE importado), pases 24 h de los satelites elegidos con cuenta atras, radar polar, mapa mundial offline con huellas y trazas, Doppler RX por CAT, grabacion del pase a WAV y busqueda de imagenes Robot36 en la grabacion |
+| Satelites | Pantalla Bricohams al estilo Look4sat: TLE de CelesTrak y frecuencias de SatNOGS con actualizacion automatica opcional (o TLE importado), pases 24 h de los satelites elegidos con cuenta atras, radar polar, mapa mundial offline con huellas y trazas, Doppler RX por CAT, grabacion del pase a WAV y busqueda de imagenes Robot36 en la grabacion |
 | SSTV Robot36 | Decodificacion de WAV o captura de microfono, tambien con CAT sintonizando, y codificador Robot36 para enviar por PTT CAT; experimental |
 | Escritura de canales, subtonos y potencia | Editor de canales FM F4HWN v6 por USB con respaldo completo y relectura |
 
@@ -354,8 +355,13 @@ fijo de assets, nunca contenido descargado, y el motor no tiene acceso Java.
 
 1. **Datos.** En Ajustes, **Actualizar TLE y frecuencias** descarga por HTTPS
    el grupo amateur de CelesTrak (hasta 256 KiB) y los transmisores de
-   SatNOGS DB (hasta 16 MiB; CC BY-SA 4.0). Solo se descarga al pulsar; no
-   hay descargas en segundo plano. Se conservan los transmisores vivos y
+   SatNOGS DB (hasta 16 MiB; CC BY-SA 4.0). Al abrir o volver a la pantalla
+   se actualiza automaticamente si falta el catalogo o tiene al menos 24 h.
+   Tras un fallo se espera 15 min antes de otro intento automatico; el boton
+   permite reintentar inmediatamente, sin descargas duplicadas. Puedes desactivar
+   la actualizacion automatica en Ajustes; no hay servicio periodico en segundo plano.
+   Los servidores reciben la peticion HTTPS habitual (incluida la IP), nunca
+   tu ubicacion guardada ni los canales. Se conservan los transmisores vivos y
    activos de satelites del catalogo cuya bajada cae en 136-174 o 400-470 MHz
    en pasos de 10 Hz. Si SatNOGS falla se guardan los TLE nuevos con las
    frecuencias anteriores y se avisa. **Importar archivo TLE** sigue
@@ -369,7 +375,9 @@ fijo de assets, nunca contenido descargado, y el motor no tiene acceso Java.
    minima de 0 a 60 grados.
 3. **Satelites.** Lista con busqueda por nombre o NORAD, casillas y atajos
    **Todos**, **Con RX** (los que tienen bajada en banda de la radio) y
-   **Ninguno**. Tras la primera descarga se eligen los que tienen bajada RX.
+   **Ninguno**. Tras la primera descarga se eligen los que tienen bajada RX
+   (hasta 20 del catalogo si no hay frecuencias). La seleccion guardada,
+   incluida **Ninguno**, se conserva al actualizar o reabrir.
 4. **Pases.** Se calculan las proximas **24 h** de los satelites elegidos y
    la lista se va llenando satelite a satelite. Cada tarjeta muestra NORAD,
    nombre, elevacion maxima, dia y horas de AOS y LOS en la zona del
@@ -387,7 +395,11 @@ fijo de assets, nunca contenido descargado, y el motor no tiene acceso Java.
    lista de bajadas de SatNOGS para elegir, o una frecuencia escrita a mano.
    **Conectar CAT: Doppler, SSTV y grabacion** abre CAT con ese pase y bajada.
 6. **Mapa.** Mapa mundial offline (costas de Natural Earth 1:110m, dominio
-   publico) con los satelites elegidos, su huella de cobertura (donde estan
+   publico), visible desde el primer arranque sin permiso GPS ni observador.
+   Los satelites aparecen tras obtener TLE validos; sin red se usa el catalogo
+   guardado mientras sus TLE sigan vigentes. Sin observador no se dibuja un
+   punto de ubicacion ficticio ni se calculan pases. Los errores TLE se muestran.
+   Muestra los satelites elegidos, su huella de cobertura (donde estan
    sobre 0 grados), tu posicion y la traza de 45 min antes y despues del
    satelite seleccionado. Toca un satelite para seleccionarlo. Se actualiza
    cada 5 s mientras esta visible.
@@ -605,7 +617,7 @@ Salidas:
 Para entregar un conjunto verificado en Windows, con los mismos requisitos:
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.1-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.2-beta'
 ```
 
 El destino debe ser nuevo. El script ejecuta pruebas/lint, verifica las firmas

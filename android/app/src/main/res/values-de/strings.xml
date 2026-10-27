@@ -542,7 +542,8 @@
     <string name="satellite_downloading">TLE von CelesTrak und Frequenzen von SatNOGS werden geladen…</string>
     <string name="satellite_downloaded">Aktualisiert: %1$d Satelliten, %2$d Frequenzen im Funkbereich. %3$s</string>
     <string name="satellite_credits">TLE: CelesTrak (Amateurgruppe). Frequenzen: SatNOGS DB, CC BY-SA 4.0. Karte: Natural Earth, gemeinfrei. Download nur über Aktualisieren; TLE verfallen nach 7 Tagen.</string>
-    <string name="satellite_no_catalog">Keine Satelliten. TLE und Frequenzen aktualisieren oder TLE-Datei importieren.</string>
+    <string name="satellite_no_catalog">Keine gespeicherten Satelliten. Automatischer Download beim Öffnen mit Internet. Erneut versuchen oder TLE-Datei importieren.</string>
+    <string name="satellite_auto_update">TLE und Frequenzen beim Öffnen automatisch aktualisieren (alle 24 h). HTTPS: CelesTrak und SatNOGS; Ihr Standort wird nicht gesendet.</string>
     <string name="satellite_no_observer">Position in Einstellungen setzen, um Überflüge zu berechnen.</string>
     <string name="satellite_none_selected">Keine Satelliten ausgewählt. Unter Satelliten auswählen.</string>
     <string name="satellite_no_passes">Keine Überflüge der gewählten Satelliten in den nächsten 24 h.</string>

@@ -80,7 +80,8 @@
     <string name="satellite_import">Importar archivo TLE</string>
     <string name="satellite_imported">Importados %1$d satelites desde archivo.</string>
     <string name="satellite_credits">TLE: CelesTrak (grupo amateur). Frecuencias: SatNOGS DB, CC BY-SA 4.0. Mapa: Natural Earth, dominio publico. Solo se descarga al pulsar Actualizar; los TLE caducan a los 7 dias.</string>
-    <string name="satellite_no_catalog">Sin satelites. Pulsa Actualizar TLE y frecuencias o importa un archivo TLE.</string>
+    <string name="satellite_no_catalog">Sin satelites guardados. Se descargan automaticamente al abrir esta pantalla con Internet. Puedes reintentar o importar un archivo TLE.</string>
+    <string name="satellite_auto_update">Actualizar TLE y frecuencias automaticamente al abrir (cada 24 h). HTTPS: CelesTrak y SatNOGS; no se envia tu ubicacion.</string>
     <string name="satellite_no_observer">Configura tu posicion en Ajustes para calcular pases.</string>
     <string name="satellite_none_selected">Ningun satelite elegido. Marcalos en Satelites.</string>
     <string name="satellite_no_passes">No hay pases en las proximas 24 h para los satelites elegidos.</string>

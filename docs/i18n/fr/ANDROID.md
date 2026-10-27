@@ -7,9 +7,11 @@ L'écran principal propose **Langue du système**, **Español**, **English (US)*
 écrans, y compris les canaux USB, CAT, satellites et SSTV. Les indicatifs, noms de canaux
 et fichiers utilisateur ne sont pas traduits ; la marque reste Bricohams.
 
-Internet est utilisé uniquement sur demande pour les TLE/fréquences HTTPS de CelesTrak et SatNOGS, sans envoyer de données personnelles. L’import hors ligne reste disponible. Cette révision conserve les fonctions 0.8.0 et prépare les APK 0.8.1-beta, versionCode 10. Tests, lint et compilation exigent JDK 17 et SDK 35 ; cette intégration ne les a pas validés localement avec Java 8. La CI doit vérifier la nouvelle APK avant distribution.
+À l'ouverture de Satellites, les TLE/fréquences de CelesTrak et SatNOGS sont actualisés automatiquement par HTTPS si le catalogue manque ou a au moins 24 h. Cette option peut être désactivée dans Réglages. La position enregistrée et les canaux radio ne sont pas envoyés ; les serveurs reçoivent la requête HTTPS habituelle, dont l'adresse IP. L’import hors ligne reste disponible. Cette révision conserve les fonctions 0.8.0 et prépare les APK 0.8.2-beta, versionCode 11. Tests, lint et compilation exigent JDK 17 et SDK 35 et ne peuvent pas fonctionner localement avec Java 8. La CI doit vérifier la nouvelle APK avant distribution.
 
-Lors de l’envoi ultérieur du tag v0.5.2, Android Beta joindra les deux APK 0.8.1-beta (app debug et tests instrumentés) et SHA256SUMS-android à la release créée par les installateurs. Aucune publication locale.
+Sans observateur enregistré, l'écran ouvre la carte mondiale hors ligne sans demander de permission GPS ni inventer de position. Satellites, empreintes et trajectoire sélectionnée apparaissent avec des TLE valides et sont actualisés toutes les 5 s lorsque la carte est visible. Le catalogue conservé fonctionne hors ligne jusqu'à expiration des TLE. Au premier chargement, les satellites recevables sont sélectionnés (jusqu'à 20 entrées sans fréquences) ; le choix enregistré, y compris Aucun, est conservé. Les passages exigent toujours votre position dans Réglages. Les erreurs sont affichées.
+
+Lors de l’envoi ultérieur du tag v0.5.2, Android Beta joindra les deux APK 0.8.2-beta (app debug et tests instrumentés) et SHA256SUMS-android à la release créée par les installateurs. Aucune publication locale.
 
 La [validation intégrale V3/Android](VALIDACION-INTEGRAL-V3-ANDROID.md) distingue
 les tests sur l’hôte des essais sur téléphone/radio et inclut la matrice des contacts,
@@ -18,7 +20,7 @@ les canaux par slot et CAT. L’audit est en cours, il n’est pas certifié.
 Application native Kotlin pour Android 8.0/API 26 ou version ultérieure, sans serveur
 ni compte. Il s’agit d’une implémentation indépendante : elle
 n’inclut aucun code ni ressource de Look4sat, Robot36 ou HAMRS.
-La version `0.8.1-beta` ne remplace pas l’ensemble de leurs fonctionnalités.
+La version `0.8.2-beta` ne remplace pas l’ensemble de leurs fonctionnalités.
 
 | Fonction | État |
 | --- | --- |
@@ -309,7 +311,7 @@ Le moteur **satellite.js 6.0.1** (MIT), distribution UMD de la web, fonctionne a
 `91fdd46e9523c6b232d24ff69fd5e9cade8471d20624a154df7d9c91dc212639`.
 Un seul contexte Rhino partagé exécute les assets fixes, jamais du code téléchargé, sans accès Java.
 
-1. **Données :** Réglages télécharge le groupe amateur CelesTrak (256 KiB maximum) et les émetteurs SatNOGS DB (16 MiB, CC BY-SA 4.0), uniquement sur demande HTTPS, jamais en arrière-plan. Les émetteurs vivants et actifs doivent appartenir au catalogue et avoir une descente 136-174 ou 400-470 MHz par pas de 10 Hz. Si SatNOGS échoue, les nouveaux TLE conservent les anciennes fréquences avec avertissement. L’import TLE hors ligne reste possible. Fichiers privés atomiques ; lignes de 69 caractères, checksum et NORAD vérifiés ; Alpha-5 et NORAD en double rejetés. Expiration après sept jours ; époque au-delà de 24 h dans le futur rejetée et fenêtre entière valide exigée.
+1. **Données :** Réglages télécharge le groupe amateur CelesTrak (256 KiB maximum) et les émetteurs SatNOGS DB (16 MiB, CC BY-SA 4.0) par HTTPS. L'actualisation automatique optionnelle est lancée à l'ouverture ou au retour si le catalogue manque ou a au moins 24 h. Après un échec, un nouvel essai automatique attend 15 min ; le bouton permet de réessayer immédiatement sans téléchargements en double. Aucun service périodique en arrière-plan. Les émetteurs vivants et actifs doivent appartenir au catalogue et avoir une descente 136-174 ou 400-470 MHz par pas de 10 Hz. Si SatNOGS échoue, les nouveaux TLE conservent les anciennes fréquences avec avertissement. L’import TLE hors ligne reste possible. Fichiers privés atomiques ; lignes de 69 caractères, checksum et NORAD vérifiés ; Alpha-5 et NORAD en double rejetés. Expiration après sept jours ; époque au-delà de 24 h dans le futur rejetée et fenêtre entière valide exigée.
 2. **Observateur :** latitude/longitude en degrés, hauteur WGS84 en **km** (-0.5 à 9). Utiliser la dernière position GPS demande la localisation et copie le dernier point GPS/réseau avec âge et précision. Vérifiez puis Enregistrer et calculer les passages. Élévation minimale 0-60 degrés.
 3. **Satellites :** recherche par nom/NORAD, cases et raccourcis Tous, Avec RX, Aucun. Le premier téléchargement sélectionne les satellites avec RX dans les bandes.
 4. **Passages :** les prochaines **24 h** se remplissent progressivement. Cartes avec NORAD, nom, élévation maximale, jour et AOS/LOS locaux, azimuts, modes, compte à rebours et progression. Échantillonnage 5 s, croisements affinés à 500 ms ; sous l’horizon, pas adaptatif multiple de 5 s préservant la grille web et bornant l’élévation pour ne manquer aucun croisement (moins de 0.3 degré/s même à 200 km). AOS/LOS utilisent le seuil choisi ; maximum échantillonné, non optimisé en continu.
@@ -506,7 +508,7 @@ Sorties :
 Pour fournir un ensemble vérifié sous Windows, avec les mêmes prérequis :
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.1-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.2-beta'
 ```
 
 La destination doit être nouvelle. Le script exécute les tests/lint, vérifie les signatures

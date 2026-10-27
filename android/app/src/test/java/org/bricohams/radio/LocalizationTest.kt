@@ -44,6 +44,8 @@ class LocalizationTest {
     private fun assertValidationErrors(qualifiers: String, morse: String, observer: String, rejected: String, noTone: String) {
         RuntimeEnvironment.setQualifiers(qualifiers)
         val context = RuntimeEnvironment.getApplication()
+        context.getSharedPreferences("satellite-observer", android.content.Context.MODE_PRIVATE)
+            .edit().putBoolean("auto-update", false).commit()
         assertEquals(rejected, context.errorText(LocalizedArgumentException(UiText(R.string.err_cat_rejected, 3))))
         assertEquals(context.getString(R.string.morse_no_tone, context.getString(R.string.morse_warning)),
             UiText(R.string.morse_no_tone, UiText(R.string.morse_warning)).resolve(context))

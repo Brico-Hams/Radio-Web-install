@@ -7,9 +7,11 @@ und **Deutsch**. Die Auswahl wird lokal gespeichert und gilt für alle Ansichten
 einschließlich USB-Kanäle, CAT, Satelliten und SSTV. Rufzeichen, Kanalnamen und
 Benutzerdateien werden nicht übersetzt; die Marke bleibt Bricohams.
 
-Internet wird nur auf Anforderung für HTTPS-TLE/Frequenzaktualisierungen von CelesTrak und SatNOGS genutzt, ohne persönliche Daten hochzuladen. Offline-Import bleibt verfügbar. Diese Revision bewahrt die Funktionen von 0.8.0 und bereitet APKs 0.8.1-beta mit versionCode 10 vor. Tests, Lint und Build benötigen JDK 17 und SDK 35; diese Integration hat sie lokal mit Java 8 nicht bestanden. CI muss die neue APK vor der Verteilung prüfen.
+Beim Öffnen von Satelliten werden TLE/Frequenzen von CelesTrak und SatNOGS per HTTPS automatisch aktualisiert, wenn der Katalog fehlt oder mindestens 24 h alt ist. In Einstellungen lässt sich dies abschalten. Gespeicherter Standort und Funkkanäle werden nicht gesendet; die Server erhalten die normale HTTPS-Anfrage einschließlich IP-Adresse. Offline-Import bleibt verfügbar. Diese Revision bewahrt die Funktionen von 0.8.0 und bereitet APKs 0.8.2-beta mit versionCode 11 vor. Tests, Lint und Build benötigen JDK 17 und SDK 35 und sind lokal mit Java 8 nicht ausführbar. CI muss die neue APK vor der Verteilung prüfen.
 
-Beim späteren Push des Tags v0.5.2 hängt Android Beta beide APKs 0.8.1-beta (Debug-App und instrumentierte Tests) sowie SHA256SUMS-android an die vom Installer-Workflow erstellte Release an. Keine lokale Veröffentlichung.
+Ohne gespeicherten Beobachter öffnet sich die Offline-Weltkarte ohne GPS-Berechtigung oder erfundenen Standort. Satelliten, Abdeckungen und ausgewählte Flugbahn erscheinen mit gültigen TLE und werden bei sichtbarer Karte alle 5 s aktualisiert. Der gespeicherte Katalog funktioniert offline bis zum TLE-Verfall. Beim ersten Laden werden empfangbare Satelliten ausgewählt (bis zu 20 Einträge ohne Frequenzen); die gespeicherte Auswahl einschließlich Keine bleibt erhalten. Überflugberechnungen benötigen weiterhin den Standort in Einstellungen. Fehler werden angezeigt.
+
+Beim späteren Push des Tags v0.5.2 hängt Android Beta beide APKs 0.8.2-beta (Debug-App und instrumentierte Tests) sowie SHA256SUMS-android an die vom Installer-Workflow erstellte Release an. Keine lokale Veröffentlichung.
 
 Die [integrierte Validierung V3/Android](VALIDACION-INTEGRAL-V3-ANDROID.md) unterscheidet
 Host-Tests von Tests mit Telefon/Funkgerät und enthält die Matrix für Kontakte,
@@ -18,7 +20,7 @@ Kanäle je Slot und CAT. Das Audit läuft noch und ist nicht zertifiziert.
 Native Kotlin-Anwendung für Android 8.0/API 26 oder höher, ohne Server
 oder Konten. Es handelt sich um eine unabhängige
 Implementierung: Sie enthält weder Code noch Ressourcen von Look4sat, Robot36
-oder HAMRS. Die Version `0.8.1-beta` ersetzt deren vollständigen Funktionsumfang nicht.
+oder HAMRS. Die Version `0.8.2-beta` ersetzt deren vollständigen Funktionsumfang nicht.
 
 | Funktion | Status |
 | --- | --- |
@@ -328,7 +330,7 @@ Engine: **satellite.js 6.0.1** (MIT), dieselbe UMD-Distribution wie im Web, übe
 `91fdd46e9523c6b232d24ff69fd5e9cade8471d20624a154df7d9c91dc212639`.
 Ein gemeinsamer Rhino-Kontext führt nur feste Assets aus, nie heruntergeladenen Code, ohne Java-Zugriff.
 
-1. **Daten:** Einstellungen lädt CelesTrak-Amateur-TLE (maximal 256 KiB) und SatNOGS-DB-Sender (16 MiB, CC BY-SA 4.0), nur auf HTTPS-Anforderung, nicht im Hintergrund. Lebende, aktive Sender müssen zum Katalog gehören und einen Downlink in 136-174 oder 400-470 MHz in 10-Hz-Schritten haben. Bei SatNOGS-Fehlern behalten neue TLE bisherige Frequenzen mit Warnung. Offline-TLE-Import bleibt verfügbar. Private Dateien werden atomar geschrieben. 69 Zeichen, Prüfsumme und NORAD werden geprüft; Alpha-5 und doppelte NORAD werden abgelehnt. TLE verfallen nach sieben Tagen; Epochen über 24 h in der Zukunft werden abgelehnt, das ganze Vorhersagefenster muss gültig sein.
+1. **Daten:** Einstellungen lädt CelesTrak-Amateur-TLE (maximal 256 KiB) und SatNOGS-DB-Sender (16 MiB, CC BY-SA 4.0) per HTTPS. Die optionale automatische Aktualisierung erfolgt beim Öffnen oder Zurückkehren, wenn der Katalog fehlt oder mindestens 24 h alt ist. Nach Fehlern wird frühestens nach 15 min automatisch erneut versucht; die Schaltfläche erlaubt sofortige Wiederholung ohne doppelte Downloads. Kein periodischer Hintergrunddienst. Lebende, aktive Sender müssen zum Katalog gehören und einen Downlink in 136-174 oder 400-470 MHz in 10-Hz-Schritten haben. Bei SatNOGS-Fehlern behalten neue TLE bisherige Frequenzen mit Warnung. Offline-TLE-Import bleibt verfügbar. Private Dateien werden atomar geschrieben. 69 Zeichen, Prüfsumme und NORAD werden geprüft; Alpha-5 und doppelte NORAD werden abgelehnt. TLE verfallen nach sieben Tagen; Epochen über 24 h in der Zukunft werden abgelehnt, das ganze Vorhersagefenster muss gültig sein.
 2. **Beobachter:** Breite/Länge in Grad, WGS84-Höhe in **km** (-0.5 bis 9). Letzte GPS-Position verwenden fordert Standortzugriff an und kopiert den letzten GPS-/Netzpunkt mit Alter und Genauigkeit. Prüfen und Speichern und Überflüge berechnen wählen. Mindestelevation 0-60 Grad.
 3. **Satelliten:** Name/NORAD-Suche, Kontrollkästchen und Alle, Mit RX, Keine. Beim ersten Download werden Satelliten mit RX im Funkbereich ausgewählt.
 4. **Überflüge:** die nächsten **24 h** erscheinen fortlaufend. Karten zeigen NORAD, Name, maximale Elevation, lokalen Tag/AOS/LOS, Azimute, Modi, Countdown und Fortschritt. Abtastung alle 5 s, Übergänge auf 500 ms verfeinert; unter dem Horizont adaptive Vielfache von 5 s zur Erhaltung des Webrasters und Begrenzung der Elevation, damit kein Übergang übersprungen wird (unter 0.3 Grad/s selbst bei 200 km). AOS/LOS beziehen sich auf die gewählte Schwelle; Maxima werden abgetastet, nicht kontinuierlich optimiert.
@@ -551,7 +553,7 @@ Ausgaben:
 Um unter Windows ein geprüftes Paket mit denselben Voraussetzungen zu liefern:
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.1-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.2-beta'
 ```
 
 Das Zielverzeichnis muss neu sein. Das Skript führt Tests/lint aus, prüft die

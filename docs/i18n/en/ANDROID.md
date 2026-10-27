@@ -7,9 +7,11 @@ and **Deutsch**. The choice is saved locally and applies to every screen, includ
 channels, CAT, satellites, and SSTV. Switching languages does not translate callsigns,
 channel names, or user files; the branding remains Bricohams.
 
-The app uses Internet only when you request HTTPS TLE/frequency updates from CelesTrak and SatNOGS. No personal data is uploaded. Offline import remains available. This revision preserves the 0.8.0 features and prepares 0.8.1-beta APKs, versionCode 10. Android tests, lint and builds require JDK 17 and SDK 35; this integration has not passed them locally with Java 8. CI must verify the new APK before distribution.
+Opening Satellites automatically updates TLE/frequencies over HTTPS from CelesTrak and SatNOGS if the catalog is missing or at least 24 h old. Settings can disable automatic updates. Your saved location and radio channels are not sent; servers receive the normal HTTPS request, including the IP address. Offline import remains available. This revision preserves the 0.8.0 features and prepares 0.8.2-beta APKs, versionCode 11. Android tests, lint and builds require JDK 17 and SDK 35; they cannot run locally with Java 8. CI must verify the new APK before distribution.
 
-On a later v0.5.2 tag push, Android Beta attaches both 0.8.1-beta APKs (debug app and instrumented tests) and SHA256SUMS-android to the release created by the installer workflow. Nothing is published locally.
+Without a saved observer the screen opens on the offline world map, without asking for GPS permission or inventing a location. Satellites, footprints and the selected track appear after valid TLE are available and refresh every 5 s while the map is visible. Cached TLE work offline until they expire. On the first catalog load, receivable satellites are selected (up to 20 catalog entries if frequencies are unavailable); saved selections, including None, are preserved. Pass predictions still require your position in Settings. Errors remain visible.
+
+On a later v0.5.2 tag push, Android Beta attaches both 0.8.2-beta APKs (debug app and instrumented tests) and SHA256SUMS-android to the release created by the installer workflow. Nothing is published locally.
 
 The [V3/Android comprehensive validation](VALIDACION-INTEGRAL-V3-ANDROID.md) distinguishes
 host tests from phone/radio tests and includes the contact, channels-by-slot,
@@ -18,7 +20,7 @@ and CAT matrices. The audit is in progress, not certified.
 Native Kotlin application for Android 8.0/API 26 or later, with no server
 or accounts. It is an independent implementation: it
 does not include code or resources from Look4sat, Robot36, or HAMRS.
-Version `0.8.1-beta` does not replace their full feature sets.
+Version `0.8.2-beta` does not replace their full feature sets.
 
 | Feature | Status |
 | --- | --- |
@@ -300,7 +302,7 @@ The engine is **satellite.js 6.0.1** (MIT), the same UMD distribution as the web
 `91fdd46e9523c6b232d24ff69fd5e9cade8471d20624a154df7d9c91dc212639`.
 One shared Rhino context runs fixed assets only, never downloaded code, without Java access.
 
-1. **Data:** Settings downloads the CelesTrak amateur TLE group (256 KiB maximum) and SatNOGS DB transmitters (16 MiB, CC BY-SA 4.0), over HTTPS only on request, never in the background. Live, active transmitters must belong to catalog satellites and have a downlink in 136-174 or 400-470 MHz in 10 Hz steps. If SatNOGS fails, new TLE retain previous frequencies with a warning. Offline TLE file import remains available. Private files are written atomically. Lines must have 69 characters, valid checksum and matching NORAD; Alpha-5 and duplicate NORAD are rejected. TLE expire after seven days; epochs over 24 h in the future are rejected and the prediction window must be valid.
+1. **Data:** Settings downloads the CelesTrak amateur TLE group (256 KiB maximum) and SatNOGS DB transmitters (16 MiB, CC BY-SA 4.0) over HTTPS. On opening or returning to Satellites, the optional automatic update runs if the catalog is missing or at least 24 h old. Failed attempts are retried automatically no sooner than 15 min later; the button retries immediately, without duplicate downloads. There is no periodic background service. Live, active transmitters must belong to catalog satellites and have a downlink in 136-174 or 400-470 MHz in 10 Hz steps. If SatNOGS fails, new TLE retain previous frequencies with a warning. Offline TLE file import remains available. Private files are written atomically. Lines must have 69 characters, valid checksum and matching NORAD; Alpha-5 and duplicate NORAD are rejected. TLE expire after seven days; epochs over 24 h in the future are rejected and the prediction window must be valid.
 2. **Observer:** latitude/longitude in degrees, WGS84 height in **km** (-0.5 to 9). Use last GPS position requests location permission and copies the latest GPS/network fix with age and accuracy. Review it and Save and calculate passes. Minimum elevation is 0-60 degrees.
 3. **Satellites:** search by name/NORAD, checkboxes and All, With RX, None shortcuts. The initial download selects satellites with in-band RX.
 4. **Passes:** the next **24 h** fill progressively. Cards show NORAD, name, maximum elevation, local day/AOS/LOS, entry/exit azimuth, modes, countdown and progress. Sampling uses 5 s with crossings refined to 500 ms; below the horizon adaptive multiples of 5 s preserve the web grid and bound the elevation change so a crossing cannot be skipped (under 0.3 degrees/s even at 200 km). AOS/LOS use the chosen elevation threshold; maxima are sampled, not continuously optimized.
@@ -500,7 +502,7 @@ Outputs:
 To deliver a verified set on Windows with the same requirements:
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.1-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.2-beta'
 ```
 
 The destination must be new. The script runs tests/lint, verifies APK

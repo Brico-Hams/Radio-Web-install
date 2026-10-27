@@ -542,7 +542,8 @@
     <string name="satellite_downloading">Téléchargement des TLE CelesTrak et des fréquences SatNOGS…</string>
     <string name="satellite_downloaded">Mis à jour : %1$d satellites, %2$d fréquences dans les bandes radio. %3$s</string>
     <string name="satellite_credits">TLE : CelesTrak (groupe amateur). Fréquences : SatNOGS DB, CC BY-SA 4.0. Carte : Natural Earth, domaine public. Téléchargement uniquement sur Actualiser ; les TLE expirent après 7 jours.</string>
-    <string name="satellite_no_catalog">Aucun satellite. Actualisez TLE et fréquences ou importez un fichier TLE.</string>
+    <string name="satellite_no_catalog">Aucun satellite enregistré. Téléchargement automatique à l\'ouverture avec Internet. Réessayez ou importez un fichier TLE.</string>
+    <string name="satellite_auto_update">Actualiser automatiquement TLE et fréquences à l\'ouverture (toutes les 24 h). HTTPS : CelesTrak et SatNOGS ; votre position n\'est pas envoyée.</string>
     <string name="satellite_no_observer">Réglez votre position dans Réglages pour calculer les passages.</string>
     <string name="satellite_none_selected">Aucun satellite choisi. Sélectionnez-les dans Satellites.</string>
     <string name="satellite_no_passes">Aucun passage dans les prochaines 24 h pour les satellites choisis.</string>
