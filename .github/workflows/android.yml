@@ -44,6 +44,15 @@ jobs:
             message="${message//$'\n'/'%0A'}"
             echo "::error title=Android build diagnostics::$message"
           fi
+          if [ -d android/app/build/test-results ]; then
+            message="$(find android/app/build/test-results -name 'TEST-*.xml' -exec grep -h -A 15 '<failure ' {} + | sed -n '1,60p' || true)"
+            if [ -n "$message" ]; then
+              message="${message//'%'/'%25'}"
+              message="${message//$'\r'/'%0D'}"
+              message="${message//$'\n'/'%0A'}"
+              echo "::error title=Android test failure details::$message"
+            fi
+          fi
       - name: Preserve build diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

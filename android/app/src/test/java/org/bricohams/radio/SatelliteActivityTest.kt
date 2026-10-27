@@ -166,22 +166,23 @@ class SatelliteActivityTest {
                 else throw IOException("satnogs-test")
             }
 
-            @Test fun expiredTleIsReportedInsteadOfSilentlyHidingSatellites() {
-                val context = RuntimeEnvironment.getApplication()
-                context.getSharedPreferences("satellite-observer", Context.MODE_PRIVATE).edit().putBoolean("auto-update", false).commit()
-                SatelliteStore(File(context.filesDir, "satellites")).saveCatalog(listOf(freshTle(10)), emptyList())
-                val controller = Robolectric.buildActivity(SatelliteActivity::class.java).setup()
-                try {
-                    val activity = controller.get()
-                    idle(activity)
-                    assertTrue(all(activity).filterIsInstance<WorldMapView>().single().satellites.isEmpty())
-                    assertTrue(text(activity), text(activity).contains(activity.getString(R.string.err_tle_stale)))
-                } finally { controller.pause().stop().destroy() }
-            }
             click(activity, "Actualizar TLE y frecuencias")
             idle(activity)
             assertEquals(25544, all(activity).filterIsInstance<WorldMapView>().single().satellites.single().norad)
             assertTrue(text(activity), text(activity).contains("satnogs-test"))
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun expiredTleIsReportedInsteadOfSilentlyHidingSatellites() {
+        val context = RuntimeEnvironment.getApplication()
+        context.getSharedPreferences("satellite-observer", Context.MODE_PRIVATE).edit().putBoolean("auto-update", false).commit()
+        SatelliteStore(File(context.filesDir, "satellites")).saveCatalog(listOf(freshTle(10)), emptyList())
+        val controller = Robolectric.buildActivity(SatelliteActivity::class.java).setup()
+        try {
+            val activity = controller.get()
+            idle(activity)
+            assertTrue(all(activity).filterIsInstance<WorldMapView>().single().satellites.isEmpty())
+            assertTrue(text(activity), text(activity).contains(activity.getString(R.string.err_tle_stale)))
         } finally { controller.pause().stop().destroy() }
     }
 
