@@ -2,14 +2,14 @@
   "repository": "Brico-Hams/Bricohams-Studio",
   "commit": "528ac7f97893a778d06f38ffa98b77cbac6d0e90",
   "path": "index.html",
-  "bytes": 683814,
-  "sha256": "66d48048c8b80cff97827b8f91b62723ecefc1e42a02c131eb1a57a811cae529",
+  "bytes": 680755,
+  "sha256": "1df2b8cf196514a66e473caf74ac6c15add7824fda65a9c7e667c75c4be97c96",
   "scriptHashes": [
-    "sha256-AsVgGs4WPpmvhEJ9O292jTjwgWscKMbJ/rVbC94SKY0=",
-    "sha256-aqTyyuFpqkuqB+qBJJTBezcHZYh7M0+K4G8Il/Od57w=",
-    "sha256-CQ7NVwdRX/XRj2Lc26avfzwwh1fYaB+KlPd8G6ZVLko=",
-    "sha256-meGyhMbPGuYaFoZJ+Nt4EBJ80Egi6JOrA9SmKZ+Zv1E=",
-    "sha256-Jsv1/39RMcwJRRLZQDi9+aVtZJf3kJ7jY+SvCASj1uo=",
-    "sha256-ZIc51+q3gthKc6d6LefRXCgGEkjFuyZ/2rcq3aBikWQ="
+    "sha256-aosqEv+9qMTFV5rRRTO45So3RxpGy4Bz7rthGKAaDPM=",
+    "sha256-hEkj9yVVQ8TfAbdSHL1QM6qdIUQJB9a07jAQSrKzfd0=",
+    "sha256-U/YVSY0FnvJhYQv8+zxWavi2ETICv0lswMoqJFCpLn0=",
+    "sha256-jKabVT7EVOMvtyljM6LAR0cWlouvjVHxGAsOC1JTHuE=",
+    "sha256-BOiY128o+AMG8MZsqSOt5pBcMh3sSarww2MQRpbiXDw=",
+    "sha256-B1RSMb6In2IkN3EZF0gCVcfOKCMpKGwKCaKZCIxD1jM="
   ]
 }
