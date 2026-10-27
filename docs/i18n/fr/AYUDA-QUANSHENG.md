@@ -23,6 +23,14 @@ L'écriture physique exige toujours une sauvegarde Flash complète, une confirma
 et une relecture. Cette connexion ne démarre pas automatiquement le visualiseur,
 pour ne pas occuper le port pendant la lecture.
 
+Test physique du 27-10-2026 : périphérique USB série COM4, firmware identifié F4HWN v6.1.0,
+banque active de 41344 octets contenant 121 canaux FM. Deux lectures complètes étaient identiques
+(SHA-256 `16f9c8b5ccb9d865ceaca599acf1766737641d8e8285a832680c2f745b02a331`).
+La web publiée a affiché les 121 canaux et préparé 16 PMR446 ; insérer PMR01 a donné
+122 canaux uniquement dans la copie locale, avec écriture bloquée. Seules identification
+et lectures ont été envoyées : aucune écriture, aucun redémarrage ni changement de banque.
+Cela ne valide pas l'écriture physique ni l'APK sur téléphone.
+
 Le visualiseur apparaît au début de la section Quansheng. Il démarre à la fin de la connexion :
 immédiatement avec **Connecter en lecture seule / CAT**, ou après la sauvegarde avec
 **Connecter et sauvegarder**. Il nécessite une image avec K5Viewer activé et sans

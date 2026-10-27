@@ -23,6 +23,14 @@ erfordert weiterhin vollständige Flash-Sicherung, Bestätigung und erneutes Les
 Die neue Kanalverbindung startet den Viewer nicht automatisch, damit der Port beim
 Lesen frei bleibt.
 
+Hardwaretest am 27.10.2026: USB-Seriell-Gerät COM4, erkannte Firmware F4HWN v6.1.0,
+aktive Bank mit 41344 Bytes und 121 FM-Kanälen. Zwei vollständige Lesevorgänge waren bytegleich
+(SHA-256 `16f9c8b5ccb9d865ceaca599acf1766737641d8e8285a832680c2f745b02a331`).
+Die veröffentlichte Web-App zeigte alle 121 Kanäle und bereitete 16 PMR446 vor.
+Einfügen von PMR01 ergab 122 Kanäle ausschließlich in der lokalen Kopie, bei gesperrtem Schreiben.
+Nur Identifikation und Lesen wurden gesendet: kein Schreiben, Neustart oder Bankwechsel.
+Schreiben ins Gerät und die APK auf einem Telefon sind damit nicht validiert.
+
 Der Viewer erscheint am Anfang des Quansheng-Bereichs. Er startet nach Abschluss der Verbindung:
 sofort bei **Nur-Leseverbindung / CAT verbinden** oder nach der Sicherung bei
 **Verbinden und sichern**. Er benötigt ein Image mit aktiviertem K5Viewer und ohne

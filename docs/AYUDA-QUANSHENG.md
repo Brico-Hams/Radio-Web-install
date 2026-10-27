@@ -23,6 +23,14 @@ se pide confirmacion antes de sustituirla. La escritura fisica sigue exigiendo
 respaldo Flash completo, confirmacion y relectura. La nueva conexion de canales no
 inicia automaticamente el visor, para no ocupar el puerto durante la lectura.
 
+Prueba real del 27-10-2026: dispositivo USB serie COM4, firmware identificado
+F4HWN v6.1.0, banco activo de 41344 bytes con 121 canales FM. Dos lecturas completas
+coincidieron byte a byte (SHA-256 `16f9c8b5ccb9d865ceaca599acf1766737641d8e8285a832680c2f745b02a331`).
+La web publicada mostro los 121 canales y preparo 16 PMR446; insertar PMR01
+dejo 122 canales solo en la copia local y con la escritura bloqueada. Solo se
+enviaron identificacion y lecturas: no hubo escritura, reinicio ni cambio de banco.
+Esto no valida la escritura fisica ni la APK en un telefono.
+
 El visor aparece al principio de Quansheng. Se inicia al terminar la conexion:
 inmediatamente en **Conectar solo lectura / CAT**, o despues del respaldo en
 **Conectar y respaldar**. Requiere una imagen con K5Viewer habilitado y sin

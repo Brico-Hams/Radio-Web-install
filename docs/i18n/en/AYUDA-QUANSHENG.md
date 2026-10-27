@@ -22,6 +22,14 @@ confirmation. Physical writes still require a complete Flash backup, confirmatio
 and rereading. The new channel connection does not start the viewer automatically,
 so it does not occupy the port during reading.
 
+Physical test on 2026-10-27: USB serial device COM4, identified firmware F4HWN v6.1.0,
+41344-byte active bank with 121 FM channels. Two complete reads matched byte for byte
+(SHA-256 `16f9c8b5ccb9d865ceaca599acf1766737641d8e8285a832680c2f745b02a331`).
+The published web app displayed all 121 channels and prepared 16 PMR446 channels;
+inserting PMR01 produced 122 channels only in the local copy, with writing disabled.
+Only identification and read commands were sent: no writing, reboot, or bank change.
+This does not validate physical writing or the APK on a phone.
+
 The viewer appears at the top of the Quansheng section. It starts when the
 connection completes: immediately with **Connect read-only / CAT**, or after
 the backup with **Connect and back up**. It requires an image with K5Viewer

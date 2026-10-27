@@ -22,6 +22,14 @@ Salvala prima di rileggere: la sostituzione richiede conferma. La scrittura fisi
 richiede ancora backup Flash completo, conferma e rilettura. La nuova connessione
 non avvia automaticamente il visualizzatore, per lasciare libera la porta durante la lettura.
 
+Test fisico del 27-10-2026: dispositivo USB seriale COM4, firmware identificato F4HWN v6.1.0,
+banco attivo di 41344 byte con 121 canali FM. Due letture complete erano identiche byte per byte
+(SHA-256 `16f9c8b5ccb9d865ceaca599acf1766737641d8e8285a832680c2f745b02a331`).
+La web pubblicata ha mostrato tutti i 121 canali e preparato 16 PMR446; inserire PMR01
+ha prodotto 122 canali soltanto nella copia locale, con scrittura bloccata. Sono stati
+inviati soltanto identificazione e letture: nessuna scrittura, riavvio o cambio banco.
+Questo non valida la scrittura fisica né l'APK su un telefono.
+
 Il visualizzatore compare all'inizio della sezione Quansheng. Si avvia al termine della connessione:
 subito con **Connetti in sola lettura / CAT**, oppure dopo il backup con
 **Connetti e crea backup**. Richiede un'immagine con K5Viewer abilitato e senza
