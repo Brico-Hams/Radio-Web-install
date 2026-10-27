@@ -134,11 +134,13 @@ Ver [construccion, controles, licencias y limites](docs/BRICOHAMS-FIRMWARE.md#nu
 
 ### Android Bricohams Beta
 
-La APK nativa 0.7.1-beta incluye contactos locales editables con busqueda e importacion ADIF con vista previa, exportacion
+La APK nativa 0.8.0-beta incluye contactos locales editables con busqueda e importacion ADIF con vista previa, exportacion
 ADIF/JSON, sesiones ARDF con historial, estadisticas, segmentos GPS filtrados y observaciones GPS puntuales, y Morse de texto
 y WAV PCM experimental. Incorpora CAT RX temporal por USB CDC ACM y
-adaptadores CH34x/CP210x/FTDI/Prolific reconocidos. Calcula pases SGP4 offline
-con TLE importados y permite seguimiento Doppler RX del pase seleccionado.
+adaptadores CH34x/CP210x/FTDI/Prolific reconocidos. Satelites al estilo Look4sat con marca
+Bricohams: TLE de CelesTrak y frecuencias de SatNOGS descargados a peticion (o
+TLE importados), pases SGP4 offline con radar polar y mapa mundial, Doppler RX
+del pase por CAT, grabacion del pase a WAV y busqueda de imagenes Robot36.
 Captura microfono en primer plano hasta 60 s para decodificar despues Morse
 o Robot36; no es decodificacion continua. No incluye escritura de canales ni
 subida LoTW. Decodifica SSTV Robot36 experimental desde WAV y exporta PNG.

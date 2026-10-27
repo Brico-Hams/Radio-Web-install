@@ -2,10 +2,11 @@
 
 ## Alcance de la APK
 
-Aplicacion nativa Kotlin para Android 8.0/API 26 o posterior, sin servidor,
-cuentas ni conexion a Internet. Es una implementacion independiente: no
+Aplicacion nativa Kotlin para Android 8.0/API 26 o posterior, sin servidor
+ni cuentas. Solo usa Internet cuando pides actualizar TLE y frecuencias de
+satelites. Es una implementacion independiente: no
 incluye codigo ni recursos de Look4sat, Robot36 o HAMRS.
-La version `0.7.1-beta` no sustituye sus funciones completas.
+La version `0.8.0-beta` no sustituye sus funciones completas.
 
 | Funcion | Estado |
 | --- | --- |
@@ -40,8 +41,9 @@ Las ordenes CAT RX opcionales cambian temporalmente la sintonia de recepcion,
 no la programacion persistente de la radio.
 
 Los datos se guardan en una base SQLite privada de la aplicacion. No hay
-telemetria, permiso INTERNET, servicio de ubicacion en segundo plano ni
-subida de datos. La copia automatica y transferencia de datos del sistema
+telemetria, servicio de ubicacion en segundo plano ni subida de datos. El
+permiso INTERNET solo se usa para descargar por HTTPS, al pulsarlo, los TLE
+de CelesTrak y las frecuencias de SatNOGS; no se envian datos propios. La copia automatica y transferencia de datos del sistema
 estan desactivadas en el manifiesto/reglas de extraccion.
 **Exporta antes de desinstalar:** desinstalar borra los datos locales.
 Al actualizar desde una version sin libros (esquema SQLite 1), la aplicacion
@@ -579,7 +581,7 @@ Salidas:
 Para entregar un conjunto verificado en Windows, con los mismos requisitos:
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.7.1-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.0-beta'
 ```
 
 El destino debe ser nuevo. El script ejecuta pruebas/lint, verifica las firmas
