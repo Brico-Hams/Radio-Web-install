@@ -77,6 +77,23 @@ function inspectFirmware(bytes) {
   return result;
 }
 
+function inspectMemoryUsage(sizeReport, imageBytes) {
+  const sections = [...sizeReport.matchAll(/^(\.\S+)\s+(\d+)\s+(\d+)\s*$/gm)]
+    .map(([, name, size, address]) => ({ name, size: Number(size), address: Number(address) }));
+  for (const required of [".isr_vector", ".text", ".data", ".bss", ".mb_ramfunc", ".mb_workspace", "._user_heap_stack"]) {
+    assert.equal(sections.filter(section => section.name === required).length, 1, `Seccion ausente o duplicada: ${required}`);
+  }
+  const ramStart = 0x20000000;
+  const ramCapacityBytes = 0x4000;
+  const ram = sections.filter(section => section.address >= ramStart && section.address < 0x30000000);
+  const ramUsedBytes = Math.max(...ram.map(section => section.address + section.size)) - ramStart;
+  assert(ramUsedBytes <= ramCapacityBytes, "La imagen excede los 16 KiB de RAM.");
+  assert(Number.isInteger(imageBytes) && imageBytes > 0 && imageBytes <= 0x1d800, "La imagen excede el slot de 118 KiB.");
+  // The multiboot RAM stub overlaps its workspace; count address ranges, not section sums.
+  return { ramUsedBytes, ramCapacityBytes, ramFreeBytes: ramCapacityBytes - ramUsedBytes,
+    imageBytes, slotCapacityBytes: 0x1d800, slotFreeBytes: 0x1d800 - imageBytes };
+}
+
 function brandWelcome(text) {
   const file = "App/ui/welcome.c";
   let result = text.replace(/\r\n/g, "\n");
@@ -148,13 +165,14 @@ function build(args) {
   const bytes = fs.readFileSync(path.join(binary, "bricohams.bin"));
   const inspected = inspectFirmware(bytes);
   const sizeReport = capture("arm-none-eabi-size", ["-A", path.join(binary, "bricohams.elf")], work, env);
+  const memory = inspectMemoryUsage(sizeReport, inspected.size);
   const firmware = `bricohams.${args.preset.toLowerCase()}${modules.length ? `.${modules.join(".")}` : ""}.${UPSTREAM.tag}.bin`;
   const info = {
     format: "bricohams-firmware-build", version: 1, firmware, preset: args.preset,
     edition: "Bricohams", hardware: ["UV-K5 V3", "UV-K1"], upstream: UPSTREAM,
     options: plan.delta, effectiveOptions: plan.options,
     sourceDateEpoch: Number(epoch), toolchain: { compiler, cmake, ninja },
-    imageBytes: inspected.size, sourceChangesIncluded: false,
+    imageBytes: inspected.size, memory, sourceChangesIncluded: false,
     hardwareTested: false, derivedFromKarina: false,
     modules, moduleSources, brandingSources, integrationTestedOnHardware: false,
     ...(modules.includes("satellite") ? { catRx: { version: 1, command: 0x7b00,
@@ -195,4 +213,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }
 }
-module.exports = { UPSTREAM, readArguments, resolvePlan, inspectFirmware, brandWelcome, brandLogo, build };
+module.exports = { UPSTREAM, readArguments, resolvePlan, inspectFirmware, inspectMemoryUsage, brandWelcome, brandLogo, build };

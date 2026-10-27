@@ -401,6 +401,49 @@ hacerse con copia completa verificada y una via de recuperacion comprobada.
 
 ### Distribucion por imagenes funcionales
 
+#### Generacion y optimizacion del 27-10-2026
+
+Se generaron Fusion, Labs, ARDF, Satellite y Spectrum desde la base fijada,
+con branding actual y las mismas opciones funcionales documentadas. No se
+incorpora el cambio local de ajustes de Fusion61 ni se escribe la radio.
+Las imagenes nuevas siguen siendo Beta sin validacion fisica; no reemplazan
+automaticamente las imagenes anteriores del catalogo web.
+
+| Perfil | BIN (bytes) | RAM reservada (bytes) | RAM libre (bytes) | Slot libre (bytes) |
+| --- | ---: | ---: | ---: | ---: |
+| Fusion | 107584 | 12160 | 4224 | 13248 |
+| Labs | 114900 | 12544 | 3840 | 5932 |
+| ARDF | 113972 | 12576 | 3808 | 6860 |
+| Satellite | 114836 | 12384 | 4000 | 5996 |
+| Spectrum | 118232 | 13472 | 2912 | 2600 |
+
+El presupuesto es 120832 bytes de imagen y 16384 de RAM. El constructor
+anade `memory` a `build-info.json` y rechaza excesos o secciones obligatorias
+ausentes. Cuenta el extremo de las regiones RAM, incluidos huecos, workspace,
+pila y reservas; no suma dos veces el stub que solapa su workspace.
+La RAM libre no demuestra el maximo consumo dinamico de pila en hardware.
+
+La optimizacion ARDF conserva el estado y la precision fraccional en 64 bits,
+pero omite el modulo cuando no se cruza el ciclo. Los ciclos validados duran
+como maximo 9999900 ms: el calculo de baliza y tiempo restante usa 32 bits.
+El desensamblado Cortex-M0+ confirma que el camino habitual pasa de tres
+divisiones de 64 bits a una de 64 y una de 32; tras un salto de ciclo se
+mantiene el modulo completo. No se cambian correcciones ppm, sincronizacion,
+avisos ni tratamiento del desbordamiento del reloj.
+
+Una compilacion ARDF de referencia con el mismo codigo restante ocupa
+113960 bytes; la optimizada ocupa 113972: **12 bytes mas, igual RAM**.
+No se afirma una reduccion global del tamano ni una medida de latencia RF.
+La prueba diferencial compara 200000 actualizaciones con la formula original,
+incluyendo 1-10 balizas, duraciones extremas, correcciones positivas/negativas,
+sincronizacion al final del ciclo y saltos de reloj hasta UINT32_MAX.
+
+Los artefactos estan en `firmware-builds/bricohams-20261027`, separados por
+perfil, con BIN, ELF, mapa, informes, licencias y SHA-256. Antes de probarlos
+en hardware, exportar el respaldo completo y comprobar el modelo y los hashes.
+Spectrum conserva solo 2600 bytes de margen de slot: no anadir funciones sin
+recompilar y revisar ambos presupuestos.
+
 #### Recompilacion y pruebas de modulos del 26-10-2026
 
 Se recompilaron los tres perfiles desde el commit fijado, con branding

@@ -1,11 +1,31 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { readArguments, resolvePlan, inspectFirmware, brandWelcome, brandLogo, UPSTREAM } = require("../scripts/build-bricohams.cjs");
+const { readArguments, resolvePlan, inspectFirmware, inspectMemoryUsage, brandWelcome, brandLogo, UPSTREAM } = require("../scripts/build-bricohams.cjs");
 const { modulePlan, replaceOnce } = require("../scripts/bricohams-modules.cjs");
 const { inspectResident } = require("../scripts/build-platform-resident.cjs");
 const { OP, STATE, encodeRequest, decodeReply, uploadPackage } = require("../scripts/platform-transfer.cjs");
 const { crc32 } = require("../radio-core.js");
+
+test("informe de memoria incluye reservas, huecos y solapamiento del restaurador sin contarlo dos veces", () => {
+  const report = [
+    ".isr_vector 192 134227968", ".text 102368 134228160", ".rodata 10360 134330528",
+    ".data 136 536870912", ".noncacheable 352 536871048", ".mb_ramfunc 888 536871552",
+    ".mb_workspace 4096 536871552", ".bss 6816 536875648", "._user_heap_stack 1024 536882464",
+    ".debug_frame 524 0"
+  ].join("\r\n");
+  assert.deepEqual(inspectMemoryUsage(report, 113960), {
+    ramUsedBytes: 12576, ramCapacityBytes: 16384, ramFreeBytes: 3808,
+    imageBytes: 113960, slotCapacityBytes: 120832, slotFreeBytes: 6872
+  });
+  assert.equal(inspectMemoryUsage(report, 120832).slotFreeBytes, 0);
+  assert.equal(inspectMemoryUsage(report.replace("1024 536882464", "4832 536882464"), 1024).ramFreeBytes, 0);
+  assert.throws(() => inspectMemoryUsage(report.replace("1024 536882464", "4833 536882464"), 1024), /RAM/);
+  assert.throws(() => inspectMemoryUsage(`${report}\n.extra 4 536887296`, 1024), /RAM/);
+  assert.throws(() => inspectMemoryUsage(report.replace(".bss", ".missing"), 1024), /Seccion/);
+  assert.throws(() => inspectMemoryUsage(`${report}\n.data 0 536870912`, 1024), /duplicada/);
+  for (const size of [0, -1, 120833, 1.5, NaN]) assert.throws(() => inspectMemoryUsage(report, size), /slot/);
+});
 
 function transferReply(op, session, received, state, status = 0, install = 0) {
   const bytes = Buffer.alloc(32);

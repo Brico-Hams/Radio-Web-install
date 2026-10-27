@@ -393,6 +393,49 @@ verified full backup and a verified recovery path.
 
 ### Distribution by Functional Image
 
+#### Generation and Optimization on 2026-10-27
+
+Fusion, Labs, ARDF, Satellite, and Spectrum were generated from the pinned
+baseline with current branding and the same documented functional options.
+The local Fusion61 settings change is excluded and no radio is written.
+New images remain Beta without physical validation and do not automatically
+replace earlier images in the web catalog.
+
+| Profile | BIN (bytes) | Reserved RAM (bytes) | Free RAM (bytes) | Free slot (bytes) |
+| --- | ---: | ---: | ---: | ---: |
+| Fusion | 107584 | 12160 | 4224 | 13248 |
+| Labs | 114900 | 12544 | 3840 | 5932 |
+| ARDF | 113972 | 12576 | 3808 | 6860 |
+| Satellite | 114836 | 12384 | 4000 | 5996 |
+| Spectrum | 118232 | 13472 | 2912 | 2600 |
+
+Budgets are 120832 image bytes and 16384 RAM bytes. The builder adds `memory`
+to `build-info.json` and rejects overflows or missing required sections.
+It counts the RAM region endpoint, including gaps, workspace, stack, and
+reservations, without counting the stub's overlapping workspace twice.
+Free RAM does not demonstrate maximum dynamic stack use on hardware.
+
+The ARDF optimization preserves 64-bit state and fractional precision but
+skips the modulo operation when the cycle is not crossed. Validated cycles
+last at most 9999900 ms, so fox and elapsed-time calculations use 32 bits.
+Cortex-M0+ disassembly confirms that the usual path changes from three
+64-bit divisions to one 64-bit and one 32-bit division; a cycle jump still
+uses the full modulo operation. Ppm corrections, synchronization, warnings,
+and clock wrap handling are unchanged.
+
+A reference ARDF build with all other code identical is 113960 bytes;
+the optimized image is 113972: **12 extra bytes, unchanged RAM**.
+No overall size reduction or RF latency measurement is claimed.
+The differential test compares 200000 updates with the original formula,
+including 1-10 foxes, extreme durations, positive/negative corrections,
+synchronization at cycle end, and clock jumps up to UINT32_MAX.
+
+Artifacts are in `firmware-builds/bricohams-20261027`, separated by profile,
+with BIN, ELF, map, reports, licenses, and SHA-256. Before hardware testing,
+export a complete backup and verify the model and hashes. Spectrum has only
+2600 bytes of slot headroom: do not add features without rebuilding and
+checking both budgets.
+
 #### Module Rebuild and Tests on 2026-10-26
 
 The three profiles were rebuilt from the pinned commit, with Bricohams branding

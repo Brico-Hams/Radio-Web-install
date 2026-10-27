@@ -51,12 +51,15 @@ bh_ardf_result bh_ardf_update(bh_ardf *state, uint32_t tick_ms, bh_ardf_view *vi
         return BH_ARDF_OK;
 
     const uint64_t rate = (uint64_t)(INT32_C(1000000) + state->config.correction_ppm);
-    const uint64_t cycle = (uint64_t)state->config.duration_ms * state->config.fox_count * BH_ARDF_SCALE;
-    state->phase_scaled = (state->phase_scaled + (uint64_t)delta * rate) % cycle;
-    const uint64_t phase_ms = state->phase_scaled / BH_ARDF_SCALE;
+    const uint64_t cycle = (uint64_t)(state->config.duration_ms * state->config.fox_count) * BH_ARDF_SCALE;
+    const uint64_t advanced = state->phase_scaled + (uint64_t)delta * rate;
+    /* Most updates stay in the same cycle; long gaps still reduce exactly. */
+    state->phase_scaled = advanced < cycle ? advanced : advanced % cycle;
+    /* Validated cycles are at most 9,999,900 ms, so the remaining division is 32-bit. */
+    const uint32_t phase_ms = (uint32_t)(state->phase_scaled / BH_ARDF_SCALE);
     view->timed = true;
     view->fox = (uint8_t)(phase_ms / state->config.duration_ms + 1);
-    view->elapsed_ms = (uint32_t)(phase_ms % state->config.duration_ms);
+    view->elapsed_ms = phase_ms % state->config.duration_ms;
     view->remaining_ms = state->config.duration_ms - view->elapsed_ms;
     view->end_notice = state->config.end_notice_ms != 0 && view->remaining_ms <= state->config.end_notice_ms;
     return BH_ARDF_OK;

@@ -408,6 +408,50 @@ démarrage devra être effectué avec une copie complète vérifiée et une voie
 récupération éprouvée.
 ### Distribution par images fonctionnelles
 
+#### Génération et optimisation du 27-10-2026
+
+Fusion, Labs, ARDF, Satellite et Spectrum ont été générés depuis la base
+fixée, avec l'identité actuelle et les mêmes options fonctionnelles
+documentées. La modification locale des réglages Fusion61 est exclue et
+aucune écriture radio n'est effectuée. Ces images restent Beta sans
+validation physique et ne remplacent pas automatiquement le catalogue web.
+
+| Profil | BIN (octets) | RAM réservée (octets) | RAM libre (octets) | Slot libre (octets) |
+| --- | ---: | ---: | ---: | ---: |
+| Fusion | 107584 | 12160 | 4224 | 13248 |
+| Labs | 114900 | 12544 | 3840 | 5932 |
+| ARDF | 113972 | 12576 | 3808 | 6860 |
+| Satellite | 114836 | 12384 | 4000 | 5996 |
+| Spectrum | 118232 | 13472 | 2912 | 2600 |
+
+Les limites sont 120832 octets d'image et 16384 de RAM. Le constructeur
+ajoute `memory` à `build-info.json` et rejette dépassements ou sections
+obligatoires absentes. Il compte l'extrémité des régions RAM, y compris
+trous, workspace, pile et réserves, sans compter deux fois le chevauchement
+du stub avec son workspace. La RAM libre ne prouve pas l'usage dynamique
+maximal de la pile sur matériel.
+
+L'optimisation ARDF conserve état et précision fractionnaire en 64 bits,
+mais évite le modulo lorsque le cycle n'est pas franchi. Les cycles validés
+durent au maximum 9999900 ms : le calcul de balise et du temps écoulé passe
+en 32 bits. Le désassemblage Cortex-M0+ confirme que le chemin habituel
+passe de trois divisions 64 bits à une 64 bits et une 32 bits ; un saut de
+cycle conserve le modulo complet. Corrections ppm, synchronisation, alertes
+et gestion du débordement de l'horloge restent inchangées.
+
+La référence ARDF avec le reste du code identique occupe 113960 octets ;
+l'image optimisée 113972 : **12 octets de plus, RAM identique**.
+Aucune réduction globale de taille ni mesure de latence RF n'est revendiquée.
+Le test différentiel compare 200000 mises à jour à la formule initiale :
+1-10 balises, durées extrêmes, corrections positives/négatives,
+synchronisation en fin de cycle et sauts d'horloge jusqu'à UINT32_MAX.
+
+Les artefacts sont dans `firmware-builds/bricohams-20261027`, séparés par
+profil, avec BIN, ELF, carte, rapports, licences et SHA-256. Avant tout essai
+matériel, exporter une sauvegarde complète et vérifier modèle et empreintes.
+Spectrum ne garde que 2600 octets libres dans le slot : ne pas ajouter de
+fonctions sans recompiler et contrôler les deux budgets.
+
 #### Recompilation et tests des modules du 26-10-2026
 
 Les trois profils ont été recompilés à partir du commit figé, avec le branding

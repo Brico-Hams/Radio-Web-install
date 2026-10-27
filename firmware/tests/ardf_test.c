@@ -7,8 +7,50 @@
     fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #expression); return EXIT_FAILURE; \
 } } while (0)
 
+static int check_timer_equivalence(void)
+{
+    const uint32_t durations[] = {1000, 1001, 60000, 999990};
+    const int32_t corrections[] = {-50000, -1000, 0, 1000, 50000};
+    const uint32_t deltas[] = {0, 1, 10, 999, 1000, 60000, 999990, UINT32_MAX, UINT32_MAX / 2};
+    for (uint8_t foxes = 1; foxes <= BH_ARDF_MAX_FOXES; ++foxes) {
+        for (size_t duration = 0; duration < sizeof(durations) / sizeof(durations[0]); ++duration) {
+            for (size_t correction = 0; correction < sizeof(corrections) / sizeof(corrections[0]); ++correction) {
+                const bh_ardf_config config = {foxes, durations[duration], 500,
+                    corrections[correction], 3, 31};
+                bh_ardf state;
+                bh_ardf_view view;
+                uint32_t tick = UINT32_MAX - 100;
+                uint64_t phase = 0;
+                const uint64_t cycle = (uint64_t)config.duration_ms * foxes * UINT64_C(1000000);
+                const uint64_t rate = (uint64_t)(INT32_C(1000000) + config.correction_ppm);
+                CHECK(bh_ardf_init(&state, &config, tick) == BH_ARDF_OK);
+                for (uint32_t iteration = 0; iteration < 1000; ++iteration) {
+                    if (iteration % 101 == 0) {
+                        CHECK(bh_ardf_sync(&state, foxes, config.duration_ms - 1, tick) == BH_ARDF_OK);
+                        phase = ((uint64_t)(foxes - 1) * config.duration_ms + config.duration_ms - 1) *
+                            UINT64_C(1000000);
+                    }
+                    const uint32_t delta = deltas[iteration % (sizeof(deltas) / sizeof(deltas[0]))];
+                    tick += delta;
+                    phase = (phase + (uint64_t)delta * rate) % cycle;
+                    const uint64_t milliseconds = phase / UINT64_C(1000000);
+                    CHECK(bh_ardf_update(&state, tick, &view) == BH_ARDF_OK);
+                    CHECK(state.phase_scaled == phase);
+                    CHECK(view.timed);
+                    CHECK(view.fox == milliseconds / config.duration_ms + 1);
+                    CHECK(view.elapsed_ms == milliseconds % config.duration_ms);
+                    CHECK(view.remaining_ms == config.duration_ms - view.elapsed_ms);
+                    CHECK(view.end_notice == (view.remaining_ms <= config.end_notice_ms));
+                }
+            }
+        }
+    }
+    return EXIT_SUCCESS;
+}
+
 int main(void)
 {
+    CHECK(check_timer_equivalence() == EXIT_SUCCESS);
     bh_ardf state = {0};
     bh_ardf_view view;
     const bh_ardf_config base = {5, 60000, 5000, 0, 3, 31};

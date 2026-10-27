@@ -383,6 +383,50 @@ mit einer vollständig geprüften Sicherung und einem verifizierten Wiederherste
 
 ### Verteilung auf Funktions-Images
 
+#### Erzeugung und Optimierung vom 27.10.2026
+
+Fusion, Labs, ARDF, Satellite und Spectrum wurden aus der festgelegten Basis
+mit aktuellem Branding und denselben dokumentierten Funktionsoptionen
+erzeugt. Die lokale Fusion61-Einstellungsänderung bleibt ausgeschlossen;
+es erfolgt kein Schreiben auf das Funkgerät. Die Images bleiben Beta ohne
+Hardwarevalidierung und ersetzen den Webkatalog nicht automatisch.
+
+| Profil | BIN (Bytes) | Reserviertes RAM (Bytes) | Freies RAM (Bytes) | Freier Slot (Bytes) |
+| --- | ---: | ---: | ---: | ---: |
+| Fusion | 107584 | 12160 | 4224 | 13248 |
+| Labs | 114900 | 12544 | 3840 | 5932 |
+| ARDF | 113972 | 12576 | 3808 | 6860 |
+| Satellite | 114836 | 12384 | 4000 | 5996 |
+| Spectrum | 118232 | 13472 | 2912 | 2600 |
+
+Die Grenzen betragen 120832 Image-Bytes und 16384 RAM-Bytes. Der Builder
+ergänzt `memory` in `build-info.json` und weist Überschreitungen oder fehlende
+Pflichtsektionen zurück. Er zählt das Ende der RAM-Bereiche einschließlich
+Lücken, Workspace, Stack und Reservierungen, ohne den mit dem Workspace
+überlappenden Stub doppelt zu zählen. Freies RAM belegt nicht den maximalen
+dynamischen Stackbedarf auf der Hardware.
+
+Die ARDF-Optimierung erhält Zustand und Bruchteilspräzision in 64 Bit,
+überspringt jedoch Modulo, wenn keine Zyklusgrenze überschritten wird.
+Validierte Zyklen dauern höchstens 9999900 ms: Fuchs- und Zeitberechnungen
+verwenden 32 Bit. Die Cortex-M0+-Disassemblierung bestätigt im üblichen Pfad
+statt drei 64-Bit-Divisionen eine 64-Bit- und eine 32-Bit-Division; bei einem
+Zyklussprung bleibt das vollständige Modulo erhalten. Ppm-Korrekturen,
+Synchronisation, Warnungen und Behandlung des Zählerüberlaufs bleiben gleich.
+
+Der ARDF-Referenzbuild mit ansonsten identischem Code belegt 113960 Bytes,
+das optimierte Image 113972: **12 Bytes mehr, gleiches RAM**.
+Eine allgemeine Größenreduktion oder gemessene RF-Latenz wird nicht behauptet.
+Der Differenztest vergleicht 200000 Aktualisierungen mit der Originalformel:
+1-10 Füchse, extreme Dauern, positive/negative Korrekturen, Synchronisation
+am Zyklusende und Zählersprünge bis UINT32_MAX.
+
+Die Artefakte liegen unter `firmware-builds/bricohams-20261027`, nach Profil
+getrennt, mit BIN, ELF, Map, Berichten, Lizenzen und SHA-256. Vor Hardwaretests
+eine vollständige Sicherung exportieren und Modell sowie Hashes prüfen.
+Spectrum hat nur 2600 Bytes Slotreserve: keine Funktionen ergänzen, ohne
+neu zu kompilieren und beide Speicherbudgets zu prüfen.
+
 #### Neukompilierung und Modultests vom 26.10.2026
 
 Die drei Profile wurden aus dem festgelegten Commit mit Bricohams-Branding

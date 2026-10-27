@@ -399,6 +399,49 @@ e `installableWithCurrentWeb: false`. Il primo test di avvio dovrà
 essere eseguito con copia completa verificata e una via di recupero collaudata.
 ### Distribuzione per immagini funzionali
 
+#### Generazione e ottimizzazione del 27-10-2026
+
+Fusion, Labs, ARDF, Satellite e Spectrum sono stati generati dalla base
+fissata, con il branding attuale e le stesse opzioni funzionali documentate.
+La modifica locale alle impostazioni Fusion61 è esclusa e non si scrive
+sulla radio. Le immagini restano Beta senza validazione fisica e non
+sostituiscono automaticamente quelle precedenti nel catalogo web.
+
+| Profilo | BIN (byte) | RAM riservata (byte) | RAM libera (byte) | Slot libero (byte) |
+| --- | ---: | ---: | ---: | ---: |
+| Fusion | 107584 | 12160 | 4224 | 13248 |
+| Labs | 114900 | 12544 | 3840 | 5932 |
+| ARDF | 113972 | 12576 | 3808 | 6860 |
+| Satellite | 114836 | 12384 | 4000 | 5996 |
+| Spectrum | 118232 | 13472 | 2912 | 2600 |
+
+I limiti sono 120832 byte di immagine e 16384 di RAM. Il costruttore aggiunge
+`memory` a `build-info.json` e rifiuta superamenti o sezioni obbligatorie
+mancanti. Conta l'estremo delle regioni RAM, inclusi spazi, workspace, stack
+e riserve, senza contare due volte lo stub sovrapposto al workspace.
+La RAM libera non dimostra l'uso dinamico massimo dello stack su hardware.
+
+L'ottimizzazione ARDF conserva stato e precisione frazionaria a 64 bit, ma
+salta il modulo quando non si attraversa il ciclo. I cicli validati durano
+al massimo 9999900 ms: i calcoli della volpe e del tempo trascorso usano
+32 bit. Il disassemblato Cortex-M0+ conferma che il percorso abituale passa
+da tre divisioni a 64 bit a una a 64 e una a 32; dopo un salto di ciclo resta
+il modulo completo. Correzioni ppm, sincronizzazione, avvisi e gestione
+del trabocco del contatore restano invariati.
+
+La compilazione ARDF di riferimento con il resto del codice identico occupa
+113960 byte; quella ottimizzata 113972: **12 byte in più, stessa RAM**.
+Non si dichiara una riduzione globale della dimensione né una latenza RF misurata.
+Il test differenziale confronta 200000 aggiornamenti con la formula originale:
+1-10 volpi, durate estreme, correzioni positive/negative, sincronizzazione
+a fine ciclo e salti di contatore fino a UINT32_MAX.
+
+Gli artefatti sono in `firmware-builds/bricohams-20261027`, separati per
+profilo, con BIN, ELF, mappa, rapporti, licenze e SHA-256. Prima delle prove
+hardware esportare un backup completo e verificare modello e hash.
+Spectrum conserva solo 2600 byte di margine nello slot: non aggiungere
+funzioni senza ricompilare e controllare entrambi i limiti.
+
 #### Ricompilazione e test dei moduli del 26-10-2026
 
 I tre profili sono stati ricompilati dal commit fissato, con branding
