@@ -5,8 +5,6 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import java.io.Closeable
-import java.io.IOException
-import java.util.concurrent.CancellationException
 
 internal interface PcmSource : Closeable {
     fun start()
@@ -20,17 +18,17 @@ internal class MicrophoneSource : PcmSource {
     constructor() {
         val minimum = AudioRecord.getMinBufferSize(LiveAudio.SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT)
-        check(minimum > 0) { "El dispositivo no admite PCM mono a 48 kHz." }
+        checkUi(minimum > 0) { UiText(R.string.err_audio_no_pcm48) }
         recorder = AudioRecord(MediaRecorder.AudioSource.MIC, LiveAudio.SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minimum, 19200))
         if (recorder.state != AudioRecord.STATE_INITIALIZED) {
             recorder.release()
-            throw IOException("No se pudo inicializar el microfono.")
+            throw LocalizedIOException(UiText(R.string.err_mic_init))
         }
     }
     override fun start() {
         recorder.startRecording()
-        check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "El microfono no esta grabando." }
+        checkUi(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) { UiText(R.string.err_mic_not_recording) }
     }
     override fun read(buffer: ShortArray, count: Int) =
         recorder.read(buffer, 0, count, AudioRecord.READ_BLOCKING)
@@ -62,27 +60,27 @@ internal class LiveAudio(private val sourceFactory: () -> PcmSource = { Micropho
         stop()
     }
     fun record(): PcmAudio {
-        synchronized(lock) { check(!used) { "La captura ya se ha utilizado." }; used = true }
+        synchronized(lock) { checkUi(!used) { UiText(R.string.err_capture_used) }; used = true }
         val samples = ShortArray(SAMPLE_RATE * MAX_SECONDS)
         val buffer = ShortArray(4800)
         var size = 0
         try {
             synchronized(lock) {
-                if (cancelled || finish) throw CancellationException("Captura cancelada antes de empezar.")
+                if (cancelled || finish) throw LocalizedCancellationException(UiText(R.string.err_capture_cancelled_before_start))
                 val opened = sourceFactory()
                 source = opened
                 opened.start()
                 recording = true
             }
             while (!finish && size < samples.size) {
-                if (Thread.currentThread().isInterrupted) throw CancellationException("Captura interrumpida.")
+                if (Thread.currentThread().isInterrupted) throw LocalizedCancellationException(UiText(R.string.err_capture_interrupted))
                 val current = checkNotNull(source)
                 val count = current.read(buffer, minOf(buffer.size, samples.size - size))
                 if (count <= 0) {
                     if (finish) break
-                    throw IOException("El microfono no entrego audio PCM: $count.")
+                    throw LocalizedIOException(UiText(R.string.err_mic_no_pcm, count))
                 }
-                check(count <= buffer.size && count <= samples.size - size) { "Lectura PCM fuera de limites." }
+                checkUi(count <= buffer.size && count <= samples.size - size) { UiText(R.string.err_pcm_read_bounds) }
                 buffer.copyInto(samples, size, 0, count)
                 size += count
             }
@@ -95,8 +93,8 @@ internal class LiveAudio(private val sourceFactory: () -> PcmSource = { Micropho
                 }
             }
         }
-        if (cancelled) throw CancellationException("Captura cancelada; audio descartado.")
-        require(size >= SAMPLE_RATE / 10) { "Graba al menos 0.1 segundos antes de decodificar." }
+        if (cancelled) throw LocalizedCancellationException(UiText(R.string.err_capture_cancelled_discarded))
+        requireUi(size >= SAMPLE_RATE / 10) { UiText(R.string.err_capture_too_short) }
         return PcmAudio(SAMPLE_RATE, samples.copyOf(size))
     }
 }

@@ -38,7 +38,7 @@ jobs:
           sha256sum debug/app-debug.apk androidTest/debug/app-debug-androidTest.apk > SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: bricohams-android-0.8.0-beta-debug
+          name: bricohams-android-0.8.1-beta-debug
           path: |
             android/app/build/outputs/apk/debug/app-debug.apk
             android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
@@ -55,7 +55,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: bricohams-android-0.8.0-beta-debug
+          name: bricohams-android-0.8.1-beta-debug
           path: android-artifact
       - name: Attach the debug-signed beta APK to the release
         env:
@@ -64,7 +64,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir upload
-          cp "$(find android-artifact -path '*apk/debug/app-debug.apk')" upload/bricohams-android-0.8.0-beta-debug.apk
+          cp "$(find android-artifact -path '*apk/debug/app-debug.apk')" upload/bricohams-android-0.8.1-beta-debug.apk
+          cp "$(find android-artifact -path '*apk/androidTest/debug/app-debug-androidTest.apk')" upload/bricohams-android-0.8.1-beta-androidTest.apk
           (cd upload && sha256sum -- * > SHA256SUMS-android && cat SHA256SUMS-android)
           for attempt in $(seq 1 40); do
             gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break

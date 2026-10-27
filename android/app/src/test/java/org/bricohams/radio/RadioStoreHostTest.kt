@@ -30,7 +30,7 @@ import java.time.Instant
 import java.io.ByteArrayInputStream
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28])
+@Config(sdk = [28], qualifiers = "es")
 class RadioStoreHostTest {
     private val context get() = RuntimeEnvironment.getApplication()
     @Before fun cleanDatabase() { removeFixture() }

@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Erste Schritte mit Satelliten: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Erste Schritte mit Satelliten | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-iniciacion-satelite.html">
+  <link rel="alternate" hreflang="en" href="ayuda-iniciacion-satelite.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-iniciacion-satelite.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-iniciacion-satelite.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-iniciacion-satelite.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda.html">App-Hilfe (Spanisch)</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-iniciacion-satelite.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-iniciacion-satelite.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-iniciacion-satelite.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-iniciacion-satelite.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-iniciacion-satelite.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#origen-y-creditos">Ursprung und Danksagungen</a></li><li><a href="#contenido">Inhalt</a></li><li><a href="#que-es-un-satelite-de-radioaficionado">Was ist ein Amateurfunksatellit</a></li><li><a href="#quien-puede-escuchar-y-quien-puede-transmitir">Wer darf empfangen und wer darf senden</a></li><li><a href="#conceptos-del-pase">Begriffe zum Überflug</a></li><li><a href="#hora-utc-localizador-y-coordenadas">UTC-Zeit, Locator und Koordinaten</a></li><li><a href="#predecir-pases-y-saber-si-el-satelite-esta-activo">Überflüge vorhersagen und Satellitenaktivität prüfen</a></li><li><a href="#efecto-doppler">Doppler-Effekt</a></li><li><a href="#satelites-fm-para-empezar">FM-Satelliten für den Einstieg</a></li><li><a href="#equipo-de-la-estacion">Stationsausrüstung</a></li><li><a href="#operar-con-bh-satelite-en-la-uv-k5">Betrieb mit BH Satélite auf dem UV-K5</a></li><li><a href="#como-hacer-un-qso-por-satelite">So führst du ein QSO über Satellit</a></li><li><a href="#registrar-y-confirmar-contactos">Kontakte protokollieren und bestätigen</a></li><li><a href="#sstv-y-aprs-desde-la-iss">SSTV und APRS von der ISS</a></li><li><a href="#lista-de-comprobacion-del-pase">Checkliste für den Überflug</a></li><li><a href="#glosario">Glossar</a></li><li><a href="#referencias">Quellen</a></li></ul></nav>
+    <article class="panel"><h1 id="iniciacion-al-satelite">Erste Schritte mit Satelliten</h1>
+<p>Autoren: Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF und Pedro Roca, Gründer und Vorstandsmitglieder von Bricohams. Informationen: <a href="https://bricohams.org" target="_blank" rel="noopener noreferrer">https://bricohams.org</a> und <a href="https://bricohams.com" target="_blank" rel="noopener noreferrer">https://bricohams.com</a>.</p>
+<p>Einführungsleitfaden auf Spanisch zum Firmware-Image <strong>BH Satélite</strong> (Bricohams Satelliten) für Quansheng UV-K5 V3/K1. Der Antennenabschnitt hat eine eigene Seite: <a href="ayuda-antenas-satelite.de.html">Antennen für Satelliten</a>.</p>
+<h2 id="origen-y-creditos">Ursprung und Danksagungen</h2>
+<p>Dieser Leitfaden entstand aus der Lektüre von *Radioamadores no Espaço — Guia básico para operar satélites* von Carlos Vicente PT2VM, Version 1.1 vom 04/09/2025, auf Portugiesisch. Der Autor erlaubt die kostenlose, nicht gewinnorientierte Weitergabe, genehmigt jedoch nicht ausdrücklich Übersetzungen oder abgeleitete Werke. Außerdem enthält das Werk Antennendesigns von PY4ZBZ und PY5LO, deren Nutzung PT2VM gestattet wurde.</p>
+<p>Deshalb ist dieses Dokument <strong>keine wörtliche Übersetzung und reproduziert keine Bilder daraus</strong>. Es folgt einem ähnlichen thematischen Ablauf, mit eigenen Texten, Schaubildern und Antennen von Bricohams, angepasst an Spanien und den UV-K5 mit BH Satélite. Wir empfehlen, das Original von PT2VM zu lesen.</p>
+<p>Wenn der Autor die Übersetzung genehmigt, veröffentlichen wir sie separat mit entsprechender Quellenangabe.</p>
+<h2 id="contenido">Inhalt</h2>
+<ol>
+<li><a href="#que-es-un-satelite-de-radioaficionado">Was ist ein Amateurfunksatellit</a></li>
+<li><a href="#quien-puede-escuchar-y-quien-puede-transmitir">Wer darf empfangen und wer darf senden</a></li>
+<li><a href="#conceptos-del-pase">Begriffe zum Überflug</a></li>
+<li><a href="#hora-utc-localizador-y-coordenadas">UTC-Zeit, Locator und Koordinaten</a></li>
+<li><a href="#predecir-pases-y-saber-si-el-satelite-esta-activo">Überflüge vorhersagen und Satellitenaktivität prüfen</a></li>
+<li><a href="#efecto-doppler">Doppler-Effekt</a></li>
+<li><a href="#satelites-fm-para-empezar">FM-Satelliten für den Einstieg</a></li>
+<li><a href="#equipo-de-la-estacion">Stationsausrüstung</a></li>
+<li><a href="#operar-con-bh-satelite-en-la-uv-k5">Betrieb mit BH Satélite auf dem UV-K5</a></li>
+<li><a href="#como-hacer-un-qso-por-satelite">So führst du ein QSO über Satellit</a></li>
+<li><a href="#registrar-y-confirmar-contactos">Kontakte protokollieren und bestätigen</a></li>
+<li><a href="#sstv-y-aprs-desde-la-iss">SSTV und APRS von der ISS</a></li>
+<li><a href="#lista-de-comprobacion-del-pase">Checkliste für den Überflug</a></li>
+<li><a href="#glosario">Glossar</a></li>
+<li><a href="#referencias">Quellen</a></li>
+</ol>
+<h2 id="que-es-un-satelite-de-radioaficionado">Was ist ein Amateurfunksatellit</h2>
+<p>Ein Amateurfunksatellit ist eine Funkstation im Orbit, die auf einer Frequenz empfängt, dem <strong>Uplink</strong>, und auf einer anderen Frequenz, dem <strong>Downlink</strong>, weiterleitet. Viele tragen die Kennung OSCAR, kurz für *Orbiting Satellite Carrying Amateur Radio*, mit einer Seriennummer wie SO-50 oder AO-7.</p>
+<p>Nach ihrer Funktion gibt es drei Haupttypen:</p>
+<ul>
+<li><strong>FM-Repeater.</strong> Sie funktionieren wie ein Bergrepeater, aber in Hunderten Kilometern Höhe. Es ist immer nur ein QSO gleichzeitig möglich; sie sind der beste Einstieg mit einem Handfunkgerät.</li>
+<li><strong>Lineare Transponder.</strong> Sie übertragen einen ganzen Bandabschnitt von mehreren zehn kHz und ermöglichen viele gleichzeitige QSOs in SSB oder CW. Üblicherweise sind Vollduplexgeräte und SSB beim Senden erforderlich.</li>
+<li><strong>Digitale Satelliten und Baken.</strong> Dazu gehören APRS, Telemetrie und SSTV. Viele lassen sich mit einfacher Ausrüstung empfangen.</li>
+</ul>
+<p>Fast alle Satelliten, die wir verwenden, befinden sich im <strong>niedrigen Erdorbit (LEO)</strong>, in 400 bis 1000 km Höhe. Sie umrunden die Erde in etwa 90-100 Minuten; ein Überflug über deine Station dauert 5 bis 15 Minuten. Die Internationale Raumstation (ISS) in rund 400 km Höhe ist der bekannteste bemannte Satellit für Funkamateure.</p>
+<h2 id="quien-puede-escuchar-y-quien-puede-transmitir">Wer darf empfangen und wer darf senden</h2>
+<ul>
+<li><strong>Satellitenempfang</strong> ist allen mit einem geeigneten Empfänger möglich.</li>
+<li><strong>Zum Senden</strong> brauchst du eine gültige Amateurfunkgenehmigung. Halte dich an die Bänder, Betriebsarten und Leistungen der geltenden, im BOE veröffentlichten Vorschriften.</li>
+<li>Die Satellitensegmente der IARU-Region 1 sind <strong>145,800-146,000 MHz</strong> und <strong>435,000-438,000 MHz</strong>. Führe dort keine terrestrischen Gespräche.</li>
+<li><strong>Militärische UHF-Satelliten</strong> wie FleetSatCom oder UHF Follow-On sind keine Amateurfunksatelliten. Ihre Nutzung ist illegal und wird verfolgt. Der UV-K5 darf dafür nicht verwendet werden.</li>
+</ul>
+<h2 id="conceptos-del-pase">Begriffe zum Überflug</h2>
+<figure><a href="docs/atlas/sat-pase-orbital.svg"><img src="docs/atlas/sat-pase-orbital.svg" alt="Geometrie eines Satellitenüberflugs" loading="lazy"></a><figcaption>Geometrie eines Satellitenüberflugs</figcaption></figure>
+<div class="table-scroll"><table><thead><tr><th scope="col">Begriff</th><th scope="col">Bedeutung</th></tr></thead><tbody>
+<tr><td>AOS</td><td>*Acquisition of Signal*: Der Satellit erscheint über dem Horizont</td></tr>
+<tr><td>TCA</td><td>*Time of Closest Approach*: höchste Elevation und geringste Entfernung</td></tr>
+<tr><td>LOS</td><td>*Loss of Signal*: Der Satellit verschwindet hinter dem Horizont</td></tr>
+<tr><td>Azimut</td><td>Horizontale Richtung in Grad: 0 Norden, 90 Osten, 180 Süden, 270 Westen</td></tr>
+<tr><td>Elevation</td><td>Winkel über dem Horizont von 0 bis 90 Grad</td></tr>
+<tr><td>Fußabdruck</td><td>Gebiet der Erde, das der Satellit zu einem bestimmten Zeitpunkt abdeckt</td></tr>
+<tr><td>TLE / Keps</td><td>Orbitparameter, mit denen Programme Überflüge berechnen</td></tr>
+</tbody></table></div>
+<p>Zwei Stationen können miteinander kommunizieren, wenn beide zur gleichen Zeit innerhalb des Fußabdrucks liegen. Bei einem LEO-Satelliten beträgt die typische Reichweite etwa 4000-5000 km. Von Spanien aus ist der Kontakt mit weiten Teilen Europas und Nordafrikas möglich.</p>
+<p>Überflüge mit einer maximalen Elevation unter 15-20 Grad sind kurz und schwach; Gebäude und Berge können sie abschatten. Wähle zum Einstieg Überflüge mit mehr als 30 Grad.</p>
+<h2 id="hora-utc-localizador-y-coordenadas">UTC-Zeit, Locator und Koordinaten</h2>
+<ul>
+<li><strong>UTC.</strong> Vorhersagen, Aktivitätsmeldungen und Protokolle verwenden UTC. Auf</li>
+</ul>
+<p>der spanischen Halbinsel liegt UTC im Winter 1 h und im Sommer 2 h hinter der Ortszeit.</p>
+<ul>
+<li><strong>Maidenhead-Locator.</strong> Ein vierstelliger Code, etwa IM97 in der Region Murcia, bezeichnet dein Rasterfeld. Bei Satelliten-QSOs werden Rufzeichen und Rasterfeld ausgetauscht; für viele Diplome zählen Rasterfelder.</li>
+<li><strong>Koordinaten.</strong> Trage Breite, Länge und Höhe im Prädiktor präzise ein. Schon einige Kilometer Abweichung können den Überflug um mehrere zehn Sekunden verschieben.</li>
+</ul>
+<h2 id="predecir-pases-y-saber-si-el-satelite-esta-activo">Überflüge vorhersagen und Satellitenaktivität prüfen</h2>
+<p>Vorhersageprogramme verwenden TLE, die laufend veröffentlicht und aktualisiert werden. Verwende stets TLE der letzten Tage.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Werkzeug</th><th scope="col">Plattform</th><th scope="col">Hinweise</th></tr></thead><tbody>
+<tr><td>Bricohams-Android-App</td><td>Android</td><td>Eigenes SGP4 und CAT RX zu BH Satélite; siehe <a href="ayuda-android.de.html">Android</a></td></tr>
+<tr><td>Gpredict</td><td>Windows, Linux und macOS</td><td>Frei, mit Rotor- und Funkgerätesteuerung</td></tr>
+<tr><td>Orbitron</td><td>Windows</td><td>Kostenlos und klassisch, mit Vorhersage und Doppler</td></tr>
+<tr><td>ISS Detector</td><td>Android</td><td>Einfach; Amateurfunksatelliten erfordern eine Erweiterung</td></tr>
+<tr><td>Heavens-Above / N2YO</td><td>Web</td><td>Sichtbare Überflüge und ISS</td></tr>
+<tr><td>AMSAT Pass Predictions</td><td>Web</td><td>Überflüge von Amateurfunksatelliten</td></tr>
+</tbody></table></div>
+<p>Ein Satellit im Orbit bedeutet nicht, dass sein Transponder funktioniert. Vor dem Überflug:</p>
+<ul>
+<li>Prüfe die Statusseite von AMSAT, auf der Betreiber berichten, was sie hören.</li>
+<li>Lies die Satellitenmeldungen: Manche werden nur nach Zeitplan oder über bestimmten Regionen aktiviert.</li>
+<li>Prüfe aktuelle Aufzeichnungen automatischer Stationen auf SatNOGS.</li>
+</ul>
+<h2 id="efecto-doppler">Doppler-Effekt</h2>
+<figure><a href="docs/atlas/sat-doppler.svg"><img src="docs/atlas/sat-doppler.svg" alt="Dopplerverschiebung während eines Überflugs" loading="lazy"></a><figcaption>Dopplerverschiebung während eines Überflugs</figcaption></figure>
+<p>Ein LEO-Satellit bewegt sich mit etwa 7,5 km/s. Während er sich nähert, empfangen wir sein Signal oberhalb der Nennfrequenz; während er sich entfernt, unterhalb davon. Die Verschiebung beträgt ungefähr:</p>
+<pre><code>desplazamiento = frecuencia x velocidad radial / velocidad de la luz</code></pre>
+<div class="table-scroll"><table><thead><tr><th scope="col">Band</th><th scope="col">Frequenz</th><th scope="col">Ungefähres maximales Doppler bei 7 km/s</th></tr></thead><tbody>
+<tr><td>2 m</td><td>145,8 MHz</td><td>± 3,4 kHz</td></tr>
+<tr><td>70 cm</td><td>436,8 MHz</td><td>± 10,2 kHz</td></tr>
+</tbody></table></div>
+<p>Praktische Folgen:</p>
+<ul>
+<li>Bei FM fällt der 70-cm-Downlink ohne Korrektur aus dem Filter. Der 2-m- Downlink wird meist auch ohne Korrektur toleriert.</li>
+<li>Korrigiere vor allem die höhere Frequenz. Bei FM-Satelliten wird der UHF-Downlink üblicherweise in 5-kHz-Schritten nachgeführt.</li>
+<li>Die Änderung ist um TCA herum am schnellsten, besonders bei hohen Überflügen.</li>
+<li>Bei gestaffelten Speichern wechselst du im Verlauf des Überflugs von der höchsten zur niedrigsten Frequenz. Mit BH Satélite kannst du beim Empfang auch manuell oder per CAT korrigieren; siehe unten.</li>
+</ul>
+<h2 id="satelites-fm-para-empezar">FM-Satelliten für den Einstieg</h2>
+<p>&gt; Frequenzen und Satellitenstatus ändern sich. Prüfe AMSAT vor der &gt; Programmierung und sende nicht an einen inaktiven Satelliten oder im Testmodus.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Satellit</th><th scope="col">Uplink (TX)</th><th scope="col">Downlink (RX)</th><th scope="col">Ton</th><th scope="col">Hinweise</th></tr></thead><tbody>
+<tr><td>SO-50</td><td>145,850 MHz</td><td>436,795 MHz</td><td>67,0 Hz</td><td>74,4 Hz aktiviert den Timer; stark frequentiert</td></tr>
+<tr><td>ISS, gekreuzter Repeater</td><td>145,990 MHz</td><td>437,800 MHz</td><td>67,0 Hz</td><td>Zeitweise aktiv</td></tr>
+<tr><td>ISS, ARISS-Sprache in Region 1</td><td>145,200 MHz</td><td>145,800 MHz</td><td>—</td><td>Schulkontakte: nur zuhören</td></tr>
+<tr><td>ISS, APRS</td><td>145,825 MHz</td><td>145,825 MHz</td><td>—</td><td>Packet-Digipeater mit 1200 bps</td></tr>
+<tr><td>PO-101</td><td>437,500 MHz</td><td>145,900 MHz</td><td>141,3 Hz</td><td>Geplante Aktivierungen</td></tr>
+</tbody></table></div>
+<figure><a href="docs/atlas/sat-memorias-fm.svg"><img src="docs/atlas/sat-memorias-fm.svg" alt="Gestaffelter Speicherplan, Beispiel SO-50" loading="lazy"></a><figcaption>Gestaffelter Speicherplan, Beispiel SO-50</figcaption></figure>
+<h2 id="equipo-de-la-estacion">Stationsausrüstung</h2>
+<figure><a href="docs/atlas/sat-estacion-bh.svg"><img src="docs/atlas/sat-estacion-bh.svg" alt="Tragbare Station mit BH Satélite" loading="lazy"></a><figcaption>Tragbare Station mit BH Satélite</figcaption></figure>
+<ul>
+<li><strong>Funkgerät.</strong> Der UV-K5 arbeitet halbduplex: Während des Sendens empfängt</li>
+</ul>
+<p>er nicht, daher kannst du dein eigenes Echo über den Satelliten nicht hören.   Mit zwei Funkgeräten, einem zum Senden und einem zum Empfangen, hörst du   dein eigenes Signal in Echtzeit. So lässt sich am besten feststellen, ob   dein Signal ankommt.</p>
+<ul>
+<li><strong>Antenne.</strong> Sie ist der wichtigste Teil. Siehe <a href="ayuda-antenas-satelite.de.html">Antennen für Satelliten</a>: eine handgeführte Dualband- Yagi mit Maßzeichnung und druckbaren STL-Teilen sowie ein fest montierter V-Dipol zum Empfang der ISS.</li>
+<li><strong>Polarisation.</strong> Das Satellitensignal dreht sich während des Überflugs. Wenn es verblasst, drehe die Hand-Yagi um ihre Achse, um es wieder aufzunehmen.</li>
+<li><strong>Kopfhörer und Aufnahme.</strong> Umgebungsgeräusche überdecken schwache Signale. Mit einer Aufzeichnung kannst du Rufzeichen später überprüfen.</li>
+<li><strong>Leistung.</strong> Mit einer Yagi reichen 2-5 W für FM-Satelliten. Mehr Leistung gleicht eine schlecht ausgerichtete Antenne nicht aus und beeinträchtigt andere Nutzer.</li>
+</ul>
+<h2 id="operar-con-bh-satelite-en-la-uv-k5">Betrieb mit BH Satélite auf dem UV-K5</h2>
+<p>BH Satélite ist das Beta-Image der Bricohams-Firmware mit dem Profil Satelliten. Technische Details, Grenzen und Protokoll: <a href="ayuda-bricohams.de.html">Bricohams-Firmware</a>.</p>
+<p>&gt; <strong>Experimentell.</strong> Doppler-, CAT-RX- und CAT-TX-Funktionen wurden mit &gt; simulierten RF-Primitiven in Software getestet. <strong>Sie wurden noch nicht im &gt; Funkgerät oder mit RF-Messungen validiert.</strong> Teste zuerst im Empfang.</p>
+<ol>
+<li><strong>Richtigen Slot auswählen.</strong> Bei Multi-Boot-Funkgeräten hat jeder Slot seine eigene Kanaldatenbank. Programmiere Satellitenspeicher <strong>nur im BH-Satélite-Slot</strong>. Erstelle vorher eine vollständige Sicherung mit <a href="ayuda-quansheng.de.html">Quansheng</a>.</li>
+<li><strong>Speicher.</strong> Erstelle einen Speicher mit RX gleich dem nominalen Downlink und TX gleich dem Uplink, einschließlich Ton. Du kannst auch den Plan mit fünf gestaffelten Speichern verwenden.</li>
+<li><strong>SAT RX.</strong> Wähle den Speicher und rufe den Fox-Hunt-/SAT-Modus auf. Auf dem Bildschirm erscheint <code>SAT RX</code>; RX und TX des Kanals werden als Nennwerte übernommen.</li>
+<li><strong>Manueller Doppler.</strong> Mit den Tasten 4 und 6 ziehst du 500 m/s Radialgeschwindigkeit ab oder addierst sie, mit Taste 5 setzt du sie auf null. Zu Beginn des Überflugs nähert sich der Satellit; verwende daher negative Geschwindigkeiten, um weiter oben zu empfangen.</li>
+<li><strong>CAT RX über Android.</strong> Drücke 8 am Funkgerät, damit <code>CAT READY RX</code> angezeigt wird. Die Bricohams-App berechnet den Überflug mit SGP4 und sendet die korrigierte RX-Frequenz. Jeder Befehl läuft nach 3 s ab, wenn er nicht erneuert wird. Mit den Tasten 4, 5 und 6 kehrst du zur manuellen Steuerung zurück.</li>
+<li><strong>Senden.</strong> Für den Uplink wird die nominale TX-Frequenz des Kanals verwendet: BH Satélite <strong>korrigiert den Doppler beim Senden nicht</strong>. Für SSTV erfordert CAT PTT eine lokale Freigabe mit Taste 9, ein Lease von 1500 ms und ein Limit von 120 s.</li>
+<li><strong>Beenden.</strong> EXIT stellt die RF-Konfiguration des VFO wieder her.</li>
+</ol>
+<p>Der UV-K5 kann mit F4HWN-Firmwares auch lineare Transponder in SSB <strong>empfangen</strong>. Zum Senden über sie sind SSB beim TX und Vollduplex nötig, was der UV-K5 nicht bietet. OpenGD77 umfasst auf kompatiblen Funkgeräten einen eigenen Satellitenmodus: <a href="ayuda-opengd77.de.html">OpenGD77</a>.</p>
+<h2 id="como-hacer-un-qso-por-satelite">So führst du ein QSO über Satellit</h2>
+<ol>
+<li><strong>Zuerst zuhören.</strong> Höre dir ein oder zwei vollständige Überflüge an, bevor du sendest, um den Ablauf und übliche Rufzeichen kennenzulernen.</li>
+<li><strong>Kurz und deutlich.</strong> Ein typisches QSO tauscht Rufzeichen und Rasterfelder aus, zum Beispiel: „EA5XXX, IM97“. Bestätige den anderen mit „QSL, 73“.</li>
+<li><strong>Immer nur eine Sendung gleichzeitig.</strong> Wenn auf einem FM-Repeater zwei Stationen gleichzeitig senden, ist keine zu hören. Warte auf eine Lücke und rufe nicht ununterbrochen.</li>
+<li><strong>Nicht den Kanal blockieren.</strong> Ein Überflug dauert nur einige Minuten und wird von vielen Stationen geteilt. Bei stark frequentierten Satelliten ist ein Kontakt pro Überflug eine gute Regel.</li>
+<li><strong>Prüfen, ob du ankommst.</strong> Mit zwei Funkgeräten kannst du deinen eigenen Downlink hören. Wenn du dich nicht hörst, prüfe Ausrichtung, Dopplerspeicher und Ton, bevor du erneut rufst.</li>
+</ol>
+<p>Übliche Codes und Ausdrücke:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Ausdruck</th><th scope="col">Bedeutung</th></tr></thead><tbody>
+<tr><td>QRZ</td><td>Wer ruft mich?</td></tr>
+<tr><td>QSL</td><td>Empfangen oder bestätigt</td></tr>
+<tr><td>QTH / grid</td><td>Standort oder Rasterfeld</td></tr>
+<tr><td>73</td><td>Viele Grüße</td></tr>
+<tr><td>QRT</td><td>Ich beende das Senden</td></tr>
+<tr><td>Rover</td><td>Station, die unterwegs seltene Rasterfelder aktiviert</td></tr>
+</tbody></table></div>
+<h2 id="registrar-y-confirmar-contactos">Kontakte protokollieren und bestätigen</h2>
+<ul>
+<li>Notiere Datum und <strong>UTC</strong>-Zeit, Rufzeichen, Raster des Gegenübers, Satellit und Betriebsart.</li>
+<li>Verwende in ADIF <code>PROP_MODE</code> = <code>SAT</code> und <code>SAT_NAME</code>, zum Beispiel <code>SO-50</code>. Das Logbuch der Android-App exportiert ADIF.</li>
+<li>Lade deine Kontakte bei LoTW oder eQSL hoch, um sie bestätigen zu lassen. Für das ARRL-VUCC-Diplom über Satellit sind 100 bestätigte Rasterfelder nötig.</li>
+</ul>
+<h2 id="sstv-y-aprs-desde-la-iss">SSTV und APRS von der ISS</h2>
+<ul>
+<li><strong>SSTV.</strong> Bei von ARISS angekündigten Veranstaltungen sendet die ISS Bilder in FM auf 145,800 MHz, üblicherweise in PD120 oder Robot36. Ein V-Dipol oder eine Yagi und ein Decoder genügen. Die Bricohams-App decodiert Robot36 aus WAV.</li>
+<li><strong>APRS.</strong> Der ISS-Digipeater auf 145,825 MHz leitet Packet-Frames weiter. Zum Senden von Frames brauchst du eine Lizenz und ein TNC oder eine kompatible App.</li>
+<li><strong>Sprachfunkempfang.</strong> Während ARISS-Schulkontakten hörst du nur den Downlink auf 145,800 MHz. Sende nicht auf dem Uplink.</li>
+</ul>
+<h2 id="lista-de-comprobacion-del-pase">Checkliste für den Überflug</h2>
+<ol>
+<li>Aktualisiere die TLE und prüfe UTC-Zeit des Überflugs, maximale Elevation sowie AOS- und LOS-Richtungen.</li>
+<li>Bestätige bei AMSAT, dass der Satellit aktiv ist.</li>
+<li>Prüfe, dass das Funkgerät im BH-Satélite-Slot startet und Speicher RX, TX und den richtigen Ton enthält.</li>
+<li>Prüfe Antenne, Koaxialkabel, Diplexer, Kopfhörer und Aufnahmegerät.</li>
+<li>Richte die Antenne vor AOS auf den Horizont aus, an dem der Satellit erscheint.</li>
+<li>Verfolge den Satelliten während des Überflugs, drehe die Antenne für die Polarisation und korrigiere den Doppler.</li>
+<li>Protokolliere nach dem Überflug die Kontakte in UTC und überprüfe die Aufnahme.</li>
+</ol>
+<h2 id="glosario">Glossar</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Begriff</th><th scope="col">Definition</th></tr></thead><tbody>
+<tr><td>Uplink / subida</td><td>Frequenz, auf der wir zum Satelliten senden</td></tr>
+<tr><td>Downlink / bajada</td><td>Frequenz, auf der der Satellit weiterleitet</td></tr>
+<tr><td>Transponder</td><td>Gerät im Satelliten, das den Uplink in den Downlink umsetzt</td></tr>
+<tr><td>Halbduplex</td><td>Während des Sendens wird nicht empfangen</td></tr>
+<tr><td>Vollduplex</td><td>Gleichzeitiger Empfang und Sendung; das eigene Echo ist hörbar</td></tr>
+<tr><td>CTCSS</td><td>Subaudio-Ton, der den Repeater des Satelliten öffnet</td></tr>
+<tr><td>SGP4</td><td>Orbit-Ausbreitungsmodell, das mit den TLE verwendet wird</td></tr>
+<tr><td>CAT</td><td>Steuerung des Funkgeräts durch Computer oder Smartphone</td></tr>
+</tbody></table></div>
+<h2 id="referencias">Quellen</h2>
+<ul>
+<li>Carlos Vicente PT2VM, *Radioamadores no Espaço — Guia básico para operar satélites*, v1.1, 04/09/2025. Inspirierte den thematischen Ablauf; wird nicht reproduziert.</li>
+<li>AMSAT: <a href="https://www.amsat.org" target="_blank" rel="noopener noreferrer">https://www.amsat.org</a>. Satellitenstatus, Frequenzen und Vorhersagen.</li>
+<li>ARISS: <a href="https://www.ariss.org" target="_blank" rel="noopener noreferrer">https://www.ariss.org</a>. Funkamateure an Bord der ISS.</li>
+<li>CelesTrak: <a href="https://celestrak.org" target="_blank" rel="noopener noreferrer">https://celestrak.org</a>. TLE-Orbitparameter.</li>
+<li>SatNOGS: <a href="https://satnogs.org" target="_blank" rel="noopener noreferrer">https://satnogs.org</a>. Offenes Netz von Bodenstationen.</li>
+<li>Bricohams: <a href="ayuda-antenas-satelite.de.html">Antennen für Satelliten</a>, <a href="ayuda-bricohams.de.html">Bricohams-Firmware</a>, <a href="ayuda-android.de.html">Android</a> und <a href="ayuda-quansheng.de.html">Quansheng</a>.</li>
+</ul></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

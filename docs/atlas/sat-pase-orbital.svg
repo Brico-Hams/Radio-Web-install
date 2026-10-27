@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="560" viewBox="0 0 1100 560" role="img" aria-labelledby="title desc">
+<title id="title">Geometria de un pase de satelite LEO</title>
+<desc id="desc">Esquema propio Bricohams. Arco de un pase visto desde la estacion: AOS en el horizonte, TCA en la maxima elevacion y LOS al desaparecer. Ilustrativo, sin escala.</desc>
+<rect width="1100" height="560" fill="#14202c"/>
+<g font-family="sans-serif" fill="#fff">
+<text x="35" y="42" font-size="24">Iniciacion al satelite - anatomia de un pase</text>
+<text x="35" y="70" font-size="15">Esquema propio Bricohams, ilustrativo y sin escala. Los tiempos y angulos reales salen de un predictor con TLE actuales.</text>
+</g>
+<path d="M90 450H1010" stroke="#8fb3d1" stroke-width="3"/>
+<path d="M150 450Q550 40 950 450" fill="none" stroke="#ffa342" stroke-width="4" stroke-dasharray="10 7"/>
+<g fill="#ffa342"><circle cx="150" cy="450" r="10"/><circle cx="550" cy="245" r="12"/><circle cx="950" cy="450" r="10"/></g>
+<rect x="520" y="430" width="60" height="22" fill="#26394b" stroke="#fff"/>
+<path d="M550 430V405" stroke="#fff" stroke-width="3"/>
+<path d="M550 405L520 380M550 405L580 380" stroke="#fff" stroke-width="3"/>
+<path d="M550 430L550 258" stroke="#8fb3d1" stroke-width="1.5" stroke-dasharray="4 5"/>
+<path d="M600 450A50 50 0 0 0 585 415" fill="none" stroke="#8fb3d1" stroke-width="2"/>
+<g font-family="sans-serif" fill="#fff" font-size="17">
+<text x="95" y="485">AOS: aparece por el horizonte</text>
+<text x="95" y="508">Doppler maximo positivo (se acerca)</text>
+<text x="440" y="225">TCA: maxima elevacion</text>
+<text x="420" y="200">Doppler cero, mejor senal</text>
+<text x="790" y="485">LOS: se pierde por el horizonte</text>
+<text x="790" y="508">Doppler maximo negativo (se aleja)</text>
+<text x="610" y="420">Elevacion</text>
+<text x="470" y="478">Tu estacion</text>
+<text x="35" y="545" font-size="15">Un pase LEO tipico dura de 5 a 15 minutos. Con elevacion maxima por debajo de 15-20 grados suele haber obstaculos y senal debil.</text>
+</g>
+</svg>

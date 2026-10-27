@@ -215,10 +215,11 @@
           $("qs-rf-body").replaceChildren();
           for (const entry of rfRows) {
             const row = document.createElement("tr");
-            for (const value of [entry.sequence, entry.flags & 8 ? "ENCENDIDO" : entry.flags & 1 ? "TX" : "RX",
+            for (const [index, value] of [entry.sequence, entry.flags & 8 ? "ENCENDIDO" : entry.flags & 1 ? "TX" : "RX",
               entry.frequency10Hz ? (entry.frequency10Hz / 100000).toFixed(5) : "-", entry.name || "-",
-              entry.durationSeconds, entry.channel === 65535 ? "-" : entry.channel + 1]) {
+              entry.durationSeconds, entry.channel === 65535 ? "-" : entry.channel + 1].entries()) {
               const cell = document.createElement("td");
+              if (index === 1) cell.setAttribute("translate", "yes");
               cell.textContent = String(value);
               row.append(cell);
             }
@@ -464,12 +465,14 @@
         const statuses = ["Cabecera valida", "Vacio / magic invalido", "Formato desconocido", "Incompleto", "Tamano invalido", "CRC invalido", "Error SPI", "Slot invalido", "Sin autorizacion", "Error RAM", "Protegido"];
         for (const item of slots) {
           const row = document.createElement("tr");
-          for (const text of [item.slot === 0 ? "M (protegido)" : item.slot, item.name, item.firmware, item.size, statuses[item.status] || `Error ${item.status}`]) {
+          for (const [index, text] of [item.slot === 0 ? "M (protegido)" : item.slot, item.name, item.firmware, item.size, statuses[item.status] || `Error ${item.status}`].entries()) {
             const cell = document.createElement("td");
+            if (index === 0 || index === 4) cell.setAttribute("translate", "yes");
             cell.textContent = String(text);
             row.append(cell);
           }
           const cell = document.createElement("td");
+          cell.setAttribute("translate", "yes");
           const button = document.createElement("button");
           button.type = "button";
           button.className = "guide-tab";
@@ -577,9 +580,10 @@
         for (const item of apps) {
           const row = document.createElement("tr");
           const filled = item.status !== 2;
-          for (const text of [item.slot + 1, filled ? item.name : "-", filled ? item.appVersion : "-", filled ? item.apiMin : "-",
-            filled ? item.codeSize + item.assetSize : "-", item.statusText]) {
+          for (const [index, text] of [item.slot + 1, filled ? item.name : "-", filled ? item.appVersion : "-", filled ? item.apiMin : "-",
+            filled ? item.codeSize + item.assetSize : "-", item.statusText].entries()) {
             const cell = document.createElement("td");
+            if (index === 5) cell.setAttribute("translate", "yes");
             cell.textContent = String(text);
             row.append(cell);
           }
@@ -703,10 +707,11 @@
           const selection = document.createElement("td");
           selection.append(selected);
           row.append(selection);
-          for (const value of [channel.number, channel.name, channel.rx, channel.tx,
+          for (const [index, value] of [channel.number, channel.name, channel.rx, channel.tx,
             channel.mode === 0 ? "FM" : `Modulacion ${channel.mode}`, channel.rxOnly ? "Si" : "No",
-            `${channel.scanList === 25 ? "Todas" : channel.scanList}${channel.scanExcluded ? " (excluido)" : ""}`]) {
+            `${channel.scanList === 25 ? "Todas" : channel.scanList}${channel.scanExcluded ? " (excluido)" : ""}`].entries()) {
             const cell = document.createElement("td");
+            if (index >= 4) cell.setAttribute("translate", "yes");
             cell.textContent = value;
             row.append(cell);
           }
@@ -1100,8 +1105,9 @@
         $("channels-body").replaceChildren();
         for (const channel of channels) {
           const row = document.createElement("tr");
-          for (const value of [channel.number, channel.name, channel.rx, channel.tx, ["FM", "DMR", "FM+", "AM"][channel.mode] || "Desconocido"]) {
+          for (const [index, value] of [channel.number, channel.name, channel.rx, channel.tx, ["FM", "DMR", "FM+", "AM"][channel.mode] || "Desconocido"].entries()) {
             const cell = document.createElement("td");
+            if (index === 4) cell.setAttribute("translate", "yes");
             cell.textContent = value;
             row.append(cell);
           }

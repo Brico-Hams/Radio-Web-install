@@ -1,0 +1,50 @@
+{
+  "pinza-elemento": {
+    "archivo": "stl/pinza-elemento.stl",
+    "triangulos": 2068,
+    "volumen_cm3": 17.2,
+    "medidas_mm": [
+      24.0,
+      30.0,
+      43.0
+    ],
+    "genero": 4,
+    "estado": "Error.NoError"
+  },
+  "bloque-excitado": {
+    "archivo": "stl/bloque-excitado.stl",
+    "triangulos": 2952,
+    "volumen_cm3": 56.4,
+    "medidas_mm": [
+      40.0,
+      64.0,
+      43.0
+    ],
+    "genero": 5,
+    "estado": "Error.NoError"
+  },
+  "empunadura": {
+    "archivo": "stl/empunadura.stl",
+    "triangulos": 7332,
+    "volumen_cm3": 99.6,
+    "medidas_mm": [
+      50.0,
+      32.0,
+      142.0
+    ],
+    "genero": 2,
+    "estado": "Error.NoError"
+  },
+  "cubo-dipolo-v": {
+    "archivo": "stl/cubo-dipolo-v.stl",
+    "triangulos": 3700,
+    "volumen_cm3": 81.9,
+    "medidas_mm": [
+      70.0,
+      70.0,
+      52.0
+    ],
+    "genero": 4,
+    "estado": "Error.NoError"
+  }
+}

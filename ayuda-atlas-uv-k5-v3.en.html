@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Technical atlas of the Quansheng UV-K5 V3 and UV-K1: Bricohams help by model and version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Technical atlas of the Quansheng UV-K5 V3 and UV-K1 | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-atlas-uv-k5-v3.html">
+  <link rel="alternate" hreflang="en" href="ayuda-atlas-uv-k5-v3.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-atlas-uv-k5-v3.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-atlas-uv-k5-v3.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-atlas-uv-k5-v3.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Help"><a href="ayuda.html">App help (Spanish)</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Language"><a href="ayuda-atlas-uv-k5-v3.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-atlas-uv-k5-v3.en.html" hreflang="en" lang="en" aria-current="page">English</a> · <a href="ayuda-atlas-uv-k5-v3.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-atlas-uv-k5-v3.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#versiones-y-como-identificarlas">Versions and how to identify them</a></li><li><a href="#arquitectura">Architecture</a></li><li><a href="#pinout-del-py32f071">PY32F071 pinout</a></li><li><a href="#buses-y-perifericos">Buses and peripherals</a></li><li><a href="#memoria-interna">Internal memory</a></li><li><a href="#flash-externa-de-2-mb">2 MB external Flash</a></li><li><a href="#mapa-eeprom-logico">Logical EEPROM map</a></li><li><a href="#calibracion">Calibration</a></li><li><a href="#protocolo-serie-de-programacion">Serial programming protocol</a></li><li><a href="#bootloader-y-flasheo">Bootloader and flashing</a></li><li><a href="#swd-y-recuperacion">SWD and recovery</a></li><li><a href="#compilar-firmware">Build firmware</a></li><li><a href="#modificaciones-de-hardware">Hardware modifications</a></li><li><a href="#esquemas-e-imagenes">Schematics and images</a></li><li><a href="#firmwares-y-repositorios-para-v3-k1">Firmware and repositories for V3/K1</a></li><li><a href="#karina-y-codigo-cerrado">Karina and closed-source code</a></li><li><a href="#fuentes">Sources</a></li></ul></nav>
+    <article class="panel"><h1 id="atlas-tecnico-del-quansheng-uv-k5-v3-y-uv-k1">Technical atlas of the Quansheng UV-K5 V3 and UV-K1</h1>
+<p>Revision: 26-10-2026. Hardware, communications, flashing, and development knowledge base for the UV-K5 V3 and its twin, the UV-K1. Pins, memories, and protocols come from the open-source code currently running on these radios (<a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">F4HWN V3</a>, Apache-2.0) and the <a href="https://github.com/armel/k1-teardown" target="_blank" rel="noopener noreferrer">armel teardown</a>, not assumptions. For step-by-step radio setup, use the <a href="ayuda-quansheng.en.html#puesta-en-marcha-de-0-a-100">getting started from 0 to 100%</a>.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Block</th><th scope="col">Component</th></tr></thead><tbody>
+<tr><td>MCU</td><td>Puya PY32F071 (PY32F071C1BT6), Cortex-M0+ at 72 MHz, 128 KB flash, 16 KB SRAM</td></tr>
+<tr><td>Transceiver</td><td>Beken BK4829</td></tr>
+<tr><td>FM radio</td><td>Beken BK1080</td></tr>
+<tr><td>Data memory</td><td>PUYA PY25Q16HB SPI Flash, 2 MB</td></tr>
+<tr><td>Display</td><td>ST7565, 128x64 monochrome</td></tr>
+<tr><td>Audio</td><td>LM4898/LN4898 amplifier</td></tr>
+<tr><td>USB-C</td><td>Charging and programming (virtual CDC serial port)</td></tr>
+</tbody></table></div>
+<h2 id="versiones-y-como-identificarlas">Versions and how to identify them</h2>
+<p>Firmware for one version does not work on another: the microcontroller is different, and the image will not start or will leave the radio without a display.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Version</th><th scope="col">MCU</th><th scope="col">Data memory</th><th scope="col">USB-C</th><th scope="col">Reference open firmware</th></tr></thead><tbody>
+<tr><td>V1 (UV-K5, K5(8), K6, 5R Plus)</td><td>DP32G030, 48 MHz, 64 KB</td><td>8 KB I2C EEPROM (expandable)</td><td>Charging only</td><td><a href="https://github.com/armel/uv-k5-firmware-custom" target="_blank" rel="noopener noreferrer">armel/uv-k5-firmware-custom</a></td></tr>
+<tr><td>V2</td><td>PY32F030 / PY32G030</td><td>I2C EEPROM</td><td>Charging only</td><td><a href="https://github.com/muzkr/uv-k5-firmware-custom" target="_blank" rel="noopener noreferrer">muzkr/uv-k5-firmware-custom</a></td></tr>
+<tr><td><strong>V3 and UV-K1</strong></td><td><strong>PY32F071</strong>, 72 MHz, 128 KB</td><td><strong>2 MB PY25Q16 SPI Flash</strong></td><td><strong>Charging and programming</strong></td><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">armel/uv-k1-k5v3-firmware-custom</a></td></tr>
+</tbody></table></div>
+<ul>
+<li><strong>Sticker under the battery:</strong> “V2” or “V3.” If unmarked, it is usually V1, but the ARDF manual warns of V3 labels on V2 hardware: this is not conclusive.</li>
+<li><strong>USB-C appears as a serial port</strong> when connected to a PC: V3/K1.</li>
+<li><strong>Bootloader version</strong> (power on while holding PTT): UV-K5 V3 reports <code>7.00.07</code>; UV-K1 <code>7.02.02</code> or <code>7.03.0x</code>. UV-K5(8) V3 radios with <code>7.0.11</code> are reported in groups: if you see another number, check before flashing.</li>
+<li>K1 and K5 V3 share a board (silkscreen <code>K1-V5.0</code>) and firmware. In factory Flash, only the second line of the startup message differs (<code>0x007030</code>).</li>
+<li>A V3 <code>.bin</code> begins with its vector table: word 0 = stack in SRAM (<code>0x2000xxxx</code>), word 1 = reset at <code>0x0800xxxx</code> with bit 0 set to 1. A V1 binary has reset near <code>0x000000xx</code>.</li>
+</ul>
+<h2 id="arquitectura">Architecture</h2>
+<p>The PY32F071 controls everything: it programs BK4829 registers on each change of frequency, mode, filter, or power; reads the S-meter; and manages audio, display, keypad, and memory.</p>
+<figure><a href="docs/atlas/bloques-v3.svg"><img src="docs/atlas/bloques-v3.svg" alt="UV-K5 V3 block diagram: MCU, transceiver, memory, display, keypad, audio, USB, and battery" loading="lazy"></a><figcaption>UV-K5 V3 block diagram: MCU, transceiver, memory, display, keypad, audio, USB, and battery</figcaption></figure>
+<h2 id="pinout-del-py32f071">PY32F071 pinout</h2>
+<p>Assignment used by F4HWN for V3/K1 (<code>App/board.c</code>, <code>App/driver/*.c</code>). The physical pin number is in the <a href="https://github.com/armel/k1-teardown/blob/main/datasheet/PY32F071_Datasheet_Rev0.7_EN.pdf" target="_blank" rel="noopener noreferrer">PY32F071 datasheet</a>.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Pin</th><th scope="col">Function</th><th scope="col">Configuration</th><th scope="col">Driver</th></tr></thead><tbody>
+<tr><td>PA0</td><td>Flash SPI2 SCK</td><td>AF8 SPI2</td><td><code>py25q16.c</code></td></tr>
+<tr><td>PA1, PA2</td><td>Flash SPI2 MISO/MOSI</td><td>AF9 SPI2, prescaler /2, DMA1</td><td><code>py25q16.c</code></td></tr>
+<tr><td>PA3</td><td>Flash SPI CS</td><td>Output</td><td><code>py25q16.c</code></td></tr>
+<tr><td>PA4</td><td>Voice DAC / RX audio capture</td><td>Analog, TIM6 + DMA</td><td><code>voice.c</code></td></tr>
+<tr><td>PA5</td><td>LCD SPI1 SCK</td><td>AF0 SPI1, prescaler /64</td><td><code>st7565.c</code></td></tr>
+<tr><td>PA6</td><td>LCD A0 (data/command)</td><td>Output</td><td><code>st7565.c</code></td></tr>
+<tr><td>PA7</td><td>LCD SPI1 MOSI</td><td>AF0 SPI1</td><td><code>st7565.c</code></td></tr>
+<tr><td>PA8</td><td>Audio amplifier enable</td><td>Output</td><td><code>gpio.h</code></td></tr>
+<tr><td>PA9, PA10</td><td>USART1 TX/RX (Kenwood jack)</td><td>AF1, 38400 baud</td><td><code>uart.c</code></td></tr>
+<tr><td>PA11, PA12</td><td>USB FS D-/D+ (CDC)</td><td>USB</td><td><code>vcp.c</code></td></tr>
+<tr><td>PA13, PA14</td><td>SWDIO / SWCLK</td><td>SWD when compiled with <code>ENABLE_SWD</code></td><td><code>board.c</code></td></tr>
+<tr><td>PB0</td><td>Battery voltage</td><td>ADC1 channel 8, 12 bits</td><td><code>board.c</code></td></tr>
+<tr><td>PB1</td><td>Reserved analog</td><td>Analog mode</td><td><code>board.c</code></td></tr>
+<tr><td>PB2</td><td>LCD CS</td><td>Output</td><td><code>st7565.c</code></td></tr>
+<tr><td>PB3-PB6</td><td>Keypad columns</td><td>Outputs</td><td><code>keyboard.c</code></td></tr>
+<tr><td>PB8</td><td>BK4829 SCK</td><td>Output, bit-bang</td><td><code>bk4829.c</code></td></tr>
+<tr><td>PB9</td><td>Bidirectional BK4829 SDIO</td><td>Output/input, bit-bang</td><td><code>bk4829.c</code></td></tr>
+<tr><td>PB10</td><td>PTT</td><td>Pull-up input, active low</td><td><code>gpio.h</code></td></tr>
+<tr><td>PB12-PB15</td><td>Keypad rows</td><td>Pull-up inputs</td><td><code>keyboard.c</code></td></tr>
+<tr><td>PC13</td><td>Flashlight</td><td>Output</td><td><code>board.c</code></td></tr>
+<tr><td>PF5, PF6</td><td>BK1080 SCL/SDA</td><td>I2C bit-bang</td><td><code>i2c.c</code></td></tr>
+<tr><td>PF8</td><td>LCD backlight</td><td>PWM via TIM7 + DMA</td><td><code>backlight.c</code></td></tr>
+<tr><td>PF9</td><td>BK4829 CS</td><td>Output</td><td><code>bk4829.c</code></td></tr>
+</tbody></table></div>
+<h3 id="matriz-del-teclado">Keypad matrix</h3>
+<p>The firmware drives one column low and reads the four rows. “Column 0” means no active column and reads the side keys. PTT is separate on PB10.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Row</th><th scope="col">Col 0</th><th scope="col">PB6</th><th scope="col">PB5</th><th scope="col">PB4</th><th scope="col">PB3</th></tr></thead><tbody>
+<tr><td>PB15</td><td>SIDE1</td><td>MENU</td><td>UP</td><td>DOWN</td><td>EXIT</td></tr>
+<tr><td>PB14</td><td>SIDE2</td><td>1</td><td>2</td><td>3</td><td>*</td></tr>
+<tr><td>PB13</td><td>-</td><td>4</td><td>5</td><td>6</td><td>0</td></tr>
+<tr><td>PB12</td><td>-</td><td>7</td><td>8</td><td>9</td><td>F</td></tr>
+</tbody></table></div>
+<h2 id="buses-y-perifericos">Buses and peripherals</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Peripheral</th><th scope="col">Bus</th><th scope="col">Notes</th></tr></thead><tbody>
+<tr><td>BK4829</td><td>3-wire bit-bang: CS PF9, SCK PB8, SDIO PB9</td><td>8-bit register + 16-bit value. Driver uses the same API as V1 BK4819 (<code>bk4819.h</code>)</td></tr>
+<tr><td>PY25Q16 Flash</td><td>SPI2 + DMA1, CS PA3</td><td>4 KB sectors; exposed as “EEPROM” through a translation table</td></tr>
+<tr><td>ST7565 LCD</td><td>SPI1, A0 PA6, CS PB2</td><td>8 pages of 128 columns, least significant bit at top</td></tr>
+<tr><td>BK1080</td><td>I2C bit-bang PF5/PF6</td><td>Only with <code>ENABLE_FMRADIO</code></td></tr>
+<tr><td>Kenwood jack</td><td>USART1 PA9/PA10</td><td>38400 8N1</td></tr>
+<tr><td>USB-C</td><td>USB FS PA11/PA12, CDC</td><td>Same protocol as the jack</td></tr>
+<tr><td>Voice and audio</td><td>DAC PA4, enable PA8</td><td>Labs apps use PA4 as ADC for APRS/AFSK</td></tr>
+</tbody></table></div>
+<h2 id="memoria-interna">Internal memory</h2>
+<figure><a href="docs/atlas/flash-interna-v3.svg"><img src="docs/atlas/flash-interna-v3.svg" alt="Internal Flash map: 10 KB bootloader, application from 0x08002800 through 118 KB" loading="lazy"></a><figcaption>Internal Flash map: 10 KB bootloader, application from 0x08002800 through 118 KB</figcaption></figure>
+<ul>
+<li>Bootloader <code>0x08000000-0x080027FF</code> (10 KB), never overwritten by DFU.</li>
+<li>Application from <code>0x08002800</code>, maximum <code>0x1D800</code> bytes (<code>Core/py32f071xb.ld</code>).</li>
+<li>256-byte erase pages; 16 KB SRAM.</li>
+</ul>
+<h2 id="flash-externa-de-2-mb">2 MB external Flash</h2>
+<figure><a href="docs/atlas/flash-externa-v3.svg"><img src="docs/atlas/flash-externa-v3.svg" alt="External Flash map with factory firmware and F4HWN multiboot" loading="lazy"></a><figcaption>External Flash map with factory firmware and F4HWN multiboot</figcaption></figure>
+<div class="table-scroll"><table><thead><tr><th scope="col">Range</th><th scope="col">Contents (F4HWN multiboot)</th></tr></thead><tbody>
+<tr><td><code>0x000000-0x00BFFF</code></td><td>Configuration bank 0: channels, names, VFO, settings</td></tr>
+<tr><td><code>0x010000-0x010FFF</code></td><td><strong>Calibration</strong> (512 useful bytes), unique to each radio</td></tr>
+<tr><td><code>0x011000-0x011FFF</code></td><td>Startup logo: 8-byte header + 1024-byte bitmap (factory signature <code>0x9ABC5A5A</code>)</td></tr>
+<tr><td><code>0x018000-0x01FFFF</code></td><td>RX/TX log, 8 sectors</td></tr>
+<tr><td><code>0x020000 + n*0x20000</code></td><td>Slots 0-4, 128 KB: 64-byte <code>FMB1</code> header (size, CRC-32, name, version) and image at +0x1000. Slot 0 = protected copy of main</td></tr>
+<tr><td><code>0x0C0000-0x0FFFFF</code></td><td>Configuration banks 1-4 (64 KB)</td></tr>
+<tr><td><code>0x100000</code> / <code>0x101000</code></td><td>Redundant <code>FMP3</code> multiboot state</td></tr>
+<tr><td><code>0x102000-</code></td><td>Overlaid <code>FAP1</code> apps, 8 KB slots</td></tr>
+<tr><td><code>0x1DE000-0x1FFFFF</code></td><td>Interoperability reserve for Sonic</td></tr>
+</tbody></table></div>
+<p>Factory firmware stores voice at <code>0x100000-0x196FFF</code>, the same area used by F4HWN. To return to factory firmware, use the guided restoration in <a href="https://armel.github.io/uvstudio/" target="_blank" rel="noopener noreferrer">UV Studio</a>, which rebuilds that area without touching calibration.</p>
+<h2 id="mapa-eeprom-logico">Logical EEPROM map</h2>
+<p><code>eeprom_compat.c</code> translates 16-bit EEPROM addresses to SPI Flash to reuse V1 code and CHIRP drivers. Addresses outside the table read as <code>0xFF</code>.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Logical address</th><th scope="col">Physical Flash</th><th scope="col">Contents</th></tr></thead><tbody>
+<tr><td><code>0x0000-0x3FFF</code></td><td><code>0x000000</code></td><td>Frequencies for 1024 memories x 16 bytes</td></tr>
+<tr><td><code>0x4000-0x7FFF</code></td><td><code>0x004000</code></td><td>Names for 1024 memories x 16 bytes</td></tr>
+<tr><td><code>0x8000-0x886D</code></td><td><code>0x008000</code></td><td>Attributes and list names</td></tr>
+<tr><td><code>0x9000-0x90E8</code></td><td><code>0x009000</code></td><td>14 VFOs and Fox Hunt/Beacon</td></tr>
+<tr><td><code>0xA000-0xA177</code></td><td><code>0x00A000</code></td><td>Settings, FM, lists, AES, spectrum, F4HWN, version</td></tr>
+<tr><td><code>0xB000-0xB1FF</code></td><td><code>0x010000</code></td><td>Calibration</td></tr>
+<tr><td><code>0xC000-0xCFFF</code></td><td><code>0x011000</code></td><td>Startup logo</td></tr>
+</tbody></table></div>
+<p>This is the F4HWN map. Factory firmware, Karina, IJV, and Matoz use another: a CHIRP driver only works with the firmware it was written for.</p>
+<h2 id="calibracion">Calibration</h2>
+<ul>
+<li>Each radio has its own calibration at <code>0x010000</code>. It is not interchangeable: “Karina calibrations” or those from another unit were calculated for a different radio.</li>
+<li>Back up before flashing with UV Studio (“dump calib”) or this website&#39;s read function; <a href="https://github.com/Gulihg/K5Tool-bin" target="_blank" rel="noopener noreferrer">K5Tool-bin</a> extracts values from a dump. Examples of 512-byte dumps are in <a href="https://github.com/armel/k1-teardown/tree/main/openocd" target="_blank" rel="noopener noreferrer">k1-teardown/openocd</a>.</li>
+<li>F4HWN commands reject writes to this sector.</li>
+</ul>
+<h2 id="protocolo-serie-de-programacion">Serial programming protocol</h2>
+<p>The same over the Kenwood jack or USB-C: 38400 baud 8N1, inherited from V1.</p>
+<figure><a href="docs/atlas/trama-serie.svg"><img src="docs/atlas/trama-serie.svg" alt="Frame: AB CD, length, type, size, data, CRC16, and DC BA; block obfuscated with XOR" loading="lazy"></a><figcaption>Frame: AB CD, length, type, size, data, CRC16, and DC BA; block obfuscated with XOR</figcaption></figure>
+<p>XOR obfuscation key (index i mod 16): <code>16 6C 14 E6 2E 91 0D 40 21 35 D5 40 13 03 E9 80</code>. CRC-16 XMODEM: polynomial <code>0x1021</code>, initial value 0, over type, size, and data before obfuscation. In replies, the radio pads the CRC with <code>clave[n] ^ 0xFF</code>. A robust reader requires consistent header, footer, and length and only logs CRC mismatches.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Request</th><th scope="col">Response</th><th scope="col">Use</th><th scope="col">Data</th></tr></thead><tbody>
+<tr><td><code>0x0514</code></td><td><code>0x0515</code></td><td>Greeting and identification</td><td>u32 timestamp</td></tr>
+<tr><td><code>0x051B</code></td><td><code>0x051C</code></td><td>Read EEPROM</td><td>u16 offset, u8 size, u8 pad, u32 timestamp</td></tr>
+<tr><td><code>0x051D</code></td><td><code>0x051E</code></td><td>Write EEPROM</td><td>u16 offset, u8 size, bool allowPassword, u32 timestamp, data</td></tr>
+<tr><td><code>0x0527</code></td><td><code>0x0528</code></td><td>RSSI</td><td>-</td></tr>
+<tr><td><code>0x0529</code></td><td>-</td><td>Battery voltage and current</td><td>-</td></tr>
+<tr><td><code>0x052F</code></td><td>-</td><td>Greeting variant</td><td>u32 timestamp</td></tr>
+<tr><td><code>0x05DD</code></td><td>-</td><td>Reboot</td><td>-</td></tr>
+<tr><td><code>0x0601</code> / <code>0x0602</code></td><td>-</td><td>BK4829 registers (only <code>ENABLE_UART_RW_BK_REGS</code>)</td><td>register, value</td></tr>
+</tbody></table></div>
+<p>F4HWN Fusion extensions: <code>0x0720-0x0729</code> slots and banks, <code>0x0730-0x0737</code> overlaid apps, <code>0x0738</code> physical Flash read, <code>0x073A</code>/<code>0x073C</code> sector erase and programming (reject calibration), <code>0x073E</code> CRC-32 of a range. Slot 0 cannot be erased or overwritten. K5Viewer injects keys with <code>AA 55 03|04 &lt;tecla&gt;</code>; PTT is locked.</p>
+<h2 id="bootloader-y-flasheo">Bootloader and flashing</h2>
+<p>With the radio off, hold PTT and power on: LED on, display off. The factory bootloader listens over USB-C and the jack using the same frames.</p>
+<figure><a href="docs/atlas/secuencia-dfu.svg"><img src="docs/atlas/secuencia-dfu.svg" alt="DFU sequence: notice 0x0518, greeting 0x0530, pages 0x0519, and acknowledgments 0x051A" loading="lazy"></a><figcaption>DFU sequence: notice 0x0518, greeting 0x0530, pages 0x0519, and acknowledgments 0x051A</figcaption></figure>
+<p>Bricohams Studio and UV Studio accept only bootloader <code>7.00.07</code> for UV-K5 V3 and <code>7.02.02</code>/<code>7.03.0x</code> for UV-K1, and validate <code>.bin</code> vectors before opening the port. A V1 image can be “flashed” but will not boot.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Tool</th><th scope="col">Use</th></tr></thead><tbody>
+<tr><td><a href="https://armel.github.io/uvstudio/" target="_blank" rel="noopener noreferrer">UV Studio</a></td><td>Flashing, multiboot, calibration dump, factory restoration</td></tr>
+<tr><td><a href="https://brico-hams.github.io/Bricohams-Studio/" target="_blank" rel="noopener noreferrer">Bricohams Studio</a></td><td>Channels, settings, slots, and main firmware</td></tr>
+<tr><td><a href="https://spm81.github.io/Multi-UVTools/" target="_blank" rel="noopener noreferrer">Multi-UVTools</a></td><td>Multi-model web flasher</td></tr>
+<tr><td><a href="https://github.com/muzkr/moto" target="_blank" rel="noopener noreferrer">Moto</a></td><td>Alternative UF2 bootloader: USB “MOTO” drive and drag <code>.uf2</code>. Risky, no serial commands</td></tr>
+</tbody></table></div>
+<p><code>*.packed.bin</code> files are for the official updater; flat <code>.bin</code> files are for the open tools.</p>
+<h2 id="swd-y-recuperacion">SWD and recovery</h2>
+<p>If the bootloader is damaged, SWD (PA13 SWDIO, PA14 SWCLK) with an ST-Link is the only option. The PY32 is treated as an STM32F0 with a different TAP ID:</p>
+<pre><code>openocd -f interface/stlink.cfg -c &quot;set CPUTAPID 0x0bc11477&quot; -f target/stm32f0x.cfg -c &quot;adapter speed 1000&quot; -c &quot;init; reset halt; dump_image K1_PY32F071.bin 0x08000000 0x00020000; shutdown&quot;</code></pre>
+<p>Do not flash a complete external Flash image with a programmer: you would erase calibration. The “Factory_Reconstructed” images from k1-teardown are for guided restoration with UV Studio.</p>
+<h2 id="compilar-firmware">Build firmware</h2>
+<p>Recommended base: <a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">armel/uv-k1-k5v3-firmware-custom</a>, which already handles PY32 startup, Puya HAL, SPI Flash, BK4829, USB, and protocol.</p>
+<pre><code>git clone --depth 1 https://github.com/armel/uv-k1-k5v3-firmware-custom
+cd uv-k1-k5v3-firmware-custom
+./compile-firmware.sh Fusion
+./compile-firmware.sh Fusion -DENABLE_VOX=OFF
+./compile-firmware.sh All</code></pre>
+<p>The container uses ARM GNU Toolchain 13.3.rel1, CMake, and Ninja. Presets: Custom, Fusion, FieldOps, Transfer, Labs, and Max. Output in <code>build/&lt;Preset&gt;</code>.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Path</th><th scope="col">Contents</th></tr></thead><tbody>
+<tr><td><code>App/driver/</code></td><td><code>bk4829.c</code>, <code>py25q16.c</code>, <code>st7565.c</code>, <code>keyboard.c</code>, <code>uart.c</code>, <code>vcp.c</code>, <code>eeprom_compat.c</code>, <code>mb_flash.c</code></td></tr>
+<tr><td><code>App/app/</code></td><td><code>spectrum.c</code>, <code>scanner.c</code>, <code>menu.c</code>, <code>uart.c</code>, <code>fm.c</code>, <code>aircopy.c</code>, <code>foxhunt.c</code></td></tr>
+<tr><td><code>Core/py32f071xb.ld</code></td><td>Linked at <code>0x08002800</code>, 118 KB</td></tr>
+<tr><td><code>CMakePresets.json</code></td><td><code>ENABLE_*</code> flags by edition</td></tr>
+</tbody></table></div>
+<p>The reproducible Bricohams build is in <a href="ayuda-bricohams.en.html">Bricohams V3</a>, and each option in <a href="ayuda-opciones-f4hwn.en.html">F4HWN options</a>. Before flashing your own build, check the vectors and that it does not exceed <code>0x1D800</code> bytes.</p>
+<h2 id="modificaciones-de-hardware">Hardware modifications</h2>
+<p>The <a href="ayuda-validacion-v3-android.en.html">comprehensive validation matrix</a> extends compatibility, testing, limits, and pending evidence criteria. There is no general certification of V1 modifications on V3. The <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/docs/atlas/android-cat-validacion.svg" target="_blank" rel="noopener noreferrer">Android/CAT/memory diagram</a> is functional, not a measured electrical schematic or soldering guide.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Modification</th><th scope="col">V3/K1</th><th scope="col">Notes</th></tr></thead><tbody>
+<tr><td>Expand EEPROM (M24M02, 24C512)</td><td>Not directly applicable</td><td>V3 uses 2 MB SPI Flash, not interchangeable I2C EEPROM. V1 reference: <a href="https://github.com/losehu/uv-k5-bootloader-custom/wiki" target="_blank" rel="noopener noreferrer">losehu</a></td></tr>
+<tr><td>SI4732 HF receiver (v5/v6.8 boards)</td><td>Not verified on V3</td><td>References cataloged here are V1 (CEC HF, Reborn, losehu, Robzyl 512K); they do not demonstrate PY32 support</td></tr>
+<tr><td>SMA antenna (17 cm, 38 cm)</td><td>Conditional accessory</td><td>Check connector, mechanical stress, band, and SWR; length or improved RX does not certify TX</td></tr>
+<tr><td>Satellite mod (coils, LNA)</td><td>Unconfirmed</td><td>No schematic or measurements for an adaptation to this V3 revision</td></tr>
+<tr><td>TX low-pass filter</td><td>Review required</td><td><a href="https://codeberg.org/Nannk/quansheng-lpf-mod" target="_blank" rel="noopener noreferrer">Nannk/quansheng-lpf-mod</a>; verify the measured board</td></tr>
+<tr><td>27 MHz mod</td><td>V1 reference, not validated on V3</td><td><a href="https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki/Hardware_Mods_27Mhz" target="_blank" rel="noopener noreferrer">Wiki</a>; requires its own RF network and measurements; do not extrapolate values</td></tr>
+<tr><td>Programming cable</td><td>Direct USB-C</td><td>Kenwood USB-serial cable (USART1) also works</td></tr>
+<tr><td>Coprocessor or ESP32</td><td>Designed for V1</td><td><a href="https://github.com/kamilsss655/ESPRI" target="_blank" rel="noopener noreferrer">ESPRI</a>, <a href="https://github.com/wabulutian/UVK5-Coprocessor" target="_blank" rel="noopener noreferrer">UVK5-Coprocessor</a>, <a href="https://github.com/losehu/UVE5" target="_blank" rel="noopener noreferrer">UVE5</a></td></tr>
+</tbody></table></div>
+<p>Firmware that raises output above 5 W can burn out the final stage. Transmitting outside your licensed bands is illegal even if the firmware allows it.</p>
+<h2 id="esquemas-e-imagenes">Schematics and images</h2>
+<p>No complete, verified V3/K1 electrical schematic was identified in the sources for this review. This does not prove that none exists elsewhere. Available references:</p>
+<ul>
+<li><a href="https://github.com/armel/k1-teardown" target="_blank" rel="noopener noreferrer">armel K1 teardown</a> (Apache-2.0): high-resolution photos, dumps, annotated firmware, and datasheets.</li>
+<li><a href="https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki/UV%E2%80%90K1-PCB" target="_blank" rel="noopener noreferrer">UV-K1 board photos</a> in the wiki.</li>
+<li><a href="https://github.com/ludwich66/Quansheng_UV-K5_Wiki/tree/main/hardware/KiCad/UVK5_reversing_06-02-2024" target="_blank" rel="noopener noreferrer">V1 reverse-engineered KiCad schematic</a>: CPU, RX, TX, audio, charger, and BK1080. Sheets <a href="https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki/Schematic_RX" target="_blank" rel="noopener noreferrer">RX</a>, <a href="https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki/Schematic_TX" target="_blank" rel="noopener noreferrer">TX</a>, and <a href="https://htmlpreview.github.io/?https://github.com/ludwich66/Quansheng_UV-K5_Wiki/blob/main/hardware/ibom.html" target="_blank" rel="noopener noreferrer">interactive BOM</a>. No license declared: link only.</li>
+<li>Datasheets: <a href="https://github.com/armel/k1-teardown/blob/main/datasheet/BK4829-BEKEN.pdf" target="_blank" rel="noopener noreferrer">BK4829</a>, <a href="https://github.com/armel/k1-teardown/blob/main/datasheet/PY32F071_Datasheet_Rev0.7_EN.pdf" target="_blank" rel="noopener noreferrer">PY32F071</a>, <a href="https://github.com/armel/k1-teardown/blob/main/datasheet/PY25Q16HB_Datasheet_V1.2.pdf" target="_blank" rel="noopener noreferrer">PY25Q16HB</a>, <a href="https://github.com/armel/k1-teardown/blob/main/datasheet/BK1080-BEKEN.pdf" target="_blank" rel="noopener noreferrer">BK1080</a>, <a href="https://github.com/ludwich66/Quansheng_UV-K5_Wiki/blob/main/hardware/BK4819V3Registers_List_20201218.pdf" target="_blank" rel="noopener noreferrer">BK4819 registers</a>.</li>
+</ul>
+<p>UV-K1 teardown photos (same board as the K5 V3). Author: F4HWN (armel), <a href="https://github.com/armel/k1-teardown" target="_blank" rel="noopener noreferrer">armel/k1-teardown</a>, Apache-2.0 license; reduced to 1600 px.</p>
+<figure><a href="docs/atlas/k1-view-a.jpg"><img src="docs/atlas/k1-view-a.jpg" alt="Complete teardown: battery, antenna, knob, case with speaker, board, and aluminum chassis" loading="lazy"></a><figcaption>Complete teardown: battery, antenna, knob, case with speaker, board, and aluminum chassis</figcaption></figure>
+<figure><a href="docs/atlas/k1-view-b-recto.jpg"><img src="docs/atlas/k1-view-b-recto.jpg" alt="Board, display side: LCD, LED, SMA, potentiometer, and keypad connector; K1-V5.0 ZG13 silkscreen" loading="lazy"></a><figcaption>Board, display side: LCD, LED, SMA, potentiometer, and keypad connector; K1-V5.0 ZG13 silkscreen</figcaption></figure>
+<figure><a href="docs/atlas/k1-view-b-verso.jpg"><img src="docs/atlas/k1-view-b-verso.jpg" alt="Board, RF and MCU side: filter coils, Kenwood jacks, USB-C, and QFP48 MCU" loading="lazy"></a><figcaption>Board, RF and MCU side: filter coils, Kenwood jacks, USB-C, and QFP48 MCU</figcaption></figure>
+<figure><a href="docs/atlas/k1-view-c-recto.jpg"><img src="docs/atlas/k1-view-c-recto.jpg" alt="Close-up of the 2 MB PUYA PY25Q16HB SPI Flash" loading="lazy"></a><figcaption>Close-up of the 2 MB PUYA PY25Q16HB SPI Flash</figcaption></figure>
+<figure><a href="docs/atlas/k1-view-c-verso.jpg"><img src="docs/atlas/k1-view-c-verso.jpg" alt="Close-up of the PUYA PY32F071 LQFP48 MCU beside USB-C and the 4R7 inductor" loading="lazy"></a><figcaption>Close-up of the PUYA PY32F071 LQFP48 MCU beside USB-C and the 4R7 inductor</figcaption></figure>
+<figure><a href="docs/atlas/k1-view-d-front.jpg"><img src="docs/atlas/k1-view-d-front.jpg" alt="Disassembled front: bezel, rubber keypad, and 4x4 matrix contact board" loading="lazy"></a><figcaption>Disassembled front: bezel, rubber keypad, and 4x4 matrix contact board</figcaption></figure>
+<figure><a href="docs/atlas/k1-view-e-front-back.jpg"><img src="docs/atlas/k1-view-e-front-back.jpg" alt="Assembly order: front bezel, inner chassis, and main board" loading="lazy"></a><figcaption>Assembly order: front bezel, inner chassis, and main board</figcaption></figure>
+<h2 id="firmwares-y-repositorios-para-v3-k1">Firmware and repositories for V3/K1</h2>
+<p>Verified with the GitHub API on 26-10-2026; “V3/K1” means the tree contains PY32 code.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Repository</th><th scope="col">License</th><th scope="col">Last push</th><th scope="col">What it is</th></tr></thead><tbody>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">armel/uv-k1-k5v3-firmware-custom</a></td><td>Apache-2.0</td><td>2026-10-25</td><td>F4HWN Fusion PY32, reference base</td></tr>
+<tr><td><a href="https://github.com/Robby69400/Sonic" target="_blank" rel="noopener noreferrer">Robby69400/Sonic</a></td><td>Apache-2.0</td><td>2026-10-25</td><td>Robzyl successor, F4HWN fork with multiboot</td></tr>
+<tr><td><a href="https://github.com/Gogu-Qs/GOGUFW-UV-K1-Messenger" target="_blank" rel="noopener noreferrer">Gogu-Qs/GOGUFW-UV-K1-Messenger</a></td><td>Apache-2.0</td><td>2026-10-24</td><td>Messaging, ACK, range</td></tr>
+<tr><td><a href="https://github.com/N7SIX/UV-K1Series_ApeX-Edition_v7.6.0" target="_blank" rel="noopener noreferrer">N7SIX/UV-K1Series_ApeX-Edition_v7.6.0</a></td><td>Apache-2.0</td><td>2026-10-11</td><td>ApeX edition</td></tr>
+<tr><td><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">reald/uv-k1-k5v3-firmware-custom</a></td><td>Apache-2.0</td><td>2026-10-19</td><td>ARDF; see <a href="ayuda-ardf.en.html">ARDF guide</a></td></tr>
+<tr><td><a href="https://github.com/fagci/k1-fw" target="_blank" rel="noopener noreferrer">fagci/k1-fw</a></td><td>No license</td><td>2026-07-19</td><td>fagci firmware for K1/K5 V3</td></tr>
+<tr><td><a href="https://github.com/muzkr/moto" target="_blank" rel="noopener noreferrer">muzkr/moto</a></td><td>Apache-2.0</td><td>2025-12-31</td><td>UF2 bootloader</td></tr>
+<tr><td><a href="https://github.com/armel/k1-teardown" target="_blank" rel="noopener noreferrer">armel/k1-teardown</a></td><td>Apache-2.0</td><td>2026-09-28</td><td>Photos, dumps, and datasheets</td></tr>
+<tr><td><a href="https://github.com/EthanYan6/uv-k1-k5v3-firmware-custom-3ch" target="_blank" rel="noopener noreferrer">EthanYan6/uv-k1-k5v3-firmware-custom-3ch</a></td><td>Apache-2.0</td><td>2026-08-10</td><td>3-channel listening</td></tr>
+<tr><td><a href="https://github.com/qbs524/uv-k1-k5v3-firmware-custom-main-chn" target="_blank" rel="noopener noreferrer">qbs524/uv-k1-k5v3-firmware-custom-main-chn</a></td><td>Apache-2.0</td><td>2025-12-24</td><td>F4HWN in Chinese</td></tr>
+<tr><td><a href="https://github.com/qrp73/K5TOOL" target="_blank" rel="noopener noreferrer">qrp73/K5TOOL</a></td><td>GPL-3.0</td><td>2025-12-18</td><td>EEPROM and command-line flashing</td></tr>
+<tr><td><a href="https://github.com/knoinok/quansheng_toolkit" target="_blank" rel="noopener noreferrer">knoinok/quansheng_toolkit</a></td><td>-</td><td>2026-05-08</td><td>K1/K5 V3 desktop toolkit</td></tr>
+<tr><td><a href="https://github.com/Dim0s/quansheng-UV-K5v3-K1-firmware-pack" target="_blank" rel="noopener noreferrer">Dim0s/quansheng-UV-K5v3-K1-firmware-pack</a></td><td>-</td><td>2026-10-25</td><td>Collection of V3/K1 binaries; see <a href="ayuda-pack-dim0s.en.html">Dim0s pack</a></td></tr>
+</tbody></table></div>
+<p>Dead links and where they live now:</p>
+<ul>
+<li><code>Robby69400/Robzyl*</code>: deleted; copies at <a href="https://github.com/K5Quan/Robzyl_K1_" target="_blank" rel="noopener noreferrer">K5Quan/Robzyl_K1_</a>, <a href="https://github.com/K5Quan/Robzyl_512K" target="_blank" rel="noopener noreferrer">K5Quan/Robzyl_512K</a>, and <a href="https://github.com/simoncottingham/Robzyl_K5" target="_blank" rel="noopener noreferrer">simoncottingham/Robzyl_K5</a>; the author continues with Sonic.</li>
+<li><code>joaquimorg/uv-k5</code> and <code>new_ui</code>: renamed to <a href="https://github.com/joaquimorg/UV-KX" target="_blank" rel="noopener noreferrer">UV-KX</a>, <a href="https://github.com/joaquimorg/UV-KX-firmware" target="_blank" rel="noopener noreferrer">UV-KX-firmware</a>, and <a href="https://github.com/joaquimorg/uv-kx-tools" target="_blank" rel="noopener noreferrer">uv-kx-tools</a> (V1).</li>
+<li><code>armel/uvtools2</code>: now <a href="https://github.com/Robby69400/uvtools2" target="_blank" rel="noopener noreferrer">Robby69400/uvtools2</a>; the website remains at <a href="https://armel.github.io/uvtools2/" target="_blank" rel="noopener noreferrer">https://armel.github.io/uvtools2/</a>.</li>
+<li><code>bg6ud/uv-k1-k5v3-firmware-custom</code>: deleted; see F4HWN V3 forks.</li>
+</ul>
+<p>No Quansheng material was found on GitFlic, GitVerse, GitLab, or Gitee; the Russian community publishes binaries on 4PDA and Telegram.</p>
+<h2 id="karina-y-codigo-cerrado">Karina and closed-source code</h2>
+<p>Karina is closed-source (see <a href="ayuda-karina.en.html">Karina</a>). According to Russian groups, it continues <a href="https://github.com/fagci/uv-k5-firmware-fagci-mod" target="_blank" rel="noopener noreferrer">fagci-mod v1.2.1</a> (Apache-2.0, which permits closed derivatives). To reproduce its features cleanly: describe them from the manual and changelog, start from F4HWN V3 and the spectrum code in fagci-mod and <a href="https://github.com/Alexuresp/PUNKTRACKER_2.5" target="_blank" rel="noopener noreferrer">PUNKTRACKER 2.5</a> (Apache-2.0, V1). <code>fagci/s0v4</code>, <code>hawk5</code>, and <code>k1-fw</code> have no license: they may be read, not copied. Do not decompile Karina&#39;s binary to reconstruct its source.</p>
+<h2 id="fuentes">Sources</h2>
+<ul>
+<li>Code: <a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">F4HWN V3</a> (<code>App/board.c</code>, <code>App/driver/*</code>, <code>App/app/uart.c</code>, <code>mb_flash.h</code>, <code>eeprom_compat.c</code>), <a href="https://github.com/muzkr/moto" target="_blank" rel="noopener noreferrer">moto</a>, Bricohams Studio (<code>bkFlashMain</code>).</li>
+<li>Hardware: <a href="https://github.com/armel/k1-teardown" target="_blank" rel="noopener noreferrer">k1-teardown</a>, <a href="https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki" target="_blank" rel="noopener noreferrer">Quansheng UV-K5 Wiki</a>.</li>
+<li>Community: targeted searches in Spanish- and Russian-language Telegram groups, without authors or personal data; <a href="https://github.com/Dim0s/quansheng-UV-K5v3-K1-firmware-pack" target="_blank" rel="noopener noreferrer">Dim0s pack</a>.</li>
+<li>V1 references: <a href="https://github.com/amnemonic/Quansheng_UV-K5_Firmware" target="_blank" rel="noopener noreferrer">amnemonic</a>, <a href="https://github.com/losehu/uv-k5-bootloader-custom/wiki" target="_blank" rel="noopener noreferrer">losehu</a>, <a href="https://github.com/egzumer/uv-k5-firmware-custom/wiki" target="_blank" rel="noopener noreferrer">egzumer wiki</a>.</li>
+</ul></article>
+    <footer><p class="translation-note">Translation of the Spanish original. If there is any discrepancy, the Spanish version prevails.</p><p>Document generated from the versioned Markdown. Check the sources and limits of each guide. <a href="ayuda-firmwares.en.html">Back to the index</a>.</p></footer>
+  </main>
+</body>
+</html>

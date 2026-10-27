@@ -12,26 +12,26 @@ class SatelliteTracking(
     private var lastElapsed: Long? = null
     fun cancel() { active = false }
     fun step(): SatelliteTarget? {
-        check(active) { "Seguimiento CAT cancelado." }
+        checkUi(active) { UiText(R.string.err_tracking_cancelled) }
         try {
             val now = clock()
             val elapsed = monotonic()
             val oldUtc = lastUtc
             val oldElapsed = lastElapsed
             if (oldUtc != null && oldElapsed != null) {
-                require(now > oldUtc && now - oldUtc <= 2000 && elapsed > oldElapsed &&
+                requireUi(now > oldUtc && now - oldUtc <= 2000 && elapsed > oldElapsed &&
                     elapsed - oldElapsed <= 2000 && kotlin.math.abs((now - oldUtc) - (elapsed - oldElapsed)) <= 500) {
-                    "Reloj o intervalo CAT discontinuo. Reinicia el seguimiento."
+                    UiText(R.string.err_tracking_clock)
                 }
             }
             val next = target(now)
-            check(active) { "Seguimiento CAT cancelado antes de SET." }
+            checkUi(active) { UiText(R.string.err_tracking_cancelled_before_set) }
             lastUtc = now; lastElapsed = elapsed
             val state = tune(next.frequency10Hz) { active }
             if (!active) return null
-            require(clock() - now in 0..1999 && monotonic() - elapsed in 0..1999) { "Respuesta CAT demasiado tardia." }
-            require(state.active && state.remote && !state.pending && state.frequency10Hz == next.frequency10Hz) {
-                "La radio no confirma Doppler aplicado."
+            requireUi(clock() - now in 0..1999 && monotonic() - elapsed in 0..1999) { UiText(R.string.err_cat_response_late) }
+            requireUi(state.active && state.remote && !state.pending && state.frequency10Hz == next.frequency10Hz) {
+                UiText(R.string.err_doppler_unconfirmed)
             }
             return next
         } catch (error: Exception) {

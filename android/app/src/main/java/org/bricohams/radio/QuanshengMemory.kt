@@ -1,7 +1,6 @@
 package org.bricohams.radio
 
 import java.io.File
-import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -13,7 +12,8 @@ import java.util.zip.CRC32
  */
 class QuanshengMemory(
     private val transport: RadioBytes,
-    private val clock: () -> Long = { System.nanoTime() / 1_000_000 }
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val allowExchange: () -> Boolean = { true }
 ) {
     var firmware = ""; private set
     /** F4HWN v6.0 has no physical Flash reader: channels can be read but never written. */
@@ -24,20 +24,22 @@ class QuanshengMemory(
     private fun view(bytes: ByteArray) = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
     private fun remaining(deadline: Long): Int {
         val left = deadline - clock()
-        if (left <= 0) throw IOException("Tiempo agotado esperando respuesta F4HWN.")
+        if (left <= 0) throw LocalizedIOException(UiText(R.string.err_f4hwn_timeout))
         return left.coerceAtMost(1000).toInt()
     }
 
     @Synchronized fun exchange(type: Int, payload: ByteArray, expected: Int = type + 1, timeoutMs: Long = 4000): ByteArray {
+        checkUi(allowExchange()) { UiText(R.string.err_usb_session_cancelled) }
         val deadline = clock() + timeoutMs
         transport.write(QuanshengFrames.encode(type, payload), remaining(deadline))
         var previous = 0
         while (true) {
+            checkUi(allowExchange()) { UiText(R.string.err_usb_session_cancelled) }
             val byte = transport.read(1, remaining(deadline)).single().toInt() and 255
             if (previous != 0xab || byte != 0xcd) { previous = byte; continue }
             val length = transport.read(2, remaining(deadline))
             val size = view(length).short.toInt() and 65535
-            require(size in 4..512) { "Longitud de paquete F4HWN fuera de rango." }
+            requireUi(size in 4..512) { UiText(R.string.err_f4hwn_packet_length) }
             val tail = transport.read(size + 4, remaining(deadline))
             val (responseType, response) = QuanshengFrames.decode(byteArrayOf(0xab.toByte(), 0xcd.toByte()) + length + tail)
             if (responseType == expected) return response
@@ -48,30 +50,30 @@ class QuanshengMemory(
     fun identify(): String {
         timestamp = System.currentTimeMillis().toInt()
         val response = exchange(0x0514, le(4).putInt(timestamp).array())
-        require(response.size >= 16) { "Respuesta de identificacion incompleta." }
+        requireUi(response.size >= 16) { UiText(R.string.err_identification_incomplete) }
         val name = response.copyOfRange(0, 16).takeWhile { it != 0.toByte() }.toByteArray().toString(Charsets.US_ASCII)
-        val match = requireNotNull(Regex("F4HWN.*v(\\d+)(?:\\.(\\d+))?", RegexOption.IGNORE_CASE).find(name)) {
-            "Firmware no compatible: $name. Se requiere F4HWN v6+."
+        val match = requireNotNullUi(Regex("F4HWN.*v(\\d+)(?:\\.(\\d+))?", RegexOption.IGNORE_CASE).find(name)) {
+            UiText(R.string.err_firmware_v6_required, name)
         }
         val major = match.groupValues[1].toInt()
-        require(major >= 6) { "Firmware no compatible: $name. Se requiere F4HWN v6+." }
+        requireUi(major >= 6) { UiText(R.string.err_firmware_v6_required, name) }
         firmware = name
         legacyReadOnly = major == 6 && (match.groupValues[2].toIntOrNull() ?: 0) == 0
         return name
     }
 
-    private fun checkIdentified() = require(firmware.isNotEmpty()) { "Identifica primero la radio." }
+    private fun checkIdentified() = requireUi(firmware.isNotEmpty()) { UiText(R.string.err_identify_first) }
 
     fun readConfiguration(progress: (Double) -> Unit = {}): ByteArray {
         checkIdentified()
-        require(Regex("^F4HWN.*v6\\.", RegexOption.IGNORE_CASE).containsMatchIn(firmware)) { "La gestion de canales solo admite F4HWN v6.x." }
+        requireUi(Regex("^F4HWN.*v6\\.", RegexOption.IGNORE_CASE).containsMatchIn(firmware)) { UiText(R.string.err_channels_v6_only) }
         val out = ByteArray(QuanshengChannels.CONFIG_SIZE)
         var offset = 0
         while (offset < out.size) {
             val length = minOf(128, out.size - offset)
             val data = exchange(0x051b, le(8).putShort(offset.toShort()).put(length.toByte()).put(0).putInt(timestamp).array())
-            require(data.size == length + 4 && (view(data).short.toInt() and 65535) == offset && (data[2].toInt() and 255) == length) {
-                "Respuesta de configuracion incorrecta en 0x%x.".format(offset)
+            requireUi(data.size == length + 4 && (view(data).short.toInt() and 65535) == offset && (data[2].toInt() and 255) == length) {
+                UiText(R.string.err_config_response, Integer.toHexString(offset))
             }
             data.copyInto(out, offset, 4)
             offset += length
@@ -85,8 +87,8 @@ class QuanshengMemory(
         val out = ByteArray(512)
         for (offset in 0 until 512 step 16) {
             val data = exchange(0x051b, le(8).putShort((0xb000 + offset).toShort()).putShort(16).putInt(timestamp).array())
-            require(data.size == 20 && (view(data).short.toInt() and 65535) == 0xb000 + offset && data[2].toInt() == 16) {
-                "Respuesta de calibracion incorrecta."
+            requireUi(data.size == 20 && (view(data).short.toInt() and 65535) == 0xb000 + offset && data[2].toInt() == 16) {
+                UiText(R.string.err_calibration_response)
             }
             data.copyInto(out, offset, 4)
             progress((offset + 16) / 512.0)
@@ -95,60 +97,69 @@ class QuanshengMemory(
     }
 
     fun readFlashBlock(address: Int, length: Int): ByteArray {
-        require(address >= 0 && length in 1..128 && address + length <= FLASH_SIZE) { "Rango de lectura Flash invalido." }
+        checkIdentified()
+        requireUi(address >= 0 && length in 1..128 && address <= FLASH_SIZE - length) { UiText(R.string.err_flash_read_range) }
         val data = exchange(0x0738, le(10).putInt(address).putShort(length.toShort()).putInt(timestamp).array())
-        require(data.size == length + 7 && view(data).getInt(0) == address &&
+        requireUi(data.size == length + 7 && view(data).getInt(0) == address &&
             (view(data).getShort(4).toInt() and 65535) == length && data[6].toInt() == 0) {
-            "Lectura Flash rechazada en 0x%x. Se requiere Labs con acceso Flash externa.".format(address)
+            UiText(R.string.err_flash_read_rejected, Integer.toHexString(address))
         }
         return data.copyOfRange(7, data.size)
     }
 
     fun verifyFlash(flash: ByteArray): Long {
-        val response = exchange(0x073e, le(12).putInt(0).putInt(flash.size).putInt(timestamp).array(), 0x073f, 30000)
-        require(response.size == 13 && view(response).getInt(0) == 0 && view(response).getInt(4) == flash.size &&
-            response[12].toInt() == 0) { "La radio no pudo verificar toda la Flash. Se requiere Labs con CRC de lectura fisica." }
-        val radio = view(response).getInt(8).toLong() and 0xffffffffL
-        require(radio == crc32(flash)) { "El CRC de la Flash leida no coincide con la radio. No se habilitara escritura." }
-        return radio
+        checkIdentified()
+        requireUi(flash.size == FLASH_SIZE) { UiText(R.string.err_flash_full_required) }
+        for (address in flash.indices step 4096) {
+            val response = exchange(0x073e, le(12).putInt(address).putInt(4096).putInt(timestamp).array(), 0x073f, 30000)
+            requireUi(response.size == 13 && view(response).getInt(0) == address && view(response).getInt(4) == 4096 &&
+                response[12].toInt() == 0) {
+                UiText(R.string.err_flash_sector_verify, Integer.toHexString(address))
+            }
+            val radio = view(response).getInt(8).toLong() and 0xffffffffL
+            requireUi(radio == crc32(flash.copyOfRange(address, address + 4096))) {
+                UiText(R.string.err_flash_crc, Integer.toHexString(address))
+            }
+        }
+        return crc32(flash)
     }
 
     /** Calibration + full 2 MiB external Flash checked by the radio's CRC + validated Main image, as the web backup. */
-    fun backup(progress: (String, Double) -> Unit = { _, _ -> }): Map<String, ByteArray> {
+    fun backup(progress: (UiText, Double) -> Unit = { _, _ -> }): Map<String, ByteArray> {
         identify()
-        val calibration = readCalibration { progress("Leyendo calibracion", it) }
-        require(!legacyReadOnly) { "F4HWN v6.0 no admite el respaldo Flash completo: escritura bloqueada. Usa Labs v6.1+." }
+        val calibration = readCalibration { progress(UiText(R.string.backup_stage_calibration), it) }
+        requireUi(!legacyReadOnly) { UiText(R.string.err_v60_no_backup) }
         val flash = ByteArray(FLASH_SIZE)
         for (address in 0 until FLASH_SIZE step 128) {
             readFlashBlock(address, 128).copyInto(flash, address)
-            progress("Leyendo Flash externa (2 MiB, 10-20 min)", (address + 128).toDouble() / FLASH_SIZE)
+            progress(UiText(R.string.backup_stage_flash), (address + 128).toDouble() / FLASH_SIZE)
         }
-        progress("Verificando CRC-32 en la radio", 1.0)
+        progress(UiText(R.string.backup_stage_crc), 1.0)
         verifyFlash(flash)
-        require(calibration.contentEquals(flash.copyOfRange(0x10000, 0x10200))) { "La calibracion no coincide con la Flash fisica. Respaldo bloqueado." }
+        requireUi(calibration.contentEquals(flash.copyOfRange(0x10000, 0x10200))) { UiText(R.string.err_calibration_mismatch) }
         return linkedMapOf("calibration.bin" to calibration, "external-flash.bin" to flash, "base-firmware.bin" to baseFromFlash(flash))
     }
 
     /** Writes only the channel area (records, names, attributes) and re-reads everything; returns the blocks written. */
     fun writeConfiguration(image: ByteArray, original: ByteArray, progress: (Double) -> Unit = {}): Int {
         checkIdentified()
-        require(!legacyReadOnly) { "F4HWN v6.0: escritura bloqueada." }
+        requireUi(!legacyReadOnly) { UiText(R.string.err_v60_write_blocked) }
         require(image.size == QuanshengChannels.CONFIG_SIZE && original.size == QuanshengChannels.CONFIG_SIZE)
-        require(image.copyOfRange(QuanshengChannels.PROTECTED_FROM, image.size)
+        requireUi(image.copyOfRange(QuanshengChannels.PROTECTED_FROM, image.size)
             .contentEquals(original.copyOfRange(QuanshengChannels.PROTECTED_FROM, original.size))) {
-            "Solo se pueden modificar memorias, nombres y atributos; VFO y ajustes estan protegidos."
+            UiText(R.string.err_write_protected_area)
         }
-        require(readConfiguration().contentEquals(original)) { "La configuracion de la radio ha cambiado. Vuelve a leer antes de escribir." }
+        requireUi(readConfiguration().contentEquals(original)) { UiText(R.string.err_config_changed) }
         val writes = plan(image, original)
         writes.forEachIndexed { index, (offset, bytes) ->
             val response = exchange(0x051d, le(16).putShort(offset.toShort()).put(8).put(0).putInt(timestamp).put(bytes).array())
-            require(response.size == 2 && (view(response).short.toInt() and 65535) == offset) {
-                "Escritura rechazada en 0x%x.".format(offset)
+            requireUi(response.size == 2 && (view(response).short.toInt() and 65535) == offset) {
+                UiText(R.string.err_write_rejected, Integer.toHexString(offset))
             }
             progress((index + 1).toDouble() / writes.size)
         }
-        require(readConfiguration().contentEquals(image)) {
-            "La relectura no coincide. Escritura parcial o rechazada; conserva el respaldo y no continues."
+        requireUi(readConfiguration().contentEquals(image)) {
+            UiText(R.string.err_readback_mismatch)
         }
         return writes.size
     }
@@ -167,12 +178,12 @@ class QuanshengMemory(
             val flags = header.getShort(0x20006).toInt() and 65535
             val size = header.getInt(0x20008)
             val crc = header.getInt(0x2000c).toLong() and 0xffffffffL
-            require(magic == 0x31424d46 && version == 1 && flags and 1 != 0) {
-                "Main no inicializado o cabecera no compatible. No hay copia de firmware base valida."
+            requireUi(magic == 0x31424d46 && version == 1 && flags and 1 != 0) {
+                UiText(R.string.err_main_header)
             }
-            require(size in 1..0x1d800) { "Tamano de Main invalido." }
+            requireUi(size in 1..0x1d800) { UiText(R.string.err_main_size) }
             val image = flash.copyOfRange(0x21000, 0x21000 + size)
-            require(crc32(image) == crc) { "El CRC del firmware base Main no coincide." }
+            requireUi(crc32(image) == crc) { UiText(R.string.err_main_crc) }
             return image
         }
 
@@ -207,9 +218,9 @@ class QuanshengBackups(private val root: File) {
     data class Receipt(val directory: File, val sha256: Map<String, String>, val firmware: String)
 
     fun save(firmware: String, files: Map<String, ByteArray>, now: Long = System.currentTimeMillis()): Receipt {
-        require(files.keys.containsAll(listOf("calibration.bin", "external-flash.bin", "base-firmware.bin"))) { "Respaldo incompleto." }
+        requireUi(files.keys.containsAll(listOf("calibration.bin", "external-flash.bin", "base-firmware.bin"))) { UiText(R.string.err_backup_incomplete) }
         val directory = File(root, "quansheng-$now")
-        if (!directory.mkdirs()) throw IOException("No se pudo crear la carpeta del respaldo.")
+        if (!directory.mkdirs()) throw LocalizedIOException(UiText(R.string.err_backup_folder))
         val hashes = LinkedHashMap<String, String>()
         for ((name, bytes) in files) {
             File(directory, name).writeBytes(bytes)
@@ -225,7 +236,7 @@ class QuanshengBackups(private val root: File) {
     fun verify(receipt: Receipt) {
         for ((name, expected) in receipt.sha256) {
             val file = File(receipt.directory, name)
-            require(file.isFile && sha256(file.readBytes()) == expected) { "La copia persistente cambio o esta corrupta: $name." }
+            requireUi(file.isFile && sha256(file.readBytes()) == expected) { UiText(R.string.err_backup_copy_corrupt, name) }
         }
     }
 

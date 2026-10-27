@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Antenne satellitari: progetti Bricohams e componenti stampabili: aiuto Bricohams per modello e versione.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Antenne satellitari: progetti Bricohams e componenti stampabili | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-antenas-satelite.html">
+  <link rel="alternate" hreflang="en" href="ayuda-antenas-satelite.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-antenas-satelite.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-antenas-satelite.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-antenas-satelite.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Vai al contenuto</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aiuto"><a href="ayuda.html">Aiuto dell&#39;app (spagnolo)</a> · <a href="ayuda-firmwares.it.html">Libreria firmware</a> · <a href="ayuda-atlas-uv-k5-v3.it.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Lingua"><a href="ayuda-antenas-satelite.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-antenas-satelite.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-antenas-satelite.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-antenas-satelite.it.html" hreflang="it" lang="it" aria-current="page">Italiano</a> · <a href="ayuda-antenas-satelite.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#que-antena-elegir">Quale antenna scegliere</a></li><li><a href="#yagi-bibanda-de-mano">Yagi bibanda portatile</a></li><li><a href="#dipolo-en-v-horizontal-2-m">Dipolo a V orizzontale 2 m</a></li><li><a href="#piezas-imprimibles-stl">Componenti stampabili STL</a></li><li><a href="#metodo-de-calculo-y-verificacion">Metodo di calcolo e verifica</a></li><li><a href="#seguridad-y-legalidad">Sicurezza e legalità</a></li></ul></nav>
+    <article class="panel"><h1 id="antenas-para-satelites-disenos-bricohams-y-piezas-imprimibles">Antenne satellitari: progetti Bricohams e componenti stampabili</h1>
+<p>Autori: Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF e Pedro Roca, fondatori e membri del consiglio di Bricohams. Informazioni: <a href="https://bricohams.org" target="_blank" rel="noopener noreferrer">https://bricohams.org</a> e <a href="https://bricohams.com" target="_blank" rel="noopener noreferrer">https://bricohams.com</a>.</p>
+<p>Sezione antenne della guida <a href="ayuda-iniciacion-satelite.it.html">Introduzione ai satelliti</a>. I progetti e i componenti sono <strong>originali Bricohams</strong>: dimensioni calcolate con un risolutore del metodo dei momenti scritto per questo progetto e parti modellate tramite codice. Non riproducono i progetti d&#39;antenna di PY4ZBZ né di PY5LO inclusi nella guida di PT2VM, il cui permesso fu concesso a quell&#39;autore.</p>
+<p>&gt; <strong>Stato: progetto simulato, non costruito né misurato.</strong> I valori provengono dalla simulazione in spazio libero. Nessuna antenna è stata ancora fabbricata o misurata con analizzatore. Tagliare le aste 3-5 mm più lunghe e regolarle con un analizzatore d&#39;antenna (NanoVNA o simile) prima di trasmettere.</p>
+<h2 id="que-antena-elegir">Quale antenna scegliere</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Antenna</th><th scope="col">Uso</th><th scope="col">Guadagno simulato</th><th scope="col">Difficoltà</th></tr></thead><tbody>
+<tr><td><a href="#yagi-bibanda-de-mano">Yagi bibanda portatile</a></td><td>Satelliti FM con uplink e downlink su bande diverse (SO-50, ripetitore ISS, PO-101)</td><td>8,4 dBi VHF / 11,4 dBi UHF</td><td>Media</td></tr>
+<tr><td><a href="#dipolo-en-v-horizontal-2-m">Dipolo a V orizzontale 2 m</a></td><td>Ascolto fisso senza inseguimento: SSTV e APRS della ISS, downlink VHF</td><td>1,8 dBi allo zenit</td><td>Bassa</td></tr>
+<tr><td>Antenna originale della radio</td><td>Primi ascolti della ISS nei passaggi alti</td><td>Molto inferiore alle precedenti</td><td>Nessuna</td></tr>
+</tbody></table></div>
+<p>Con l&#39;antenna originale si può ricevere la ISS nei passaggi alti, ma per lavorare satelliti FM a bassa potenza si usa di solito un&#39;antenna direzionale orientata a mano. Una lunga antenna a stilo o un contrappeso aiutano un po&#39;, ma non sostituiscono la direzionale.</p>
+<h2 id="yagi-bibanda-de-mano">Yagi bibanda portatile</h2>
+<figure><a href="docs/atlas/sat-antena-yagi.svg"><img src="docs/atlas/sat-antena-yagi.svg" alt="Disegno quotato della Yagi bibanda" loading="lazy"></a><figcaption>Disegno quotato della Yagi bibanda</figcaption></figure>
+<p>Due Yagi condividono un boom non conduttivo: 3 elementi per 2 m sul piano orizzontale e 5 elementi per 70 cm sul piano verticale, ruotati di 90 gradi. Nei piani ortogonali e centrati, la simulazione non mostra un accoppiamento apprezzabile tra bande: ogni Yagi rende allo stesso modo con o senza l&#39;altra. Un disallineamento reale degli elementi introduce invece un certo accoppiamento.</p>
+<h3 id="dimensiones">Dimensioni</h3>
+<p>Quote in mm, misurate dal riflettore VHF (x = 0). Le lunghezze sono da punta a punta; per gli elementi attivi includono lo spazio centrale di 16 mm del blocco stampato, quindi ogni metà misura (lunghezza − 16) / 2.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Banda</th><th scope="col">Elemento</th><th scope="col">Lunghezza (mm)</th><th scope="col">Posizione x (mm)</th><th scope="col">Ogni metà (mm)</th></tr></thead><tbody>
+<tr><td>VHF</td><td>Riflettore</td><td>1011</td><td>0</td><td>—</td></tr>
+<tr><td>VHF</td><td>Attivo</td><td>969</td><td>532</td><td>476,5</td></tr>
+<tr><td>VHF</td><td>Direttore</td><td>904</td><td>950</td><td>—</td></tr>
+<tr><td>UHF</td><td>Riflettore</td><td>337</td><td>75</td><td>—</td></tr>
+<tr><td>UHF</td><td>Attivo</td><td>320</td><td>231</td><td>152</td></tr>
+<tr><td>UHF</td><td>Direttore 1</td><td>304</td><td>365</td><td>—</td></tr>
+<tr><td>UHF</td><td>Direttore 2</td><td>301</td><td>572</td><td>—</td></tr>
+<tr><td>UHF</td><td>Direttore 3</td><td>294</td><td>751</td><td>—</td></tr>
+</tbody></table></div>
+<p>Boom in tubo PVC da 20 mm, come il tubo elettrico rigido, lungo circa 1030 mm. I pezzi VHF e UHF distano almeno 35 mm lungo il boom; lo script di progetto lo verifica.</p>
+<h3 id="rendimiento-simulado">Prestazioni simulate</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">MHz</th><th scope="col">Z (Ω)</th><th scope="col">ROS 50 Ω</th><th scope="col">Guadagno (dBi)</th><th scope="col">Rapporto avanti/indietro (dB)</th></tr></thead><tbody>
+<tr><td>145,8</td><td>38,0 + j2,6</td><td>1,32</td><td>8,43</td><td>15,0</td></tr>
+<tr><td>145,9</td><td>37,9 + j3,3</td><td>1,33</td><td>8,44</td><td>15,0</td></tr>
+<tr><td>146,0</td><td>37,9 + j4,1</td><td>1,34</td><td>8,45</td><td>14,9</td></tr>
+<tr><td>435,0</td><td>39,1 − j0,7</td><td>1,28</td><td>11,32</td><td>15,2</td></tr>
+<tr><td>436,5</td><td>38,6 − j0,3</td><td>1,30</td><td>11,37</td><td>15,6</td></tr>
+<tr><td>438,0</td><td>37,1 + j0,0</td><td>1,35</td><td>11,42</td><td>16,2</td></tr>
+</tbody></table></div>
+<p>Il progetto privilegia guadagno e rapporto avanti/indietro con ROS inferiore a 1,4 nell&#39;intero segmento satellitare, alimentando l&#39;elemento attivo raccordandolo direttamente con coassiale da 50 Ω e senza rete di adattamento. Una ROS di 1,3-1,35 riflette circa il 2 % della potenza; è accettabile per una radio portatile.</p>
+<h3 id="materiales">Materiali</h3>
+<ul>
+<li>Tubo PVC da 20 mm, 1030 mm.</li>
+<li>Asta di alluminio da 4 mm, circa 5,5 m in totale. Va bene anche l&#39;ottone; per un metro a nastro occorre un blocco diverso.</li>
+<li>Componenti stampati: 6 morsetti per elementi, 2 blocchi attivi e 1 impugnatura; vedi <a href="#piezas-imprimibles-stl">componenti STL</a>.</li>
+<li>Viti M3 x 8 per fissare aste e componenti e M3 x 10 con terminale ad anello per gli elementi attivi.</li>
+<li>Due tratti di coassiale sottile da 50 Ω, come RG-316 o RG-58, con choke di modo comune su ciascuno: alcune perline di ferrite vicino al blocco o 4-5 spire di coassiale di circa 3 cm di diametro. Verificare il choke con l&#39;analizzatore.</li>
+<li>Un diplexer VHF/UHF per unire entrambi gli elementi attivi a un unico downlink se si usa una sola radio, ad esempio UV-K5. Con due radio, ciascun coassiale si collega alla propria radio.</li>
+</ul>
+<h3 id="montaje">Montaggio</h3>
+<ol>
+<li>Tagliare le aste 3-5 mm più lunghe della tabella e limarne le estremità. Applicare protezioni alle punte: guaina termorestringente o tappi. Girando un&#39;antenna portatile è facile avvicinare una punta al viso.</li>
+<li>Segnare le posizioni x sul boom con nastro. I morsetti VHF tengono l&#39;asta orizzontale e quelli UHF la ruotano di 90 gradi sul boom.</li>
+<li>Centrare l&#39;asta in ciascun morsetto e stringerla con la vite M3 superiore. Fissare il morsetto al boom con la vite M3 inferiore.</li>
+<li>Nei blocchi attivi, inserire ciascuna metà fino in fondo al foro. La vite superiore la fissa e funge da morsetto: calza da un lato e centrale dall&#39;altro, con terminale ad anello. Sigillare i collegamenti contro l&#39;umidità.</li>
+<li>Instradare i coassiali sul boom verso il riflettore con fascette attraverso il perno del blocco e il choke vicino all&#39;alimentazione.</li>
+<li>Montare l&#39;impugnatura tra l&#39;elemento attivo UHF (231) e il direttore 1 UHF (365), verso x ≈ 300. Spostarla finché l&#39;antenna non è bilanciata.</li>
+</ol>
+<h3 id="ajuste-con-analizador">Regolazione con analizzatore</h3>
+<ul>
+<li>Misurare la ROS di ciascuna banda separatamente, con l&#39;altro coassiale terminato a 50 Ω o collegato al diplexer.</li>
+<li>Se il minimo è sotto il segmento, accorciare l&#39;elemento attivo in misura uguale su entrambi i lati, a passi di 1-2 mm. Se è sopra, l&#39;attivo è corto: sostituirlo.</li>
+<li>Non inseguire una ROS di 1,0: l&#39;attivo diretto è circa 38 Ω per progetto. L&#39;importante è che il minimo sia centrato su 145,9 e 436,5 MHz.</li>
+<li>Durante la misura allontanarsi da tavoli metallici e persone. Puntare l&#39;antenna verso il cielo.</li>
+</ul>
+<h2 id="dipolo-en-v-horizontal-2-m">Dipolo a V orizzontale 2 m</h2>
+<figure><a href="docs/atlas/sat-antena-dipolo-v.svg"><img src="docs/atlas/sat-antena-dipolo-v.svg" alt="Disegno quotato del dipolo a V" loading="lazy"></a><figcaption>Disegno quotato del dipolo a V</figcaption></figure>
+<p>Antenna fissa senza inseguimento per ascoltare la ISS, ad esempio SSTV a 145,800 MHz e APRS a 145,825 MHz, e downlink VHF. I bracci a V di 100 gradi riempiono parzialmente i nulli del dipolo rettilineo e avvicinano l&#39;impedenza a 50 Ω.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Parametro</th><th scope="col">Valore</th></tr></thead><tbody>
+<tr><td>Angolo tra i bracci</td><td>100 gradi</td></tr>
+<tr><td>Braccio dal centro</td><td>505 mm</td></tr>
+<tr><td>Asta per braccio</td><td>497 mm: inizia a 8 mm dall&#39;asse, all&#39;interno del cubo stampato</td></tr>
+<tr><td>Z simulata 145,8 / 145,9 / 146,0 MHz</td><td>48,7 + j2,0 / 48,9 + j2,6 / 49,0 + j3,3 Ω</td></tr>
+<tr><td>ROS 50 Ω</td><td>1,05-1,07</td></tr>
+<tr><td>Guadagno allo zenit</td><td>1,82 dBi</td></tr>
+<tr><td>Oscillazione in azimut a 30 gradi di elevazione</td><td>5,5 dB</td></tr>
+</tbody></table></div>
+<p>Montarlo orizzontalmente su un palo in PVC da 20 mm, con il cubo stampato e choke di modo comune sul coassiale, circa 0,5-1 m sopra il tetto o il terreno. L&#39;altezza dal suolo modifica il diagramma reale: la simulazione è in spazio libero. Per trasmettere durante passaggi bassi è preferibile la Yagi.</p>
+<h2 id="piezas-imprimibles-stl">Componenti stampabili STL</h2>
+<figure><a href="docs/atlas/sat-piezas-stl.svg"><img src="docs/atlas/sat-piezas-stl.svg" alt="Vista dei componenti stampabili" loading="lazy"></a><figcaption>Vista dei componenti stampabili</figcaption></figure>
+<div class="table-scroll"><table><thead><tr><th scope="col">Componente</th><th scope="col">File</th><th scope="col">Quantità</th><th scope="col">Funzione</th></tr></thead><tbody>
+<tr><td>Morsetto per elemento</td><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/stl/pinza-elemento.stl" target="_blank" rel="noopener noreferrer">pinza-elemento.stl</a></td><td>6</td><td>Fissa un elemento passivo da 4 mm al boom da 20 mm</td></tr>
+<tr><td>Blocco dell&#39;elemento attivo</td><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/stl/bloque-excitado.stl" target="_blank" rel="noopener noreferrer">bloque-excitado.stl</a></td><td>2</td><td>Due metà isolate con spazio da 16 mm, morsetti M3 e passaggio coassiale</td></tr>
+<tr><td>Impugnatura</td><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/stl/empunadura.stl" target="_blank" rel="noopener noreferrer">empunadura.stl</a></td><td>1</td><td>Manico da 32 mm, cavo e rigato, fissato al boom</td></tr>
+<tr><td>Cubo del dipolo a V</td><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/stl/cubo-dipolo-v.stl" target="_blank" rel="noopener noreferrer">cubo-dipolo-v.stl</a></td><td>1</td><td>Bracci a 100 gradi, morsetti M3 e sede per palo da 20 mm</td></tr>
+</tbody></table></div>
+<p>Impostazioni di stampa consigliate:</p>
+<ul>
+<li>Materiale: PETG o ASA. Il PLA si deforma al sole.</li>
+<li>Pareti e riempimento: 4 pareti e riempimento al 40 %.</li>
+<li>Altezza layer: 0,2 mm.</li>
+<li>Orientamento: anello del boom orizzontale, appoggiato sulla faccia piana della sporgenza. Stampare il cubo con la sede rivolta verso il basso.</li>
+</ul>
+<p>Fori con gioco:</p>
+<ul>
+<li>Boom: 20,4 mm.</li>
+<li>Asta: 4,3 mm.</li>
+<li>Filettatura diretta M3: 2,8 mm.</li>
+</ul>
+<p>Se la stampante chiude i fori, modificare le costanti <code>BOOM</code>, <code>ROD</code> e <code>M3_TAP</code> di <code>generar_stl.py</code> e rigenerare i componenti.</p>
+<p>Lo script verifica che ogni STL sia un solido chiuso e composto da un solo pezzo. I dati di volume e dimensioni sono in <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/piezas.json" target="_blank" rel="noopener noreferrer">piezas.json</a>.</p>
+<h2 id="metodo-de-calculo-y-verificacion">Metodo di calcolo e verifica</h2>
+<p>File in <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/hardware/antenas/README.md" target="_blank" rel="noopener noreferrer">hardware/antenas</a>:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Script</th><th scope="col">Funzione</th></tr></thead><tbody>
+<tr><td><code>mom.py</code></td><td>Risolutore proprietario di fili sottili con metodo dei momenti (Harrington): correnti nei nodi, carichi per segmento, nucleo ridotto e termine statico integrato analiticamente</td></tr>
+<tr><td><code>disenar.py</code></td><td>Ottimizza le dimensioni con Nelder-Mead per il massimo guadagno con ROS ≤ 1,3-1,35 e rapporto avanti/indietro ≥ 15 dB; verifica la combinazione bibanda e la distanza tra componenti e scrive <code>resultados.json</code></td></tr>
+<tr><td><code>generar_stl.py</code></td><td>Modella i componenti con manifold3d e scrive gli STL e <code>piezas.json</code></td></tr>
+<tr><td><code>vistas.py</code></td><td>Disegna i piani quotati e le viste dei componenti in <code>docs/atlas</code></td></tr>
+</tbody></table></div>
+<p>Convalida del risolutore sul dipolo λ/2 di riferimento:</p>
+<ul>
+<li>Con raggio 10⁻⁵ λ restituisce Z ≈ 78 + j43 Ω, rispetto al valore classico</li>
+</ul>
+<p>di 73 + j42,5 Ω. La differenza deriva dall&#39;alimentazione delta-gap.</p>
+<ul>
+<li>Con raggio 10⁻³ λ, il dipolo da 0,475 λ risuona a 71 − j3,5 Ω.</li>
+<li>La direttività è 2,15 dBi. Il guadagno calcolato dalla potenza in ingresso</li>
+</ul>
+<p>coincide con l&#39;integrale del diagramma, quindi la potenza si conserva.</p>
+<p>Errore previsto nella frequenza di risonanza: qualche punto percentuale. Per questo gli elementi si tagliano lunghi e poi si regolano.</p>
+<p>Limiti del modello:</p>
+<ul>
+<li>Spazio libero, senza terreno né corpo dell&#39;operatore.</li>
+<li>Conduttori perfetti.</li>
+<li>Non modella la plastica dei morsetti, che abbassa leggermente la risonanza,</li>
+</ul>
+<p>il boom, il coassiale né il diplexer.</p>
+<ul>
+<li>Non è una misura né una certificazione delle prestazioni.</li>
+</ul>
+<p>Per rigenerare dalla cartella <code>hardware/antenas</code>:</p>
+<pre><code>python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python disenar.py
+.venv\Scripts\python generar_stl.py
+.venv\Scripts\python vistas.py</code></pre>
+<h2 id="seguridad-y-legalidad">Sicurezza e legalità</h2>
+<ul>
+<li>Per trasmettere è necessaria l&#39;autorizzazione di radioamatore. Per ascoltare no.</li>
+<li>Con 5 W e una Yagi da 11 dBi, non puntare verso persone vicine e tenere gli</li>
+</ul>
+<p>elementi lontani dal viso durante la trasmissione.</p>
+<ul>
+<li>Non usare queste antenne su bande o satelliti non autorizzati, ad esempio</li>
+</ul>
+<p>satelliti militari UHF.</p></article>
+    <footer><p class="translation-note">Traduzione dell&#39;originale spagnolo. In caso di discrepanza prevale la versione spagnola.</p><p>Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida. <a href="ayuda-firmwares.it.html">Torna all&#39;indice</a>.</p></footer>
+  </main>
+</body>
+</html>

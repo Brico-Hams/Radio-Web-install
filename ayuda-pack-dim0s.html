@@ -10,12 +10,18 @@
   <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-pack-dim0s.html">
+  <link rel="alternate" hreflang="en" href="ayuda-pack-dim0s.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-pack-dim0s.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-pack-dim0s.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-pack-dim0s.fr.html">
 </head>
 <body>
   <a class="skip" href="#main">Saltar al contenido</a>
   <main id="main" class="firmware-help">
     <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
       <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Idioma"><a href="ayuda-pack-dim0s.html" hreflang="es" lang="es" aria-current="page">Español</a> · <a href="ayuda-pack-dim0s.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-pack-dim0s.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-pack-dim0s.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-pack-dim0s.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
     <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#que-cambia-respecto-a-la-inspeccion-anterior">Que cambia respecto a la inspeccion anterior</a></li><li><a href="#naturaleza-y-limites-del-inventario">Naturaleza y limites del inventario</a></li><li><a href="#familias-presentes">Familias presentes</a></li><li><a href="#multiboot-afirmacion-frente-a-comprobacion">Multiboot: afirmacion frente a comprobacion</a></li><li><a href="#karina-21-09-2026-evidencia-del-zip">Karina 21-09-2026: evidencia del ZIP</a></li><li><a href="#configuraciones-karina-v3-descritas-por-el-recopilador">Configuraciones Karina V3 descritas por el recopilador</a></li><li><a href="#que-falta-para-un-port-o-integracion-real">Que falta para un port o integracion real</a></li><li><a href="#fuentes-fijadas">Fuentes fijadas</a></li></ul></nav>
     <article class="panel"><h1 id="pack-dim0s-inventario-y-karina-v3-uv-k1">Pack Dim0s: inventario y Karina V3/UV-K1</h1>
@@ -58,6 +64,7 @@
 <h2 id="karina-21-09-2026-evidencia-del-zip">Karina 21-09-2026: evidencia del ZIP</h2>
 <p>Archivo: <code>Karina/21.09.2026.zip</code>, 2296162 bytes. SHA-256 de la descarga:</p>
 <pre><code>619368c7d08cd2dfdda13aeec4ae5d8fadd70eb78d60bbe908832d53385e2999</code></pre>
+<p>El <a href="ayuda-binarios-terceros.html">indice de terceros</a> contiene una descarga de igual nombre pero de 2161962 bytes y otro SHA-256. No se han demostrado contenidos equivalentes entre ambos ZIP. Este inventario y los hashes extraidos siguientes corresponden exclusivamente a la descarga de 2296162 bytes indicada arriba, no a cualquier archivo llamado <code>21.09.2026.zip</code>.</p>
 <p>Inventario interior: carpetas K1 y K5V3, dos RAW, dos packed, dos copias de <code>calib11.bin</code>, dos drivers CHIRP y tres PDF. No contiene proyecto C, Makefile, linker ni aviso LICENSE por nombre. Los nombres rusos de algunas entradas presentan problemas de codificacion al listar el ZIP; no se han reinterpretado como nombres de fuente ni se ha ejecutado contenido.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Imagen RAW</th><th scope="col">Bytes</th><th scope="col">SP</th><th scope="col">Reset</th></tr></thead><tbody>
 <tr><td><code>k1_210926_3.bin</code></td><td>76288</td><td><code>0x20004000</code></td><td><code>0x08010AF5</code></td></tr>

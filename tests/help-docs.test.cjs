@@ -4,7 +4,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const { once } = require("node:events");
-const { pages, render, helpImages, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown } = require("../scripts/build-help.cjs");
+const { pages, render, helpImages, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown,
+  LANGS, TRANSLATIONS, localized, checkParity, translatedPath } = require("../scripts/build-help.cjs");
 const { ALLOWED_FILES, createServer } = require("../server.cjs");
 const root = path.join(__dirname, "..");
 // Generated docs are stored with LF; a Windows checkout with core.autocrlf turns them into CRLF.
@@ -55,13 +56,15 @@ test("las 18 versiones historicas resuelven herencia sin proyectar opciones nuev
   assert.throws(() => resolvePresets({ configurePresets: [{ name: "x", inherits: "x" }] }), /circular/);
 });
 
-test("las guias generadas tienen enlaces y anclas locales resolubles, sin scripts", () => {
-  for (const [source, file] of Object.entries(pages)) {
-    const markdown = read(`docs/${source}`);
+test("las guias generadas tienen enlaces y anclas locales resolubles, sin scripts, en todos los idiomas", () => {
+  for (const lang of LANGS) for (const [source, spanish] of Object.entries(pages)) {
+    const file = localized(spanish, lang);
+    const markdown = read(lang === "es" ? `docs/${source}` : `docs/i18n/${lang}/${source}`);
     assert.doesNotMatch(markdown, /\]\([^)]*\\/, `Enlace no portable: ${source}`);
     const html = read(file);
     assert.ok(markdown.length > 1000, source);
-    assert.match(html, /<html lang="es">/);
+    assert.match(html, new RegExp(`<html lang="${lang}">`));
+    for (const code of LANGS) assert.ok(html.includes(`hreflang="${code}" href="${localized(spanish, code)}"`), `${file}: falta alternativo ${code}`);
     assert.match(html, /Bricohams Radio Workspace<\/title>/);
     assert.doesNotMatch(html, /<script|\son\w+=|javascript:|\sstyle=/i, file);
     assert.ok(ALLOWED_FILES.includes(file), file);
@@ -185,6 +188,31 @@ test("los ejemplos solo incluyen binarios abiertos con licencia y hashes correct
   for (const page of ["ayuda-ejemplos.html", "ayuda-binarios-terceros.html"]) assert.ok(read("ayuda.html").includes(`href="${page}"`), page);
 });
 
+test("iniciacion al satelite y antenas: guia propia, cifras simuladas y piezas STL publicadas", () => {
+  const guide = read("docs/INICIACION-SATELITE.md");
+  for (const value of ["no es una traducción literal", "PT2VM", "BH Satélite", "ANTENAS-SATELITE.md", "EA5KAO"]) {
+    assert.ok(guide.includes(value), `guia: ${value}`);
+  }
+  const antennas = read("docs/ANTENAS-SATELITE.md");
+  assert.ok(antennas.includes("no construido ni medido"));
+  for (const name of ["pinza-elemento", "bloque-excitado", "empunadura", "cubo-dipolo-v"]) {
+    assert.ok(antennas.includes(`../hardware/antenas/stl/${name}.stl`), name);
+    const stl = fs.readFileSync(path.join(root, "hardware/antenas/stl", `${name}.stl`));
+    assert.equal(stl.length, 84 + 50 * stl.readUInt32LE(80), `STL binario valido: ${name}`);
+  }
+  for (const value of ["1011", "969", "904", "1030", "505"]) assert.ok(antennas.includes(value), `cota ${value}`);
+  for (const page of ["ayuda-iniciacion-satelite.html", "ayuda-antenas-satelite.html"]) {
+    assert.equal(Object.values(pages).filter(target => target === page).length, 1, page);
+    assert.ok(read("ayuda.html").includes(`href="${page}"`), page);
+    assert.ok(ALLOWED_FILES.includes(page), page);
+  }
+  for (const id of ["pase-orbital", "doppler", "estacion-bh", "memorias-fm", "antena-yagi", "antena-dipolo-v", "piezas-stl"]) {
+    const svg = read(`docs/atlas/sat-${id}.svg`);
+    assert.doesNotMatch(svg, /<script|\son[a-z]+=|href=/i, id);
+    assert.ok(ALLOWED_FILES.includes(`docs/atlas/sat-${id}.svg`), id);
+  }
+});
+
 test("DM-32UV, Karina y enlaces de comunidad documentan fuentes, licencias y la ruta de compilacion", () => {
   const dm32 = read("docs/DM32UV-FIRMWARE.md");
   for (const value of ["HR_C7000", "FD6818", "RadioFoundry", "make BOARD=dm32", "hrc7000_codec.py", "serial_loader.py",
@@ -250,8 +278,8 @@ test("estadisticas ARDF explican observaciones manuales, limites y ausencia de G
 test("Android documenta las funciones reales, permisos y limites de la APK", () => {
   for (const name of ["docs/ANDROID.md", "ayuda-android.html"]) {
     const value = read(name);
-    for (const marker of ["0.8.0-beta", "SQLite", "WAV PCM", "LoTW", "no ejecutadas",
-      "GPS", "No se fusionan sesiones", "rollback", "Cien pruebas host", "CelesTrak", "SatNOGS DB", "Natural Earth", "WAV 16 kHz mono", "Grabaciones de pases", "0x7B02", "Editor de canales Quansheng por USB", "0x051D", "D023N", "60 segundos",
+    for (const marker of ["0.8.1-beta", "SQLite", "WAV PCM", "LoTW", "no ejecutadas",
+      "GPS", "No se fusionan sesiones", "rollback", "Cien pruebas host", "instrumentation-", "cancelacion de respaldo/escritura", "no hace rollback", "CelesTrak", "SatNOGS DB", "Natural Earth", "WAV 16 kHz mono", "Grabaciones de pases", "0x7B02", "Editor de canales Quansheng por USB", "0x051D", "D023N", "60 segundos",
       "Estadisticas e historial ARDF", "Haversine", "No es recorrido completo", "222.39016",
       "Captura de microfono Morse y Robot36", "RECORD_AUDIO", "Conceder permiso no graba",
       "2880000", "No se reanuda", "no valida recepcion RF real",
@@ -263,6 +291,25 @@ test("Android documenta las funciones reales, permisos y limites de la APK", () 
     }
   }
   assert(read("scripts/build-installers.sh").includes("ayuda-android.html"));
+});
+
+test("la auditoria conserva limites fisicos, snapshots distintos y presupuesto RAM real", () => {
+  for (const name of ["docs/VALIDACION-INTEGRAL-V3-ANDROID.md", "ayuda-validacion-v3-android.html"]) {
+    const text = read(name);
+    for (const marker of ["Auditoria en curso", "No se han", "instrumentation-", "2296162",
+      "2161962", "4160", "no declara revision linea por", "no un esquema electrico"]) {
+      assert(text.includes(marker), `${name}: ${marker}`);
+    }
+  }
+  for (const name of ["docs/BRICOHAMS-FIRMWARE.md", "ayuda-bricohams.html"]) {
+    const text = read(name);
+    for (const marker of ["8320 bytes", "8192", "no resuelve por si", "paquete y scratch"]) {
+      assert(text.includes(marker), `${name}: ${marker}`);
+    }
+  }
+  assert(read("docs/DEPLOYMENT.md").includes("no por ruta"));
+  assert(read("docs/DECISIONS.md").includes("no la URL"));
+  assert(read("docs/BRANDING.md").includes("#FF9800"));
 });
 
 test("la revision de entrega mantiene cada peticion y distingue objetivos de capacidades", () => {
@@ -307,4 +354,21 @@ test("ayuda, instaladores y paginas estaticas incluyen todas las guias sin expon
     }
     assert.equal((await fetch(`${base}/docs/AYUDA-FIRMWARES.md`)).status, 404);
   } finally { server.close(); }
+});
+
+test("las traducciones en, de, it y fr existen y conservan estructura, codigo, tablas y enlaces del original", () => {
+  assert.deepEqual(LANGS, ["es", "en", "de", "it", "fr"]);
+  assert.deepEqual(TRANSLATIONS, ["en", "de", "it", "fr"]);
+  const documents = [...Object.keys(pages).filter(source => source !== "F4HWN-PRESETS.md").map(source => `docs/${source}`), "README.md"];
+  for (const lang of TRANSLATIONS) {
+    assert.equal(read(`docs/i18n/${lang}/F4HWN-PRESETS.md`), presetMarkdown(lang));
+    checkOptionCoverage(read(`docs/i18n/${lang}/AYUDA-OPCIONES-F4HWN.md`));
+    assert.ok(read("README.md").includes(`href="README.${lang}.md"`), `README sin enlace a ${lang}`);
+    assert.ok(read("ayuda.html").includes(`href="ayuda-firmwares.${lang}.html"`), `ayuda.html sin enlace a ${lang}`);
+    for (const document of documents) {
+      const target = translatedPath(document, lang);
+      assert.ok(fs.existsSync(path.join(root, target)), `falta traduccion ${target}`);
+      assert.deepEqual(checkParity(read(document), path.join(root, document), read(target), path.join(root, target), lang), [], target);
+    }
+  }
 });

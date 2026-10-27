@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620" role="img" aria-labelledby="title desc">
+<title id="title">Cadena de validacion Android y Quansheng V3</title>
+<desc id="desc">Diagrama funcional propio, no esquema electrico. Contactos SQLite independientes de canales por slot y control CAT temporal. No certifica cableado ni pruebas fisicas.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L8 3L0 6" fill="none" stroke="#ffa342"/></marker></defs>
+<rect width="1100" height="620" fill="#14202c"/>
+<g font-family="sans-serif" fill="#fff">
+<text x="35" y="40" font-size="24">Bricohams - Android / CAT / memoria por slot</text>
+<text x="35" y="68" font-size="15">Diagrama funcional propio. NO es un esquema electrico ni certificado de hardware.</text>
+<g fill="#26394b" stroke="#ffa342" stroke-width="2">
+<rect x="35" y="105" width="300" height="120" rx="8"/>
+<rect x="400" y="105" width="300" height="120" rx="8"/>
+<rect x="765" y="105" width="300" height="120" rx="8"/>
+<rect x="35" y="290" width="300" height="150" rx="8"/>
+<rect x="400" y="290" width="300" height="150" rx="8"/>
+<rect x="765" y="290" width="300" height="150" rx="8"/>
+</g>
+<g font-size="17">
+<text x="50" y="135">Libro de guardia Android</text>
+<text x="50" y="165">Contactos QSO / SQLite privada</text>
+<text x="50" y="192">ADIF y JSON, no agenda Android</text>
+<text x="415" y="135">App / USB Host OTG</text>
+<text x="415" y="165">Permiso USB y seleccion puerto</text>
+<text x="415" y="192">CDC o adaptador serie reconocido</text>
+<text x="780" y="135">Radio UV-K5 V3 / PY32</text>
+<text x="780" y="165">Firmware SAT exacto identificado</text>
+<text x="780" y="192">CAT tecla 8 / PTT tecla 9</text>
+<text x="50" y="320">Copia de canales en el movil</text>
+<text x="50" y="350">Backup completo antes de escribir</text>
+<text x="50" y="378">CRC de 512 sectores x 4096 B</text>
+<text x="50" y="407">Cambios locales no son grabacion</text>
+<text x="415" y="320">Banco del slot ACTIVO</text>
+<text x="415" y="350">Releer antes y despues de escribir</text>
+<text x="415" y="378">No copiar calibracion entre radios</text>
+<text x="415" y="407">No confundir etiqueta con indice</text>
+<text x="780" y="320">CAT RX / Doppler temporal</text>
+<text x="780" y="350">SET - QUERY aplicado - STOP</text>
+<text x="780" y="378">No escribe canales persistentes</text>
+<text x="780" y="407">TX requiere ensayo separado</text>
+</g>
+<g stroke="#ffa342" stroke-width="2" fill="none" marker-end="url(#arrow)">
+<path d="M700 165H765"/><path d="M550 225V290"/>
+<path d="M915 225V290"/><path d="M335 365H400"/>
+</g>
+<text x="35" y="500" font-size="18">Evidencias separadas: codigo / host simulado / Android instrumentado / radio fisica / medida RF.</text>
+<text x="35" y="535" font-size="17">Un ACK CAT no demuestra frecuencia RF; un test SQLite host no certifica el almacenamiento del movil.</text>
+<text x="35" y="570" font-size="16">Autores del documento: Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF y Pedro Roca.</text>
+<text x="35" y="597" font-size="15">Bricohams - bricohams.org / bricohams.com. Sin valores electricos ni conexiones internas inferidas.</text>
+</g></svg>

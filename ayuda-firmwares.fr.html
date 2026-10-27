@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Bibliothèque d’aide sur les radios et les firmwares: aide Bricohams par modèle et version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Bibliothèque d’aide sur les radios et les firmwares | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-firmwares.html">
+  <link rel="alternate" hreflang="en" href="ayuda-firmwares.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-firmwares.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-firmwares.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-firmwares.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Aller au contenu</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aide"><a href="ayuda.html">Aide de l&#39;application (espagnol)</a> · <a href="ayuda-firmwares.fr.html">Bibliothèque de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Langue"><a href="ayuda-firmwares.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-firmwares.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-firmwares.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-firmwares.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-firmwares.fr.html" hreflang="fr" lang="fr" aria-current="page">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenu de ce guide"><h2>Dans ce guide</h2><ul><li><a href="#documentos-y-orden-de-lectura">Documents et ordre de lecture</a></li><li><a href="#que-significa-soportado">Que signifie « pris en charge »</a></li><li><a href="#cobertura-de-versiones">Couverture des versions</a></li><li><a href="#regla-de-seguridad-y-de-uso-legal">Règles de sécurité et d’utilisation légale</a></li><li><a href="#licencias-componentes-distintos">Licences : composants distincts</a></li><li><a href="#actualizar-esta-biblioteca">Mettre à jour cette bibliothèque</a></li></ul></nav>
+    <article class="panel"><h1 id="biblioteca-de-ayuda-de-radios-y-firmware">Bibliothèque d’aide sur les radios et les firmwares</h1>
+<p>Révision : 25-10-2026. Aide originale de Bricohams ; elle ne remplace pas les manuels officiels et ne certifie pas les combinaisons qui n’ont pas été testées sur le matériel.</p>
+<h2 id="documentos-y-orden-de-lectura">Documents et ordre de lecture</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Guide</th><th scope="col">Ce qu’il explique</th></tr></thead><tbody>
+<tr><td><a href="ayuda-configuracion.fr.html">Configuration commune et procédures</a></td><td>Fréquences, FM/DMR, tonalités, sauvegardes, relais, satellites, USB et vérification des résultats</td></tr>
+<tr><td><a href="ayuda-quansheng.fr.html">Quansheng F4HWN</a></td><td>Mise en service de 0 à 100 %, matériel V1/V2/V3, versions v4/v5/v6, éditions, menus, slots, CFG, applications et récupération</td></tr>
+<tr><td><a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas technique UV-K5 V3</a></td><td>Fonctionnement interne : brochage PY32F071, mémoires, protocole série, bootloader, SWD, compilation, mods, schémas et photos</td></tr>
+<tr><td><a href="ayuda-opciones-f4hwn.fr.html">Toutes les options de compilation F4HWN</a></td><td>Signification de chaque option du catalogue, dépendances et précautions</td></tr>
+<tr><td><a href="ayuda-presets-f4hwn.fr.html">Valeurs des presets F4HWN</a></td><td>Matrices ON/OFF de 18 versions publiées v4.3.0-v6.3.0, tous leurs presets et profils locaux v6.1.0</td></tr>
+<tr><td><a href="ayuda-ardf.fr.html">ARDF</a></td><td>Gain manuel, cycles, synchronisation, distance et différences matérielles</td></tr>
+<tr><td><a href="ayuda-egzumer.fr.html">Egzumer original</a></td><td>Sources V1, licence Apache-2.0 et chaque option du Makefile inspecté</td></tr>
+<tr><td><a href="ayuda-pack-dim0s.fr.html">Pack Dim0s et Karina V3/K1</a></td><td>Inventaire des variantes, nouvelles preuves PY32, empreintes et limites du multiboot/des licences</td></tr>
+<tr><td><a href="ayuda-opengd77.fr.html">OpenGD77 : configuration et utilisation</a></td><td>FM/DMR, codeplug, canaux, TG, TS, filtres, GPS, APRS et satellites</td></tr>
+<tr><td><a href="ayuda-opengd77-modelos.fr.html">OpenGD77 : radios et révisions</a></td><td>Modèles, alias, révisions, variantes et distinction entre catalogue et identification</td></tr>
+<tr><td><a href="ayuda-karina.fr.html">Karina</a></td><td>Inventaire, fonctions documentées, recherche du code source (fermé), spécification pour la réimplémenter et sources</td></tr>
+<tr><td><a href="ayuda-dm32uv.fr.html">Baofeng DM-32UV</a></td><td>Matériel HR_C7000/FD6818, état et licence d’OpenGD77, installation, compilation de RadioFoundry et protocole du bootloader</td></tr>
+<tr><td><a href="ayuda-ejemplos.fr.html">Exemples</a></td><td>Firmwares ouverts F4HWN v6.3.0 et moto avec leur licence, canaux PMR446 d’exemple et scripts d’analyse</td></tr>
+<tr><td><a href="ayuda-iniciacion-satelite.fr.html">Premiers pas avec les satellites</a></td><td>Guide original en espagnol pour débuter avec les satellites FM et l’image BH Satélite</td></tr>
+<tr><td><a href="ayuda-antenas-satelite.fr.html">Antennes satellites</a></td><td>Yagi bibande et dipôle en V simulés avec une MoM propriétaire, plans et pièces STL</td></tr>
+<tr><td><a href="ayuda-binarios-terceros.fr.html">Binaires tiers</a></td><td>SHA-256 et origine de Karina, firmwares DM-32UV officiels et modifiés, OpenGD77 DM32 et images d’usine du K1/K5 V3, sans redistribution</td></tr>
+<tr><td><a href="ayuda-enlaces-comunidad.fr.html">Dépôts de la communauté</a></td><td>Catalogue vérifié de dépôts Quansheng et DM-32UV, liens morts récupérés et recherche sur d’autres forges</td></tr>
+<tr><td><a href="ayuda-bricohams.fr.html">Bricohams V3</a></td><td>Compilation locale reproductible de Fusion et Labs et artefacts livrés</td></tr>
+<tr><td><a href="ayuda-anytone.fr.html">AnyTone</a></td><td>Préparateur local JSON/CSV ; ce n’est ni le CPS RDT ni un programmateur USB</td></tr>
+<tr><td><a href="ayuda-android.fr.html">Android</a></td><td>Journal de trafic, canaux FM, CAT et audio expérimentaux ; autorisations et tests par révision</td></tr>
+<tr><td><a href="ayuda-validacion-v3-android.fr.html">Validation V3 et Android</a></td><td>Éléments probants, défaillances corrigées, isolation des données, essais en attente et limites des mods</td></tr>
+</tbody></table></div>
+<p>Dans les pages web, utilisez la recherche du navigateur (Ctrl+F). Les documents Markdown sont conservés dans le dépôt pour une consultation hors ligne. L’aide web est également incluse dans le serveur local, Pages et les installateurs.</p>
+<h2 id="que-significa-soportado">Que signifie « pris en charge »</h2>
+<p>Il existe quatre notions différentes :</p>
+<ol>
+<li><strong>Pris en charge par le projet de firmware :</strong> l’upstream maintient une image.</li>
+<li><strong>Reconnu par le connecteur :</strong> ce site connaît une structure d’identification.</li>
+<li><strong>Publié dans le catalogue :</strong> un nom de fichier provenant d’une source autorisée est</li>
+</ol>
+<p>reconnu. Cela ne signifie pas qu’il peut être installé avec ce site.</p>
+<ol>
+<li><strong>Testé sur une radio :</strong> nécessite des preuves physiques pour le modèle et la build exacts.</li>
+</ol>
+<p>Les tests automatisés de ce site ne constituent pas une telle certification.</p>
+<p>Une ligne dans un tableau n’autorise pas l’utilisation du firmware d’une autre révision. « Téléchargement » ne signifie pas « flashage » ; « fichier vérifié » ne signifie pas « signé numériquement ».</p>
+<h2 id="cobertura-de-versiones">Couverture des versions</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Famille</th><th scope="col">Couverture précise de cette bibliothèque</th><th scope="col">Limite</th></tr></thead><tbody>
+<tr><td>F4HWN Quansheng PY32</td><td>18 versions publiées reconnues ; 84 options d’interface et 94 clés distinctes dans l’historique des presets par commit</td><td>Les fonctions v6 ne sont pas attribuées aux anciennes versions</td></tr>
+<tr><td>ARDF Quansheng</td><td>Publications reconnues du dépôt V3/UV-K1 ; guide ARDF local v0.5 et avertissements sur l’évolution</td><td>Écriture dans les slots désactivée sans compatibilité vérifiée</td></tr>
+<tr><td>Bricohams sur F4HWN</td><td>Fusion, Labs, ARDF, Satellite et Spectrum v6.1.0, options et empreintes documentées</td><td>Les lectures préalables et CRC des slots ne certifient ni le démarrage ni toutes les fonctions</td></tr>
+<tr><td>Plateforme indépendante Bricohams</td><td>Résident expérimental, Diagnostics et Blocks dans BHA1, stockage et transfert portables</td><td>Aucun démarrage matériel validé ni intégration USB/Flash ; BHA1 n’est pas FAP1 et ne s’installe pas avec le chargeur web existant</td></tr>
+<tr><td>Karina</td><td>Pack V1 local et pack V3/K1 du 21-09-2026 inspecté depuis Dim0s</td><td>Des binaires PY32 existent ; les sources et la compatibilité avec le multiboot Armel ne sont pas démontrées</td></tr>
+<tr><td>OpenGD77</td><td>Familles et modèles documentés ; versions identifiées par date/build et variantes de distribution</td><td>Pas de tableau universel des menus applicable à toutes les builds historiques</td></tr>
+<tr><td>Stock Quansheng, UVMOD, OneOfEleven</td><td>Identification et références pour éviter les confusions</td><td>Ne sont ni des protocoles ni des compilateurs intégrés à ce site</td></tr>
+</tbody></table></div>
+<p>« Toutes les versions » est documenté comme une matrice de familles, de différences et de sources par version, et non comme la promesse que chaque menu existe depuis le premier firmware. Pour une build précise, notez le modèle, la révision, la date, le nom du fichier, le commit s’il existe et l’empreinte. Comparez avec son manuel et ses notes de publication. Les éléments non confirmés sont signalés comme tels, plutôt que d’inventer des valeurs, raccourcis ou cartographies.</p>
+<h2 id="regla-de-seguridad-y-de-uso-legal">Règles de sécurité et d’utilisation légale</h2>
+<ul>
+<li>Identifiez le matériel réel, pas seulement le boîtier.</li>
+<li>Conservez l’étalonnage d’origine et le codeplug avant la migration.</li>
+<li>N’effectuez pas d’effacement, de restauration ou de reset à cause d’une erreur de port</li>
+</ul>
+<p>sans en avoir d’abord déterminé la cause.</p>
+<ul>
+<li>Pour OpenGD77, ce site maintient l’écriture bloquée, car il ne récupère pas une</li>
+</ul>
+<p>copie complète vérifiée du firmware MCU.</p>
+<ul>
+<li>Pour Quansheng, toute modification exige une sauvegarde complète ; Main est protégé.</li>
+<li>Les données importées pour l’écoute sont initialisées en RX-only.</li>
+<li>N’activez pas le TX automatique ni l’émission hors des fréquences autorisées. Un profil</li>
+</ul>
+<p>PMR/GMRS/FRS/MURS du firmware n’homologue pas une radio.</p>
+<h2 id="licencias-componentes-distintos">Licences : composants distincts</h2>
+<p>La déclaration de l’utilisateur « la licence est MIT » est enregistrée comme une déclaration en attente d’association au composant, au titulaire et au texte de licence d’origine. Elle ne modifie donc pas la licence des tiers ni celle du dépôt existant :</p>
+<ul>
+<li>Le site déclare GPL-3.0-or-later dans son manifeste et son fichier LICENSE.</li>
+<li>Les sources F4HWN inspectées comprennent Apache-2.0 et NOTICE.</li>
+<li>Les pilotes CHIRP du pack Karina contiennent des avis GPL.</li>
+<li>La licence exacte du firmware Karina ne figure pas dans le pack inspecté.</li>
+</ul>
+<p>La déclaration MIT de l’utilisateur ne fournit pas ses sources et ne prouve pas à quels fichiers/versions elle s’applique. L’avis correspondant sera ajouté lorsqu’une référence vérifiable sera disponible.</p>
+<ul>
+<li>OpenGD77 et ses composants sont régis par leurs propres avis ; ne présumez pas qu’ils sont MIT.</li>
+</ul>
+<p>Les manuels complets, le firmware Karina, les étalonnages d’autrui et les logiciels tiers ne sont pas redistribués du seul fait qu’ils sont cités.</p>
+<h2 id="actualizar-esta-biblioteca">Mettre à jour cette bibliothèque</h2>
+<p>Les tableaux de valeurs sont générés depuis les catalogues figés, pas de mémoire :</p>
+<pre><code>npm run build:help</code></pre>
+<p>Lorsqu’un catalogue change, il faut vérifier la signification des nouvelles options, versions et dépendances, régénérer les pages et exécuter les tests d’aide. La radio n’est pas interrogée et sa configuration n’est pas modifiée à l’ouverture d’un guide.</p>
+<p>L’instantané historique se trouve dans <code>f4hwn-history-presets.json</code> : il conserve commit, SHA-256 et contenu de CMakePresets.json pour chaque version. Sa mise à jour est explicite via <code>node scripts/fetch-help-presets.cjs</code> depuis la racine du dépôt ; elle effectue des requêtes publiques vers GitHub, sans accéder aux radios ni envoyer de fichiers locaux. Le générateur d’aide habituel fonctionne hors ligne et ne télécharge pas les sources.</p></article>
+    <footer><p class="translation-note">Traduction de l&#39;original espagnol. En cas de divergence, la version espagnole fait foi.</p><p>Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide. <a href="ayuda-firmwares.fr.html">Retour à l&#39;index</a>.</p></footer>
+  </main>
+</body>
+</html>

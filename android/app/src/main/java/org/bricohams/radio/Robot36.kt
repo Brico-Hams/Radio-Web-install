@@ -6,7 +6,7 @@ import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-data class SstvImage(val pixels: IntArray, val startSeconds: Double, val warning: String)
+data class SstvImage(val pixels: IntArray, val startSeconds: Double, val warning: UiText)
 
 object Robot36 {
     const val WIDTH = 320
@@ -14,9 +14,9 @@ object Robot36 {
     private const val RATE = 8000
     private const val LINE = 1200
     fun decode(audio: PcmAudio): SstvImage {
-        require(audio.sampleRate in 8000..48000 && audio.sampleRate % RATE == 0 &&
+        requireUi(audio.sampleRate in 8000..48000 && audio.sampleRate % RATE == 0 &&
             audio.samples.size in audio.sampleRate * 37..audio.sampleRate * 60) {
-            "Robot36 requiere WAV de 37-60 s a 8/16/24/32/40/48 kHz."
+            UiText(R.string.err_robot36_wav)
         }
         val factor = audio.sampleRate / RATE
         val samples = DoubleArray(audio.samples.size / factor) { index ->
@@ -26,19 +26,19 @@ object Robot36 {
         }
         val frequency = demodulate(samples)
         val start = alignPorch(frequency, findHeader(frequency))
-        require(start + HEIGHT * LINE + 32 < frequency.size) { "Imagen Robot36 truncada: faltan lineas o margen final de audio." }
+        requireUi(start + HEIGHT * LINE + 32 < frequency.size) { UiText(R.string.err_robot36_truncated) }
         val pixels = IntArray(WIDTH * HEIGHT)
         val luminance = Array(2) { DoubleArray(WIDTH) }
         val chroma = Array(2) { DoubleArray(WIDTH / 2) }
         for (row in 0 until HEIGHT) {
-            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Decodificacion SSTV cancelada.")
+            if (Thread.currentThread().isInterrupted) throw LocalizedInterruptedIOException(UiText(R.string.err_sstv_cancelled))
             val base = start + row * LINE
-            require(near(frequency, base + 24, base + 48, 1200.0, 100.0) > 0.8) {
-                "Robot36: sincronismo perdido en linea ${row + 1}. No se entrega una imagen completa."
+            requireUi(near(frequency, base + 24, base + 48, 1200.0, 100.0) > 0.8) {
+                UiText(R.string.err_robot36_sync_lost, row + 1)
             }
             val separator = if (row % 2 == 0) 1500.0 else 2300.0
-            require(near(frequency, base + 808, base + 828, separator, 140.0) > 0.7) {
-                "Robot36: separador de color incorrecto en linea ${row + 1}."
+            requireUi(near(frequency, base + 808, base + 828, separator, 140.0) > 0.7) {
+                UiText(R.string.err_robot36_separator, row + 1)
             }
             for (x in 0 until WIDTH) luminance[row % 2][x] = level(frequency, base + 96 + (x + 0.5) * 704 / WIDTH)
             for (x in 0 until WIDTH / 2) chroma[row % 2][x] = level(frequency, base + 848 + (x + 0.5) * 352 / (WIDTH / 2))
@@ -55,14 +55,12 @@ object Robot36 {
                 }
             }
         }
-        return SstvImage(pixels, start.toDouble() / RATE,
-            "Robot36 experimental desde WAV. Imagen 320x240; crominancia compartida por pares de lineas. " +
-                "Sin compensacion de deriva/reloj ni recuperacion de lineas. Ruido, audio o sincronismo pueden alterar colores y detalle; no es una validacion RF.")
+        return SstvImage(pixels, start.toDouble() / RATE, UiText(R.string.robot36_warning))
     }
     /** Robot36 (VIS 8) audio for a 320x240 ARGB image, in the exact timing [decode] expects. */
     fun encode(pixels: IntArray, sampleRate: Int = 48000): ShortArray {
-        require(pixels.size == WIDTH * HEIGHT) { "Robot36 requiere una imagen de 320x240." }
-        require(sampleRate in 8000..48000 && sampleRate % RATE == 0) { "Robot36: 8/16/24/32/40/48 kHz." }
+        requireUi(pixels.size == WIDTH * HEIGHT) { UiText(R.string.err_robot36_size) }
+        requireUi(sampleRate in 8000..48000 && sampleRate % RATE == 0) { UiText(R.string.err_robot36_rate) }
         val out = ShortArray(((LEAD_MS + 910.0 + HEIGHT * 150.0 + TAIL_MS) * sampleRate / 1000).roundToInt() + 2)
         var written = 0
         var clock = 0.0
@@ -108,8 +106,8 @@ object Robot36 {
         val index = position.toInt()
         val fraction = position - index
         val value = frequency[index] * (1 - fraction) + frequency[index + 1] * fraction
-        require(value.isFinite() && value in 1300.0..2500.0) {
-            "Robot36: audio de imagen fuera de banda o sin senal ($value Hz, muestra $index)."
+        requireUi(value.isFinite() && value in 1300.0..2500.0) {
+            UiText(R.string.err_robot36_out_of_band, value, index)
         }
         return ((value - 1500) * 255 / 800).coerceIn(0.0, 255.0)
     }
@@ -139,7 +137,7 @@ object Robot36 {
             if (valid && code == 8 && parity == 0 &&
                 near(frequency, start + 2200, start + 2300, 1200.0, 70.0) > 0.9) return start + 2400
         }
-        throw IllegalArgumentException("No se detecta cabecera Robot36 completa (VIS 8 con paridad par). No se adivina el modo.")
+        throw LocalizedArgumentException(UiText(R.string.err_robot36_no_header))
     }
     private fun alignPorch(frequency: DoubleArray, nominal: Int): Int {
         for (index in nominal + 56..nominal + 88) {
@@ -152,7 +150,7 @@ object Robot36 {
                 return (crossing - 72).roundToInt()
             }
         }
-        throw IllegalArgumentException("Robot36: no se puede alinear el primer porch de linea.")
+        throw LocalizedArgumentException(UiText(R.string.err_robot36_align))
     }
     private fun demodulate(samples: DoubleArray): DoubleArray {
         val half = 31
@@ -164,7 +162,7 @@ object Robot36 {
         var previousImaginary = 0.0
         for (index in half until samples.size - half) {
             if (index % 8000 == 0 && Thread.currentThread().isInterrupted)
-                throw java.io.InterruptedIOException("Decodificacion SSTV cancelada.")
+                throw LocalizedInterruptedIOException(UiText(R.string.err_sstv_cancelled))
             val real = samples[index]
             var imaginary = 0.0
             for ((offset, coefficient) in taps) imaginary += coefficient * samples[index - offset]

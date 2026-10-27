@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="AnyTone und lokale Kanäle – Hilfe: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>AnyTone und lokale Kanäle – Hilfe | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-anytone.html">
+  <link rel="alternate" hreflang="en" href="ayuda-anytone.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-anytone.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-anytone.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-anytone.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda.html">App-Hilfe (Spanisch)</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-anytone.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-anytone.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-anytone.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-anytone.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-anytone.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#capacidades-y-modos">Funktionen und Modi</a></li><li><a href="#aeropuertos-y-banda-aeronautica">Flughäfen und Flugfunkband</a></li><li><a href="#emisoras-fm-comerciales-locales">Lokale kommerzielle FM-Sender</a></li><li><a href="#repetidores-y-remer">Repeater und REMER</a></li><li><a href="#guardar-y-revisar">Speichern und prüfen</a></li></ul></nav>
+    <article class="panel"><h1 id="guia-anytone-y-canales-locales">AnyTone und lokale Kanäle – Hilfe</h1>
+<p>Diese Seite beschreibt den AnyTone-Beta-Webvorbereiter. Er ersetzt nicht das offizielle CPS und programmiert das Funkgerät nicht über USB. JSON- und CSV-Projekte sind eigene Austauschformate: Es sind keine RDT-Dateien und sie dürfen nicht als native Codeplugs direkt im CPS geladen werden. Erstelle mit dem CPS des Herstellers eine Originalkopie, bevor du etwas schreibst.</p>
+<h2 id="capacidades-y-modos">Funktionen und Modi</h2>
+<p>Wähle ein Modellprofil und bestätige separat die Fähigkeiten, die du im Handbuch der genauen Variante geprüft hast. Familienprofile bescheinigen keine Merkmale aller Revisionen. Flugfunk-AM und kommerzielles FM 87.5-108 MHz werden nur für das Profil &quot;Otro&quot; nach manueller Bestätigung freigeschaltet. Prüfe, ob der Empfänger das Band und den Modus unterstützt; eine akzeptierte Frequenz belegt nicht, dass die Hardware sie empfangen kann.</p>
+<p>Alle Kanäle sind nur für den Empfang. AM benötigt RF-Frequenzen in MHz, nicht die Flugfunk-Kanalbezeichnung 8.33 kHz; der Vorbereiter prüft das darstellbare Raster. Es werden keine Sendungen angelegt und weder Antennen-, Filter-, Firmware- noch CPS-Kompatibilität bescheinigt.</p>
+<h2 id="aeropuertos-y-banda-aeronautica">Flughäfen und Flugfunkband</h2>
+<p>Der Benutzer stellt lokal ein JSON mit <code>results</code> (1-4000 Zeilen) bereit. Jeder Datensatz enthält <code>name</code>, <code>frequencyMHz</code> und <code>source</code> mit einem Verweis auf ein aktuelles AIP. Zum Filtern nach Nähe können <code>latitude</code> und <code>longitude</code> enthalten sein; wenn du einen Standort auswählst, bittet der Browser um Erlaubnis und verwendet ihn lokal im Arbeitsspeicher, ohne Koordinaten an einen Dienst zu senden. Datensätze ohne Koordinaten oder außerhalb des gewählten Radius werden ausgelassen. Ohne Standort wird die gesamte Liste verarbeitet.</p>
+<p>Rufe die RF-Frequenzen und aktuellen Dienste im <a href="https://aip.enaire.es/" target="_blank" rel="noopener noreferrer">AIP ENAIRE</a> ab. Es gibt keine landesweite Frequenzdatenbank, Daten werden nicht automatisch heruntergeladen und 8.33-kHz-Kanalbezeichnungen werden nicht umgerechnet. Die App bietet 121.500 MHz als manuelle Option, nur RX; prüfe Verfahren und Aktualität in offiziellen Quellen. Verwende die Notfrequenz nicht für Routinekommunikation.</p>
+<h2 id="emisoras-fm-comerciales-locales">Lokale kommerzielle FM-Sender</h2>
+<p>Prüfe vor dem Import von Sendern im genauen Handbuch, ob das Gerät kommerzielles FM 87.5-108 MHz empfängt. Erstelle eine lokale Datei mit <code>results</code> und den Feldern <code>name</code>, <code>frequencyMHz</code> (oder <code>frequency</code>), <code>latitude</code>, <code>longitude</code> und <code>source</code>. Der Filter verwendet die Entfernung in km zum freigegebenen Standort und den gewählten Radius (1-500 km). Es gibt keinen vorinstallierten landesweiten Katalog und kein Scraping; nutze eine autorisierte, aktuelle und für deine Region geeignete Quelle. Die Anwendung bescheinigt weder die Lizenz noch die Richtigkeit der bereitgestellten Daten.</p>
+<p>Die resultierenden Kanäle werden in der Austausch-CSV als <code>FM_Broadcast_RX</code> markiert, mit identischem nominalem RX und TX sowie gesperrtem TX im Editor. Diese Markierung schaltet keine Übertragung frei und macht die CSV nicht zum AnyTone-Format. Für kommerzielle Kanäle muss die Fähigkeit im JSON-Projekt bestätigt werden; sie lassen sich nicht mit einem Profil eines Funkgeräts öffnen, für das diese Bestätigung fehlt.</p>
+<h2 id="repetidores-y-remer">Repeater und REMER</h2>
+<p>Es lassen sich autorisierte lokale Daten von RadioID, URE und RepeaterBook gemäß dem vom Editor erwarteten Format importieren. Analoge Töne bleiben als Hinweis zur Prüfung erhalten; sie werden nicht aus der Frequenz abgeleitet oder programmiert. Prüfe im CPS Aktualität, Ablage, CC, TS, TG, Kontakte, Empfangslisten und Modellgrenzen.</p>
+<p>Der REMER-Tab ist in den kompatiblen Planern von Quansheng und OpenGD77 verfügbar. Seine VHF-Tabelle ist eine Abschrift der vom Benutzer bereitgestellten Referenz ohne überprüfbares Datum; gleiche jeden Eintrag mit REMER ab. CTCSS werden als Hinweis angezeigt und nicht als Einstellungen importiert. HF/SSB-Frequenzen sind vom Import in FM-Speicher ausgeschlossen. Wenn ein Parser einen Kanal erneut einliest, bestätigt das nur die Dateistruktur: Es belegt weder Aktualität noch RF-Empfang noch Sichtbarkeit in der Firmware nach einem Schreibvorgang.</p>
+<h2 id="guardar-y-revisar">Speichern und prüfen</h2>
+<p>Im Editor kannst du Kanäle im lokalen Projekt hinzufügen, ändern und löschen. Exportiere JSON, um die Arbeit zu erhalten, und CSV nur als Referenz oder für den manuellen Austausch. Beim Import von OpenGD77- oder Quansheng-Binärdateien werden nur erkannte Felder übernommen; herstellerspezifische Parameter, Töne, Zonen und Kontakte musst du im CPS des Zielgeräts möglicherweise neu aufbauen. Die abschließende Prüfung, Umwandlung in das native Format und das Schreiben erfolgen im offiziellen CPS, nachdem du das Ergebnis geprüft und eine unveränderte Kopie gespeichert hast.</p></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

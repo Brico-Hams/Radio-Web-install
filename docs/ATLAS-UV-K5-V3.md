@@ -250,14 +250,20 @@ build propio comprueba los vectores y que no supere `0x1D800` bytes.
 
 ## Modificaciones de hardware
 
+La [matriz de validacion integral](VALIDACION-INTEGRAL-V3-ANDROID.md) amplia
+los criterios de compatibilidad, pruebas, limites y evidencia pendiente.
+No hay certificacion general de mods V1 sobre V3. El
+[diagrama Android/CAT/memorias](atlas/android-cat-validacion.svg) es funcional,
+no un esquema electrico medido ni una guia de soldadura.
+
 | Modificacion | V3/K1 | Notas |
 | --- | --- | --- |
-| Ampliar EEPROM (M24M02, 24C512) | Innecesaria | El V3 ya trae 2 MB. En V1 es el paso previo a 999 canales y SSB con SI4732 ([losehu](https://github.com/losehu/uv-k5-bootloader-custom/wiki)) |
-| Receptor HF SI4732 (placas v5/v6.8) | Sin soporte | Solo hay firmware para V1 (CEC HF, Reborn, losehu, Robzyl 512K) |
-| Antena SMA (17 cm, 38 cm) | Aplica | Mismo conector; para satelite, antena externa |
-| Mod de satelite (bobinas, LNA) | Sin confirmar | Nadie confirma en los grupos que los mods V1 sirvan en V3 |
+| Ampliar EEPROM (M24M02, 24C512) | No aplicable directamente | El V3 usa Flash SPI de 2 MB, no EEPROM I2C intercambiable. Referencia V1: [losehu](https://github.com/losehu/uv-k5-bootloader-custom/wiki) |
+| Receptor HF SI4732 (placas v5/v6.8) | No verificado en V3 | Las referencias aqui catalogadas son V1 (CEC HF, Reborn, losehu, Robzyl 512K); no demuestran soporte PY32 |
+| Antena SMA (17 cm, 38 cm) | Accesorio condicional | Comprobar conector, esfuerzos mecanicos, banda y ROE; longitud o mejora RX no certifican TX |
+| Mod de satelite (bobinas, LNA) | Sin confirmar | No se dispone de esquema ni medidas de una adaptacion a esta revision V3 |
 | Filtro paso bajo TX | Revisar | [Nannk/quansheng-lpf-mod](https://codeberg.org/Nannk/quansheng-lpf-mod); verifica la placa medida |
-| Mod de 27 MHz | Solo V1 | [Wiki](https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki/Hardware_Mods_27Mhz); con antena VHF da ROE alta y armonicos |
+| Mod de 27 MHz | Referencia V1, no validado V3 | [Wiki](https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki/Hardware_Mods_27Mhz); requiere red RF y medidas propias, no extrapolar valores |
 | Cable de programacion | USB-C directo | Tambien vale el cable Kenwood USB-serie (USART1) |
 | Coprocesador o ESP32 | Disenados para V1 | [ESPRI](https://github.com/kamilsss655/ESPRI), [UVK5-Coprocessor](https://github.com/wabulutian/UVK5-Coprocessor), [UVE5](https://github.com/losehu/UVE5) |
 
@@ -266,7 +272,9 @@ Transmitir fuera de las bandas de tu licencia es ilegal aunque el firmware lo pe
 
 ## Esquemas e imagenes
 
-No hay un esquema completo publicado del V3/K1. Lo mas cercano:
+No se ha identificado en las fuentes de esta revision un esquema electrico
+completo y verificado del V3/K1. Esto no demuestra que no exista otro.
+Las referencias disponibles son:
 
 - [Teardown K1 de armel](https://github.com/armel/k1-teardown) (Apache-2.0): fotos de alta resolucion, volcados, firmware anotado y datasheets.
 - [Fotos de la placa UV-K1](https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki/UV%E2%80%90K1-PCB) en la wiki.

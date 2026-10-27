@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Revisione dei requisiti e consegna: aiuto Bricohams per modello e versione.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Revisione dei requisiti e consegna | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-entrega.html">
+  <link rel="alternate" hreflang="en" href="ayuda-entrega.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-entrega.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-entrega.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-entrega.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Vai al contenuto</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aiuto"><a href="ayuda.html">Aiuto dell&#39;app (spagnolo)</a> · <a href="ayuda-firmwares.it.html">Libreria firmware</a> · <a href="ayuda-atlas-uv-k5-v3.it.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Lingua"><a href="ayuda-entrega.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-entrega.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-entrega.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-entrega.it.html" hreflang="it" lang="it" aria-current="page">Italiano</a> · <a href="ayuda-entrega.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#revision-complementaria-del-26-10-2026">Revisione complementare del 26-10-2026</a></li><li><a href="#peticiones-revisadas">Richieste esaminate</a></li><li><a href="#evidencia-de-software-mas-reciente">Prove software più recenti</a></li><li><a href="#condiciones-de-entrega">Condizioni di consegna</a></li><li><a href="#alcance-de-la-exportacion">Ambito dell&#39;esportazione</a></li></ul></nav>
+    <article class="panel"><h1 id="revision-de-requisitos-y-entrega">Revisione dei requisiti e consegna</h1>
+<p>Revisione del 25-10-2026. Il progetto è ancora in Beta. Questa matrice distingue le funzioni implementate dai test fisici e dagli obiettivi in sospeso. Una compilazione riuscita non dimostra che una radio sia stata avviata con essa. <strong>Consegna incompleta:</strong> restano requisiti da implementare e convalidare.</p>
+<h2 id="revision-complementaria-del-26-10-2026">Revisione complementare del 26-10-2026</h2>
+<p>La matrice e i dati seguenti del 25-10 sono storici. Per la verifica attuale, consultare <a href="ayuda-validacion-v3-android.it.html">Convalida integrale V3 e Android</a>: 283 test web locali riusciti, 92 test Android host locali e 93 nella revisione pubblicata isolata <code>01c58563e6507d17bd2bec612ef669840abfeddb</code>. Non sono risultati intercambiabili. La correzione locale del CRC settoriale Android non è stata pubblicata. I test strumentati usano una base isolata e compilano, ma non sono stati eseguiti su dispositivo. Non esiste un certificato fisico per contatti, canali o CAT dello slot SAT attuale.</p>
+<p>La revisione pubblicata include registri General/POTA/SOTA e un elenco di passaggi non presenti in questa base locale. I requisiti AND-02/AND-06 in sospeso nella matrice storica vanno interpretati secondo la revisione valutata. Il residente indipendente e le app BHA1 sono sperimentali: i test portabili non equivalgono al supporto fisico USB/Flash né a un avvio convalidato.</p>
+<h2 id="peticiones-revisadas">Richieste esaminate</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">ID</th><th scope="col">Richiesta</th><th scope="col">Stato e prove</th><th scope="col">Attività necessaria per completarla</th></tr></thead><tbody>
+<tr><td>USB-01</td><td>Caricare e cancellare canali PMR e ripetitori Quansheng</td><td>Connettore, editor e protezioni implementati. Due letture reali coincidenti di configurazione e calibrazione; 200 canali in F4HWN v6.0.0</td><td>Backup integrale e prove reali di scrittura, cancellazione e rilettura</td></tr>
+<tr><td>USB-02</td><td>Caricare satelliti e memorie Doppler Quansheng</td><td>Pianificazione SGP4, memorie RX e CAT RX sperimentale nell&#39;immagine Satelliti</td><td>Convalida RF e caricamento fisico delle memorie sull&#39;unità</td></tr>
+<tr><td>FW-01</td><td>Catalogo delle versioni firmware</td><td>Catalogo e guide per famiglie, revisioni e opzioni</td><td>Mantenere copertura aggiungendo nuove versioni; il riconoscimento non equivale a compatibilità provata</td></tr>
+<tr><td>WEB-01</td><td>Pubblicare e ridistribuire il sito</td><td>Ultimo main pubblicato: <code>f7bd6125893385dd517fecd105967f241a65991f</code></td><td>Pubblicare le modifiche successive e controllare Pages; nessuna nuova pubblicazione in questa revisione</td></tr>
+<tr><td>FW-02</td><td>Documentare esaustivamente Karina</td><td>Dossier V1, pacchetto V3/UV-K1 Dim0s, inventari, hash e funzioni osservate</td><td>Completare il confronto funzionale e visivo; il progetto sorgente non è stato recuperato</td></tr>
+<tr><td>FW-03</td><td>Bricohams con tutte le funzioni Karina</td><td>Implementazione indipendente sulla base aperta F4HWN V3; non è una copia né una ricompilazione di Karina</td><td>Parità funzionale completa e test per funzione; non si dichiara il 100 %</td></tr>
+<tr><td>FW-04</td><td>Multiboot e compilazione modulare su richiesta</td><td>Builder con commit fissato, preset, moduli separati e verifica strutturale</td><td>Provare avvio, cambio slot e recupero su V3 senza sostituire Main</td></tr>
+<tr><td>FW-05</td><td>Libreria firmware esistente negli slot</td><td>Selezione locale e classificazione per formato/modello, con rifiuto degli incompatibili</td><td>Installare e provare ogni immagine compatibile; nessuna conversione automatica da V1 a V3</td></tr>
+<tr><td>FW-06</td><td>ARDF attivabile e separato se non entra tutto</td><td>Immagine ARDF: cicli, sincronizzazione e memoria manuale di attenuazione</td><td>Prove sul campo e comportamento documentato ancora da completare</td></tr>
+<tr><td>FW-07</td><td>Spettro e funzioni VFO-PRO</td><td>Immagine Spettro: RSSI, peak hold, media, preset RAM, esclusioni, acquisizione RX e ricerca CSS</td><td>Verificare RF/CSS ed equivalenza delle funzioni in sospeso; non trasmette né calibra</td></tr>
+<tr><td>FW-08</td><td>Conservare i preset dello spettro</td><td>Esportazione/importazione BHSP con convalida atomica e rilettura</td><td>Persistenza interna se necessaria; i file non sono EEPROM</td></tr>
+<tr><td>FW-09</td><td>Licenza MIT indicata per Karina</td><td>Dichiarazione registrata; nel pacchetto non è stato trovato un avviso verificabile</td><td>Identificare titolare, componente e testo della licenza prima di ridistribuirlo come MIT</td></tr>
+<tr><td>HELP-01</td><td>Aiuto completo per tutte le famiglie e opzioni</td><td>Quattordici guide HTML, comprese Android e questa revisione; 84 opzioni dell&#39;interfaccia, storico di 18 versioni e 94 opzioni storiche</td><td>Estendere per ogni nuova funzione; non dichiarare copertura di varianti senza prove</td></tr>
+<tr><td>HELP-02</td><td>OpenGD77 e tutti i suoi modelli</td><td>Guida alla configurazione e matrice per famiglie/revisioni</td><td>Test fisici per modello; il catalogo non certifica tutte le radio</td></tr>
+<tr><td>PRO-01</td><td>Modalità PRO senza conferme ripetute</td><td>Attivazione esplicita per sessione e operazioni protette</td><td>Non elimina autorizzazioni del browser, backup, CRC, hash o protezione di Main</td></tr>
+<tr><td>DATA-01</td><td>Configurare RepeaterBook nella versione installata</td><td>Modulo provider e server locale con token in memoria</td><td>Prova con credenziali e autorizzazione proprie; nessun token incluso</td></tr>
+<tr><td>DATA-02</td><td>Scaricare automaticamente contatti DMR</td><td>RadioID e selezione/importazione; CSV web quando CORS impedisce l&#39;API diretta</td><td>Verifica per apparecchio e capacità; non tutti i servizi consentono accesso diretto da Pages</td></tr>
+<tr><td>DATA-03</td><td>Scaricare stanze/gruppi DMR</td><td>Consultazione BrandMeister e importazione gruppi</td><td>Un talkgroup non equivale a tutte le stanze di ogni rete; completare le altre integrazioni richieste</td></tr>
+<tr><td>GD77-01</td><td>CPS OpenGD77 completo senza installare nulla</td><td>Edizione standard, riferimenti, dati e pianificazione nel browser</td><td>Flash, voci, database massivo degli ID, zone/impostazioni complete e parità con il CPS esterno non implementati</td></tr>
+<tr><td>GD77-02</td><td>Backup automatico del firmware originale e calibrazione prima dell&#39;uso</td><td>Calibrazione e codeplug automatici con hash; risultato PARZIALE</td><td>Lettura integrale dell&#39;MCU verificata per modello; le successive operazioni fisiche restano bloccate</td></tr>
+<tr><td>ANY-01</td><td>CPS AnyTone web</td><td>Sezione Beta con progetto JSON/CSV, importazione, modifica e zone</td><td>USB, RDT nativo e parametri completi per modello/firmware</td></tr>
+<tr><td>ANY-02</td><td>Codeplug con ripetitori digitali e analogici della Spagna</td><td>PMR e normalizzatori per RepeaterBook, RadioID e URE</td><td>Fonti attuali autorizzate, copertura nazionale confrontata e codeplug nativo del modello esatto</td></tr>
+<tr><td>ANY-03</td><td>Riutilizzare database OpenGD77 e Quansheng</td><td>Importazioni dei formati supportati con conservazione dei parametri conosciuti</td><td>Completare e verificare i campi non pubblicati; non inventare TS/TG</td></tr>
+<tr><td>ANY-04</td><td>Aeroporti se AnyTone supporta la banda aeronautica</td><td>Importazione di frequenze RF con fonte AIP e conferma manuale AM</td><td>Modello esatto, elenco aggiornato e verifica AM/spaziatura; nessun database aeroportuale nazionale incluso</td></tr>
+<tr><td>CAT-01</td><td>Cambiare frequenza durante il passaggio selezionato</td><td>CAT RX abilitato fisicamente, lease di 3 s e inseguimento web con arresto sicuro; separatamente, CAT TX v1 (PTT tramite lease, tasto 9) solo per invio SSTV</td><td>Convalida USB/RF reale; nessun inseguimento autonomo nella radio né Doppler in uplink</td></tr>
+<tr><td>CAT-02</td><td>Modificare da Android frequenza, subtoni e potenza per canale</td><td>Editor Android Beta dei canali FM F4HWN v6: nome, RX/TX, CTCSS/DCS RX e TX, potenza, stretto e blocco TX; backup completo con CRC dalla radio e SHA-256 su disco, scrittura a blocchi nell&#39;ordine web e rilettura; 10 test host con radio simulata</td><td>Eseguire i test in CI, prova OTG reale con scrittura e rilettura su radio e persistenza dopo riavvio</td></tr>
+<tr><td>AND-01</td><td>Applicazione Android Bricohams</td><td>Progetto Kotlin 0.8.1-beta; SQLite, ADIF, SSTV, statistiche ARDF, acquisizione microfono e CAT RX via CDC ACM e adattatori riconosciuti, con test host</td><td>Funzioni in sospeso, installazione, autorizzazioni e test OTG/RF di ciascun cavo sul telefono</td></tr>
+<tr><td>AND-02</td><td>Funzioni satellitari tipo Look4sat, con interfaccia simile</td><td>SGP4 offline Android, TLE importati, osservatore manuale, passaggi 24 h e Doppler CAT RX con arresto sicuro</td><td>Interfaccia in stile Look4sat (elenco passaggi, radar polare, mappa), download automatico TLE e transponder, GPS osservatore, matrice telefono/cavo/radio e test sul campo; non si dichiara parità con Look4sat</td></tr>
+<tr><td>AND-03</td><td>SSTV Robot36 con CAT sul firmware Bricohams</td><td>Decoder WAV e acquisizione microfono con VIS/parità, colore 320x240 e PNG; schermata CAT registra Robot36 mentre Doppler o sintonizzazione CAT sono attivi; test sintetici</td><td>Convalida AudioRecord, percorso fisico e RF; decodifica continua in streaming, deriva e rumore</td></tr>
+<tr><td>AND-04</td><td>Interpretazione Morse</td><td>Testo, WAV PCM e acquisizione microfono fino a 60 s con decodifica successiva e tono/velocità fissi; test sintetici</td><td>AudioRecord reale, decodifica continua, adattamento e misure d&#39;errore con campioni reali</td></tr>
+<tr><td>AND-05</td><td>«SSTVEncrip»: codificare e inviare SSTV come SSTV Encoder (interpretazione accettata dall&#39;utente)</td><td>Codificatore Robot36 con andata/ritorno nel decoder; invio dalla schermata CAT con PTT CAT v1 del firmware (0x7B02): attivazione radio con tasto 9, lease 1,5 s, timeout a 120 s, blocco TX, bande, batteria e modulazione della radio, interruzione con qualsiasi tasto, nominativo obbligatorio stampato sull&#39;immagine e conferma nell&#39;app; test C del nucleo e dell&#39;adattatore e 4 test host con radio simulata; immagine satellitare compilata senza avvisi</td><td>Prova sulla radio e misura RF (livello microfono, deviazione, LED, interruzione da tasto); altre modalità SSTV (Martin, Scottie, PD); Doppler uplink</td></tr>
+<tr><td>AND-06</td><td>Registro come HAMRS</td><td>Contatti SQLite, ricerca, modifica/cancellazione, ADIF ASCII con importazione/anteprima, JSON e ripristino transazionale; test host</td><td>Flusso e interfaccia tipo HAMRS (logbook per attività, modelli POTA/SOTA, inserimento rapido), convalida sul telefono e ADIF esteso; non si dichiara parità HAMRS</td></tr>
+<tr><td>AND-07</td><td>Caricamento su LoTW</td><td>Obiettivo documentato; ADIF/TQSL non equivale al caricamento diretto</td><td>Firma, certificato, custodia delle chiavi e flusso LoTW verificabile da Android</td></tr>
+<tr><td>AND-08</td><td>Statistiche di caccia alla volpe con GPS</td><td>Il firmware esporta il riepilogo; Android salva sessioni, storico, posizione puntuale con precisione/UTC, intervalli per beacon e somma filtrata di segmenti GPS senza unire intervalli mancanti, previa autorizzazione</td><td>GPS reale, percorso continuo, mappe, sincronizzazione firmware e statistiche di campo estese</td></tr>
+<tr><td>BRAND-01</td><td>Marchio Bricohams e bootlogo</td><td>Schermata iniziale e bitmap monocromatica integrata; Android conserva PNG originale e accento arancione</td><td>Verificare LCD fisico e interfaccia telefono</td></tr>
+<tr><td>BRAND-02</td><td>Arancione aziendale al termine e nei test</td><td>Palette documentata; logo aziendale conservato</td><td>Migrazione finale web/Android, contrasto e regressioni visive</td></tr>
+<tr><td>DOC-01</td><td>Documentazione naturale senza personalizzazione IA</td><td>Revisione editoriale delle attribuzioni visibili e dei racconti conversazionali</td><td>Mantenere uno stile tecnico diretto; conservare licenze e attribuzioni legali</td></tr>
+<tr><td>REL-01</td><td>Push su main al termine</td><td>Autorizzazione alla pubblicazione registrata</td><td>Chiudere i requisiti o concordare espressamente una consegna parziale; eseguire push e controllare CI/Pages</td></tr>
+<tr><td>REL-02</td><td>Nuovi programmi installabili con tutte le caratteristiche</td><td>Catena esistente per Windows, Debian/Raspberry Pi, Arch e FreeBSD</td><td>Costruire dalla revisione di consegna e provare contenuti/avvio; nessun nuovo installabile in questa revisione</td></tr>
+<tr><td>REL-03</td><td>ZIP con progetto, firmware, installabili ed evolutivi</td><td>Esportatore di sviluppo predisposto con verifica d&#39;integrità ed esclusioni</td><td>Eseguirlo con tutti gli artefatti di consegna e verificare l&#39;estrazione; non sostituisce le funzioni in sospeso</td></tr>
+</tbody></table></div>
+<h2 id="evidencia-de-software-mas-reciente">Prove software più recenti</h2>
+<ul>
+<li>211 test JavaScript riusciti in questa revisione, inclusi esportazione Android, estrazione ZIP e controllo d&#39;integrità.</li>
+<li>Otto suite C riuscite nell&#39;ultima convalida del firmware; questa revisione documentale e di consegna non modifica i sorgenti C.</li>
+<li>Compilazione ARDF con statistiche: 113960 byte RAW, RAM 12576/16384, Flash 113072/120832; manifesto e dieci hash delle sorgenti verificati.</li>
+<li>Satelliti CAT: 113868 byte RAW. Spettro con BHSP: 118044 byte RAW.</li>
+<li>Pannello ARDF presente e bloccato senza connessione nel browser.</li>
+<li>Nessuna di queste immagini è stata flashata o convalidata fisicamente.</li>
+<li>Android 0.7: APK e test strumentati compilati. Sessantanove test JVM/Robolectric riusciti in CI, inclusi USB/CAT simulato, ADIF, Robot36, SGP4, acquisizione/</li>
+</ul>
+<p>schermata del microfono e statistiche/storico ARDF. Il 2026-10-26 passano in locale   tutti gli 84 test host, inclusi quelli dell&#39;editor canali (CAT-02) e dell&#39;invio   SSTV tramite PTT CAT (AND-05); manca la prima esecuzione in CI. Zero errori e   tredici avvisi lint. Firme e hash delle 58 sorgenti verificati; il manifesto di   ogni build registra il risultato corrispondente. I test strumentati sono compilati,   ma non eseguiti; non è collegato alcun telefono.</p>
+<p>I numeri sono prove datate, non un contatore che sostituisce i test di ogni revisione. Le build precedenti restano artefatti evolutivi; il nome di una cartella contenente <code>final</code> non le rende versioni stabili.</p>
+<h2 id="condiciones-de-entrega">Condizioni di consegna</h2>
+<ol>
+<li>Rivedere ogni ID e chiudere l&#39;attività in sospeso con prove, oppure registrare una modifica di ambito approvata. Non sostituire un requisito con un pulsante o mock.</li>
+<li>Testare software, documentazione, avvio locale e capacità reali. Per l&#39;hardware: backup integrale, identificazione e prove autorizzate.</li>
+<li>Applicare e verificare la palette arancione al completamento delle funzioni.</li>
+<li>Costruire programmi installabili dalla stessa revisione e verificarne contenuti, licenze, integrità e avvio. Non riutilizzare pacchetti precedenti spacciandoli per nuovi.</li>
+<li>Pubblicare su main, controllare CI e Pages e registrare la revisione pubblicata.</li>
+<li>Esportare sorgenti, cronologia, artefatti firmware con sorgenti e licenze, programmi installabili ed evolutivi verificabili. Includere inventario e hash.</li>
+<li>Estrarre lo ZIP in un&#39;altra cartella, verificarne gli hash e provare l&#39;avvio. Verificare che non contenga credenziali, backup radio o calibrazioni.</li>
+</ol>
+<h2 id="alcance-de-la-exportacion">Ambito dell&#39;esportazione</h2>
+<p>L&#39;esportatore genera uno <strong>snapshot di sviluppo Beta</strong>, non certifica il completamento della matrice. Richiede l&#39;accettazione tramite <code>--beta</code>. Non pubblica, compila né esegue il flash. L&#39;uso è descritto in <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/docs/DEPLOYMENT.md#exportar-el-proyecto" target="_blank" rel="noopener noreferrer">Distribuzione</a>. La consegna definitiva resta subordinata ai punti precedenti.</p>
+<p>Gli evolutivi sono compilazioni Bricohams verificabili e la cronologia Git di HEAD insieme allo stato attuale dei sorgenti. Per impostazione predefinita non include tutto <code>Documents/Multiboot</code>: contiene pacchetti di terze parti, configurazioni e calibrazioni che non vanno confuse con una distribuzione del progetto. Le cartelle di compilazioni fallite vengono segnalate, non presentate come firmware. L&#39;opzione <code>--android</code> include una consegna APK Beta solo se tutti gli hash dei sorgenti corrispondono esattamente allo snapshot esportato; include guida, licenze e prove di compilazione. Non incorpora APK evolutivi storici senza i relativi sorgenti né inventa una convalida fisica.</p></article>
+    <footer><p class="translation-note">Traduzione dell&#39;originale spagnolo. In caso di discrepanza prevale la versione spagnola.</p><p>Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida. <a href="ayuda-firmwares.it.html">Torna all&#39;indice</a>.</p></footer>
+  </main>
+</body>
+</html>

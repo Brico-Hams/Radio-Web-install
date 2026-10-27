@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Guide AnyTone et canaux locaux: aide Bricohams par modèle et version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Guide AnyTone et canaux locaux | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-anytone.html">
+  <link rel="alternate" hreflang="en" href="ayuda-anytone.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-anytone.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-anytone.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-anytone.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Aller au contenu</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aide"><a href="ayuda.html">Aide de l&#39;application (espagnol)</a> · <a href="ayuda-firmwares.fr.html">Bibliothèque de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Langue"><a href="ayuda-anytone.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-anytone.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-anytone.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-anytone.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-anytone.fr.html" hreflang="fr" lang="fr" aria-current="page">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenu de ce guide"><h2>Dans ce guide</h2><ul><li><a href="#capacidades-y-modos">Capacités et modes</a></li><li><a href="#aeropuertos-y-banda-aeronautica">Aéroports et bande aéronautique</a></li><li><a href="#emisoras-fm-comerciales-locales">Stations FM commerciales locales</a></li><li><a href="#repetidores-y-remer">Relais et REMER</a></li><li><a href="#guardar-y-revisar">Enregistrer et vérifier</a></li></ul></nav>
+    <article class="panel"><h1 id="guia-anytone-y-canales-locales">Guide AnyTone et canaux locaux</h1>
+<p>Cette page décrit le préparateur web AnyTone Beta. Il ne remplace pas le CPS officiel et ne programme pas la radio par USB. Les projets JSON et CSV sont des formats d’échange propres à l’application : ce ne sont pas des fichiers RDT et ils ne doivent pas être chargés directement dans le CPS en supposant qu’il s’agit de codeplugs natifs. Effectuez une copie originale avec le CPS du fabricant avant toute écriture.</p>
+<h2 id="capacidades-y-modos">Capacités et modes</h2>
+<p>Sélectionnez un profil de modèle et confirmez séparément les capacités que vous aurez vérifiées dans le manuel de la variante exacte. Les profils de famille ne certifient pas les caractéristiques de toutes les révisions. AM aéronautique et FM commerciale 87.5-108 MHz ne sont activées que pour le profil « Otro » avec confirmation manuelle. Vérifiez que le récepteur couvre la bande et le mode ; une fréquence acceptée ne prouve pas que le matériel puisse la recevoir.</p>
+<p>Tous les canaux sont en réception uniquement. L’AM nécessite les fréquences RF en MHz, et non le désignateur de canal aéronautique 8.33 kHz ; le préparateur valide la grille représentable. Aucune émission n’est créée et la compatibilité de l’antenne, du filtre, du firmware ou du CPS n’est pas certifiée.</p>
+<h2 id="aeropuertos-y-banda-aeronautica">Aéroports et bande aéronautique</h2>
+<p>L’utilisateur fournit un JSON local avec <code>results</code> (1-4000 lignes). Chaque enregistrement comprend <code>name</code>, <code>frequencyMHz</code> et <code>source</code> avec une référence AIP en vigueur. Pour filtrer par proximité, il peut inclure <code>latitude</code> et <code>longitude</code> ; lors de la sélection d’un emplacement, le navigateur demande l’autorisation et l’utilise localement en mémoire, sans transmettre les coordonnées à un service. Les enregistrements sans coordonnées ou hors du rayon choisi sont ignorés. Sans emplacement, la liste complète est traitée.</p>
+<p>Consultez les fréquences RF et les services en vigueur dans l’<a href="https://aip.enaire.es/" target="_blank" rel="noopener noreferrer">AIP ENAIRE</a>. Aucune base nationale de fréquences n’est incluse, aucune donnée n’est téléchargée automatiquement et les indicateurs 8.33 kHz ne sont pas convertis. L’application propose le canal 121.500 MHz en option manuelle, en réception uniquement ; vérifiez la procédure et la validité dans les sources officielles. N’utilisez pas la fréquence de garde pour les communications courantes.</p>
+<h2 id="emisoras-fm-comerciales-locales">Stations FM commerciales locales</h2>
+<p>Pour importer des stations, vérifiez d’abord dans le manuel exact que l’appareil reçoit la FM commerciale 87.5-108 MHz. Préparez un fichier local avec <code>results</code> et les champs <code>name</code>, <code>frequencyMHz</code> (ou <code>frequency</code>), <code>latitude</code>, <code>longitude</code> et <code>source</code>. Le filtre utilise la distance en km par rapport à l’emplacement autorisé et au rayon sélectionné (1-500 km). Aucun catalogue national n’est préchargé et il n’y a pas de scraping ; utilisez une source autorisée, à jour et adaptée à votre région. L’application ne certifie pas la licence ni l’exactitude des données fournies.</p>
+<p>Les canaux obtenus sont marqués <code>FM_Broadcast_RX</code> dans le CSV d’échange, avec RX et TX nominaux identiques et TX verrouillée dans l’éditeur. Cette marque n’autorise pas l’émission et ne transforme pas le CSV en format AnyTone. Les canaux commerciaux nécessitent de confirmer la capacité dans le projet JSON et ne peuvent pas être ouverts avec un profil radio qui n’a pas cette confirmation.</p>
+<h2 id="repetidores-y-remer">Relais et REMER</h2>
+<p>Il est possible d’importer des données locales autorisées de relais RadioID, URE et RepeaterBook selon le format attendu par l’éditeur. Les tonalités analogiques sont conservées comme note à vérifier ; elles ne sont ni déduites ni programmées à partir de la fréquence. Vérifiez la validité, le décalage, le CC, le TS, le TG, les contacts, les listes de réception et les limites du modèle dans le CPS.</p>
+<p>L’onglet REMER est disponible dans les planificateurs compatibles Quansheng et OpenGD77. Son tableau VHF est une transcription de la référence fournie par l’utilisateur, sans date vérifiable ; recoupez chaque donnée avec REMER. Les CTCSS sont affichés sous forme de note et ne sont pas importés comme réglages. Les fréquences HF/SSB sont exclues de l’importation des mémoires FM. Le fait qu’un analyseur relise un canal valide uniquement la structure du fichier : cela ne démontre ni sa validité, ni la réception RF, ni sa visibilité dans le firmware après une écriture.</p>
+<h2 id="guardar-y-revisar">Enregistrer et vérifier</h2>
+<p>L’éditeur permet d’ajouter, de modifier et de supprimer des canaux du projet local. Exportez le JSON pour préserver le travail et le CSV uniquement comme référence ou échange manuel. Lors de l’importation de binaires OpenGD77 ou Quansheng, seuls les champs reconnus sont transférés ; les paramètres propriétaires, tonalités, zones et contacts peuvent nécessiter une reconstruction dans le CPS de destination. La vérification finale, la conversion au format natif et l’écriture s’effectuent avec le CPS officiel, après vérification du résultat et sauvegarde d’une copie intacte.</p></article>
+    <footer><p class="translation-note">Traduction de l&#39;original espagnol. En cas de divergence, la version espagnole fait foi.</p><p>Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide. <a href="ayuda-firmwares.fr.html">Retour à l&#39;index</a>.</p></footer>
+  </main>
+</body>
+</html>

@@ -1,0 +1,49 @@
+Bricohams independent resident - third-party components
+
+The resident startup, linker, application shell, text renderer and LCD/keypad
+glue are implemented in firmware/platform. They are not the F4HWN application
+and do not contain code recovered from a Karina binary.
+
+PY32 CMSIS device definitions, LL inline helpers and system clock source:
+Copyright (c) 2023 Puya Semiconductor Co.
+Copyright (c) 2016 STMicroelectronics.
+Licensed under BSD-3-Clause:
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+Arm CMSIS core headers:
+Copyright (c) Arm Limited.
+Apache-2.0. Original headers retain their applicable copyright notices.
+See the accompanying CMSIS-LICENSE.txt.
+
+ARM GNU Toolchain libgcc:
+GCC runtime support is linked with the GCC Runtime Library Exception.
+Runtime license: https://www.gnu.org/licenses/gcc-exception-3.1.html
+Corresponding toolchain sources: https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads
+This local experimental build is not a source distribution of libgcc.
+
+Hardware pin and controller-command references were checked against the
+locally available Apache-2.0 UV-K1/K5 V3 source tree. Its application code
+is not linked. Original reference contributors include Dual Tachyon,
+Manuel Jinger, muzkr and F4HWN; this is not an endorsement by those authors.

@@ -48,7 +48,10 @@ temporal de 16 frecuencias exactas y busqueda CTCSS/DCS FM opcional mediante
 el detector upstream, pendiente de validar en RF. No edita calibracion,
 guarda tonos ni transmite.
 Satelites no implementa TLE/SGP4 ni seguimiento
-autonomo. Ninguna ha sido flasheada o validada fisicamente.
+autonomo. En la inspeccion inicial ninguna se habia flasheado. El
+26-10-2026 se verificaron posteriormente CRC de los slots Bricohams en
+Flash externa, como registra la [guia Quansheng](AYUDA-QUANSHENG.md).
+Eso no valida arranque de SAT/ARDF/Espectro, equivalencia Karina ni RF.
 Dividir por funcion no implica que todos los modulos Karina esten recreados.
 Los presets de espectro ya se exportan/importan por USB/UART en archivos BHSP,
 con validacion y relectura; no tienen persistencia interna EEPROM. La imagen
@@ -60,10 +63,12 @@ Se pueden documentar funciones observadas y preparar una implementacion propia
 sobre una base abierta. No se debe anunciar esa implementacion como Karina
 recompilada ni afirmar equivalencia sin verificarla.
 
-**Busqueda de fuentes (26-10-2026).** No hay codigo fuente publico de Karina.
+**Busqueda de fuentes (26-10-2026).** No se encontro codigo fuente publico
+de Karina en las fuentes consultadas; no es una prueba de inexistencia.
 El pack Dim0s lo declara firmware cerrado sin repositorio, y en los grupos de
-Telegram en espanol y ruso nadie ha publicado fuentes. Tampoco aparecen en
-GitHub, Codeberg, GitLab, Gitee, GitFlic ni GitVerse. Segun el grupo ruso,
+Telegram en espanol y ruso revisados no se localizaron fuentes. Tampoco se
+localizaron en las busquedas realizadas en GitHub, Codeberg, GitLab, Gitee,
+GitFlic ni GitVerse. Segun el grupo ruso,
 Karina continua [fagci-mod v1.2.1](https://github.com/fagci/uv-k5-firmware-fagci-mod)
 (Apache-2.0, que permite derivados cerrados) y comparte codigo de espectro con
 [PUNKTRACKER 2.5](https://github.com/Alexuresp/PUNKTRACKER_2.5) (Apache-2.0, V1).
@@ -370,9 +375,10 @@ y GitFlic (con sesion iniciada), y en el pack de Dim0s. Sin autores ni datos per
 | «Karina no tiene github, publica las versiones en su foro ruso» | Grupo en espanol |
 | Karina es «la continuacion directa de fagci b5» y Punktracker comparte su codigo de espectro | Grupo ruso |
 | Tema «Karina mod Fagci based» (creado 22-02-2024) y canal del desarrollador «k5fw» | Grupo ruso |
-| Ninguna forja publica contiene Karina; GitFlic y GitVerse no tienen proyectos Quansheng | Busquedas del 26-10-2026 |
+| No se localizaron fuentes Karina ni proyectos Quansheng en las busquedas realizadas en GitFlic y GitVerse | Busquedas del 26-10-2026; no prueba de inexistencia |
 
-Conclusion: **no hay fuentes publicas de Karina**. La base abierta mas cercana es
+Conclusion: **no se localizaron fuentes publicas de Karina en esta revision**.
+La base abierta de referencia identificada es
 [fagci-mod v1.2.1](https://github.com/fagci/uv-k5-firmware-fagci-mod) (Apache-2.0, que
 permite derivados cerrados) y [PUNKTRACKER 2.5](https://github.com/Alexuresp/PUNKTRACKER_2.5)
 (Apache-2.0, V1, con AFC Doppler). `fagci/s0v4`, `hawk5` y `k1-fw` no tienen licencia:

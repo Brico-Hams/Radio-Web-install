@@ -1,8 +1,10 @@
 # Binarios de terceros: indice de hashes
 
 Revision: 26-10-2026. Indice de los firmwares y herramientas de terceros estudiados para Karina y el
-Baofeng DM-32UV. **Los archivos no se publican en este repositorio**: no tienen una licencia que permita
-redistribuirlos. Se descargan de su origen y se comprueban con estos SHA-256. Brico-Hams guarda una
+Baofeng DM-32UV. **Los archivos no se publican en este repositorio**: no se ha
+verificado una autorización de redistribución aplicable a cada archivo.
+No se deduce su licencia por estar disponibles para descargar.
+Se descargan de su origen y se comprueban con estos SHA-256. Brico-Hams guarda una
 copia interna en un repositorio privado.
 
 Comprobar un archivo: `sha256sum ARCHIVO` (Linux/macOS) o `Get-FileHash ARCHIVO` (Windows) y comparar.
@@ -11,6 +13,15 @@ Explicacion de cada familia: [Karina](KARINA.md) y [DM-32UV](DM32UV-FIRMWARE.md)
 ## Karina V3/K1 (pack Dim0s, carpeta Karina)
 
 Origen: <https://github.com/Dim0s/quansheng-UV-K5v3-K1-firmware-pack/tree/main/Karina>
+
+**No confundir instantaneas:** el ZIP `21.09.2026.zip` de esta tabla tiene
+2161962 bytes y SHA-256 `c8877d5b...`. El
+[expediente Dim0s](AYUDA-PACK-DIM0S.md) registra otro contenido de igual
+nombre, con 2296162 bytes y SHA-256 `619368c7...`, inspeccionado en el commit
+`52b41c182dd82c1fbdc027dc2da7bbcb02c7d79c`. No son el mismo archivo.
+El nombre y la URL a `main` no fijan los bytes: comparar hash completo y
+conservar la procedencia de cada descarga. Los hashes de binarios extraidos
+del expediente no se atribuyen automaticamente al ZIP de esta tabla.
 
 | Archivo | Bytes | SHA-256 |
 | --- | ---: | --- |

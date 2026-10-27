@@ -103,7 +103,7 @@ Antes de cualquier escritura se relee la copia y se compara con los hashes del p
 ## Limitaciones conocidas
 
 - **OpenGD77:** no existe aquí un protocolo verificado para extraer el firmware completo del MCU. La copia se marca como **parcial** y la escritura en la radio queda bloqueada.
-- **Quansheng:** la copia física completa de la Flash requiere F4HWN Labs v6.1+. No hay instalación nativa de canales ni SAT en la radio.
+- **Quansheng:** la copia física completa de la Flash requiere las capacidades de lectura y CRC de F4HWN Labs v6.1+. La web implementa escritura Beta de configuración/canales con respaldo y relectura, y las imágenes Bricohams SAT incorporan CAT RX experimental. Eso no demuestra escritura persistente ni funcionamiento CAT en una radio concreta; consulta la [matriz de validación](VALIDACION-INTEGRAL-V3-ANDROID.md).
 - **RepeaterBook:** requiere un token aprobado por RepeaterBook y solo está en la versión local.
 - **Web:** los datos de satélites pueden tener hasta un día de antigüedad (se avisa a partir de 7 días) y firmware/RadioID se cargan a mano.
-- **Hardware:** no hay validación con radios físicas en el entorno de desarrollo.
+- **Hardware:** existen lecturas previas de una unidad Quansheng, pero no certifican las escrituras, el residente independiente ni la combinación actual de APK, slot SAT y teléfono. Las pruebas físicas de esta revisión están pendientes.

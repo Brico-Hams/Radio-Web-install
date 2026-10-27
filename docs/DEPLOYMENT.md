@@ -173,6 +173,19 @@ npm start
 
 Exporta tus copias antes de actualizar el navegador o de borrar los datos del sitio.
 
+## Documentación multilingüe
+
+La ayuda se publica en español (original), inglés de EE. UU., alemán, italiano y francés. Las fuentes traducidas están en `docs/i18n/<idioma>/` (mismo nombre que el original) y `README.<idioma>.md`; `npm run build:help` genera `ayuda-*.html` y `ayuda-*.<idioma>.html` con selector de idioma. `docs/i18n/<idioma>/F4HWN-PRESETS.md` se genera automáticamente.
+
+Al cambiar un documento en español, actualiza las cuatro traducciones y comprueba que conservan títulos, bloques de código, código en línea, filas de tabla, imágenes y enlaces:
+
+```powershell
+node scripts/i18n.cjs --fix --strict
+npm run build:help
+```
+
+`--fix` ajusta las rutas relativas de enlaces e imágenes a la carpeta de cada traducción y las dirige a la traducción hermana. Si el texto traducido y el original discrepan, prevalece el español.
+
 ## Arranque automático (opcional, desde código fuente)
 
 Los instaladores ya arrancan en segundo plano al abrir el lanzador, pero no al iniciar sesión. Estos ejemplos son para una copia del repositorio con Node instalado; adapta las rutas y no los combines con otro servidor en el mismo puerto.
@@ -208,7 +221,15 @@ El sitio estático se genera con `npm run build:pages` (carpeta `dist/`) y lo pu
 
 ### Por qué un origen propio
 
-IndexedDB (copias de la radio) y `localStorage` (perfil) se aíslan por origen. Si el sitio viviera en una subruta de `bricohams.github.io`, compartiría origen con Bricohams Studio y con cualquier otro proyecto de esa cuenta: una página ajena podría leer las copias. Por eso se publica en la **raíz** de una cuenta u organización dedicada, `https://<org>.github.io/`, separada de `bricohams.github.io`. Aun así, todas las rutas del cliente son relativas.
+IndexedDB (copias de la radio) y `localStorage` (perfil) se aíslan por origen,
+no por ruta. La recomendación inicial era una cuenta dedicada en
+`https://<org>.github.io/`. El sitio actual
+`https://brico-hams.github.io/Radio-Web-install/` usa la excepción de origen
+compartido: comparte almacenamiento con otros proyectos de
+`brico-hams.github.io`, incluido Bricohams Studio. No se debe presentar la
+subruta como aislamiento. Exporta las copias fuera del navegador; cambiar
+de origen no migra automáticamente los datos del perfil. Todas las rutas
+del cliente siguen siendo relativas.
 
 ### Pasos (los hace el autor)
 
@@ -250,7 +271,7 @@ Con Node.js 22+, Git y las herramientas de archivo del sistema:
 npm run export:project -- --beta `
   --firmware 'C:\ruta\Multiboot\Bricohams' `
   --installers 'C:\ruta\instalables-verificados' `
-  --android 'C:\ruta\Android-0.8.0-beta' `
+  --android 'C:\ruta\Android-0.8.1-beta' `
   --output 'C:\ruta\entregas\Bricohams-desarrollo.zip'
 ```
 

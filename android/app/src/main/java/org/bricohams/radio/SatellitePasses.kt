@@ -37,33 +37,37 @@ object SatellitePasses {
         return SatelliteLook(time, (a.azimuth + turn * f + 360) % 360, a.elevation + (b.elevation - a.elevation) * f,
             a.rangeKm + (b.rangeKm - a.rangeKm) * f)
     }
-    fun countdown(pass: SatellitePass, now: Long): String = when {
-        now < pass.aos.time -> "AOS en " + duration(pass.aos.time - now)
-        now < pass.los.time -> "En curso, LOS en " + duration(pass.los.time - now)
-        else -> "Terminado"
+    private fun phrase(context: Context?, id: Int, fallback: String, vararg args: Any): String =
+        context?.getString(id, *args) ?: String.format(Locale.ROOT, fallback, *args)
+    fun countdown(pass: SatellitePass, now: Long, context: Context? = null): String = when {
+        now < pass.aos.time -> phrase(context, R.string.pass_countdown_aos, "AOS en %1\$s", duration(pass.aos.time - now))
+        now < pass.los.time -> phrase(context, R.string.pass_countdown_los, "En curso, LOS en %1\$s", duration(pass.los.time - now))
+        else -> phrase(context, R.string.pass_finished, "Terminado")
     }
     private fun duration(millis: Long): String {
         val seconds = millis / 1000
         return if (seconds >= 3600) String.format(Locale.ROOT, "%d h %02d min", seconds / 3600, seconds / 60 % 60)
             else String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60)
     }
-    fun card(track: PassTrack, now: Long, zone: ZoneId): String {
+    fun card(track: PassTrack, now: Long, zone: ZoneId, context: Context? = null): String {
         val pass = track.plan.pass
         val day = DateTimeFormatter.ofPattern("dd/MM HH:mm:ss", Locale.ROOT).withZone(zone)
         val clock = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT).withZone(zone)
-        val cut = if (pass.partialStart || pass.partialEnd) " (cortado por la ventana)" else ""
+        val cut = if (pass.partialStart || pass.partialEnd)
+            phrase(context, R.string.pass_partial, " (cortado por la ventana)") else ""
         return String.format(Locale.ROOT, "%s (%d)%s\nAOS %s  LOS %s  %d min\nMax %.1f°  Az %.0f° → %.0f°\n%s",
             track.plan.tle.name, track.plan.tle.norad, cut, day.format(Instant.ofEpochMilli(pass.aos.time)),
             clock.format(Instant.ofEpochMilli(pass.los.time)), (pass.los.time - pass.aos.time + 30000) / 60000,
-            pass.maximum.elevation, pass.aos.azimuth, pass.los.azimuth, countdown(pass, now))
+            pass.maximum.elevation, pass.aos.azimuth, pass.los.azimuth, countdown(pass, now, context))
     }
-    fun detail(track: PassTrack, now: Long): String {
+    fun detail(track: PassTrack, now: Long, context: Context? = null): String {
         val plan = track.plan
         val pass = plan.pass
         val position = at(track.track, now)?.let {
-            String.format(Locale.ROOT, "Ahora az %.1f°, el %.1f°, %.0f km", it.azimuth, it.elevation, it.rangeKm)
-        } ?: countdown(pass, now)
-        return String.format(Locale.ROOT, "%s\nAOS %s az %.0f°\nMax %s el %.1f°\nLOS %s az %.0f°\nParcial inicio=%s fin=%s\nObservador %.6f, %.6f, %.3f km; RX %d Hz\n%s",
+            phrase(context, R.string.pass_current, "Ahora az %1\$.1f°, el %2\$.1f°, %3\$.0f km",
+                it.azimuth, it.elevation, it.rangeKm)
+        } ?: countdown(pass, now, context)
+        return phrase(context, R.string.pass_detail, "%s\nAOS %s az %.0f°\nMax %s el %.1f°\nLOS %s az %.0f°\nParcial inicio=%s fin=%s\nObservador %.6f, %.6f, %.3f km; RX %d Hz\n%s",
             plan.tle.name, Instant.ofEpochMilli(pass.aos.time), pass.aos.azimuth, Instant.ofEpochMilli(pass.maximum.time),
             pass.maximum.elevation, Instant.ofEpochMilli(pass.los.time), pass.los.azimuth, pass.partialStart, pass.partialEnd,
             plan.observer.latitude, plan.observer.longitude, plan.observer.heightKm, plan.downlinkHz, position)

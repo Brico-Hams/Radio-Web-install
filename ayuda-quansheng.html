@@ -10,12 +10,18 @@
   <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-quansheng.html">
+  <link rel="alternate" hreflang="en" href="ayuda-quansheng.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-quansheng.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-quansheng.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-quansheng.fr.html">
 </head>
 <body>
   <a class="skip" href="#main">Saltar al contenido</a>
   <main id="main" class="firmware-help">
     <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
       <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Idioma"><a href="ayuda-quansheng.html" hreflang="es" lang="es" aria-current="page">Español</a> · <a href="ayuda-quansheng.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-quansheng.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-quansheng.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-quansheng.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
     <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#visor-en-directo-y-registro-rf">Visor en directo y registro RF</a></li><li><a href="#catalogo-precompilado-sin-herramientas-de-compilacion">Catalogo precompilado sin herramientas de compilacion</a></li><li><a href="#puesta-en-marcha-de-0-a-100">Puesta en marcha de 0 a 100 %</a></li><li><a href="#volver-a-fabrica-y-recuperacion">Volver a fabrica y recuperacion</a></li><li><a href="#beta-prueba-usb-real-y-canales">Beta: prueba USB real y canales</a></li><li><a href="#elegir-hardware-antes-de-firmware">Elegir hardware antes de firmware</a></li><li><a href="#matriz-de-versiones-y-formatos">Matriz de versiones y formatos</a></li><li><a href="#que-edicion-elegir">Que edicion elegir</a></li><li><a href="#diccionario-de-menus-de-radio">Diccionario de menus de radio</a></li><li><a href="#rxmode-y-full-watch">RxMode y Full Watch</a></li><li><a href="#slots-y-bancos-cfg-operaciones-distintas">Slots y bancos CFG: operaciones distintas</a></li><li><a href="#labs-y-aplicaciones">Labs y aplicaciones</a></li><li><a href="#problemas-habituales">Problemas habituales</a></li><li><a href="#fuentes-y-mantenimiento">Fuentes y mantenimiento</a></li></ul></nav>
     <article class="panel"><h1 id="quansheng-f4hwn-versiones-y-configuracion">Quansheng: F4HWN, versiones y configuracion</h1>
@@ -50,6 +56,7 @@
 <tr><td>4</td><td>BH Spectrum</td><td><code>702b5c07</code></td></tr>
 </tbody></table></div>
 <p>Main/Fusion, configuracion activa y calibracion se verificaron sin cambios. No se enviaron resets CFG, borrados de apps ni reinicios durante la grabacion. Posteriormente el propietario arranco BH Labs manualmente y se verificaron lecturas reales, como se detalla abajo. <strong>El arranque de ARDF, Satellite y Spectrum y las pruebas de escritura de canales siguen sin validar</strong>: los CRC no prueban ejecucion. Se detectaron respuestas perdidas y un bloqueo USB CDC con tramas de 64 bytes exactos. El transporte Quansheng agrega un byte nulo fuera de esas tramas y reintenta hasta cuatro veces solo el mismo bloque NOR (como UV Studio); nunca reintenta automaticamente borrados, resets ni rechazos del firmware.</p>
+<p>Para operar el slot 3 (BH Satellite) consulta <a href="ayuda-iniciacion-satelite.html">Iniciacion al satelite</a> y <a href="ayuda-antenas-satelite.html">Antenas de satelite</a>.</p>
 <h3 id="opciones-avanzadas-y-alcance-de-la-restauracion">Opciones avanzadas y alcance de la restauracion</h3>
 <p>El panel <strong>Herramientas propias Bricohams</strong> contiene accesos internos a teclado/reinicio, firmware principal DFU v6/v7, backup/restore de calibracion, descarga/instalacion de logo, backup/restore Flash, catalogo/orden/borrado de apps, slots y filtros/exportacion RF. No abre UV Studio, no carga sus scripts ni delega estas operaciones a otra web. Los enlaces de procedencia y licencia de binarios se mantienen: no son dependencias de ejecucion de la interfaz. La restauracion stock reconstruye Flash externa y necesita el paso DFU, con imagenes distintas para UV-K1/UV-K5 V3, conservando calibracion propia. No se confunde con <strong>Restablecer banco CFG</strong>, que solo borra un banco.</p>
 <p>Hay paneles nativos de mantenimiento y fabrica/DFU con implementacion propia del protocolo publicado, sin copiar la interfaz ni el codigo de UV Studio. No hay paridad completa entre versiones: los slots y canales conservan su flujo v6; el DFU admite BIN v6 y paquetes v7 FWAT/FWA1. Recursos v7 solo se instalan en el firmware activo con Build ID coincidente y respaldo nuevo. Todo el soporte v7 se ha probado en simulacion, no en esta radio fisica. Pausar el visor antes de iniciar seguimiento CAT: ambos comparten el puerto. CAT y el visor quedan bloqueados mientras haya una recuperacion de fabrica pendiente.</p>

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="520" viewBox="0 0 1100 520" role="img" aria-labelledby="title desc">
+<title id="title">Plan de memorias escalonadas para un satelite FM</title>
+<desc id="desc">Esquema propio Bricohams. Cinco memorias con la bajada UHF desplazada en pasos de 5 kHz y la subida VHF fija, usadas en orden de AOS a LOS. Ejemplo con SO-50.</desc>
+<rect width="1100" height="520" fill="#14202c"/>
+<g font-family="sans-serif" fill="#fff">
+<text x="35" y="42" font-size="24">Iniciacion al satelite - memorias escalonadas (ejemplo SO-50)</text>
+<text x="35" y="70" font-size="15">Esquema propio. Subida 145.850 MHz con tono 67.0 Hz fija; bajada nominal 436.795 MHz corregida por pasos de 5 kHz.</text>
+<g fill="#26394b" stroke="#ffa342" stroke-width="2">
+<rect x="35" y="110" width="190" height="200" rx="8"/>
+<rect x="245" y="110" width="190" height="200" rx="8"/>
+<rect x="455" y="110" width="190" height="200" rx="8"/>
+<rect x="665" y="110" width="190" height="200" rx="8"/>
+<rect x="875" y="110" width="190" height="200" rx="8"/>
+</g>
+<g font-size="18">
+<text x="50" y="145">SO50 A</text><text x="260" y="145">SO50 B</text><text x="470" y="145">SO50 C</text><text x="680" y="145">SO50 D</text><text x="890" y="145">SO50 E</text>
+</g>
+<g font-size="16">
+<text x="50" y="180">RX 436.805</text><text x="260" y="180">RX 436.800</text><text x="470" y="180">RX 436.795</text><text x="680" y="180">RX 436.790</text><text x="890" y="180">RX 436.785</text>
+<text x="50" y="210">TX 145.850</text><text x="260" y="210">TX 145.850</text><text x="470" y="210">TX 145.850</text><text x="680" y="210">TX 145.850</text><text x="890" y="210">TX 145.850</text>
+<text x="50" y="240">CTCSS 67.0</text><text x="260" y="240">CTCSS 67.0</text><text x="470" y="240">CTCSS 67.0</text><text x="680" y="240">CTCSS 67.0</text><text x="890" y="240">CTCSS 67.0</text>
+<text x="50" y="280">AOS</text><text x="260" y="280">Subiendo</text><text x="470" y="280">TCA</text><text x="680" y="280">Bajando</text><text x="890" y="280">LOS</text>
+</g>
+<path d="M60 345H1040" stroke="#ffa342" stroke-width="4"/>
+<path d="M1040 345L1020 333V357Z" fill="#ffa342"/>
+<text x="35" y="390" font-size="17">Avanza de memoria cuando la voz se distorsione. En pases bajos puede bastar con 3 memorias.</text>
+<text x="35" y="420" font-size="17">Con BH Satelite puedes usar una sola memoria nominal y corregir la recepcion con 4/5/6 o con CAT RX.</text>
+<text x="35" y="450" font-size="17">Frecuencias y tonos cambian: confirmalos en AMSAT antes de programar. Graba solo en el banco del slot SAT.</text>
+<text x="35" y="490" font-size="15">Nota: la radio escribe la subida como TX; no se corrige Doppler en transmision.</text>
+</g></svg>

@@ -19,19 +19,19 @@ data class Contact(
     val logbook: String = Logbook.GENERAL
 ) {
     fun validated(): Contact {
-        require(call.matches(Regex("[A-Z0-9/]{3,20}")) && call.any(Char::isLetter) && call.any(Char::isDigit)) {
-            "Indicativo invalido: usa letras, numeros y /."
+        requireUi(call.matches(Regex("[A-Z0-9/]{3,20}")) && call.any(Char::isLetter) && call.any(Char::isDigit)) {
+            UiText(R.string.err_call_invalid)
         }
         val frequency = frequencyMHz.toBigDecimalOrNull()
-        require(frequency != null && frequency >= BigDecimal("0.1") && frequency <= BigDecimal("1300") &&
-            frequency.scale() <= 6) { "Frecuencia invalida: 0.1-1300 MHz y hasta seis decimales." }
-        require(mode in setOf("FM", "SSB", "CW", "AM", "RTTY", "SSTV", "DMR", "DIGITALVOICE")) { "Modo no admitido." }
-        require(sent.matches(Regex("[0-9+-]{1,8}")) && received.matches(Regex("[0-9+-]{1,8}"))) { "Informes invalidos." }
-        require(notes.length <= 2000) { "Notas demasiado largas (maximo 2000 caracteres)." }
-        require(utc >= Instant.parse("1900-01-01T00:00:00Z") && utc < Instant.parse("2100-01-01T00:00:00Z")) {
-            "Fecha fuera del intervalo admitido (1900-2099)."
+        requireUi(frequency != null && frequency >= BigDecimal("0.1") && frequency <= BigDecimal("1300") &&
+            frequency.scale() <= 6) { UiText(R.string.err_frequency_invalid) }
+        requireUi(mode in setOf("FM", "SSB", "CW", "AM", "RTTY", "SSTV", "DMR", "DIGITALVOICE")) { UiText(R.string.err_mode_unsupported) }
+        requireUi(sent.matches(Regex("[0-9+-]{1,8}")) && received.matches(Regex("[0-9+-]{1,8}"))) { UiText(R.string.err_reports_invalid) }
+        requireUi(notes.length <= 2000) { UiText(R.string.err_notes_too_long) }
+        requireUi(utc >= Instant.parse("1900-01-01T00:00:00Z") && utc < Instant.parse("2100-01-01T00:00:00Z")) {
+            UiText(R.string.err_date_range)
         }
-        require(logbook.matches(Regex("[A-Za-z0-9-]{1,64}"))) { "Libro de guardia invalido." }
+        requireUi(logbook.matches(Regex("[A-Za-z0-9-]{1,64}"))) { UiText(R.string.err_logbook) }
         return this
     }
 }
@@ -45,19 +45,19 @@ data class Logbook(
     val stationCall: String
 ) {
     fun validated(): Logbook {
-        require(id.matches(Regex("[A-Za-z0-9-]{1,64}"))) { "ID de libro invalido." }
-        require(name.isNotBlank() && name.length <= 120 && name.all { it.code in 32..126 }) {
-            "Nombre de libro requerido (ASCII, maximo 120 caracteres)."
+        requireUi(id.matches(Regex("[A-Za-z0-9-]{1,64}"))) { UiText(R.string.err_logbook_id) }
+        requireUi(name.isNotBlank() && name.length <= 120 && name.all { it.code in 32..126 }) {
+            UiText(R.string.err_logbook_name)
         }
-        require(kind in KINDS) { "Plantilla de libro no admitida." }
+        requireUi(kind in KINDS) { UiText(R.string.err_logbook_kind) }
         when (kind) {
-            "POTA" -> require(reference.matches(Regex("[A-Z0-9]{1,4}-[0-9]{4,5}"))) { "Referencia POTA invalida (ejemplo EA-0123)." }
-            "SOTA" -> require(reference.matches(Regex("[A-Z0-9]{1,4}/[A-Z0-9]{2}-[0-9]{3}"))) { "Referencia SOTA invalida (ejemplo EA4/MD-001)." }
-            else -> require(reference.isEmpty()) { "El libro General no lleva referencia." }
+            "POTA" -> requireUi(reference.matches(Regex("[A-Z0-9]{1,4}-[0-9]{4,5}"))) { UiText(R.string.err_pota) }
+            "SOTA" -> requireUi(reference.matches(Regex("[A-Z0-9]{1,4}/[A-Z0-9]{2}-[0-9]{3}"))) { UiText(R.string.err_sota) }
+            else -> requireUi(reference.isEmpty()) { UiText(R.string.err_general_reference) }
         }
-        require(if (kind == "GENERAL" && stationCall.isEmpty()) true else
+        requireUi(if (kind == "GENERAL" && stationCall.isEmpty()) true else
             stationCall.matches(Regex("[A-Z0-9/]{3,20}")) && stationCall.any(Char::isLetter) && stationCall.any(Char::isDigit)) {
-            "Indicativo de estacion invalido (obligatorio en POTA/SOTA)."
+            UiText(R.string.err_station_call)
         }
         return this
     }
@@ -81,8 +81,8 @@ data class Logbook(
 
 data class Fix(val latitude: Double, val longitude: Double, val accuracyMeters: Double, val utc: Instant) {
     fun validated(): Fix {
-        require(latitude.isFinite() && latitude in -90.0..90.0 && longitude.isFinite() && longitude in -180.0..180.0 &&
-            accuracyMeters.isFinite() && accuracyMeters >= 0) { "Posicion GPS invalida." }
+        requireUi(latitude.isFinite() && latitude in -90.0..90.0 && longitude.isFinite() && longitude in -180.0..180.0 &&
+            accuracyMeters.isFinite() && accuracyMeters >= 0) { UiText(R.string.err_gps_invalid) }
         return this
     }
 }
@@ -91,8 +91,8 @@ object Adif {
     private val date = DateTimeFormatter.ofPattern("yyyyMMdd", Locale.ROOT).withZone(ZoneOffset.UTC)
     private val time = DateTimeFormatter.ofPattern("HHmmss", Locale.ROOT).withZone(ZoneOffset.UTC)
     private fun field(name: String, value: String): String {
-        require(value.all { it.code in 32..126 }) {
-            "ADIF ASCII: exporta JSON para conservar notas con acentos o caracteres no ASCII."
+        requireUi(value.all { it.code in 32..126 }) {
+            UiText(R.string.err_adif_export_ascii)
         }
         return "<$name:${value.length}>$value"
     }
@@ -111,7 +111,7 @@ object Adif {
         logbook?.validated()
         for (contact in contacts) {
             contact.validated()
-            require(logbook == null || contact.logbook == logbook.id) { "Contacto de otro libro en la exportacion." }
+            requireUi(logbook == null || contact.logbook == logbook.id) { UiText(R.string.err_contact_other_book) }
             append(field("CALL", contact.call))
             append(field("QSO_DATE", date.format(contact.utc)))
             append(field("TIME_ON", time.format(contact.utc)))
@@ -142,8 +142,8 @@ object Morse {
         "---.." to "8", "----." to "9", "-..-." to "/", "..--.." to "?"
     )
     fun decode(input: String): String {
-        require(input.length <= 10000 && input.all { it == '.' || it == '-' || it == '/' || it.isWhitespace() }) {
-            "Introduce puntos y rayas; espacios separan letras y / separa palabras."
+        requireUi(input.length <= 10000 && input.all { it == '.' || it == '-' || it == '/' || it.isWhitespace() }) {
+            UiText(R.string.err_morse_input)
         }
         return input.trim().split(Regex("\\s*/\\s*")).joinToString(" ") { word ->
             word.trim().split(Regex("\\s+")).filter(String::isNotEmpty).joinToString("") { alphabet[it] ?: "?" }

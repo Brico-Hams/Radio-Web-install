@@ -57,7 +57,7 @@ class ChannelActivity : Activity() {
             val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
             if (intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED && device?.deviceName == requested?.deviceName) {
                 requested = null
-                endSession("USB desconectado: sesion cerrada. Vuelve a conectar y a respaldar antes de escribir.")
+                endSession(getString(R.string.channel_usb_detached))
             }
         }
     }
@@ -81,46 +81,47 @@ class ChannelActivity : Activity() {
             }
         }
         status = TextView(this).apply { textSize = 17f }
-        show(INTRO)
+        show(getString(R.string.channel_intro))
         content.addView(status)
-        fun button(label: String, action: () -> Unit) {
-            val button = Button(this).apply { text = label; setOnClickListener { action() } }
+        fun button(label: Int, action: () -> Unit) {
+            val button = Button(this).apply { setText(label); setOnClickListener { action() } }
             controls.add(button); content.addView(button)
         }
-        fun field(label: String, hint: String, input: Int): EditText {
-            content.addView(TextView(this).apply { text = label })
+        fun field(label: Int, hint: String, input: Int): EditText {
+            content.addView(TextView(this).apply { setText(label) })
             return EditText(this).apply { this.hint = hint; inputType = input }.also(content::addView)
         }
         val decimal = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
         val plain = android.text.InputType.TYPE_CLASS_TEXT
-        button("1. Elegir dispositivo USB y conectar") { chooseDevice() }
-        button("2. Respaldo completo (Flash 2 MiB, 10-20 min)") { backup() }
-        button("3. Leer canales de la radio") { readChannels() }
-        button("4. Elegir canal") { chooseChannel() }
-        name = field("Nombre (1-10 ASCII)", "REPE R1", plain)
-        rx = field("RX (MHz)", "145.60000", decimal)
-        tx = field("TX (MHz)", "145.00000", decimal)
-        rxTone = field("Tono RX: OFF, CTCSS en Hz (88.5) o DCS (D023N / D023I)", "OFF", plain)
-        txTone = field("Tono TX: OFF, CTCSS en Hz (88.5) o DCS (D023N / D023I)", "88.5", plain)
-        content.addView(TextView(this).apply { text = POWER_LABEL })
+        button(R.string.channel_choose_device) { chooseDevice() }
+        button(R.string.channel_backup) { backup() }
+        button(R.string.channel_read) { readChannels() }
+        button(R.string.channel_choose) { chooseChannel() }
+        name = field(R.string.channel_name_label, "REPE R1", plain)
+        rx = field(R.string.channel_rx_label, "145.60000", decimal)
+        tx = field(R.string.channel_tx_label, "145.00000", decimal)
+        rxTone = field(R.string.channel_rx_tone_label, "OFF", plain)
+        txTone = field(R.string.channel_tx_tone_label, "88.5", plain)
+        content.addView(TextView(this).apply { setText(R.string.channel_power_label) })
         power = Spinner(this).apply {
             adapter = ArrayAdapter(this@ChannelActivity, android.R.layout.simple_spinner_dropdown_item, QuanshengChannels.POWER)
         }.also(content::addView)
-        narrow = CheckBox(this).apply { text = NARROW_LABEL }.also(content::addView)
-        txLock = CheckBox(this).apply { text = TX_LOCK_LABEL }.also(content::addView)
-        button("5. Aplicar cambios a la copia local") { applyEdit() }
-        button("6. Escribir en la radio y releer") { confirmWrite() }
-        button("Desconectar USB") { endSession("USB desconectado.") }
+        narrow = CheckBox(this).apply { setText(R.string.channel_narrow_label) }.also(content::addView)
+        txLock = CheckBox(this).apply { setText(R.string.channel_tx_lock_label) }.also(content::addView)
+        button(R.string.channel_apply) { applyEdit() }
+        button(R.string.channel_write) { confirmWrite() }
+        button(R.string.usb_disconnect) { endSession(getString(R.string.usb_disconnected)) }
         setContentView(ScrollView(this).apply { addView(content) })
     }
 
     private fun show(message: String) { status.text = message }
+    private fun show(message: Int) { status.setText(message) }
 
     private fun chooseDevice() {
         if (busy) return
         val devices = manager.deviceList.values.filter { SerialRadio.description(it) != null }.sortedBy { it.deviceName }
-        if (devices.isEmpty()) { show("No hay cable USB-serie o CDC reconocido. Conecta el cable por OTG."); return }
-        AlertDialog.Builder(this).setTitle("Selecciona el dispositivo de radio")
+        if (devices.isEmpty()) { show(R.string.channel_no_devices); return }
+        AlertDialog.Builder(this).setTitle(R.string.usb_select_device)
             .setItems(devices.map { "VID %04X PID %04X - %s".format(it.vendorId, it.productId, SerialRadio.description(it)) }.toTypedArray()) { _, index ->
                 val device = devices[index]
                 requested = device
@@ -133,9 +134,9 @@ class ChannelActivity : Activity() {
                     }
                     try {
                         manager.requestPermission(device, PendingIntent.getActivity(this, 12, intent, flags))
-                        show("Esperando permiso USB de Android.")
+                        show(R.string.channel_waiting_permission)
                     } catch (error: SecurityException) {
-                        show("Permiso USB rechazado por Android: ${error.message}")
+                        show(getString(R.string.channel_permission_rejected, errorText(error)))
                     }
                 }
             }.show()
@@ -146,7 +147,7 @@ class ChannelActivity : Activity() {
         if (intent.action != PERMISSION_ACTION) return
         @Suppress("DEPRECATION")
         val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-        if (device == null || device.deviceName != requested?.deviceName) { show("Permiso de otro dispositivo ignorado."); return }
+        if (device == null || device.deviceName != requested?.deviceName) { show(R.string.channel_other_device); return }
         permissionResult = true
         if (foreground) consumePermission()
     }
@@ -155,45 +156,46 @@ class ChannelActivity : Activity() {
         if (!permissionResult) return
         permissionResult = false
         val device = requested
-        if (device != null && manager.hasPermission(device)) connect(device) else show("Permiso USB denegado.")
+        if (device != null && manager.hasPermission(device)) connect(device) else show(R.string.channel_permission_denied)
     }
 
-    private fun connect(device: UsbDevice) = operation("Conectando") {
-        closeTransport()
-        val port = SerialRadio.open(manager, device)
-        transport = port
-        val radio = QuanshengMemory(port)
-        memory = radio
-        val found = radio.identify()
-        if (radio.legacyReadOnly) "Conectado: $found. F4HWN v6.0: solo lectura; la escritura exige Labs v6.1+."
-        else "Conectado: $found. Haz el respaldo completo antes de leer y escribir canales."
+    private fun connect(device: UsbDevice) {
+        val token = generation
+        operation(R.string.channel_op_connecting) {
+            closeTransport()
+            val port = SerialRadio.open(manager, device)
+            transport = port
+            val radio = QuanshengMemory(port, allowExchange = { foreground && token == generation })
+            memory = radio
+            val found = radio.identify()
+            getString(if (radio.legacyReadOnly) R.string.channel_connected_readonly else R.string.channel_connected, found)
+        }
     }
 
-    private fun backup() = operation("Respaldo") {
-        val radio = requireNotNull(memory) { "Conecta primero la radio." }
-        val files = radio.backup { stage, value -> progress("$stage: ${(value * 100).toInt()} %") }
+    private fun backup() = operation(R.string.channel_op_backup) {
+        val radio = requireNotNull(memory) { getString(R.string.channel_connect_first) }
+        val files = radio.backup { stage, value -> progress(getString(R.string.channel_progress, stage.resolve(this@ChannelActivity), (value * 100).toInt())) }
         val saved = QuanshengBackups(File(filesDir, "backups")).save(radio.firmware, files)
         receipt = saved
-        "Respaldo completo guardado y verificado en ${saved.directory.absolutePath} (calibracion, Flash 2 MiB con CRC de la radio y Main). " +
-            "Copia esa carpeta fuera del telefono si quieres conservarla."
+        getString(R.string.channel_backup_saved, saved.directory.absolutePath)
     }
 
-    private fun readChannels() = operation("Lectura") {
-        val radio = requireNotNull(memory) { "Conecta primero la radio." }
-        val image = radio.readConfiguration { progress("Leyendo configuracion: ${(it * 100).toInt()} %") }
+    private fun readChannels() = operation(R.string.channel_op_read) {
+        val radio = requireNotNull(memory) { getString(R.string.channel_connect_first) }
+        val image = radio.readConfiguration { progress(getString(R.string.channel_reading_progress, (it * 100).toInt())) }
         val channels = QuanshengChannels.read(image)
         original = image; working = image.copyOf(); selected = null
-        "Configuracion ${QuanshengChannels.version(image)} leida: ${channels.size} canales. Elige uno para editarlo."
+        getString(R.string.channel_read_done, QuanshengChannels.version(image), channels.size)
     }
 
     private fun chooseChannel() {
         if (busy) return
-        val image = working ?: run { show("Lee primero los canales de la radio."); return }
+        val image = working ?: run { show(R.string.channel_read_first); return }
         val channels = try { QuanshengChannels.read(image).filter { it.mode == 0 } } catch (error: IllegalArgumentException) {
-            show("Configuracion no valida: ${error.message}"); return
+            show(getString(R.string.channel_invalid_configuration, errorText(error))); return
         }
-        if (channels.isEmpty()) { show("No hay canales FM existentes para editar."); return }
-        AlertDialog.Builder(this).setTitle("Canal FM a editar")
+        if (channels.isEmpty()) { show(R.string.channel_no_fm); return }
+        AlertDialog.Builder(this).setTitle(R.string.channel_choose_title)
             .setItems(channels.map { "${it.number}. ${it.name} RX ${QuanshengChannels.mhz(it.rx10Hz)} TX ${QuanshengChannels.mhz(it.tx10Hz)}" }.toTypedArray()) { _, index ->
                 val channel = channels[index]
                 selected = channel.number
@@ -205,7 +207,7 @@ class ChannelActivity : Activity() {
                 power.setSelection(channel.power)
                 narrow.isChecked = channel.narrow
                 txLock.isChecked = channel.txLock
-                show("Editando canal ${channel.number}. Pulsa 5 para aplicar a la copia local.")
+                show(getString(R.string.channel_editing, channel.number))
             }.show()
     }
 
@@ -213,18 +215,18 @@ class ChannelActivity : Activity() {
         if (busy) return
         val image = working
         val number = selected
-        if (image == null || number == null) { show("Lee los canales y elige uno antes de aplicar."); return }
+        if (image == null || number == null) { show(R.string.channel_select_before_apply); return }
         try {
             val edited = QuanshengChannel(number, name.text.toString().trim(), QuanshengChannels.frequency(rx.text.toString()),
                 QuanshengChannels.frequency(tx.text.toString()), 0, QuanshengTone.parse(rxTone.text.toString()),
                 QuanshengTone.parse(txTone.text.toString()), power.selectedItemPosition, narrow.isChecked, txLock.isChecked)
             working = QuanshengChannels.update(image, edited)
             val pending = QuanshengMemory.plan(requireNotNull(working), requireNotNull(original)).size
-            show("Canal $number actualizado en la copia local ($pending bloques de 8 bytes pendientes). Aun no se ha escrito la radio.")
+            show(getString(R.string.channel_updated, number, pending))
         } catch (error: IllegalArgumentException) {
-            show("No aplicado: ${error.message}")
+            show(getString(R.string.channel_not_applied, errorText(error)))
         } catch (error: ArithmeticException) {
-            show("No aplicado: frecuencia con mas de 5 decimales.")
+            show(R.string.channel_too_many_decimals)
         }
     }
 
@@ -232,44 +234,43 @@ class ChannelActivity : Activity() {
         if (busy) return
         val image = working
         val base = original
-        if (image == null || base == null) { show("Lee los canales antes de escribir."); return }
-        if (receipt == null) { show(BACKUP_REQUIRED); return }
+        if (image == null || base == null) { show(R.string.channel_read_before_write); return }
+        if (receipt == null) { show(R.string.channel_backup_required); return }
         val blocks = QuanshengMemory.plan(image, base).size
-        if (blocks == 0) { show("No hay cambios que escribir."); return }
-        AlertDialog.Builder(this).setTitle("Escribir canales en la radio")
-            .setMessage("Se escribiran $blocks bloques de 8 bytes y se releera toda la configuracion. " +
-                "Los canales afectados quedan ocultos hasta terminar; no desconectes ni apagues la radio. " +
-                "Comprueba que las frecuencias, tonos y potencia son legales para ti.")
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Escribir") { _, _ -> write(image, base) }.show()
+        if (blocks == 0) { show(R.string.channel_no_changes); return }
+        AlertDialog.Builder(this).setTitle(R.string.channel_write_title)
+            .setMessage(getString(R.string.channel_write_message, blocks))
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_write) { _, _ -> write(image, base) }.show()
     }
 
-    private fun write(image: ByteArray, base: ByteArray) = operation("Escritura") {
-        val radio = requireNotNull(memory) { "Conecta primero la radio." }
-        val saved = requireNotNull(receipt) { BACKUP_REQUIRED }
+    private fun write(image: ByteArray, base: ByteArray) = operation(R.string.channel_op_write) {
+        val radio = requireNotNull(memory) { getString(R.string.channel_connect_first) }
+        val saved = requireNotNull(receipt) { getString(R.string.channel_backup_required) }
         try {
             QuanshengBackups(File(filesDir, "backups")).verify(saved)
         } catch (error: IllegalArgumentException) {
             receipt = null
-            throw IllegalStateException("Escritura bloqueada al verificar el respaldo: ${error.message}", error)
+            throw IllegalStateException(getString(R.string.channel_write_blocked, errorText(error)), error)
         }
-        val blocks = radio.writeConfiguration(image, base) { progress("Escribiendo: ${(it * 100).toInt()} %") }
+        val blocks = radio.writeConfiguration(image, base) { progress(getString(R.string.channel_writing_progress, (it * 100).toInt())) }
         original = image.copyOf()
         working = image.copyOf()
-        "Escritura verificada por relectura: $blocks bloques. Reinicia la radio para recargar sus memorias."
+        getString(R.string.channel_write_done, blocks)
     }
 
     private fun progress(message: String) = runOnUiThread { if (!isDestroyed) show(message) }
 
-    private fun operation(label: String, action: () -> String) {
+    private fun operation(label: Int, action: () -> String) {
         if (busy || !foreground) return
         busy = true
         controls.forEach { it.isEnabled = false }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        show("$label en curso. No desconectes el cable.")
+        show(getString(R.string.channel_in_progress, getString(label)))
         val token = generation
         worker.execute {
             val message = try {
+                check(foreground && token == generation) { getString(R.string.channel_cancelled_session) }
                 action()
             } catch (error: IOException) {
                 fail(error)
@@ -295,8 +296,8 @@ class ChannelActivity : Activity() {
 
     // Any communication error ends the session: a backup does not carry over to a new connection.
     private fun fail(error: Exception): String {
-        receipt = null
-        return "Error: ${error.message}. Sesion invalidada: reconecta y repite el respaldo antes de escribir."
+        closeTransport()
+        return getString(R.string.channel_error, errorText(error))
     }
 
     private fun closeTransport() {
@@ -332,7 +333,7 @@ class ChannelActivity : Activity() {
     override fun onStop() {
         foreground = false
         unregisterReceiver(detachReceiver)
-        endSession("Pantalla cerrada: sesion USB terminada. Vuelve a conectar y respaldar antes de escribir.")
+        endSession(getString(R.string.channel_screen_closed))
         super.onStop()
     }
 
@@ -343,11 +344,5 @@ class ChannelActivity : Activity() {
 
     companion object {
         private const val PERMISSION_ACTION = "org.bricohams.radio.CHANNEL_USB_PERMISSION"
-        private const val INTRO = "Editor de canales Quansheng F4HWN v6 (Beta). Solo canales FM existentes: frecuencia, " +
-            "subtonos y potencia. Pasos: conectar, respaldo completo, leer, editar, aplicar y escribir con relectura."
-        private const val BACKUP_REQUIRED = "Escritura bloqueada: falta el respaldo completo y verificado de esta sesion."
-        private const val POWER_LABEL = "Potencia (USER, LOW1-LOW5, MID, HIGH)"
-        private const val NARROW_LABEL = "Banda estrecha (12,5 kHz)"
-        private const val TX_LOCK_LABEL = "Bloquear TX en este canal"
     }
 }

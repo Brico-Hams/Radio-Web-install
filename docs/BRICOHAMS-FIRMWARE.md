@@ -9,7 +9,7 @@ La lectura real de una radio con F4HWN v6.0.0 no valida estos firmware Bricohams
 El Modo PRO de la web reduce confirmaciones, no cambia modulos, licencias ni
 protecciones del firmware.
 
-Edicion independiente de F4HWN para **UV-K5 V3 / UV-K1 PY32**. No es Karina,
+Edicion derivada de la base abierta F4HWN para **UV-K5 V3 / UV-K1 PY32**. No es Karina,
 no admite UV-K5 V1 y no anade un bootloader propio. Reutiliza el multiboot del
 upstream y conserva su identidad de protocolo `F4HWN v6.1.0`. La edicion de
 pantalla pasa a `Bricohams` mediante una variable CMake, sin parchear el binario.
@@ -29,7 +29,410 @@ No se han portado sus algoritmos, menus ni controladores.
 
 ## Compilar a demanda
 
+### Linea independiente: plataforma de aplicaciones Bricohams
+
+`firmware/platform` inicia una linea distinta de la aplicacion F4HWN.
+Contiene un validador/cargador de paquetes en memoria, un contrato inicial
+de servicios y apps de diagnostico y bloques, escritos en C y probados en escritorio.
+Ahora incluye un **residente experimental compilable** con arranque y glue
+LCD/teclado PY32. No se ha comprobado que arranque en la radio. **No es un
+sustituto validado e instalable de Labs ni un SDK completo.**
+No se ha probado su conexion con USB, Flash, LCD, teclado o RF fisicos.
+
+El formato experimental BHA1 no es FAP1 y no debe instalarse con el
+cargador de apps existente en la web. Los enteros son little-endian:
+
+| Offset | Bytes | Campo |
+| --- | ---: | --- |
+| 0 | 4 | Magic ASCII BHA1 |
+| 4 | 4 | Tamano de cabecera, 64 |
+| 8 | 4 | Version API, 2 |
+| 12 | 4 | Arquitectura, 1 = Cortex-M Thumb |
+| 16 | 4 | Tamano de codigo, par, 2..4096 |
+| 20 | 4 | Datos inicializados, 0..1024 |
+| 24 | 4 | BSS, cero al cargar |
+| 28 | 4 | Offset de entrada par dentro del codigo, sin bit Thumb |
+| 32 | 4 | Capacidades solicitadas: pantalla 1, teclado 2, RX 4 |
+| 36 | 4 | CRC-32 del codigo y datos concatenados |
+| 40 | 16 | Nombre ASCII imprimible, relleno cero si ocupa menos de 16 |
+| 56 | 4 | Reservado, cero |
+| 60 | 4 | CRC-32 de los primeros 60 bytes |
+
+Siguen codigo y datos, sin bytes sobrantes. Codigo, datos y BSS juntos
+no pueden superar 4096 bytes: es un presupuesto inicial, no una medicion
+del firmware residente. El cargador valida todo antes de modificar el
+buffer destino, copia codigo/datos y pone BSS a cero. No llama al codigo,
+no resuelve relocaciones ni conoce la direccion final de enlace. El
+descriptor de salida debe ser independiente de los buffers de entrada
+y destino; la memoria y su vida util son responsabilidad del llamador.
+
+Los CRC detectan corrupcion, **no autentican al autor**. Las capacidades
+son un filtro de admision, no una sandbox: codigo nativo en un MCU sin
+aislamiento puede acceder directamente a perifericos. No se debe ejecutar
+codigo no confiable ni anunciar aislamiento de calibracion por este filtro.
+No hay API TX ni escritura Flash en este componente.
+
+Faltan validar el arranque, LCD y teclado del residente en PY32, completar los
+controladores Flash/USB/RF, medir pila y tiempos reales, instalacion transaccional fisica,
+recuperacion e integracion completa de las aplicaciones con hardware. No se ha
+implementado Doom. Este formato es provisional y no demuestra funcionamiento
+fisico de las apps. La linea anterior de perfiles no se reemplaza.
+
+#### Primera app: diagnostico de pantalla
+
+`bh_api.h` define una ABI C experimental version 2 con version, tamano, contexto y callbacks
+de limpiar, escribir texto y presentar pantalla, mas un buffer de estado
+privado de la app con su tamano. Recibe eventos START, KEY, TICK
+y STOP. Las teclas son identificadores de la plataforma, no codigos UART:
+EXIT tiene valor 1. La app devuelve continuar, salir o error explicito;
+al fallar un callback no solicita mas servicios de pantalla.
+
+`diagnostics.c` presenta cuatro lineas Bricohams y acepta EXIT/STOP sin
+escribir en RF o almacenamiento. Su ejecucion de escritorio usa servicios
+simulados; se comprueban version/tamano, callbacks ausentes y errores en
+cada etapa. Esto no ejecuta instrucciones ARM sobre la radio.
+
+```powershell
+node scripts\build-platform-app.cjs firmware-builds\diagnostics-nuevo
+```
+
+Requiere las herramientas ARM ya usadas por el proyecto y un destino
+nuevo. Produce ELF, codigo BIN, `diagnostics.bha`, licencia y manifiesto
+con SHA-256 de fuentes y paquete. La compilacion API 2 mide 300 bytes de
+paquete: 64 de cabecera y 236 de codigo/constantes.
+`app.ld` enlaza la app a `0x20002000`; esta direccion es experimental,
+**no esta reservada en el firmware F4HWN ni debe usarse en el mismo**.
+No admite globales mutables o relocaciones dinamicas. El nucleo futuro
+debera reservar la region, pila y buffers sin solapamientos antes de
+permitir ejecutar el punto de entrada en modo Thumb.
+
+El test C del cargador admite como argumento `diagnostics.bha` y comprueba
+el paquete ARM real, sus CRC y la copia en RAM. Es una prueba de carga,
+no de ejecucion ARM, instalacion en Flash o arranque de firmware.
+
+#### Segunda app: Blocks
+
+`blocks.c` implementa un juego propio de piezas de cuatro celdas, con siete
+formas, rotacion sin wall kicks, colisiones, caida, bloqueo, eliminacion de
+lineas, fin de partida y reinicio. No usa codigo, imagenes, sonidos ni datos
+de Tetris o Doom. El tablero textual es de 10 columnas y 6 filas para
+probar los callbacks actuales; no es un port grafico final para la LCD.
+
+LEFT/RIGHT desplazan, ROTATE gira, DOWN baja un paso, DROP fija la pieza,
+RESTART inicia de nuevo y EXIT sale. Cada TICK baja un paso: el nucleo
+debera definir la cadencia, sin depender de la velocidad del bucle.
+La secuencia pseudoaleatoria es determinista y se reinicia en START/RESTART.
+Las lineas se cuentan en el estado pero aun no se presentan como puntuacion.
+
+El estado debe proporcionarlo el nucleo en memoria alineada, a cero antes
+del primer evento y exclusiva para esta app. El manifiesto reserva un
+presupuesto externo de 256 bytes; no es BSS del paquete. El contrato API 2
+incluye este buffer y sustituye la API 1 inicial. El cargador rechaza los
+paquetes API 1: no se mezclan silenciosamente contratos binarios distintos.
+
+```powershell
+node scripts\build-platform-app.cjs firmware-builds\blocks-nuevo blocks
+```
+
+La app compila para Cortex-M0+ sin biblioteca C ni helpers de division:
+940 bytes de paquete (64 de cabecera, 876 de codigo/constantes).
+Las pruebas de escritorio verifican movimiento, rotacion, borrado de
+linea, fin de partida, reinicio, errores de servicio y 10000 eventos
+con comprobacion de comportamiento indefinido. El cargador C valida y
+copia tambien el paquete ARM real. **No se ha ejecutado ese codigo ARM en
+la radio. El residente experimental incluye un launcher, pero no un instalador
+de paquetes externos.**
+
+#### Launcher portable
+
+`bh_launcher.c` gestiona una app nativa a la vez con un buffer alineado
+exclusivo de 256 bytes. Inicializar una instancia nueva y mantenerla en la
+misma direccion durante toda su vida: el contrato contiene un puntero a su
+propia memoria. No copiar instancias ni reinicializarlas durante una app.
+
+START se envia exclusivamente desde `bh_launcher_start`; el dispatcher
+acepta KEY, TICK y STOP. Al cambiar de app se entrega STOP a la anterior;
+salida o error libera la app y limpia todo su estado. Un error STOP impide
+iniciar la siguiente app. Las llamadas reentrantes a start/stop/dispatch
+durante un callback se rechazan. Los ticks deben llegar de forma serial
+desde el bucle principal; no es una API segura para interrupciones.
+
+El launcher invoca funciones C ya enlazadas para pruebas de escritorio.
+**No convierte la direccion de un paquete ARM en funcion ni ejecuta BHA1
+en el PC.** Aun faltan el puente de ejecucion en MCU, instalacion en Flash,
+controladores, menu LCD y recuperacion. Es un ciclo de vida portable
+probado, no un launcher residente arrancable o una sandbox.
+
+#### Instalacion persistente con dos bancos
+
+`bh_store.c` implementa almacenamiento portable de **un paquete y su
+version anterior** en dos bancos abstractos de 8192 bytes. No constituye
+todavia un catalogo de varias apps. El controlador debe proporcionar leer,
+escribir y borrar exclusivamente esos bancos; no se ha asignado ninguna
+direccion de la Flash de la radio ni se reutiliza el mapa F4HWN.
+
+Antes de borrar se valida el paquete BHA1 API 2 completo y se consulta la
+version anterior. Se borra solo el banco inactivo y se verifica por lectura
+que todos sus bytes sean `0xff`, incluido el marcador de confirmacion:
+un ACK de borrado sin borrado real se rechaza antes de programar.
+Se escribe en fragmentos
+que no cruzan paginas de 128 bytes y se relee cada fragmento. La cabecera
+BHS1 incluye version, generacion, longitud y CRC del paquete; se relee antes
+de escribir `DONE` como confirmacion final. Se vuelve a validar cabecera y
+paquete despues de confirmar. No se borra el banco anterior al terminar.
+
+La lectura selecciona la generacion valida mas reciente y puede recuperar
+la anterior si la nueva esta incompleta o corrupta. Si ninguno es valido
+pero hay un banco confirmado corrupto, se informa error y no se instala
+encima automaticamente. Un error del controlador aborta sin simular exito.
+Generaciones iguales son ambiguas y se rechazan; al agotar `uint32_t` se
+bloquea una nueva instalacion en lugar de permitir un wrap.
+
+El llamador debe proporcionar un scratch independiente del paquete de al
+menos 4160 bytes y serializar todas las operaciones. Este maximo incluye
+64 bytes de cabecera y 4096 de codigo/datos combinados: no se suman los
+maximos individuales de codigo y datos, pues el contrato BHA1 limita la
+RAM total a 4096. Se reducen 1024 bytes respecto al scratch inicial sin
+reducir el conjunto de paquetes validos. Se prueban tanto codigo de 4096
+bytes como codigo de 3072 mas datos de 1024, y rechazo sin E/S cuando el
+scratch es un byte insuficiente. No hay heap ni buffer
+de banco completo interno. Tras un error final de escritura/relectura,
+la instalacion puede haber quedado confirmada: se debe consultar de nuevo
+antes de reintentar, no asumir rollback.
+
+`bh_store_load` conecta la seleccion del banco con la carga validada en RAM:
+copia codigo/datos y limpia BSS, sin saltar al punto de entrada. Scratch y RAM
+deben ser independientes, al igual que el descriptor de salida. Un destino
+insuficiente devuelve `BH_STORE_NO_SPACE`; los errores no modifican la RAM ni
+el descriptor. El llamador debe reservar la direccion real de enlace antes de
+ejecutar; este helper no valida direcciones ni convierte bytes en una funcion.
+
+Las pruebas con NOR simulada cubren 322 interrupciones/fallos de lectura,
+escritura y borrado durante primera instalacion y actualizacion, incluidas
+escrituras parciales, ACK falso de escritura/borrado, corrupcion, paquete
+maximo, generaciones iguales, alternancia y agotamiento de generacion.
+Se verifica que el banco anterior no cambia en cada interrupcion de una
+actualizacion. Tambien se prueba carga de codigo/datos/BSS y preservacion de
+RAM ante errores. Esto no prueba tolerancia a cortes
+electricos ni atomicidad del chip real. Faltan controlador SPI/Flash,
+reserva de sectores, instalador USB y conexion con el launcher residente.
+
+Pruebas mantenidas de la plataforma (compilador C11 de escritorio requerido):
+
+```powershell
+cmake -S firmware\platform -B firmware-builds\platform-tests -DBUILD_TESTING=ON
+cmake --build firmware-builds\platform-tests
+ctest --test-dir firmware-builds\platform-tests --no-tests=error --output-on-failure
+```
+
+Los ocho tests C y el test de integracion JavaScript/C pasan mediante
+CMake/CTest en escritorio. El test de integracion se habilita si se encuentra Node.js.
+El workflow `firmware-modules.yml` incorpora tambien este conjunto separado
+en Linux con comprobacion de comportamiento indefinido; el cambio de
+workflow local no implica que ya se haya ejecutado en GitHub.
+
+#### Receptor experimental BHT1 y cliente de transferencia
+
+`bh_transfer.c` implementa la maquina de estados del receptor, sin driver de
+serie/USB. `scripts/platform-transfer.cjs` codifica las peticiones, valida
+respuestas y proporciona `uploadPackage(exchange, bytes, session)`, donde
+`exchange` debe entregar una trama completa y devolver exactamente su respuesta.
+No abre puertos ni ofrece instalacion en la web actual.
+
+Cada peticion tiene una cabecera de 24 bytes y hasta 128 bytes de payload.
+Todos los enteros son u32 little-endian:
+
+| Offset | Campo |
+| --- | --- |
+| 0 | Magic BHT1 |
+| 4 | Operacion: BEGIN 1, DATA 2, COMMIT 3, ABORT 4, STATUS 5 |
+| 8 | ID de sesion no nulo, elegido por el cliente |
+| 12 | Offset dentro del paquete para DATA; cero en otras operaciones |
+| 16 | Longitud del payload |
+| 20 | CRC-32 de cabecera y payload, poniendo este campo a cero |
+
+BEGIN contiene dos u32: longitud total (66..4160) y CRC-32 de todo el BHA1.
+DATA envia bloques contiguos de 1..128 bytes. Un bloque duplicado se acepta
+solo si coincide exactamente con bytes ya recibidos y no avanza dos veces el
+offset; se rechazan huecos y solapamientos parciales. BEGIN duplicado de la
+misma sesion/longitud/CRC conserva el progreso. Una sesion distinta no puede
+interrumpir una recepcion activa. ABORT cancela sin llamar al instalador;
+STATUS consulta sin ampliar el plazo. La recepcion caduca a los 30000 ms
+desde BEGIN o el ultimo DATA valido, con diferencias sin signo ante wrap.
+Una sesion caducada o cancelada requiere un ID nuevo.
+
+COMMIT exige todos los bytes, CRC total correcto y validacion BHA1/API/
+capacidades antes de invocar el callback instalador. Un COMMIT duplicado no
+vuelve a invocarlo, tanto si tuvo exito como si devolvio error: un error de
+escritura puede significar que la Flash ya quedo confirmada. El cliente no
+reintenta automaticamente un COMMIT cuya respuesta se pierde; debe consultar
+STATUS y el almacenamiento antes de decidir una nueva operacion.
+
+La respuesta BHR1 tiene 32 bytes: magic, operacion, sesion, resultado, bytes
+recibidos, estado, resultado del instalador (i32), CRC de los primeros 28.
+Resultados: OK 0, BAD_FRAME 1, BAD_SESSION 2, BUSY 3, BAD_OFFSET 4,
+INCOMPLETE 5, BAD_PACKAGE 6, INSTALL_ERROR 7, EXPIRED 8, BAD_STATE 9.
+Estados: IDLE 0, RECEIVING 1, DONE 2, FAILED 3, CANCELLED 4, TIMED_OUT 5.
+El cliente rechaza CRC, sesion, operacion, estado o ACK de offset incorrectos.
+
+El llamador debe serializar llamadas, mantener instancia y staging vivos,
+y proporcionar buffers independientes para instancia, staging, trama y
+respuesta. Se requiere staging de 4160 bytes. El callback recibe ese staging
+solo durante COMMIT y no debe modificarlo ni retenerlo. Una llamada reentrante
+devuelve BUSY sin generar respuesta. El transporte fisico futuro debera limitar esperas, comunicar desconexiones
+y realizar control de flujo. La API de transferencia recibe tramas completas;
+el ensamblado desde un flujo arbitrariamente fragmentado corresponde a
+`bh_stream.c`, descrito a continuacion.
+Los CRC y el ID de sesion **no autentican al emisor**.
+
+`bh_stream.c` consume un byte por llamada, reconoce magic BHT1 y longitud
+limitada a 128 bytes, y comprueba el CRC antes de entregar la trama al
+receptor. No requiere prefijo de longitud ni separadores adicionales.
+Tolera tramas fragmentadas o concatenadas. Busca de nuevo el magic despues
+de ruido, longitud imposible o CRC incorrecto; un magic dentro de un payload
+valido no se interpreta como una segunda peticion. Devuelve errores de
+framing explicitos y solo `BH_STREAM_REPLY` autoriza enviar su buffer BHR1.
+El llamador debe comunicar esos errores o registrarlos, no simular exito.
+
+Una trama parcial caduca tras 1000 ms sin bytes nuevos, usando diferencias
+sin signo para tolerar wrap. `bh_stream_poll` permite comprobar ese plazo
+sin recibir otro byte. Un timeout descarta solo la trama parcial, no cancela
+la sesion de transferencia ni altera el banco anterior. El driver debera
+notificar una desconexion y decidir si permite reanudar la sesion existente.
+Las llamadas y buffers deben estar serializados; el callback instalador no
+debe reentrar al stream. No hay heap: el buffer de ensamblado ocupa 152 bytes,
+aparte de estructura, respuesta, staging y memoria temporal del validador.
+
+La integracion de escritorio envia el flujo BHT1 crudo desde JS al receptor C por pipes,
+instala en una NOR simulada y valida la carga posterior a RAM; cubre dos
+generaciones, paquete maximo y repeticiones sin reinstalar, insertando ruido
+antes de cada trama. Se ha eliminado el prefijo de longitud exclusivo del
+primer harness. La misma prueba con los paquetes ARM
+reales de Diagnostics y Blocks completa 34 intercambios JS/C, incluyendo
+cancelacion y rechazo de CRC total incorrecto sin sustituir el banco activo.
+El test C comprueba tambien 10000 tramas malformadas sin modificar la sesion
+ni llamar al instalador. El stream prueba todos los puntos de corte de una
+trama STATUS, tramas concatenadas, maximo payload, magic anidado,
+recuperacion tras corrupcion, timeout con wrap y 100000 bytes de ruido.
+El receptor y el stream tambien se compilan para
+Cortex-M0+. **No esta enlazado al residente ni escribe Flash fisica**:
+staging, scratch, RAM de apps y pila deberan presupuestarse juntos antes de
+integrarlos; no se pueden sumar buffers sin comprobar el limite de 16 KiB.
+
+Con los buffers maximos actuales, staging y scratch suman 8320 bytes:
+ya superan por 128 bytes los 8192 reservados a CORE, incluso antes de
+estructuras, framebuffer o estado de apps. APP y STACK tienen regiones
+propias de 4096 bytes cada una; no son RAM libre para esos buffers.
+La reduccion del scratch elimina desperdicio, pero **no resuelve por si
+sola la integracion**. No se conectara el receptor al residente sumando
+estos buffers, ni se reducira la pila sin mediciones para ocultar el exceso.
+Hace falta almacenamiento/verificacion por bloques o una reutilizacion de
+memoria con vidas utiles y solapamientos probados, manteniendo el contrato
+actual que impide solapar paquete y scratch durante la instalacion.
+
+#### Primer residente independiente experimental PY32
+
+```powershell
+node scripts\build-platform-resident.cjs firmware-builds\residente-nuevo firmware\Fusion61
+```
+
+El segundo argumento indica el arbol local de referencia que contiene los
+headers CMSIS/LL PY32 y `Core/Src/system_py32f071.c`. No se enlaza su
+aplicacion F4HWN: el arranque, linker, shell, texto, framebuffer y glue de
+pantalla/teclado de esta imagen estan en `firmware/platform`. Se conservan
+las atribuciones BSD/Apache de los componentes de terceros; no es codigo
+recuperado de Karina ni una afirmacion de independencia de toda licencia.
+Requiere ARM GNU Toolchain y no sobrescribe destinos existentes.
+
+El builder compila primero Diagnostics y Blocks como BHA1 API 2 independientes
+y los incorpora, sin modificarlos, a la Flash del residente. Al iniciar una
+app, `resident_apps.c` valida su paquete, lo copia a la region de 4096 bytes
+en `0x20002000`, limpia BSS y prepara la entrada Thumb con barreras de memoria.
+El codigo ARM contiene esa ruta de ejecucion: **compilarla no demuestra que
+el salto o las apps funcionen en el MCU**. Solo se admiten estos paquetes
+construidos junto al residente; no existe carga desde USB o almacenamiento
+externo y el almacenamiento dual-bank aun no esta conectado.
+
+Mapa comprobado por el linker:
+
+- Flash de aplicacion desde `0x08002800`, 118 KiB; no incluye el bootloader.
+- RAM del nucleo: `0x20000000..0x20001fff`, 8 KiB.
+- RAM ejecutable para una app: `0x20002000..0x20002fff`, 4 KiB.
+- Pila: `0x20003000..0x20003fff`, 4 KiB; sin heap.
+
+El startup propio inicializa datos/BSS y VTOR. Desactiva y limpia las
+interrupciones externas NVIC heredadas y los pendientes SysTick/PendSV;
+despues activa exclusivamente SysTick de 1 ms como base de tiempo.
+La ISR solo incrementa un contador `volatile` de 32 bits: no llama al launcher
+ni dibuja. Las actualizaciones LCD no dependen del sondeo de COUNTFLAG ni
+pierden vueltas del contador durante un dibujo. Conserva los relojes que entrega el
+bootloader, usando el calculo CMSIS para leer su frecuencia. No programa la
+Flash interna ni el almacenamiento de canales. El glue inicial usa LCD ST7565
+por GPIO y matriz de teclado; no inicializa RF ni ofrece API TX. Esto no
+constituye una garantia de bloqueo fisico de TX, ni se admite un salto desde
+otro firmware que deje perifericos activos.
+
+El menu permite seleccionar Diagnostics/Blocks con UP/DOWN y abrir con MENU.
+En Blocks: 4/6 izquierda/derecha, MENU girar, DOWN bajar, `*` caida directa,
+0 reiniciar y EXIT volver. Se requieren tres muestras estables de teclado
+separadas 10 ms; no se repite una tecla mantenida ni se acepta una combinacion.
+La shell solicita un tick como maximo cada 500 ms, sin rafagas de recuperacion.
+Los ticks del juego usan diferencias de tiempo sin signo para tolerar el wrap
+del contador de milisegundos. La ISR debe atenderse antes del siguiente
+milisegundo; no se permite que una app enmascare interrupciones. Esto no
+puede imponerse a codigo nativo no confiable: los tiempos reales deben medirse.
+
+Se producen ELF, BIN experimental, mapa, informes de pila del compilador,
+paquetes BHA1, manifiestos con SHA-256 y licencias/avisos. El builder comprueba
+limites del BIN, vectores de pila/Reset/SysTick contra los simbolos ELF,
+destino de todos los restantes vectores, limites RAM y ausencia de simbolos
+sin resolver. Sus pruebas rechazan vectores Thumb incorrectos, RAM solapada
+y simbolos ausentes sin necesitar el compilador ARM.
+Los informes de pila individuales **no prueban** el maximo acumulado de pila.
+La shell y el renderizador se prueban en escritorio, incluyendo tick de
+499/500 ms, wrap de tiempo, vuelta al menu, errores y limites de texto.
+El renderer 3x5 es propio y no incluye tipografias o recursos de otros firmware.
+
+**No cargar este BIN con el instalador web actual ni como slot multiboot.**
+No implementa identificacion/CRC de slot F4HWN, protocolo USB, recuperacion o
+instalacion de apps externas. El manifiesto mantiene `hardwareTested: false`
+e `installableWithCurrentWeb: false`. La primera prueba de arranque debera
+hacerse con copia completa verificada y una via de recuperacion comprobada.
+
 ### Distribucion por imagenes funcionales
+
+#### Recompilacion y pruebas de modulos del 26-10-2026
+
+Se recompilaron los tres perfiles desde el commit fijado, con branding
+Bricohams, Beacon y VOX desactivados. No se incorporo codigo del binario
+Karina ni se instalaron estas compilaciones durante esta comprobacion.
+
+| Perfil | BIN (bytes) | Flash enlazada / 120832 | RAM / 16384 |
+| --- | ---: | ---: | ---: |
+| ARDF | 113960 | 113072 | 12576 |
+| Satelites (incluye CAT TX) | 114844 | 113956 | 12384 |
+| Espectro/VFO-PRO | 118040 | 117152 | 13440 |
+
+La Flash enlazada no incluye los 888 bytes del stub multiboot que tambien
+se almacenan en el BIN. El constructor verifica los vectores, la identidad,
+los limites de imagen y el aislamiento del stub.
+
+Las nueve pruebas C de escritorio pasaron con Zig 0.13.0 como compilador
+C: ARDF y su adaptador, Doppler, CAT RX, CAT TX, adaptador de Satelites,
+Espectro, codec de presets y adaptador de Espectro. Los adaptadores usan
+primitivas RF/pantalla simuladas; estos resultados no certifican RF, audio,
+arranque fisico ni compatibilidad funcional completa con Karina.
+Las siete pruebas JavaScript del constructor tambien pasaron.
+
+Esto es una recompilacion comprobada de los modulos existentes, no una
+implementacion nueva de todas las funciones de Karina. En particular no
+acredita volumen dinamico, autocaptura equivalente con filtro de ruido,
+temporizaciones internas equivalentes de AM/squelch, generador AM,
+presets persistentes completos de estado ni equivalencia de menus.
+No se implementan autorrespuestas o balizas TX por el hecho de aparecer
+en la documentacion Karina. La identidad de protocolo sigue siendo F4HWN:
+renombrarla sin actualizar conectores y mapas de memoria romperia la
+interoperabilidad existente.
 
 Las funciones se distribuyen en imagenes separadas cuando Flash/RAM impiden
 una imagen unica. El objetivo es conservar Main y distribuir imagenes compatibles en
@@ -68,6 +471,11 @@ Los tests contrastan 241 velocidades con una referencia de doble precision,
 signos, limites y redondeo de hasta media unidad (5 Hz).
 
 ### Imagen Satelites: Doppler manual en recepcion
+
+Guias de usuario ligadas a esta imagen: [Iniciacion al satelite](INICIACION-SATELITE.md)
+(conceptos, pases, Doppler, operacion con teclas 4/5/6/8/9 y CAT) y
+[Antenas de satelite](ANTENAS-SATELITE.md) (Yagi bibanda y dipolo en V
+simulados, con piezas STL imprimibles).
 
 El builder admite `--module satellite` en vez de `--module ardf` en el
 comando FieldOps de abajo, con Beacon y VOX OFF. Rechaza combinar ambos:
@@ -350,7 +758,7 @@ fragmentos. Importar recibe ambos fragmentos en un buffer temporal, valida
 el archivo completo y solo entonces reemplaza la tabla RAM. Una interrupcion,
 fragmento ausente, token distinto o CRC incorrecto no sustituye la tabla.
 El formato general del codec admite mas configuraciones que el adaptador;
-la importacion exige 128 puntos, 20 ms, pasos 125/250/625/1250 en unidades
+la importacion exige 128 puntos, asentamiento 10/20/40/80 ms, pasos 125/250/625/1250 en unidades
 de 10 Hz, promedio 1/2/4/8 y ventana completa dentro de 136-174 o 400-470 MHz.
 Nombres, seleccion, reservados y registros no usados deben ser canonicos.
 
@@ -418,6 +826,7 @@ esta restauracion y el funcionamiento RF quedan pendientes de prueba fisica.
 | 5 | Reiniciar peak hold a los niveles actuales |
 | 6 | Paso 1.25, 2.5, 6.25, 12.5 kHz; reinicia el cuadro |
 | 7 | Promedio 1, 2, 4, 8 muestras por punto; reinicia el cuadro |
+| * | Asentamiento RX 20, 40, 80, 10 ms, circular; reinicia el cuadro |
 | 8 | Guardar en el siguiente preset RAM; si hay ocho, reemplazar el seleccionado |
 | 9 | Recuperar el siguiente preset RAM de forma circular |
 | 3 / flechas | Atenuacion upstream; cambiar ganancia reinicia medidas no comparables |
@@ -429,10 +838,19 @@ esta restauracion y el funcionamiento RF quedan pendientes de prueba fisica.
 Se muestran RSSI bruto y picos con escala automatica 0...maximo de los
 picos del cuadro, no dBm calibrados ni una FFT. La escala puede cambiar.
 Cada sintonia aplica frecuencia, filtro RX y reinicio de recepcion BK4819,
-y espera al menos 20 ms del SysTick real antes de aceptar muestras. No
+y espera al menos el asentamiento seleccionado del SysTick real antes de aceptar muestras. No
 bloquea esperando ese tiempo. Cada muestra procede de otra iteracion.
 Los retardos del bucle modal tambien afectan la cadencia: no se garantiza
 una tasa de barrido, ancho de banda de resolucion o precision instrumental.
+
+El asentamiento comienza en 20 ms en cada entrada al modo y se guarda
+individualmente en los presets RAM/BHSP. Los archivos previos de 20 ms
+siguen admitidos; otros valores distintos de 10/20/40/80 se rechazan sin
+sustituir la tabla. La captura VFO-PRO y los cambios de ganancia conservan
+su espera independiente de 20 ms. El modo de 10 ms es experimental:
+su disponibilidad no demuestra que el PLL, filtro o RSSI hayan alcanzado
+estabilidad en todas las condiciones. No es una reproduccion del
+parametro Delay o Turbo interno de Karina ni reduce el tiempo de CSS.
 
 `SPECTRUM ERROR` detiene nuevas sintonias si la ventana no cabe en banda
 o el nucleo devuelve error. No se recortan silenciosamente los extremos:
@@ -1026,7 +1444,7 @@ contraste, orientacion o legibilidad en la radio. No se han flasheado.
 
 ## Fase posterior solicitada: Bricohams Android
 
-La APK nativa `0.8.0-beta` incorpora libro de guardia con busqueda e importacion ADIF, ADIF/JSON,
+La APK nativa `0.8.1-beta` incorpora libro de guardia con busqueda e importacion ADIF, ADIF/JSON,
 restauracion JSON, sesiones ARDF con historial/estadisticas y suma filtrada de segmentos,
 GPS puntual, Morse de texto/WAV experimental
 y CAT RX temporal por USB CDC ACM y adaptadores reconocidos CH34x/CP210x/FTDI/Prolific.

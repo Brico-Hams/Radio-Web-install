@@ -135,14 +135,14 @@ class LiveAudioActivity : Activity() {
                 }
                 if (selected == 0) {
                     val result = MorseAudio.decode(audio, checkNotNull(toneHz), checkNotNull(wpm))
-                    show(token) { status.text = getString(R.string.live_morse_result, result.text, result.morse, result.warning) }
+                    show(token) { status.text = getString(R.string.live_morse_result, result.text, result.morse, result.warning.resolve(this@LiveAudioActivity)) }
                 } else {
                     val result = Robot36.decode(audio)
                     val decoded = Bitmap.createBitmap(result.pixels, Robot36.WIDTH, Robot36.HEIGHT, Bitmap.Config.ARGB_8888)
                     runOnUiThread {
                         if (token == generation && foreground && !isDestroyed) {
                             bitmap = decoded; image.setImageBitmap(decoded)
-                            status.text = getString(R.string.sstv_complete, result.startSeconds, result.warning)
+                            status.text = getString(R.string.sstv_complete, result.startSeconds, result.warning.resolve(this@LiveAudioActivity))
                         } else decoded.recycle()
                     }
                 }
@@ -169,7 +169,7 @@ class LiveAudioActivity : Activity() {
         runOnUiThread { if (!isDestroyed && foreground && token == generation) action() }
     }
     private fun failed(token: Int, error: Exception) {
-        show(token) { status.text = getString(R.string.live_error, error.message) }
+        show(token) { status.text = getString(R.string.live_error, errorText(error)) }
     }
     private fun stopCapture(discard: Boolean) {
         handler.removeCallbacks(deadline)
@@ -180,7 +180,7 @@ class LiveAudioActivity : Activity() {
             stop.isEnabled = false; cancel.isEnabled = false
             if (!discard) status.setText(R.string.live_decoding)
         } catch (error: IllegalStateException) {
-            status.text = getString(R.string.live_error, error.message)
+            status.text = getString(R.string.live_error, errorText(error))
         }
     }
     @Deprecated("Platform callback")
@@ -201,15 +201,15 @@ class LiveAudioActivity : Activity() {
         busy = true; controls()
         worker.execute {
             try {
-                val stream = contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Proveedor sin flujo de escritura.")
-                stream.use { check(snapshot.compress(Bitmap.CompressFormat.PNG, 100, it)) { "No se pudo codificar PNG." } }
+                val stream = contentResolver.openOutputStream(uri, "wt") ?: throw IOException(getString(R.string.provider_no_stream))
+                stream.use { check(snapshot.compress(Bitmap.CompressFormat.PNG, 100, it)) { getString(R.string.png_encode_error) } }
                 exportResult(getString(R.string.sstv_saved))
             } catch (error: IOException) {
-                exportResult(getString(R.string.live_error, error.message))
+                exportResult(getString(R.string.live_error, errorText(error)))
             } catch (error: SecurityException) {
-                exportResult(getString(R.string.live_error, error.message))
+                exportResult(getString(R.string.live_error, errorText(error)))
             } catch (error: IllegalStateException) {
-                exportResult(getString(R.string.live_error, error.message))
+                exportResult(getString(R.string.live_error, errorText(error)))
             } finally {
                 runOnUiThread { if (!isDestroyed) { busy = false; controls() } }
             }

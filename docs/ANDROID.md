@@ -2,11 +2,23 @@
 
 ## Alcance de la APK
 
+La [validacion integral V3/Android](VALIDACION-INTEGRAL-V3-ANDROID.md) distingue
+pruebas host de ensayos en telefono/radio e incluye la matriz de contactos,
+canales por slot y CAT. La auditoria esta en curso, no certificada.
+
 Aplicacion nativa Kotlin para Android 8.0/API 26 o posterior, sin servidor
 ni cuentas. Solo usa Internet cuando pides actualizar TLE y frecuencias de
 satelites. Es una implementacion independiente: no
 incluye codigo ni recursos de Look4sat, Robot36 o HAMRS.
-La version `0.8.0-beta` no sustituye sus funciones completas.
+La version `0.8.1-beta` no sustituye sus funciones completas.
+
+Esta revision conserva las funciones de 0.8.0 y prepara APK nuevas con
+versionCode 10. La compilacion, lint y pruebas Android de esta integracion
+requieren JDK 17 y SDK 35; no se han ejecutado con exito en el entorno local
+con Java 8. La CI debe verificarlas antes de distribuir la APK.
+Al publicar mas adelante la etiqueta v0.5.2, Android Beta adjuntara la APK
+debug y la APK instrumentada 0.8.1-beta con SHA256SUMS-android a la Release
+creada por el flujo de instaladores. No se publica nada desde el entorno local.
 
 | Funcion | Estado |
 | --- | --- |
@@ -286,6 +298,13 @@ No utiliza servicios en segundo plano. Estas funciones tienen pruebas
 con USB simulado; faltan pruebas OTG y RF con telefono/radio reales.
 
 ## Editor de canales Quansheng por USB (Beta)
+
+Correccion local de auditoria: el CRC fisico se solicita en 512 sectores de
+4096 bytes, no en una orden de 2 MiB que excede el limite `0x073E`. Se
+comprueban direccion, longitud, estado y CRC de cada sector, incluido el
+ultimo. Esta correccion requiere reconstruir e instalar la APK; no modifica
+por si misma una version ya descargada. Ver el
+[informe de validacion](VALIDACION-INTEGRAL-V3-ANDROID.md).
 
 Pantalla «Editar canales Quansheng por USB (Beta)». Es el port Android del
 editor web: mismos comandos F4HWN v6, mismo respaldo y misma escritura con
@@ -581,7 +600,7 @@ Salidas:
 Para entregar un conjunto verificado en Windows, con los mismos requisitos:
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.0-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.1-beta'
 ```
 
 El destino debe ser nuevo. El script ejecuta pruebas/lint, verifica las firmas
@@ -596,11 +615,16 @@ Con un telefono/emulador de pruebas conectado y autorizado por ADB:
 .\android\gradlew.bat -p android :app:connectedDebugAndroidTest
 ```
 
-No ejecutes esas pruebas contra datos operativos. La prueba instrumentada
-crea y elimina solo sus propios contactos/sesion mediante IDs aleatorios.
+Usa un dispositivo de pruebas. Cada prueba instrumentada de persistencia
+remapea `bricohams.db` a una base privada `instrumentation-<UUID>.db`;
+no abre ni limpia el libro de guardia real y solo elimina su propia base.
 La APK de prueba no es la aplicacion de uso habitual.
 
 ## Validacion realizada y pendiente
+
+La validacion historica inicial comprendia 84 pruebas host; el resumen de
+cien pruebas siguiente corresponde a la base upstream 0.8.0, no certifica
+que esta integracion y sus nuevas pruebas se hayan ejecutado con Java 8.
 
 Cien pruebas host: siete de modelos/ADIF, cuatro de importacion
 ADIF, tres de audio, doce de almacenamiento/interfaz, ocho de protocolo CAT, dos de pantalla CAT,
@@ -643,6 +667,21 @@ bytes del canal; las 50 CTCSS y 104 DCS ida y vuelta; rechazos sin tocar la
 copia. Una radio F4HWN simulada comprueba respaldo completo (CRC de la radio,
 Main, calibracion), SHA-256 en disco, orden de escritura web, relectura y
 bloqueos por ajustes, radio modificada, v6.0, CRC y bloque rechazado.
+La auditoria posterior agrega comprobaciones de los 512 sectores CRC,
+metadatos de respuesta incorrectos, lectura fisica sin identificar o con
+rangos que desbordan un entero, y cancelacion de respaldo/escritura.
+La sesion del editor queda vinculada al primer plano y a su generacion:
+salir, desconectar o invalidarla impide el siguiente intercambio USB y
+descarta tareas antiguas que aun no hayan empezado. Una orden ya enviada
+puede haberse aplicado; la cancelacion no hace rollback ni convierte una
+escritura en atomica. Conservar el respaldo y repetir identificacion,
+lectura y verificacion antes de escribir de nuevo. Las pruebas de pantalla
+comprueban errores sin USB y borrado de las copias de edicion al salir,
+sin reanudacion automatica. Tras un error se cierra el transporte y se
+requiere una conexion nueva, no solo volver a pulsar Respaldo.
+Los resultados actuales, separados de main
+publicado y de pruebas fisicas, estan en la
+[matriz de validacion](VALIDACION-INTEGRAL-V3-ANDROID.md).
 ADIF comprueba ida/vuelta, etiquetas dentro de comentarios, cabecera opcional,
 horas en minutos, campos no conservados, registros truncados/invalidos y ASCII.
 SQLite verifica duplicados y rollback con un fallo real de insercion inyectado,

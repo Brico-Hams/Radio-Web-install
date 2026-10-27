@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620" role="img" aria-labelledby="title desc">
+<title id="title">Estacion portatil de satelite con BH Satelite</title>
+<desc id="desc">Diagrama funcional propio Bricohams, no esquema electrico. Antena direccional bibanda, Quansheng UV-K5 con imagen BH Satelite, movil Android con predictor SGP4 y CAT RX/TX experimental, y segunda radio opcional para full duplex.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0 0L8 3L0 6" fill="none" stroke="#ffa342"/></marker></defs>
+<rect width="1100" height="620" fill="#14202c"/>
+<g font-family="sans-serif" fill="#fff">
+<text x="35" y="42" font-size="24">Iniciacion al satelite - estacion portatil con BH Satelite</text>
+<text x="35" y="70" font-size="15">Diagrama funcional propio. NO es un esquema electrico ni una certificacion de hardware.</text>
+<g fill="#26394b" stroke="#ffa342" stroke-width="2">
+<rect x="35" y="110" width="300" height="170" rx="8"/>
+<rect x="400" y="110" width="300" height="170" rx="8"/>
+<rect x="765" y="110" width="300" height="170" rx="8"/>
+<rect x="400" y="350" width="300" height="150" rx="8"/>
+<rect x="35" y="350" width="300" height="150" rx="8"/>
+</g>
+<g font-size="17">
+<text x="50" y="140">Antena direccional bibanda</text>
+<text x="50" y="170">VHF 2 m + UHF 70 cm, a mano</text>
+<text x="50" y="198">Apuntar acimut y elevacion</text>
+<text x="50" y="226">Girar para la polarizacion</text>
+<text x="50" y="254">Duplexor si comparte una bajada</text>
+<text x="415" y="140">Quansheng UV-K5 V3</text>
+<text x="415" y="170">Slot con imagen BH Satelite</text>
+<text x="415" y="198">SAT RX: Doppler manual 4/5/6</text>
+<text x="415" y="226">8 = CAT RX, 9 = arma PTT CAT</text>
+<text x="415" y="254">Semiduplex: no RX y TX a la vez</text>
+<text x="780" y="140">Android Bricohams</text>
+<text x="780" y="170">TLE + SGP4: AOS, TCA, LOS</text>
+<text x="780" y="198">CAT RX: frecuencia corregida</text>
+<text x="780" y="226">SSTV Robot36 con PTT lease</text>
+<text x="780" y="254">USB OTG, cable de datos</text>
+<text x="415" y="380">Auriculares y grabacion</text>
+<text x="415" y="410">Escuchar el propio eco</text>
+<text x="415" y="438">Registrar hora UTC del QSO</text>
+<text x="415" y="466">Cuaderno ADIF en la app</text>
+<text x="50" y="380">Segunda radio (opcional)</text>
+<text x="50" y="410">Una transmite y otra recibe</text>
+<text x="50" y="438">Permite oir el propio enlace</text>
+<text x="50" y="466">Duplexor o antenas separadas</text>
+</g>
+<g stroke="#ffa342" stroke-width="2" fill="none" marker-end="url(#arrow)">
+<path d="M335 195H400"/><path d="M765 195H700"/><path d="M550 280V350"/><path d="M185 280V350"/>
+</g>
+<text x="35" y="545" font-size="16">CAT RX solo cambia la sintonia de recepcion. La PTT CAT exige armado local con 9, lease de 1500 ms y limite de 120 s.</text>
+<text x="35" y="572" font-size="16">Funciones experimentales sin validacion en radio ni medida RF. Transmitir requiere licencia de radioaficionado.</text>
+<text x="35" y="599" font-size="15">Autores: Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF y Pedro Roca - bricohams.org / bricohams.com</text>
+</g></svg>

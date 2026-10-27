@@ -513,10 +513,11 @@ int main(void)
     CHECK(strcmp(bhSpecPresets.entries[0].name, "FILE") == 0 && tunes == before_transfer_tunes);
     CHECK(bhSpecPaused && strcmp(bhSpecNotice, "PRESETS IMPORTED") == 0);
     const bh_presets before = bhSpecPresets;
-    for (unsigned mode = 0; mode < 4; ++mode) {
+    for (unsigned mode = 0; mode < 5; ++mode) {
         if (mode == 1) restored.entries[0].spectrum.bins = 64;
         if (mode == 2) { restored.entries[0].spectrum.bins = 128; restored.entries[0].spectrum.first_10hz = 11800000; }
         if (mode == 3) { restored.entries[0].spectrum.first_10hz = 14500000; restored.entries[0].spectrum.samples_per_bin = 3; }
+        if (mode == 4) { restored.entries[0].spectrum.samples_per_bin = 1; restored.entries[0].spectrum.settle_ms = 30; }
         CHECK(bh_presets_encode(&restored, blob, sizeof(blob)) == BH_PRESETS_OK);
         if (mode == 0) blob[50] ^= 1;
         for (unsigned stage = 0; stage < 2; ++stage) {
@@ -588,6 +589,47 @@ int main(void)
     request[1] = 1;
     BH_SPEC_PresetRequest(request, 6, response);
     CHECK(response[1] == 0);
+    BH_SPEC_Stop();
+    BH_SPEC_Start();
+    CHECK(bhSpecSettleMs == 20 && bhSpec.config.settle_ms == 20);
+    const uint16_t delays[] = {40, 80, 10, 20};
+    for (unsigned index = 0; index < 4; ++index) {
+        CHECK(BH_SPEC_Key(KEY_STAR));
+        CHECK(bhSpec.config.settle_ms == delays[index] && bhSpec.frames == 0);
+        BH_SPEC_Draw();
+        CHECK(strstr(lines[6], "SETTLE") != NULL);
+        BH_SPEC_Update();
+        const unsigned previous_reads = reads;
+        tick += (uint32_t)(delays[index] / 10U - 1U);
+        BH_SPEC_Update();
+        CHECK(reads == previous_reads && bhSpec.bin == 0);
+        tick++;
+        BH_SPEC_Update();
+        CHECK(reads == previous_reads + 1 && bhSpec.bin == 1);
+        CHECK(BH_SPEC_Key(KEY_8));
+        CHECK(bhSpecPresets.entries[index].spectrum.settle_ms == delays[index]);
+    }
+    for (unsigned index = 0; index < 4; ++index) {
+        bhSpecPresets.selected = (uint8_t)index;
+        BH_SPEC_Recall();
+        CHECK(!bhSpecError && bhSpec.config.settle_ms == delays[index]);
+    }
+    CHECK(bh_presets_encode(&bhSpecPresets, blob, sizeof(blob)) == BH_PRESETS_OK);
+    CHECK(bh_presets_decode(&restored, blob, sizeof(blob)) == BH_PRESETS_OK);
+    for (unsigned index = 0; index < 4; ++index)
+        CHECK(restored.entries[index].spectrum.settle_ms == delays[index]);
+    BH_SPEC_Key(KEY_4);
+    for (unsigned stage = 0; stage < 2; ++stage) {
+        request[1] = (uint8_t)(2U + stage);
+        memcpy(request + 6, blob + stage * BH_PRESET_CHUNK_BYTES, BH_PRESET_CHUNK_BYTES);
+        CHECK(BH_SPEC_PresetRequest(request, sizeof(request), response) == 6 && response[1] == 0);
+    }
+    request[1] = 4;
+    CHECK(BH_SPEC_PresetRequest(request, 6, response) == 6 && response[1] == 0);
+    for (unsigned index = 0; index < 4; ++index)
+        CHECK(bhSpecPresets.entries[index].spectrum.settle_ms == delays[index]);
+    BH_SPEC_Start();
+    CHECK(bhSpec.config.settle_ms == 20 && bhSpecSettleMs == 20);
     BH_SPEC_Stop();
     puts("Spectrum adapter: RF/display/presets/CSS/file transfer checked with mocks; not physical validation");
     return EXIT_SUCCESS;

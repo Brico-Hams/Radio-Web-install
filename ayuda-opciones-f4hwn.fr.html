@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="F4HWN : référence de toutes les options du catalogue: aide Bricohams par modèle et version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>F4HWN : référence de toutes les options du catalogue | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-opciones-f4hwn.html">
+  <link rel="alternate" hreflang="en" href="ayuda-opciones-f4hwn.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-opciones-f4hwn.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-opciones-f4hwn.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-opciones-f4hwn.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Aller au contenu</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aide"><a href="ayuda.html">Aide de l&#39;application (espagnol)</a> · <a href="ayuda-firmwares.fr.html">Bibliothèque de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Langue"><a href="ayuda-opciones-f4hwn.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-opciones-f4hwn.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-opciones-f4hwn.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-opciones-f4hwn.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-opciones-f4hwn.fr.html" hreflang="fr" lang="fr" aria-current="page">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenu de ce guide"><h2>Dans ce guide</h2><ul><li><a href="#como-leer-las-opciones">Comment lire les options</a></li><li><a href="#plataforma-y-protocolos">Plateforme et protocoles</a></li><li><a href="#multiboot-cfg-y-overlays">Multiboot, CFG et overlays</a></li><li><a href="#recepcion-audio-y-espectro">Réception, audio et spectre</a></li><li><a href="#escaneo-memorias-y-registro">Balayage, mémoires et journal</a></li><li><a href="#interfaz-pantalla-y-energia">Interface, écran et énergie</a></li><li><a href="#tx-transferencia-y-perfiles-regionales">TX, transfert et profils régionaux</a></li><li><a href="#otros-parametros-no-casillas-booleanas">Autres paramètres, non booléens</a></li><li><a href="#verificacion-de-una-combinacion">Vérification d’une combinaison</a></li><li><a href="#fuentes">Sources</a></li></ul></nav>
+    <article class="panel"><h1 id="f4hwn-referencia-de-todas-las-opciones-del-catalogo">F4HWN : référence de toutes les options du catalogue</h1>
+<p>Révision : 25-10-2026. Ce tableau couvre <strong>chaque clé</strong> du catalogue web v6.3.0, commit <code>ca3a4271386049e7b459b215cef0ad0eea1a30ca</code>. Les descriptions indiquent l’objectif de la fonction ; elles ne garantissent pas qu’une combinaison arbitraire compile ou fonctionne sur votre radio. Les 10 clés supplémentaires trouvées dans les presets publiés des 18 versions historiques sont également incluses, sans être présentées comme des options de l’interface actuelle.</p>
+<h2 id="como-leer-las-opciones">Comment lire les options</h2>
+<ul>
+<li>ON/OFF correspondent ici à des décisions de <strong>compilation</strong>, pas nécessairement à des interrupteurs</li>
+</ul>
+<p>disponibles dans le menu de la radio.</p>
+<ul>
+<li>Une fonction compilée peut nécessiter une configuration ultérieure, des ressources,</li>
+</ul>
+<p>du matériel, une application ou des outils externes.</p>
+<ul>
+<li>OFF retire généralement du code/de l’interface ; cela n’efface pas nécessairement les anciennes données.</li>
+<li>L’absence d’un nom ne signifie pas OFF : il peut ne pas exister ou ne pas être exposé</li>
+</ul>
+<p>par ce catalogue. La <a href="ayuda-presets-f4hwn.fr.html">matrice des presets</a> utilise N/D.</p>
+<ul>
+<li>Le formulaire web utilise v6.3.0 ; le constructeur local Bricohams utilise v6.1.0</li>
+</ul>
+<p>figé. Ne mélangez pas les options/valeurs par défaut sans comparer les deux tableaux.</p>
+<ul>
+<li>Le budget maximal d’image PY32 accepté par les slots est de 118 KiB</li>
+</ul>
+<p>(120832 bytes). Tout activer ne garantit pas que cela tiendra dans la Flash/RAM.</p>
+<ul>
+<li>L’upstream avertit que plusieurs options non F4HWN désactivées par défaut ne</li>
+</ul>
+<p>sont pas prises en charge, sauf documentation explicite. Il est déconseillé de les activer uniquement parce qu’une case existe.</p>
+<h2 id="plataforma-y-protocolos">Plateforme et protocoles</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Option</th><th scope="col">Explication</th><th scope="col">Précaution/configuration ultérieure</th></tr></thead><tbody>
+<tr><td><code>DEV</code></td><td>Identité et traitement de compilation de développement</td><td>Ce n’est pas un module utilisateur ; le builder Bricohams exige OFF et le catalogue stable exclut le développement</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN</code></td><td>Couche de fonctions F4HWN, identité et menus associés</td><td>Requise par le profil Bricohams ; ne pas utiliser OFF pour simuler une compatibilité</td></tr>
+<tr><td><code>ENABLE_UART</code></td><td>Communication UART et code du protocole associé</td><td>À conserver pour la gestion série compatible ; ne définit pas à lui seul toutes les commandes</td></tr>
+<tr><td><code>ENABLE_USB</code></td><td>Prise en charge USB native et son transport sur PY32</td><td>Nécessite le matériel/le câble adapté ; n’ajoute pas l’USB de données à une V1</td></tr>
+<tr><td><code>ENABLE_EXTRA_UART_CMD</code></td><td>Commandes UART supplémentaires de la base</td><td>Surface de contrôle supplémentaire ; uniquement pour des outils connus et une version compatible</td></tr>
+<tr><td><code>ENABLE_UART_RW_BK_REGS</code></td><td>Accès en lecture/écriture aux registres BK par UART</td><td>Diagnostic avancé ; peut modifier le fonctionnement RF, ne pas activer sans nécessité</td></tr>
+<tr><td><code>ENABLE_SWD</code></td><td>Disponibilité du débogage SWD selon l’implémentation</td><td>Ce n’est pas un mode de copie web ; vérifier les effets sur les broches et la carte</td></tr>
+<tr><td><code>ENABLE_LTO</code></td><td>Optimisation de l’édition de liens entre unités de compilation</td><td>Modifie le résultat/la taille ; vérifier la compatibilité de la toolchain et les contrôles du stub</td></tr>
+<tr><td><code>ENABLE_NO_HEAP</code></td><td>Supprime la réservation du heap dans le linker de la base</td><td>Uniquement si le programme n’a pas besoin d’allocation dynamique ; ce n’est pas une accélération générale</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_DEBUG</code></td><td>Instrumentation de diagnostic F4HWN</td><td>Peut consommer de la mémoire/modifier les temporisations ; inutile pour une utilisation normale</td></tr>
+<tr><td><code>ENABLE_AGC_SHOW_DATA</code></td><td>Affichage des données de contrôle automatique du gain</td><td>Outil de diagnostic ; pas un étalonnage automatique</td></tr>
+<tr><td><code>ENABLE_BYP_RAW_DEMODULATORS</code></td><td>Chemins de démodulation RAW de la base</td><td>Option avancée/non prise en charge par certains presets ; consulter l’implémentation, ne pas présumer d’une meilleure réception</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_EXT_FLASH_RW</code></td><td>Commandes d’accès physique à la Flash externe</td><td>Nécessaire à la sauvegarde complète de ce site dans Labs compatible ; à ne pas confondre avec la lecture de l’étalonnage</td></tr>
+</tbody></table></div>
+<h2 id="multiboot-cfg-y-overlays">Multiboot, CFG et overlays</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Option</th><th scope="col">Explication</th><th scope="col">Précaution/configuration ultérieure</th></tr></thead><tbody>
+<tr><td><code>ENABLE_FEAT_F4HWN_MULTIBOOT</code></td><td>Gestionnaire d’images externes et banques associées</td><td>N’assure pas la prise en charge V1 et ne rend pas compatible n’importe quel <code>.bin</code></td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_MULTIBOOT_HOT_CFG</code></td><td>Changement de banque CFG à l’exécution</td><td>Modifie les paramètres/les canaux, ne restaure pas un autre firmware ; exige des données compatibles</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_MULTIBOOT_OVERLAY</code></td><td>Espace de travail/exécution RAM utilisés par multiboot et les overlays</td><td>Maintenir le contrôle d’isolation ; ne pas désactiver dans le profil Bricohams</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_OVERLAY_APPS</code></td><td>Chargeur et menu d’applications externes</td><td>Nécessite l’overlay RAM et des applications ABI/API/caps compatibles ; expérimental</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_OVERLAY_BEAM</code></td><td>Service Beam disponible pour les applications overlay</td><td>Dépend du chargeur d’applications ; n’implique pas l’inclusion d’une application particulière</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_OVERLAY_INFO</code></td><td>Informations système par overlay/service associé</td><td>Dépend des applications ; agit sur le code de diagnostic/l’utilisation de la pile selon la source</td></tr>
+</tbody></table></div>
+<p>Le CMake inspecté rejette APPS sans MULTIBOOT_OVERLAY et BEAM/INFO overlay sans APPS. Ce sont des dépendances vérifiées, pas une liste exhaustive de toutes les interactions possibles. Ne modifiez pas un binaire pour faire croire qu’une autre API existe.</p>
+<h2 id="recepcion-audio-y-espectro">Réception, audio et spectre</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Option</th><th scope="col">Explication</th><th scope="col">Précaution/configuration ultérieure</th></tr></thead><tbody>
+<tr><td><code>ENABLE_FMRADIO</code></td><td>Réception de radiodiffusion FM utilisant le matériel pris en charge</td><td>Ce n’est pas le mode FM d’un canal VHF/UHF</td></tr>
+<tr><td><code>ENABLE_NOAA</code></td><td>Fonctions de réception météo NOAA</td><td>Disponibilité géographique ; ce n’est pas un réseau météo universel</td></tr>
+<tr><td><code>ENABLE_WIDE_RX</code></td><td>Plages de réception étendues prises en charge par le code</td><td>Sensibilité/filtres variables selon la bande ; n’autorise pas l’émission TX légale hors bande</td></tr>
+<tr><td><code>ENABLE_SPECTRUM</code></td><td>Analyseur de spectre de la base</td><td>Ne pas présumer la simultanéité avec d’autres fonctions ni les performances d’un analyseur de laboratoire</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_SPECTRUM</code></td><td>Améliorations F4HWN de l’analyseur</td><td>Interagit avec SPECTRUM et les paramètres persistés selon la build</td></tr>
+<tr><td><code>ENABLE_SQUELCH_MORE_SENSITIVE</code></td><td>Critères de squelch plus sensibles</td><td>Peut provoquer des ouvertures dues au bruit ; régler SQL et tester</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_NARROWER</code></td><td>Variante de filtre FM plus étroite et menu associé</td><td>Adapter à la largeur du système ; ne modifie pas le raster VFO</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_VOL</code></td><td>Réglage logiciel de l’audio RX</td><td>Différent du bouton et du gain RF</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_AUDIO</code></td><td>Profils/traitement audio RX F4HWN</td><td>Choisir ensuite le profil audio ; ne corrige pas une fréquence mal réglée</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_AUDIO_SCOPE</code></td><td>Affichage audio en RX/TX</td><td>Ne mesure pas la puissance RF ni la qualité de modulation en laboratoire</td></tr>
+<tr><td><code>ENABLE_AUDIO_BAR</code></td><td>Barre de niveau audio</td><td>Indicateur visuel, ne garantit pas l’absence de distorsion</td></tr>
+<tr><td><code>ENABLE_RSSI_BAR</code></td><td>Barre d’intensité du signal</td><td>Le RSSI ne garantit pas un audio décodable</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_FULL_WATCH</code></td><td>Cycle étendu d’écoute A/B et priorités</td><td>Vérifier RxMode et la destination de réponse TX ; pas quatre récepteurs parallèles</td></tr>
+</tbody></table></div>
+<h2 id="escaneo-memorias-y-registro">Balayage, mémoires et journal</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Option</th><th scope="col">Explication</th><th scope="col">Précaution/configuration ultérieure</th></tr></thead><tbody>
+<tr><td><code>ENABLE_FASTER_CHANNEL_SCAN</code></td><td>Améliorations de vitesse du balayage des canaux de la base</td><td>Différent du mode rapide supplémentaire F4HWN</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_SCAN_FASTER</code></td><td>Modes rapides de balayage F4HWN</td><td>Peut manquer des signaux courts ou la reconnaissance des tonalités</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_SCAN_PROGRESS</code></td><td>Indication de progression du balayage</td><td>Ne modifie pas à elle seule la liste ou la plage</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_SCAN_RSSI</code></td><td>Informations RSSI pendant le balayage</td><td>À interpréter avec le bruit/l’atténuation, pas comme une distance</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_SCAN_SUBAUDIBLE</code></td><td>Informations sur les sous-tons/codes détectés pendant le balayage</td><td>Confirmer la tonalité avant de la programmer pour TX</td></tr>
+<tr><td><code>ENABLE_SCAN_RANGES</code></td><td>Balayage dans les plages configurées</td><td>Configurer correctement les limites et le pas</td></tr>
+<tr><td><code>ENABLE_NO_CODE_SCAN_TIMEOUT</code></td><td>Modifie le délai de recherche des codes/sous-tons de la base</td><td>Ce n’est pas le TOT TX ; vérifier la consommation et la sortie du mode</td></tr>
+<tr><td><code>ENABLE_COPY_CHAN_TO_VFO</code></td><td>Copie des paramètres de mémoire vers le VFO</td><td>Copie temporaire ; ne remplace pas l’enregistrement de la mémoire</td></tr>
+<tr><td><code>ENABLE_KEEP_MEM_NAME</code></td><td>Conservation des noms de mémoire dans les opérations prises en charge</td><td>Vérifier la destination lors de l’écrasement de canaux</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_MEM</code></td><td>Page SysInf sur l’utilisation de la Flash et de la SRAM</td><td>Informations mémoire du programme, pas une extension des canaux ou de l’EEPROM</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_RESUME_STATE</code></td><td>Restauration de l’état opérationnel à l’allumage</td><td>Peut reprendre le balayage/le spectre ; vérifier avant les essais</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_RESET_VFO</code></td><td>Action de réinitialisation des paramètres VFO</td><td>N’équivaut pas à restaurer l’étalonnage ou toutes les données</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_RXTX_LOG</code></td><td>Journal de l’activité RX/TX dans la Flash externe</td><td>Confidentialité, espace de stockage consommé et compatibilité du format</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_RXTX_LOG_WRAP</code></td><td>Réutilisation circulaire du journal lorsqu’il est plein</td><td>Peut remplacer les anciennes entrées ; exporter si vous devez les conserver</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_RXTX_LOG_K5VIEWER</code></td><td>Accès/présentation de RF Log par les outils K5Viewer</td><td>Nécessite une version et un protocole d’outil compatibles</td></tr>
+</tbody></table></div>
+<h2 id="interfaz-pantalla-y-energia">Interface, écran et énergie</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Option</th><th scope="col">Explication</th><th scope="col">Précaution/configuration ultérieure</th></tr></thead><tbody>
+<tr><td><code>ENABLE_BIG_FREQ</code></td><td>Affichage agrandi de la fréquence</td><td>Réduit l’espace disponible pour d’autres données selon la disposition</td></tr>
+<tr><td><code>ENABLE_SMALL_BOLD</code></td><td>Petite police en gras</td><td>Modifie la lisibilité, pas les paramètres du canal</td></tr>
+<tr><td><code>ENABLE_CUSTOM_MENU_LAYOUT</code></td><td>Ordre/disposition personnalisés des menus</td><td>Les numéros de menu ne sont plus une référence stable entre les builds</td></tr>
+<tr><td><code>ENABLE_BOOT_BEEPS</code></td><td>Sons au démarrage</td><td>Vérifier le volume et les écouteurs</td></tr>
+<tr><td><code>ENABLE_VOICE</code></td><td>Annonces vocales disponibles dans la base</td><td>Ne pas présumer de la langue ni de la couverture complète des menus</td></tr>
+<tr><td><code>ENABLE_SHOW_CHARGE_LEVEL</code></td><td>Affichage du niveau de charge</td><td>Estimation ; ne prouve ni la capacité ni l’état du chargeur</td></tr>
+<tr><td><code>ENABLE_REVERSE_BAT_SYMBOL</code></td><td>Variante d’orientation/affichage du symbole de batterie</td><td>Visuel uniquement</td></tr>
+<tr><td><code>ENABLE_PWRON_PASSWORD</code></td><td>Contrôle d’accès à l’allumage</td><td>Risque de verrouillage ; ne chiffre pas la mémoire et ne remplace pas la sécurité physique</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_CTR</code></td><td>Contrôle du contraste</td><td>Régler SetCtr pour l’écran concerné</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_INV</code></td><td>Inversion de l’écran</td><td>Réglage visuel</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_RX_TX_TIMER</code></td><td>Compteurs RX/TX visibles</td><td>N’est pas une limite d’émission ; celle-ci est configurée par TOT</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_SLEEP</code></td><td>Deep sleep/extinction sur inactivité selon le firmware</td><td>Vérifier SetOff avant les longues sessions</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_CHARGING_C</code></td><td>Traitement/indication de charge USB-C selon la carte et le firmware</td><td>Ne modifie pas l’électronique de charge et ne rend pas sûre une batterie endommagée</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_LOGO</code></td><td>Logo/interface de démarrage F4HWN</td><td>Ne prouve pas la provenance de l’image</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_LOGO_SAV</code></td><td>Logo/présentation en économie d’écran</td><td>Peut conditionner le menu SetSav</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_MENU_CAT</code></td><td>Regroupement des menus par catégories</td><td>Les emplacements diffèrent de la liste classique</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_ACTION_PICKER</code></td><td>Sélecteur d’actions/raccourcis</td><td>Vérifier les affectations courtes/longues pour éviter un TX accidentel</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_QRCODE</code></td><td>Codes QR d’informations/liens</td><td>Ouvrir des liens ne fait pas partie de la sauvegarde et ne certifie pas le fichier</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_K5VIEWER</code></td><td>Écran/contrôle compatible avec un visualiseur externe</td><td>Ce site n’implémente pas toutes les fonctions du visualiseur</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_GAME</code></td><td>Jeu intégré dans le profil qui le prend en charge</td><td>Occupe de la Flash/RAM ; différent des applications de jeux Labs</td></tr>
+<tr><td><code>ENABLE_FLASHLIGHT</code></td><td>Fonction lampe torche/LED du matériel</td><td>Ne modifie pas la radio et ne signale pas un mode bootloader universel</td></tr>
+</tbody></table></div>
+<h2 id="tx-transferencia-y-perfiles-regionales">TX, transfert et profils régionaux</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Option</th><th scope="col">Explication</th><th scope="col">Précaution/configuration ultérieure</th></tr></thead><tbody>
+<tr><td><code>ENABLE_VOX</code></td><td>Émission déclenchée par la voix/l’audio</td><td>Régler la sensibilité ensuite ; OFF dans les deux builds Bricohams livrées</td></tr>
+<tr><td><code>ENABLE_TX1750</code></td><td>Génération d’une tonalité d’accès 1750 Hz</td><td>Uniquement si le système l’exige et avec autorisation</td></tr>
+<tr><td><code>ENABLE_DTMF_CALLING</code></td><td>Logique d’appels/identification DTMF</td><td>N’équivaut pas au DMR ; configurer les ID et les durées avec le correspondant</td></tr>
+<tr><td><code>ENABLE_CTCSS_TAIL_PHASE_SHIFT</code></td><td>Traitement de fin de tonalité CTCSS par déphasage</td><td>Uniquement si le récepteur/relais l’utilise ; ce n’est pas du chiffrement</td></tr>
+<tr><td><code>ENABLE_REDUCE_LOW_MID_TX_POWER</code></td><td>Modifie les objectifs de puissance basse/moyenne de la base</td><td>Vérifier avec des instruments ; ne pas l’utiliser comme étalonnage universel</td></tr>
+<tr><td><code>ENABLE_AIRCOPY</code></td><td>Fonction de transfert AirCopy</td><td>Nécessite la compatibilité des deux extrémités ; ne copie pas le MCU complet de ce site</td></tr>
+<tr><td><code>ENABLE_AIRCOPY_UART</code></td><td>Variante de transfert par UART</td><td>Le câble/protocole et le firmware doivent correspondre</td></tr>
+<tr><td><code>ENABLE_AIRCOPY_FLASH</code></td><td>Fonctions AirCopy liées à la Flash</td><td>Opération avancée sur les données ; ne pas présumer une restauration sûre entre révisions</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_PMR</code></td><td>Profil/contraintes liés au PMR</td><td>N’homologue ni l’antenne, ni la puissance, ni l’équipement pour un service libre</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_GMRS_FRS_MURS</code></td><td>Profils régionaux de bandes/services des États-Unis</td><td>Les exigences légales dépendent du service et du matériel ; non applicables universellement</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_CA</code></td><td>Profil des limites de bandes canadiennes de la base</td><td>À ne pas confondre avec Carrier Aggregation ou un récepteur supplémentaire</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_RESCUE_OPS</code></td><td>Profil d’interface/d’utilisation RescueOps</td><td>N’autorise pas les fréquences professionnelles et ne transforme pas le matériel en dispositif de sécurité certifié</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_FOXHUNT</code></td><td>Outil RX de recherche du signal avec atténuation/historique</td><td>Différent du firmware ARDF temporisé et d’un localisateur GPS</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_BEACON</code></td><td>Balise Morse intégrée</td><td>Peut émettre automatiquement ; la laisser désactivée jusqu’à une configuration légale et contrôlée</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_BEAM</code></td><td>Transfert Beam de paramètres de canal/VFO par paquets de la base</td><td>Le payload inspecté comprend fréquence, offset, tonalités, mode et nom. Nécessite des extrémités/protocoles compatibles ; ce n’est ni une antenne directive ni APRS</td></tr>
+<tr><td><code>ENABLE_F_CAL_MENU</code></td><td>Menu d’étalonnage de la référence RF</td><td>Nécessite des instruments et une procédure ; ne pas activer pour résoudre un problème USB</td></tr>
+</tbody></table></div>
+<h2 id="otros-parametros-no-casillas-booleanas">Autres paramètres, non booléens</h2>
+<h3 id="opciones-historicas-o-no-expuestas-por-el-formulario-actual">Options historiques ou non exposées par le formulaire actuel</h3>
+<p>Leur existence est confirmée dans les presets par commit ; cela n’implique pas une prise en charge actuelle. Pour les anciennes fonctions non vérifiées sur matériel, l’objectif du code est conservé sans donner de séquences opérationnelles spéculatives.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Option</th><th scope="col">Explication</th><th scope="col">Précaution/configuration ultérieure</th></tr></thead><tbody>
+<tr><td><code>ENABLE_ALARM</code></td><td>Fonction d’alarme de la base historique</td><td>Peut générer de l’audio ou du TX selon l’implémentation ; ne pas activer pour tester un port ni l’utiliser comme système de secours</td></tr>
+<tr><td><code>ENABLE_AM_FIX</code></td><td>Corrections de gain/réception AM de branches historiques</td><td>Ne transforme pas le TX en AM et n’améliore pas toutes les conditions RF</td></tr>
+<tr><td><code>ENABLE_AM_FIX_SHOW_DATA</code></td><td>Diagnostic visible de la correction AM</td><td>Nécessite la fonction correspondante ; pas un étalonnage automatique</td></tr>
+<tr><td><code>ENABLE_BLMIN_TMP_OFF</code></td><td>Gestion temporaire du rétroéclairage minimal dans les branches qui l’incluent</td><td>Vérifier la logique des touches/de l’économie de cette version ; n’agit pas sur la sensibilité</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_OVERLAY_TRIVFO</code></td><td>Service TriVFO du système overlay dans les presets qui le déclarent</td><td>Non exposé par le catalogue web ; ne pas présumer trois récepteurs physiques ni la compatibilité avec des applications d’une autre release</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_RESET_CHANNEL</code></td><td>Action de réinitialisation de canal des branches antérieures</td><td>N’équivaut pas forcément à RESET_VFO ; vérifier la portée avant de perdre des réglages</td></tr>
+<tr><td><code>ENABLE_FEAT_F4HWN_SCREENSHOT</code></td><td>Code de capture d’écran des anciennes versions</td><td>Peut utiliser un protocole/outil différent du K5Viewer actuel</td></tr>
+<tr><td><code>ENABLE_NAVIG_LEFT_RIGHT</code></td><td>Sélection de disposition de navigation dans les presets historiques</td><td>Ne pas le copier vers les versions avec SetNav sans vérifier la migration</td></tr>
+<tr><td><code>ENABLE_REGA</code></td><td>Signalisation historique de test/alarme du réseau de secours REGA via des tonalités ZVEI</td><td>Peut activer automatiquement le TX. Ne pas tester sur des fréquences d’urgence ni l’affecter habituellement à des touches ; exige l’autorisation et la procédure du service</td></tr>
+<tr><td><code>ENABLE_TX_WHEN_AM</code></td><td>Autorise un chemin TX lorsque le mode de réception AM est sélectionné dans la base historique</td><td>Ne garantit ni une modulation AM en sortie ni une autorisation légale ; ne pas activer pour tenter d’émettre sur l’aéronautique ou d’autres services</td></tr>
+</tbody></table></div>
+<h3 id="parametros-de-identidad-y-herramientas">Paramètres d’identité et outils</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Paramètre CMake</th><th scope="col">Signification</th><th scope="col">Traitement ici</th></tr></thead><tbody>
+<tr><td><code>CMAKE_BUILD_TYPE</code></td><td>Niveau de configuration de compilation</td><td>Release du builder local</td></tr>
+<tr><td><code>TARGET</code></td><td>Nom de l’exécutable/artefact</td><td>bricohams du builder local ; ne désigne pas automatiquement le matériel cible</td></tr>
+<tr><td><code>EDITION_STRING</code></td><td>Identité de l’édition affichée</td><td>Bricohams dans le builder local, en conservant l’identité du protocole upstream</td></tr>
+<tr><td><code>VERSION_STRING_1/2</code></td><td>Versions des composants affichées</td><td>Ne pas les modifier pour contourner la validation</td></tr>
+<tr><td><code>AUTHOR_STRING</code>, <code>AUTHOR_STRING_1/2</code></td><td>Attribution et identité de l’upstream</td><td>Conserver les avis et la compatibilité ; ne pas revendiquer la paternité d’autrui</td></tr>
+<tr><td><code>SQL_TONE</code></td><td>Paramètre de la base utilisé dans des configurations spécifiques</td><td>Non exposé par --option ; ne pas le modifier selon une recette SA818 sur une radio normale</td></tr>
+<tr><td><code>SOURCE_DATE_EPOCH</code></td><td>Horodatage de compilation reproductible</td><td>Fixé au commit dans le builder local ; ne règle pas l’horloge de la radio</td></tr>
+</tbody></table></div>
+<p>Ces valeurs arbitraires ne sont pas autorisées dans le constructeur local via <code>--option</code>. La liste des booléens/valeurs par défaut et la signification de « absent » figurent dans <a href="ayuda-presets-f4hwn.fr.html">la matrice générée</a>.</p>
+<h2 id="verificacion-de-una-combinacion">Vérification d’une combinaison</h2>
+<ol>
+<li>Choisir la version et le preset comme un tout, sans copier des flags d’un autre commit.</li>
+<li>Ne modifier que le nécessaire et enregistrer la demande.</li>
+<li>Compiler et traiter les erreurs de dépendances, de RAM, de Flash et d’isolation RAM.</li>
+<li>Vérifier le binaire, les métadonnées, la carte mémoire et SHA256SUMS.</li>
+<li>Préparer le slot sans écriture ; vérifier que l’inspecteur l’accepte.</li>
+<li>Effectuer un essai physique contrôlé avec une sauvegarde originale et une procédure de récupération connue.</li>
+</ol>
+<p>Une compilation réussie ne prouve ni les performances RF, ni l’absence de bugs, ni la compatibilité des données avec tous les firmwares de l’historique.</p>
+<h2 id="fuentes">Sources</h2>
+<ul>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/ca3a4271386049e7b459b215cef0ad0eea1a30ca/CMakePresets.json" target="_blank" rel="noopener noreferrer">Presets du catalogue v6.3.0</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/App/CMakeLists.txt" target="_blank" rel="noopener noreferrer">CMake des fonctions v6.1 inspecté</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/App/ui/menu.c" target="_blank" rel="noopener noreferrer">Informations mémoire dans SysInf</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/App/app/beam.c" target="_blank" rel="noopener noreferrer">Payload Beam inspecté</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/e21d47260915174f358f1033564844148d5c6590/App/app/rega.c" target="_blank" rel="noopener noreferrer">Module historique REGA, référence sur l’objectif</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">README et manuels de l’upstream</a>.</li>
+<li>Catalogue versionné <code>f4hwn-options.js</code> et constructeur <code>scripts/build-bricohams.cjs</code></li>
+</ul>
+<p>de ce dépôt.</p></article>
+    <footer><p class="translation-note">Traduction de l&#39;original espagnol. En cas de divergence, la version espagnole fait foi.</p><p>Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide. <a href="ayuda-firmwares.fr.html">Retour à l&#39;index</a>.</p></footer>
+  </main>
+</body>
+</html>

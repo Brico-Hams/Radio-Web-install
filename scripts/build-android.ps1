@@ -21,8 +21,8 @@ try {
     & .\android\gradlew.bat -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
     if ($LASTEXITCODE -ne 0) { throw "La compilacion Android fallo: $LASTEXITCODE" }
     $artifacts = @(
-        @{ Source = 'android\app\build\outputs\apk\debug\app-debug.apk'; Name = 'bricohams-android-0.8.0-beta-debug.apk' },
-        @{ Source = 'android\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'; Name = 'bricohams-android-0.8.0-beta-androidTest.apk' }
+        @{ Source = 'android\app\build\outputs\apk\debug\app-debug.apk'; Name = 'bricohams-android-0.8.1-beta-debug.apk' },
+        @{ Source = 'android\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'; Name = 'bricohams-android-0.8.1-beta-androidTest.apk' }
     )
     foreach ($artifact in $artifacts) {
         & $signer verify $artifact.Source
@@ -62,7 +62,8 @@ try {
         format = 'bricohams-android-build'
         version = 1
         applicationId = 'org.bricohams.radio'
-        applicationVersion = '0.8.0-beta'
+        applicationVersion = '0.8.1-beta'
+        applicationVersionCode = 10
         stability = 'beta'
         signing = 'debug'
         minimumApi = 26
@@ -77,8 +78,8 @@ try {
         instrumentationTestsExecuted = $false
         hardwareTested = $false
         sourceHashes = $sources
-        capabilities = @('local-logbook', 'logbook-search', 'adif-export-ascii', 'adif-import-preview-transactional', 'json-export-import', 'ardf-manual-observations', 'ardf-session-statistics', 'ardf-observation-history', 'foreground-gps-fix', 'morse-text', 'morse-wav-experimental', 'usb-cdc-cat-rx-experimental', 'usb-uart-known-single-port-adapters', 'sstv-robot36-wav-experimental', 'sstv-png-export', 'satellite-sgp4-offline', 'tle-catalog-import', 'satellite-pass-cat-rx-experimental', 'foreground-microphone-bounded-capture', 'morse-captured-audio-experimental', 'sstv-robot36-captured-audio-experimental')
-        unavailable = @('continuous-audio-decoding', 'sstv-transmission', 'channel-programming', 'lotw-signing-upload', 'continuous-gps-track', 'satellite-auto-download')
+        capabilities = @('local-logbook', 'logbook-search', 'adif-export-ascii', 'adif-import-preview-transactional', 'json-export-import', 'ardf-manual-observations', 'ardf-session-statistics', 'ardf-observation-history', 'foreground-gps-fix', 'morse-text', 'morse-wav-experimental', 'usb-cdc-cat-rx-experimental', 'usb-uart-known-single-port-adapters', 'sstv-robot36-wav-experimental', 'sstv-png-export', 'satellite-sgp4-offline', 'tle-catalog-import', 'satellite-pass-cat-rx-experimental', 'foreground-microphone-bounded-capture', 'morse-captured-audio-experimental', 'sstv-robot36-captured-audio-experimental', 'cat-ptt-lease-experimental', 'sstv-transmission-cat-experimental', 'channel-programming-f4hwn-v6-backup-readback', 'external-flash-crc-4096-byte-sectors', 'activity-logbooks-pota-sota', 'satellite-catalog-download-on-request', 'satellite-pass-polar-radar', 'satellite-world-map-offline', 'satellite-pass-wav-recording', 'sstv-pass-recording-scan', 'localized-ui-es-en-us-fr-de', 'localized-validation-errors')
+        unavailable = @('continuous-audio-decoding', 'lotw-signing-upload', 'continuous-gps-track', 'satellite-auto-download', 'android-address-book-integration', 'hardware-certification')
     }
     [IO.File]::WriteAllText((Join-Path $output 'build-info.json'), (($info | ConvertTo-Json -Depth 8) + "`n"), [Text.UTF8Encoding]::new($false))
     $sums = Get-ChildItem -LiteralPath $output -File | Sort-Object Name | ForEach-Object {

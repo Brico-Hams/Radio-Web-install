@@ -37,7 +37,7 @@ import java.lang.reflect.Proxy
 import com.hoho.android.usbserial.driver.UsbSerialPort
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28], shadows = [CdcRadioTest.Connection::class])
+@Config(sdk = [28], qualifiers = "es", shadows = [CdcRadioTest.Connection::class])
 class CdcRadioTest {
     @Implements(UsbDeviceConnection::class)
     class Connection {

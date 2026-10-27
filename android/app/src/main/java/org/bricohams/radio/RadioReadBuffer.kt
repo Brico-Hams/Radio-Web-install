@@ -1,6 +1,5 @@
 package org.bricohams.radio
 
-import java.io.IOException
 import java.util.ArrayDeque
 
 internal class RadioReadBuffer {
@@ -11,9 +10,9 @@ internal class RadioReadBuffer {
         val deadline = System.nanoTime() / 1_000_000 + timeoutMs
         while (bytes.size < length) {
             val left = deadline - System.nanoTime() / 1_000_000
-            if (left <= 0) throw IOException("Tiempo agotado leyendo USB.")
+            if (left <= 0) throw LocalizedIOException(UiText(R.string.err_usb_read_timeout))
             val chunk = packet(left.toInt())
-            if (chunk.isEmpty()) throw IOException("USB sin datos: timeout o desconexion.")
+            if (chunk.isEmpty()) throw LocalizedIOException(UiText(R.string.err_usb_no_data))
             chunk.forEach(bytes::add)
         }
         return ByteArray(length) { bytes.removeFirst() }

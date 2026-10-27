@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="600" viewBox="0 0 1100 600" role="img" aria-labelledby="title desc">
+<title id="title">Desplazamiento Doppler durante un pase</title>
+<desc id="desc">Esquema propio Bricohams. Curva aproximada del desplazamiento Doppler en 145.8 MHz y 436.8 MHz para una velocidad radial maxima de unos 7 km/s. Valores redondeados e ilustrativos.</desc>
+<rect width="1100" height="600" fill="#14202c"/>
+<g font-family="sans-serif" fill="#fff">
+<text x="35" y="42" font-size="24">Iniciacion al satelite - efecto Doppler</text>
+<text x="35" y="70" font-size="15">Esquema propio. Desplazamiento = f x v / c. Con v = 7 km/s: unos 3.4 kHz en 145.8 MHz y unos 10.2 kHz en 436.8 MHz.</text>
+</g>
+<path d="M120 320H1040M120 110V530" stroke="#8fb3d1" stroke-width="2"/>
+<g stroke="#8fb3d1" stroke-width="1" stroke-dasharray="4 6">
+<path d="M120 130H1040"/><path d="M120 510H1040"/><path d="M120 256H1040"/><path d="M120 384H1040"/>
+</g>
+<path d="M140 130C400 135 470 140 580 320C690 500 760 505 1020 510" fill="none" stroke="#ffa342" stroke-width="4"/>
+<path d="M140 256C400 258 470 262 580 320C690 378 760 382 1020 384" fill="none" stroke="#7fd18b" stroke-width="4"/>
+<g font-family="sans-serif" fill="#fff" font-size="16">
+<text x="40" y="135">+10 kHz</text><text x="48" y="261">+3 kHz</text><text x="70" y="325">0</text>
+<text x="52" y="389">-3 kHz</text><text x="44" y="515">-10 kHz</text>
+<text x="130" y="555">AOS</text><text x="560" y="555">TCA</text><text x="990" y="555">LOS</text>
+<text x="700" y="160" fill="#ffa342">UHF 436.8 MHz: casi +/-10 kHz</text>
+<text x="700" y="190" fill="#7fd18b">VHF 145.8 MHz: casi +/-3.4 kHz</text>
+<text x="700" y="225">Corrige sobre todo el enlace UHF</text>
+<text x="35" y="585" font-size="15">La pendiente mas fuerte esta en el TCA: en pases altos hay que cambiar de memoria con rapidez. Valores aproximados, no medidos con la radio.</text>
+</g>
+</svg>

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Dim0s-Pack: Inventar und Karina V3/UV-K1: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Dim0s-Pack: Inventar und Karina V3/UV-K1 | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-pack-dim0s.html">
+  <link rel="alternate" hreflang="en" href="ayuda-pack-dim0s.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-pack-dim0s.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-pack-dim0s.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-pack-dim0s.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda.html">App-Hilfe (Spanisch)</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-pack-dim0s.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-pack-dim0s.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-pack-dim0s.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-pack-dim0s.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-pack-dim0s.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#que-cambia-respecto-a-la-inspeccion-anterior">Was sich gegenüber der vorherigen Untersuchung geändert hat</a></li><li><a href="#naturaleza-y-limites-del-inventario">Art und Grenzen des Inventars</a></li><li><a href="#familias-presentes">Enthaltene Familien</a></li><li><a href="#multiboot-afirmacion-frente-a-comprobacion">Multiboot: Behauptung und Prüfung</a></li><li><a href="#karina-21-09-2026-evidencia-del-zip">Karina 21-09-2026: Nachweis des ZIP</a></li><li><a href="#configuraciones-karina-v3-descritas-por-el-recopilador">Vom Zusammensteller beschriebene Karina-V3-Konfigurationen</a></li><li><a href="#que-falta-para-un-port-o-integracion-real">Was für einen echten Port oder eine Integration noch fehlt</a></li><li><a href="#fuentes-fijadas">Festgehaltene Quellen</a></li></ul></nav>
+    <article class="panel"><h1 id="pack-dim0s-inventario-y-karina-v3-uv-k1">Dim0s-Pack: Inventar und Karina V3/UV-K1</h1>
+<p>Revision: 25-10-2026. Vom Benutzer bereitgestelltes Repository: <code>Dim0s/quansheng-UV-K5v3-K1-firmware-pack</code>. Untersuchter Commit: <code>52b41c182dd82c1fbdc027dc2da7bbcb02c7d79c</code>.</p>
+<h2 id="que-cambia-respecto-a-la-inspeccion-anterior">Was sich gegenüber der vorherigen Untersuchung geändert hat</h2>
+<p>Das zunächst lokal geprüfte Karina-Paket war <strong>V1</strong>. Dieses Repository kündigt Firmwares für <strong>K5 V3, K1 und Geräte mit Bootloader 7.x</strong> an und enthält ein weiteres Karina-Paket mit separaten K1-/V3-Binärdateien. Daher gilt:</p>
+<ul>
+<li>Die Aussage, es gebe nur Karina V1, ist nicht korrekt.</li>
+<li>Weiterhin korrekt ist, das V1-Binary aus dem vorherigen Paket für V3 abzulehnen.</li>
+<li>Es gibt neue Nachweise für <strong>Karina-PY32-Binärdateien</strong>, aber nicht dafür, dass sie mit Armel-Multiboot kompatibel sind oder dass ihre Quellen verfügbar sind.</li>
+<li>Dieser Hinweis macht das Pack nicht zur offiziellen Quelle jedes Autors.</li>
+</ul>
+<p>Der Repository-Header empfiehlt, Kalibrierungen aufzubewahren. In den Karina-Informationen steht, dass es keinen Link zum Quellrepository gibt; die Firmware wird als geschlossen beschrieben, Builds würden in einem externen Kanal erneut veröffentlicht. Das beweist für sich genommen keine konkrete Lizenz: Der vom Benutzer angegebene MIT-Hinweis wartet weiterhin auf eine überprüfbare Quelle/einen Rechteinhaber.</p>
+<h2 id="naturaleza-y-limites-del-inventario">Art und Grenzen des Inventars</h2>
+<p>Der vollständige, nicht abgeschnittene Git-Baum enthält Binärdateien, Apps, Dokumente, Python-Treiber und komprimierte Dateien. In diesem Baum wurden keine Quell-Dateien <code>.c</code>/<code>.h</code>, Makefile oder LICENSE/COPYING/NOTICE nach Namen gefunden. Es wird nicht behauptet, alle ZIP/RAR-Dateien im Repository von innen untersucht zu haben. Das ZIP vom 21-09-2026 wurde für Karina untersucht, ohne Dateien daraus auszuführen.</p>
+<p>Das Pack wird nicht in das Web-Repository kopiert und EXE, APK, Treiber oder Kalibrierungen werden nicht installiert. Die PDFs, Dateien und Firmwares werden nicht weiterverteilt. Ein lokal berechneter SHA-256-Hash erkennt Änderungen gegenüber diesem Download, belegt aber weder Urheberschaft noch Lizenz, Sicherheit oder Übereinstimmung mit Quellcode.</p>
+<h2 id="familias-presentes">Enthaltene Familien</h2>
+<p>Die folgenden Funktionen sind <strong>Angaben des Pack-Zusammenstellers</strong> aus dem untersuchten README und keine von Bricohams zertifizierten Eigenschaften. Für jeden Build sind Autor und zugehöriges Handbuch maßgeblich.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Ordner/Projekt</th><th scope="col">Im Pack beschriebener Schwerpunkt</th><th scope="col">Status auf dieser Website</th></tr></thead><tbody>
+<tr><td>BD1AHN</td><td>Variante mit drei VFOs</td><td>Dokumentationshinweis; kein validiertes Protokoll</td></tr>
+<tr><td>Calypso</td><td>Ordner der Versionen 1.5.0 und 1.7.0</td><td>Inventarisiert; keine Funktionen abgeleitet</td></tr>
+<tr><td>Delta</td><td>Passwort und Datenschutz laut Zusammensteller</td><td>Kryptografische Eigenschaften werden nicht zertifiziert</td></tr>
+<tr><td>E25WOP</td><td>CW-Funktionen und Zubehör laut Zusammensteller</td><td>Zubehör nicht nach Rezept für eine andere Platine anschließen</td></tr>
+<tr><td>F4HWN</td><td>Releases und Apps, einschließlich historischer Versionen</td><td>Integrierte offizielle Armel-Quelle bevorzugen</td></tr>
+<tr><td>GOGU</td><td>F4HWN-Variante mit Nachrichten und weiteren Funktionen</td><td>Multiboot vom Zusammensteller behauptet; lokal nicht validiert</td></tr>
+<tr><td>HAWK</td><td>Eigene Dokumentation und Dateien</td><td>Inventarisiert; keine Funktionen abgeleitet</td></tr>
+<tr><td>IJV</td><td>Versionen mit kostenlosen/kostenpflichtigen Funktionen laut Pack</td><td>Kostenpflichtige Funktionen nicht ohne Lizenz weitergeben oder aktivieren</td></tr>
+<tr><td>IOTCU</td><td>Variante mit Si4732-Modul laut Pack</td><td>Konkrete Hardware/Firmware erforderlich; nicht annehmen, dass ein serienmäßiges Funkgerät es enthält</td></tr>
+<tr><td>KA50 / KA52 / KA52M</td><td>Spektrum; KA52M mit 2-/3-VFO-Varianten</td><td>Mehrere VFOs entsprechen nicht gleichzeitig aktiven RF-Empfängern</td></tr>
+<tr><td>Karina</td><td>Eigenes Spektrum, Aufnahme und Presets</td><td>Neue K1-/V3-Binärdateien; keine geprüften Armel-Slots</td></tr>
+<tr><td>Matoz</td><td>Eigene Dateien</td><td>Inventarisiert; keine Funktionen abgeleitet</td></tr>
+<tr><td>N7SIX</td><td>Spektrum/CW-Funktionen laut Zusammensteller</td><td>Multiboot behauptet, nicht zertifiziert</td></tr>
+<tr><td>NR7Y</td><td>CW-Funktionen laut Zusammensteller</td><td>Elektrische Kompatibilität von Zubehör nicht annehmen</td></tr>
+<tr><td>PrepperRadio</td><td>Nachrichten über FSK-Betriebsarten laut Pack</td><td>Verschlüsselung, Netz oder Variantenkompatibilität nicht zertifizieren</td></tr>
+</tbody></table></div>
+<p>Das README erwähnt außerdem Sonic über einen externen Link und stellt klar, dass es zu diesem Zeitpunkt nicht im Pack enthalten ist. Eine Erwähnung ist kein untersuchtes Binary. Ordner mit Serienfirmware und Werkskalibrierungen sind Referenzmaterial: <strong>Kalibrierungen anderer Geräte nicht als eigene Sicherung verwenden</strong>.</p>
+<h2 id="multiboot-afirmacion-frente-a-comprobacion">Multiboot: Behauptung und Prüfung</h2>
+<p>Der Zusammensteller nennt F4HWN, GOGU, IOTCU und N7SIX als mit Armel-Multiboot kompatibel, außerdem Sonic aus externer Quelle. <strong>Karina ist nicht in dieser Liste enthalten.</strong> Bevor der Inspector erweitert wird, müssen Format, Speicherplan, Identifikation, CFG-Bänke, Wiederherstellung, Protokoll, Integrität und Start auf Hardware überprüft werden.</p>
+<p>Die Website behält ihre Liste erkannter F4HWN-Images bei. Eine Zeichenfolge wird weder geändert noch eine Datei umbenannt, um die Prüfung zu umgehen. Diese Quellen werden nicht automatisch zum Katalog der Downloads mit verifizierten Originalautoren hinzugefügt.</p>
+<h2 id="karina-21-09-2026-evidencia-del-zip">Karina 21-09-2026: Nachweis des ZIP</h2>
+<p>Datei: <code>Karina/21.09.2026.zip</code>, 2296162 bytes. SHA-256 des Downloads:</p>
+<pre><code>619368c7d08cd2dfdda13aeec4ae5d8fadd70eb78d60bbe908832d53385e2999</code></pre>
+<p>Der <a href="ayuda-binarios-terceros.de.html">Index der Drittanbieter</a> enthält einen Download mit demselben Namen, aber 2161962 Bytes und einem anderen SHA-256. Dass beide ZIP denselben Inhalt haben, ist nicht nachgewiesen. Dieses Inventar und die folgenden extrahierten Hashes gelten ausschließlich für den oben angegebenen Download mit 2296162 Bytes, nicht für jede Datei namens <code>21.09.2026.zip</code>.</p>
+<p>Inventar im Inneren: Ordner K1 und K5V3, zwei RAW-Dateien, zwei packed-Dateien, zwei Kopien von <code>calib11.bin</code>, zwei CHIRP-Treiber und drei PDFs. Kein C-Projekt, Makefile, Linker oder LICENSE-Hinweis nach Dateiname enthalten. Russische Namen einiger Einträge weisen beim Auflisten des ZIP Codierungsprobleme auf; sie wurden weder als Quellnamen interpretiert noch wurde ihr Inhalt ausgeführt.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">RAW-Image</th><th scope="col">Bytes</th><th scope="col">SP</th><th scope="col">Reset</th></tr></thead><tbody>
+<tr><td><code>k1_210926_3.bin</code></td><td>76288</td><td><code>0x20004000</code></td><td><code>0x08010AF5</code></td></tr>
+<tr><td><code>v3_210926_3.bin</code></td><td>76352</td><td><code>0x20004000</code></td><td><code>0x08010B39</code></td></tr>
+</tbody></table></div>
+<p>Diese Vektoren sind für beide Images ein Nachweis der PY32-Familie und unterscheiden sich von <code>Reset=0x0000010B</code> des V1-Pakets. Ein Vektor innerhalb des Bereichs und eine zulässige Größe <strong>beweisen keine Kompatibilität mit dem Multiboot-Loader</strong>. Die packed-Varianten sind andere Container; nicht blind 18 bytes abschneiden.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Datei</th><th scope="col">Lokal berechneter SHA-256</th></tr></thead><tbody>
+<tr><td><code>k1_210926_3.bin</code></td><td><code>81328890f55739d917fe9531feb76179b28db2a80672e1383dfb76917a13ee82</code></td></tr>
+<tr><td><code>v3_210926_3.bin</code></td><td><code>40467077e32273392da6ff735ff69c0e40779c9236477e4ead287add645db4d4</code></td></tr>
+<tr><td><code>k1_210926_3.packed.bin</code></td><td><code>de1d74fd1a3901776c977fb58342264a69ad687c61c58a4063b63e91cd1123bc</code></td></tr>
+<tr><td><code>v3_210926_3.packed.bin</code></td><td><code>5ec8598ca8cc5c0df0030137d5fd774bade8569d27b8021fcde147248f088d34</code></td></tr>
+</tbody></table></div>
+<p><code>calib11.bin</code> wurde nicht wiederhergestellt und es wird nicht dazu geraten. Beide Kopien sind 512 bytes groß und haben denselben Hash; dadurch werden sie nicht zu Originalkalibrierungen der beiden Funkgeräte des Benutzers.</p>
+<h2 id="configuraciones-karina-v3-descritas-por-el-recopilador">Vom Zusammensteller beschriebene Karina-V3-Konfigurationen</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Funktion</th><th scope="col">Beschriebene Bedeutung</th><th scope="col">Vorsicht/Version</th></tr></thead><tbody>
+<tr><td>Spektrum Delay</td><td>Kompromiss zwischen Messdauer und Geschwindigkeit</td><td>Niedrigere Werte können Empfindlichkeit kosten; keine universelle „optimale“ Zahl übernehmen</td></tr>
+<tr><td>Turbo</td><td>Beschleunigt den Sweep</td><td>Kann laut eigenem Hinweis Signale überspringen</td></tr>
+<tr><td>Roger 5</td><td>Im Zusammenhang mit experimentellen RX-Änderungen wiederverwendeter Parameter</td><td>Bedeutung ändert sich: Am 21-09-2026 werden permanente Beschleunigungen angekündigt; nicht nur als Roger-Ton behandeln</td></tr>
+<tr><td>Dynamische Lautstärke</td><td>Behandlung von Audio/Endsignalen</td><td>Wahrnehmungseinstellung, keine RF-Kalibrierung</td></tr>
+<tr><td>Nah-/Fernaufnahme</td><td>Automatische Frequenzsuche</td><td>Wirkt auf Verbrauch/Latenz; garantiert weder die Lokalisierung eines Signals noch die Erfassung aller Signale</td></tr>
+<tr><td>Drei Presets</td><td>Laut Versionshinweisen ab Juli 2026 Konfigurationszustände</td><td>Enthalten eigene Daten; sind keine Armel-Firmware-Slots</td></tr>
+<tr><td>Beacon/Auto-Antwort</td><td>Funktionen, die automatisch senden können</td><td>Nicht als Grundeinstellung oder zum Testen des Funkgeräts aktivieren</td></tr>
+<tr><td>Erweitertes SQL</td><td>Juli-Hinweise nennen den Bereich 0-15</td><td>Nicht ohne Prüfung auf frühere Versionen anwenden</td></tr>
+<tr><td>CHIRP-Einstellungen/Tasten</td><td>Hinweise warnen vor Inkompatibilitäten und Sperren mit NONE</td><td>Nicht mit generischem Treiber schreiben und keine Werte anderer Firmware übernehmen</td></tr>
+</tbody></table></div>
+<p>Der Eintrag vom 21-09-2026 beschreibt Änderungen am AM-Squelch-Abschluss, Beschleunigung, Aufnahme sowie CTCSS/DCS-Messungen. Der vom 21-08-2026 beschreibt eine mit Roger 5 zusammenhängende RX-Sperrkorrektur. Es sind Pack-Hinweise, keine Testergebnisse. Die Datei vom 15-08-2026 ist als Test gekennzeichnet.</p>
+<p>Der Pack-Text enthält Löschvorgänge, das Laden von Kalibrierungen und sogar Anweisungen, Verifikationsfehler zu ignorieren. <strong>Diese Hinweise werden nicht zu Anleitungen dieser Website.</strong> Bei einem Verifikationsfehler anhalten, Sicherungen aufbewahren und Werkzeug/Hardware/Version prüfen; den Erfolg nicht aufgrund eines Hinweises Dritter behaupten.</p>
+<h2 id="que-falta-para-un-port-o-integracion-real">Was für einen echten Port oder eine Integration noch fehlt</h2>
+<ol>
+<li>Exakte Quellen und Lizenz des Karina-Autors für K1/V3.</li>
+<li>Reproduzierbare Kompilierung und Speicherplan.</li>
+<li>Spezifikation/Protokoll sowie echte CFG-/Kalibrierungskompatibilität.</li>
+<li>Nachweis der Multiboot-Funktion oder einer bewiesenen kompatiblen Implementierung.</li>
+<li>Physische Lese-, Sicherungs-, Start-, Wiederherstellungs- und Recovery-Tests.</li>
+</ol>
+<p>Karina wurde aus diesem Link weder portiert noch kompiliert oder geflasht. Der neue Nachweis korrigiert die Hardwareabdeckung, hebt diese Anforderungen aber nicht auf.</p>
+<h2 id="fuentes-fijadas">Festgehaltene Quellen</h2>
+<ul>
+<li><a href="https://github.com/Dim0s/quansheng-UV-K5v3-K1-firmware-pack/tree/52b41c182dd82c1fbdc027dc2da7bbcb02c7d79c" target="_blank" rel="noopener noreferrer">Vollständiger Pack-Baum</a>.</li>
+<li><a href="https://github.com/Dim0s/quansheng-UV-K5v3-K1-firmware-pack/tree/52b41c182dd82c1fbdc027dc2da7bbcb02c7d79c/Karina" target="_blank" rel="noopener noreferrer">Karina-Ordner</a>.</li>
+<li><a href="https://github.com/Dim0s/quansheng-UV-K5v3-K1-firmware-pack/tree/52b41c182dd82c1fbdc027dc2da7bbcb02c7d79c/Karina" target="_blank" rel="noopener noreferrer">Karina-Hinweise und Änderungsdatei</a>.</li>
+<li><a href="ayuda-egzumer.de.html">Egzumer: andere Originalquelle</a>.</li>
+<li><a href="ayuda-karina.de.html">Dossier zum Karina-V1-Paket</a>.</li>
+</ul></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

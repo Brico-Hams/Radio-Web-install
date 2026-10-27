@@ -248,9 +248,9 @@ class SatelliteActivity : Activity() {
                         found.add(PassTrack(SatellitePlan(tle, position, defaultDownlink(tle.norad), it), emptyList()))
                     }
                 } catch (error: IllegalArgumentException) {
-                    errors.add("${tle.name}: ${error.message}")
+                    errors.add("${tle.name}: ${errorText(error)}")
                 } catch (error: IOException) {
-                    errors.add("${tle.name}: ${error.message}")
+                    errors.add("${tle.name}: ${errorText(error)}")
                 }
                 val snapshot = found.sortedBy { it.plan.pass.aos.time }
                 val done = index + 1
@@ -291,7 +291,7 @@ class SatelliteActivity : Activity() {
                 val day = DateTimeFormatter.ofPattern("EEE dd/MM", Locale.getDefault()).withZone(zone)
                 val card = Brand.card(this@SatelliteActivity).apply {
                     isClickable = true; isFocusable = true
-                    contentDescription = SatellitePasses.card(track, now, zone)
+                    contentDescription = SatellitePasses.card(track, now, zone, this@SatelliteActivity)
                     setOnClickListener { openPass(track) }
                 }
                 card.addView(Brand.row(this@SatelliteActivity,
@@ -344,7 +344,7 @@ class SatelliteActivity : Activity() {
             radar = view
             addView(view)
             detailStats = Brand.text(this@SatelliteActivity, 15f).also { addView(it) }
-            addView(Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply { text = SatellitePasses.detail(track, 0).substringBeforeLast('\n') })
+            addView(Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply { text = SatellitePasses.detail(track, 0, this@SatelliteActivity).substringBeforeLast('\n') })
             addView(Brand.text(this@SatelliteActivity, 16f, Brand.ORANGE, true).apply {
                 setText(R.string.satellite_downlinks); setPadding(0, Brand.dp(this@SatelliteActivity, 12), 0, 0)
             })
@@ -377,9 +377,9 @@ class SatelliteActivity : Activity() {
                     val typed = manual.text.toString().trim()
                     val downlink = if (typed.isNotEmpty()) typed.toBigDecimal().movePointRight(6).longValueExact()
                         else group.findViewById<RadioButton>(group.checkedRadioButtonId)?.tag as? Long
-                        ?: throw IllegalArgumentException("Elige un downlink o escribe uno en MHz.")
-                    require(downlink % 10 == 0L && CatProtocol.inBand(downlink / 10)) { "Downlink en MHz VHF/UHF de la radio, paso 10 Hz." }
-                    require(System.currentTimeMillis() < track.plan.pass.los.time) { "El pase ya ha terminado." }
+                        ?: throw LocalizedArgumentException(UiText(R.string.err_downlink_choose))
+                    requireUi(downlink % 10 == 0L && CatProtocol.inBand(downlink / 10)) { UiText(R.string.err_downlink_band) }
+                    requireUi(System.currentTimeMillis() < track.plan.pass.los.time) { UiText(R.string.err_pass_ended) }
                     preferences.edit().putLong("downlink-${tle.norad}", downlink).apply()
                     startActivity(Intent(this@SatelliteActivity, CatActivity::class.java)
                         .putExtra("satellite-plan", SatellitePlanJson.encode(track.plan.copy(downlinkHz = downlink))))
@@ -442,7 +442,7 @@ class SatelliteActivity : Activity() {
                 mapInfo.text = if (chosenPoint == null) "" else getString(R.string.satellite_map_info, chosenPoint.norad, chosenPoint.name,
                     chosenPoint.point.latitude, chosenPoint.point.longitude, chosenPoint.point.altitudeKm,
                     passes.firstOrNull { it.plan.tle.norad == focus && it.plan.pass.los.time > now }?.let {
-                        SatellitePasses.countdown(it.plan.pass, now)
+                        SatellitePasses.countdown(it.plan.pass, now, this@SatelliteActivity)
                     } ?: getString(R.string.satellite_map_no_pass))
             }
         }
@@ -529,10 +529,10 @@ class SatelliteActivity : Activity() {
                     fun value(key: String) = fields.getValue(key).text.toString().trim()
                     ObserverPosition(value("latitude").toDouble(), value("longitude").toDouble(), value("height").toDouble()).validated()
                     val minimum = value("minimum").toDouble()
-                    require(minimum.isFinite() && minimum in 0.0..60.0) { "Elevacion minima de 0 a 60 grados." }
+                    require(minimum.isFinite() && minimum in 0.0..60.0) { getString(R.string.satellite_minimum_invalid) }
                     val editor = preferences.edit()
                     fields.forEach { (key, input) -> editor.putString(key, input.text.toString().trim()) }
-                    check(editor.commit()) { "No se pudieron conservar los parametros locales." }
+                    check(editor.commit()) { getString(R.string.satellite_preferences_error) }
                     dirty = true
                     show(Page.PASSES)
                 } catch (error: NumberFormatException) { report(error) }
@@ -586,14 +586,14 @@ class SatelliteActivity : Activity() {
                         decoded.forEachIndexed { index, image ->
                             val bitmap = Bitmap.createBitmap(image.pixels, Robot36.WIDTH, Robot36.HEIGHT, Bitmap.Config.ARGB_8888)
                             File(file.parentFile, "${file.nameWithoutExtension}-sstv${index + 1}.png").outputStream().use {
-                                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) { "No se pudo codificar PNG." }
+                                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) { getString(R.string.png_encode_error) }
                             }
                             bitmap.recycle()
                         }
                         getString(R.string.satellite_decoded, decoded.size, decoded.joinToString { String.format(Locale.ROOT, "%.0f s", it.startSeconds) })
-                    } catch (error: IOException) { getString(R.string.sstv_error, error.message) }
-                    catch (error: IllegalArgumentException) { getString(R.string.sstv_error, error.message) }
-                    catch (error: IllegalStateException) { getString(R.string.sstv_error, error.message) }
+                    } catch (error: IOException) { getString(R.string.sstv_error, errorText(error)) }
+                    catch (error: IllegalArgumentException) { getString(R.string.sstv_error, errorText(error)) }
+                    catch (error: IllegalStateException) { getString(R.string.sstv_error, errorText(error)) }
                     catch (error: CancellationException) { getString(R.string.live_cancelled) }
                     runOnUiThread { if (!isDestroyed) { result.text = message; showImages() } }
                 }
@@ -627,9 +627,9 @@ class SatelliteActivity : Activity() {
                     SatelliteSources.parseTransmitters(fetch(SatelliteSources.TRANSMITTERS_URL, 16 * 1024 * 1024).toString(Charsets.UTF_8),
                         tle.map { it.norad }.toSet())
                 } catch (error: IOException) {
-                    warning = error.message ?: ""; store.transmitters()
+                    warning = errorText(error); store.transmitters()
                 } catch (error: IllegalArgumentException) {
-                    warning = error.message ?: ""; store.transmitters()
+                    warning = errorText(error); store.transmitters()
                 }
                 store.saveCatalog(tle, list)
                 runOnUiThread {
@@ -682,7 +682,7 @@ class SatelliteActivity : Activity() {
         }
         for (card in cards) {
             val pass = card.track.plan.pass
-            card.countdown.text = SatellitePasses.countdown(pass, now)
+            card.countdown.text = SatellitePasses.countdown(pass, now, this)
             card.countdown.setTextColor(if (now >= pass.aos.time) Brand.GREEN else Brand.TEXT)
             card.progress.progress = (((now - pass.aos.time).toDouble() / (pass.los.time - pass.aos.time)).coerceIn(0.0, 1.0) * 1000).toInt()
         }
@@ -690,7 +690,7 @@ class SatelliteActivity : Activity() {
         if (page == Page.DETAIL && track != null) {
             radar?.now = now
             val position = SatellitePasses.at(track.track, now)
-            detailStats?.text = if (position == null) SatellitePasses.countdown(track.plan.pass, now) else {
+            detailStats?.text = if (position == null) SatellitePasses.countdown(track.plan.pass, now, this) else {
                 val rate = SatellitePasses.at(track.track, now + 500)?.let { later ->
                     SatellitePasses.at(track.track, now - 500)?.let { later.rangeKm - it.rangeKm }
                 } ?: 0.0
@@ -711,7 +711,7 @@ class SatelliteActivity : Activity() {
         super.onPause()
     }
     private fun report(error: Exception) {
-        runOnUiThread { if (!isDestroyed) status.text = getString(R.string.satellite_error, error.message) }
+        runOnUiThread { if (!isDestroyed) status.text = getString(R.string.satellite_error, errorText(error)) }
     }
     @Deprecated("Platform callback")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -723,7 +723,7 @@ class SatelliteActivity : Activity() {
             val file = pendingExport ?: run { status.setText(R.string.satellite_cancelled); return }
             audioWorker.execute {
                 try {
-                    val output = contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Proveedor sin flujo de escritura.")
+                    val output = contentResolver.openOutputStream(uri, "wt") ?: throw IOException(getString(R.string.provider_no_stream))
                     output.use { stream -> file.inputStream().use { it.copyTo(stream) } }
                     runOnUiThread { if (!isDestroyed) status.setText(R.string.satellite_exported) }
                 } catch (error: IOException) { report(error) }

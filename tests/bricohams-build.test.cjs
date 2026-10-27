@@ -3,6 +3,101 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { readArguments, resolvePlan, inspectFirmware, brandWelcome, brandLogo, UPSTREAM } = require("../scripts/build-bricohams.cjs");
 const { modulePlan, replaceOnce } = require("../scripts/bricohams-modules.cjs");
+const { inspectResident } = require("../scripts/build-platform-resident.cjs");
+const { OP, STATE, encodeRequest, decodeReply, uploadPackage } = require("../scripts/platform-transfer.cjs");
+const { crc32 } = require("../radio-core.js");
+
+function transferReply(op, session, received, state, status = 0, install = 0) {
+  const bytes = Buffer.alloc(32);
+  bytes.write("BHR1");
+  for (const [offset, value] of [[4, op], [8, session], [12, status],
+    [16, received], [20, state]]) bytes.writeUInt32LE(value, offset);
+  bytes.writeInt32LE(install, 24);
+  bytes.writeUInt32LE(crc32(bytes.subarray(0, 28)), 28);
+  return bytes;
+}
+
+test("transferencia BHT1 valida CRC, sesion, limites y codigo de error con signo", () => {
+  const frame = encodeRequest(OP.DATA, 0x12345678, 128, Buffer.from([1, 2, 3]));
+  assert.equal(frame.length, 27);
+  assert.equal(frame.toString("ascii", 0, 4), "BHT1");
+  const clean = Buffer.from(frame); clean.writeUInt32LE(0, 20);
+  assert.equal(frame.readUInt32LE(20), crc32(clean));
+  assert.throws(() => encodeRequest(OP.DATA, -1));
+  assert.throws(() => encodeRequest(OP.DATA, 1, 0, Buffer.alloc(129)));
+  const valid = transferReply(OP.COMMIT, 7, 320, STATE.FAILED, 7, -17);
+  assert.deepEqual(decodeReply(valid, OP.COMMIT, 7),
+    { status: 7, received: 320, state: STATE.FAILED, installResult: -17 });
+  assert.throws(() => decodeReply(valid, OP.DATA, 7));
+  assert.throws(() => decodeReply(valid, OP.COMMIT, 8));
+  const corrupt = Buffer.from(valid); corrupt[16] ^= 1;
+  assert.throws(() => decodeReply(corrupt, OP.COMMIT, 7), /CRC/);
+  assert.throws(() => decodeReply(valid.subarray(1), OP.COMMIT, 7));
+});
+
+test("cliente de apps reanuda bloques y no repite un commit incierto", async () => {
+  const bytes = Buffer.alloc(320);
+  const calls = [];
+  const exchange = async frame => {
+    const op = frame.readUInt32LE(4), session = frame.readUInt32LE(8);
+    calls.push([op, frame.readUInt32LE(12)]);
+    if (op === OP.BEGIN) return transferReply(op, session, 128, STATE.RECEIVING);
+    if (op === OP.DATA)
+      return transferReply(op, session, frame.readUInt32LE(12) + frame.readUInt32LE(16), STATE.RECEIVING);
+    return transferReply(op, session, bytes.length, STATE.DONE);
+  };
+  assert.equal((await uploadPackage(exchange, bytes, 7)).state, STATE.DONE);
+  assert.deepEqual(calls, [[OP.BEGIN, 0], [OP.DATA, 128], [OP.DATA, 256], [OP.COMMIT, 0]]);
+  let commits = 0;
+  await assert.rejects(uploadPackage(async frame => {
+    const op = frame.readUInt32LE(4);
+    if (op === OP.COMMIT) { ++commits; throw new Error("Lost commit ACK"); }
+    return transferReply(op, 8, op === OP.BEGIN ? 320 : 0, STATE.RECEIVING);
+  }, bytes, 8), /Lost commit ACK/);
+  assert.equal(commits, 1);
+  await assert.rejects(uploadPackage(async () => transferReply(OP.BEGIN, 9, 320, STATE.FAILED, 7, -4),
+    bytes, 9), error => error.reply.installResult === -4);
+  await assert.rejects(uploadPackage(async () => transferReply(OP.BEGIN, 10, 321, STATE.RECEIVING),
+    bytes, 10), /Offset/);
+  let doneCalls = 0;
+  await uploadPackage(async () => {
+    ++doneCalls;
+    return transferReply(OP.BEGIN, 11, 320, STATE.DONE);
+  }, bytes, 11);
+  assert.equal(doneCalls, 1);
+  await assert.rejects(uploadPackage(exchange, bytes, 0), /cero/);
+});
+
+test("residente independiente valida vectores ELF, SysTick y separacion RAM", () => {
+  const bytes = Buffer.alloc(512);
+  bytes.writeUInt32LE(0x20004000, 0);
+  for (let i = 1; i < 64; i++) bytes.writeUInt32LE(0x08002921, i * 4);
+  bytes.writeUInt32LE(0x08002901, 4);
+  bytes.writeUInt32LE(0x08002941, 60);
+  const symbols = [
+    "08002900 T Reset_Handler", "08002920 T Fault_Handler", "08002940 T SysTick_Handler",
+    "20002000 B _app_start", "20003000 B _app_end",
+    "20000000 D _data_start", "20000004 D _data_end",
+    "20000008 B _bss_start", "20000550 B _bss_end"
+  ].join("\n");
+  assert.deepEqual(inspectResident(bytes, symbols),
+    { coreRamUsedBytes: 1360, systickVector: 0x08002941 });
+  for (const [offset, value] of [[0, 0x20003000], [4, 0x08002900],
+    [4, 0x08002941], [60, 0x08002921], [60, 0x20002001], [64, 0x08002901]]) {
+    const corrupt = Buffer.from(bytes);
+    corrupt.writeUInt32LE(value, offset);
+    assert.throws(() => inspectResident(corrupt, symbols));
+  }
+  assert.throws(() => inspectResident(Buffer.alloc(255), symbols));
+  assert.throws(() => inspectResident(Buffer.alloc(118 * 1024 + 1), symbols));
+  for (const [before, after] of [
+    ["20002000 B _app_start", "20001000 B _app_start"],
+    ["20003000 B _app_end", "20004000 B _app_end"],
+    ["20000550 B _bss_end", "20002004 B _bss_end"],
+    ["20000004 D _data_end", "2000000c D _data_end"],
+    ["08002940 T SysTick_Handler", ""]
+  ]) assert.throws(() => inspectResident(bytes, symbols.replace(before, after)));
+});
 const required = {
   DEV: false, VERSION_STRING_2: UPSTREAM.tag, ENABLE_VOX: true,
   ENABLE_FEAT_F4HWN: true, ENABLE_UART: true, ENABLE_USB: true,

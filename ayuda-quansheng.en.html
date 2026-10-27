@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Quansheng: F4HWN, versions and configuration: Bricohams help by model and version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Quansheng: F4HWN, versions and configuration | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-quansheng.html">
+  <link rel="alternate" hreflang="en" href="ayuda-quansheng.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-quansheng.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-quansheng.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-quansheng.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Help"><a href="ayuda.html">App help (Spanish)</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Language"><a href="ayuda-quansheng.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-quansheng.en.html" hreflang="en" lang="en" aria-current="page">English</a> · <a href="ayuda-quansheng.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-quansheng.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-quansheng.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#visor-en-directo-y-registro-rf">Live viewer and RF log</a></li><li><a href="#catalogo-precompilado-sin-herramientas-de-compilacion">Precompiled catalog without build tools</a></li><li><a href="#puesta-en-marcha-de-0-a-100">Getting started from 0 to 100%</a></li><li><a href="#volver-a-fabrica-y-recuperacion">Return to stock and recovery</a></li><li><a href="#beta-prueba-usb-real-y-canales">Beta: real USB test and channels</a></li><li><a href="#elegir-hardware-antes-de-firmware">Choose hardware before firmware</a></li><li><a href="#matriz-de-versiones-y-formatos">Version and format matrix</a></li><li><a href="#que-edicion-elegir">Which edition to choose</a></li><li><a href="#diccionario-de-menus-de-radio">Radio menu glossary</a></li><li><a href="#rxmode-y-full-watch">RxMode and Full Watch</a></li><li><a href="#slots-y-bancos-cfg-operaciones-distintas">Slots and CFG banks: different operations</a></li><li><a href="#labs-y-aplicaciones">Labs and apps</a></li><li><a href="#problemas-habituales">Common problems</a></li><li><a href="#fuentes-y-mantenimiento">Sources and maintenance</a></li></ul></nav>
+    <article class="panel"><h1 id="quansheng-f4hwn-versiones-y-configuracion">Quansheng: F4HWN, versions and configuration</h1>
+<p>Revision: 26-10-2026. Inspected functional baseline: Fusion61, commit <code>f556a96e73c3e423a00cf473aeb37f827cac05a5</code>; modular web catalog v6.3.0, commit <code>ca3a4271386049e7b459b215cef0ad0eea1a30ca</code>. This guide does not automatically attribute v6.1/v6.3 features to v4 or v5. For how the radio works internally (pins, memories, protocol, bootloader, schematics, and photos), see <a href="ayuda-atlas-uv-k5-v3.en.html">UV-K5 V3 technical atlas</a>.</p>
+<h2 id="visor-en-directo-y-registro-rf">Live viewer and RF log</h2>
+<p>The viewer appears at the top of the Quansheng section. It starts when the connection completes: immediately with <strong>Connect read-only / CAT</strong>, or after the backup with <strong>Connect and back up</strong>. It requires an image with K5Viewer enabled and no lock that prevents the protocol. If no frames arrive within ten seconds, it reports this and stops; it does not simulate the screen.</p>
+<ul>
+<li>Real 128 x 64 LCD, PNG capture, and firmware-reported LED status.</li>
+<li>One connection and one reader. Any operation first pauses the viewer, lets frames finish, and then runs the command. <strong>Start viewer and RF log</strong> resumes it. <strong>Pause viewer</strong> retains the last capture.</li>
+<li>The RF log appears at the end. It receives RF Log <strong>v2</strong> and firmware history, removes duplicate sequence numbers, and retains up to 512 entries in RAM. RF Log must be enabled: no data does not mean no signals.</li>
+<li><strong>Export RF log CSV</strong> downloads the sequence, RX/TX/power-on event, frequency, duration, memory number/name, raw meter value, and battery. No UTC date is assigned to records that do not include one. Meter values are not calibrated power measurements. The CSV neutralizes spreadsheet formulas.</li>
+<li>Reconnecting clears the previous view to avoid mixing radios. Export first. Stopping the viewer does not erase the radio&#39;s persistent log.</li>
+</ul>
+<p>Protocol reference: UV Studio, revision <code>e7aa946f6de002559e1aaf3f91765db7fc2ed567</code>, <code>k5viewer.js</code>, and <code>rf-log.js</code>. The local implementation does not send PTT, keypresses, reboot, or persistent commands. The COM4 test on 26-10-2026 received <strong>24 LCD frames and one RF frame</strong> from firmware that remained running, with no incomplete data. USB DTR had to be enabled; Web Serial explicitly sets it for Quansheng. The radio did not send stored RF entries, so no physical validation is claimed for a history that was not received. The history parser, mutual exclusion, web screen, and CSV were also checked with test frames. K5Viewer must be enabled in the active firmware.</p>
+<h2 id="catalogo-precompilado-sin-herramientas-de-compilacion">Precompiled catalog without build tools</h2>
+<p>The website includes nine v6.1.0 images: Bricohams ARDF, Satellite, Spectrum, Labs, and Fusion, plus the official F4HWN Fusion, FieldOps, Transfer, and Labs. No folder selection is required. The same catalog is used on the local server and in the static export. It is not a dynamic download from an arbitrary URL.</p>
+<ol>
+<li>Select UV-K1 or UV-K5 V3 and an image from the catalog.</li>
+<li>Confirm the model and Beta status of Bricohams derivatives.</li>
+<li><strong>Download, verify, and prepare for slot</strong> checks size, SHA-256, and PY32 structure before enabling the image. <strong>Download BIN and manifest</strong> lets you save it without preparing or writing it.</li>
+<li>Select slot 1-4, a name, and <strong>Install and verify CRC</strong>. Backup protections remain in effect; Main, CFG, and calibration are not erased.</li>
+<li>Manually boot each slot and check SysInf and its functions.</li>
+</ol>
+<p>Bricohams images remain <strong>Beta without complete boot validation</strong>, even when their Flash write has been verified by CRC. The catalog retains original metadata: a structural test is not converted into hardware certification. The official release catalog remains available for other versions; variants incompatible with slots are download-only.</p>
+<p>Maintenance: <code>npm run publish:firmware</code> verifies the five local builds pinned by SHA-256 and retrieves the official v6.1.0 release with GitHub hashes. It writes the catalog only after validating every file. The Bricohams GPL and upstream Apache licenses and notices are distributed. Options, integrated-source hashes, and upstream commit are listed in each <code>precompiled/catalog.json</code> entry; the builder and source modules are in this repository. User configurations and calibrations are not included in the catalog.</p>
+<h3 id="grabacion-fisica-verificada-el-26-10-2026">Physical writing verified on 26-10-2026</h3>
+<p>The following was written to the UV-K5 V3 unit identified by its owner:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Slot</th><th scope="col">Image</th><th scope="col">CRC verified on radio</th></tr></thead><tbody>
+<tr><td>1</td><td>BH ARDF</td><td><code>47f33dcc</code></td></tr>
+<tr><td>2</td><td>BH Labs</td><td><code>273d232d</code></td></tr>
+<tr><td>3</td><td>BH Satellite</td><td><code>96d5b68b</code></td></tr>
+<tr><td>4</td><td>BH Spectrum</td><td><code>702b5c07</code></td></tr>
+</tbody></table></div>
+<p>Main/Fusion, active configuration, and calibration were verified unchanged. No CFG resets, app erasures, or reboots were sent during writing. Later, the owner manually booted BH Labs and real reads were verified, as detailed below. <strong>ARDF, Satellite, and Spectrum booting, and channel-write tests, remain unvalidated</strong>: CRCs do not prove execution. Lost responses and a USB CDC lockup with exact 64-byte frames were detected. Quansheng transport adds a null byte outside those frames and retries the same NOR block up to four times (as UV Studio does); it never automatically retries erasures, resets, or firmware rejections.</p>
+<p>To operate slot 3 (BH Satellite), see <a href="ayuda-iniciacion-satelite.en.html">Satellite introduction</a> and <a href="ayuda-antenas-satelite.en.html">Satellite antennas</a>.</p>
+<h3 id="opciones-avanzadas-y-alcance-de-la-restauracion">Advanced options and restoration scope</h3>
+<p>The <strong>Bricohams custom tools</strong> panel contains internal access to the keyboard/reboot, main firmware DFU v6/v7, calibration backup/restore, logo download/installation, Flash backup/restore, app catalog/order/erase, slots, and RF filters/export. It does not open UV Studio, load its scripts, or delegate these operations to another website. Binary provenance and license links are retained; they are not runtime dependencies of the interface. Stock restoration rebuilds external Flash and requires the DFU step, with different images for UV-K1/UV-K5 V3, preserving the unit&#39;s own calibration. Do not confuse this with <strong>Reset CFG bank</strong>, which erases only one bank.</p>
+<p>Native maintenance and factory/DFU panels implement the published protocol independently, without copying UV Studio&#39;s interface or code. Versions are not fully at parity: slots and channels retain their v6 workflow; DFU accepts v6 BIN and v7 FWAT/FWA1 packages. V7 resources are installed only in the active firmware with a matching Build ID and a new backup. All v7 support was tested in simulation, not on this physical radio. Pause the viewer before starting CAT tracking: they share the port. CAT and the viewer remain blocked while a factory recovery is pending.</p>
+<p><strong>Main firmware / custom DFU:</strong> select an F4HWN v6.x PY32 BIN from 256 bytes to 118 KiB, or a v7 package with an FWAT trailer and FWA1 resources. The package is split locally; only the internal image is sent to DFU. Package limits, exact lengths, package CRC, and resource CRCs are checked. V7 without the complete package and unknown versions are rejected. The image is checked for vectors, version, and SHA-256, but this does not guarantee provenance or physical compatibility. A full backup and the phrase <code>FIRMWARE PRINCIPAL UV-K5-V3</code> or <code>FIRMWARE PRINCIPAL UV-K1</code> are required. Preparing does not write; it stores an immutable in-memory copy, blocks other operations, and enables the DFU button. Disconnect here, manually enter DFU with PTT, and confirm <code>DFU PRINCIPAL UV-K5-V3</code> or <code>DFU PRINCIPAL UV-K1</code>. Do not close the page or switch radios between steps.</p>
+<p>This flow replaces internal firmware, not the bootloader; it does not erase external Flash or synchronize the multiboot external Main image. The multiboot selector may restore another image at boot: check slots and verify manually. Rollback is not guaranteed. The bootloader, consistent identification, page number, and status of each ACK are checked. DFU has no readback: completing pages does not validate boot or RF. If it fails, keep the page, backup, and same radio for retry. Simulation-tested only.</p>
+<p><strong>V7 external resources:</strong> after DFU, boot v7 normally and connect with a new full backup (if that cannot be completed, writing remains blocked). The screen may be blank while resources are missing. Select the same complete package or its FWA1 in <strong>V7 external resources</strong>. Check the file without writing, then confirm <code>RECURSOS UV-K5-V3</code> or <code>RECURSOS UV-K1</code> to install. The active slot and Build ID are queried using <code>0x0750</code>; a different Build ID stops the process before erasure.</p>
+<p>Only the active slot&#39;s resource area is erased using <code>0x0752</code>; blocks of up to 128 bytes are written with <code>0x0754</code>, and the 32-byte FWA1 header is written last. Only an identical block is retried on timeout (up to four retries), never erasures or rejections. <code>0x0756</code> validates resources, and the final query must report the same slot/Build ID, valid status, and loaded resources. Erasing revokes write permission after any attempt: reconnect and back up again. No physical readback is offered for an area whose address is not published here; the result is firmware validation, not proof of display or boot. An interruption can leave resources incomplete: keep the package and backup for recovery. Resources are not installed into inactive slots, and the v6 map is not used for v7.</p>
+<p><strong>Custom RF log:</strong> filter by memory name, MHz frequency, and RX/TX/power-on event. Filters change only the view; they never delete received history. Export the selection as CSV or the full log as JSON <code>bricohams-rf-log</code> v1. <code>exportedAt</code> is the export time, not the event time; <code>eventUTCProvided</code> and <code>calibratedRF</code> are false. UTC dates, calibrated RSSI, and spectrum analysis are not invented from the history.</p>
+<p><strong>Authorship and rights:</strong> these tools are Bricohams&#39; own implementation, but third-party firmware, apps, and resources retain their licenses and attributions. Rewriting the website does not make those files original work or guarantee freedom from claims. Apache/GPL notices are not removed, and stock images are not redistributed inside the website.</p>
+<p><strong>Native remote keyboard:</strong> in the viewer, it requires a full backup of the current connection, manual enablement, and confirmation for every key. It offers digits, MENU, up/down, EXIT, asterisk, hash, and F1/F2, with short or long presses; it has no PTT or global shortcuts. Keys may change settings, and F1/F2 may trigger transmission features according to their assignments. Do not assume receive-only operation. Each send disables the keyboard again. Only UART transmission is reported; no execution ACK is fabricated. Check the LCD. It is locked when paused, permission/connection is lost, CAT starts, or factory recovery begins.</p>
+<p><strong>Native reboot:</strong> requires a full backup and entering <code>REINICIAR RADIO</code>, even in advanced mode. It pauses the viewer, sends one <code>0x05DD</code> command, revokes permissions, and closes the connection. It does not retry or claim an ACK or successful reboot; check the radio and reconnect for a new backup. It does not change the slot or CFG bank and may lose transient state. Keyboard and reboot were tested in simulation, not on the physical radio.</p>
+<p><strong>Native maintenance:</strong> allows downloading/installing an ST7565 BIN or exact 128 x 64 PNG logo, exporting/restoring the 512 calibration bytes, and exporting/restoring 2 MiB of external Flash. Writes require a full backup of the current connection and explicit confirmation. The logo is read back and neighboring data checked. Flash restore preserves the entire current calibration sector, skips identical sectors, and writes multiboot status sectors last. Both Backup and Restore verify all 512 4 KiB sectors using the firmware&#39;s physical CRC: command <code>0x073E</code> cannot query 2 MiB at once. The stored global CRC is calculated locally over the image whose sectors have already been compared. Restoring calibration or Flash revokes write permission: reconnect. Do not import calibration from another radio.</p>
+<p><strong>Native factory restore, irreversible:</strong> this is not CFG reset. Select the exact model and download the two stock BIN files from the wizard links. Size and SHA-256 are checked against the pinned official revision <code>e7aa946f6de002559e1aaf3f91765db7fc2ed567</code>; these BIN files are not redistributed.</p>
+<ol>
+<li>Export the full backup outside the browser and verify both BIN files.</li>
+<li>With the same radio connected normally, confirm <code>FABRICA UV-K5-V3</code> or <code>FABRICA UV-K1</code>. Step 1 replaces slots, every channel bank, apps, and logs, but preserves the entire calibration sector.</li>
+<li>Wait for the full Flash verification. Do not close or reload the page: step 2 authorization exists only in memory. Do not boot normally before both steps are complete, and do not switch radios.</li>
+<li>Click Disconnect; turn off the radio and hold PTT while powering on for DFU (LED on, screen off). Release PTT, select step 2, and confirm <code>DFU UV-K5-V3</code> or <code>DFU UV-K1</code>.</li>
+<li>The wizard verifies the bootloader and confirmation of each page. It accepts only bootloader <code>7.00.07</code> for V3, and <code>7.02.02</code> or <code>7.03.xx</code> for K1. Retries are limited to the same page on timeout, never rejections. DFU has no readback: confirmed pages do not prove boot.</li>
+<li>Boot manually and check version, reception, and operation. If step 2 fails, keep the page and retry it with the same image. If step 1 fails, do not attempt DFU or boot normally: keep the backup, disconnect here, and use official recovery.</li>
+</ol>
+<p>Maintenance and DFU were tested with simulated devices. The four official stock files were downloaded and validated with the production verifier. <strong>No factory restore, calibration, logo, or full Flash restoration was performed on the physical radio during these tests.</strong></p>
+<div class="table-scroll"><table><thead><tr><th scope="col">UV Studio option</th><th scope="col">On this website</th><th scope="col">Additional official access</th></tr></thead><tbody>
+<tr><td>LCD viewer, capture, short/long keyboard press, and reboot</td><td>Native, shares connection; changes require confirmation</td><td>Official viewer</td></tr>
+<tr><td>RF log, history, filters, CSV/JSON</td><td>Native, v2; local export</td><td>Other views</td></tr>
+<tr><td>Precompiled catalog</td><td>Native, nine pinned images and dynamic catalog</td><td>Editor catalog</td></tr>
+<tr><td>Slots 1-4, erase, CRC</td><td>Native with backup</td><td>Additional editor options</td></tr>
+<tr><td>CFG 1-4</td><td>Native reset, separate from firmware</td><td>Select bank on radio</td></tr>
+<tr><td>Labs apps</td><td>Six-app catalog, list, export, install, move to empty slot, individual/global erase, and native verification</td><td>Expanded catalog</td></tr>
+<tr><td>Calibration</td><td>Native backup/restore, confirmation, and readback</td><td>Official restore</td></tr>
+<tr><td>External Flash</td><td>Native backup/restore, calibration sector protected</td><td>Official restore</td></tr>
+<tr><td>Main firmware</td><td>Native DFU for v6 BIN or v7 FWAT/FWA1 package</td><td>Does not sync external Main</td></tr>
+<tr><td>V7 assets</td><td>Native, active slot only with Build ID, backup, and firmware validation</td><td>No inactive slots or physical readback</td></tr>
+<tr><td>Logo</td><td>Native download/install of BIN or 128 x 64 PNG</td><td>Official editor</td></tr>
+<tr><td>Stock factory and DFU</td><td>Native wizard, two steps, pinned hashes/models</td><td>Official recovery</td></tr>
+</tbody></table></div>
+<h2 id="puesta-en-marcha-de-0-a-100">Getting started from 0 to 100%</h2>
+<p>A complete path from a new radio to one that is configured, backed up, and verified. Each phase explains when it is complete. Phases 9 and 10 are optional.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Phase</th><th scope="col">What you do</th><th scope="col">Complete when</th><th scope="col">Details</th></tr></thead><tbody>
+<tr><td>0. Identify</td><td>Check label under the battery, SysInf, and bootloader version</td><td>You know whether it is UV-K5 V3, UV-K1, or another revision</td><td><a href="ayuda-atlas-uv-k5-v3.en.html#versiones-y-como-identificarlas">Versions</a></td></tr>
+<tr><td>1. Prepare PC</td><td>Desktop Chrome or Edge, USB-C data cable or Kenwood cable, driver</td><td>Port appears and no other application is using it</td><td><a href="ayuda.html#drivers">Drivers</a> and <a href="ayuda-configuracion.en.html#conexion-usb-sin-confundir-modos">USB</a></td></tr>
+<tr><td>2. Backups</td><td>Calibration (512 bytes), configuration, and, if firmware allows, full Flash</td><td>Files are outside the browser and have SHA-256 hashes</td><td><a href="ayuda-atlas-uv-k5-v3.en.html#calibracion">Calibration</a></td></tr>
+<tr><td>3. Choose firmware</td><td>Version and edition (Fusion, FieldOps, Transfer, Labs) for your hardware</td><td><code>.bin</code> file downloaded from the official release with its hash checked</td><td><a href="#que-edicion-elegir">Editions</a> and <a href="#matriz-de-versiones-y-formatos">versions</a></td></tr>
+<tr><td>4. Flash</td><td>Radio off, hold PTT while powering on, use UV Studio or Bricohams Studio</td><td>Tool confirms every page and the radio restarts</td><td><a href="ayuda-atlas-uv-k5-v3.en.html#bootloader-y-flasheo">Bootloader</a></td></tr>
+<tr><td>5. First boot</td><td>Read SysInf and check the version</td><td>Version matches the flashed file</td><td>Next section</td></tr>
+<tr><td>6. Basic settings</td><td>Navigation, battery, display, squelch, TX, and locks</td><td>Settings persist after power cycling</td><td>Basic settings table</td></tr>
+<tr><td>7. Channels</td><td>Repeaters, receive-only PMR, satellites, and names</td><td>Memories appear and read back unchanged</td><td><a href="#preparar-y-enviar-memorias-fm">FM memories</a></td></tr>
+<tr><td>8. Scanning</td><td>Lists, priorities, and resume behavior</td><td>Scanning covers only the intended memories</td><td><a href="#escaneo-prioridades-y-teclas">Scanning</a></td></tr>
+<tr><td>9. Multiboot (optional)</td><td>Slots 1-4 and CFG banks</td><td>Each slot passes CRC and boots</td><td><a href="#slots-y-bancos-cfg-operaciones-distintas">Slots and banks</a></td></tr>
+<tr><td>10. Labs (optional)</td><td>Overlay apps from the same release</td><td>App boots and returns to firmware</td><td><a href="#labs-y-aplicaciones">Labs</a></td></tr>
+<tr><td>11. Final verification</td><td>Checklist and a fresh backup</td><td>You have a final-state backup and recorded versions</td><td><a href="ayuda-configuracion.en.html#lista-de-verificacion-posterior">Final checklist</a></td></tr>
+</tbody></table></div>
+<h3 id="fase-4-paso-a-paso-flashear-el-firmware-principal">Phase 4 step by step: flash the main firmware</h3>
+<ol>
+<li>Save the Phase 2 backups. Do not continue without saved calibration.</li>
+<li>Close CHIRP, CPS, other Studio tabs, and this website&#39;s normal connection.</li>
+<li>Turn off the radio. Hold PTT while powering on: the LED stays on and the display stays off. Release PTT and connect the USB-C cable.</li>
+<li>In <a href="https://armel.github.io/uvstudio/" target="_blank" rel="noopener noreferrer">UV Studio</a> or <a href="https://brico-hams.github.io/Bricohams-Studio/" target="_blank" rel="noopener noreferrer">Bricohams Studio</a>, select the port. The bootloader must report <code>7.00.07</code> (UV-K5 V3) or <code>7.02.02</code>/<code>7.03.0x</code> (UV-K1). For any other version, stop and check the model.</li>
+<li>Choose the plain <code>.bin</code> for the edition. Never use a <code>*.packed.bin</code> (for the official updater) or a V1 image.</li>
+<li>Confirm and do not touch the radio or cable until every page is confirmed. If interrupted, the radio remains in update mode: repeat from step 3 with the same file.</li>
+<li>The radio restarts on its own. After flashing F4HWN, save calibration again with UV Studio, as the project recommends.</li>
+</ol>
+<h3 id="fase-5-primer-arranque">Phase 5: first boot</h3>
+<ul>
+<li>Open SysInf and note the version and edition. If they do not match the file, do not continue: repeat Phase 4.</li>
+<li>Flashing does not erase calibration. If the battery reads 0 V or squelch behaves unexpectedly, confirm the calibration belongs to this radio before changing anything.</li>
+<li>If menus show inconsistent values after a firmware change, use Reset only after checking your backups: its scope depends on the build.</li>
+</ul>
+<h3 id="fase-6-ajustes-basicos-recomendados">Phase 6: recommended basic settings</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Menu</th><th scope="col">Reasonable starting value</th><th scope="col">Reason</th></tr></thead><tbody>
+<tr><td>SetNav</td><td>According to model (K1 or K5 V3)</td><td>Use this if the arrow directions seem reversed</td></tr>
+<tr><td>BatTyp</td><td>Actual battery capacity</td><td>Correct charge indicator</td></tr>
+<tr><td>SetCtr, BLMin, BLMax, BLTime</td><td>Readable with the lowest power use</td><td>Comfort and battery life</td></tr>
+<tr><td>Sql</td><td>3-4 to start</td><td>Closes squelch noise without losing weak signals</td></tr>
+<tr><td>Step</td><td>Service raster (12.5 or 25 kHz on VHF/UHF)</td><td>Tune to real channels</td></tr>
+<tr><td>RxMode</td><td>MAIN ONLY to start</td><td>Always know which VFO will transmit</td></tr>
+<tr><td>SetPTT</td><td>Classic</td><td>OnePush may keep transmitting after release</td></tr>
+<tr><td>VOX</td><td>OFF</td><td>Avoid accidental transmissions</td></tr>
+<tr><td>TxTOut</td><td>60-120 s</td><td>Stops a stuck PTT</td></tr>
+<tr><td>F Lock</td><td>Your regional profile</td><td>Limits TX to applicable bands</td></tr>
+<tr><td>SetLck</td><td>Keys (and PTT if needed)</td><td>Prevents changes in a pocket</td></tr>
+<tr><td>ChDisp</td><td>Name</td><td>Show the memory name in MR mode</td></tr>
+</tbody></table></div>
+<p>After changing settings, power-cycle to confirm they were saved. See the <a href="#diccionario-de-menus-de-radio">menu glossary</a> for each menu&#39;s meaning.</p>
+<h3 id="fases-7-y-8-canales-y-escaneo">Phases 7 and 8: channels and scanning</h3>
+<ul>
+<li>This website prepares channels from a template and writes them with a backup and readback (<a href="#preparar-y-enviar-memorias-fm">FM memories</a>). You can also use the CHIRP driver for each F4HWN release or Bricohams Studio.</li>
+<li>Imported channels start with TXLock. Remove it only for verified, authorized channels (<a href="ayuda-configuracion.en.html#diccionario-de-canal-analogico">channel glossary</a>).</li>
+<li>Assign each memory to its list (ScList), choose priorities (PriCh1/PriCh2), and set resume mode (ScnRev). Test scanning with SQL adjusted.</li>
+</ul>
+<h2 id="volver-a-fabrica-y-recuperacion">Return to stock and recovery</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Situation</th><th scope="col">What to do</th></tr></thead><tbody>
+<tr><td>You want to return to factory firmware</td><td>Use guided <a href="https://armel.github.io/uvstudio/" target="_blank" rel="noopener noreferrer">UV Studio</a> restoration: it rebuilds external Flash without touching calibration. Flashing only the factory <code>.bin</code> may leave the K1 unable to boot</td></tr>
+<tr><td>The radio will not boot after flashing</td><td>Enter update mode (hold PTT while powering on) and reflash the correct model&#39;s <code>.bin</code></td></tr>
+<tr><td>The bootloader does not respond or the port does not appear</td><td>Try another data cable and port; check that no other program is using the port</td></tr>
+<tr><td>You cannot enter update mode</td><td>SWD recovery with ST-Link (<a href="ayuda-atlas-uv-k5-v3.en.html#swd-y-recuperacion">SWD</a>). Experienced users only</td></tr>
+<tr><td>Calibration is lost or belongs to another radio</td><td>Restore the Phase 2 backup. Do not use calibration from another unit</td></tr>
+</tbody></table></div>
+<h2 id="beta-prueba-usb-real-y-canales">Beta: real USB test and channels</h2>
+<h3 id="bh-labs-arrancado-verificacion-real-del-26-10-2026">BH Labs booted: real verification on 26-10-2026</h3>
+<p>After manually selecting slot 2, COM4 identifies <strong>F4HWN v6.1.0</strong>. Main and the four Bricohams slot CRCs in the table above were verified, and 38 channels were read from the active BH Labs bank.</p>
+<p>The first backup revealed that <code>0x073E</code> rejects a 2 MiB range: firmware limits each CRC query to 4 KiB. After the website was corrected, the 2 MiB backup was completed and persisted, with all 512 sectors verified. The 512-byte calibration and 120832-byte Main image were also saved. Calibration retains the prior SHA-256 <code>f9c537df7a1764b31c73b3021dae69a1a654e267315f8c58c12bc4a3f1dd1a1b</code>. Sixteen app slots were queried; Tetris was rebuilt and exported from physical Flash, with the file format and CRCs validated.</p>
+<p>The active configuration was read back unchanged. On a local copy of that real read, creating, editing, and deleting an RX-only channel were checked while retaining the original 38 channels and protected settings. <strong>No channels, apps, firmware, calibration, or resources were written during this verification.</strong> This read test does not demonstrate on-radio CRUD writes or physical isolation of the other banks.</p>
+<h3 id="lecturas-historicas-con-main-fusion-v6-0-0">Historical reads with Main/Fusion v6.0.0</h3>
+<p>Read-only test performed on 25-10-2026 on COM4 (USB CDC VID 36B7 / PID FFFF), for a unit identified by its owner as <strong>UV-K5 V3</strong>. The radio reports <strong>F4HWN v6.0.0</strong>; this does not automatically identify the board.</p>
+<ul>
+<li>Identification, 512-byte calibration, and 41344-byte logical configuration: successful. Two independent reads matched byte for byte and by SHA-256.</li>
+<li>200 existing channels were recognized. Memories with erased frequencies (<code>0</code>/<code>0xFFFFFFFF</code>) are not shown, even if residual attributes remain, in line with the firmware&#39;s check.</li>
+<li>Slot query: Main/Fusion, FieldOps, Labs, Doppler, and Ardf, all v6.0.0. This reads headers; it is not equivalent to checking each image&#39;s CRC.</li>
+<li>The physical Flash command <code>0x0738</code> does not respond in this firmware. It used to be attempted during automatic backup, and the timeout invalidated the connection. v6.0 now saves a <strong>partial</strong> copy (calibration/configuration), keeps the read connection open, and explains the write lockout without trying that command.</li>
+<li>No physical channels, firmware, slots, or calibration were written or erased. No RF or OpenGD77 hardware tests were performed.</li>
+</ul>
+<p>A repeat read on <strong>26-10-2026</strong>: COM4 reports F4HWN v6.0.0 and returns 41344 bytes with 200 memories. On a copy of that read, 16 new PMR channels (216 total) were verified, along with editing, list assignment, and local deletion, without changing bytes from <code>0x8800</code> onward. The browser also opens that real read and reads back the 16 added PMR channels. No persistent write was sent. CAT was not tested with this firmware: it does not implement the private CAT v1 command in the Bricohams Satellites image.</p>
+<h3 id="preparar-y-enviar-memorias-fm">Prepare and send FM memories</h3>
+<ol>
+<li>Select UV-K5 V3 or UV-K1 for the device and confirm the model. To read without waiting for a full Flash backup, use <strong>Connect read-only / CAT</strong>. This session does not create a backup or enable persistent writes. A normal connection retains the automatic backup required for writing.</li>
+<li>Click <strong>Read channels from active bank</strong>. In v6.0 they appear automatically from the partial copy; after a full backup, the active configuration is also read. To work without a radio, open an F4HWN v6 logical configuration that is exactly 41344 bytes—not firmware or a full Flash image.</li>
+<li>Prepare <strong>analog PMR446 channels 1-16 (RX only)</strong>, FM repeaters, or SAT/Doppler memories in the planner. Select an existing FM memory as a template and click <strong>Add channels to the open local file</strong>. The first FM template is selected when the file is opened and retained when the table is refreshed. A configuration with no FM memories needs a valid template from its own firmware; arbitrary records are not generated. You can also import FM channels from CHIRP CSV or OpenGD77 CPS; only supported VHF/UHF frequencies are accepted, and DMR/other-format rows are excluded with a reason. The repeater-file field accepts those same CSV files and sends them directly to Prepared Channels. RepeaterBook JSON requires authorization confirmation and first goes through the selection table.</li>
+<li>New memories have TXLock enabled, tones and DTMF disabled, and Reverse disabled. PMR is prepared as narrow FM. Only nominal RX/TX frequencies from 136-174 or 400-470 MHz are imported; this does not authorize transmission. Names use the first 10 ASCII characters. Duplicates are skipped only when the equivalent existing memory already has TX locked; a match that permits TX is not considered valid.</li>
+<li><strong>Edit</strong> changes an FM memory&#39;s name/RX/TX, and <strong>Delete from file</strong> removes that memory from the local copy. Editing enables TX lock and preserves bytes outside those fields; both operations work on an in-memory copy. Recheck the channel shown by the parser, click <strong>Save local configuration</strong>, and save the edited binary separately from the original. When Chrome/Edge offers a file picker, the website writes and closes the file before confirming. In browsers without that picker, it only requests a download: check Downloads and do not mistake the request for a confirmed save. Saving a JSON or CSV project is not a substitute for this binary.</li>
+<li><strong>Write and read back channels (Beta)</strong> is enabled only with a full backup from this session, using Labs v6.1+ with Flash read and CRC support. It checks that the radio is unchanged since the read, writes 8-byte blocks, and reads everything back. During writing, affected memories are temporarily marked empty; they are reactivated after their data/names are written. This is not power-failure-proof transactional writing. VFO, settings, calibration, and other banks are protected.</li>
+<li>On success, manually restart the radio to reload caches. If it fails, keep the backup and exact message; do not assume success based only on an ACK.</li>
+</ol>
+<p>Sending was verified with simulated transport, <strong>not on hardware</strong>: the connected v6.0 unit does not allow the required full backup. The unit is not updated or flashed as a side effect. The native SAT orbital table is not installed: SAT/Doppler are FM memories. Continuous CAT RX tracking specifically requires the Bricohams Satellites image with CAT v1.</p>
+<h3 id="simular-el-ciclo-multiboot-sin-escribir-en-usb">Simulate the multiboot cycle without writing to USB</h3>
+<p>The automated regression test runs with:</p>
+<pre><code>node --test --test-name-pattern=&quot;simulacion multiboot completa&quot; tests\connectors.test.cjs</code></pre>
+<p>It uses only an in-memory transport: it does not open Web Serial, COM, or USB. It simulates four installations using test images, a full backup and session-scoped permission, a header written last, and each slot&#39;s CRC. In the model, it manually selects CFG banks whose numbers differ from the slot number, so the two are not confused. Each bank imports 16 PMR channels, 11 REMER channels, and a fictitious repeater CSV; writes, reads back, edits, changes a list, deletes, and reuses a memory. It checks isolation between banks, Main, calibration, and protected settings. In Satellites it simulates CAT RX and STOP without persistent changes. AM is rejected because this importer does not convert it.</p>
+<p>CSV files accept trailing decimal zeros, such as <code>145.600000</code> and offset <code>0.600000</code>, without rounding values that require more than five significant decimal places. The test repeaters are not a current directory of real frequencies. This simulation does not run compiled firmware or test boot, RF, display, audio, or physical isolation of banks in the connected radio. It does not unlock writes or replace the full backup required for that unit.</p>
+<h3 id="secciones-de-la-pagina-y-tablas-de-canales">Page sections and channel tables</h3>
+<p>Sidebar steps (Backups and connection, Channels, Satellites, Firmware, Tools) show only the selected section; tools-menu links open the section containing their target.</p>
+<p>Channels has two tables: <strong>Radio channels</strong>, read from the active bank or opened file, and <strong>Channels to load</strong>, prepared by repeaters, REMER, PMR446, SAT/Doppler, airports, FM/CSV or copied from the radio. Drag a row to reorder; intermediate rows shift. Drag from the load table into the radio to insert before the target, or append in an empty area. Copying from the radio preserves every byte, including DCS. Select rows and use Copy selection / Paste here, or Ctrl+C / Ctrl+V with the table focused. Radio paste inserts before the first selected row or appends if none is selected. Only contiguous memories up to the first gap shift; later memories remain unchanged. These are local edits, not USB writes.</p>
+<h3 id="botones-backup-y-restore-de-canales">Channel Backup and Restore buttons</h3>
+<h4 id="sustitucion-excepcional-de-firmware-legacy-autorizada">Authorized exceptional legacy firmware replacement</h4>
+<p>The advanced API <code>BackupManager.authorizeSlotReplacement</code> authorizes only firmware installation in slots 1-4 for F4HWN legacy with a partial backup, after the user literally accepts <code>REEMPLAZAR SLOTS SIN RESPALDO DE FIRMWARE</code>. This acceptance means the previous images will be lost without a recoverable copy; their CRCs are not a backup. Connecting, using PRO, or importing a file does not enable this authorization.</p>
+<p>Before issuing authorization, the current session&#39;s calibration and configuration are read and persisted. The partial record retains the acceptance, slots, names, sizes, and exact SHA-256 hashes of the images. Each installation rechecks that record and consumes one authorization for that image and slot. This permission does not allow separately erasing slots, Main, restoring Flash, writing channels, resetting CFG, or installing/removing apps. The normal website still requires a full backup.</p>
+<p>This path follows UV Studio&#39;s installation protocol: erase a slot, write image blocks, write the header last, and check CRC. It is not a full backup or proof of boot. If writing or verification fails, stop and do not boot that slot. Test each image manually and leave Main intact.</p>
+<p><strong>Back up active bank</strong> performs a fresh read and saves the 41344-byte binary with date and SHA-256. It does not download the local edit in its place or replace that edit. The result distinguishes a written file from a requested download. This is a logical copy, not a backup of Flash, firmware, or calibration.</p>
+<p><strong>Restore: open channel backup</strong> requires connecting and reading the  destination bank first. It validates size, structure, and an identical version; copies only memories, names, and attributes through <code>0x8800</code> onto the read of the destination; preserves that destination&#39;s settings; and asks for confirmation before replacing the local edit. It can restore channels with TX enabled: review them before writing. It does not write by itself. To send, use <strong>Write and read back channels</strong>, subject to its full-backup, confirmation, and readback requirements. Flash backups and UV Studio packages are not imported.</p>
+<h3 id="plantillas-regionales-y-ficheros-preconfigurados">Regional templates and preset files</h3>
+<p>In Repeaters, <strong>Prepare 3 Bricohams Murcia repeaters</strong> adds ED5YBF Carrascoy, ED5YAK, and ED5YAL Sierra Espuna, transcribed from the supplied Bricohams Studio ZIP&#39;s <code>PRESET_CSV</code>. The CHIRP CSV file can be downloaded without relying on external services. Receive-only throughout; the CSV uses Duplex off and lists nominal TX in comments. Current status has not been confirmed, and CTCSS is not programmed.</p>
+<p><strong>Murcia templates</strong> are displayed and downloaded separately:</p>
+<ul>
+<li>LEMI, LELC, and LEAL airports plus guard frequency 121.500 MHz: 15 AM services in JSON. RF carriers and 8.33 kHz designators remain separate. Source: <a href="https://aip.enaire.es/" target="_blank" rel="noopener noreferrer">AIP ENAIRE</a>, each airport&#39;s AD 2.18, consulted on 26-10-2026. Airport coordinates are approximate. Check current AIP and NOTAM; do not use the template for aeronautical operations.</li>
+<li>FM Murcia: 15 Onda Regional and OR Musica entries from <a href="https://www.orm.es/donde-escucharnos/" target="_blank" rel="noopener noreferrer">Where to listen</a>, consulted on 26-10-2026. This is a broadcast selection, not every commercial station. Transmitter coordinates are not verified, and there is no proximity filter.</li>
+<li>REMER: download the 11 available VHF channels as receive-only CSV. Individual selection and preparation remain in the REMER tab.</li>
+</ul>
+<p>AM and WFM broadcast templates are for reference/export; they are not converted to communications FM. The current Quansheng memory editor does not install them; a compatible receiver and format are required. Downloads do not prove reception, activity, or hardware writes.</p>
+<h3 id="listas-de-escaneo-por-zona-o-geografia">Scan lists by zone or geography</h3>
+<p>New memories participate in all lists by default (value 25); participation is not set to zero. You can choose one list from 1-24 for the batch, zero for no participation, or group by zone, province/region, or locality. Grouping reserves free numeric lists without replacing existing lists. If the selected field is missing or there are no free lists, the batch is rejected without changing the image. A province is not inferred from frequency, and geolocation is not used implicitly.</p>
+<p>REMER includes its zone; RepeaterBook retains region/locality. A CSV can include additional <code>Zone</code>, <code>Region</code>/<code>State</code>, <code>City</code>, and <code>Country</code> columns. Without them, you can use one list for all or the CSV format&#39;s generic zone. The report shows the number assigned to each new group; record it before closing. List names, priorities, ALL/MIX, and global settings are not changed. Skipped duplicates keep their previous list.</p>
+<p>To change existing channels, mark them in the table, choose <strong>Assign selection to list</strong>, and click <strong>Apply list to local file</strong>. You can also edit one memory&#39;s list. Assignment removes its scan-exclusion mark but preserves frequencies, tones, modes, and TX lock. Save the binary and check ScList on the radio after an authorized write. These are not DMR zones or multiple groups per channel; each memory has one native participation number.</p>
+<h3 id="pases-guardados-y-cat-rx">Saved passes and CAT RX</h3>
+<p><strong>Save pass plan as JSON</strong> preserves the TLE, position, schedule, and selected FM frequency. <strong>Reopen pass plan JSON</strong> requires consent to use the position in the file, validates the data, and recalculates schedules for the current time without querying providers. Old schedules are not used to control CAT. An expired TLE is rejected: update the elements and recalculate. Older plans without a frequency can be opened, but you must look up and select the FM frequency again.</p>
+<p>To add a pass to the configuration, select the frequency and pass, then use <strong>Prepare channels with Doppler correction</strong>, <strong>Load prepared SAT / Doppler</strong>, and <strong>Save local configuration</strong>. Saving schedules does not install TLE data in firmware. These options do not record radio audio.</p>
+<p>For CAT, connect in read-only mode, manually boot the correct Bricohams Satellites image, enter SAT RX, press 8, and check the firmware confirmation in the panel. Do not try CAT with original F4HWN, ARDF, or Spectrum: they do not implement the private command. Select a currently visible pass and keep the page in the foreground. RX commands expire after 3 seconds; the browser&#39;s command cadence accounts for each command&#39;s response time. Stop does not send another tuning command if SAT RX is already disabled.</p>
+<p>Automated and browser tests check PMR, editing, lists, and export using synthetic data and the configuration read from the unit. A real USB read is not equivalent to verifying writes, display, or RF. Without a full backup and an unambiguous bank, physical writing is not declared verified, and slots or calibration are not modified.</p>
+<h3 id="multiboot-y-canales-independientes-por-perfil">Multiboot and independent channels by profile</h3>
+<p>The connector reads only the logical configuration presented by the booted radio. It does not select firmware slots or CFG banks, nor does it prove that the visible profile or slot corresponds to the storage that would be written. There is no website operation that distributes a channel plan to every slot.</p>
+<p>To keep profiles separate, manually boot each profile/bank you want to manage and repeat the read and export workflow <strong>separately</strong>. Label each file with model/revision, firmware version and profile, CFG bank if verifiable on the radio, and date; also retain its SHA-256 hash. Save and close the previous file before editing another profile. Compare reads: if firmware cannot identify the slot, or two backups do not establish isolation, treat separation as unverified and do not write. Do not copy a file between profiles assuming memories are shared or remain independent.</p>
+<p>No new USB test was performed in this session. For the previously documented unit (F4HWN v6.0.0), the available backup remains partial and physical writing is still locked. The new edit, delete, and post-import channel checks validate the local file; they do not prove that firmware displays the channels or that the change reached a physical slot. See <a href="ayuda-anytone.en.html">REMER, airports, and commercial FM</a> for the differences between local preparation, parser compatibility, and RF testing.</p>
+<h2 id="elegir-hardware-antes-de-firmware">Choose hardware before firmware</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Radio/revision</th><th scope="col">Relationship to this website</th><th scope="col">Rule</th></tr></thead><tbody>
+<tr><td>UV-K1 / UV-K1(8) PY32</td><td>UV-K1 target for catalog/connector</td><td>Verify board and identification; no V1 image</td></tr>
+<tr><td>UV-K5 V3 PY32</td><td>UV-K5-V3 target</td><td>Same family does not let you ignore the actual revision</td></tr>
+<tr><td>UV-K5(8), UV-K6, UV-K5+ V1</td><td>Karina V1/OneOfEleven or other V1 projects</td><td>Outside the PY32 slot connector&#39;s scope</td></tr>
+<tr><td>UV-K5 V2</td><td>Different hardware</td><td>Neither V1 nor V3 images based on appearance alone</td></tr>
+<tr><td>UV-K5(99) and commercial labels</td><td>The name may cover different revisions</td><td>Identify MCU/revision using the project&#39;s source</td></tr>
+<tr><td>TK-11 and similar-looking Baofeng radios</td><td>Not connector targets</td><td>Do not use these images</td></tr>
+</tbody></table></div>
+<p>The ARDF manual even warns that V3 labels can be found on V2 hardware. The sticker helps but is not conclusive. USB-C does not guarantee that all firmware uses the same protocol or that the port can program every revision.</p>
+<h2 id="matriz-de-versiones-y-formatos">Version and format matrix</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Branch</th><th scope="col">Catalog</th><th scope="col">Editions/variants</th><th scope="col">Writing from this website</th></tr></thead><tbody>
+<tr><td>F4HWN v4.x</td><td>Stable releases recognized with a specific <code>k1</code> or <code>k5v3</code> file</td><td>Fusion; possibly SA818, depending on release</td><td>Download only</td></tr>
+<tr><td>F4HWN v5.x</td><td>Stable releases recognized with published hash</td><td>Fusion; possibly SA818</td><td>Download only</td></tr>
+<tr><td>F4HWN v6.x</td><td>Stable releases recognized with published hash</td><td>Fusion, FieldOps, Transfer, Labs, depending on release</td><td>Only non-SA818 images that have been inspected and have a full backup</td></tr>
+<tr><td>Development/beta/rolling</td><td>Excluded from the stable catalog</td><td>Not treated as releases</td><td>Library blocks known names for these variants</td></tr>
+<tr><td>ARDF V3/UV-K1</td><td>Separate reald source</td><td>ARDF-K5v3_K1 versions</td><td>Download only; see <a href="ayuda-ardf.en.html">ARDF</a></td></tr>
+<tr><td>Stock</td><td>Not selected as F4HWN</td><td>Manufacturer image</td><td>This inspector does not install it in slots</td></tr>
+<tr><td>Karina V1</td><td>Package documentation</td><td>RAW and packed V1</td><td>Blocked because it is incompatible with PY32</td></tr>
+<tr><td>Karina V3/K1 by Dim0s</td><td>Separately inspected ZIP with PY32 vectors</td><td>Hardware-specific RAW and packed files</td><td>Not enabled: Armel multiboot and sources have not been verified</td></tr>
+<tr><td>Bricohams V3</td><td>Local v6.1.0 builder</td><td>Generated Fusion and Labs</td><td>Slot preparation with the same safeguards; experimental</td></tr>
+</tbody></table></div>
+<p>Historical names such as Bandscope, Broadcast, Basic, RescueOps, or Game in old documents do not map one-to-one to v6 presets. Do not convert their settings by menu position. For the exact option/default inventory, see <a href="ayuda-opciones-f4hwn.en.html">options</a> and <a href="ayuda-presets-f4hwn.en.html">presets by commit</a>.</p>
+<p>The selector queries authorized releases, excludes prereleases and drafts, and checks the name, version, size, and SHA-256 digest published by GitHub. It does not present a partial catalog as complete when errors occur. Read the installed version in SysInf; do not infer it from the most recently downloaded file. An update can change persistence and CFG compatibility.</p>
+<h3 id="inventario-de-publicaciones-reconocido-el-25-10-2026">Release inventory recognized on 25-10-2026</h3>
+<p>A live query for UV-K5-V3 recognized 41 images; this is not a list of every file in the repositories. UV-K1 v4 images must be the versions made specifically for K1. Each link contains that version&#39;s notes; this table does not invent functional differences between patches that have not been verified.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Version</th><th scope="col">Recognized editions</th><th scope="col">Handling</th></tr></thead><tbody>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.3.0" target="_blank" rel="noopener noreferrer">v6.3.0</a></td><td>Fusion, FieldOps, Labs, Transfer</td><td>Can be prepared after checks and backup</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.2.0" target="_blank" rel="noopener noreferrer">v6.2.0</a></td><td>Fusion, FieldOps, Labs, Transfer</td><td>Same; review data/API changes</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.1.0" target="_blank" rel="noopener noreferrer">v6.1.0</a></td><td>Fusion, FieldOps, Labs, Transfer</td><td>Local Bricohams baseline; not the same edition identity</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.0.0" target="_blank" rel="noopener noreferrer">v6.0.0</a></td><td>Fusion, FieldOps, Labs, Transfer</td><td>Do not assume the Labs v6.1+ physical reader</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.9.0" target="_blank" rel="noopener noreferrer">v5.9.0</a></td><td>Fusion and SA818</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.8.0" target="_blank" rel="noopener noreferrer">v5.8.0</a></td><td>Fusion and SA818</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.7.0" target="_blank" rel="noopener noreferrer">v5.7.0</a></td><td>Fusion and SA818</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.6.1" target="_blank" rel="noopener noreferrer">v5.6.1</a></td><td>Fusion and SA818</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.6.0" target="_blank" rel="noopener noreferrer">v5.6.0</a></td><td>Fusion and SA818</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.5.0" target="_blank" rel="noopener noreferrer">v5.5.0</a></td><td>Fusion and SA818</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.4.0" target="_blank" rel="noopener noreferrer">v5.4.0</a></td><td>Fusion and SA818</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.3.1" target="_blank" rel="noopener noreferrer">v5.3.1</a></td><td>Fusion</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.3.0" target="_blank" rel="noopener noreferrer">v5.3.0</a></td><td>Fusion</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.2.0" target="_blank" rel="noopener noreferrer">v5.2.0</a></td><td>Fusion</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v5.1.0" target="_blank" rel="noopener noreferrer">v5.1.0</a></td><td>Fusion</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v4.3.2" target="_blank" rel="noopener noreferrer">v4.3.2</a></td><td>Hardware-specific Fusion</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v4.3.1" target="_blank" rel="noopener noreferrer">v4.3.1</a></td><td>Hardware-specific Fusion</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v4.3.0" target="_blank" rel="noopener noreferrer">v4.3.0</a></td><td>Hardware-specific Fusion</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/releases/tag/ARDF-K5v3_K1-v0.5.1" target="_blank" rel="noopener noreferrer">ARDF v0.5.1</a></td><td>ARDF</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/releases/tag/ARDF-K5v3_K1-v0.5" target="_blank" rel="noopener noreferrer">ARDF v0.5</a></td><td>ARDF</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/releases/tag/ARDF-K5v3_K1-v0.4" target="_blank" rel="noopener noreferrer">ARDF v0.4</a></td><td>ARDF</td><td>Download only</td></tr>
+<tr><td><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/releases/tag/ARDF-K5v3_K1-v0.2" target="_blank" rel="noopener noreferrer">ARDF v0.2</a></td><td>ARDF</td><td>Download only</td></tr>
+</tbody></table></div>
+<h2 id="que-edicion-elegir">Which edition to choose</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Edition</th><th scope="col">v6 profile focus</th><th scope="col">Caution</th></tr></thead><tbody>
+<tr><td>Fusion</td><td>General use, spectrum, scanning, multiboot/CFG depending on preset</td><td>Does not therefore include the complete Labs physical reader</td></tr>
+<tr><td>FieldOps</td><td>Field features, Fox Hunt/Beacon, and RescueOps depending on preset</td><td>Review TX features; this is not emergency-service certification</td></tr>
+<tr><td>Transfer</td><td>Focus on transfer/AirCopy depending on preset</td><td>Requires a compatible endpoint/protocol; does not replace a full backup</td></tr>
+<tr><td>Labs</td><td>Overlay apps, diagnostics, and external read/write when enabled</td><td>Experimental; ABI/API and commands change</td></tr>
+<tr><td>Max</td><td>Profile available in the v6.3.0 options catalog</td><td>Do not assume a release binary exists or fits with every change</td></tr>
+<tr><td>Custom</td><td>Configurable reduced profile</td><td>Multiboot is not guaranteed; the local builder here does not accept it</td></tr>
+<tr><td>Bricohams</td><td>Bricohams edition identity on pinned v6.1.0 profiles</td><td>Not Karina or officially signed firmware</td></tr>
+</tbody></table></div>
+<p>Exact ON/OFF values are more reliable than a profile&#39;s marketing name. For example, Labs needs the specific physical Flash options required for this website&#39;s backup.</p>
+<h2 id="diccionario-de-menus-de-radio">Radio menu glossary</h2>
+<p>The following names come from <code>MenuList</code> in the inspected v6.1 code. A conditional menu may not exist in your build. Refer to the menu name, not a fixed number that changes when features are included or excluded. “Save channel” means persist the memory; not every temporary change in MR is saved automatically.</p>
+<h3 id="canal-recepcion-y-tonos">Channel, reception, and tones</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Menu</th><th scope="col">Explanation and check</th></tr></thead><tbody>
+<tr><td>Step</td><td>VFO tuning step, not filter bandwidth. Choose the raster for the service you are listening to</td></tr>
+<tr><td>Power</td><td>RF level per channel/VFO. Nominal values do not guarantee measured output power</td></tr>
+<tr><td>RxDCS / RxCTCS</td><td>Subaudible receive filter. Disable it when troubleshooting silence</td></tr>
+<tr><td>TxDCS / TxCTCS</td><td>Transmitted code/tone. Use only what the system requires</td></tr>
+<tr><td>TxODir</td><td>TX offset direction: OFF, +, or - in the inspected codebase</td></tr>
+<tr><td>TxOffs</td><td>Offset magnitude. Check the resulting TX frequency</td></tr>
+<tr><td>W/N</td><td>Wide/narrow FM channel; SetNFM may select a narrow variant</td></tr>
+<tr><td>BusyCL</td><td>Prevents TX when it detects a busy channel under its criterion</td></tr>
+<tr><td>Compnd</td><td>Audio compander; requires compatibility at the other end</td></tr>
+<tr><td>Mode</td><td>RX demodulation available in that build; does not change hardware or TX permissions</td></tr>
+<tr><td>TXLock</td><td>Channel transmit lock; keep enabled on listening channels</td></tr>
+<tr><td>Sql</td><td>Squelch threshold; zero may leave the receiver continuously open to noise</td></tr>
+<tr><td>RxMode</td><td>Determines listening and TX response; check which VFO will transmit</td></tr>
+<tr><td>ChList</td><td>View/select memories depending on interface context</td></tr>
+<tr><td>ChSave</td><td>Save to memory; check the destination before replacing it</td></tr>
+<tr><td>ChDele</td><td>Delete a memory; not the same as deleting only its name</td></tr>
+<tr><td>ChName</td><td>Channel name; does not change frequency</td></tr>
+</tbody></table></div>
+<h3 id="escaneo-prioridades-y-teclas">Scanning, priorities, and keys</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Menu</th><th scope="col">Explanation and check</th></tr></thead><tbody>
+<tr><td>ScList</td><td>Active scan list; check that it is not empty</td></tr>
+<tr><td>ScPri</td><td>Use of priority channels in the cycle</td></tr>
+<tr><td>PriCh1 / PriCh2</td><td>Priority memories; not VFO A/B</td></tr>
+<tr><td>ScnRev</td><td>Resume behavior: carrier, time, or stop, depending on build</td></tr>
+<tr><td>F1Shrt / F1Long</td><td>Short/long press function for side key 1</td></tr>
+<tr><td>F2Shrt / F2Long</td><td>Short/long press function for side key 2</td></tr>
+<tr><td>M Long</td><td>Function assigned to a long MENU press</td></tr>
+<tr><td>KeyLck</td><td>Automatic lock and delay; different from SetLck</td></tr>
+<tr><td>1 Call</td><td>Quick-call channel; verify the selected memory</td></tr>
+<tr><td>SetScn</td><td>Scan mode/speed when compiled; faster scanning does not guarantee better detection</td></tr>
+<tr><td>SetKey</td><td>RescueOps key settings; only if included in the profile</td></tr>
+</tbody></table></div>
+<p>In v6.1, the documentation describes 24 named lists plus ALL and MIX combinations. ALL omits excluded memories, and MIX combines selected lists. Do not assume this capability in v4/v5. Full Watch priorities come from list priorities; duplicates/invalid entries do not create additional receivers.</p>
+<h3 id="audio-dtmf-y-emision">Audio, DTMF, and transmission</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Menu</th><th scope="col">Explanation and check</th></tr></thead><tbody>
+<tr><td>TxTOut</td><td>Continuous TX limit; different from selecting the SetTOT warning</td></tr>
+<tr><td>Mic</td><td>Microphone gain; too much causes distortion, not more useful power</td></tr>
+<tr><td>MicBar</td><td>Level indicator; does not replace a deviation measurement</td></tr>
+<tr><td>Beep</td><td>Key/interface alerts; set volume before using headphones</td></tr>
+<tr><td>Voice</td><td>Voice prompts, only if compiled</td></tr>
+<tr><td>Roger</td><td>TX-end alert; use only where permitted and appropriate</td></tr>
+<tr><td>STE / RP STE</td><td>Local/repeater squelch-tail handling, depending on the other endpoint</td></tr>
+<tr><td>ANI ID</td><td>DTMF identifier when DTMF calling is compiled</td></tr>
+<tr><td>UPCode / DWCode</td><td>Configured DTMF identification/control sequences; do not send to systems without permission</td></tr>
+<tr><td>PTT ID</td><td>Timing/use of identification when PTT is pressed</td></tr>
+<tr><td>D ST</td><td>Local audio associated with DTMF depending on implementation; not a DMR Time Slot</td></tr>
+<tr><td>D Resp / D Hold</td><td>DTMF call response and hold behavior when enabled</td></tr>
+<tr><td>D Prel</td><td>DTMF preamble/timing parameter; keep the default unless the system requires otherwise</td></tr>
+<tr><td>D Decd / D List</td><td>DTMF decoding/list for the calling feature</td></tr>
+<tr><td>D Live</td><td>Display of received DTMF; does not make the signal private</td></tr>
+<tr><td>VOX</td><td>Audio-triggered transmission; disable for troubleshooting and to avoid accidental TX</td></tr>
+<tr><td>SetPwr</td><td>User power level used by Power=USER</td></tr>
+<tr><td>SetPTT</td><td>Classic or latched OnePush PTT; the latter may continue transmitting after release</td></tr>
+<tr><td>SetTOT</td><td>Timeout warning type, not its duration</td></tr>
+<tr><td>SetEOT</td><td>End-of-transmission alert; check audio/visual behavior for your use</td></tr>
+<tr><td>SetRxA</td><td>RX audio profile when AUDIO is enabled</td></tr>
+<tr><td>SetVol</td><td>Firmware RX audio adjustment, distinct from the physical control</td></tr>
+<tr><td>SetNFM</td><td>Upstream-documented 12.5/6.25 kHz narrow-filter variant; not a VFO step</td></tr>
+</tbody></table></div>
+<h3 id="pantalla-energia-y-opciones-avanzadas">Display, power, and advanced options</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Menu</th><th scope="col">Explanation and check</th></tr></thead><tbody>
+<tr><td>BatSav</td><td>Receive power saving; may delay activity detection</td></tr>
+<tr><td>BatTxt</td><td>Battery display</td></tr>
+<tr><td>ChDisp</td><td>Name/frequency/number, depending on display mode</td></tr>
+<tr><td>POnMsg</td><td>Startup message; does not prove firmware authenticity</td></tr>
+<tr><td>BLTime</td><td>Backlight duration</td></tr>
+<tr><td>BLMin / BLMax</td><td>Minimum/maximum brightness; ensure the result is readable</td></tr>
+<tr><td>BLTxRx</td><td>Light activation during TX/RX</td></tr>
+<tr><td>SysInf</td><td>Version/build, battery, and diagnostic pages depending on options</td></tr>
+<tr><td>SetCtr</td><td>Display contrast, not RF gain</td></tr>
+<tr><td>SetInv</td><td>Invert colors/pixels</td></tr>
+<tr><td>SetLck</td><td>Lock scope: keys or PTT too, depending on build</td></tr>
+<tr><td>SetMet</td><td>S-meter style; figures are not equivalent to a calibrated bench instrument</td></tr>
+<tr><td>SetGUI</td><td>VFO information style/size</td></tr>
+<tr><td>SetTmr</td><td>RX/TX time display</td></tr>
+<tr><td>SetOff</td><td>Deep-sleep timer; may interrupt a session</td></tr>
+<tr><td>SetSav</td><td>Screensaver/logo when compiled</td></tr>
+<tr><td>SetCfg</td><td>Apply another configuration bank without changing firmware</td></tr>
+<tr><td>SetNWR</td><td>NOAA function if compiled and applicable to the region</td></tr>
+<tr><td>F Lock</td><td>Band profile; not certification or permission to expand TX</td></tr>
+<tr><td>350 En</td><td>Receive access to an additional range depending on build; does not authorize transmission</td></tr>
+<tr><td>FrCali</td><td>Frequency reference adjustment if compiled; requires test equipment</td></tr>
+<tr><td>BatCal</td><td>Voltage-reading calibration; do not use values from another unit</td></tr>
+<tr><td>BatTyp</td><td>Battery capacity profile; not a repair or RF calibration</td></tr>
+<tr><td>SetNav</td><td>Navigation layout for UV-K1 versus UV-K5 V3</td></tr>
+<tr><td>Reset</td><td>Reset settings; scope depends on build and may cause data loss</td></tr>
+</tbody></table></div>
+<p>Menus <code>Scramb</code>, <code>Tx 200</code>, <code>Tx 350</code>, <code>Tx 500</code>, <code>ScraEn</code>, and <code>NOAA-S</code> may appear in branches without the F4HWN layer. They are listed for historical identification, not as enabled options in published profiles or instructions to unlock transmissions. A scrambler must not be treated as secure encryption.</p>
+<h2 id="rxmode-y-full-watch">RxMode and Full Watch</h2>
+<p>In v6.1, Full Watch checks VFO A, VFO B, and valid priorities. These are not four independent receivers. FULL RX/RESPOND may reply on the last received channel; MAIN TX/FULL RX keeps TX on the main VFO. Before using PTT, verify the indicated transmit destination. For troubleshooting, choose MAIN ONLY. DUAL/CROSS display modes must not be confused with repeater configuration or assumed to automatically repeat between bands.</p>
+<h2 id="slots-y-bancos-cfg-operaciones-distintas">Slots and CFG banks: different operations</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Item</th><th scope="col">Contents</th><th scope="col">Changing it means</th></tr></thead><tbody>
+<tr><td>Main</td><td>Base copy managed by firmware, not the bootloader</td><td>Protected by the website</td></tr>
+<tr><td>Slot 1-4</td><td>Additional firmware image in external Flash</td><td>Restore an image from the radio to the processor</td></tr>
+<tr><td>CFG M/1-4</td><td>Independent channels, VFO, settings, and lists</td><td>Load another compatible configuration</td></tr>
+<tr><td>Labs app</td><td>Code/resources with a specific ABI/API</td><td>Run a function in RAM overlay; does not replace full firmware</td></tr>
+</tbody></table></div>
+<p>In the inspected v6.1 upstream, the selector opens by pressing MENU while powering on. Confirm restoration on the radio itself; do not turn it off during the process. SetCfg changes banks without restoring firmware. The website does not invent a remote command for either action.</p>
+<p>To prepare an image from the library, choose a folder, select a supported entry, review its name/hash, and click Prepare. This does not write anything. Installation requires a compatible connection, a full Flash backup, and confirmation. The slot CRC is checked. Correct vectors and an F4HWN string do not prove that the code is authentic.</p>
+<h2 id="labs-y-aplicaciones">Labs and apps</h2>
+<p>The inspected codebase documents 16 slots and radio, APRS, SSTV, diagnostic, and demo apps. The set changes between releases; not every app is available or compatible with every build.</p>
+<p><strong>Precompiled Labs app catalog:</strong> includes SystemInfo, BroadcastFM, Cube3D, Tetris, Breakout, and Minesweeper from upstream release v6.1.0. They are served with the website, including the static export, without compiling. They are Apache-2.0 and retain their original authorship; they are not renamed as our work. SHA-256, size, FAP1, name, version, ABI, and minimum API are checked. All require ABI 1 and minimum API 2; confirm compatibility with active Labs. Boot has not been certified on this unit.</p>
+<p>Select a model and app, confirm compatibility, and click <strong>Verify and prepare app</strong>. This only prepares the file: query the slots, select a destination, and separately click <strong>Install app and verify</strong>. You can also download the file and its manifest. Apps are not installed or run automatically. The test catalog excludes beacons and distress apps; the full catalog remains in UV Studio. This is not an isolation guarantee: every native app has access to the radio.</p>
+<p>The maintainer regenerates this catalog with <code>node scripts/publish-firmware.cjs --apps-only</code>: only the six archived files and pinned hashes are accepted; any change is rejected.</p>
+<p>The connector checks FAP1, code/resource limits, and resource CRCs, then reads written blocks back. Accepting a header does not prove that an app can run: ABI, API, or capabilities may reject it at load/run time. Use firmware and apps from the same release. Installing an app from an unknown source gives native code access to the radio.</p>
+<p><strong>Export app from slot</strong> rebuilds the FAP1 file from the header, physical code, and resources, and checks their CRCs before requesting the download. Requires firmware with physical Flash read support; this is not a catalog download.</p>
+<p><strong>Move app to empty slot</strong> lets you reorder apps without overwriting another. Select the source and an empty destination, then enter the displayed confirmation. The destination is installed, read back, and verified before the source is erased and checked as empty. This is not atomic: an interruption can leave two copies or an incomplete destination while the source remains intact. Keep the backup and query the slots again before retrying. To swap two occupied apps, use a third empty slot as a temporary location. This does not run an app or certify ABI/API compatibility.</p>
+<p><strong>Erase all apps</strong> requires a full backup and the phrase <code>BORRAR TODAS LAS APPS</code>, including in advanced mode. The actual slot count (16 or 48, depending on firmware) is queried; only occupied slots are erased, and all slots are checked as empty. An error stops the process without claiming overall success; a partial erase is not rolled back automatically. Channels, configuration, firmware, and calibration are untouched. These new operations were verified with a simulated radio; they were not run on the physical unit.</p>
+<p>APRS TX requires a legally configured callsign/SSID, position, and route. Loading a <code>.app</code> does not make this website transmit; automatic beacons are not configured as part of a backup. Emergency/EPIRB functions are mentioned as upstream inventory only: do not test transmissions on distress frequencies.</p>
+<h2 id="problemas-habituales">Common problems</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Symptom</th><th scope="col">Check</th></tr></thead><tbody>
+<tr><td>Radio boots but SetCfg does not appear</td><td>Check the build&#39;s multiboot options, not just its version</td></tr>
+<tr><td>Slot is visible with data but CRC is wrong</td><td>Do not restore it; keep the file and backup</td></tr>
+<tr><td>USB identifies but Flash read fails</td><td>Physical Labs command may be missing; close other programs and record the build</td></tr>
+<tr><td>Keys seem reversed</td><td>Check SetNav/model; do not flash another family to fix it</td></tr>
+<tr><td>A settings change disappears</td><td>Save the memory or check CFG bank and persistence</td></tr>
+<tr><td>Repeater cannot be heard</td><td>Check RX, mode, SQL, and RX filter; do not start by increasing TX power</td></tr>
+<tr><td>An app will not run</td><td>Check ABI/API/caps and release; do not blindly repeat writes</td></tr>
+<tr><td>SA818 or packed image is blocked</td><td>This is intentional; do not rename it to bypass the restriction</td></tr>
+</tbody></table></div>
+<h2 id="fuentes-y-mantenimiento">Sources and maintenance</h2>
+<ul>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">PY32 project and README</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases" target="_blank" rel="noopener noreferrer">Releases by version</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/ca3a4271386049e7b459b215cef0ad0eea1a30ca/CMakePresets.json" target="_blank" rel="noopener noreferrer">Pinned v6.3.0 presets</a>.</li>
+<li><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/f556a96e73c3e423a00cf473aeb37f827cac05a5/App/ui/menu.c" target="_blank" rel="noopener noreferrer">Inspected v6.1 menu</a>.</li>
+<li><a href="https://armel.github.io/uvtools2/" target="_blank" rel="noopener noreferrer">Project UVTOOLS2</a>.</li>
+<li><a href="https://github.com/armel/uv-k5-chirp-driver" target="_blank" rel="noopener noreferrer">Dedicated CHIRP driver</a>.</li>
+<li><a href="ayuda-bricohams.en.html">Bricohams, hashes, and build</a>.</li>
+<li><a href="ayuda-karina.en.html">Karina V1 and license/source limits</a>.</li>
+<li><a href="ayuda-atlas-uv-k5-v3.en.html">UV-K5 V3 technical atlas: hardware, protocols, and schematics</a>.</li>
+</ul>
+<p>For stock firmware, UVMOD, or OneOfEleven, consult the exact project and hardware: menu/EEPROM equivalence with this guide is not guaranteed. For links added by the user, see <a href="ayuda-egzumer.en.html">Egzumer V1</a> and <a href="ayuda-pack-dim0s.en.html">Dim0s pack with Karina V3/K1</a>.</p></article>
+    <footer><p class="translation-note">Translation of the Spanish original. If there is any discrepancy, the Spanish version prevails.</p><p>Document generated from the versioned Markdown. Check the sources and limits of each guide. <a href="ayuda-firmwares.en.html">Back to the index</a>.</p></footer>
+  </main>
+</body>
+</html>

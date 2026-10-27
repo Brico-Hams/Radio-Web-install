@@ -10,12 +10,18 @@
   <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-atlas-uv-k5-v3.html">
+  <link rel="alternate" hreflang="en" href="ayuda-atlas-uv-k5-v3.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-atlas-uv-k5-v3.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-atlas-uv-k5-v3.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-atlas-uv-k5-v3.fr.html">
 </head>
 <body>
   <a class="skip" href="#main">Saltar al contenido</a>
   <main id="main" class="firmware-help">
     <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
       <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Idioma"><a href="ayuda-atlas-uv-k5-v3.html" hreflang="es" lang="es" aria-current="page">Español</a> · <a href="ayuda-atlas-uv-k5-v3.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-atlas-uv-k5-v3.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-atlas-uv-k5-v3.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
     <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#versiones-y-como-identificarlas">Versiones y como identificarlas</a></li><li><a href="#arquitectura">Arquitectura</a></li><li><a href="#pinout-del-py32f071">Pinout del PY32F071</a></li><li><a href="#buses-y-perifericos">Buses y perifericos</a></li><li><a href="#memoria-interna">Memoria interna</a></li><li><a href="#flash-externa-de-2-mb">Flash externa de 2 MB</a></li><li><a href="#mapa-eeprom-logico">Mapa EEPROM logico</a></li><li><a href="#calibracion">Calibracion</a></li><li><a href="#protocolo-serie-de-programacion">Protocolo serie de programacion</a></li><li><a href="#bootloader-y-flasheo">Bootloader y flasheo</a></li><li><a href="#swd-y-recuperacion">SWD y recuperacion</a></li><li><a href="#compilar-firmware">Compilar firmware</a></li><li><a href="#modificaciones-de-hardware">Modificaciones de hardware</a></li><li><a href="#esquemas-e-imagenes">Esquemas e imagenes</a></li><li><a href="#firmwares-y-repositorios-para-v3-k1">Firmwares y repositorios para V3/K1</a></li><li><a href="#karina-y-codigo-cerrado">Karina y codigo cerrado</a></li><li><a href="#fuentes">Fuentes</a></li></ul></nav>
     <article class="panel"><h1 id="atlas-tecnico-del-quansheng-uv-k5-v3-y-uv-k1">Atlas tecnico del Quansheng UV-K5 V3 y UV-K1</h1>
@@ -176,19 +182,20 @@ cd uv-k1-k5v3-firmware-custom
 </tbody></table></div>
 <p>La compilacion Bricohams reproducible esta en <a href="ayuda-bricohams.html">Bricohams V3</a> y cada opcion en <a href="ayuda-opciones-f4hwn.html">opciones F4HWN</a>. Antes de flashear un build propio comprueba los vectores y que no supere <code>0x1D800</code> bytes.</p>
 <h2 id="modificaciones-de-hardware">Modificaciones de hardware</h2>
+<p>La <a href="ayuda-validacion-v3-android.html">matriz de validacion integral</a> amplia los criterios de compatibilidad, pruebas, limites y evidencia pendiente. No hay certificacion general de mods V1 sobre V3. El <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/docs/atlas/android-cat-validacion.svg" target="_blank" rel="noopener noreferrer">diagrama Android/CAT/memorias</a> es funcional, no un esquema electrico medido ni una guia de soldadura.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Modificacion</th><th scope="col">V3/K1</th><th scope="col">Notas</th></tr></thead><tbody>
-<tr><td>Ampliar EEPROM (M24M02, 24C512)</td><td>Innecesaria</td><td>El V3 ya trae 2 MB. En V1 es el paso previo a 999 canales y SSB con SI4732 (<a href="https://github.com/losehu/uv-k5-bootloader-custom/wiki" target="_blank" rel="noopener noreferrer">losehu</a>)</td></tr>
-<tr><td>Receptor HF SI4732 (placas v5/v6.8)</td><td>Sin soporte</td><td>Solo hay firmware para V1 (CEC HF, Reborn, losehu, Robzyl 512K)</td></tr>
-<tr><td>Antena SMA (17 cm, 38 cm)</td><td>Aplica</td><td>Mismo conector; para satelite, antena externa</td></tr>
-<tr><td>Mod de satelite (bobinas, LNA)</td><td>Sin confirmar</td><td>Nadie confirma en los grupos que los mods V1 sirvan en V3</td></tr>
+<tr><td>Ampliar EEPROM (M24M02, 24C512)</td><td>No aplicable directamente</td><td>El V3 usa Flash SPI de 2 MB, no EEPROM I2C intercambiable. Referencia V1: <a href="https://github.com/losehu/uv-k5-bootloader-custom/wiki" target="_blank" rel="noopener noreferrer">losehu</a></td></tr>
+<tr><td>Receptor HF SI4732 (placas v5/v6.8)</td><td>No verificado en V3</td><td>Las referencias aqui catalogadas son V1 (CEC HF, Reborn, losehu, Robzyl 512K); no demuestran soporte PY32</td></tr>
+<tr><td>Antena SMA (17 cm, 38 cm)</td><td>Accesorio condicional</td><td>Comprobar conector, esfuerzos mecanicos, banda y ROE; longitud o mejora RX no certifican TX</td></tr>
+<tr><td>Mod de satelite (bobinas, LNA)</td><td>Sin confirmar</td><td>No se dispone de esquema ni medidas de una adaptacion a esta revision V3</td></tr>
 <tr><td>Filtro paso bajo TX</td><td>Revisar</td><td><a href="https://codeberg.org/Nannk/quansheng-lpf-mod" target="_blank" rel="noopener noreferrer">Nannk/quansheng-lpf-mod</a>; verifica la placa medida</td></tr>
-<tr><td>Mod de 27 MHz</td><td>Solo V1</td><td><a href="https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki/Hardware_Mods_27Mhz" target="_blank" rel="noopener noreferrer">Wiki</a>; con antena VHF da ROE alta y armonicos</td></tr>
+<tr><td>Mod de 27 MHz</td><td>Referencia V1, no validado V3</td><td><a href="https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki/Hardware_Mods_27Mhz" target="_blank" rel="noopener noreferrer">Wiki</a>; requiere red RF y medidas propias, no extrapolar valores</td></tr>
 <tr><td>Cable de programacion</td><td>USB-C directo</td><td>Tambien vale el cable Kenwood USB-serie (USART1)</td></tr>
 <tr><td>Coprocesador o ESP32</td><td>Disenados para V1</td><td><a href="https://github.com/kamilsss655/ESPRI" target="_blank" rel="noopener noreferrer">ESPRI</a>, <a href="https://github.com/wabulutian/UVK5-Coprocessor" target="_blank" rel="noopener noreferrer">UVK5-Coprocessor</a>, <a href="https://github.com/losehu/UVE5" target="_blank" rel="noopener noreferrer">UVE5</a></td></tr>
 </tbody></table></div>
 <p>Los firmwares que suben la salida por encima de 5 W pueden quemar el paso final. Transmitir fuera de las bandas de tu licencia es ilegal aunque el firmware lo permita.</p>
 <h2 id="esquemas-e-imagenes">Esquemas e imagenes</h2>
-<p>No hay un esquema completo publicado del V3/K1. Lo mas cercano:</p>
+<p>No se ha identificado en las fuentes de esta revision un esquema electrico completo y verificado del V3/K1. Esto no demuestra que no exista otro. Las referencias disponibles son:</p>
 <ul>
 <li><a href="https://github.com/armel/k1-teardown" target="_blank" rel="noopener noreferrer">Teardown K1 de armel</a> (Apache-2.0): fotos de alta resolucion, volcados, firmware anotado y datasheets.</li>
 <li><a href="https://github.com/ludwich66/Quansheng_UV-K5_Wiki/wiki/UV%E2%80%90K1-PCB" target="_blank" rel="noopener noreferrer">Fotos de la placa UV-K1</a> en la wiki.</li>

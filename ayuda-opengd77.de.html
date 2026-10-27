@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="OpenGD77-Hilfe: Konfiguration und sichere Verwendung: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>OpenGD77-Hilfe: Konfiguration und sichere Verwendung | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-opengd77.html">
+  <link rel="alternate" hreflang="en" href="ayuda-opengd77.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-opengd77.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-opengd77.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-opengd77.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda.html">App-Hilfe (Spanisch)</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-opengd77.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-opengd77.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-opengd77.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-opengd77.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-opengd77.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#borrado-local-de-canales-beta">Kanäle lokal löschen (Beta)</a></li><li><a href="#importar-repetidores-remer-solo-archivo-local">REMER-Repeater importieren (nur lokale Datei)</a></li><li><a href="#importar-canales-csv-de-cps-o-chirp">CSV-Kanäle aus CPS oder CHIRP importieren</a></li><li><a href="#comprobacion-web-sin-instalacion-25-10-2026">Webprüfung ohne Installation (25-10-2026)</a></li><li><a href="#1-antes-de-conectar-o-transmitir">1. Vor dem Verbinden oder Senden</a></li><li><a href="#2-firmware-codeplug-calibracion-y-copias">2. Firmware, Codeplug, Kalibrierung und Sicherungen</a></li><li><a href="#3-modelo-mental-como-encajan-los-datos">3. Denkmodell: Wie die Daten zusammenhängen</a></li><li><a href="#4-campos-de-canal-y-significado-practico">4. Kanalfelder und ihre praktische Bedeutung</a></li><li><a href="#5-escenario-a-canal-fm-de-escucha-o-repetidor">5. Szenario A: FM-Kanal zum Zuhören oder für einen Repeater</a></li><li><a href="#6-escenario-b-repetidor-dmr-con-varios-tg">6. Szenario B: DMR-Repeater mit mehreren TG</a></li><li><a href="#7-zonas-rx-groups-y-exploracion">7. Zonen, RX groups und Scan</a></li><li><a href="#8-pantallas-controles-y-conservacion-de-cambios">8. Bildschirme, Bedienelemente und Speichern von Änderungen</a></li><li><a href="#9-accesibilidad-y-sonido">9. Barrierefreiheit und Ton</a></li><li><a href="#10-potencia-bateria-y-calibracion">10. Leistung, Akku und Kalibrierung</a></li><li><a href="#11-hotspot-dmr-por-usb">11. DMR-Hotspot über USB</a></li><li><a href="#12-aprs-que-puede-y-que-no-puede-hacer">12. APRS: Möglichkeiten und Grenzen</a></li><li><a href="#13-gps-nmea-y-registro">13. GPS, NMEA und Protokollierung</a></li><li><a href="#14-satelites-preparacion-y-operacion">14. Satelliten: Vorbereitung und Betrieb</a></li><li><a href="#15-usb-modos-de-conexion-y-firmware">15. USB, Verbindungsmodi und Firmware</a></li><li><a href="#16-diagnostico-por-sintomas">16. Fehlerdiagnose nach Symptomen</a></li><li><a href="#17-glosario">17. Glossar</a></li><li><a href="#18-fuentes-versiones-y-licencias">18. Quellen, Versionen und Lizenzen</a></li></ul></nav>
+    <article class="panel"><h1 id="ayuda-de-opengd77-configuracion-y-uso-seguro">OpenGD77-Hilfe: Konfiguration und sichere Verwendung</h1>
+<p><strong>Prüfdatum: 2026-10-25.</strong> Der spanische Originaltext beruht auf den am Ende genannten offiziellen Quellen und dem Code dieser Anwendung. Es handelt sich weder um eine Übersetzung des Handbuchs noch um eine Funktionsgarantie für alle Builds.</p>
+<p>Wenn du ein Funkgerät, eine Platinenrevision oder ein bestimmtes Image auswählen möchtest, lies <a href="ayuda-opengd77-modelos.de.html">Modelle und Kompatibilität</a>. Hier wird erklärt, wie du die Konfiguration organisierst, dokumentierte Funktionen verwendest und die Grenzen des Webeditors erkennst.</p>
+<h2 id="borrado-local-de-canales-beta">Kanäle lokal löschen (Beta)</h2>
+<p>In einem Standard-Codeplug mit 128 KiB gibt <strong>Aus Datei löschen</strong> den ausgewählten Speicher frei und entfernt seine Verweise aus den 68 Standardzonen (80 Kanäle pro Zone) und den 64 Scanlisten (32 Kanäle pro Liste). Auch Verweise als Priorität 1, Priorität 2 und festgelegter TX-Kanal werden bereinigt und auf null gesetzt. Namen, Markierungen, andere Kanäle und deren Nummern bleiben erhalten; es wird nicht neu nummeriert. Kontakte und die SAT-Liste werden nicht geändert. Die Zuordnung wurde mit dem <a href="https://grid.radio/opengd77/js/g77.js" target="_blank" rel="noopener noreferrer">Binärparser der öffentlichen CPS</a> abgeglichen.</p>
+<p>Dieses Verfahren unterstützt keine Scanner-Formate mit erweiterten Zonen. Es arbeitet mit einer Speicherkopie: Exportiere die bearbeitete Binärdatei unter einem anderen Namen und bewahre das Original auf. Im normalen Modus wird eine Bestätigung angefordert; PRO überspringt sie für diese Sitzung. Es wird nichts ins Funkgerät geschrieben: Das Schreiben auf ein OpenGD77-Gerät bleibt gesperrt, bis das erforderliche vollständige MCU-Backup verfügbar ist. Ein angeschlossenes Quansheng-Funkgerät ermöglicht keine Validierung der OpenGD77-Hardware.</p>
+<h2 id="importar-repetidores-remer-solo-archivo-local">REMER-Repeater importieren (nur lokale Datei)</h2>
+<p>Die REMER-Registerkarte des Planers enthält die VHF/FM-Frequenzen, die aus der vom Benutzer bereitgestellten Referenz übernommen wurden. Wähle die benötigten Speicherplätze aus und füge sie dem geöffneten Codeplug hinzu; die Anwendung liest ihn mit dem OpenGD77-Parser erneut ein, um zu prüfen, ob Name, Frequenzen und Modus in der Liste erscheinen. Die Speicherplätze werden nur für den Empfang vorbereitet. Veröffentlichte CTCSS-Werte dienen als Referenzhinweis: Töne werden weder programmiert noch über Funk verifiziert.</p>
+<p>Die Liste belegt nicht, dass eine Frequenz, ein Ton, ein Standort oder ein Repeater noch aktuell ist. Prüfe die Angaben vor jeder Verwendung bei REMER und den zuständigen Behörden. HF/SSB-Frequenzen derselben Referenz werden als Kontext angezeigt und nicht als VHF-Kanäle importiert. Wenn der Parser einen Kanal akzeptiert, belegt das nur, dass die Standardstruktur der Binärdatei lesbar ist; es beweist nicht, dass die Firmware ihn nach dem Schreiben anzeigt, HF empfangen wird oder das Funkgerät programmiert wurde. Das Schreiben auf das Gerät bleibt gesperrt.</p>
+<h2 id="importar-canales-csv-de-cps-o-chirp">CSV-Kanäle aus CPS oder CHIRP importieren</h2>
+<p>Importiere unter <strong>Vorbereitete Kanäle</strong> <code>Channels.csv</code>, exportiert aus OpenGD77 CPS, oder eine CSV-Datei mit den Standard-CHIRP-Spaltenüberschriften (<code>Name</code>, <code>Frequency</code>, <code>Duplex</code>, <code>Offset</code>, <code>Mode</code>). Der Parser akzeptiert nur analoge FM-Kanäle innerhalb von VHF 136-174 MHz und UHF 400-470 MHz. Für CHIRP verarbeitet er <code>+</code>, <code>-</code>, <code>split</code> und <code>off</code> und weist Frequenzen, Offsets oder Modi zurück, die er nicht validieren kann. Die Datensätze werden in reine RX-Kanäle umgewandelt; Töne aus der Quelle werden vermerkt, aber nicht programmiert. Prüfe die Tabelle der vorbereiteten Kanäle, wähle eine FM-Vorlage und speichere die lokale Binärdatei, um sie vor der Verwendung der CPS zu prüfen.</p>
+<p>Digitale/DMR-Zeilen aus <code>Channels.csv</code> werden ausdrücklich ausgeschlossen: Kontakte, TG-Gruppen, RX-Listen und Zonenverweise aus <code>Contacts.csv</code>, <code>TG_Lists.csv</code> und <code>Zones.csv</code> werden bei diesem Import nicht übernommen. Diese Dateien sind verknüpfte Tabellen, kein eigenständiger binärer Codeplug. Proprietäre Retevis/RT950-CSV-Dateien und <code>.4rdmf</code>-Dateien werden weder anhand ihrer Endung noch anhand von Frequenzspalten interpretiert: Für die Zuordnung der Felder sind verifizierte Spezifikationen erforderlich. Eine ausgeschlossene Zeile wird mit Zeilennummer und Grund angezeigt; sie wird weder stillschweigend verworfen noch mit der Binärdatei vermischt.</p>
+<h2 id="comprobacion-web-sin-instalacion-25-10-2026">Webprüfung ohne Installation (25-10-2026)</h2>
+<p>Die Oberfläche enthält eine Matrix <strong>OpenGD77 CPS: tatsächliche Verfügbarkeit im Web</strong>. Sie wird als statische HTTPS-Website bereitgestellt, ohne Node oder das lokale Paket zu installieren. Für den physischen Zugriff sind WebUSB/Web Serial und Browserberechtigungen erforderlich; möglicherweise wird ein Systemtreiber benötigt. Mobilkompatibilität wird nicht garantiert.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Funktion</th><th scope="col">Web ohne installierten Server</th></tr></thead><tbody>
+<tr><td>Standard-Codeplug öffnen/speichern, Kanäle bearbeiten/löschen und Verweise bereinigen</td><td>Verfügbar</td></tr>
+<tr><td>RadioID user.csv importieren</td><td>Verfügbar; die direkte API-Abfrage unterstützt kein CORS</td></tr>
+<tr><td>BrandMeister-Gruppen</td><td>Direkte Abfrage nach Präfix und Import als Gruppen</td></tr>
+<tr><td>RepeaterBook</td><td>Autorisiert bezogenes JSON importieren; authentifizierte Abfrage nur mit Server</td></tr>
+<tr><td>SAT-Liste, veröffentlichte TLE, SGP4-Pässe und Doppler-Speicher</td><td>Im Browser verfügbar</td></tr>
+<tr><td>Kalibrierung/Codeplug beim Verbinden sichern</td><td>Automatisch, dauerhaft gespeichert und mit Hashes; Teilkopie</td></tr>
+<tr><td>MCU-Firmware des Geräts kopieren</td><td>Nicht vollständig, modellverifiziert implementiert</td></tr>
+<tr><td>Funkvorgänge nach einem Teil-Backup</td><td>Gesperrt, einschließlich erneutem Lesen/Aufnehmen</td></tr>
+<tr><td>Flashen, Wiederherstellung, Sprachdateien, umfangreiche ID-Datenbank und vollständiger Zonen-/Einstellungseditor</td><td>Hier nicht implementiert</td></tr>
+</tbody></table></div>
+<p>Eine vollständige Funktionsgleichheit mit grid.radio oder der Desktop-CPS wird nicht zugesagt. Die Provider-Header wurden geprüft: BrandMeister lässt den Web-Origin zu; RadioID liefert für die getestete Abfrage kein Access-Control-Allow-Origin. Diese Grenzen werden weder durch öffentliche Proxys noch durch erfundene Daten verschleiert.</p>
+<h3 id="respaldo-previo-obligatorio">Erforderliches vorheriges Backup</h3>
+<p>Verbinden identifiziert das Gerät und führt automatisch BackupManager aus, bevor andere Funkvorgänge freigeschaltet werden. Die Identifizierung und die zum Erstellen der Sicherung erforderlichen Lesevorgänge sind die einzige Ausnahme. Kalibrierung und Codeplug werden in IndexedDB gespeichert und vor dem Export des Manifests erneut mit SHA-256 gelesen. Fehlt die MCU-Firmware, meldet das Ergebnis <strong>TEIL-BACKUP</strong>; es wird keine Berechtigung erteilt, und neue Lesevorgänge, Aufnahme, Schreiben und Wiederherstellung werden gesperrt, auch in PRO. Mit der Kopie lässt sich der Codeplug öffnen und offline bearbeiten, ohne das Funkgerät anzutasten.</p>
+<p>Dieser Schutz schafft keinen nicht vorhandenen Firmware-Leser. Es lässt sich nicht behaupten, dass die vollständige Originalfirmware bereits automatisch gesichert wird. Es werden keine willkürlichen MCU-Modi/-Adressen ausprobiert, um diese Funktion vorzutäuschen. Wenn «Original» die bereits ersetzte kommerzielle Werksfirmware meint, hilft nur eine vor der Installation erstellte Kopie; das Auslesen von OpenGD77 stellt diese Bytes nicht wieder her.</p>
+<h2 id="1-antes-de-conectar-o-transmitir">1. Vor dem Verbinden oder Senden</h2>
+<ol>
+<li>Ermittle Hersteller, vollständiges Modell, Hardware-Revision und installierte Firmware. «UV380», «10W» und «10W PLUS» sind nicht gleichwertig.</li>
+<li>Notiere CPS-Version, Firmwaredatum/Build, Sprache und Hardwareänderungen. Bewahre auch den Namen und die Herkunft des installierten Pakets auf.</li>
+<li>Prüfe deine Berechtigung, den Bandplan und die vom Repeater- oder Netzverantwortlichen veröffentlichten Parameter. Ein von der Software akzeptiertes Frequenzfeld <strong>berechtigt nicht zum Senden</strong>.</li>
+<li>Beginne mit <strong>reinen Empfangskanälen</strong>, deaktiviertem VOX und deaktivierten APRS-Baken. Schließe vor jeder Übertragung eine geeignete Antenne an.</li>
+<li>Speichere die Originalkopien außerhalb des Browsers. Kalibriere nicht und installiere keine andere Firmware, um einen einfachen Kanalfehler zu beheben.</li>
+</ol>
+<p>OpenGD77 ist auf Amateurfunk ausgerichtet. Es behält nicht unbedingt alle Funktionen der kommerziellen Firmware bei. Laut dem eingesehenen Leitfaden werden SMS TX/RX und kommerzielle Scanlisten nicht unterstützt; Datenschutz/Verschlüsselung gehören nicht zum Ziel. Verstehe diese Beschreibung nicht als weltweites Rechtsgutachten. [G: Introduction]</p>
+<h3 id="tres-significados-distintos-de-soportado">Drei unterschiedliche Bedeutungen von «unterstützt»</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Beleg</th><th scope="col">Was er nachweist</th><th scope="col">Was er nicht nachweist</th></tr></thead><tbody>
+<tr><td>Ein Modell erscheint im Handbuch</td><td>Für diese Familie oder Funktion gibt es Dokumentation</td><td>Dass jede kommerzielle Revision kompatibel ist</td></tr>
+<tr><td>Vorhanden in <code>firmware-core.js</code>, <code>TARGETS</code></td><td>Der Katalog kennt ein Ziel und bestimmte Paketnamen</td><td>USB-Installation, Echtheit an sich oder Kompatibilität mit deiner Platine</td></tr>
+<tr><td>Vorhanden in <code>gd77-connector.js</code>, <code>MODELS</code></td><td>Der Connector kennt einen Identifizierungswert des Protokolls</td><td>Physische Tests mit jedem Modell, Flashen oder Schreibberechtigung</td></tr>
+<tr><td>Das Funkgerät antwortet auf die Identifizierung</td><td>Eine erkannte Struktur und eine passende Familie wurden empfangen</td><td>Vollständiges Backup oder universelle Speicherkonformität</td></tr>
+<tr><td>Der Editor zeigt Kanäle an</td><td>Der Standardbereich der Datei kann interpretiert werden</td><td>Dass er erweiterte Kanäle, alle Benutzerdaten oder Firmware gelesen hat</td></tr>
+</tbody></table></div>
+<p><strong>Tatsächlicher Status dieser Webanwendung: OpenGD77-Schreibzugriff ist GESPERRT.</strong> Das implementierte Backup speichert Kalibrierung und Standard-Codeplug, gibt aber <code>complete: false</code> zurück: Es fehlt ein verifiziertes Protokoll zum vollständigen Kopieren der internen MCU-Firmware. Daher wird keine Schreibberechtigung erteilt. Ein offizielles Image herunterzuladen <strong>ersetzt</strong> kein Backup des Geräts. Dass eine externe CPS das Schreiben erlaubt, hebt diese Sperre nicht auf. [L]</p>
+<h2 id="2-firmware-codeplug-calibracion-y-copias">2. Firmware, Codeplug, Kalibrierung und Sicherungen</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Element</th><th scope="col">Inhalt oder Zweck</th><th scope="col">Vorsicht</th></tr></thead><tbody>
+<tr><td>Firmware</td><td>Programm, das das Funkgerät ausführt</td><td>Exakte Familie, Revision und Variante auswählen; keine Kanalliste</td></tr>
+<tr><td>Codeplug</td><td>Konfiguration: Kanäle, Kontakte, Gruppen, Zonen und weitere Einstellungen</td><td>Herstellerformat und OpenGD77-Format sind ohne Prüfung nicht austauschbar</td></tr>
+<tr><td>Kalibrierung</td><td>HF-Einstellungen dieses Geräts</td><td>Nicht von einem anderen Funkgerät kopieren oder ohne geeignete Instrumente und Verfahren bearbeiten</td></tr>
+<tr><td>EEPROM / Flash</td><td>Gerätespezifische Speicherbereiche</td><td>«Flash» bedeutet nicht notwendigerweise MCU-Firmware oder vollständigen Klon</td></tr>
+<tr><td>MCU ROM / interner Speicher</td><td>Internes Image, das die CPS bei bestimmten Geräten als separates Backup behandeln kann</td><td>Das Web verfügt über kein verifiziertes vollständiges Lesen, das eine Berechtigung erteilen könnte</td></tr>
+<tr><td>Sprachdateien, ID-Datenbank, Bahndaten</td><td>Zusätzliche mit der CPS geladene Ressourcen</td><td>Nicht annehmen, dass sie in einem 128-KiB-Codeplug enthalten sind</td></tr>
+</tbody></table></div>
+<p>Der Leitfaden empfiehlt vor dem ersten Schreiben der Konfiguration Sicherungen von EEPROM, Flash, Kalibrierung, MCU ROM und Codeplug. Die konkrete Verfügbarkeit jeder Sicherung muss mit der verwendeten CPS und dem Modell geprüft werden; die Aufzählung zertifiziert nicht, dass alle Funkgeräte dieselben Bereiche offenlegen. Archiviere die Originale, nicht nur die bearbeitete Datei. [G: Backup Before You Do Anything Else]</p>
+<h3 id="uso-disponible-en-la-web">Im Web verfügbare Nutzung</h3>
+<ol>
+<li>Öffne die Anwendung unter <code>localhost</code> oder HTTPS und verwende je nach Familie einen Browser mit WebUSB oder WebSerial. Die Kompatibilität hängt von Browser und Betriebssystem ab.</li>
+<li>Wähle die passende Familie: <code>MK22</code>, <code>STM32</code> oder <code>SERIAL</code>. Bestätige vor dem Verbinden die physische Identifizierung.</li>
+<li>Schließe CPS, MMDVMHost und jedes andere Programm, das das Funkgerät verwendet. Erteile nur dem erwarteten Gerät Zugriff.</li>
+<li>Die Verbindung identifiziert das Funkgerät und fordert ein automatisches Backup an. Prüfe Protokoll und Fehler: Das erwartete Ergebnis ist <strong>teilweise</strong>, kein vollständiges Backup.</li>
+<li>Prüfe den Download der Datei <code>.rwb.json</code>. Im Verlauf lassen sich Manifest und einzelne Binärdateien erneut exportieren. Der Browser kann dauerhafte Speicherung ablehnen: Exportiere in einen eigenen Ordner.</li>
+<li>Der Codeplug des Teil-Backups wird automatisch zur Offline-Bearbeitung geöffnet. <strong>Codeplug lesen</strong> bleibt ohne vollständiges Backup gesperrt. Du kannst auch eine Standard-Binärdatei mit genau <strong>131072 Byte (128 KiB)</strong> öffnen; unterstützte Dateiendungen ersetzen nicht die Prüfung des Inhalts.</li>
+<li>Bearbeite die lokale Datei und wähle <strong>128-KiB-Binärdatei speichern</strong>. Das verändert das Funkgerät nicht. Schreiben bleibt gesperrt.</li>
+<li>Trenne das Funkgerät in der Anwendung, bevor du die Seite wechselst oder die CPS öffnest.</li>
+</ol>
+<p>Das Formular bearbeitet vorhandene Kanäle: ASCII-Name mit bis zu 16 Zeichen, RX, TX, FM/DMR, CC, TS und nur Empfang. Nicht bearbeitete Felder bleiben erhalten; dies ist kein vollständiger Editor für alle CPS-Funktionen. Planungstools können außerdem vorlagenbasierte Kanäle, Kontakte und Satellitendaten in die lokale Datei übernehmen. Das belegt nicht, dass alle Firmwarefunktionen im Browser implementiert sind. [L]</p>
+<p><strong>Wichtige Grenze:</strong> Das Web liest den Standardbereich von 128 KiB und umfasst keine erweiterten Kanäle <strong>ab 1025</strong>. Bezeichne die Datei nicht als vollständigen Klon oder als Kopie aller Zonen und Ressourcen einer erweiterten Konfiguration. Ein Backup- oder CPS-JSON, ein Firmware-ZIP und eine Binärdatei passender Größe sind nicht automatisch ein gültiger Codeplug.</p>
+<h3 id="trabajo-con-el-cps-externo">Arbeit mit der externen CPS</h3>
+<p>Der Leitfaden verlangt <strong>OpenGD77 CPS</strong> für ein Funkgerät, auf dem bereits OpenGD77 läuft, nicht die kommerzielle CPS von Radioddity, Baofeng, TYT oder Retevis. Er empfiehlt, einen neuen Codeplug zu erstellen oder CSV zu importieren und das Ergebnis zu prüfen. Bewahre vor dem Schreiben das Original und eine Arbeitsversion auf. Nach einem von der CPS zugelassenen Schreibvorgang lies erneut aus und prüfe pro Szenario einen Kanal. Dieses Verfahren wird nicht als Möglichkeit dargestellt, die Webanwendung freizuschalten. [G: Codeplug compatibility; CPS software]</p>
+<h2 id="3-modelo-mental-como-encajan-los-datos">3. Denkmodell: Wie die Daten zusammenhängen</h2>
+<pre><code>Identidad propia: indicativo + DMR ID
+Contactos digitales: destinos TG o llamadas privadas
+Lista TG / RX Group: selección de destinos para un canal
+Canal: RX/TX + modo + tonos o CC/TS + destino/lista + restricciones
+Zona: selección ordenada de canales
+Exploración: canales de la zona o intervalo del VFO</code></pre>
+<p>Eine <strong>ID-Datenbank</strong> zeigt Namen von Gesprächspartnern an. Sie ersetzt weder Kontakte noch weist sie den TX-TG zu. Ein <strong>digitaler Kontakt</strong> kann eine Gruppe oder einen privaten Anruf darstellen: Der Typ ist ebenso wichtig wie die Nummer.</p>
+<p>In kommerziellen CPS-Programmen oder Codeplugs findest du «RX Group», «RX Group List» oder «Empfangsgruppe». OpenGD77 dokumentiert <strong>TG Lists</strong>, um TG vom Kanal aus auszuwählen und je nach Filter den Empfang einzuschränken. Gehe nicht davon aus, dass eine importierte Liste genau die Empfangsregeln der kommerziellen Firmware abbildet. [G: CPS software — Overview]</p>
+<h3 id="orden-recomendado-al-programar">Empfohlene Reihenfolge beim Programmieren</h3>
+<ol>
+<li>Trage bei Bedarf dein Rufzeichen und deine DMR ID ein.</li>
+<li>Erstelle digitale Kontakte vom Typ Gruppe für die benötigten TG; halte private Anrufe getrennt.</li>
+<li>Erstelle nützliche TG-Listen pro Repeater, geografischer Zone oder Einsatzzweck.</li>
+<li>Erstelle Kanäle mit Frequenzen, Modus und Parametern des tatsächlichen Dienstes.</li>
+<li>Weise je nach gewähltem Ablauf eine TG-Liste oder einen direkten Kontakt zu.</li>
+<li>Gruppiere die Kanäle in kleine, geordnete Zonen.</li>
+<li>Prüfe Scan-Ausschlüsse, Leistung, TOT und Nur-Empfang.</li>
+<li>Speichere, überprüfe und teste zuerst im Empfang.</li>
+</ol>
+<p>Du musst nicht für jeden TG einen eigenen Kanal duplizieren, wenn RX/TX, CC und Repeaterbetrieb übereinstimmen und die TG-Liste die Ziele abdeckt. Separate Kanäle können jedoch bei unterschiedlichem TS, Betriebsbedingungen oder Einschränkungen sinnvoll sein.</p>
+<p><strong>Versionshinweis:</strong> Der allgemeine CPS-Abschnitt empfiehlt mindestens eine TG-Liste mit einem Gruppenkontakt; der Abschnitt <code>Channel Details</code> dokumentiert außerdem die Auswahl von <strong>TG Lst oder Contact</strong>, nicht beides gleichzeitig. Diese Abläufe müssen mit der verwendeten CPS/Build geprüft werden; sie rechtfertigen nicht die Behauptung, alle Versionen verwalteten beides gleich.</p>
+<h2 id="4-campos-de-canal-y-significado-practico">4. Kanalfelder und ihre praktische Bedeutung</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Feld</th><th scope="col">FM</th><th scope="col">DMR</th><th scope="col">Was prüfen</th></tr></thead><tbody>
+<tr><td>Name</td><td>Lokale Bezeichnung</td><td>Lokale Bezeichnung</td><td>Ein Name konfiguriert den Repeater nicht</td></tr>
+<tr><td>RX</td><td>Empfangsfrequenz des Funkgeräts</td><td>Empfangsfrequenz des Funkgeräts</td><td>Bei Repeatern normalerweise dessen Ausgang</td></tr>
+<tr><td>TX</td><td>Sendefrequenz des Funkgeräts</td><td>Sendefrequenz des Funkgeräts</td><td>Bei Repeatern normalerweise dessen Eingang</td></tr>
+<tr><td>Modus</td><td>FM / Schmalband-FM</td><td>DMR</td><td>Muss zum Dienst passen</td></tr>
+<tr><td>BW</td><td>Laut Leitfaden 25 oder 12,5 kHz</td><td>Entspricht nicht der Auswahl von TS</td><td>Örtliche Kanalplanung beachten</td></tr>
+<tr><td>RX CSS</td><td>CTCSS oder DCS für den Empfang</td><td>Kein DMR-Filter</td><td>Ein falscher Ton kann gültiges Audio stummschalten</td></tr>
+<tr><td>TX CSS</td><td>Gesendetes CTCSS oder DCS</td><td>Nicht zutreffend</td><td>Den vom Repeater benötigten Wert verwenden</td></tr>
+<tr><td>Color Code</td><td>Nicht zutreffend</td><td>CC 0–15</td><td>Weder TG noch analoger Ton</td></tr>
+<tr><td>Timeslot</td><td>Nicht zutreffend</td><td>TS1 oder TS2</td><td>Muss zur Netzzuordnung passen</td></tr>
+<tr><td>TG List / Contact</td><td>Keine DTMF-Tonliste</td><td>Auswählbares oder direktes Ziel</td><td>Gruppen-/Privattyp und mögliche Overrides prüfen</td></tr>
+<tr><td>DMR ID</td><td>Identifiziert allein keine FM-Übertragung</td><td>Eigene digitale Identität</td><td>Möglicherweise eigene Einstellung pro Kanal</td></tr>
+<tr><td>RX Only</td><td>Verhindert TX</td><td>Verhindert TX</td><td>Bei der Vorbereitung sehr nützlich</td></tr>
+<tr><td>TOT</td><td>Sendezeitbegrenzung</td><td>Sendezeitbegrenzung</td><td>Tatsächliche Dauer und Warnung prüfen</td></tr>
+<tr><td>Ch Power</td><td>Geräteeigene Leistung oder Master</td><td>Geräteeigene Leistung oder Master</td><td>Der angezeigte Wert ist keine HF-Messung</td></tr>
+<tr><td>Zone Skip / All Skip</td><td>Scan-Ausschluss</td><td>Scan-Ausschluss</td><td>Verschiedene Bedienelemente</td></tr>
+<tr><td>Kanalstandort</td><td>Koordinaten des Repeaters</td><td>Koordinaten des Repeaters</td><td>Nicht mit dem Standort des Bedieners verwechseln</td></tr>
+<tr><td>APRS</td><td>FM-Bakenprofil</td><td>Kann eine separate FM-Frequenz benötigen</td><td>Entspricht nicht dem APRS-Empfang</td></tr>
+</tbody></table></div>
+<p><strong>Simplex:</strong> RX und TX stimmen überein. <strong>Repeater:</strong> Beide Frequenzen ausdrücklich eingeben; nicht nur auf das Vorzeichen eines Offsets vertrauen. Der VFO-Abstimmschritt ist nicht die FM-Bandbreite.</p>
+<p><code>Reverse</code> vertauscht den RX/TX-Betrieb des Repeaters; <code>Talkaround</code> sendet für den Direktbetrieb auf der RX-Frequenz. Die Funktionen sind nicht gleichbedeutend und laut Leitfaden gegenseitig ausgeschlossen. Verwende sie erst, nachdem du geprüft hast, auf welcher Frequenz das Funkgerät tatsächlich sendet. <code>Force DMO</code> erzwingt direkten DMR-Betrieb, auch bei unterschiedlichen Frequenzen; dies ist keine allgemeine Option zur «Verbesserung der Reichweite». [G: Channel Quick Menu; Channel Details]</p>
+<h2 id="5-escenario-a-canal-fm-de-escucha-o-repetidor">5. Szenario A: FM-Kanal zum Zuhören oder für einen Repeater</h2>
+<ol>
+<li>Erstelle einen FM-Kanal und beginne mit <code>RX Only</code>.</li>
+<li>Gib RX und TX gemäß den Angaben des Dienstverantwortlichen ein; für Simplex dieselbe Frequenz verwenden.</li>
+<li>Stelle entsprechend der Kanalplanung Wide-/Narrow-FM ein.</li>
+<li>Gib den erforderlichen <strong>TX</strong>-Ton ein. Lass RX CSS während der Fehlersuche ohne Ton, sofern kein bestimmter Bedarf bekannt ist.</li>
+<li>Stelle Squelch so ein, dass Rauschen unterdrückt wird, schwache Signale aber nicht abgeschnitten werden; er ersetzt keinen korrekten Ton.</li>
+<li>Füge den Kanal einer Zone hinzu; prüfe <code>Zone Skip</code> und <code>All Skip</code>.</li>
+<li>Prüfe den Empfangston. Erst danach, falls du dazu berechtigt bist, TX mit vorsichtiger Leistung freischalten und kurz testen.</li>
+</ol>
+<p>CTCSS und DCS steuern die Audioöffnung oder den Zugang; <strong>sie verschlüsseln das Gespräch nicht</strong>. Mit Monitor lässt sich fehlendes Signal von einer Stummschaltung durch Filter unterscheiden. Der VFO-Tonsuchlauf kann CTCSS oder DCS finden. Laut Leitfaden wird das Ergebnis sowohl auf RX als auch TX angewendet: Prüfe beides, bevor du sendest.</p>
+<p>Der <strong>1750-Hz</strong>-Öffnungston und <strong>DTMF</strong>-Sequenzen sind andere Funktionen als CTCSS/DCS. Sende kein DTMF an Steuerungen, wenn du deren Funktion und die erforderliche Berechtigung nicht kennst. Der lokal hörbare Ton gibt das gesendete DTMF nicht immer genau wieder: Der Leitfaden weist auf Hardwareunterschiede bei MD-UV380 und MD-9600 hin. [G: FM specific functionality]</p>
+<h2 id="6-escenario-b-repetidor-dmr-con-varios-tg">6. Szenario B: DMR-Repeater mit mehreren TG</h2>
+<ol>
+<li>Lass dir RX, TX, CC und die TG-Verteilung pro TS vom Repeaterverantwortlichen geben.</li>
+<li>Gib deine gültige DMR ID ein. Verwende weder die ID einer anderen Person noch die TG-Nummer als eigene Identität.</li>
+<li>Erstelle Kontakte vom Typ <strong>Group Call</strong> mit den TG-Nummern; erstelle eine TG-Liste und weise sie dem Kanal zu.</li>
+<li>Konfiguriere RX/TX, CC und TS des Kanals. Wähle zunächst einen bekannten, auf diesem TS zugelassenen TG.</li>
+<li>Prüfe den Empfang mit den vorgesehenen Filtern; lockere Filter zur Diagnose kontrolliert und stelle die normale Konfiguration wieder her.</li>
+<li>Prüfe, ob noch eine manuelle TG/TS-Auswahl aus einem früheren Test aktiv ist.</li>
+<li>Wenn Senden angebracht ist, höre erst zu, aktiviere den TG entsprechend den Netzregeln und lasse Pausen zwischen den Durchgängen.</li>
+</ol>
+<p>Einen TG zu hören bedeutet nicht, dass er dauerhaft mit dem Repeater verbunden ist. Statische oder dynamische TG, Reflektoren und Aktivierungsregeln hängen vom <strong>Netz und dessen Administrator</strong> ab, nicht nur vom Codeplug.</p>
+<h3 id="seleccion-temporal-contactos-y-llamadas-privadas">Vorübergehende Auswahl, Kontakte und private Anrufe</h3>
+<p>Bei der Referenztastenbelegung lässt sich mit <code>#</code> ein TG eingeben; zweimaliges Drücken von <code>#</code> ermöglicht die Eingabe eines privaten Ziels. Die TS-Wechseltaste und Kontakte mit bevorzugtem TS können den aktiven TS ändern. Entsprechende Bedienelemente unterscheiden sich je nach Funkgerät; siehe Modelltabelle.</p>
+<p>Eine manuelle Auswahl oder ein <strong>override</strong> kann Vorrang vor Kanal oder Liste haben. Der Leitfaden dokumentiert, dass sich ein TS-Override durch Gedrückthalten der TS-Taste löschen lässt und man einen privaten Anruf durch Auswahl eines TG oder mit anderen modellabhängigen Bedienelementen beendet. Prüfe das sichtbare Ziel und den TS <strong>vor dem PTT</strong>.</p>
+<p>Verwechsle einen DMR-«Privatanruf» nicht mit Vertraulichkeit. Er ist nicht allein deshalb verschlüsselt, weil er privat ist. Empfang und automatische Annahme privater Anrufe hängen ebenfalls von den Firmwareoptionen ab. [G: DMR specific functionality; Making and receiving DMR Private Calls]</p>
+<h3 id="filtros-dmr-no-son-todos-el-mismo">DMR-Filter: Sie sind nicht alle gleich</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Bedienelement</th><th scope="col">Wirkung</th><th scope="col">Vorsicht</th></tr></thead><tbody>
+<tr><td>DMR Filter Off</td><td>Begrenzt nicht nach dem TG-/Kontaktkriterium der anderen Modi</td><td>Hebt nicht alle Signalanforderungen auf</td></tr>
+<tr><td>TG</td><td>Filtert nach ausgewähltem TG</td><td>Andere empfangbare Gruppen können ausgeblendet werden</td></tr>
+<tr><td>Ct</td><td>Filtert laut Leitfaden nach privaten Anrufkontakten im Codeplug</td><td>Nicht mit TG-Liste verwechseln</td></tr>
+<tr><td>TGL</td><td>Filtert nach Gruppen in der TG-Liste</td><td>Inhalt und Zuordnung der Liste prüfen</td></tr>
+<tr><td>TS Filter</td><td>Hört den vorgesehenen Slot oder sucht Aktivität zwischen Slots</td><td>Ausschalten erzeugt keine zwei gleichzeitigen Empfänger</td></tr>
+<tr><td>CC Scan, zuvor CC Filter</td><td>Sucht einen gültigen CC für den Empfang</td><td>Bedeutet nicht «alle CC ignorieren»; kann den Empfangsbeginn verzögern oder verpassen</td></tr>
+</tbody></table></div>
+<p>Der Leitfaden erklärt, dass die DMR-Schaltung einen CC benötigt und die Firmware bei aktiviertem <code>CC Scan</code> nach einer Übereinstimmung sucht. Für den normalen Betrieb mit bekanntem CC wird dies nicht empfohlen. Außerdem verwendet das Abhören beider TS einen Auswahlalgorithmus und keinen unabhängigen gleichzeitigen Empfang. Eine visuelle Umkehrung von CC/TS und Modus kann auf Filtereinstellungen statt auf einen Displayfehler hindeuten. [G: Filters (Channel)]</p>
+<p><strong>Geordnete Fehlersuche:</strong> Frequenz und Modus → HF-Signal → CC → TS → TG/Anruftyp → Filter → Status der Netzverbindung. Wenn du alles gleichzeitig änderst, kannst du nicht erkennen, wodurch das Problem behoben wurde.</p>
+<h2 id="7-zonas-rx-groups-y-exploracion">7. Zonen, RX groups und Scan</h2>
+<p>Eine <strong>Zone</strong> ist eine geordnete Kanalsammlung, kein Band und kein Netz. Derselbe Kanal kann in mehreren Zonen verwendet werden. Eine <strong>TG-Liste</strong> enthält digitale Ziele; sie legt nicht fest, welche Kanäle gescannt werden.</p>
+<p>Der Leitfaden implementiert <strong>kommerzielle Scanlisten</strong> nicht als gleichwertige Funktion. Wenn du eine Scan-Gruppe nachbilden möchtest, erstelle eine Zone mit diesen Kanälen und scanne die Zone. Das Importieren des Feldes «Scan List» aus einer kommerziellen Datei reicht nicht aus.</p>
+<h3 id="escenario-c-explorar-una-zona-local">Szenario C: Eine lokale Zone scannen</h3>
+<ol>
+<li>Erstelle eine Zone mit den Kanälen, die du tatsächlich hören möchtest.</li>
+<li>Prüfe, ob sie einzeln nutzbar und nicht über <code>Zone Skip</code> ausgeschlossen sind.</li>
+<li>Starte den Scan mit dem Bedienelement deines Modells. Beim GD-77 und mehreren Modellen mit entsprechender Referenzbelegung wird langes Drücken von Aufwärts verwendet.</li>
+<li>Passe <code>Scan dwell</code> an, wenn du schwache oder sporadische Signale verpasst: Mehr Zeit pro Kanal verbessert die Erkennungschance, verlangsamt aber den Scan.</li>
+<li>Wähle das Verhalten: <code>Hold</code> bleibt bei vorhandenem Signal stehen; <code>Pause</code> setzt nach der Verzögerung fort; <code>Stop</code> beendet den Scan bei einem gültigen Signal.</li>
+<li>Nutze bei Bedarf den vorübergehenden Ausschluss eines störenden Kanals. Verwechsle ihn nicht mit der dauerhaften Bearbeitung von <code>Zone Skip</code> oder <code>All Skip</code>.</li>
+<li>Prüfe für <code>All Channels</code> separat <code>All Skip</code>.</li>
+</ol>
+<p>Der VFO-Scan verwendet untere/obere Grenzen und eine Schrittweite, keine Zone. <code>Dual Watch</code> wechselt die Aufmerksamkeit zwischen VFOs; <strong>das belegt keinen gleichzeitigen Doppelempfang</strong>. Der Spektrum-Scan ist eine andere Darstellung, kein kalibrierter Analysator. [G: Scanning; VFO specific functionality; Channel Details]</p>
+<p>Organisiere beim GD-77S Zonen mit <strong>bis zu 16 über den Wahlschalter erreichbaren Kanälen</strong>; dass das Format größere Zonen zulässt, erweitert nicht die physischen Bedienelemente.</p>
+<p><code>Roaming</code> ordnet laut eingesehenem Leitfaden die Zone nach Entfernung zu Repeatern, wenn Standort des Bedieners und Kanal-Koordinaten verfügbar sind. Es bestätigt weder, dass jeder Repeater in Betrieb ist, noch wählt es den HF-stärksten aus. Es ordnet <code>All Channels</code> nicht und wird während des Scans deaktiviert. [G: Roaming]</p>
+<h2 id="8-pantallas-controles-y-conservacion-de-cambios">8. Bildschirme, Bedienelemente und Speichern von Änderungen</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Bildschirm oder Modus</th><th scope="col">Verwendung</th><th scope="col">Prüfung</th></tr></thead><tbody>
+<tr><td>VFO A/B</td><td>Abstimmung und Parametertests</td><td>RX und TX prüfen, nicht nur die hervorgehobene Frequenz</td></tr>
+<tr><td>Kanal</td><td>Betrieb mit Codeplug und Zone</td><td>Tatsächlich aktive Zone, Kanal, TG und TS prüfen</td></tr>
+<tr><td>Channel Details</td><td>Kanal- oder VFO-Daten bearbeiten</td><td>Vorübergehendes Anwenden vom Speichern unterscheiden</td></tr>
+<tr><td>Last Heard</td><td>Empfangene digitale Aktivität prüfen</td><td>Zeigt nicht alle Netzteilnehmer</td></tr>
+<tr><td>Radio Info</td><td>Akku, Datum/Uhrzeit und je nach Gerät Standort</td><td>Ohne RTC kann die Uhrzeit verloren gehen</td></tr>
+<tr><td>RSSI</td><td>Orientierung zum Empfangspegel</td><td>Ersetzt kein kalibriertes HF-Messgerät</td></tr>
+<tr><td>GPS</td><td>Status des installierten Empfängers</td><td>Fehlt es oder steht <code>None</code>, behebt Laden eines Codeplugs das nicht</td></tr>
+<tr><td>Satellite</td><td>Vorhersagen und Satellitenbetrieb</td><td>Benötigt gültige Zeit, Position und Bahnelemente</td></tr>
+</tbody></table></div>
+<p>Bei <code>Channel Details</code> unterscheidet der Leitfaden <strong>Green</strong> zum Bestätigen, <strong>SK2 + Green</strong> zum dauerhaften Speichern und <strong>Red</strong> zum Abbrechen. Die Konfigurationssperre kann dauerhafte Änderungen verhindern. Diese Bezeichnungen stehen für logische Bedienelemente, nicht für physisch gleiche Tasten bei allen Geräten.</p>
+<p>Vorübergehende Einstellungen für Kanalleistung, TG und TS ändern den Codeplug möglicherweise nicht. Wechsle nach einem Test den Kanal oder rufe die Details auf, um zu prüfen, was gespeichert wurde. Bewahre eine bekannte Dateiversion auf dem Computer auf.</p>
+<p>Je nach Plattform/Build gibt es Displayoptionen für Beleuchtung, Kontrast, Invertierung, Farben und Tag-/Nachtmodus. Ein GD-77 mit invertiertem Display wird dadurch nicht physisch zur «Black»-LCD-Variante. Übertrage Farbthemen nicht auf monochrome Modelle oder Screenshots auf den GD-77S ohne Display. [G: Main screens; Display Options; Channel Details]</p>
+<h2 id="9-accesibilidad-y-sonido">9. Barrierefreiheit und Ton</h2>
+<p>OpenGD77 dokumentiert akustische Hinweise, Wiederholung von Sprachausgaben und Sprachlautstärke. Sprachdateien werden <strong>separat mit der CPS geladen</strong>; die Änderung der Menüsprache ändert nicht automatisch die installierte Stimme.</p>
+<ol>
+<li>Prüfe, ob die Sprachdatei für Firmware und Sprache geeignet ist.</li>
+<li>Wähle <code>Prompt</code>: Stummschaltung, Pieptöne, Pieptöne ohne Tastentöne oder Sprache, sofern verfügbar.</li>
+<li>Teste die Stufen <code>Voice</code>, <code>Voice L2</code> und <code>Voice L3</code>: Sie verändern Zeitpunkt und Detailtiefe der Ansage, nicht die Sprache.</li>
+<li>Verwende das SK1 entsprechende Bedienelement, um die letzte Ansage zu wiederholen; während einer Ansage kann es sie stoppen.</li>
+<li>Stelle die Lautstärke der Pieptöne und DMR-/TOT-Beginn-/Endhinweise ein, ohne erforderliche Warnungen zu entfernen.</li>
+<li>Teste die Konfiguration vollständig ohne Display, bevor du sie unterwegs verwendest.</li>
+</ol>
+<p>Beim <strong>GD-77S</strong> ist das Laden von Sprachdateien für den praktischen Betrieb unerlässlich, da es weder Display noch Tastatur gibt. Mit der Modustaste lassen sich TG, Scan, TS, CC, Filter, Zone und Leistung durchgehen; SK1/SK2 ändern je nach angesagtem Modus ihre Funktion. Verwende keine Abläufe des GD-77 mit Display. [G: Sound Options — Prompt; GD-77S operation]</p>
+<p>Die Mikrofonverstärkung für FM und DMR wird getrennt eingestellt. Mehr Verstärkung bedeutet nicht mehr Reichweite; sie kann die Verständlichkeit verschlechtern. VOX kann unbeabsichtigtes Senden auslösen; deaktiviere es bei Konfiguration, Tests und USB-Verbindung.</p>
+<h2 id="10-potencia-bateria-y-calibracion">10. Leistung, Akku und Kalibrierung</h2>
+<p>Die Leistung <strong>Master</strong> gilt für VFO und Kanäle, die diese Einstellung übernehmen; ein Kanal kann eine eigene Leistung haben. Laut Leitfaden wird die eigene Leistung hervorgehoben angezeigt; eine Änderung im Betrieb kann vorübergehend sein. Verwende zum dauerhaften Speichern das für das Modell beschriebene Verfahren in den Details.</p>
+<p>Es gibt keine einheitliche Skala für alle Hand- und Mobilgeräte. Der Leitfaden unterscheidet 5-W-Geräte, 10-W-Varianten und Mobilgeräte; außerdem macht die Skalierungsoption eines UV380 <strong>10W ohne PLUS</strong> aus einem normalen Handfunkgerät keine andere Hardware. Die Variante <strong>10W PLUS benötigt ihr eigenes Image</strong>. [G: Controlling Tx power; Radio Options — Mode; F2]</p>
+<p>Bewährte Vorgehensweisen:</p>
+<ul>
+<li>Verwende nur die erforderliche Mindestleistung und eine geeignete Antenne.</li>
+<li>Prüfe Stromversorgung, Akku, Anschlüsse und SWR, bevor du einen vermeintlichen Leistungsabfall untersuchst.</li>
+<li>Verstehe eine Displayangabe nicht als Garantie für gemessene Leistung.</li>
+<li>Versuche nicht, durch Ändern einer Bezeichnung, eines Menüs oder der Kalibrierung aus einem 5-W-Gerät 10 W zu machen.</li>
+<li>Kopiere keine Kalibrierung eines anderen Funkgeräts, selbst bei gleichem Modell.</li>
+<li>Bearbeite keine Referenz-, Abweichungs- oder Leistungseinstellungen, um einen CC-/TG-Fehler zu beheben.</li>
+<li>Kalibrierung erfordert Instrumente, passende Last und ein spezifisches Verfahren. Wenn du das nicht hast, bewahre die Originalwerte auf.</li>
+</ul>
+<p>Ein Funkgerät kann sich bei längeren Übertragungen stark erhitzen, besonders als Hotspot. Eine bei unterbrochenem Sprechfunk verträgliche Leistung garantiert keinen sicheren Dauerbetrieb.</p>
+<h2 id="11-hotspot-dmr-por-usb">11. DMR-Hotspot über USB</h2>
+<p>Der Leitfaden dokumentiert das Funkgerät als Modem für <strong>DMR-Sprache</strong> mit MMDVMHost/Pi-Star und erwähnt BlueDV mit Kompatibilitätshinweisen. Es ist weder ein Netzzugang über den Browser noch ein WLAN-Hotspot und macht nicht jedes Funkgerät zu einem Duplex-Repeater.</p>
+<h3 id="escenario-d-radio-compatible-como-hotspot">Szenario D: Kompatibles Funkgerät als Hotspot</h3>
+<ol>
+<li>Bestätige, dass Modell und Build dies unterstützen. <strong>RD-5R/DM-5R unterstützt wegen der USB-Beschränkung beim Senden keinen Hotspot.</strong></li>
+<li>Wähle die passende Hotspot-Option am Funkgerät; betreibe nicht gleichzeitig eine CPS-/Web-Sitzung.</li>
+<li>Verbinde das geeignete Programmierkabel mit dem Computer oder MMDVMHost-Gerät.</li>
+<li>In Pi-Star nennt der Leitfaden den Modemtyp <code>OpenGD77 DMR hotspot (USB)</code>. Falls er fehlt, prüfe Version und Dokumentation des Hosts.</li>
+<li>Konfiguriere Frequenz, CC, ID und Netz nach Vorschriften und Host. Prüfe den Modus auf dem Display des Funkgeräts.</li>
+<li>Beginne mit geringer Leistung, ausreichender Belüftung und kurzen Tests. Übertrage Prozent-/Leistungstabellen eines Handfunkgeräts nicht auf ein Mobilgerät.</li>
+<li>Wenn USB beim Senden zurückgesetzt wird, untersuche zuerst HF-Einstrahlung: Der Leitfaden empfiehlt eine separate externe Antenne, HF-Schutz am USB und geeignete Maßnahmen am Host. Verwende bei dieser Anordnung nicht die Antenne direkt am Handfunkgerät.</li>
+</ol>
+<p>Die Werte <code>RFLevel</code>/Prozentangaben des Hosts entsprechen keiner universellen Wattzahl. Der Leitfaden beschreibt bei manchen Implementierungen sogar eine Sonderbehandlung des Werts 100; verwende dies nicht als Regel für jeden Build. Gruppenverwaltung, Authentifizierung und Verbindungen gehören ebenfalls zur Software und zum Netz des Hosts. [G: Hotspot mode]</p>
+<h2 id="12-aprs-que-puede-y-que-no-puede-hacer">12. APRS: Möglichkeiten und Grenzen</h2>
+<p>Der Leitfaden dokumentiert <strong>FM-APRS-Senden mit AFSK bei 1200 oder 300 Baud</strong> und <strong>keinen APRS-AX.25-Empfang bzw. keine Decodierung</strong>. Versprich weder eine Karte empfangener Stationen noch bidirektionale APRS-Nachrichten oder einen universellen TNC.</p>
+<p>Es handelt sich um unterschiedliche Mechanismen:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Mechanismus</th><th scope="col">Übertragungsweg der Daten</th><th scope="col">Abhängigkeiten</th></tr></thead><tbody>
+<tr><td>FM APRS</td><td>AFSK-Paket auf einer FM-Frequenz</td><td>APRS-Profil, Rufzeichen, Position und passende Frequenz</td></tr>
+<tr><td>Position über Talker Alias DMR</td><td>Informationen im DMR-Datenstrom</td><td>Unterstützung durch Repeater/Netz und TA-Optionen</td></tr>
+<tr><td>Veröffentlichung auf einer APRS-Website</td><td>Nachgelagerte Verarbeitung durch Infrastruktur</td><td>Empfangsabdeckung, Gateway und Netz; durch das Senden nicht garantiert</td></tr>
+</tbody></table></div>
+<h3 id="escenario-e-primera-baliza-fm-aprs">Szenario E: Erste FM-APRS-Bake</h3>
+<ol>
+<li>Konfiguriere Rufzeichen und APRS-Profil in OpenGD77 CPS. Der Leitfaden beschreibt bis zu <strong>8 Profile</strong>, nicht eine universelle Anzahl für alle künftigen Versionen.</li>
+<li>Stelle SSID, Ziel/Route, Symbol, Kommentar, Geschwindigkeit und Frequenz entsprechend dem lokalen Netz ein. Übertrage keine terrestrische Route auf einen Satelliten.</li>
+<li>Gib eine gültige manuelle Position oder GPS mit tatsächlichem Fix an. Wähle GPS nicht als Quelle, wenn das Funkgerät keinen funktionierenden Empfänger hat.</li>
+<li>Weise das Profil dem entsprechenden Kanal oder VFO zu.</li>
+<li>Wähle zuerst <code>Manual</code>; prüfe Standort und Frequenz, bevor du eine Testbake sendest.</li>
+<li>Prüfe den Empfang mit Infrastruktur oder einem geeigneten Empfänger, nicht nur anhand des lokalen Pieptons. Manche Modelle geben keine Audio-Rückmeldung aus.</li>
+<li>Aktiviere erst dann bei Bedarf <code>PTT</code>, <code>Auto</code> oder <code>Smart</code>. Prüfe Intervall und Decay, damit der Kanal nicht unnötig belegt wird.</li>
+</ol>
+<p>Bei <code>PTT</code> wird die Bake laut Leitfaden nach dem Loslassen von PTT unter Berücksichtigung der Timer gesendet; <code>Auto</code> verwendet Intervalle und <code>Smart</code> passt sie an Bewegung und Drehung an. Eine ungültige Position kann die Bake verhindern oder <code>Location?</code> anzeigen. Vorübergehende Deaktivierung und Tastenkombinationen sind modellabhängig.</p>
+<p>Ein Profil kann eine andere TX-Frequenz festlegen; andernfalls wird die Frequenz des analogen Kanals/VFO verwendet. Für diese FM-Funktion verlangt der Leitfaden in einem DMR-Kanal eine ausdrücklich angegebene APRS-Frequenz. Die Profilfrequenz gilt im Satellitenmodus und im APRS-Modus <code>PTT</code> nicht gleichermaßen: Prüfe diese Ausnahmen vor dem Betrieb. [G: FM APRS location transmission; APRS Options]</p>
+<p>Die TA-Option <code>APRS</code> oder <code>Both</code> aktiviert keinen AX.25-Empfänger. Der Leitfaden warnt vor Problemen mit gesendetem Talker Alias in Motorola-Repeatern/-Netzen; lasse TA TX deaktiviert, sofern das System dies nicht nachweislich unterstützt. Der TA-Empfang hängt nicht davon ab, dass dessen Übertragung eingeschaltet ist. Veröffentliche persönliche Koordinaten nicht automatisch, ohne deren Datenschutz zu berücksichtigen.</p>
+<h2 id="13-gps-nmea-y-registro">13. GPS, NMEA und Protokollierung</h2>
+<p>GPS ist eine <strong>Hardwarefunktion</strong>, die nicht durch die Installation einer Datei entsteht. Der Leitfaden dokumentiert Versionen mit optionalem Empfänger und Änderungen bei bestimmten Familien; nicht jedes Gerät gleichen Namens hat GPS.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Status/Option</th><th scope="col">Bedeutung laut Leitfaden</th><th scope="col">Folge</th></tr></thead><tbody>
+<tr><td><code>None</code></td><td>Kein Modul erkannt</td><td>Variante, Installation und Kompatibilität prüfen; nicht von einem Menüfehler ausgehen</td></tr>
+<tr><td><code>Off</code></td><td>GPS deaktiviert</td><td>Bei MD-9600/RT-90 gibt es Einschränkungen bei der Stromversorgungssteuerung</td></tr>
+<tr><td><code>On</code></td><td>Empfänger aktiviert</td><td>Muss Position ermitteln; im Freien testen</td></tr>
+<tr><td><code>NMEA</code></td><td>GPS-Daten werden über USB-Seriell gesendet</td><td>Normale CPS-Kommunikation ist bis zum Wechsel zu <code>Off</code> oder <code>On</code> nicht möglich</td></tr>
+<tr><td><code>Log</code></td><td>NMEA-Protokoll im Flash</td><td>Belegt Speicher und kann andere Ressourcen verdrängen</td></tr>
+</tbody></table></div>
+<p>Ein fehlender Fix in Innenräumen beweist keinen defekten Empfänger. Geh ins Freie und prüfe den GPS-Bildschirm. Die aus der Bewegung abgeleitete Richtung ist kein Magnetkompass, der im Stillstand funktioniert. Bei aktivem GPS dokumentiert der Leitfaden die Aktualisierung der Uhr und die Verwendung der Position durch andere Funktionen.</p>
+<p><strong>Speicherwarnung:</strong> Bei Geräten mit 1 MB Flash, etwa dem GD-77-Beispiel aus dem Leitfaden, belegt aktivierte GPS-Protokollierung Speicher der DMR-ID-Datenbank und kann <strong>deren Daten löschen</strong>; Sprachdateien beeinflussen den verfügbaren Platz ebenfalls. Deaktiviere die Protokollierung und lade die Datenbank erneut, falls du sie wiederherstellen musst. Übertrage die Protokollierungsfunktionen eines Flash-Geräts nicht auf alle Modelle. [G: General Options — GPS; GPS Screen]</p>
+<p>MK22-Pakete mit dem Zusatz <code>_NMEA</code> sind veröffentlichte Varianten; ihre Existenz beweist nicht, dass ein unverändertes Funkgerät GPS enthält. Verwechsle ein <strong>NMEA-Variantenimage</strong> nicht mit dem <strong>NMEA-Ausgabemodus über USB</strong> im Menü. Prüfe Build-Hinweise und Hardware vor der Auswahl. [F1]</p>
+<h2 id="14-satelites-preparacion-y-operacion">14. Satelliten: Vorbereitung und Betrieb</h2>
+<p>Der dokumentierte Satellitenbildschirm sagt Überflüge voraus, zeigt Azimut/Elevation an und wendet Doppler-Korrektur auf RX/TX an. Er macht das Gerät weder zum Empfänger aller Satellitenmodi noch belegt er Vollduplex.</p>
+<h3 id="escenario-f-preparar-un-pase">Szenario F: Einen Überflug vorbereiten</h3>
+<ol>
+<li>Prüfe den Betriebsstatus und die Regeln des Satelliten anhand aktueller Quellen des Betreibers/AMSAT.</li>
+<li>Aktualisiere mit der CPS die Bahnelemente <strong>Keps/TLE</strong> und Parameter der Satelliten, die du tatsächlich verwenden wirst.</li>
+<li>Gib korrekten Standort sowie Datum/Uhrzeit ein; prüfe UTC im Vergleich zur Ortszeit. Eine große Zeitabweichung verschiebt Vorhersagen.</li>
+<li>Bestätige Frequenzen, Modus, Töne und ob der Satellit zu diesem Zeitpunkt Sprache, Bake oder APRS zulässt.</li>
+<li>Prüfe die Passliste und danach die Polardarstellung oder Live-Daten.</li>
+<li>Teste den Empfang vor dem Senden. Passe Antenne, Ausrichtung und Leistung an den Überflug an, ohne allgemeine Regeln terrestrischer Repeater zu übertragen.</li>
+<li>Wenn es Satelliten-APRS gibt, verwende dessen spezifische Parameter. Der Leitfaden unterstützt Profile mit Satellitennamen zur Anpassung der vorgesehenen Werte.</li>
+</ol>
+<p>Laut Leitfaden stellt das Hochladen von Keps mit der CPS auch Datum/Uhrzeit ein. Funkgeräte ohne RTC können sie beim Ausschalten verlieren; leite die Speicherung nicht auf den gesamten Katalog ab. Die Erwähnung von RTC bei MD-9600/RT-90, UV380/RT-3S und DM-1701 entspricht dem Umfang des Textes und ist keine Zertifizierung aller späteren Modelle.</p>
+<p>Veraltete Bahndaten, eine falsche Hemisphäre oder die Verwechslung von Dezimalgraden mit einem anderen Format führen auch bei korrekt funktionierender Firmware zu falschen Vorhersagen. Alarme, automatischer Satellitenwechsel und besondere Tonsteuerungen hängen von Build/Plattform ab. Die lokale Bearbeitung von Satellitendaten in dieser Webanwendung <strong>lädt sie nicht ins Funkgerät</strong>, solange der Schreibzugriff gesperrt bleibt. [G: Satellite Screen; L]</p>
+<h2 id="15-usb-modos-de-conexion-y-firmware">15. USB, Verbindungsmodi und Firmware</h2>
+<p><strong>Normalbetrieb/CPS und Bootloader sind unterschiedliche Modi.</strong> Im Aktualisierungsmodus funktioniert die CPS-Identifizierung möglicherweise nicht; ein leerer Bildschirm beweist nicht, dass das Gerät defekt ist. Das Kabel muss zur jeweiligen Hardware passen; nicht alle zweipoligen Anschlüsse verwenden dasselbe Kabel oder Protokoll.</p>
+<p>Der Leitfaden unterscheidet die Installation für MK22 und STM32: Für STM32-Aktualisierungen dokumentiert er den STM-DFUSe-Treiber; für normale CPS-Kommunikation gibt es einen anderen Port-/Treiberkontext. Ändere Treiber nicht willkürlich und gehe nicht davon aus, dass ein DFU-Treiber WebUSB oder WebSerial im Normalbetrieb ermöglicht.</p>
+<h3 id="si-necesitas-instalar-o-actualizar-firmware-fuera-de-la-web">Wenn du Firmware außerhalb der Webanwendung installieren oder aktualisieren musst</h3>
+<ol>
+<li>Prüfe Modell und Revision in <a href="ayuda-opengd77-modelos.de.html">der Matrix</a> sowie die Anweisungen für das konkrete Paket.</li>
+<li>Bewahre verfügbare Sicherungen und die für das Gerät passende Originalfirmware auf.</li>
+<li>Verwende den vom Projekt genannten Firmware-Updater in <strong>OpenGD77 CPS</strong>, nicht den kommerziellen Updater für ein OpenGD77-Image.</li>
+<li>Prüfe die für diese Familie erforderliche «Donor»-Firmware. Laut Leitfaden wird sie im Updater ausgewählt, um Komponenten des AMBE-Codecs beizusteuern; sie wird nicht als Ersatz gemäß den Anweisungen für ein anderes Gerät installiert.</li>
+<li>Bestätige Modell, Variante, Sprache und Revision vor dem Start. Eine richtige Donor-Auswahl kann DMR ermöglichen; ohne das erforderliche Verfahren beschreibt der Leitfaden nur FM-Betrieb.</li>
+<li>Befolge die <strong>modell- und revisionsspezifische</strong> Bootloader-Sequenz und stelle eine stabile Stromversorgung sicher. Es gibt hier keine universelle Tastenkombination.</li>
+<li>Prüfe nach der Installation Identifizierung, Audio, RX/TX und Konfiguration; erstelle die Sicherungen, die CPS ermöglicht.</li>
+</ol>
+<p>Es werden keine Wiederherstellungsanweisungen angeboten, die auf dem Überbrücken von Platinen, Löschen von Bereichen oder Schreiben der Kalibrierung eines anderen Geräts beruhen. Bei unklarer Identifizierung die Aktualisierung stoppen, bis die Hardware dokumentiert ist.</p>
+<h2 id="16-diagnostico-por-sintomas">16. Fehlerdiagnose nach Symptomen</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Symptom</th><th scope="col">Prüfungen von geringerer zu größerer Auswirkung</th><th scope="col">Was du vermeiden solltest</th></tr></thead><tbody>
+<tr><td>Verbinden ist deaktiviert</td><td>HTTPS/localhost, Browser-API, Familie und Bestätigung</td><td>Firmware nur ändern, um eine Schaltfläche freizuschalten</td></tr>
+<tr><td>USB-/Serienberechtigung vorhanden, aber keine Identifizierung</td><td>Normalmodus, passendes Kabel, CPS/Host geschlossen, richtige Familie</td><td>Andere Familie erzwingen oder Speicherkarte annehmen</td></tr>
+<tr><td>Unbekannte Identifizierungsstruktur</td><td>Modell/Build und Meldung aufzeichnen; dokumentierte Werkzeuge für diese Version verwenden</td><td>Connector-Validierung umgehen</td></tr>
+<tr><td>Teil-Backup und Schreibzugriff gesperrt</td><td>Kalibrierung/Codeplug und Manifest exportieren; Status aufbewahren</td><td>Heruntergeladenes ZIP als MCU-Backup behandeln</td></tr>
+<tr><td>Datei lässt sich nicht öffnen</td><td>Exakt 131072 Byte und Standardformat; kein JSON und keine Firmware</td><td>Datei auffüllen oder kürzen, damit sie passt</td></tr>
+<tr><td>Kanäle ab 1025 fehlen</td><td>Ausdrückliche Grenze des Webeditors</td><td>Standardbereich als erweitertes Backup speichern</td></tr>
+<tr><td>FM-Signal vorhanden, aber kein Audio</td><td>RX CSS, Squelch, Stummschaltung, Modus/Bandbreite und Lautstärke</td><td>Zuerst HF-Kalibrierung ändern</td></tr>
+<tr><td>DMR-Signal vorhanden, aber kein Audio</td><td>CC, TS, TG/Kontakt, Filter und Verbindungsstatus</td><td>CC Scan dauerhaft ohne Bedarf verwenden</td></tr>
+<tr><td>TG wird gehört, aber ein anderer gesendet</td><td>Override, direkter Kontakt, TG-Liste und aktiver TS</td><td>Nur auf den Kanalnamen vertrauen</td></tr>
+<tr><td>Repeater lässt sich nicht öffnen</td><td>Tatsächliches TX, FM-Ton oder DMR-CC/TS, Abdeckung und Zugangsregeln</td><td>Leistung erhöhen, ohne Konfiguration zu prüfen</td></tr>
+<tr><td>RX Only-Fehler / TX nicht verfügbar</td><td>Nur-Empfang, TX Inhibit, Bandgrenzen und TOT</td><td>Einschränkungen ohne Berechtigung entfernen</td></tr>
+<tr><td>DMR-Namen fehlen</td><td>ID-Datenbank geladen, Länge/Speicher, empfangener Talker Alias</td><td>ID-Datenbank mit TG-Liste verwechseln</td></tr>
+<tr><td>Erwartete Kanäle werden nicht gescannt</td><td>Aktive Zone, Zone Skip, All Skip und Scanmodus</td><td>Nach nicht implementierter kommerzieller Scan List suchen</td></tr>
+<tr><td>USB fällt beim Senden aus</td><td>HF-Einstrahlung, separate Antenne und Aufbau; RD-5R kein Hotspot</td><td>Schutz deaktivieren oder mit maximaler Leistung weitermachen</td></tr>
+<tr><td>CPS kommuniziert nach GPS-Aktivierung nicht mehr</td><td><code>NMEA</code>-Ausgabe: zurück zu <code>Off</code> oder <code>On</code></td><td>Firmware neu installieren, bevor der USB-Modus geprüft wurde</td></tr>
+<tr><td>GPS zeigt <code>None</code> / erhält keinen Fix</td><td>Tatsächliches Vorhandensein des Moduls, Build-Unterstützung und Test im Freien</td><td>GPS ab Werk wegen des Handelsnamens annehmen</td></tr>
+<tr><td>APRS zeigt <code>Location?</code> oder sendet nicht</td><td>Position, Profil, Rufzeichen, Frequenz, Beacon-Modus, TX Inhibit</td><td>Automatische Baken zum «gründlicheren Testen» aktivieren</td></tr>
+<tr><td>Satellitenüberflüge unplausibel</td><td>Zeit, Datum, UTC, Position, TLE und tatsächlicher Satellitenstatus</td><td>Frequenzen nach Gefühl ändern</td></tr>
+<tr><td>GD-77S spricht nicht</td><td>Sprachdateien geladen, Lautstärke und Steuerungsmodus</td><td>Display-Anweisungen für GD-77 anwenden</td></tr>
+<tr><td>MD-9600/RT-90 ohne RX/TX nach Aktualisierung</td><td>HW-Image und tatsächliche Revision, Stromversorgung und Sicherungen</td><td>Revisionen nach einer vermeintlich universellen Regel zufällig flashen</td></tr>
+<tr><td>Eine Option fehlt</td><td>Modell, Variante, Sprache und Datum/Build</td><td>Annehmen, dass jeder Screenshot zur installierten Version gehört</td></tr>
+</tbody></table></div>
+<h2 id="17-glosario">17. Glossar</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Begriff</th><th scope="col">Bedeutung</th></tr></thead><tbody>
+<tr><td>AMBE</td><td>Digitaler Sprachcodec; seine Integration erfordert das dokumentierte Donor-Verfahren</td></tr>
+<tr><td>APRS</td><td>System zum Austausch von Stations-/Positionsinformationen; hier wird FM AFSK von DMR-Daten unterschieden</td></tr>
+<tr><td>Build</td><td>Konkreter Firmware-Build; Datum und Revision notieren</td></tr>
+<tr><td>CC</td><td>DMR Color Code, Wert 0–15</td></tr>
+<tr><td>Codeplug</td><td>Konfigurationsdatei/-struktur des Funkgeräts</td></tr>
+<tr><td>Kontakt</td><td>Digitales Ziel mit Nummer und Anruftyp</td></tr>
+<tr><td>CPS</td><td>Computerprogramm zum Konfigurieren und Warten des Funkgeräts</td></tr>
+<tr><td>CTCSS / DCS / CSS</td><td>FM-Ton-/Code-Signalisierungssysteme; keine Verschlüsselung</td></tr>
+<tr><td>DMO</td><td>Direkter Digitalbetrieb ohne Repeater</td></tr>
+<tr><td>DMR ID</td><td>Digitale Kennung einer Station; nicht der TG</td></tr>
+<tr><td>DTMF</td><td>Signalisierung mit Tonpaaren zur Steuerung oder Wahl</td></tr>
+<tr><td>Keps / TLE</td><td>Bahndaten zur Vorhersage von Satellitenüberflügen</td></tr>
+<tr><td>MCU</td><td>Mikrocontroller, der die Firmware ausführt</td></tr>
+<tr><td>MMDVMHost</td><td>Hostsoftware für digitale Modems, verwendet im Hotspot-Szenario</td></tr>
+<tr><td>NMEA</td><td>Format für Navigationsmeldungen; je nach Zusammenhang auch Name einer Ausgabe oder Variante</td></tr>
+<tr><td>Override</td><td>Vorübergehende Auswahl, die einen gespeicherten Wert überschreibt</td></tr>
+<tr><td>PTT / VOX</td><td>Senden per Sprechtaste / sprachgesteuerte Aktivierung</td></tr>
+<tr><td>RTC</td><td>Echtzeituhr; Vorhandensein und Erhalt hängen vom Gerät ab</td></tr>
+<tr><td>RX / TX</td><td>Empfang / Senden</td></tr>
+<tr><td>RX Group / TG List</td><td>Kontaktgruppe; Bedeutung in der verwendeten Firmware/CPS prüfen</td></tr>
+<tr><td>SK1 / SK2</td><td>Logische Namen von Seitentasten; Position je nach Modell unterschiedlich</td></tr>
+<tr><td>TA</td><td>Talker Alias, zusätzliche in DMR gesendete Informationen</td></tr>
+<tr><td>TG</td><td>Talkgroup, Ziel eines DMR-Gruppenanrufs</td></tr>
+<tr><td>TOT</td><td>Timer zur Begrenzung einer Übertragung</td></tr>
+<tr><td>TS</td><td>DMR-Timeslot, 1 oder 2</td></tr>
+<tr><td>VFO</td><td>Frequenzabstimmungsmodus</td></tr>
+<tr><td>Zone</td><td>Geordnete Kanalsammlung</td></tr>
+</tbody></table></div>
+<h2 id="18-fuentes-versiones-y-licencias">18. Quellen, Versionen und Lizenzen</h2>
+<p>Abfrage am <strong>2026-10-25</strong>, mit Download des Leitfadens zur lokalen Einsicht und gezielten Abfragen offizieller Indizes; das Forumsarchiv wurde nicht massenhaft durchsucht.</p>
+<ul>
+<li><strong>[G] Offizieller englischer Leitfaden:</strong> <a href="https://raw.githubusercontent.com/LibreDMR/OpenGD77_UserGuide/master/OpenGD77_User_Guide.md" target="_blank" rel="noopener noreferrer">Gepflegtes Markdown</a>. Als reproduzierbare Referenz nennt die abgefragte API als letzte Änderung der Datei <a href="https://github.com/LibreDMR/OpenGD77_UserGuide/blob/33de63dcb002fcd837419fda25a2e535b940dbcd/OpenGD77_User_Guide.md" target="_blank" rel="noopener noreferrer">33de63dcb002fcd837419fda25a2e535b940dbcd, 2026-03-08</a>. Die Namen der zitierten Abschnitte verweisen auf Funktionsbelege.</li>
+<li><strong>[R] Offizielles Repository des Leitfadens:</strong> <a href="https://github.com/LibreDMR/OpenGD77_UserGuide" target="_blank" rel="noopener noreferrer">LibreDMR/OpenGD77_UserGuide</a>. Die README erläutert die Trennung vom früheren Repository aus Lizenzgründen, erklärt <strong>GPL 2 für diese Dokumente</strong> und weist darauf hin, dass nur die englische Version gepflegt wird; die chinesische ist veraltet.</li>
+<li><strong>[W] Projektwebsite:</strong> <a href="https://www.opengd77.com/" target="_blank" rel="noopener noreferrer">opengd77.com</a>. Laut Startseite wurde bei der Abfrage die Schließung des interaktiven Forums und das Bot-Traffic-Problem erklärt.</li>
+<li><strong>[A] Statisches Archiv:</strong> <a href="https://www.opengd77.com/archive/index.html" target="_blank" rel="noopener noreferrer">Archivindex des Forums</a>. Als Snapshot mit sichtbarem Datum Juli 2025 präsentiert; kein Beleg für alle Funktionen eines Builds von 2026. Registrierung, Profile oder andere Links funktionieren möglicherweise nicht.</li>
+<li><strong>[F1] Eingesehener MK22-Index:</strong> <a href="https://www.opengd77.com/downloads/GD77/Firmware/20260504_946183e9002d277dfaba616a1eea15bfe959c692/" target="_blank" rel="noopener noreferrer">GD77, 2026-05-04, Revision 946183e9002d277dfaba616a1eea15bfe959c692</a>. Enthält spezifische Pakete für GD77, GD77S, DM1801, DM1801A und RD5R mit Zielvarianten.</li>
+<li><strong>[F2] Eingesehener STM32-Handfunkgeräte-Index:</strong> <a href="https://www.opengd77.com/downloads/MDUV380_DM1701/Firmware/20260504_ebd7100bb4c930e6ff0c24202474b5b72e7d6beb/" target="_blank" rel="noopener noreferrer">MDUV380_DM1701, 2026-05-04, Revision ebd7100bb4c930e6ff0c24202474b5b72e7d6beb</a>. Enthält <code>OpenMDUV380_10W_PLUS.zip</code> getrennt vom Standard sowie DM1701 und RT84.</li>
+<li><strong>[F3] Eingesehener Mobilgeräte-Index:</strong> <a href="https://www.opengd77.com/downloads/MD9600/Firmware/20260504_e779365405cbe4a73803a402626294764784b11f/" target="_blank" rel="noopener noreferrer">MD9600, 2026-05-04, Revision e779365405cbe4a73803a402626294764784b11f</a>. Enthält HW-V1/V2/V4/V5-Images.</li>
+<li><strong>[F4] Eingesehener MD2017-Index:</strong> <a href="https://www.opengd77.com/downloads/MD2017/Firmware/20260505_6b43740c89378240c0cabad0ca827e5b0963124e/" target="_blank" rel="noopener noreferrer">2026-05-05, Revision 6b43740c89378240c0cabad0ca827e5b0963124e</a>. Belegt ein veröffentlichtes Paket, nicht die Gleichwertigkeit mit einem anderen Modell.</li>
+<li><strong>[C] Geprüfte Wartungshinweise:</strong> <a href="https://www.opengd77.com/downloads/MDUV380_DM1701/Firmware/20260504_ebd7100bb4c930e6ff0c24202474b5b72e7d6beb/changelog.txt" target="_blank" rel="noopener noreferrer">MDUV380_DM1701-Changelog vom 2026-05-04</a>. Beschreibt die Anpassung der Codec-Verbindung an aktuelle Tools, keine Zusage aller Funktionen für jedes Modell.</li>
+<li><strong>[L] Lokale Belege dieser Anwendung:</strong> <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/firmware-core.js" target="_blank" rel="noopener noreferrer"> 0 </a>, <code>TARGETS</code>; <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/gd77-connector.js" target="_blank" rel="noopener noreferrer"> 2 </a>, <code>MODELS</code>, <code>connect</code>, <code>backup</code>, <code>readCodeplugRaw</code>; <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/radio-ui.js" target="_blank" rel="noopener noreferrer"> 7 </a>, Status der Berechtigungen, Lesen/Bearbeiten und Export. Beschreibt die Implementierung, keine physische Testkampagne.</li>
+</ul>
+<p>Die abgefragten <code>Latest</code>-Pfade leiteten zu diesen Verzeichnissen weiter; sie können sich ändern und bedeuten nicht «stabil für jedes Gerät». Leitfaden, Pakete und Forumsarchiv haben unterschiedliche Zeitabläufe. Bei Abweichungen sind die verifizierten Anweisungen für genau das Paket und die Hardware maßgeblich; neue Erkenntnisse nicht automatisch übertragen.</p>
+<p><strong>Lizenzen:</strong> Die zitierte GPL-2-Angabe gilt für das Repository des Leitfadens. Sie wird weder als MIT-Lizenz verstanden noch auf aktuelle Firmware, Donor-Firmware, Codec, Sprachdateien, CPS, Images oder sämtliche Abhängigkeiten ausgedehnt. Prüfe für jede Komponente die konkrete Lizenz, bevor du sie weiterverbreitest; ein öffentlicher Download hebt Nutzungs- oder Verbreitungsbedingungen nicht auf.</p></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

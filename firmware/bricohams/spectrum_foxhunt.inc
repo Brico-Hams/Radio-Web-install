@@ -7,6 +7,7 @@ static bh_spectrum bhSpec;
 static bh_presets bhSpecPresets;
 static uint32_t bhSpecCenter;
 static uint8_t bhSpecStep;
+static uint16_t bhSpecSettleMs;
 static uint8_t bhSpecGain;
 static uint8_t bhSpecSavedAudio;
 static bool bhSpecPaused;
@@ -46,6 +47,10 @@ static uint8_t bhSpecTransferState;
 static uint32_t bhSpecTransferToken;
 static uint32_t bhSpecTransferTick;
 static bool BH_SPEC_InBand(uint32_t first, uint32_t last);
+static bool BH_SPEC_SettleValid(uint16_t milliseconds)
+{
+    return milliseconds == 10 || milliseconds == 20 || milliseconds == 40 || milliseconds == 80;
+}
 
 uint16_t BH_SPEC_PresetRequest(const uint8_t *input, uint16_t length, uint8_t output[BH_PRESET_REPLY_MAX])
 {
@@ -115,7 +120,7 @@ uint16_t BH_SPEC_PresetRequest(const uint8_t *input, uint16_t length, uint8_t ou
     }
     for (uint8_t i = 0; i < decoded.count; ++i) {
         const bh_spectrum_config *config = &decoded.entries[i].spectrum;
-        if (config->bins != 128 || config->settle_ms != 20 ||
+        if (config->bins != 128 || !BH_SPEC_SettleValid(config->settle_ms) ||
             !BH_SPEC_InBand(config->first_10hz, config->first_10hz + 127U * config->step_10hz) ||
             (config->step_10hz != 125 && config->step_10hz != 250 &&
              config->step_10hz != 625 && config->step_10hz != 1250) ||
@@ -271,7 +276,7 @@ static void BH_SPEC_Reset(uint8_t samples)
     bhSpecError = bhSpecCenter <= below || bhSpecCenter > UINT32_MAX - 63U * step;
     if (bhSpecError)
         return;
-    const bh_spectrum_config config = {bhSpecCenter - below, step, 128, 20, samples};
+    const bh_spectrum_config config = {bhSpecCenter - below, step, 128, bhSpecSettleMs, samples};
     bhSpecError = !BH_SPEC_InBand(config.first_10hz, bhSpecCenter + 63U * step) ||
         bh_spectrum_init(&bhSpec, &config) != BH_SPECTRUM_OK;
     bhSpecGain = attStep;
@@ -303,10 +308,11 @@ static void BH_SPEC_Recall(void)
     for (bhSpecStep = 0; bhSpecStep < 4; ++bhSpecStep)
         if (bhSpecSteps[bhSpecStep] == config->step_10hz)
             break;
-    if (bhSpecStep == 4) {
+    if (bhSpecStep == 4 || !BH_SPEC_SettleValid(config->settle_ms)) {
         bhSpecError = true;
         bhSpecStep = 0;
     } else {
+        bhSpecSettleMs = config->settle_ms;
         bhSpecCenter = config->first_10hz + 64U * config->step_10hz;
         BH_SPEC_Reset(config->samples_per_bin);
     }
@@ -320,6 +326,7 @@ static void BH_SPEC_Start(void)
     memset(&bhSpecPresets, 0, sizeof(bhSpecPresets));
     bhSpecCenter = gRxVfo->pRX->Frequency;
     bhSpecStep = 0;
+    bhSpecSettleMs = 20;
     bhSpecPaused = false;
     bhSpecCapture = false;
     bhSpecRegisters = false;
@@ -543,7 +550,13 @@ static bool BH_SPEC_Key(KEY_Code_t key)
     }
     if (key == KEY_2)
         return true;
-    if (key == KEY_4) {
+    if (key == KEY_STAR) {
+        bhSpecSettleMs = bhSpecSettleMs >= 80 ? 10 : (uint16_t)(bhSpecSettleMs * 2U);
+        BH_SPEC_Reset(bhSpec.initialized ? bhSpec.config.samples_per_bin : 1);
+        bhSpecNotice = bhSpecSettleMs == 10 ? "SETTLE 10ms BETA" :
+            bhSpecSettleMs == 20 ? "SETTLE 20ms" :
+            bhSpecSettleMs == 40 ? "SETTLE 40ms" : "SETTLE 80ms";
+    } else if (key == KEY_4) {
         bhSpecPaused = !bhSpecPaused;
     } else if (key == KEY_5) {
         if (!bhSpecError)

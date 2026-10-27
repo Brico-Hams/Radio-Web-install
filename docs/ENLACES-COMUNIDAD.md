@@ -94,6 +94,9 @@ verificacion de Cloudflare.
 
 ## Busqueda en otras forjas
 
-GitFlic (con sesion, catalogo publico por titulo), GitVerse, GitLab y Gitee: ningun proyecto
-Quansheng, Karina, fagci, F4HWN, DM-32 ni HR_C7000. Codeberg: el filtro LPF, forks de egzumer y
+En las busquedas realizadas en GitFlic (con sesion, catalogo publico por
+titulo), GitVerse, GitLab y Gitee no se localizaron proyectos para los
+terminos Quansheng, Karina, fagci, F4HWN, DM-32 ni HR_C7000. Este resultado
+no demuestra ausencia de proyectos privados, no indexados o publicados
+despues de la consulta. En Codeberg se localizaron el filtro LPF, forks de egzumer y
 [DL9CAT/uv-k5-firmware-custom](https://codeberg.org/DL9CAT/uv-k5-firmware-custom) (ARDF V1).

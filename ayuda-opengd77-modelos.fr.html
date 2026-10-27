@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="OpenGD77 : modèles, variantes et portée de la prise en charge: aide Bricohams par modèle et version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>OpenGD77 : modèles, variantes et portée de la prise en charge | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-opengd77-modelos.html">
+  <link rel="alternate" hreflang="en" href="ayuda-opengd77-modelos.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-opengd77-modelos.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-opengd77-modelos.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-opengd77-modelos.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Aller au contenu</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aide"><a href="ayuda.html">Aide de l&#39;application (espagnol)</a> · <a href="ayuda-firmwares.fr.html">Bibliothèque de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Langue"><a href="ayuda-opengd77-modelos.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-opengd77-modelos.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-opengd77-modelos.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-opengd77-modelos.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-opengd77-modelos.fr.html" hreflang="fr" lang="fr" aria-current="page">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenu de ce guide"><h2>Dans ce guide</h2><ul><li><a href="#1-como-interpretar-las-tablas">1. Comment interpréter les tableaux</a></li><li><a href="#2-matriz-de-modelos-y-destinos">2. Matrice des modèles et destinations</a></li><li><a href="#3-familias-y-protocolo-de-identificacion-de-la-web">3. Familles et protocole d&#39;identification du site web</a></li><li><a href="#4-md-9600-rt-90-revisiones-hw1-hw2-hw4-y-hw5">4. MD-9600 / RT-90 : révisions HW1, HW2, HW4 et HW5</a></li><li><a href="#5-uv380-uv390-rt3s-y-las-variantes-10w">5. UV380, UV390, RT3S et variantes 10W</a></li><li><a href="#6-bandas-potencia-y-capacidades-lo-documentado-y-lo-pendiente">6. Bandes, puissance et capacités : éléments documentés et questions en suspens</a></li><li><a href="#7-controles-y-bootloader-no-hay-secuencia-universal">7. Commandes et bootloader : aucune séquence universelle</a></li><li><a href="#8-escenarios-de-seleccion-segura">8. Scénarios de sélection sûre</a></li><li><a href="#9-diagnostico-de-compatibilidad">9. Diagnostic de compatibilité</a></li><li><a href="#10-fuentes-y-alcance-temporal">10. Sources et portée temporelle</a></li></ul></nav>
+    <article class="panel"><h1 id="opengd77-modelos-variantes-y-alcance-del-soporte">OpenGD77 : modèles, variantes et portée de la prise en charge</h1>
+<p><strong>Vérification documentaire : 2026-10-25.</strong> Complément à <a href="ayuda-opengd77.fr.html">l&#39;aide de configuration et d&#39;utilisation</a>. La compatibilité documentée par le projet, les cibles du catalogue et les noms reconnus par le connecteur sont distingués. Aucun essai physique n&#39;a été effectué sur tous les équipements.</p>
+<h2 id="1-como-interpretar-las-tablas">1. Comment interpréter les tableaux</h2>
+<ul>
+<li><strong>Guide :</strong> le modèle ou la variante apparaît dans le guide officiel anglais consulté. Une mention dans un titre, une capture ou un exemple ne constitue pas des instructions complètes d&#39;installation.</li>
+<li><strong>Paquet :</strong> un fichier a été observé dans un index officiel donné. Cela ne certifie pas toutes les révisions matérielles portant un nom commercial similaire.</li>
+<li><strong>Catalogue :</strong> cible de <code>firmware-core.js</code>, <code>TARGETS</code> ; il s&#39;agit d&#39;un sélecteur de paquets, pas d&#39;un outil de chargement du firmware.</li>
+<li><strong>Identification :</strong> étiquette dans <code>gd77-connector.js</code>, <code>MODELS</code> ; elle permet d&#39;interpréter un numéro de protocole. Elle ne prouve pas à elle seule une compatibilité opérationnelle complète.</li>
+<li><strong>Non confirmé :</strong> les sources consultées ne fournissent pas de preuves suffisantes ; cela ne signifie pas nécessairement que la chose est impossible ou inexistante.</li>
+</ul>
+<p><strong>Toutes les familles OpenGD77 restent en lecture seule sur la radio avec cette application web.</strong> Le codeplug standard peut être lu, modifié et enregistré localement, mais <strong>l&#39;écriture est BLOQUÉE</strong>, car la sauvegarde ne comprend pas de copie intégrale vérifiée du firmware MCU. Le CPS externe peut proposer d&#39;autres opérations ; cela ne modifie pas l&#39;autorisation de l&#39;application web. Aucun flashage n&#39;est effectué depuis le catalogue. [L]</p>
+<h2 id="2-matriz-de-modelos-y-destinos">2. Matrice des modèles et destinations</h2>
+<p>Dans ce tableau, « ID » désigne l&#39;étiquette que le connecteur peut renvoyer. Les noms sans tiret, avec tiret ou avec espace sont regroupés uniquement pour faciliter la recherche ; cela ne rend pas les variantes différentes équivalentes matériellement.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Modèle ou désignation</th><th scope="col">Preuve officielle et restrictions</th><th scope="col">Destination dans <code>TARGETS</code></th><th scope="col">Étiquette dans <code>MODELS</code></th><th scope="col">Conclusion pratique</th></tr></thead><tbody>
+<tr><td>Radioddity GD-77 / GD77</td><td>Installation et fonctionnement documentés ; paquet <code>OpenGD77.zip</code> [G, F1]</td><td><code>GD-77</code>, MK22</td><td><code>GD-77</code></td><td>Choisir son paquet, pas celui du GD77S</td></tr>
+<tr><td>Radioddity GD-77S / GD77S</td><td>Documenté sans écran ni clavier ; voix essentielles ; paquet dédié [G, F1]</td><td><code>GD-77S</code>, MK22</td><td><code>GD-77S</code></td><td>Zones limitées aux 16 premiers canaux accessibles via le sélecteur</td></tr>
+<tr><td>Baofeng DM-1801 / DM1801</td><td>Matériel version 1 uniquement ; révision 2022 exclue par le guide [G, F1]</td><td><code>DM-1801</code>, MK22</td><td><code>DM-1801</code></td><td>Vérifier la carte ; la façade seule ne suffit pas</td></tr>
+<tr><td>Baofeng DM-1801A / DM1801A</td><td>Matériel version 1 uniquement ; la nouvelle révision de 2022 est également exclue [G, F1]</td><td><code>DM-1801A</code>, MK22</td><td><code>DM-1801A</code></td><td>Image différente de DM1801 ; le A n&#39;est pas un suffixe facultatif</td></tr>
+<tr><td>Baofeng RD-5R / RD5R</td><td>Installation documentée ; hotspot indisponible en raison de la limitation USB pendant TX [G, F1]</td><td><code>RD-5R</code>, MK22</td><td><code>RD-5R</code></td><td>Ne pas confondre avec n&#39;importe quel DM-5R ou UV-5R</td></tr>
+<tr><td>TYT MD-9600 / MD9600</td><td>Mobile documenté avec révisions RF et paquets distincts par HW [G, F3]</td><td><code>MD-9600-V1</code>, <code>-V2</code>, <code>-V4</code>, <code>-V5</code>, STM32</td><td><code>MD-9600</code></td><td>L&#39;ID ne sélectionne pas automatiquement la révision</td></tr>
+<tr><td>Retevis RT-90 / RT90</td><td>Documenté avec le MD-9600 ; mêmes précautions concernant la révision [G]</td><td>Pas de clé RT90 ; destinations MD9600 pertinentes</td><td>Pas d&#39;étiquette RT90 ; le tableau propose <code>MD-9600</code></td><td>Association officielle de famille, pas garantie pour toutes les cartes</td></tr>
+<tr><td>TYT MD-UV380 / UV380 standard</td><td>Installation et fonctionnement documentés ; paquet <code>OpenMDUV380.zip</code> [G, F2]</td><td><code>MD-UV380</code>, STM32</td><td><code>MD-UV380</code></td><td>Ne pas le choisir pour un MD-380 par simple ressemblance de nom</td></tr>
+<tr><td>Retevis RT-3S / RT3S</td><td>Documenté avec le MD-UV380 [G]</td><td>Pas de clé RT3S ; la destination <code>MD-UV380</code> le cite dans son étiquette</td><td>Pas d&#39;étiquette RT3S</td><td>Association officielle ; vérifier le GPS et le matériel de l&#39;appareil</td></tr>
+<tr><td>TYT MD-UV390 / UV390</td><td>Inclus dans le titre du guide et dans la section d&#39;écran GPS [G]</td><td>Pas de destination portant ce nom</td><td>Pas d&#39;étiquette UV390</td><td>Mention officielle, mais affectation exacte de l&#39;image à chaque variante non confirmée ici</td></tr>
+<tr><td>MD-UV380 10W <strong>sans PLUS</strong></td><td>Le guide décrit une option d&#39;échelle de puissance pour la plateforme UV380 sans PLUS [G: Radio Options — Mode]</td><td>Pas de destination dédiée au 10W sans PLUS</td><td>Pas d&#39;ID distinct</td><td>L&#39;échelle ne certifie pas la puissance et ne change pas le matériel ; vérifier les notes de la variante</td></tr>
+<tr><td>MD-UV380 10W <strong>PLUS</strong></td><td>Paquet officiel séparé <code>OpenMDUV380_10W_PLUS.zip</code> [F2]</td><td><code>MD-UV380-10W-PLUS</code>, STM32</td><td>Pas d&#39;ID PLUS séparé</td><td>Matériel distinct selon l&#39;étiquette locale ; ne pas le traiter comme un UV380 standard</td></tr>
+<tr><td>UV390 annoncé comme 10W ou PLUS</td><td>Aucune affectation spécifique vérifiée dans les sources consultées</td><td>Pas de destination UV390 PLUS</td><td>Pas d&#39;ID spécifique</td><td>Ne pas extrapoler l&#39;image UV380 PLUS sur la seule foi de l&#39;annonce</td></tr>
+<tr><td>Baofeng DM-1701 / DM1701</td><td>Installation et fonctionnement documentés ; paquet <code>OpenDM1701.zip</code> [G, F2]</td><td><code>DM-1701</code>, STM32</td><td><code>DM-1701</code></td><td>Ne pas le confondre avec RGB</td></tr>
+<tr><td>Baofeng DM-1701 RGB / DM1701RGB</td><td>Étiquette prévue par le connecteur ; aucune documentation propre vérifiée ici [L]</td><td>Pas de destination RGB</td><td><code>DM-1701 RGB</code></td><td>Reconnaissance d&#39;ID, pas de paquet ni d&#39;installation confirmés</td></tr>
+<tr><td>Retevis RT-84 / RT84</td><td>Guide d&#39;installation et paquet dédié <code>OpenRT84.zip</code> [G, F2]</td><td><code>RT-84</code>, STM32</td><td>Pas d&#39;étiquette RT84</td><td>Le fait de partager un chapitre avec le DM1701 n&#39;autorise pas à échanger les ZIP</td></tr>
+<tr><td>TYT MD-2017 / MD2017</td><td>Schéma des commandes dans le guide et paquet officiel <code>OpenMD2017.zip</code> [G, F4]</td><td><code>MD-2017</code>, STM32</td><td><code>MD-2017</code></td><td>Publication attestée ; ne pas extrapoler intégralement le manuel UV380</td></tr>
+<tr><td>MD-380 / MD380</td><td>Étiquette du connecteur ; aucune destination ni aucun paquet vérifié pour ce modèle lors de cette consultation [L]</td><td>Pas de destination</td><td><code>MD-380</code></td><td><strong>Ce n&#39;est pas un MD-UV380</strong> ; bandes et compatibilité des variantes non certifiées ici</td></tr>
+<tr><td>DM-32 / DM32</td><td>Étiquette d&#39;identification prévue [L]</td><td>Pas de destination</td><td><code>DM-32</code>, famille logique SERIAL</td><td>Le nom ne certifie ni firmware, GPS, APRS ni cartographie complète</td></tr>
+<tr><td>UV008</td><td>Étiquette d&#39;identification prévue [L]</td><td>Pas de destination</td><td><code>UV008</code>, famille logique SERIAL</td><td>Aucune équivalence commerciale ni capacité RF n&#39;est certifiée</td></tr>
+</tbody></table></div>
+<p>Les destinations Quansheng <code>UV-K1</code> et <code>UV-K5-V3</code>, également présentes dans <code>TARGETS</code>, <strong>ne relèvent pas d&#39;OpenGD77</strong>. Elles sont exclues de ce guide.</p>
+<h3 id="alias-y-nombres-adicionales-presentes-en-la-guia">Alias et autres noms présents dans le guide</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Noms</th><th scope="col">Ce qui est confirmé</th><th scope="col">Ce qu&#39;il ne faut pas en déduire</th></tr></thead><tbody>
+<tr><td>GD-77 ↔ TYT MD-760</td><td>La section d&#39;installation identifie MD-760 comme une désignation du GD-77</td><td>La compatibilité de tout autre TYT similaire</td></tr>
+<tr><td>DM-1801 version 1 ↔ Baofeng DM-860</td><td>Le guide l&#39;indique expressément</td><td>Qu&#39;un DM-1801 de 2022 redevienne compatible parce qu&#39;il est appelé DM-860</td></tr>
+<tr><td>RD-5R ↔ Baofeng DM-5R <strong>Tier 2</strong></td><td>Alias explicitement indiqué dans l&#39;installation</td><td>Que n&#39;importe quel DM-5R, y compris d&#39;autres conceptions ou versions, soit un RD-5R</td></tr>
+<tr><td>MD-9600 ↔ Retevis RT-90</td><td>Traitement commun officiel pour l&#39;installation et le fonctionnement</td><td>Une image unique pour toutes les révisions des deux marques</td></tr>
+<tr><td>MD-UV380 ↔ Retevis RT-3S</td><td>Traitement commun officiel, également reflété par l&#39;étiquette du catalogue</td><td>Une identité avec le MD-380 ou une compatibilité automatique de toutes les versions 10W</td></tr>
+<tr><td>TYT MD-730 et GD-77S</td><td>MD-730 figure dans la liste des commandes d&#39;entrée en mise à jour avec GD77/GD77S/MD760</td><td>Cette seule mention ne confirme pas ici un alias complet GD77S↔MD730 ni une destination distincte</td></tr>
+<tr><td>DM-1701 et RT-84</td><td>Les deux appareils ont des instructions dans le même chapitre</td><td>Un alias d&#39;image : il existe des ZIP différents</td></tr>
+<tr><td>MD-UV390 et MD-UV380</td><td>Le guide couvre le UV390 et son GPS</td><td>Une image interchangeable pour toute révision du UV390</td></tr>
+<tr><td>MD-2017 et Retevis RT82 ou autres noms commerciaux</td><td>Aucun alias confirmé par les sources examinées</td><td>Ne pas utiliser les images MD2017 en se fondant uniquement sur une équivalence de vendeur</td></tr>
+<tr><td>DM1701RGB, DM32, UV008 et autres équipements</td><td>Uniquement les étiquettes locales indiquées</td><td>Une famille de transport ne démontre pas l&#39;identité du matériel</td></tr>
+</tbody></table></div>
+<p>Le tableau évite de transformer la proximité commerciale, l&#39;apparence extérieure ou la présence dans un même index en équivalence technique.</p>
+<h2 id="3-familias-y-protocolo-de-identificacion-de-la-web">3. Familles et protocole d&#39;identification du site web</h2>
+<p>La classification suivante est <strong>celle mise en œuvre par le connecteur</strong>, et non un inventaire universel des microcontrôleurs de tout équipement vendu sous ce nom :</p>
+<div class="table-scroll"><table><thead><tr><th scope="col"><code>radioType</code></th><th scope="col">Étiquette interprétée</th><th scope="col">Famille logique et transport choisis par le code</th></tr></thead><tbody>
+<tr><td>0</td><td>GD-77</td><td>MK22 / USB</td></tr>
+<tr><td>1</td><td>GD-77S</td><td>MK22 / USB</td></tr>
+<tr><td>2</td><td>DM-1801</td><td>MK22 / USB</td></tr>
+<tr><td>3</td><td>RD-5R</td><td>MK22 / USB</td></tr>
+<tr><td>4</td><td>DM-1801A</td><td>MK22 / USB</td></tr>
+<tr><td>5</td><td>MD-9600</td><td>STM32 / USB</td></tr>
+<tr><td>6</td><td>MD-UV380</td><td>STM32 / USB</td></tr>
+<tr><td>7</td><td>MD-380</td><td>STM32 / USB</td></tr>
+<tr><td>8</td><td>DM-1701</td><td>STM32 / USB</td></tr>
+<tr><td>9</td><td>MD-2017</td><td>STM32 / USB</td></tr>
+<tr><td>10</td><td>DM-1701 RGB</td><td>STM32 / USB</td></tr>
+<tr><td>11</td><td>DM-32</td><td>SERIAL / WebSerial à 115200</td></tr>
+<tr><td>12</td><td>UV008</td><td>SERIAL / WebSerial à 115200</td></tr>
+</tbody></table></div>
+<p><code>connect()</code> demande une structure RadioInfo de 46 octets, accepte les versions de structure <strong>1 à 4</strong>, vérifie la plage du type et exige que la famille sélectionnée corresponde. Il extrait le modèle, le firmware et la build. Si ces données ne sont pas reconnues, il rejette la structure : il ne faut pas deviner une carte mémoire.</p>
+<p>Ce tableau ne contient pas d&#39;ID distinct pour RT90, RT3S, RT84, UV390, HW V1/V2/V4/V5 ou 10W PLUS. Cette absence empêche d&#39;utiliser la liste comme détecteur sans ambiguïté de toutes les variantes. Elle ne garantit pas non plus la valeur renvoyée par chaque firmware non testé.</p>
+<p>La sauvegarde web utilise des cartes de calibrage différentes pour MK22 et les autres familles, ainsi que des segments pour reconstituer le codeplug standard. La présence de cette voie dans le code ne prouve pas, à elle seule, des essais physiques, sa validité dans les builds futures ni une copie complète sur chaque modèle SERIAL. En cas de réponse inattendue, conserver l&#39;erreur et ne pas forcer la famille. [L]</p>
+<h2 id="4-md-9600-rt-90-revisiones-hw1-hw2-hw4-y-hw5">4. MD-9600 / RT-90 : révisions HW1, HW2, HW4 et HW5</h2>
+<p>Le projet explique que la PLL et la fréquence intermédiaire ont changé pendant la production. La sérigraphie de la carte peut ne pas suffire : certaines unités ont subi une modification matérielle sans changement de cette inscription. Le catalogue ne résout pas cette ambiguïté.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Destination locale</th><th scope="col">Fichier observé dans l&#39;index officiel [F3]</th><th scope="col">Critère de sélection</th></tr></thead><tbody>
+<tr><td><code>MD-9600-V1</code></td><td><code>MD9600_firmware_HW_V1.zip</code></td><td>Révision RF compatible avec HW1, documentée pour l&#39;unité</td></tr>
+<tr><td><code>MD-9600-V2</code></td><td><code>MD9600_firmware_HW_V2.zip</code></td><td>Révision RF compatible avec HW2</td></tr>
+<tr><td><code>MD-9600-V4</code></td><td><code>MD9600_firmware_HW_V4.zip</code></td><td>Révision RF compatible avec HW4</td></tr>
+<tr><td><code>MD-9600-V5</code></td><td><code>MD9600_firmware_HW_V5.zip</code></td><td>Révision RF compatible avec HW5 ; le guide oriente la carte 4A vers le firmware V5</td></tr>
+</tbody></table></div>
+<p>L&#39;index comprend également des variantes japonaises préfixées par <code>Japanese_</code>. Aucune destination V3 n&#39;est observée dans le catalogue local ni dans cet index : ne pas en inventer une par continuité numérique.</p>
+<p>Le guide avertit également que certaines unités très anciennes portant la mention carte version 2 peuvent nécessiter le firmware V1. Bien que le texte historique suggère d&#39;essayer une autre révision en cas d&#39;absence de RX/TX, ce guide <strong>n&#39;en fait pas une procédure universelle de flashage à l&#39;aveugle</strong>. Documenter la carte et l&#39;unité, consulter les instructions de cette révision et conserver les sauvegardes.</p>
+<p>Un codeplug correct associé à une image HW incorrecte peut empêcher le fonctionnement de RX/TX. Changer les TG, filtres ou tonalités ne corrige pas un mauvais choix de PLL/IF. Le numéro de firmware HW n&#39;est ni la version de CPS ni la version de la structure RadioInfo.</p>
+<h2 id="5-uv380-uv390-rt3s-y-las-variantes-10w">5. UV380, UV390, RT3S et variantes 10W</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Cas</th><th scope="col">Preuve</th><th scope="col">Limite de la conclusion</th></tr></thead><tbody>
+<tr><td>UV380 standard / RT3S</td><td>Guide commun et destination locale <code>MD-UV380</code></td><td>Vérifier si l&#39;appareil est équipé du GPS et vérifier sa build</td></tr>
+<tr><td>UV380 10W sans PLUS</td><td>Option <code>Mode</code> qui adapte l&#39;échelle affichée selon le guide</td><td>Le choix de l&#39;échelle n&#39;augmente pas la puissance physique</td></tr>
+<tr><td>UV380 10W PLUS</td><td>ZIP officiel et destination locale séparés</td><td>Ne pas charger l&#39;image standard au seul motif qu&#39;elle partage « UV380 »</td></tr>
+<tr><td>UV390</td><td>Mentionné dans le périmètre et la section GPS du guide</td><td>Aucun sélecteur local ne certifie automatiquement sa variante</td></tr>
+<tr><td>UV390 10W/PLUS commercial</td><td>Aucune correspondance précise vérifiée ici</td><td>Identifier la carte et les notes officielles avant de choisir l&#39;image</td></tr>
+</tbody></table></div>
+<p>Il ne faut pas déduire que les versions sans PLUS et PLUS partagent la procédure d&#39;installation, l&#39;écran, le GPS ou le calibrage. Il ne faut pas non plus supposer que tous les portatifs annoncés « 10W » délivrent cette puissance mesurée.</p>
+<h2 id="6-bandas-potencia-y-capacidades-lo-documentado-y-lo-pendiente">6. Bandes, puissance et capacités : éléments documentés et questions en suspens</h2>
+<p>Aucun tableau commercial des plages RX/TX ou des watts par radio n&#39;est publié ici : les sources consultées ne vérifient pas uniformément les variantes régionales et les révisions. Seuls les éléments étayés sont présentés, avec leurs limites.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Capacité</th><th scope="col">Preuve exploitable</th><th scope="col">Ne pas extrapoler à…</th></tr></thead><tbody>
+<tr><td>FM et DMR</td><td>Fonctions visées et modes du guide pour les plateformes prises en charge ; le DMR nécessite la procédure liée au codec/donneur</td><td>Toute étiquette du connecteur ou installation sans donneur correct</td></tr>
+<tr><td>VHF/UHF</td><td>Le guide traite les limites des deux bandes et les canaux FM/DMR</td><td>La double réception simultanée ni les plages exactes garanties pour tous les modèles</td></tr>
+<tr><td>Bande 200/220 MHz</td><td>Le manuel décrit les limites logicielles et avertit de l&#39;absence d&#39;une section RX/PA adaptée à 200 MHz et de fortes émissions parasites</td><td>Considérer tous les appareils comme « tribande » ou recommander d&#39;y émettre</td></tr>
+<tr><td>Puissance 5 W / 10 W / mobile</td><td>Le guide distingue les échelles et tableaux, et un paquet PLUS séparé existe</td><td>Une puissance maximale unique commune ni la tolérance à un fonctionnement continu</td></tr>
+<tr><td>Écran/clavier</td><td>GD77S n&#39;a ni l&#39;un ni l&#39;autre ; les autres commandes et dimensions varient</td><td>L&#39;universalité d&#39;une capture ou d&#39;un raccourci</td></tr>
+<tr><td>GPS</td><td>Le guide prévoit un récepteur facultatif sur MD9600/RT90 et UV380/RT3S ; l&#39;écran GPS cite aussi UV390, DM1701 et RT84 équipés du GPS</td><td>La présence du GPS sur toutes les unités, ou une garantie pour DM1701RGB/DM32/UV008</td></tr>
+<tr><td>RTC</td><td>Le chapitre consacré aux satellites énumère MD9600/RT90, UV380/RT3S et DM1701 dans son contexte</td><td>Classer automatiquement tout autre modèle plus récent comme « sans RTC »</td></tr>
+<tr><td>TX APRS FM</td><td>Fonction documentée par le guide ; profil et position requis</td><td>Réception APRS, messages bidirectionnels ou ressources identiques dans toutes les builds</td></tr>
+<tr><td>NMEA / journal GPS</td><td>Options documentées lorsque le matériel et la mémoire appropriés sont présents</td><td>Que le suffixe NMEA ajoute un récepteur ou n&#39;affecte pas la base d&#39;IDs</td></tr>
+<tr><td>Hotspot</td><td>Documenté pour les plateformes compatibles ; RD5R/DM5R exclu en raison de l&#39;USB pendant TX</td><td>RD5R, le full duplex ou toutes les nouvelles étiquettes du connecteur</td></tr>
+<tr><td>Satellites</td><td>Prédiction et correction Doppler documentées avec heure/position/Keps</td><td>Tous les modes spatiaux ni l&#39;écoute de sa propre transmission en duplex</td></tr>
+<tr><td>Accessibilité vocale</td><td>Voix externes et niveaux d&#39;avertissement ; essentielles sur GD77S</td><td>Des voix automatiquement intégrées à tout ZIP ou toute langue</td></tr>
+</tbody></table></div>
+<h3 id="frecuencias-del-manual-no-son-una-homologacion">Les fréquences du manuel ne constituent pas une homologation</h3>
+<p>Dans <code>Radio Options — Band Limits</code>, le guide distingue :</p>
+<ul>
+<li>Les limites TX logicielles, avec une valeur par défaut indiquée pour les États-Unis : <strong>144–148, 222–225 et 420–450 MHz</strong>. <strong>Ce ne sont ni le plan de bandes espagnol ni une autorisation locale.</strong></li>
+<li>Les limites générales de syntonisation décrites pour les plateformes de ce chapitre : <strong>127–178, 190–282 et 380–564 MHz</strong>, avec exclusion explicite de la plage intermédiaire sur MD9600/RT90.</li>
+<li>Les spécifications du circuit AT1846S citées dans le texte lui-même : <strong>134–174, 200–260 et 400–520 MHz</strong>, accompagnées d&#39;avertissements sur le fonctionnement hors spécifications.</li>
+</ul>
+<p>Ces chiffres décrivent des contextes différents. Il ne faut pas les transformer en « bandes garanties pour tous les modèles » ni les appliquer à DM32, UV008, RGB ou MD380 parce qu&#39;ils apparaissent dans un tableau local. Le manuel avertit de la présence d&#39;émissions parasites dans la bande intermédiaire en raison de l&#39;absence d&#39;étages appropriés : <strong>ce guide ne recommande pas d&#39;y émettre</strong>. Configurer les limites autorisées dans votre pays et les restrictions réelles de votre appareil.</p>
+<h3 id="limites-del-codeplug-frente-a-capacidad-del-equipo">Limites du codeplug et capacités de l&#39;appareil</h3>
+<p>L&#39;éditeur web prend en charge le binaire standard de <strong>128 KiB</strong> et exclut les canaux <strong>1025+</strong>. Cela n&#39;affirme pas que toutes les radios ont le même nombre maximal de canaux, contacts, IDs ou zones. Sur certaines plateformes, les ressources vocales, le journal GPS et les bases d&#39;IDs se partagent la mémoire. La longueur choisie pour chaque entrée de la base d&#39;IDs modifie également sa capacité. Consulter le CPS/la build et la mémoire réelle de l&#39;unité.</p>
+<h2 id="7-controles-y-bootloader-no-hay-secuencia-universal">7. Commandes et bootloader : aucune séquence universelle</h2>
+<p>Le guide utilise des noms logiques tels que SK1, SK2, Green, Red et Orange. Leur emplacement varie selon la radio et, pour les mobiles, selon le panneau ou le microphone.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Famille/modèle</th><th scope="col">Particularité de fonctionnement documentée</th><th scope="col">Précaution</th></tr></thead><tbody>
+<tr><td>GD-77</td><td>Deux boutons latéraux et un bouton supérieur ; référence du manuel</td><td>Ne pas transposer les positions à n&#39;importe quel Baofeng</td></tr>
+<tr><td>GD-77S</td><td>Sélecteur à 16 positions et modes annoncés vocalement</td><td>Pas de menus visuels ni de clavier numérique</td></tr>
+<tr><td>DM-1801 / DM-860</td><td>Commandes dédiées MR/VFO et A/B</td><td>La révision 2022 n&#39;est pas validée par la seule ressemblance des boutons</td></tr>
+<tr><td>RD-5R / DM-5R Tier 2</td><td>A/B et Band remplacent gauche/droite ; accès long au menu rapide</td><td>Ne possède pas le même bouton physique Orange que GD77</td></tr>
+<tr><td>MD-UV380 / RT-3S</td><td>Molette et fonctions des flèches différentes</td><td>Vérifier le contexte : canal/VFO ou menu</td></tr>
+<tr><td>DM-1701 / RT-84</td><td>P1/P2 assurent les fonctions gauche/droite</td><td>Paquets propres et positions non interchangeables par intuition</td></tr>
+<tr><td>MD-9600 / RT-90</td><td>Correspondances spécifiques pour le panneau et le microphone</td><td>Selon le guide, le balayage VFO ne se commande pas entièrement depuis le panneau</td></tr>
+<tr><td>MD-2017</td><td>Le guide comprend un schéma dédié des commandes</td><td>Ne pas le remplacer par le schéma du UV380</td></tr>
+<tr><td>RGB / DM32 / UV008 / MD380</td><td>Aucune instruction spécifique vérifiée lors de cette consultation</td><td>Ne pas inventer de combinaisons</td></tr>
+</tbody></table></div>
+<p>Pour installer le firmware, suivre les instructions du projet pour la <strong>variante exacte</strong> et utiliser le chargeur correspondant dans OpenGD77 CPS. Le guide différencie les combinaisons latérales sur MK22, P1 et bouton supérieur sur les mobiles, et PTT avec un autre bouton sur certains portatifs STM32. Aucune recette universelle n&#39;est reproduite : l&#39;identification et le nom commercial ne suffisent pas à valider tous les cas.</p>
+<p>Sur STM32, le contexte du bootloader DFU et son pilote diffèrent du mode CPS/USB utilisé normalement. Un écran vide pendant une mise à jour peut être normal. Ne pas essayer des combinaisons au hasard ni écrire des fichiers d&#39;une autre famille dans le seul but de faire apparaître un port.</p>
+<h2 id="8-escenarios-de-seleccion-segura">8. Scénarios de sélection sûre</h2>
+<h3 id="tengo-un-dm-1801-sirve-el-paquete-dm1801">« J&#39;ai un DM-1801, le paquet DM1801 convient-il ? »</h3>
+<ol>
+<li>Vérifier s&#39;il s&#39;agit du matériel version 1 ou de la nouvelle révision de 2022.</li>
+<li>Si le guide exclut cette révision, ne pas utiliser le paquet OpenDM1801 sur la seule foi du nom.</li>
+<li>S&#39;il s&#39;agit d&#39;un DM1801A, ne pas le remplacer par DM1801 : le catalogue et la publication ont des destinations distinctes.</li>
+<li>S&#39;il est impossible de déterminer la révision, conserver la configuration actuelle et interrompre l&#39;installation.</li>
+</ol>
+<h3 id="mi-rt3s-aparece-como-familia-md-uv380">« Mon RT3S apparaît dans la famille MD-UV380 »</h3>
+<p>L&#39;association est documentée par le projet et par l&#39;étiquette du catalogue. Vérifier tout de même le matériel, la présence du GPS et les notes de l&#39;image. Le nom de la famille ne prouve pas une réception simultanée de deux canaux ni ne transforme la radio en 10W PLUS.</p>
+<h3 id="el-conector-reconoce-dm32-ya-se-puede-programar">« Le connecteur reconnaît DM32, peut-on déjà le programmer ? »</h3>
+<p>L&#39;étiquette est prévue comme type 11 avec transport SERIAL. Il n&#39;y a pas de destination de firmware DM32 dans <code>TARGETS</code>. Aucun paquet officiel ni l&#39;ensemble des fonctions n&#39;ont été confirmés ici. Le site web n&#39;accorde pas l&#39;autorisation d&#39;écriture, même si l&#39;identification et la lecture aboutissent. État d&#39;OpenGD77 sur le DM-32, installation, sauvegardes et compilation d&#39;un firmware ouvert : <a href="ayuda-dm32uv.fr.html">guide DM-32UV</a>.</p>
+<h3 id="hay-un-zip-oficial-para-md2017-por-que-no-figura-al-principio-del-manual">« Il existe un ZIP officiel pour MD2017 : pourquoi n&#39;est-il pas au début du manuel ? »</h3>
+<p>Le guide évolue par sections et son en-tête ne répertorie pas forcément toutes les publications ultérieures. Le schéma des commandes et l&#39;index officiel constituent des preuves supplémentaires précises. On ne peut pas en déduire que chaque détail d&#39;un autre modèle s&#39;applique au MD2017 sans vérification.</p>
+<h3 id="quiero-restaurar-mi-md9600-con-una-copia-de-otra-unidad">« Je veux restaurer mon MD9600 avec une sauvegarde provenant d&#39;un autre appareil »</h3>
+<p>Ne pas utiliser le calibrage d&#39;une autre unité. Distinguer codeplug, ressources, calibrage et firmware ; identifier la révision RF et conserver les sauvegardes de l&#39;appareil concerné. Une image téléchargée ne remplace pas la sauvegarde MCU requise par la politique du site web.</p>
+<h2 id="9-diagnostico-de-compatibilidad">9. Diagnostic de compatibilité</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Indice</th><th scope="col">Interprétation prudente</th><th scope="col">Action</th></tr></thead><tbody>
+<tr><td>Présent dans le catalogue, mais pas dans <code>MODELS</code> sous cet alias</td><td>La destination de téléchargement et l&#39;identification n&#39;utilisent pas nécessairement le même nom</td><td>Vérifier la famille documentée ; ne pas exiger une égalité littérale entre tous les alias</td></tr>
+<tr><td>Présent dans <code>MODELS</code>, mais absent du catalogue</td><td>Il s&#39;agit d&#39;une étiquette de protocole, pas d&#39;un firmware téléchargeable sélectionné</td><td>Ne pas choisir un modèle similaire en remplacement</td></tr>
+<tr><td>L&#39;appareil répond comme MD9600</td><td>La famille est connue, mais pas nécessairement HW1/2/4/5</td><td>Déterminer la révision avant l&#39;installation</td></tr>
+<tr><td>C&#39;est un UV380 et le vendeur indique « Plus »</td><td>Il peut s&#39;agir d&#39;un matériel nécessitant une image différente</td><td>Vérifier la carte et la désignation complète</td></tr>
+<tr><td>UV390 mentionné dans le guide</td><td>Mention officielle, mais sans sélecteur local dédié</td><td>Chercher les notes exactes de la variante ; ne pas supposer qu&#39;il s&#39;agit du ZIP UV380</td></tr>
+<tr><td>MD380 sans « UV »</td><td>Nom de modèle différent</td><td>Ne pas charger <code>OpenMDUV380.zip</code> en raison d&#39;une correspondance partielle</td></tr>
+<tr><td>Famille sélectionnée rejetée</td><td>L&#39;identification ne correspond pas au transport attendu ou au format accepté</td><td>Conserver l&#39;erreur et ne pas désactiver la vérification</td></tr>
+<tr><td>Sauvegarde signalée comme incomplète</td><td>La copie MCU complète manque dans le flux web</td><td>Exporter les données lues ; laisser l&#39;écriture bloquée</td></tr>
+<tr><td>Une fonction présente dans des captures manque</td><td>Différence de build, plateforme, ressources ou matériel</td><td>Comparer la version et les notes, pas seulement la marque/le modèle</td></tr>
+</tbody></table></div>
+<h3 id="lista-de-comprobacion-antes-de-afirmar-soporte">Liste de vérification avant d&#39;affirmer la prise en charge</h3>
+<ul>
+<li>[ ] Modèle complet et fabricant consignés.</li>
+<li>[ ] Révision réelle de la carte confirmée si nécessaire.</li>
+<li>[ ] Firmware, build et CPS notés.</li>
+<li>[ ] Alias étayé par une source, et pas seulement par une boutique.</li>
+<li>[ ] Image choisie selon le modèle/la variante, pas selon la ressemblance.</li>
+<li>[ ] GPS, RTC, puissance, écran et bandes non supposés sans preuve.</li>
+<li>[ ] Mode USB normal distingué du bootloader.</li>
+<li>[ ] Sauvegardes originales exportées et portée de chacune comprise.</li>
+<li>[ ] Limite de 128 KiB et exclusion des canaux étendus acceptées.</li>
+<li>[ ] Écriture web maintenue <strong>BLOQUÉE</strong>.</li>
+</ul>
+<h2 id="10-fuentes-y-alcance-temporal">10. Sources et portée temporelle</h2>
+<p>Toutes les sources ci-dessous ont été consultées le <strong>2026-10-25</strong>. Les liens indiquent des preuves ; ils n&#39;autorisent pas le téléchargement d&#39;un firmware pour n&#39;importe quel appareil.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Clé</th><th scope="col">Source vérifiée</th><th scope="col">Apport</th></tr></thead><tbody>
+<tr><td>G</td><td><a href="https://raw.githubusercontent.com/LibreDMR/OpenGD77_UserGuide/master/OpenGD77_User_Guide.md" target="_blank" rel="noopener noreferrer">Guide officiel anglais</a> ; <a href="https://github.com/LibreDMR/OpenGD77_UserGuide/blob/33de63dcb002fcd837419fda25a2e535b940dbcd/OpenGD77_User_Guide.md" target="_blank" rel="noopener noreferrer">référence fixe 33de63dcb002fcd837419fda25a2e535b940dbcd</a></td><td>Modèles d&#39;installation, avertissement sur le DM1801 de 2022, alias explicites, commandes et fonctions par plateforme</td></tr>
+<tr><td>R</td><td><a href="https://github.com/LibreDMR/OpenGD77_UserGuide" target="_blank" rel="noopener noreferrer">Dépôt LibreDMR/OpenGD77_UserGuide</a></td><td>Provenance du guide et déclaration GPL 2 pour ses documents ; seule la version anglaise est maintenue</td></tr>
+<tr><td>W</td><td><a href="https://www.opengd77.com/" target="_blank" rel="noopener noreferrer">Page d&#39;accueil OpenGD77</a></td><td>État du forum et accès aux archives statiques</td></tr>
+<tr><td>A</td><td><a href="https://www.opengd77.com/archive/index.html" target="_blank" rel="noopener noreferrer">Archives du forum</a></td><td>Contexte historique ; l&#39;instantané visible date de juillet 2025 et n&#39;est pas une matrice actualisée pour 2026</td></tr>
+<tr><td>F1</td><td><a href="https://www.opengd77.com/downloads/GD77/Firmware/20260504_946183e9002d277dfaba616a1eea15bfe959c692/" target="_blank" rel="noopener noreferrer">GD77, 2026-05-04 / 946183e9002d277dfaba616a1eea15bfe959c692</a></td><td>Paquets MK22 par modèle et variantes NMEA/Japanese lorsqu&#39;elles existent</td></tr>
+<tr><td>F2</td><td><a href="https://www.opengd77.com/downloads/MDUV380_DM1701/Firmware/20260504_ebd7100bb4c930e6ff0c24202474b5b72e7d6beb/" target="_blank" rel="noopener noreferrer">MDUV380_DM1701, 2026-05-04 / ebd7100bb4c930e6ff0c24202474b5b72e7d6beb</a></td><td>ZIP dédiés UV380, UV380 10W PLUS, DM1701 et RT84</td></tr>
+<tr><td>F3</td><td><a href="https://www.opengd77.com/downloads/MD9600/Firmware/20260504_e779365405cbe4a73803a402626294764784b11f/" target="_blank" rel="noopener noreferrer">MD9600, 2026-05-04 / e779365405cbe4a73803a402626294764784b11f</a></td><td>ZIP HW V1/V2/V4/V5 et variantes japonaises</td></tr>
+<tr><td>F4</td><td><a href="https://www.opengd77.com/downloads/MD2017/Firmware/20260505_6b43740c89378240c0cabad0ca827e5b0963124e/" target="_blank" rel="noopener noreferrer">MD2017, 2026-05-05 / 6b43740c89378240c0cabad0ca827e5b0963124e</a></td><td>Publication de l&#39;image MD2017 et variante japonaise</td></tr>
+<tr><td>L</td><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/firmware-core.js" target="_blank" rel="noopener noreferrer"> 0 </a>, <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/gd77-connector.js" target="_blank" rel="noopener noreferrer"> 1 </a>, <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/radio-ui.js" target="_blank" rel="noopener noreferrer"> 2 </a></td><td>Catalogue, étiquettes du protocole et portée réelle de la lecture, de la modification et du verrouillage web</td></tr>
+</tbody></table></div>
+<p>Les chemins <code>Latest</code> de ces familles redirigeaient vers les index datés cités ; cela n&#39;affirme pas qu&#39;il s&#39;agit de toutes les builds disponibles ni que « Latest » signifie stable pour chaque appareil. Les noms <code>Japanese</code>, <code>JA</code> ou <code>NMEA</code> désignent des variantes de distribution, pas de nouveaux modèles ni une équivalence de capacités.</p>
+<p>La licence GPL 2 déclarée dans le README du guide <strong>ne prouve pas une licence MIT du firmware</strong> ni une licence unique pour CPS, voix, donneurs et codec. Vérifier les conditions propres à chaque composant avant toute redistribution.</p>
+<p><strong>Blocages et lacunes explicitement conservés :</strong> absence de sauvegarde MCU intégrale sur le site web ; révision commerciale ambiguë pour certains appareils ; absence de correspondance vérifiée pour chaque variante UV390 ; absence de prise en charge complète démontrée pour DM1701RGB, DM32, UV008 et MD380 sur la seule foi de leurs étiquettes. Aucune lacune n&#39;est comblée en attribuant à tous les modèles les fonctions du manuel général.</p></article>
+    <footer><p class="translation-note">Traduction de l&#39;original espagnol. En cas de divergence, la version espagnole fait foi.</p><p>Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide. <a href="ayuda-firmwares.fr.html">Retour à l&#39;index</a>.</p></footer>
+  </main>
+</body>
+</html>

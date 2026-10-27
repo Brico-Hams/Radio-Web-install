@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="ARDF Quansheng: Empfang und Konfiguration – Hilfe: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>ARDF Quansheng: Empfang und Konfiguration – Hilfe | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-ardf.html">
+  <link rel="alternate" hreflang="en" href="ayuda-ardf.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-ardf.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-ardf.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-ardf.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda.html">App-Hilfe (Spanisch)</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-ardf.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-ardf.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-ardf.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-ardf.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-ardf.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#hardware-versiones-y-limites">Hardware, Versionen und Grenzen</a></li><li><a href="#modos-y-ajustes">Modi und Einstellungen</a></li><li><a href="#puesta-en-marcha-solo-recepcion">Inbetriebnahme nur für Empfang</a></li><li><a href="#recordatorio-de-ganancia">Hinweis zur Verstärkung</a></li><li><a href="#distancia-una-estimacion-no-navegacion">Entfernung: Schätzung, keine Navigation</a></li><li><a href="#correccion-de-reloj">Uhrkorrektur</a></li><li><a href="#diferencias-historicas-verificables">Überprüfbare historische Unterschiede</a></li><li><a href="#diagnostico">Diagnose</a></li><li><a href="#fuentes">Quellen</a></li></ul></nav>
+    <article class="panel"><h1 id="ardf-quansheng-ayuda-de-recepcion-y-configuracion">ARDF Quansheng: Empfang und Konfiguration – Hilfe</h1>
+<p>Revision: 25-10-2026. Hauptbeleg: <code>ARDFv05/ARDF.md</code> und das Repository reald V3/UV-K1. Dies ist eine eigene Zusammenfassung der Konfiguration, keine Kopie des Handbuchs. Die folgenden Namen und Bereiche entsprechen dem untersuchten Dokument; ohne Prüfung werden sie v0.2/v0.4 oder V1/V2-Zweigen nicht zugeschrieben.</p>
+<h2 id="hardware-versiones-y-limites">Hardware, Versionen und Grenzen</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Familie</th><th scope="col">Zugehörige Quelle</th><th scope="col">Verhältnis zu dieser Website</th></tr></thead><tbody>
+<tr><td>V1 DP32</td><td>reald/uv-k5-firmware-custom</td><td>Nicht mit dem PY32-Connector installieren</td></tr>
+<tr><td>V2</td><td>Von reald verlinktes DL9CAT-V2-Projekt</td><td>Außerhalb des Katalogs/Connectors</td></tr>
+<tr><td>V3 / UV-K1 PY32</td><td>reald/uv-k1-k5v3-firmware-custom</td><td>Erkannte stabile Releases zum Herunterladen</td></tr>
+</tbody></table></div>
+<p>Der Katalog erkennt Tags <code>ARDF-K5v3_K1-vX.Y[.Z]</code> aus der V3-Quelle, keine beliebigen Dateien, nur weil sie «ARDF» im Namen tragen. Auf dieser Website sind sie weiterhin <strong>nur Downloads</strong>, auch mit PY32-Vektoren: Die ARDF-Slotvalidierung ist nicht freigeschaltet. Der Ordner ARDFv05 enthält Quellen und geerbte Dateien; dadurch wird nicht jede Binärdatei aus seinem Archiv zu einem aktuellen ARDF-Build.</p>
+<p>Upstream dokumentiert in den offiziellen ARDF-Releases deaktiviertes TX. Setze das bei fremden Builds nicht voraus: Prüfe <code>ENABLE_PREVENT_TX</code> und die Version. Richtungsfinder-Firmware macht das Funkgerät nicht zu einem 80-Meter-Empfänger; das Dokument nennt eine untere Chipgrenze von etwa 18 MHz, daher ist es für ARDF bei 3.5 MHz ungeeignet.</p>
+<h2 id="modos-y-ajustes">Modi und Einstellungen</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Einstellung</th><th scope="col">Steuerung</th><th scope="col">Auswahl und Prüfung</th></tr></thead><tbody>
+<tr><td>ARDF=OFF</td><td>Betrieb außerhalb des ARDF-Bildschirms/-Modus</td><td>Belegt weder kompiliertes noch erlaubtes TX</td></tr>
+<tr><td>ARDF=DF Simple</td><td>Einfache Peilung mit manueller Verstärkung</td><td>Suche ohne Zyklen; keine Korrektur des Zyklustakts nötig</td></tr>
+<tr><td>ARDF=ARDF</td><td>Zyklen und Fuchs-Anzeige</td><td>Synchronisierung mit dem tatsächlichen Ereignis konfigurieren</td></tr>
+<tr><td>Mode=AM</td><td>AM-Demodulation der Aktivitätssignale</td><td>An das tatsächliche Signal anpassen; aktiviert kein AM-TX</td></tr>
+<tr><td>Step</td><td>Abstimmraster</td><td>Das Handbuch schlägt 1 kHz vor; verhindert Rundung der gewünschten Frequenz</td></tr>
+<tr><td>Sql</td><td>Squelch</td><td>Das Handbuch schlägt 0 für kontinuierliches Hören vor; Lautstärke vorsichtig einstellen</td></tr>
+<tr><td>RxMode</td><td>VFO-Empfang</td><td>MAIN ONLY vermeidet Umschalten und Flackern des Verstärkungsverlaufs</td></tr>
+<tr><td>Manuelle Verstärkung</td><td>Empfindlichkeit/Dämpfung je Index</td><td>Niedrigerer Index verringert Empfindlichkeit; bei starkem Signal reduzieren</td></tr>
+<tr><td>NumFox</td><td>Anzahl der Sender pro Zyklus</td><td>Dokument: 1-10; 0 deaktiviert die Zeitsteuerung; Standard 5</td></tr>
+<tr><td>FoxDur</td><td>Dauer jedes Durchgangs</td><td>Dokument: Standard 60 s, Bereich 1.00-999.99 s; Eingabeeinheiten des Builds prüfen</td></tr>
+<tr><td>EndSig</td><td>Warnung vor Ende des Durchgangs</td><td>0 deaktiviert; Dokument 1-30 s. Vor Kopfhörern Lautstärke senken</td></tr>
+<tr><td>GainRe</td><td>Verstärkung je Fuchs/VFO speichern</td><td>Laut Dokument OFF, VFO A, VFO B oder BOTH</td></tr>
+<tr><td>RSS100</td><td>Referenz zur Entfernungsschätzung</td><td>Null deaktiviert; keine RF-Kalibrierung des ganzen Funkgeräts</td></tr>
+<tr><td>ClkCor</td><td>Korrektur des internen Timers</td><td>Nur nach Messung der Abweichung; Wert eines anderen Geräts nicht übernehmen</td></tr>
+<tr><td>SetNav</td><td>Tastenorientierung K1/K5</td><td>Korrigieren, wenn UP/DOWN umgekehrt wirken</td></tr>
+<tr><td>ChSave</td><td>Speicherkonfiguration sichern</td><td>In MR erforderlich; VFO und MR sind nicht dasselbe</td></tr>
+</tbody></table></div>
+<p>Änderungen der Verstärkung je Index werden als ungefähr 5 dB beschrieben; das ist kein zertifizierter Dämpfer. Ein sehr nahes Signal kann trotz reduzierter Verstärkung übersteuern. Antenne, Polarisation, Ausrichtung und Umgebung sind relevant.</p>
+<h2 id="puesta-en-marcha-solo-recepcion">Inbetriebnahme nur für Empfang</h2>
+<ol>
+<li>Genaue Hardware und ARDF-Firmware identifizieren; ursprüngliche Konfiguration sichern.</li>
+<li>Antenne anschließen und Lautstärke niedrig einstellen; langsam erhöhen, besonders mit Kopfhörern.</li>
+<li>DF Simple wählen, um Empfang ohne Uhr zu prüfen.</li>
+<li>Modulation, Raster und Frequenz des autorisierten Ereignissignals auswählen.</li>
+<li>MAIN ONLY verwenden; bei Eingabe einer Frequenz prüfen, ob du im VFO bist.</li>
+<li>Verstärkung und Ausrichtung anpassen, ohne maximales Rauschen mit einem Nutzsignal zu verwechseln.</li>
+<li>Für zeitgesteuerte Wettkämpfe NumFox/FoxDur konfigurieren und mit dem tatsächlichen Zyklus gemäß Bildschirm/Anleitung der installierten Version synchronisieren.</li>
+<li>Falls nötig speichern; beim erneuten Laden VFO/Speicher prüfen.</li>
+</ol>
+<p>Es werden keine universellen Synchronisierungsfolgen empfohlen: Tasten und Modi können sich zwischen Versionen ändern. Sende kein Testsignal ohne Genehmigung.</p>
+<h2 id="recordatorio-de-ganancia">Hinweis zur Verstärkung</h2>
+<p>GainRe behält Werte je Fuchs zu Beginn seines Durchgangs bei. Eine nützliche Einstellung ist VFO A für die Fuchsfrequenz mit gespeicherter Verstärkung, VFO B für eine kontinuierliche Bake ohne diese Speicherung. Wenn NumFox=0 ist oder GainRe den aktiven VFO nicht einschließt, ist keine Verlaufstabelle je Fuchs zu erwarten. Das Dokument weist darauf hin, dass die sichtbare Tabelle andere Grenzen als das NumFox-Maximum haben kann: Aus der Anzeige von 10 Durchgängen nicht auf 10 Verlaufseinträge schließen.</p>
+<h2 id="distancia-una-estimacion-no-navegacion">Entfernung: Schätzung, keine Navigation</h2>
+<p>Die Vorhersage beruht auf einem ungefähren Ausbreitungsmodell und RSS100 als Referenz für Sender-Antenne-Empfänger. Gelände, Leistung, Höhe und Hindernisse ändern das Ergebnis; vertraue der Zahl nicht als tatsächlicher Entfernung. Das Handbuch beschreibt eine Referenzmessung 100 m vom Ereignissender entfernt, mit stabilem Signal und bekannter Ausrichtung. Null deaktiviert die Funktion. Sie ersetzt weder Karten noch persönliche Sicherheit oder Anweisungen des Veranstalters.</p>
+<h2 id="correccion-de-reloj">Uhrkorrektur</h2>
+<p>Das Handbuch beschreibt die Abweichung des internen Resonators. Für den konkreten Fall, die real verstrichenen Sekunden zu messen, während das Gerät eine Stunde anzeigt:</p>
+<pre><code>correccion = 6000 - (segundos_reales * 100 / 60)</code></pre>
+<p>Das Dokument nennt für ClkCor den Bereich -500 bis 500. Diese Formel gilt nur für das Verfahren dieser Version, nicht für ein beliebiges Uhrmenü eines anderen Funkgeräts. Sie korrigiert nicht den RF-Oszillator und erfordert keine Änderung der RF-Kalibrierung. Nach einer Änderung erneut messen und Synchronisierung prüfen.</p>
+<h2 id="diferencias-historicas-verificables">Überprüfbare historische Unterschiede</h2>
+<ul>
+<li>Laut Dokument befand sich SetNav vor v0.4 in einem versteckten Menü; setze denselben Ort nicht für alle Versionen voraus.</li>
+<li>Welche Änderungen v0.2, v0.4, v0.5 und v0.5.1 enthalten, steht in den jeweiligen Releases; ein neueres Tag belegt für sich keine Datenkompatibilität.</li>
+<li>Verwende das CHIRP-Modul des jeweiligen Releases. Der Standard-UV-K5-Treiber bildet die ARDF-Einstellungen nicht unbedingt ab.</li>
+<li>V1/V2 nicht auf V3-Flashen übertragen. Das Handbuch warnt, dass k5prog/k5prog_win V1 nicht die passenden Werkzeuge für V3 sind.</li>
+</ul>
+<h2 id="diagnostico">Diagnose</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Problem</th><th scope="col">Nichtdestruktive Prüfung</th></tr></thead><tbody>
+<tr><td>Es lassen sich nur drei Ziffern eingeben</td><td>Vielleicht bist du im Speicher statt im VFO</td></tr>
+<tr><td>Die eingegebene Frequenz ändert sich</td><td>Step/Raster und Bandgrenzen prüfen</td></tr>
+<tr><td>Verstärkungsverlauf flackert</td><td>Dual-Empfang deaktivieren</td></tr>
+<tr><td>Fuchs-Tabelle fehlt</td><td>NumFox und GainRe für den aktiven VFO prüfen</td></tr>
+<tr><td>CHIRP zeigt andere Einstellungen</td><td>Speicher sichern und Modul/Version prüfen</td></tr>
+<tr><td>Pfeile vertauscht</td><td>SetNav; nicht wegen äußerlicher Ähnlichkeit die Firmware wechseln</td></tr>
+<tr><td>Fehler Header short read</td><td>Programme schließen, Datenkabel/-anschluss, Modus und Firmware prüfen; Speicher nicht löschen</td></tr>
+<tr><td>Entfernung unplausibel</td><td>RSS100-Referenz, Antenne, Leistung und Gelände; RF nicht blind neu kalibrieren</td></tr>
+</tbody></table></div>
+<h2 id="fuentes">Quellen</h2>
+<ul>
+<li><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">ARDF-V3- und UV-K1-Projekt</a>.</li>
+<li><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/blob/main/ARDF.md" target="_blank" rel="noopener noreferrer">ARDF-Handbuch des Projekts</a>.</li>
+<li><a href="https://github.com/reald/uv-k1-k5v3-firmware-custom/releases" target="_blank" rel="noopener noreferrer">ARDF-V3-Releases</a>.</li>
+<li><a href="https://github.com/reald/uv-k5-firmware-custom" target="_blank" rel="noopener noreferrer">ARDF-V1-Projekt</a>.</li>
+<li><a href="ayuda-configuracion.de.html">Gemeinsame Konfiguration</a>.</li>
+</ul>
+<p>Der Remote-Branch kann sich weiterentwickeln. Halte für eine Wiederholung der Konfiguration die genaue Version von Handbuch, Firmware und Treiber zusammen mit deiner Kopie fest.</p></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

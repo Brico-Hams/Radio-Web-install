@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Baofeng DM-32UV: offene Firmware, OpenGD77 und wie man sie baut: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Baofeng DM-32UV: offene Firmware, OpenGD77 und wie man sie baut | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-dm32uv.html">
+  <link rel="alternate" hreflang="en" href="ayuda-dm32uv.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-dm32uv.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-dm32uv.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-dm32uv.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda.html">App-Hilfe (Spanisch)</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-dm32uv.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-dm32uv.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-dm32uv.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-dm32uv.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-dm32uv.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#resumen">Zusammenfassung</a></li><li><a href="#hardware">Hardware</a></li><li><a href="#familias-de-firmware-de-fabrica">Werksfirmware-Familien</a></li><li><a href="#paso-0-copia-de-seguridad">Schritt 0: Sicherung</a></li><li><a href="#instalar-opengd77-experimental">OpenGD77 installieren (experimentell)</a></li><li><a href="#construir-firmware-radiofoundry">Firmware bauen: RadioFoundry</a></li><li><a href="#protocolo-del-bootloader-de-baofeng">Baofeng-Bootloader-Protokoll</a></li><li><a href="#otros-recursos-encontrados">Weitere gefundene Ressourcen</a></li><li><a href="#licencias-y-limites">Lizenzen und Einschränkungen</a></li></ul></nav>
+    <article class="panel"><h1 id="baofeng-dm-32uv-firmware-abierto-opengd77-y-como-construirlo">Baofeng DM-32UV: offene Firmware, OpenGD77 und wie man sie baut</h1>
+<p>Stand: 26-10-2026. Ergebnis der Suche nach dem Quellcode und der Möglichkeit, Firmware für das DM-32UV auf GitHub, Codeberg, GitLab, GitFlic, der OpenGD77-Website und in den Telegram-Gruppen OpenGD77 EA, Baofeng DM-32UV EA, Baofeng DM-32UV RU und OpenGD77 Rus zu bauen. Nichts in diesem Leitfaden wurde an einem Bricohams-Funkgerät getestet: Für jede Angabe ist die Quelle genannt.</p>
+<h2 id="resumen">Zusammenfassung</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Frage</th><th scope="col">Antwort</th></tr></thead><tbody>
+<tr><td>Gibt es Quellcode des OpenGD77-Ports für das DM-32 (OpenDM32)?</td><td><strong>Nein.</strong> Es wird nur als Binärdatei verbreitet. Das bestätigen die Gruppen und die OpenGD77-Website</td></tr>
+<tr><td>Lässt sich OpenGD77 auf dem DM-32 installieren?</td><td>Ja, in einer experimentellen Version: mit der offiziellen CPS (Typ «DM32/UV008») oder <a href="https://grid.radio/opengd77/" target="_blank" rel="noopener noreferrer">grid.radio</a>. Laut den Gruppen gibt es keine stabile Version</td></tr>
+<tr><td>Gibt es eine offene Firmware, die sich bauen lässt?</td><td><strong>Ja: <a href="https://github.com/RadioFoundry/RadioFoundry" target="_blank" rel="noopener noreferrer">RadioFoundry</a></strong> (MIT). FM- und DMR-Sprache in beide Richtungen, CTCSS/DCS, APRS, GPS und Hotspot wurden über Funk getestet</td></tr>
+<tr><td>Aktuelle Lizenz von OpenGD77?</td><td>Seit 2019 BSD-ähnlich mit Verbot der kommerziellen Nutzung (keine GPL). Nur der alte Mirror <a href="https://github.com/open-ham/OpenGD77" target="_blank" rel="noopener noreferrer">open-ham/OpenGD77</a> steht unter GPL-2.0</td></tr>
+<tr><td>AMBE-Codec?</td><td>Proprietär (DVSI). Kein offenes Projekt verbreitet ihn: Nutzer extrahieren ihn aus der Werksfirmware ihres eigenen Geräts</td></tr>
+</tbody></table></div>
+<h2 id="hardware">Hardware</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Baustein</th><th scope="col">Komponente</th></tr></thead><tbody>
+<tr><td>SoC</td><td>Hongruan HR_C7000 (Dahua DH4570): C-SKY-CK803S-Kern mit 168 MHz, 288 KB SRAM, integriertes DMR/FM-Modem, kein interner Flash</td></tr>
+<tr><td>HF-Transceiver</td><td>FD6818 (kein öffentliches Datenblatt; Register ähneln in ihrer Funktion denen von BK4819/AT1846S)</td></tr>
+<tr><td>Programm-Flash</td><td>GD25Q80 / 25Q16, Klasse 1 MB, Ausführung vor Ort bei <code>0x03000000</code></td></tr>
+<tr><td>Daten-Flash</td><td>GD25Q128 oder Puya PY25Q128HA, 16 MB: Codeplug, Kalibrierung, Kontakte</td></tr>
+<tr><td>Display</td><td>240x320 Farbe, Controller der ST7789-Klasse am 8-Bit-i8080-Bus</td></tr>
+<tr><td>Sonstiges</td><td>ALPU-MP (I2C-Authentifizierung), RDA5807M (kommerzielles FM), GPS ATGM336H, RTC mit Batterie</td></tr>
+<tr><td>Programmierung</td><td>2-polige K1-Buchse mit USB-Seriell-Kabel bei 115200 Baud. USB-C befindet sich am Akku und dient nur zum Laden</td></tr>
+</tbody></table></div>
+<p>Speicherkarte des Programm-Flashs:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Bereich</th><th scope="col">Inhalt</th></tr></thead><tbody>
+<tr><td><code>0x03000000-0x0300BFFF</code></td><td>Baofeng-Bootloader (Aktualisierungsmodus PTT+SK1). Niemals verändern</td></tr>
+<tr><td><code>0x0300C000-0x030E7FFF</code></td><td>Anwendung (880 KB in RadioFoundry)</td></tr>
+<tr><td><code>0x030E8000-0x030FFFFF</code></td><td>Codec-Slot (RadioFoundry)</td></tr>
+</tbody></table></div>
+<p>Im Daten-Flash liegen unterhalb von <code>0x700000</code> der Werks-Codeplug und die <strong>Kalibrierung</strong> (die 4-KB-Seite, deren letztes Byte den Wert 2 hat). Niemals beschreiben.</p>
+<p>Vollständige Details, größtenteils an einem Funkgerät gemessen: <a href="https://github.com/RadioFoundry/RadioFoundry/blob/main/docs/spec/hardware-dm32.md" target="_blank" rel="noopener noreferrer">hardware-dm32.md von RadioFoundry</a>, mit Takt und PLL, Peripherie, Interrupts, Pinbelegung, FD6818-Registern, Audiopfaden, Kalibrierungsformat und Protokollen. Datenblätter für den HR_C7000 (Dokumente 1 und 2), annotiertes Platinenfoto und Ladeschaltung unter <a href="https://github.com/yo3hjv/Baofeng-DM32" target="_blank" rel="noopener noreferrer">yo3hjv/Baofeng-DM32</a> (ohne Lizenz: hier wird nur darauf verwiesen).</p>
+<h2 id="familias-de-firmware-de-fabrica">Werksfirmware-Familien</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Firmware</th><th scope="col">Familie</th><th scope="col">Hinweis</th></tr></thead><tbody>
+<tr><td><code>DM32.01.*</code></td><td>ROW, am weitesten verbreitet</td><td>Grundlage von OpenDM32 und RadioFoundry (<code>DM32.01.01.049</code>)</td></tr>
+<tr><td><code>DM32.NRF.*</code> / Fanti</td><td>Taiwan, derselbe Zweig wie <code>01.*</code></td><td></td></tr>
+<tr><td><code>DM32.00.*</code> / <code>UV32.*</code></td><td>HR-Vocoder</td><td>RadioFoundry unterstützt den Codec (<code>DM32.00.01.046HRVocoder</code>)</td></tr>
+</tbody></table></div>
+<p>Ein Wechsel zwischen Familien führt zu einem Soft-Brick: Wiederherstellung im Aktualisierungsmodus (PTT+SK1). Datei <code>BFUV32-V2</code>: 256-Byte-Kopfzeile (<code>BFUV32-V2</code> ... <code>END</code>) und danach das rohe, bei <code>0x0300C000</code> gelinkte Image. Sie ist weder verschlüsselt noch signiert.</p>
+<h2 id="paso-0-copia-de-seguridad">Schritt 0: Sicherung</h2>
+<p>Sichere vor jeder Firmware beide Flash-Speicher. Sie enthalten die <strong>Kalibrierung RX/TX</strong> und den ALPU-Schlüssel, die für jedes Funkgerät einzigartig sind:</p>
+<ul>
+<li><code>OpenUV008_Flasher_v1</code> von andynvkz (<a href="http://infotex58.ru/forum/index.php?topic=1155.0" target="_blank" rel="noopener noreferrer">infotex58, Thema 1155</a>): Funkgerät ausgeschaltet lassen, Read wählen und auf Aufforderung einschalten. Für Programm- und Daten-Flash wiederholen.</li>
+<li>Alternative: die Python-Skripte von <a href="https://github.com/rogerclarkmelbourne/DM32/tree/main/python" target="_blank" rel="noopener noreferrer">rogerclarkmelbourne/DM32</a>.</li>
+<li>grid.radio bietet im Browser ebenfalls Backup/Restore der beiden Chips.</li>
+<li>Wenn ein Kabel nicht funktioniert, einen anderen USB-Seriell-Chip (CH340, FTDI oder CP2102) probieren. Laut RadioFoundry antwortet das ROM des HR_C7000 nur mit FTDI.</li>
+</ul>
+<h2 id="instalar-opengd77-experimental">OpenGD77 installieren (experimentell)</h2>
+<ol>
+<li>Schritt 0 ausführen und die Dateien sicher aufbewahren.</li>
+<li>OpenGD77 CPS <code>E2026.05.26.01</code> oder neuer installieren (<a href="https://www.opengd77.com/downloads/PC_CPS/Experimental/" target="_blank" rel="noopener noreferrer">experimentelle Downloads</a>).</li>
+<li>Unter Radio Type <strong>DM32/UV008</strong> auswählen und Extras &gt; Firmware loader öffnen.</li>
+<li>Funkgerät ausgeschaltet lassen: <strong>PTT + SK1</strong> gedrückt halten und einschalten. Die grüne LED zeigt den Aktualisierungsmodus an. Kabel anschließen.</li>
+<li>Firmware auswählen (Referenz: <code>OpenGD77_DM32_20260704.bin</code>) und den Vorgang abschließen lassen.</li>
+<li>Den Standard-Codeplug schreiben.</li>
+<li>Um zur Werksfirmware zurückzukehren, mit der Baofeng-CPS im Aktualisierungsmodus wiederholen.</li>
+</ol>
+<p>Alternative ohne Installation: <a href="https://grid.radio/opengd77/" target="_blank" rel="noopener noreferrer">grid.radio</a> mit Chrome oder Edge (Web Serial, ohne Zadig). Quelle des Verfahrens: <a href="https://radio.xreflector.es/wp-content/uploads/2026/07/Install-OpenGD77-on-Baofeng-DM-32_EN.pdf" target="_blank" rel="noopener noreferrer">Anleitung von xreflector.es (PDF)</a>.</p>
+<p>Laut den Gruppen (August bis Oktober 2026): keine stabile Version, leise DMR-Audioausgabe und mehrere Fehler. Nur die Familie <code>01.*</code> wird unterstützt. Autoren: andynvkz (UV008-Port), Koshak und RA4FHE (DM-32), Roger VK3KYY (CPS).</p>
+<h2 id="construir-firmware-radiofoundry">Firmware bauen: RadioFoundry</h2>
+<p><a href="https://github.com/RadioFoundry/RadioFoundry" target="_blank" rel="noopener noreferrer">RadioFoundry</a> ist eine neue, offene DMR-Firmware (MIT, erstellt am 24-10-2026) mit gemeinsamem Kern und einer Ebene pro Funkgerät. Sie leitet sich nicht aus dem OpenGD77-Code ab. Es gibt noch keine Releases: Die Firmware muss gebaut werden.</p>
+<pre><code>git clone https://github.com/RadioFoundry/RadioFoundry
+cd RadioFoundry
+git submodule update --init
+tools/build-csky-toolchain.sh            # GCC csky-elf en ~/toolchains/csky-elf (unos 45 min)
+make BOARD=dm32                          # build/dm32/rfoundry_dm32.bin
+tools/hrc7000_codec.py --stock DM32.01.01.049.bin   # tu firmware de fabrica: anade el codec en local
+tools/serial_loader.py --model dm32 build/dm32/rfoundry_dm32_codec.bin --wrap build/dm32/rfoundry_dm32_codec_BFUV32.bin</code></pre>
+<div class="table-scroll"><table><thead><tr><th scope="col">Schritt</th><th scope="col">Details</th></tr></thead><tbody>
+<tr><td>Toolchain</td><td><code>tools/build-csky-toolchain.sh</code> oder Docker-Image <code>tools/docker/csky-toolchain/run.sh make BOARD=dm32</code></td></tr>
+<tr><td>Codec</td><td><code>tools/hrc7000_codec.py</code> prüft die Werksfirmware mit SHA-256 und kopiert den Codec auf deinen Rechner. Er wird nie ins Repository hochgeladen oder geteilt. Ohne Codec funktioniert nur FM</td></tr>
+<tr><td>Flashen</td><td><code>tools/serial_loader.py</code> verwendet das Baofeng-Bootloader-Protokoll (YMODEM bei 115200). <code>--wrap</code> erstellt die Datei <code>BFUV32-V2</code> für den offiziellen Updater. <code>--stock ARCHIVO</code> stellt die Werksfirmware wieder her</td></tr>
+<tr><td>Codeplug migrieren</td><td>Zuerst <code>tools/dm32_migrate.py all --image ... --dry-run</code>. Verwendet <code>dmrconf</code> von qdmr 0.15</td></tr>
+<tr><td>Sicherheit</td><td>RadioFoundry verändert weder den Bootloader noch den Daten-Flash unterhalb von <code>0x700000</code></td></tr>
+<tr><td>Status</td><td>Laut eigener Dokumentation wurden die Flash- und Migrationstools noch nicht an einem Funkgerät getestet. Mit <code>--dry-run</code> beginnen, Antenne anschließen und erst nach Überprüfung senden</td></tr>
+</tbody></table></div>
+<p>Boot-Checkliste: <a href="https://github.com/RadioFoundry/RadioFoundry/blob/main/docs/testing/dm32-bringup.md" target="_blank" rel="noopener noreferrer">dm32-bringup.md</a>.</p>
+<h2 id="protocolo-del-bootloader-de-baofeng">Baofeng-Bootloader-Protokoll</h2>
+<p>Mit PTT + SK1 beim Einschalten starten (grüne LED). Kabel mit 115200 8N1.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Schritt</th><th scope="col">Host</th><th scope="col">Funkgerät</th></tr></thead><tbody>
+<tr><td>1</td><td><code>52</code></td><td><code>06</code></td></tr>
+<tr><td>2</td><td><code>4D 00 00 00 01</code></td><td><code>4D 01 09</code></td></tr>
+<tr><td>3</td><td><code>06</code></td><td><code>BFUV32-V2</code></td></tr>
+<tr><td>4</td><td><code>45 00 00 00 00</code></td><td><code>06</code></td></tr>
+<tr><td>5</td><td><code>31</code></td><td><code>43</code></td></tr>
+<tr><td>6</td><td><code>01</code></td><td><code>43</code></td></tr>
+<tr><td>7</td><td><code>00 FF</code> + 128-Byte-Block (Name, NUL, Größe als ASCII) + CRC-16/XMODEM. Löscht die Anwendung (bis zu 15 s)</td><td><code>06 43</code></td></tr>
+<tr><td>8</td><td>Für jedes KB: <code>02</code>, Nummer n, <code>FF-n</code>, 1024 Bytes, CRC</td><td><code>06</code></td></tr>
+<tr><td>9</td><td><code>04</code></td><td>Neustart</td></tr>
+</tbody></table></div>
+<p>Der Bootloader ist separat gespeichert und übersteht einen fehlgeschlagenen Schreibvorgang: Wenn das Image nicht startet, Akku entfernen und erneut in den Aktualisierungsmodus wechseln.</p>
+<h2 id="otros-recursos-encontrados">Weitere gefundene Ressourcen</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Ressource</th><th scope="col">Beitrag</th></tr></thead><tbody>
+<tr><td><a href="https://github.com/M7OCM/DM-32UV" target="_blank" rel="noopener noreferrer">M7OCM/DM-32UV</a></td><td>CPS-Archiv und offizielle Firmware; Zweig Mods mit gepatchter Werksfirmware (ohne ALPU-Prüfung, erweiterte Bänder, GPS-NMEA-Korrektur) und Patch-Skript</td></tr>
+<tr><td><a href="https://github.com/Chicago-Offline/dm32-info" target="_blank" rel="noopener noreferrer">Chicago-Offline/dm32-info</a></td><td>Spezifikationen, Firmwareversionen mit SHA-256 und Community-Karte</td></tr>
+<tr><td><a href="https://github.com/gzalo/dm32-uv" target="_blank" rel="noopener noreferrer">gzalo/dm32-uv</a> (MIT)</td><td>Reverse Engineering des Bootloaders und ROMs</td></tr>
+<tr><td><a href="https://github.com/infamy/DM32-Protocol-Spec" target="_blank" rel="noopener noreferrer">infamy/DM32-Protocol-Spec</a></td><td>CPS-Programmierprotokoll</td></tr>
+<tr><td><a href="https://github.com/chaffed/CHiRP-DM32UV-Support" target="_blank" rel="noopener noreferrer">chaffed/CHiRP-DM32UV-Support</a>, <a href="https://github.com/fivelidz/dm32uv-linux" target="_blank" rel="noopener noreferrer">fivelidz/dm32uv-linux</a>, <a href="https://github.com/insideTheFlux/dm32uv-tools" target="_blank" rel="noopener noreferrer">insideTheFlux/dm32uv-tools</a></td><td>Codeplug-Programmierung mit CHIRP, Linux und Mapping-Tools</td></tr>
+<tr><td>Offene FD6818-Treiber</td><td><a href="https://github.com/sophiel-meow/bf-k61-firmware-aura" target="_blank" rel="noopener noreferrer">bf-k61-firmware-aura</a> (GPL-3.0, Rust)</td></tr>
+<tr><td><a href="https://github.com/jasiek/baocoder" target="_blank" rel="noopener noreferrer">jasiek/baocoder</a></td><td>Aus dem DM-32 extrahierter AMBE-Codec: proprietär, <strong>nicht verwenden</strong></td></tr>
+<tr><td><a href="https://github.com/dongrat/HR_C70X0SDKlib" target="_blank" rel="noopener noreferrer">dongrat/HR_C70X0SDKlib</a></td><td>Als HR_C7000-SDK angekündigt, am 26-10-2026 jedoch leer</td></tr>
+<tr><td>GitFlic, GitLab, Codeberg</td><td>Nichts zum DM-32 oder HR_C7000</td></tr>
+</tbody></table></div>
+<h2 id="licencias-y-limites">Lizenzen und Einschränkungen</h2>
+<ul>
+<li>RadioFoundry steht unter MIT; die aktuelle OpenGD77-Lizenz verbietet kommerzielle Nutzung; OpenDM32 veröffentlicht keinen Quellcode. Es wird kein Code inkompatibler Lizenzen vermischt und keine Firmware Dritter weitergegeben.</li>
+<li>Der AMBE-Codec wird nur verwendet, wenn er aus der Werksfirmware des eigenen Funkgeräts extrahiert wurde.</li>
+<li>Kalibrierung und ALPU-Schlüssel sind gerätespezifisch: nicht von einem anderen Gerät kopieren.</li>
+<li>Nur in zugelassenen Bändern senden, auch wenn eine modifizierte Firmware es ermöglicht.</li>
+</ul>
+<p>Bricohams pflegt außerdem ein technisches Dossier und ein Port-Grundgerüst für C-SKY im privaten Repository <code>dm32uv-opengd77-port</code>. Derzeit wird empfohlen, RadioFoundry zu bauen.</p></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

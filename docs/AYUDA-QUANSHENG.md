@@ -94,6 +94,9 @@ exactos. El transporte Quansheng agrega un byte nulo fuera de esas tramas y
 reintenta hasta cuatro veces solo el mismo bloque NOR (como UV Studio);
 nunca reintenta automaticamente borrados, resets ni rechazos del firmware.
 
+Para operar el slot 3 (BH Satellite) consulta [Iniciacion al satelite](INICIACION-SATELITE.md)
+y [Antenas de satelite](ANTENAS-SATELITE.md).
+
 ### Opciones avanzadas y alcance de la restauracion
 
 El panel **Herramientas propias Bricohams** contiene accesos internos a

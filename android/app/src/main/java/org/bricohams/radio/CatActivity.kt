@@ -59,7 +59,7 @@ class CatActivity : Activity() {
             val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
             if (intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED && device?.deviceName == requested?.deviceName) {
                 requested = null
-                suspendConnection("USB desconectado. Vuelve a elegir el dispositivo antes de usar CAT.")
+                suspendConnection(getString(R.string.cat_usb_detached))
             }
         }
     }
@@ -90,12 +90,12 @@ class CatActivity : Activity() {
         content.addView(TextView(this).apply {
             setText(R.string.cat_help)
         })
-        fun button(label: String, action: () -> Unit) {
-            val button = Button(this).apply { text = label; setOnClickListener { action() } }
+        fun button(label: Int, action: () -> Unit) {
+            val button = Button(this).apply { setText(label); setOnClickListener { action() } }
             controls.add(button); content.addView(button)
         }
-        button("Elegir dispositivo USB") { chooseDevice() }
-        button("Consultar CAT RX") { operation { requireNotNull(protocol) { "Conecta primero USB." }.query() } }
+        button(R.string.cat_choose_device) { chooseDevice() }
+        button(R.string.cat_query) { operation { requireNotNull(protocol) { getString(R.string.cat_connect_first) }.query() } }
         content.addView(TextView(this).apply { setText(R.string.cat_frequency_label) })
         val frequency = EditText(this).apply {
             id = R.id.cat_frequency
@@ -103,24 +103,24 @@ class CatActivity : Activity() {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
         }
         content.addView(frequency)
-        button("Sintonizar RX temporal (3 s)") {
+        button(R.string.cat_tune) {
             val value = frequency.text.toString().toBigDecimalOrNull()
             val scaled = value?.movePointRight(5)?.stripTrailingZeros()
             if (scaled == null || scaled.scale() > 0 || scaled < java.math.BigDecimal(13600000) ||
                 scaled > java.math.BigDecimal(47000000) || !CatProtocol.inBand(scaled.toLong())) {
                 status.setText(R.string.cat_invalid_frequency)
-            } else operation { requireNotNull(protocol) { "Conecta primero USB." }.tune(scaled.longValueExact()) }
+            } else operation { requireNotNull(protocol) { getString(R.string.cat_connect_first) }.tune(scaled.longValueExact()) }
         }
-        button("STOP: volver a RX nominal") { operation { requireNotNull(protocol) { "Conecta primero USB." }.stop() } }
-        button("Desconectar USB") { operation { closeRadio(); null } }
+        button(R.string.cat_stop) { operation { requireNotNull(protocol) { getString(R.string.cat_connect_first) }.stop() } }
+        button(R.string.usb_disconnect) { operation { closeRadio(); null } }
         content.addView(TextView(this).apply { setText(R.string.cat_sstv_help) })
         callsign = EditText(this).apply {
             id = R.id.cat_callsign
-            hint = "Indicativo (obligatorio)"
+            setHint(R.string.cat_callsign_hint)
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
         }
         content.addView(callsign)
-        button("Enviar Robot36 por PTT CAT") { chooseImage() }
+        button(R.string.cat_send_robot36) { chooseImage() }
         content.addView(Button(this).apply { setText(R.string.cat_sstv_record); setOnClickListener { startReceive() } })
         content.addView(Button(this).apply { setText(R.string.cat_sstv_stop); setOnClickListener { capture?.stop() } })
         sstvStatus = TextView(this)
@@ -138,19 +138,19 @@ class CatActivity : Activity() {
                         java.time.Instant.ofEpochMilli(plan.pass.los.time).toString(),
                         plan.downlinkHz.toString())
                 })
-                button("Iniciar Doppler del pase seleccionado") { startTracking() }
+                button(R.string.cat_start_tracking) { startTracking() }
                 content.addView(Button(this).apply {
                     setText(R.string.cat_stop_tracking)
                     setOnClickListener {
                         trackingRequested = false
                         tracker?.cancel()
-                        suspendConnection("Seguimiento detenido. Se intenta STOP y se cierra USB; reconecta antes de iniciar otra sesion.")
+                        suspendConnection(getString(R.string.cat_tracking_stopped))
                     }
                 })
                 content.addView(Button(this).apply { setText(R.string.cat_pass_record); setOnClickListener { startPassRecording(plan) } })
                 content.addView(Button(this).apply { setText(R.string.cat_pass_record_stop); setOnClickListener { passRecorder?.stop() } })
             } catch (error: IllegalArgumentException) {
-                status.text = getString(R.string.cat_plan_error, error.message)
+                status.text = getString(R.string.cat_plan_error, errorText(error))
             }
         }
         setContentView(ScrollView(this).apply { addView(content) })
@@ -163,7 +163,7 @@ class CatActivity : Activity() {
             status.setText(R.string.cat_no_devices)
             return
         }
-        AlertDialog.Builder(this).setTitle("Selecciona el dispositivo de radio")
+        AlertDialog.Builder(this).setTitle(R.string.usb_select_device)
             .setItems(devices.map { "VID %04X PID %04X - %s - %s".format(it.vendorId, it.productId, SerialRadio.description(it), it.deviceName) }.toTypedArray()) { _, index ->
                 val device = devices[index]
                 requested = device
@@ -179,7 +179,7 @@ class CatActivity : Activity() {
                         manager.requestPermission(device, PendingIntent.getActivity(this, 11, intent, flags))
                         status.setText(R.string.cat_waiting_permission)
                     } catch (error: SecurityException) {
-                        status.text = getString(R.string.cat_permission_error, error.message)
+                        status.text = getString(R.string.cat_permission_error, errorText(error))
                     }
                 }
             }.show()
@@ -219,9 +219,9 @@ class CatActivity : Activity() {
         if (busy || trackingRequested || !foreground) return
         try {
             Callsign.normalize(callsign.text.toString())
-            requireNotNull(protocol) { "Conecta primero USB." }
+            requireNotNull(protocol) { getString(R.string.cat_connect_first) }
         } catch (error: IllegalArgumentException) {
-            sstvStatus.text = error.message
+            sstvStatus.text = errorText(error)
             return
         }
         startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -235,23 +235,23 @@ class CatActivity : Activity() {
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null) { sstvStatus.setText(R.string.sstv_cancelled); return }
         val call = try { Callsign.normalize(callsign.text.toString()) } catch (error: IllegalArgumentException) {
-            sstvStatus.text = error.message; return
+            sstvStatus.text = errorText(error); return
         }
         audioWorker.execute {
             try {
                 val bytes = contentResolver.readDocument(uri, 20 shl 20)
-                val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: throw IOException("Formato de imagen no reconocido.")
+                val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: throw IOException(getString(R.string.cat_image_unknown))
                 val frame = stamp(source, call)
                 source.recycle()
                 val pixels = IntArray(Robot36.WIDTH * Robot36.HEIGHT)
                 frame.getPixels(pixels, 0, Robot36.WIDTH, 0, 0, Robot36.WIDTH, Robot36.HEIGHT)
                 runOnUiThread { if (!isDestroyed && foreground) { picture.setImageBitmap(frame); confirmTransmit(call, pixels) } }
             } catch (error: IOException) {
-                sstv(getString(R.string.sstv_error, error.message))
+                sstv(getString(R.string.sstv_error, errorText(error)))
             } catch (error: SecurityException) {
-                sstv(getString(R.string.sstv_error, error.message))
+                sstv(getString(R.string.sstv_error, errorText(error)))
             } catch (error: IllegalArgumentException) {
-                sstv(getString(R.string.sstv_error, error.message))
+                sstv(getString(R.string.sstv_error, errorText(error)))
             }
         }
     }
@@ -266,22 +266,19 @@ class CatActivity : Activity() {
         return frame
     }
     private fun confirmTransmit(call: String, pixels: IntArray) {
-        AlertDialog.Builder(this).setTitle("Transmitir SSTV Robot36")
-            .setMessage("Se emitiran unos 37 s en la frecuencia TX del VFO de la radio con el indicativo $call en la imagen. " +
-                "Comprueba licencia, frecuencia autorizada, cable de audio al microfono y PTT armada con tecla 9. " +
-                "Cualquier tecla de la radio corta la emision.")
-            .setNegativeButton("Cancelar") { _, _ -> sstvStatus.setText(R.string.sstv_cancelled) }
-            .setPositiveButton("Transmitir") { _, _ ->
+        AlertDialog.Builder(this).setTitle(R.string.cat_transmit_title)
+            .setMessage(getString(R.string.cat_transmit_message, call))
+            .setNegativeButton(R.string.action_cancel) { _, _ -> sstvStatus.setText(R.string.sstv_cancelled) }
+            .setPositiveButton(R.string.action_transmit) { _, _ ->
                 val token = generation
                 sstvStatus.setText(R.string.cat_sstv_sending)
                 operation {
-                    val cat = requireNotNull(protocol) { "Conecta primero USB." }
+                    val cat = requireNotNull(protocol) { getString(R.string.cat_connect_first) }
                     val audio = Robot36.encode(pixels, LiveAudio.SAMPLE_RATE)
                     CatTransmitter(cat).send(audio, LiveAudio.SAMPLE_RATE, AudioTrackSink(LiveAudio.SAMPLE_RATE)) {
                         foreground && token == generation
                     }
-                    "Robot36 enviado con $call (%.1f s). PTT liberada y confirmada por la radio; sin medida RF.".format(
-                        audio.size.toDouble() / LiveAudio.SAMPLE_RATE)
+                    getString(R.string.cat_robot36_sent, call, audio.size.toDouble() / LiveAudio.SAMPLE_RATE)
                 }
             }.show()
     }
@@ -305,11 +302,11 @@ class CatActivity : Activity() {
             } catch (error: CancellationException) {
                 getString(R.string.cat_pass_saved, file.name, 0, 0)
             } catch (error: IOException) {
-                getString(R.string.sstv_error, error.message)
+                getString(R.string.sstv_error, errorText(error))
             } catch (error: IllegalStateException) {
-                getString(R.string.sstv_error, error.message)
+                getString(R.string.sstv_error, errorText(error))
             } catch (error: SecurityException) {
-                getString(R.string.sstv_error, error.message)
+                getString(R.string.sstv_error, errorText(error))
             }
             runOnUiThread { if (passRecorder === recorder) passRecorder = null; if (!isDestroyed) sstvStatus.text = message }
         }
@@ -328,17 +325,17 @@ class CatActivity : Activity() {
                 val result = Robot36.decode(recording.record())
                 val decoded = Bitmap.createBitmap(result.pixels, Robot36.WIDTH, Robot36.HEIGHT, Bitmap.Config.ARGB_8888)
                 runOnUiThread { if (!isDestroyed) picture.setImageBitmap(decoded) }
-                getString(R.string.sstv_complete, result.startSeconds, result.warning)
+                getString(R.string.sstv_complete, result.startSeconds, result.warning.resolve(this@CatActivity))
             } catch (error: CancellationException) {
                 getString(R.string.live_cancelled)
             } catch (error: IOException) {
-                getString(R.string.sstv_error, error.message)
+                getString(R.string.sstv_error, errorText(error))
             } catch (error: IllegalArgumentException) {
-                getString(R.string.sstv_error, error.message)
+                getString(R.string.sstv_error, errorText(error))
             } catch (error: IllegalStateException) {
-                getString(R.string.sstv_error, error.message)
+                getString(R.string.sstv_error, errorText(error))
             } catch (error: SecurityException) {
-                getString(R.string.sstv_error, error.message)
+                getString(R.string.sstv_error, errorText(error))
             }
             runOnUiThread { if (capture === recording) capture = null; if (!isDestroyed) sstvStatus.text = message }
         }
@@ -363,8 +360,9 @@ class CatActivity : Activity() {
             var message: String
             try {
                 val state = action()
-                message = if (state == null) "USB desconectado." else if (state !is CatState) state.toString() else
-                    "CAT v1 reconocido. Activo=${state.active}, remoto=${state.remote}, pendiente=${state.pending}, RX=${state.frequency10Hz * 10} Hz. Confirmacion de firmware, no medida RF."
+                message = if (state == null) getString(R.string.usb_disconnected) else if (state !is CatState) state.toString() else
+                    getString(R.string.cat_state, state.active.toString(), state.remote.toString(), state.pending.toString(),
+                        state.frequency10Hz * 10)
             } catch (error: IOException) {
                 message = fail(error)
             } catch (error: IllegalArgumentException) {
@@ -388,9 +386,9 @@ class CatActivity : Activity() {
         protocol = null; transport = null
         return try {
             port?.close()
-            "CAT detenido y USB cerrado: ${error.message}. El lease de firmware restaura RX nominal si la radio sigue ejecutando SAT RX."
+            getString(R.string.cat_failed_closed, errorText(error))
         } catch (cleanup: IOException) {
-            "Error CAT: ${error.message}. Error al liberar USB: ${cleanup.message}. Comprueba la radio."
+            getString(R.string.cat_failed_release, errorText(error), errorText(cleanup))
         }
     }
     private fun closeRadio() {
@@ -418,7 +416,7 @@ class CatActivity : Activity() {
                 if (failure == null) failure = error else failure.addSuppressed(error)
             }
         }
-        failure?.let { throw IOException("No se confirmo restauracion/cierre CAT: ${it.message}", it) }
+        failure?.let { throw IOException(getString(R.string.cat_restore_unconfirmed, errorText(it)), it) }
     }
     override fun onStart() {
         super.onStart()
@@ -444,7 +442,7 @@ class CatActivity : Activity() {
                 android.util.Log.e("BricohamsCAT", "No se confirmo STOP/cierre al ocultar pantalla", error)
                 runOnUiThread {
                     if (token == generation && !isDestroyed)
-                        status.text = getString(R.string.cat_stop_error, error.message)
+                        status.text = getString(R.string.cat_stop_error, errorText(error))
                 }
             }
         }
@@ -466,7 +464,7 @@ class CatActivity : Activity() {
         worker.execute {
             if (token != generation || !trackingRequested) return@execute
             try {
-                val cat = requireNotNull(protocol) { "Conecta USB antes de iniciar seguimiento." }
+                val cat = requireNotNull(protocol) { getString(R.string.cat_connect_before_tracking) }
                 val engine = SatelliteOrbit(plan.tle, plan.observer,
                     assets.open("satellite-6.0.1.js").bufferedReader().use { it.readText() },
                     assets.open("orbital-engine.js").bufferedReader().use { it.readText() })
@@ -481,7 +479,7 @@ class CatActivity : Activity() {
     private fun trackingStep(token: Int) {
         if (token != generation || !trackingRequested) return
         try {
-            val current = requireNotNull(tracker) { "Sesion de seguimiento inexistente." }
+            val current = requireNotNull(tracker) { getString(R.string.cat_no_tracking_session) }
             val next = current.step()
             if (next != null && token == generation && trackingRequested) {
                 runOnUiThread {
@@ -500,9 +498,9 @@ class CatActivity : Activity() {
         if (token != generation) return
         trackingRequested = false
         disposeOrbit()
-        var message = "Seguimiento detenido: ${error.message}."
+        var message = getString(R.string.cat_tracking_failed, errorText(error))
         try { closeRadio() } catch (cleanup: IOException) {
-            message += " STOP/cierre sin confirmar: ${cleanup.message}. Comprueba RX nominal."
+            message += " " + getString(R.string.cat_tracking_cleanup_failed, errorText(cleanup))
         }
         val finalMessage = message
         runOnUiThread {
@@ -517,7 +515,7 @@ class CatActivity : Activity() {
         unregisterReceiver(detachReceiver)
         capture?.cancel()
         passRecorder?.stop()
-        suspendConnection("CAT suspendido. Volver requiere elegir y conectar USB de nuevo.")
+        suspendConnection(getString(R.string.cat_suspended))
         super.onStop()
     }
     override fun onDestroy() {

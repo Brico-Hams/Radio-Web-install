@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Esempi: firmware aperti, canali e script: aiuto Bricohams per modello e versione.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Esempi: firmware aperti, canali e script | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-ejemplos.html">
+  <link rel="alternate" hreflang="en" href="ayuda-ejemplos.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-ejemplos.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-ejemplos.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-ejemplos.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Vai al contenuto</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aiuto"><a href="ayuda.html">Aiuto dell&#39;app (spagnolo)</a> · <a href="ayuda-firmwares.it.html">Libreria firmware</a> · <a href="ayuda-atlas-uv-k5-v3.it.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Lingua"><a href="ayuda-ejemplos.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-ejemplos.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-ejemplos.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-ejemplos.it.html" hreflang="it" lang="it" aria-current="page">Italiano</a> · <a href="ayuda-ejemplos.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenuto di questa guida"><h2>In questa guida</h2><ul><li><a href="#firmwares-abiertos">Firmware aperti</a></li><li><a href="#canales">Canali</a></li><li><a href="#scripts">Script</a></li></ul></nav>
+    <article class="panel"><h1 id="ejemplos-firmwares-abiertos-canales-y-scripts">Esempi: firmware aperti, canali e script</h1>
+<p>Revisione: 26-10-2026. File di esempio della cartella <code>examples/</code> del repository. Sono inclusi solo i binari la cui licenza ne consente la ridistribuzione, con la relativa licenza. I firmware di terze parti privi di tale licenza (Karina, Baofeng, OpenGD77 DM32) compaiono solo nell&#39;<a href="ayuda-binarios-terceros.it.html">indice degli hash</a>.</p>
+<h2 id="firmwares-abiertos">Firmware aperti</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Cartella</th><th scope="col">Contenuto</th><th scope="col">Licenza</th><th scope="col">Destinazione</th></tr></thead><tbody>
+<tr><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/examples/firmware/f4hwn-v6.3.0/SHA256SUMS" target="_blank" rel="noopener noreferrer">examples/firmware/f4hwn-v6.3.0</a></td><td><code>f4hwn.fusion</code>, <code>fieldops</code>, <code>labs</code> e <code>transfer</code> v6.3.0, più il driver CHIRP della stessa release</td><td>Apache-2.0 (firmware, con <code>LICENSE</code> e <code>NOTICE</code>); GPL-2.0 o successiva (driver CHIRP, nella relativa intestazione)</td><td>Quansheng UV-K5 V3 e UV-K1 (PY32F071)</td></tr>
+<tr><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/examples/firmware/moto-v1.3.2/SHA256SUMS" target="_blank" rel="noopener noreferrer">examples/firmware/moto-v1.3.2</a></td><td>Bootloader moto 1.3.2 in <code>.bin</code> e <code>.uf2</code></td><td>Apache-2.0</td><td>UV-K5 V3 / UV-K1. Cambiare il bootloader è rischioso: consulta l&#39;<a href="ayuda-atlas-uv-k5-v3.it.html#bootloader-y-flasheo">atlante</a></td></tr>
+</tbody></table></div>
+<p>Origine: release ufficiali di <a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.3.0" target="_blank" rel="noopener noreferrer">armel/uv-k1-k5v3-firmware-custom</a> e <a href="https://github.com/muzkr/moto/releases/tag/v1.3.2" target="_blank" rel="noopener noreferrer">muzkr/moto</a>. Gli SHA-256 corrispondono a quelli pubblicati da GitHub per ogni file. Verifica prima dell&#39;uso:</p>
+<pre><code>cd examples/firmware/f4hwn-v6.3.0
+sha256sum -c SHA256SUMS</code></pre>
+<p>Per flashare il firmware principale: <a href="ayuda-quansheng.it.html#puesta-en-marcha-de-0-a-100">guida dall&#39;inizio al 100 %</a>. La versione più recente è sempre nella release di armel; queste copie sono un riferimento stabile.</p>
+<h2 id="canales">Canali</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">File</th><th scope="col">Contenuto</th></tr></thead><tbody>
+<tr><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/examples/channels/pmr446-solo-rx.chirp.csv" target="_blank" rel="noopener noreferrer">examples/channels/pmr446-solo-rx.chirp.csv</a></td><td>I 16 canali PMR446 in formato CSV di CHIRP, FM stretta e TX disattivata (<code>Duplex = off</code>). Modello per importare in CHIRP o in questo sito web</td></tr>
+</tbody></table></div>
+<p>Le radioamatoriali non sono omologate per PMR446: il file è solo per l&#39;ascolto.</p>
+<h2 id="scripts">Script</h2>
+<p>Codice proprietario di Bricohams, con la licenza del repository (GPL-3.0-or-later). Eseguire con <code>python -I</code>.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Script</th><th scope="col">Funzione</th></tr></thead><tbody>
+<tr><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/examples/scripts/tg_kb.py" target="_blank" rel="noopener noreferrer">tg_kb.py</a></td><td>Converte esportazioni JSON di Telegram Desktop di gruppi tecnici in una base di conoscenza locale per argomento (firmware, flash, calibrazione, mod), con catalogo di file (SHA-256, MCU di destinazione secondo la tabella dei vettori) e link. Rimuove autori, alias, telefoni ed e-mail. Il risultato è materiale di terzi: conservarlo localmente</td></tr>
+<tr><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/examples/scripts/test_tg_kb.py" target="_blank" rel="noopener noreferrer">test_tg_kb.py</a></td><td>Test di <code>tg_kb.py</code> con un&#39;esportazione sintetica: <code>python -I test_tg_kb.py</code></td></tr>
+<tr><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/examples/scripts/check_repos.py" target="_blank" rel="noopener noreferrer">check_repos.py</a></td><td>Legge un elenco <code>owner/repo</code> e produce una tabella con stato, ultimo push, licenza, stelle e MCU (V3/K1 se è presente codice PY32). Richiede <code>gh</code> con una sessione attiva</td></tr>
+<tr><td><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/examples/scripts/recover.py" target="_blank" rel="noopener noreferrer">recover.py</a></td><td>Per i repository eliminati: cerca una copia in Software Heritage, una cattura in Wayback Machine e fork con lo stesso nome</td></tr>
+</tbody></table></div>
+<p>Uso tipico:</p>
+<pre><code>python -I tg_kb.py salida ChatExport_grupo1 ChatExport_grupo2
+python -I check_repos.py repos.txt &gt; repos.md
+python -I recover.py caidos.txt</code></pre></article>
+    <footer><p class="translation-note">Traduzione dell&#39;originale spagnolo. In caso di discrepanza prevale la versione spagnola.</p><p>Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida. <a href="ayuda-firmwares.it.html">Torna all&#39;indice</a>.</p></footer>
+  </main>
+</body>
+</html>

@@ -23,13 +23,13 @@ sealed class QuanshengTone {
             if (value.isEmpty() || value == "OFF") return Off
             Regex("D([0-7]{3})([NI])").matchEntire(value)?.let { match ->
                 val index = QuanshengChannels.DCS.indexOf(match.groupValues[1].toInt(8))
-                require(index >= 0) { "Codigo DCS ${match.groupValues[1]} no admitido por F4HWN." }
+                requireUi(index >= 0) { UiText(R.string.err_dcs_unsupported, match.groupValues[1]) }
                 return Dcs(index, match.groupValues[2] == "I")
             }
             val tenths = value.toBigDecimalOrNull()?.movePointRight(1)
-            require(tenths != null && tenths.stripTrailingZeros().scale() <= 0) { "Tono: OFF, CTCSS en Hz (88.5) o DCS (D023N/D023I)." }
+            requireUi(tenths != null && tenths.stripTrailingZeros().scale() <= 0) { UiText(R.string.err_tone_format) }
             val index = QuanshengChannels.CTCSS.indexOf(tenths.toInt())
-            require(index >= 0) { "Tono CTCSS $text Hz no admitido por F4HWN." }
+            requireUi(index >= 0) { UiText(R.string.err_ctcss_unsupported, text) }
             return Ctcss(index)
         }
     }
@@ -76,18 +76,18 @@ object QuanshengChannels {
     val POWER = listOf("USER", "LOW1", "LOW2", "LOW3", "LOW4", "LOW5", "MID", "HIGH")
 
     fun version(image: ByteArray): String {
-        require(image.size == CONFIG_SIZE) { "La configuracion F4HWN v6 debe tener exactamente $CONFIG_SIZE bytes." }
+        requireUi(image.size == CONFIG_SIZE) { UiText(R.string.err_config_size, CONFIG_SIZE) }
         val version = image.copyOfRange(0xa160, 0xa170).takeWhile { it != 0.toByte() }.toByteArray().toString(Charsets.US_ASCII)
-        require(Regex("v6\\.\\d+\\.\\d+").matches(version)) { "La configuracion no contiene una version F4HWN v6 reconocida." }
+        requireUi(Regex("v6\\.\\d+\\.\\d+").matches(version)) { UiText(R.string.err_config_version) }
         return version
     }
 
     /** MHz text with up to 5 decimals to 10 Hz units, limited like the web editor to RX VHF 136-174 and UHF 400-470. */
     fun frequency(text: String): Long {
         val value = text.trim()
-        require(Regex("\\d{1,3}(\\.\\d{1,5})?").matches(value)) { "Frecuencia: MHz con hasta 5 decimales." }
+        requireUi(Regex("\\d{1,3}(\\.\\d{1,5})?").matches(value)) { UiText(R.string.err_channel_frequency_format) }
         val units = BigDecimal(value).movePointRight(5).longValueExact()
-        require(units in 13600000..17400000 || units in 40000000..47000000) { "Frecuencias limitadas a 136-174 y 400-470 MHz." }
+        requireUi(units in 13600000..17400000 || units in 40000000..47000000) { UiText(R.string.err_channel_frequency_band) }
         return units
     }
 
@@ -95,9 +95,9 @@ object QuanshengChannels {
 
     private fun tone(type: Int, code: Int, number: Int): QuanshengTone = when (type) {
         0 -> QuanshengTone.Off
-        1 -> { require(code in CTCSS.indices) { "Canal $number: indice CTCSS corrupto." }; QuanshengTone.Ctcss(code) }
-        2, 3 -> { require(code in DCS.indices) { "Canal $number: indice DCS corrupto." }; QuanshengTone.Dcs(code, type == 3) }
-        else -> throw IllegalArgumentException("Canal $number: tipo de tono $type desconocido.")
+        1 -> { requireUi(code in CTCSS.indices) { UiText(R.string.err_channel_ctcss_corrupt, number) }; QuanshengTone.Ctcss(code) }
+        2, 3 -> { requireUi(code in DCS.indices) { UiText(R.string.err_channel_dcs_corrupt, number) }; QuanshengTone.Dcs(code, type == 3) }
+        else -> throw LocalizedArgumentException(UiText(R.string.err_channel_tone_type, number, type))
     }
     private fun encode(tone: QuanshengTone): Pair<Int, Int> = when (tone) {
         QuanshengTone.Off -> 0 to 0
@@ -116,9 +116,9 @@ object QuanshengChannels {
             if (rx == 0L || rx == 0xffffffffL) continue
             val offset = view.getInt(record + 4).toLong() and 0xffffffffL
             val direction = image[record + 11].toInt() and 15
-            require(rx < 150000000 && direction <= 2) { "Canal $number: frecuencia o desplazamiento corruptos." }
+            requireUi(rx < 150000000 && direction <= 2) { UiText(R.string.err_channel_offset_corrupt, number) }
             val tx = rx + when (direction) { 1 -> offset; 2 -> -offset; else -> 0 }
-            require(tx in 1 until 150000000) { "Canal $number: TX nominal corrupta." }
+            requireUi(tx in 1 until 150000000) { UiText(R.string.err_channel_tx_corrupt, number) }
             val types = image[record + 10].toInt() and 255
             val flags = image[record + 12].toInt() and 255
             val nameBytes = image.copyOfRange(0x4000 + record, 0x4000 + record + 10)
@@ -133,12 +133,12 @@ object QuanshengChannels {
     /** Returns a copy of [image] with one existing FM channel changed; every other byte is kept. */
     fun update(image: ByteArray, channel: QuanshengChannel): ByteArray {
         val existing = read(image).firstOrNull { it.number == channel.number }
-        require(existing != null && existing.mode == 0) { "Solo se editan canales FM existentes." }
-        require(Regex("[\\x20-\\x7e]{1,10}").matches(channel.name)) { "Nombre: 1-10 caracteres ASCII." }
-        require(channel.rx10Hz in 13600000..17400000 || channel.rx10Hz in 40000000..47000000) { "RX fuera de 136-174 / 400-470 MHz." }
-        require(channel.tx10Hz in 13600000..17400000 || channel.tx10Hz in 40000000..47000000) { "TX fuera de 136-174 / 400-470 MHz." }
-        require((channel.rx10Hz < 35000000) == (channel.tx10Hz < 35000000)) { "RX y TX deben permanecer en la misma banda." }
-        require(channel.power in POWER.indices) { "Potencia fuera de USER..HIGH." }
+        requireUi(existing != null && existing.mode == 0) { UiText(R.string.err_channel_fm_only) }
+        requireUi(Regex("[\\x20-\\x7e]{1,10}").matches(channel.name)) { UiText(R.string.err_channel_name) }
+        requireUi(channel.rx10Hz in 13600000..17400000 || channel.rx10Hz in 40000000..47000000) { UiText(R.string.err_channel_rx_band) }
+        requireUi(channel.tx10Hz in 13600000..17400000 || channel.tx10Hz in 40000000..47000000) { UiText(R.string.err_channel_tx_band) }
+        requireUi((channel.rx10Hz < 35000000) == (channel.tx10Hz < 35000000)) { UiText(R.string.err_channel_same_band) }
+        requireUi(channel.power in POWER.indices) { UiText(R.string.err_channel_power) }
         val record = (channel.number - 1) * 16
         val result = image.copyOf()
         val view = ByteBuffer.wrap(result).order(ByteOrder.LITTLE_ENDIAN)

@@ -71,7 +71,21 @@
 .firmware-help :target {
   scroll-margin-top: 20px;
 }
-@media (max-width: 600px) {
+.firmware-help .languages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 8px;
+  font-size: .95em;
+}
+.firmware-help .languages [aria-current="page"] {
+  font-weight: 700;
+  text-decoration: none;
+}
+.firmware-help .translation-note {
+  color: var(--muted);
+  font-size: .9em;
+}@media (max-width: 600px) {
   .firmware-help {
     padding: 12px;
   }

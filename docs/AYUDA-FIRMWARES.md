@@ -20,9 +20,14 @@ oficiales ni certifica combinaciones que no se han probado en hardware.
 | [Karina](KARINA.md) | Inventario, funciones documentadas, busqueda del codigo fuente (cerrado), especificacion para reimplementarla y fuentes |
 | [Baofeng DM-32UV](DM32UV-FIRMWARE.md) | Hardware HR_C7000/FD6818, estado y licencia de OpenGD77, instalacion, como compilar RadioFoundry y protocolo del bootloader |
 | [Ejemplos](EJEMPLOS.md) | Firmwares abiertos F4HWN v6.3.0 y moto con su licencia, canales PMR446 de ejemplo y scripts de analisis |
+| [Iniciacion al satelite](INICIACION-SATELITE.md) | Guia propia en espanol para empezar con satelites FM y la imagen BH Satelite |
+| [Antenas de satelite](ANTENAS-SATELITE.md) | Yagi bibanda y dipolo en V simulados con MoM propio, planos y piezas STL |
 | [Binarios de terceros](BINARIOS-TERCEROS.md) | SHA-256 y origen de Karina, firmwares DM-32UV oficiales y parcheados, OpenGD77 DM32 e imagenes de fabrica del K1/K5 V3, sin redistribuirlos |
 | [Repositorios de la comunidad](ENLACES-COMUNIDAD.md) | Catalogo verificado de repositorios Quansheng y DM-32UV, enlaces caidos recuperados y busqueda en otras forjas |
 | [Bricohams V3](BRICOHAMS-FIRMWARE.md) | Compilacion local reproducible de Fusion y Labs y artefactos entregados |
+| [AnyTone](AYUDA-ANYTONE.md) | Preparador local JSON/CSV; no es CPS RDT ni programador USB |
+| [Android](ANDROID.md) | Libro de guardia, canales FM, CAT y audio experimentales; permisos y pruebas por revision |
+| [Validacion V3 y Android](VALIDACION-INTEGRAL-V3-ANDROID.md) | Evidencias, fallos corregidos, aislamiento de datos, ensayos pendientes y limites de mods |
 
 En las paginas web puedes utilizar la busqueda del navegador (Ctrl+F).
 Los documentos Markdown se conservan en el repositorio para consulta sin red.
@@ -48,7 +53,8 @@ no significa «flasheo»; «archivo verificado» no significa «firmado digitalm
 | --- | --- | --- |
 | F4HWN Quansheng PY32 | 18 versiones publicadas reconocidas; 84 opciones de interfaz y 94 claves distintas en el historial de presets por commit | No se atribuyen las funciones v6 a las versiones antiguas |
 | ARDF Quansheng | Publicaciones reconocidas del repositorio V3/UV-K1; guia de ARDF local v0.5 y advertencias de evolucion | No se habilita su escritura en slots sin compatibilidad verificada |
-| Bricohams | Fusion y Labs locales v6.1.0, opciones y hashes documentados | Experimental, sin prueba de banco |
+| Bricohams sobre F4HWN | Fusion, Labs, ARDF, Satellite y Spectrum v6.1.0, opciones y hashes documentados | Lecturas previas y CRC de slots no certifican arranque ni todas las funciones |
+| Plataforma independiente Bricohams | Residente experimental, Diagnostics y Blocks en BHA1, almacenamiento y transferencia portables | Sin arranque fisico validado ni integracion USB/Flash; BHA1 no es FAP1 y no se instala con el cargador web existente |
 | Karina | Paquete V1 local y paquete V3/K1 de 21-09-2026 inspeccionado desde Dim0s | Existen binarios PY32; no fuentes ni compatibilidad multiboot Armel demostradas |
 | OpenGD77 | Familias y modelos documentados; versiones identificadas por fecha/build y variantes de distribucion | No existe una tabla universal de menus aplicable a todos los builds historicos |
 | Stock Quansheng, UVMOD, OneOfEleven | Identificacion y referencias para evitar confusiones | No son protocolos ni compiladores incorporados a esta web |

@@ -16,10 +16,10 @@ data class ArdfSummary(val count: Int, val spanSeconds: Double, val located: Int
 object ArdfStatistics {
     fun calculate(observations: List<ArdfObservation>): ArdfSummary {
         observations.forEach {
-            require(it.fox in 1..10) { "Baliza fuera del intervalo 1-10." }
+            requireUi(it.fox in 1..10) { UiText(R.string.err_ardf_fox_range) }
             it.fix?.validated()
         }
-        require(observations.map { it.id }.distinct().size == observations.size) { "Observaciones duplicadas." }
+        requireUi(observations.map { it.id }.distinct().size == observations.size) { UiText(R.string.err_ardf_duplicate_observations) }
         val ordered = observations.sortedWith(compareBy<ArdfObservation> { it.utc }.thenBy { it.id })
         fun seconds(first: Instant, last: Instant) = Duration.between(first, last).toMillis() / 1000.0
         fun usable(observation: ArdfObservation): Boolean {

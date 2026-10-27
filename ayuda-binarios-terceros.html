@@ -10,19 +10,26 @@
   <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-binarios-terceros.html">
+  <link rel="alternate" hreflang="en" href="ayuda-binarios-terceros.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-binarios-terceros.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-binarios-terceros.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-binarios-terceros.fr.html">
 </head>
 <body>
   <a class="skip" href="#main">Saltar al contenido</a>
   <main id="main" class="firmware-help">
     <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
       <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Idioma"><a href="ayuda-binarios-terceros.html" hreflang="es" lang="es" aria-current="page">Español</a> · <a href="ayuda-binarios-terceros.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-binarios-terceros.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-binarios-terceros.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-binarios-terceros.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
     <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#karina-v3-k1-pack-dim0s-carpeta-karina">Karina V3/K1 (pack Dim0s, carpeta Karina)</a></li><li><a href="#dm-32uv-familia-01-row-nrf-fanti-y-flasheador-openuv008">DM-32UV familia 01 (ROW, NRF, Fanti) y flasheador OpenUV008</a></li><li><a href="#dm-32uv-familia-00-hr-vocoder">DM-32UV familia 00 HR-Vocoder</a></li><li><a href="#dm-32uv-firmwares-de-fabrica-parcheados-m7ocm">DM-32UV firmwares de fabrica parcheados (M7OCM)</a></li><li><a href="#dm-32uv-descargas-oficiales-de-baofeng-cps-firmware-fcc">DM-32UV descargas oficiales de Baofeng (CPS, firmware, FCC)</a></li><li><a href="#opengd77-para-el-dm-32-no-descargados">OpenGD77 para el DM-32 (no descargados)</a></li><li><a href="#quansheng-uv-k1-uv-k5-v3-imagenes-de-fabrica-reconstruidas">Quansheng UV-K1 / UV-K5 V3: imagenes de fabrica reconstruidas</a></li><li><a href="#firmwares-abiertos-incluidos-en-este-repositorio">Firmwares abiertos incluidos en este repositorio</a></li></ul></nav>
     <article class="panel"><h1 id="binarios-de-terceros-indice-de-hashes">Binarios de terceros: indice de hashes</h1>
-<p>Revision: 26-10-2026. Indice de los firmwares y herramientas de terceros estudiados para Karina y el Baofeng DM-32UV. <strong>Los archivos no se publican en este repositorio</strong>: no tienen una licencia que permita redistribuirlos. Se descargan de su origen y se comprueban con estos SHA-256. Brico-Hams guarda una copia interna en un repositorio privado.</p>
+<p>Revision: 26-10-2026. Indice de los firmwares y herramientas de terceros estudiados para Karina y el Baofeng DM-32UV. <strong>Los archivos no se publican en este repositorio</strong>: no se ha verificado una autorización de redistribución aplicable a cada archivo. No se deduce su licencia por estar disponibles para descargar. Se descargan de su origen y se comprueban con estos SHA-256. Brico-Hams guarda una copia interna en un repositorio privado.</p>
 <p>Comprobar un archivo: <code>sha256sum ARCHIVO</code> (Linux/macOS) o <code>Get-FileHash ARCHIVO</code> (Windows) y comparar. Explicacion de cada familia: <a href="ayuda-karina.html">Karina</a> y <a href="ayuda-dm32uv.html">DM-32UV</a>.</p>
 <h2 id="karina-v3-k1-pack-dim0s-carpeta-karina">Karina V3/K1 (pack Dim0s, carpeta Karina)</h2>
 <p>Origen: <a href="https://github.com/Dim0s/quansheng-UV-K5v3-K1-firmware-pack/tree/main/Karina" target="_blank" rel="noopener noreferrer">https://github.com/Dim0s/quansheng-UV-K5v3-K1-firmware-pack/tree/main/Karina</a></p>
+<p><strong>No confundir instantaneas:</strong> el ZIP <code>21.09.2026.zip</code> de esta tabla tiene 2161962 bytes y SHA-256 <code>c8877d5b...</code>. El <a href="ayuda-pack-dim0s.html">expediente Dim0s</a> registra otro contenido de igual nombre, con 2296162 bytes y SHA-256 <code>619368c7...</code>, inspeccionado en el commit <code>52b41c182dd82c1fbdc027dc2da7bbcb02c7d79c</code>. No son el mismo archivo. El nombre y la URL a <code>main</code> no fijan los bytes: comparar hash completo y conservar la procedencia de cada descarga. Los hashes de binarios extraidos del expediente no se atribuyen automaticamente al ZIP de esta tabla.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Archivo</th><th scope="col">Bytes</th><th scope="col">SHA-256</th></tr></thead><tbody>
 <tr><td><code>21.09.2026.zip</code></td><td>2161962</td><td><code>c8877d5b6eb30d8bcd95bf10dca265086e9f1e4b875a81513f5baac9c22b4858</code></td></tr>
 <tr><td><code>информация.txt</code></td><td>9509</td><td><code>f9232b6d3e09a728b1675097fe39177ffec945edda1b2b279cb93efb6c08d0ff</code></td></tr>

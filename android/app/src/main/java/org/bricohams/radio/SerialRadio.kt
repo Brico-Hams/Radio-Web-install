@@ -16,17 +16,17 @@ class SerialRadio private constructor(private val port: UsbSerialPort) : RadioBy
     private val buffer = RadioReadBuffer()
     private var closed = false
     @Synchronized override fun write(bytes: ByteArray, timeoutMs: Int) {
-        check(!closed) { "USB cerrado." }
+        checkUi(!closed) { UiText(R.string.err_usb_closed) }
         require(timeoutMs > 0)
         // The library completes partial writes or throws; never retry a CAT SET after a timeout.
         port.write(bytes, timeoutMs)
     }
     @Synchronized override fun read(length: Int, timeoutMs: Int): ByteArray {
-        check(!closed) { "USB cerrado." }
+        checkUi(!closed) { UiText(R.string.err_usb_closed) }
         return buffer.read(length, timeoutMs) { left ->
             val chunk = ByteArray(4096)
             val count = port.read(chunk, left)
-            if (count !in 1..chunk.size) throw IOException("USB-serie sin datos, timeout o desconexion.")
+            if (count !in 1..chunk.size) throw LocalizedIOException(UiText(R.string.err_serial_no_data))
             chunk.copyOf(count)
         }
     }
@@ -46,10 +46,10 @@ class SerialRadio private constructor(private val port: UsbSerialPort) : RadioBy
         fun description(device: UsbDevice): String? = if (CdcRadio.compatible(device)) "CDC ACM" else
             driver(device)?.javaClass?.simpleName?.removeSuffix("SerialDriver")
         fun open(manager: UsbManager, device: UsbDevice): RadioBytes {
-            require(manager.hasPermission(device)) { "Falta permiso Android USB." }
+            requireUi(manager.hasPermission(device)) { UiText(R.string.err_usb_permission_missing) }
             if (CdcRadio.compatible(device)) return CdcRadio.open(manager, device)
-            val driver = requireNotNull(driver(device)) { "Adaptador desconocido o multipuerto: no se adivina un puerto." }
-            val connection = manager.openDevice(device) ?: throw IOException("No se pudo abrir el adaptador USB-serie.")
+            val driver = requireNotNullUi(driver(device)) { UiText(R.string.err_serial_adapter_unknown) }
+            val connection = manager.openDevice(device) ?: throw LocalizedIOException(UiText(R.string.err_serial_open_failed))
             return attach(driver.ports.single(), connection)
         }
         internal fun attach(port: UsbSerialPort, connection: UsbDeviceConnection): SerialRadio {

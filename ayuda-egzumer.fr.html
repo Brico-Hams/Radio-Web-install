@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Egzumer : sources, configuration et différences avec V3: aide Bricohams par modèle et version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Egzumer : sources, configuration et différences avec V3 | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-egzumer.html">
+  <link rel="alternate" hreflang="en" href="ayuda-egzumer.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-egzumer.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-egzumer.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-egzumer.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Aller au contenu</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Aide"><a href="ayuda.html">Aide de l&#39;application (espagnol)</a> · <a href="ayuda-firmwares.fr.html">Bibliothèque de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.fr.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Langue"><a href="ayuda-egzumer.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-egzumer.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-egzumer.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-egzumer.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-egzumer.fr.html" hreflang="fr" lang="fr" aria-current="page">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenu de ce guide"><h2>Dans ce guide</h2><ul><li><a href="#que-aporta-este-repositorio">Apports de ce dépôt</a></li><li><a href="#hardware-y-uso-en-esta-web">Matériel et utilisation sur ce site</a></li><li><a href="#funciones-y-ajustes-de-usuario">Fonctions et réglages utilisateur</a></li><li><a href="#opciones-de-compilacion-del-commit-inspeccionado">Options de compilation du commit inspecté</a></li><li><a href="#relacion-con-karina-y-bricohams">Relation avec Karina et Bricohams</a></li><li><a href="#fuentes-fijadas">Sources fixées</a></li></ul></nav>
+    <article class="panel"><h1 id="egzumer-fuentes-configuracion-y-diferencias-con-v3">Egzumer : sources, configuration et différences avec V3</h1>
+<p>Révision : 25-10-2026. Source inspectée : <code>egzumer/uv-k5-firmware-custom</code>, commit <code>7607f0a4bd6203d1f06b70556fc1ce0d7399d6b3</code>.</p>
+<h2 id="que-aporta-este-repositorio">Apports de ce dépôt</h2>
+<p>Il publie du code C, des en-têtes, un Makefile et la documentation d’une réimplémentation du firmware Quansheng UV-K5/K6/5R de la famille d’origine. Le README explique la provenance de DualTachyon, des modifications OneOfEleven et de l’analyseur fagci. Cette base n’est pas le portage PY32 pour UV-K5 V3/UV-K1.</p>
+<p>Son fichier LICENSE contient <strong>Apache License 2.0</strong>, et non MIT. Conservez ses avis, attributions et ceux des composants lors d’une dérivation de code. La licence d’Egzumer ne prouve pas qu’une autre image appelée Karina utilise la même licence ni que les sources exactes de ce binaire sont disponibles.</p>
+<h2 id="hardware-y-uso-en-esta-web">Matériel et utilisation sur ce site</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Aspect</th><th scope="col">Egzumer d’origine</th><th scope="col">F4HWN PY32 de ce site</th></tr></thead><tbody>
+<tr><td>Famille</td><td>Plateforme d’origine UV-K5 V1 / DP32</td><td>UV-K5 V3 / UV-K1 PY32</td></tr>
+<tr><td>Système de build</td><td>Makefile et indicateurs 0/1</td><td>CMake et options par preset</td></tr>
+<tr><td>Analyseur</td><td>Base fagci avec modifications Egzumer</td><td>Portage et modifications par version</td></tr>
+<tr><td>Mémoire/données</td><td>Cartographie de son firmware</td><td>Équivalence non présumée</td></tr>
+<tr><td>Multiboot Armel v6</td><td>Non documenté comme fonction de cette base</td><td>Extension spécifique du projet PY32</td></tr>
+<tr><td>Préparation dans les slots web</td><td>Non prise en charge</td><td>Uniquement les images reconnues et vérifiées</td></tr>
+</tbody></table></div>
+<p>N’utilisez pas un flasheur V1 ni une image Egzumer d’origine sur une V3. Les mots K5/K6 sur une page de garde ne prouvent pas la révision du MCU. Consultez la carte et le projet. Aucun compilateur Egzumer n’est intégré à la commande Bricohams V3.</p>
+<h2 id="funciones-y-ajustes-de-usuario">Fonctions et réglages utilisateur</h2>
+<p>Le README documente la correction AM, la démodulation SSB, le spectre, le balayage rapide, la modification du nom, les modes d’affichage, les touches attribuables, la batterie, le rétroéclairage, le microphone et la recherche CTCSS/DCS. SSB désigne ici la démodulation en réception ; cela ne signifie pas un émetteur SSB.</p>
+<p>Pour les notions RX/TX, step, largeur, SQL, tonalités, VOX, TOT et verrouillage de canal, consultez la <a href="ayuda-configuracion.fr.html">configuration commune</a>. Utilisez le nom du menu, et non des numéros transposés depuis F4HWN v6 ou Karina. L’ordre et les noms ont été modifiés par rapport au firmware stock.</p>
+<p>Le wiki officiel est la référence pour les séquences de touches du build installé :</p>
+<ul>
+<li><a href="https://github.com/egzumer/uv-k5-firmware-custom/wiki" target="_blank" rel="noopener noreferrer">Wiki et manuel</a>.</li>
+<li><a href="https://github.com/egzumer/uv-k5-firmware-custom/releases" target="_blank" rel="noopener noreferrer">Releases</a>.</li>
+</ul>
+<p>Tous ses raccourcis n’ont pas été vérifiés sur le matériel et ils ne sont pas transférés automatiquement aux firmwares dérivés. Le README avertit des limites de plage dynamique, de la surcharge et des filtres d’entrée ; l’AM fix ne peut pas éliminer les limites physiques. Une antenne avec un signal plus fort peut dégrader la réception dans un environnement RF intense.</p>
+<h2 id="opciones-de-compilacion-del-commit-inspeccionado">Options de compilation du commit inspecté</h2>
+<p>Valeurs <code>?=</code> du Makefile : un argument make peut les remplacer. 0/1 ne sont pas les ON/OFF de CMake ni des menus de la radio. Les explications des fonctions partagées figurent dans la <a href="ayuda-opciones-f4hwn.fr.html">référence F4HWN et options historiques</a> ; partager un nom ne garantit pas que l’implémentation ou le stockage soit identique.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Option</th><th scope="col">Défaut</th><th scope="col">Fonction</th></tr></thead><tbody>
+<tr><td>ENABLE_UART</td><td>1</td><td>Communication de configuration avec le PC</td></tr>
+<tr><td>ENABLE_AIRCOPY</td><td>0</td><td>Transfert AirCopy compatible</td></tr>
+<tr><td>ENABLE_FMRADIO</td><td>1</td><td>Récepteur de radiodiffusion FM</td></tr>
+<tr><td>ENABLE_NOAA</td><td>0</td><td>Fonctions météorologiques NOAA</td></tr>
+<tr><td>ENABLE_VOICE</td><td>0</td><td>Annonces vocales</td></tr>
+<tr><td>ENABLE_VOX</td><td>1</td><td>Déclenchement TX par audio, à configurer/désactiver pour éviter les accidents</td></tr>
+<tr><td>ENABLE_ALARM</td><td>0</td><td>Fonction d’alarme avec émissions possibles ; ne pas l’utiliser comme test</td></tr>
+<tr><td>ENABLE_TX1750</td><td>0</td><td>Tonalité d’accès à un relais</td></tr>
+<tr><td>ENABLE_PWRON_PASSWORD</td><td>0</td><td>Mot de passe à la mise sous tension ; ne chiffre pas toute la mémoire</td></tr>
+<tr><td>ENABLE_DTMF_CALLING</td><td>1</td><td>Logique d’appels DTMF</td></tr>
+<tr><td>ENABLE_FLASHLIGHT</td><td>1</td><td>LED/lampe torche du matériel</td></tr>
+<tr><td>ENABLE_BIG_FREQ</td><td>1</td><td>Fréquence en gros caractères</td></tr>
+<tr><td>ENABLE_SMALL_BOLD</td><td>1</td><td>Texte de petite taille en gras</td></tr>
+<tr><td>ENABLE_CUSTOM_MENU_LAYOUT</td><td>1</td><td>Disposition alternative des menus</td></tr>
+<tr><td>ENABLE_KEEP_MEM_NAME</td><td>1</td><td>Conservation du nom lors de la modification d’une mémoire</td></tr>
+<tr><td>ENABLE_WIDE_RX</td><td>1</td><td>Réception de plages étendues ; ne constitue pas une autorisation TX</td></tr>
+<tr><td>ENABLE_TX_WHEN_AM</td><td>0</td><td>Autoriser la voie TX en mode RX AM ; ne prouve pas la modulation AM</td></tr>
+<tr><td>ENABLE_F_CAL_MENU</td><td>0</td><td>Étalonnage de fréquence avec des instruments</td></tr>
+<tr><td>ENABLE_CTCSS_TAIL_PHASE_SHIFT</td><td>0</td><td>Traitement de la queue CTCSS par déphasage</td></tr>
+<tr><td>ENABLE_BOOT_BEEPS</td><td>0</td><td>Sons au démarrage</td></tr>
+<tr><td>ENABLE_SHOW_CHARGE_LEVEL</td><td>0</td><td>Affichage du niveau de charge</td></tr>
+<tr><td>ENABLE_REVERSE_BAT_SYMBOL</td><td>0</td><td>Variante visuelle de la batterie</td></tr>
+<tr><td>ENABLE_NO_CODE_SCAN_TIMEOUT</td><td>1</td><td>Comportement de timeout de recherche de codes</td></tr>
+<tr><td>ENABLE_AM_FIX</td><td>1</td><td>Correction de réception/gain AM</td></tr>
+<tr><td>ENABLE_SQUELCH_MORE_SENSITIVE</td><td>1</td><td>Critère de squelch plus sensible</td></tr>
+<tr><td>ENABLE_FASTER_CHANNEL_SCAN</td><td>1</td><td>Amélioration de la vitesse de balayage</td></tr>
+<tr><td>ENABLE_RSSI_BAR</td><td>1</td><td>Indicateur d’intensité</td></tr>
+<tr><td>ENABLE_AUDIO_BAR</td><td>1</td><td>Indicateur audio</td></tr>
+<tr><td>ENABLE_COPY_CHAN_TO_VFO</td><td>1</td><td>Copie de la mémoire vers le VFO</td></tr>
+<tr><td>ENABLE_SPECTRUM</td><td>1</td><td>Analyseur de spectre</td></tr>
+<tr><td>ENABLE_REDUCE_LOW_MID_TX_POWER</td><td>0</td><td>Variante des cibles de puissance faible/moyenne</td></tr>
+<tr><td>ENABLE_BYP_RAW_DEMODULATORS</td><td>0</td><td>Voies RAW avancées de démodulation</td></tr>
+<tr><td>ENABLE_BLMIN_TMP_OFF</td><td>0</td><td>Traitement temporaire de la lumière minimale</td></tr>
+<tr><td>ENABLE_SCAN_RANGES</td><td>1</td><td>Plages de balayage</td></tr>
+<tr><td>ENABLE_AM_FIX_SHOW_DATA</td><td>0</td><td>Données de diagnostic AM fix</td></tr>
+<tr><td>ENABLE_AGC_SHOW_DATA</td><td>0</td><td>Données de diagnostic AGC</td></tr>
+<tr><td>ENABLE_UART_RW_BK_REGS</td><td>0</td><td>Accès aux registres RF ; ne pas activer en routine</td></tr>
+<tr><td>ENABLE_CLANG</td><td>0</td><td>Compilation avec Clang dans la configuration du projet</td></tr>
+<tr><td>ENABLE_SWD</td><td>0</td><td>Prise en charge du débogage SWD</td></tr>
+<tr><td>ENABLE_OVERLAY</td><td>0</td><td>Overlay mémoire de cette base, pas les slots firmware</td></tr>
+<tr><td>ENABLE_LTO</td><td>1</td><td>Optimisation de l’édition de liens</td></tr>
+</tbody></table></div>
+<p>Dans ce Makefile, Clang force LTO=0 ; avec LTO=1, OVERLAY=0 est imposé. Ces règles sont propres à cette base et ne doivent pas être copiées dans le CMake PY32 sans analyse. L’activation d’options peut dépasser la mémoire ou casser des combinaisons ; l’existence d’une clé n’implique pas que toutes les combinaisons soient prises en charge.</p>
+<p>Pour compiler, utilisez la toolchain et la procédure de son README dans un checkout fixé, conservez la carte mémoire, la licence et les hashs, et validez le matériel V1. Egzumer n’a pas été compilé, flashé ni testé lors de cet ajout documentaire.</p>
+<h2 id="relacion-con-karina-y-bricohams">Relation avec Karina et Bricohams</h2>
+<p>Une généalogie de fonctions similaires ne permet pas de reconstituer les sources exactes de Karina. Les pilotes et noms qui mentionnent Egzumer ne constituent pas non plus une preuve. Bricohams V3 dérive actuellement de F4HWN PY32, et non de ce dépôt d’origine. Un projet Bricohams V1 serait une autre compilation et une autre validation matérielle.</p>
+<h2 id="fuentes-fijadas">Sources fixées</h2>
+<ul>
+<li><a href="https://github.com/egzumer/uv-k5-firmware-custom/blob/7607f0a4bd6203d1f06b70556fc1ce0d7399d6b3/README.md" target="_blank" rel="noopener noreferrer">README du commit</a>.</li>
+<li><a href="https://github.com/egzumer/uv-k5-firmware-custom/blob/7607f0a4bd6203d1f06b70556fc1ce0d7399d6b3/Makefile" target="_blank" rel="noopener noreferrer">Makefile du commit</a>.</li>
+<li><a href="https://github.com/egzumer/uv-k5-firmware-custom/blob/7607f0a4bd6203d1f06b70556fc1ce0d7399d6b3/LICENSE" target="_blank" rel="noopener noreferrer">Licence Apache-2.0</a>.</li>
+<li><a href="ayuda-pack-dim0s.fr.html">Pack V3 et nouvelles preuves Karina</a>.</li>
+</ul></article>
+    <footer><p class="translation-note">Traduction de l&#39;original espagnol. En cas de divergence, la version espagnole fait foi.</p><p>Document généré à partir du Markdown versionné. Consultez les sources et les limites de chaque guide. <a href="ayuda-firmwares.fr.html">Retour à l&#39;index</a>.</p></footer>
+  </main>
+</body>
+</html>

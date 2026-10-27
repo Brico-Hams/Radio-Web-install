@@ -31,9 +31,11 @@ a color en web o Android. Construcción y límites en la
 
 **Cambio solicitado el 25-10-2026:** el color corporativo indicado por el
 usuario es el **naranja**. La paleta verde azulada de abajo describe la
-implementación actual, no la identidad objetivo. La migración de web y futura
-aplicación Android a naranja se realizará después de completar y probar las
-funciones, según la secuencia solicitada. El tono exacto y los contrastes
+implementación web actual, no la identidad objetivo. Android ya usa
+`#FF9800` como acento en su tema; esto no acredita contraste ni usabilidad
+en todos los controles y dispositivos. La migración final de la web a
+naranja se realizará después de completar y probar las funciones, según
+la secuencia solicitada. El tono exacto y los contrastes
 deberán validarse antes de sustituir los tokens; no recolorear el logotipo
 original ni usar únicamente el color para comunicar estados.
 

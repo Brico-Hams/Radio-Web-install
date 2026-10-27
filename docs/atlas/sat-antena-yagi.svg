@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+<title id="title">Plano de la Yagi bibanda de mano Bricohams</title>
+<desc id="desc">Plano propio acotado: elementos VHF en un plano y UHF en el ortogonal, sobre boom de PVC de 20 mm.</desc>
+<rect width="1200" height="800" fill="#14202c"/>
+<g font-family="sans-serif" fill="#fff">
+<text x="35" y="42" font-size="24" fill="#fff" text-anchor="start">Yagi bibanda de mano Bricohams - plano acotado</text>
+<text x="35" y="70" font-size="15" fill="#fff" text-anchor="start">Diseno propio calculado con mom.py. Cotas en mm desde el reflector VHF. Varilla aluminio 4 mm, boom PVC 20 mm de 1030 mm.</text>
+<path d="M60 300H1100.0" stroke="#bbb" stroke-width="10"/>
+<path d="M100.0 182.2V417.8" stroke="#ffa342" stroke-width="5"/>
+<text x="100" y="150" font-size="14" fill="#ffa342" text-anchor="middle">reflector</text>
+<text x="100" y="170" font-size="15" fill="#ffa342" text-anchor="middle">1011 mm</text>
+<text x="100" y="440" font-size="14" fill="#ffa342" text-anchor="middle">x=0</text>
+<path d="M616.5 187.1V412.9" stroke="#ffa342" stroke-width="5"/>
+<text x="617" y="155" font-size="14" fill="#ffa342" text-anchor="middle">excitado</text>
+<text x="617" y="175" font-size="15" fill="#ffa342" text-anchor="middle">969 mm</text>
+<text x="617" y="435" font-size="14" fill="#ffa342" text-anchor="middle">x=532</text>
+<path d="M1022.3 194.7V405.3" stroke="#ffa342" stroke-width="5"/>
+<text x="1022" y="163" font-size="14" fill="#ffa342" text-anchor="middle">director</text>
+<text x="1022" y="183" font-size="15" fill="#ffa342" text-anchor="middle">904 mm</text>
+<text x="1022" y="427" font-size="14" fill="#ffa342" text-anchor="middle">x=950</text>
+<path d="M60 630H1100.0" stroke="#bbb" stroke-width="10"/>
+<path d="M172.8 590.7V669.3" stroke="#7fd18b" stroke-width="5"/>
+<text x="173" y="561" font-size="14" fill="#7fd18b" text-anchor="middle">reflector</text>
+<text x="173" y="581" font-size="15" fill="#7fd18b" text-anchor="middle">337</text>
+<text x="173" y="691" font-size="14" fill="#7fd18b" text-anchor="middle">x=75</text>
+<path d="M324.3 592.7V667.3" stroke="#7fd18b" stroke-width="5"/>
+<text x="324" y="563" font-size="14" fill="#7fd18b" text-anchor="middle">excitado</text>
+<text x="324" y="583" font-size="15" fill="#7fd18b" text-anchor="middle">320</text>
+<text x="324" y="689" font-size="14" fill="#7fd18b" text-anchor="middle">x=231</text>
+<path d="M454.4 594.6V665.4" stroke="#7fd18b" stroke-width="5"/>
+<text x="454" y="565" font-size="14" fill="#7fd18b" text-anchor="middle">D1</text>
+<text x="454" y="585" font-size="15" fill="#7fd18b" text-anchor="middle">304</text>
+<text x="454" y="687" font-size="14" fill="#7fd18b" text-anchor="middle">x=365</text>
+<path d="M655.3 594.9V665.1" stroke="#7fd18b" stroke-width="5"/>
+<text x="655" y="565" font-size="14" fill="#7fd18b" text-anchor="middle">D2</text>
+<text x="655" y="585" font-size="15" fill="#7fd18b" text-anchor="middle">301</text>
+<text x="655" y="687" font-size="14" fill="#7fd18b" text-anchor="middle">x=572</text>
+<path d="M829.1 595.7V664.3" stroke="#7fd18b" stroke-width="5"/>
+<text x="829" y="566" font-size="14" fill="#7fd18b" text-anchor="middle">D3</text>
+<text x="829" y="586" font-size="15" fill="#7fd18b" text-anchor="middle">294</text>
+<text x="829" y="686" font-size="14" fill="#7fd18b" text-anchor="middle">x=751</text>
+<text x="35" y="112" font-size="17" fill="#ffa342" text-anchor="start">VHF 145.8-146.0 MHz: plano horizontal (vista superior, longitudes no a escala)</text>
+<text x="35" y="500" font-size="17" fill="#7fd18b" text-anchor="start">UHF 435-438 MHz: plano vertical, girado 90 grados sobre el mismo boom (vista lateral)</text>
+<text x="35" y="718" font-size="15" fill="#fff" text-anchor="start">Excitados: longitud total punta a punta, incluido el hueco central de 16 mm del bloque impreso.</text>
+<text x="35" y="743" font-size="15" fill="#fff" text-anchor="start">Elementos pasivos: varilla continua, aislada del boom por la pinza. Cortar 3-5 mm largo y ajustar con analizador.</text>
+<text x="35" y="783" font-size="14" fill="#fff" text-anchor="start">Autores: Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF y Pedro Roca - bricohams.org / bricohams.com</text>
+</g></svg>

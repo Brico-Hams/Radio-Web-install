@@ -10,12 +10,18 @@
   <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-firmwares.html">
+  <link rel="alternate" hreflang="en" href="ayuda-firmwares.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-firmwares.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-firmwares.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-firmwares.fr.html">
 </head>
 <body>
   <a class="skip" href="#main">Saltar al contenido</a>
   <main id="main" class="firmware-help">
     <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
       <nav aria-label="Ayuda"><a href="ayuda.html">Ayuda de la aplicacion</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Idioma"><a href="ayuda-firmwares.html" hreflang="es" lang="es" aria-current="page">Español</a> · <a href="ayuda-firmwares.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-firmwares.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-firmwares.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-firmwares.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
     <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#documentos-y-orden-de-lectura">Documentos y orden de lectura</a></li><li><a href="#que-significa-soportado">Que significa «soportado»</a></li><li><a href="#cobertura-de-versiones">Cobertura de versiones</a></li><li><a href="#regla-de-seguridad-y-de-uso-legal">Regla de seguridad y de uso legal</a></li><li><a href="#licencias-componentes-distintos">Licencias: componentes distintos</a></li><li><a href="#actualizar-esta-biblioteca">Actualizar esta biblioteca</a></li></ul></nav>
     <article class="panel"><h1 id="biblioteca-de-ayuda-de-radios-y-firmware">Biblioteca de ayuda de radios y firmware</h1>
@@ -35,9 +41,14 @@
 <tr><td><a href="ayuda-karina.html">Karina</a></td><td>Inventario, funciones documentadas, busqueda del codigo fuente (cerrado), especificacion para reimplementarla y fuentes</td></tr>
 <tr><td><a href="ayuda-dm32uv.html">Baofeng DM-32UV</a></td><td>Hardware HR_C7000/FD6818, estado y licencia de OpenGD77, instalacion, como compilar RadioFoundry y protocolo del bootloader</td></tr>
 <tr><td><a href="ayuda-ejemplos.html">Ejemplos</a></td><td>Firmwares abiertos F4HWN v6.3.0 y moto con su licencia, canales PMR446 de ejemplo y scripts de analisis</td></tr>
+<tr><td><a href="ayuda-iniciacion-satelite.html">Iniciacion al satelite</a></td><td>Guia propia en espanol para empezar con satelites FM y la imagen BH Satelite</td></tr>
+<tr><td><a href="ayuda-antenas-satelite.html">Antenas de satelite</a></td><td>Yagi bibanda y dipolo en V simulados con MoM propio, planos y piezas STL</td></tr>
 <tr><td><a href="ayuda-binarios-terceros.html">Binarios de terceros</a></td><td>SHA-256 y origen de Karina, firmwares DM-32UV oficiales y parcheados, OpenGD77 DM32 e imagenes de fabrica del K1/K5 V3, sin redistribuirlos</td></tr>
 <tr><td><a href="ayuda-enlaces-comunidad.html">Repositorios de la comunidad</a></td><td>Catalogo verificado de repositorios Quansheng y DM-32UV, enlaces caidos recuperados y busqueda en otras forjas</td></tr>
 <tr><td><a href="ayuda-bricohams.html">Bricohams V3</a></td><td>Compilacion local reproducible de Fusion y Labs y artefactos entregados</td></tr>
+<tr><td><a href="ayuda-anytone.html">AnyTone</a></td><td>Preparador local JSON/CSV; no es CPS RDT ni programador USB</td></tr>
+<tr><td><a href="ayuda-android.html">Android</a></td><td>Libro de guardia, canales FM, CAT y audio experimentales; permisos y pruebas por revision</td></tr>
+<tr><td><a href="ayuda-validacion-v3-android.html">Validacion V3 y Android</a></td><td>Evidencias, fallos corregidos, aislamiento de datos, ensayos pendientes y limites de mods</td></tr>
 </tbody></table></div>
 <p>En las paginas web puedes utilizar la busqueda del navegador (Ctrl+F). Los documentos Markdown se conservan en el repositorio para consulta sin red. La ayuda web se incluye tambien en el servidor local, Pages e instaladores.</p>
 <h2 id="que-significa-soportado">Que significa «soportado»</h2>
@@ -53,7 +64,8 @@
 <div class="table-scroll"><table><thead><tr><th scope="col">Familia</th><th scope="col">Cobertura concreta de esta biblioteca</th><th scope="col">Limite</th></tr></thead><tbody>
 <tr><td>F4HWN Quansheng PY32</td><td>18 versiones publicadas reconocidas; 84 opciones de interfaz y 94 claves distintas en el historial de presets por commit</td><td>No se atribuyen las funciones v6 a las versiones antiguas</td></tr>
 <tr><td>ARDF Quansheng</td><td>Publicaciones reconocidas del repositorio V3/UV-K1; guia de ARDF local v0.5 y advertencias de evolucion</td><td>No se habilita su escritura en slots sin compatibilidad verificada</td></tr>
-<tr><td>Bricohams</td><td>Fusion y Labs locales v6.1.0, opciones y hashes documentados</td><td>Experimental, sin prueba de banco</td></tr>
+<tr><td>Bricohams sobre F4HWN</td><td>Fusion, Labs, ARDF, Satellite y Spectrum v6.1.0, opciones y hashes documentados</td><td>Lecturas previas y CRC de slots no certifican arranque ni todas las funciones</td></tr>
+<tr><td>Plataforma independiente Bricohams</td><td>Residente experimental, Diagnostics y Blocks en BHA1, almacenamiento y transferencia portables</td><td>Sin arranque fisico validado ni integracion USB/Flash; BHA1 no es FAP1 y no se instala con el cargador web existente</td></tr>
 <tr><td>Karina</td><td>Paquete V1 local y paquete V3/K1 de 21-09-2026 inspeccionado desde Dim0s</td><td>Existen binarios PY32; no fuentes ni compatibilidad multiboot Armel demostradas</td></tr>
 <tr><td>OpenGD77</td><td>Familias y modelos documentados; versiones identificadas por fecha/build y variantes de distribucion</td><td>No existe una tabla universal de menus aplicable a todos los builds historicos</td></tr>
 <tr><td>Stock Quansheng, UVMOD, OneOfEleven</td><td>Identificacion y referencias para evitar confusiones</td><td>No son protocolos ni compiladores incorporados a esta web</td></tr>

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Allgemeine Konfiguration, Sicherungen und Diagnose: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Allgemeine Konfiguration, Sicherungen und Diagnose | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-configuracion.html">
+  <link rel="alternate" hreflang="en" href="ayuda-configuracion.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-configuracion.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-configuracion.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-configuracion.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda.html">App-Hilfe (Spanisch)</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-configuracion.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-configuracion.en.html" hreflang="en" lang="en">English</a> · <a href="ayuda-configuracion.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-configuracion.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-configuracion.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#antes-de-configurar">Vor der Konfiguration</a></li><li><a href="#beta-y-modo-pro">Beta und PRO-Modus</a></li><li><a href="#diccionario-de-canal-analogico">Glossar für Analogkanäle</a></li><li><a href="#diccionario-dmr">DMR-Glossar</a></li><li><a href="#escaneo-y-doble-escucha">Scan und Dual Watch</a></li><li><a href="#ajustes-de-sistema">Systemeinstellungen</a></li><li><a href="#repetidores-radioid-y-satelites-en-esta-web">Repeater, RadioID und Satelliten auf dieser Website</a></li><li><a href="#conexion-usb-sin-confundir-modos">USB-Verbindung: Betriebsarten nicht verwechseln</a></li><li><a href="#lista-de-verificacion-posterior">Checkliste nach der Konfiguration</a></li></ul></nav>
+    <article class="panel"><h1 id="configuracion-comun-copias-y-diagnostico">Allgemeine Konfiguration, Sicherungen und Diagnose</h1>
+<p>Revision: 25-10-2026. Konzeptionell auf FM/DMR anwendbar; Menünamen, Bereiche und Tasten hängen vom Modellleitfaden und Build ab.</p>
+<h2 id="antes-de-configurar">Vor der Konfiguration</h2>
+<h3 id="proveedores-y-descarga-automatica-en-la-version-instalada">Anbieter und automatischer Download in der installierten Version</h3>
+<p>Öffne unter Repeater <strong>RepeaterBook-API konfigurieren</strong>, gib den individuellen freigegebenen Token und User-Agent ein und bestätige deine Genehmigung. Sie werden nur bis zum Neustart im Serverspeicher behalten; das Token-Feld wird nach dem Absenden geleert. Die Variablen <code>RB_USER_TOKEN</code>, <code>RB_APPROVED_USER_AGENT</code> und <code>RB_APPROVED=yes</code> können weiterhin zur Konfiguration des Prozesses über die Umgebung verwendet werden.</p>
+<p>Unter DMR-Kontakte importiert <strong>DMR automatisch herunterladen</strong> einen RadioID-Stapel nach Land/Region (1-10 Seiten, maximal 1024) in das lokale Codeplug. Räume sind Talkgroups: Die BrandMeister-Option verwendet ein TG- Präfix, kein RadioID-Land. Speichere die Gruppen als Gruppenrufkontakte mit einem numerischen TG-Namen; weise danach im CPS das TG dem Kanal zu. Dadurch wird der Hotspot weder abonniert noch ein Raum geöffnet. Es wird nicht ins Funkgerät geschrieben und beim Start nicht stillschweigend synchronisiert.</p>
+<p>Für Quansheng bereitest du unter SAT/Überflüge FM- oder Doppler-Kanäle vor und drückst <strong>Vorbereitete SAT-/Doppler-Kanäle in Quansheng-Konfiguration laden</strong>, nachdem du eine FM-Vorlage gewählt hast. Dafür muss eine F4HWN-v6-Konfiguration gelesen/geöffnet worden sein. Es lädt keine TLE in das Firmwaremodul: Es bereitet gestaffelte Empfangsspeicher mit manuellem Wechsel vor.</p>
+<p>Notiere Modell, Platinenrevision, MCU-Familie, Firmware und Datum/Build. Speichere ein Foto von SysInf/Radio Info, Originaldateien und deren Hashes. Notiere Kabeltyp, Port, Browser und verwendetes Programm. Es darf immer nur eine Anwendung den Port geöffnet haben: CHIRP, CPS, Studio und andere Tabs schließen.</p>
+<p>Verwechsle diese Objekte nicht:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Objekt</th><th scope="col">Inhalt</th><th scope="col">Ersetzt nicht</th></tr></thead><tbody>
+<tr><td>Firmware</td><td>Programm, das der Prozessor ausführt</td><td>Individuelle Kalibrierung</td></tr>
+<tr><td>Codeplug/Konfiguration</td><td>Kanäle, Kontakte, Zonen und Einstellungen je nach Format</td><td>Firmware- oder vollständige Funkgerätesicherung</td></tr>
+<tr><td>Kalibrierung</td><td>Individuelle Einstellwerte des Geräts</td><td>Konfiguration eines anderen Funkgeräts desselben Modells</td></tr>
+<tr><td>Physischer Flash</td><td>Image eines bestimmten Speichers</td><td>Speicher anderer Chips, sofern diese nicht im angegebenen Umfang enthalten sind</td></tr>
+<tr><td>Manifest/SHA256SUMS</td><td>Namen, Hashes und Metadaten</td><td>Digitale Herstellersignatur</td></tr>
+<tr><td>TLE</td><td>Orbitale Elemente und Epoche</td><td>Aktive Frequenzen oder garantierter Satellitendienst</td></tr>
+</tbody></table></div>
+<p>Exportiere die Sicherung <code>.rwb.json</code> aus dem Browser und bewahre das Original unverändert auf. IndexedDB hängt von Ursprung, Browser und Profil ab. Beim Wechsel zwischen localhost, 127.0.0.1, Pages oder privatem Modus werden möglicherweise unterschiedliche Sicherungen angezeigt. Lösche keine Browserdaten, um USB-Probleme zu beheben, bevor du sie exportiert hast.</p>
+<h2 id="beta-y-modo-pro">Beta und PRO-Modus</h2>
+<p>Die Anwendung und die Bricohams-Builds befinden sich in der Phase <strong>Beta / Validierung</strong>. Aktiviere vor dem Anschließen <strong>PRO-Modus</strong>, wenn du die angeklickten Aktionen ohne Bestätigungswörter oder Einverständnis zum lokalen Löschen von Kanälen ausführen möchtest. Die PRO-Auswahl genehmigt auch den anfänglichen Lesevorgang, ohne ein weiteres Kästchen anzukreuzen. Die Auswahl gilt für diese Seite/Sitzung; beim Neuladen wird sie nicht stillschweigend gespeichert. Sie entfernt weder die Modellauswahl noch die WebUSB-/Web-Serial-Berechtigungen des Browsers, die vollständige Sicherung, CRC, Hash-Prüfung, erneutes Einlesen, Sperre während laufender Aufgaben oder Main-Schutz. Bestätigungen im externen CPS/Studio werden dadurch nicht gesteuert. Während eines Vorgangs darfst du auch mit PRO weder navigieren noch die Verbindung trennen. Eine Teilsicherung erlaubt niemals Schreibvorgänge, unabhängig von diesem Modus.</p>
+<h2 id="diccionario-de-canal-analogico">Glossar für Analogkanäle</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Einstellung</th><th scope="col">Bedeutung</th><th scope="col">Auswahl und Prüfung</th></tr></thead><tbody>
+<tr><td>RX</td><td>Frequenz, die das Funkgerät empfängt</td><td>Veröffentlichte Ausgabe des Repeaters oder Simplexfrequenz verwenden</td></tr>
+<tr><td>TX</td><td>Frequenz, auf der gesendet wird</td><td>Bei Repeatern deren Eingabe verwenden; RX/TX nicht intuitiv vertauschen</td></tr>
+<tr><td>Offset und Richtung</td><td>Differenz von TX zu RX</td><td>Resultierende TX-Frequenz prüfen, nicht nur das Vorzeichen</td></tr>
+<tr><td>Modus</td><td>FM, AM oder andere unterstützte Betriebsart</td><td>Muss zum Signal passen; AM-Empfang berechtigt nicht zu AM-TX</td></tr>
+<tr><td>Step</td><td>VFO-Schrittweite</td><td>Nicht die Kanalbandbreite; passendes Raster auswählen</td></tr>
+<tr><td>W/N / Bandbreite</td><td>FM-Hub/Filter des Kanals</td><td>Auf das System abstimmen; schmal erzeugt keinen digitalen Modus</td></tr>
+<tr><td>SQL</td><td>Schwelle zum Öffnen des Audios</td><td>Niedrig beginnen und nur so weit erhöhen, dass Rauschen unterdrückt wird, ohne Signale zu verlieren</td></tr>
+<tr><td>CTCSS TX</td><td>Übertragener Subaudio-Ton</td><td>Nur falls vom Repeater verlangt</td></tr>
+<tr><td>DCS TX</td><td>Digitaler Subaudio-Code</td><td>Nicht gleich Color Code bei DMR; gegebenenfalls Polarität beachten</td></tr>
+<tr><td>CTCSS/DCS RX</td><td>Zusätzliche Bedingung zum Öffnen des Audios</td><td>Bei der Diagnose ungefiltert lassen; verschlüsselt keine Kommunikation</td></tr>
+<tr><td>Leistung</td><td>RF-Ausgangsleistung</td><td>Niedrigste ausreichende und zulässige Stufe; Werte hängen von der Kalibrierung ab</td></tr>
+<tr><td>RX-only / TXLock</td><td>Verhindert das Senden auf diesem Kanal</td><td>Beim Empfang und bei nicht überprüften Importen aktiviert lassen</td></tr>
+<tr><td>Busy lock</td><td>TX-Sperre bei erkannter Belegung</td><td>Ersetzt nicht die Pflicht, vor dem Senden zuzuhören</td></tr>
+<tr><td>TOT</td><td>Maximale Dauer des ununterbrochenen TX</td><td>Hilft bei klemmender PTT; ist nicht das Scanintervall</td></tr>
+<tr><td>VOX</td><td>Aktiviert TX über Audio</td><td>Bei USB-, Kopfhörer- und lauten Umgebungstests deaktivieren</td></tr>
+<tr><td>Compander</td><td>Dynamikverarbeitung</td><td>Nur verwenden, wenn die Gegenstation kompatibel ist</td></tr>
+<tr><td>Reverse</td><td>Tauscht Eingang/Ausgang vorübergehend</td><td>RX/TX beim Beenden erneut prüfen; gespeicherten Kanal nicht unbeabsichtigt ändern</td></tr>
+</tbody></table></div>
+<h3 id="ejemplo-de-trabajo-con-un-repetidor">Beispiel: mit einem Repeater arbeiten</h3>
+<ol>
+<li>RX, TX, Modus, Bandbreite und Ton aus der Veröffentlichung des Betreibers übernehmen.</li>
+<li>Eine kompatible Vorlage erstellen oder duplizieren; RX-only während der Prüfung beibehalten.</li>
+<li>Ohne RX-Filter zuhören und Aktivität sowie Frequenz prüfen.</li>
+<li>Prüfen, dass der TX-Ton tatsächlich erforderlich ist und nicht nur vom Anbieter angenommen wurde.</li>
+<li>Gesetzmäßigkeit, Leistung und Zugehörigkeit zu Listen/Zonen überprüfen.</li>
+<li>Im Speicher sichern. Kanal erneut auswählen und Persistenz prüfen.</li>
+<li>Auf dieser Website das Ergebnis exportieren; nicht annehmen, dass die Bearbeitung einer Datei sie ins Funkgerät geschrieben hat.</li>
+</ol>
+<p>Es gibt keine universellen Sendefrequenzen: Sie hängen von Ort, Lizenz, Band, Dienst und konkretem Repeater ab.</p>
+<h2 id="diccionario-dmr">DMR-Glossar</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Einstellung</th><th scope="col">Bedeutung</th><th scope="col">Häufiger Fehler</th></tr></thead><tbody>
+<tr><td>Radio ID</td><td>Eigene Teilnehmerkennung</td><td>Mit TG verwechseln oder die ID einer anderen Person verwenden</td></tr>
+<tr><td>TX-Kontakt</td><td>Anrufziel und Gruppen-/Einzelrufart</td><td>Einen Einzelrufkontakt verwenden, obwohl Gruppe erforderlich ist</td></tr>
+<tr><td>TG</td><td>Talkgroup, Gruppenkennung</td><td>Annehmen, dass sie allein das Netzwerk des Repeaters programmiert</td></tr>
+<tr><td>TS 1/2</td><td>Time Slot des Kanals</td><td>Mit Kanalnummer oder Color Code verwechseln</td></tr>
+<tr><td>CC 0-15</td><td>DMR-Zugangs-Color-Code</td><td>Als Passwort oder CTCSS-Ton behandeln</td></tr>
+<tr><td>RX Group</td><td>Gruppe der Empfangs-Talkgroups</td><td>Mit Kanalzone verwechseln</td></tr>
+<tr><td>Zone</td><td>Organisierte Kanalliste</td><td>Erwarten, dass TS/CC automatisch geändert werden</td></tr>
+<tr><td>DMR-Filter</td><td>Bedingungen zur Audioannahme</td><td>Ein offener Filter berechtigt nicht, in jeder TG zu senden</td></tr>
+<tr><td>Hotspot</td><td>Persönliche RF-/Netzwerkschnittstelle</td><td>Ist standardmäßig kein herkömmlicher Repeater mit zwei Slots</td></tr>
+<tr><td>ID-Datenbank</td><td>Zuordnung von ID, Rufzeichen und Name</td><td>Erstellt keine TX-Kontakte und ermöglicht keinen Netzzugang</td></tr>
+</tbody></table></div>
+<p>Für die DMR-Konfiguration in OpenGD77 folge dem <a href="ayuda-opengd77.de.html">eigenen Leitfaden</a>. Quansheng F4HWN/Karina/ARDF wird hier nicht als DMR-Funkgerät dokumentiert.</p>
+<h2 id="escaneo-y-doble-escucha">Scan und Dual Watch</h2>
+<p>Beim Scannen werden Kanäle nacheinander aufgerufen; nicht der gesamte Bereich gleichzeitig abgehört. Höhere Geschwindigkeit kann kurze Träger, Töne oder digitale Header verpassen. Zeitgesteuertes Fortsetzen, Fortsetzen bei Träger oder Anhalten sind unterschiedliche Verhaltensweisen.</p>
+<p>Prioritätskanäle und Dual Watch ergänzen weitere Besuche im Zyklus und können die effektive Hörzeit verändern. Prüfe, welcher Kanal für TX verwendet wird: Hauptkanal, zuletzt empfangener Kanal oder der im Antwortmodus festgelegte. Schalte zur Empfangsdiagnose den Scan aus und verwende ein einzelnes VFO.</p>
+<h2 id="ajustes-de-sistema">Systemeinstellungen</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Gruppe</th><th scope="col">Was geändert wird</th><th scope="col">Vorsicht</th></tr></thead><tbody>
+<tr><td>Hintergrundbeleuchtung/Kontrast/Invertierung</td><td>Lesbarkeit und Verbrauch</td><td>Ändert nicht die RF-Empfindlichkeit</td></tr>
+<tr><td>Beeps/Sprache/Hinweise</td><td>Oberflächensignale</td><td>Lautstärke vor dem Verwenden von Kopfhörern reduzieren</td></tr>
+<tr><td>Energiesparen/Sleep/APO</td><td>Empfangszyklus oder Abschaltung</td><td>Kann Signalerkennung verzögern und Sitzungen unterbrechen</td></tr>
+<tr><td>Akkukapazität</td><td>Schätzung/Verwaltung je nach Firmware</td><td>Ändert die physische Kapazität nicht und kalibriert die Spannung nicht</td></tr>
+<tr><td>Tastatur-/PTT-Sperre</td><td>Erlaubte Aktionen</td><td>Prüfen, ob damit auch TX gesperrt wird und wie die Entsperrung in diesem Build funktioniert</td></tr>
+<tr><td>Datum/Uhrzeit/UTC</td><td>Protokollierung, Position und Orbits</td><td>Zeitzone ersetzt keine korrekte Uhr</td></tr>
+<tr><td>Position/GPS</td><td>Berechnungen oder darauf angewiesene Dienste</td><td>Datenschutz beachten und GPS nicht annehmen, wenn das Modell keines hat</td></tr>
+<tr><td>Shortcuts/Tasten</td><td>Kurze/lang gedrückte Aktionen</td><td>Änderungen dokumentieren; keine Kombinationen anderer Modelle übernehmen</td></tr>
+<tr><td>Reset</td><td>Setzt Wertgruppen zurück</td><td>Kann Kanäle/Einstellungen löschen; nicht als erste Diagnose verwenden</td></tr>
+<tr><td>Kalibrierung</td><td>Frequenz, Pegel und weitere Prüfstandparameter</td><td>Nicht ohne Instrumente und Projektverfahren ändern</td></tr>
+</tbody></table></div>
+<h2 id="repetidores-radioid-y-satelites-en-esta-web">Repeater, RadioID und Satelliten auf dieser Website</h2>
+<ul>
+<li>Webmodus: RadioID über <code>user.csv</code>; lokaler Modus: Abfrage über den Server. Importierte Einzelkontakte erstellen keine Zonen und weisen Kanälen kein TG zu.</li>
+<li>RepeaterBook benötigt die lokale Version und einen freigegebenen Token. Eine externe Quelle kann unvollständig oder veraltet sein. Betriebsstatus beim Verantwortlichen prüfen.</li>
+<li>OpenGD77 verwendet hier ein Standard-Codeplug mit 128 KiB. Importierte Kanäle basieren auf einer kompatiblen Vorlage und sind zunächst RX-only; Zone im CPS überprüfen.</li>
+<li>Quansheng kann eine F4HWN-v6-Konfiguration lesen, FM-Kanäle auf einer Vorlage ergänzen und Speicher aus der lokalen Datei löschen. Beta-Übertragung erfordert vollständige Flash-Sicherung und erneutes Einlesen; v6.0 bleibt schreibgeschützt. Es exportiert auch Projekte/CSV. Es gibt keine native Quansheng-SAT-Orbittabelle.</li>
+<li>OpenGD77 unterscheidet native SAT-Tabelle und Empfangskanäle. Prüfe Grenzen und tatsächliche Fähigkeiten des Editors, bevor du annimmst, dass eine erweiterte Datei verwendbar ist.</li>
+<li>Doppler ist kein Repeater-Offset. Er hängt von Zeitpunkt, Orbit und Position ab; gestaffelte Kanäle sind Näherungen, kein kontinuierliches Tracking.</li>
+<li>TLE, Uhrzeit und Position aktualisieren; Epoche und aktive Frequenz prüfen. Ein vorhergesagter Überflug garantiert weder einen aktiven Transponder noch Empfang.</li>
+<li>Für den Empfang alte Töne deaktivieren, sofern sie nicht nachweislich benötigt werden. Durch den Import eines Satelliten keinen Uplink/automatischen TX aktivieren.</li>
+</ul>
+<h2 id="conexion-usb-sin-confundir-modos">USB-Verbindung: Betriebsarten nicht verwechseln</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Betriebsfamilie</th><th scope="col">Erwarteter Modus</th><th scope="col">Was nicht zu tun ist</th></tr></thead><tbody>
+<tr><td>Quansheng: Lesen und Slots</td><td>Kompatible F4HWN-Firmware normal gestartet, serielles Protokoll</td><td>Nicht nur für die Kanalanzeige den Bootloader-Modus verwenden</td></tr>
+<tr><td>Quansheng: externes Flashen</td><td>Hardware-spezifischer Modus und passendes Werkzeug</td><td>Kein V1-Werkzeug für V3 verwenden und packed/RAW nicht verwechseln</td></tr>
+<tr><td>OpenGD77: Web-CPS-Lesen</td><td>Normale OpenGD77-Firmware und Transport der jeweiligen Familie</td><td>Weder DFU noch Boot-ROM auswählen</td></tr>
+<tr><td>OpenGD77: Firmware installieren</td><td>Offizielles Werkzeug und Vorgehensweise des Modells</td><td>Die Website nicht wie einen MCU-Flasher verwenden</td></tr>
+</tbody></table></div>
+<p>Chrome/Edge auf dem Desktop, HTTPS oder 127.0.0.1 und eine Geräteberechtigung sind für Browser-APIs erforderlich. Ein Ladekabel kann Strom zuführen, ohne Daten zu übertragen. USB-C direkt und seitliches serielles Kabel sind unterschiedliche Verbindungen. Ändere nicht den Treiber eines fremden Geräts und ersetze nicht alle CDC-Geräte durch WinUSB: Identifikatoren und Schnittstelle vorher prüfen.</p>
+<h3 id="tiempo-agotado-0-de-1-bytes">Zeitüberschreitung / „0 von 1 Bytes“</h3>
+<ol>
+<li>Exakte Meldung und letzten erfolgreichen Vorgang speichern.</li>
+<li>Andere Programme und Tabs schließen, die den Port verwenden.</li>
+<li>Sicher trennen und das Funkgerät im Normalmodus starten.</li>
+<li>Hardware, Firmware und richtigen Port prüfen; ein Datenkabel testen.</li>
+<li>Einen Lesevorgang erneut versuchen, ohne zu schreiben oder zu löschen.</li>
+<li>Wenn die Identifikation funktioniert, das Lesen aber fehlschlägt, genaue Firmware sowie Befehl/Phase notieren. Die Identifikation beweist nicht, dass alle Befehle unterstützt werden.</li>
+<li>Bei erneutem Fehler anhalten und Protokolle sichern. Baudrate nicht beliebig erhöhen und Sicherungsschutz nicht entfernen.</li>
+</ol>
+<h2 id="lista-de-verificacion-posterior">Checkliste nach der Konfiguration</h2>
+<ul>
+<li>Die exportierte Datei hat das erwartete Format/die erwartete Größe und eine Originalkopie.</li>
+<li>Änderungen bleiben nach Schließen und erneutem Öffnen der Datei erhalten.</li>
+<li>RX/TX, Töne, Modus, TS/CC und RX-only sind korrekt, soweit zutreffend.</li>
+<li>Zone/Liste/Bank entspricht der Absicht, nicht nur die Speichernummer.</li>
+<li>„Vorbereitet“ wurde nicht mit „installiert“ verwechselt.</li>
+<li>Eine CRC-Prüfung deckt nur die angegebenen Daten ab, nicht die gesamte Firmware-Sicherheit oder die Kalibrierung anderer Chips.</li>
+</ul>
+<p>Quellen: Connector, Editor und Planer dieser Website; in den Leitfäden <a href="ayuda-quansheng.de.html">F4HWN</a> und <a href="ayuda-opengd77.de.html">OpenGD77</a> verlinkte Handbücher.</p></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

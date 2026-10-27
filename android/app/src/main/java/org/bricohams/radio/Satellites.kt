@@ -11,32 +11,32 @@ import kotlin.math.roundToLong
 data class Tle(val name: String, val line1: String, val line2: String) {
     val norad: Int get() = line1.substring(2, 7).trim().toInt()
     fun validated(): Tle {
-        require(name.isNotBlank() && name.length <= 120 && name.none { it.code < 32 }) { "Nombre TLE invalido." }
+        requireUi(name.isNotBlank() && name.length <= 120 && name.none { it.code < 32 }) { UiText(R.string.err_tle_name) }
         for ((index, line) in listOf(line1, line2).withIndex()) {
-            require(line.length == 69 && line[0] == '1' + index && line[1] == ' ' &&
-                line.all { it.code in 32..126 } && line[68].isDigit()) { "TLE: lineas de 69 caracteres, numero y checksum requeridos." }
+            requireUi(line.length == 69 && line[0] == '1' + index && line[1] == ' ' &&
+                line.all { it.code in 32..126 } && line[68].isDigit()) { UiText(R.string.err_tle_line_format) }
             val checksum = line.take(68).sumOf { if (it in '0'..'9') it - '0' else if (it == '-') 1 else 0 } % 10
-            require(checksum == line[68] - '0') { "Checksum TLE incorrecto." }
-            require(line.substring(2, 7).trim().matches(Regex("[0-9]{1,5}"))) { "Solo NORAD numerico clasico, no Alpha-5." }
+            requireUi(checksum == line[68] - '0') { UiText(R.string.err_tle_checksum) }
+            requireUi(line.substring(2, 7).trim().matches(Regex("[0-9]{1,5}"))) { UiText(R.string.err_tle_norad_numeric) }
         }
-        require(norad in 1..99999 && line2.substring(2, 7).trim().toInt() == norad) { "NORAD inconsistente." }
+        requireUi(norad in 1..99999 && line2.substring(2, 7).trim().toInt() == norad) { UiText(R.string.err_tle_norad_mismatch) }
         return this
     }
     companion object {
         fun parseCatalog(text: String): List<Tle> {
-            require(text.length <= 256 * 1024 && text.all { it.code in 32..126 || it in "\r\n\t" }) { "Catalogo TLE ASCII de hasta 256 KiB." }
+            requireUi(text.length <= 256 * 1024 && text.all { it.code in 32..126 || it in "\r\n\t" }) { UiText(R.string.err_tle_catalog_size) }
             val lines = text.lineSequence().filter { it.isNotBlank() }.map { it.trimEnd('\r') }.toList()
             val result = ArrayList<Tle>()
             var index = 0
             while (index < lines.size) {
-                require(result.size < 256) { "Maximo 256 satelites por catalogo." }
-                require(!lines[index].startsWith("1 ") || lines[index].length == 69) { "Linea TLE truncada." }
+                requireUi(result.size < 256) { UiText(R.string.err_tle_catalog_count) }
+                requireUi(!lines[index].startsWith("1 ") || lines[index].length == 69) { UiText(R.string.err_tle_line_truncated) }
                 val name = if (lines[index].startsWith("1 ")) "NORAD ${lines[index].substring(2, 7).trim()}"
                     else lines[index++].removePrefix("0 ")
-                require(index + 1 < lines.size) { "Catalogo TLE truncado." }
+                requireUi(index + 1 < lines.size) { UiText(R.string.err_tle_catalog_truncated) }
                 result.add(Tle(name, lines[index++], lines[index++]).validated())
             }
-            require(result.isNotEmpty() && result.map { it.norad }.distinct().size == result.size) { "Catalogo vacio o con NORAD duplicado." }
+            requireUi(result.isNotEmpty() && result.map { it.norad }.distinct().size == result.size) { UiText(R.string.err_tle_catalog_empty) }
             return result
         }
     }
@@ -44,8 +44,8 @@ data class Tle(val name: String, val line1: String, val line2: String) {
 
 data class ObserverPosition(val latitude: Double, val longitude: Double, val heightKm: Double) {
     fun validated(): ObserverPosition {
-        require(latitude.isFinite() && latitude in -90.0..90.0 && longitude.isFinite() && longitude in -180.0..180.0 &&
-            heightKm.isFinite() && heightKm in -0.5..9.0) { "Observador: latitud -90..90, longitud -180..180, altura -0.5..9 km." }
+        requireUi(latitude.isFinite() && latitude in -90.0..90.0 && longitude.isFinite() && longitude in -180.0..180.0 &&
+            heightKm.isFinite() && heightKm in -0.5..9.0) { UiText(R.string.err_observer_invalid) }
         return this
     }
 }
@@ -107,26 +107,26 @@ class SatelliteOrbit(
                 .toDouble().roundToLong()
         } catch (error: Exception) {
             if (ownsEngine) shared.close()
-            throw IllegalArgumentException("No se pudo preparar SGP4: ${error.message}", error)
+            throw LocalizedArgumentException(UiText(R.string.err_sgp4_prepare, error), error)
         }
     }
     private fun call(name: String, arguments: Array<Any>): Any =
         (ScriptableObject.getProperty(engine, name) as Function).call(context, scope, engine, arguments)
     fun validateAge(time: Long) {
-        require(time - epoch <= 7 * 86400000L && epoch - time <= 86400000L) {
-            "TLE caducado (>7 dias) o futuro (>24 h). Actualiza el catalogo."
+        requireUi(time - epoch <= 7 * 86400000L && epoch - time <= 86400000L) {
+            UiText(R.string.err_tle_stale)
         }
     }
     fun look(time: Long): SatelliteLook {
-        check(!closed) { "Motor orbital cerrado." }
+        checkUi(!closed) { UiText(R.string.err_orbit_closed) }
         validateAge(time)
         val array = try { call("look", arrayOf(time.toDouble())) as NativeArray } catch (error: org.mozilla.javascript.RhinoException) {
-            throw IllegalArgumentException("Error de propagacion SGP4: ${error.message}", error)
+            throw LocalizedArgumentException(UiText(R.string.err_sgp4_propagation, error.message), error)
         }
         fun number(index: Int) = (array.get(index, array) as Number).toDouble()
         val point = SatelliteLook(time, number(0), number(1), number(2))
-        require(point.azimuth.isFinite() && point.azimuth in 0.0..360.0 &&
-            point.elevation.isFinite() && point.elevation in -90.0..90.0 && point.rangeKm.isFinite() && point.rangeKm > 0) { "Geometria SGP4 no valida." }
+        requireUi(point.azimuth.isFinite() && point.azimuth in 0.0..360.0 &&
+            point.elevation.isFinite() && point.elevation in -90.0..90.0 && point.rangeKm.isFinite() && point.rangeKm > 0) { UiText(R.string.err_sgp4_geometry) }
         return point
     }
     fun geo(time: Long): SubPoint {
@@ -142,7 +142,7 @@ class SatelliteOrbit(
         return point
     }
     fun predict(start: Long, hours: Int = 24, minimum: Double = 10.0): List<SatellitePass> {
-        require(hours in 1..48 && minimum.isFinite() && minimum in 0.0..60.0) { "Prediccion: 1-48 horas, elevacion 0-60 grados." }
+        requireUi(hours in 1..48 && minimum.isFinite() && minimum in 0.0..60.0) { UiText(R.string.err_prediction_params) }
         val end = start + hours * 3600000L
         validateAge(start); validateAge(end)
         fun crossing(left: Long, right: Long, rising: Boolean): SatelliteLook {
@@ -160,7 +160,7 @@ class SatelliteOrbit(
         var maximum = previous
         var time = start
         while (time < end) {
-            if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Prediccion cancelada.")
+            if (Thread.currentThread().isInterrupted) throw LocalizedInterruptedIOException(UiText(R.string.err_prediction_cancelled))
             // Below the horizon range > 1500 km, so even a 200 km LEO changes elevation under 0.3 deg/s: no crossing is skipped.
             val step = if (aos == null) maxOf(1L, ((minimum - previous.elevation) / 0.4 / 5).toLong()) * 5000 else 5000L
             time = minOf(time + step, end)
@@ -181,15 +181,15 @@ class SatelliteOrbit(
         return passes
     }
     fun target(plan: SatellitePlan, time: Long): SatelliteTarget {
-        require(plan.tle == tle && plan.observer == observer) { "El motor orbital no corresponde al plan CAT." }
-        require(plan.pass.los.time > plan.pass.aos.time && plan.pass.los.time - plan.pass.aos.time <= 2 * 3600000 &&
-            time >= plan.pass.aos.time && time < plan.pass.los.time) { "Fuera del pase CAT seleccionado." }
-        require(CatProtocol.inBand(plan.downlinkHz / 10) && plan.downlinkHz % 10 == 0L) { "Downlink RX fuera de banda o de pasos de 10 Hz." }
+        requireUi(plan.tle == tle && plan.observer == observer) { UiText(R.string.err_orbit_plan_mismatch) }
+        requireUi(plan.pass.los.time > plan.pass.aos.time && plan.pass.los.time - plan.pass.aos.time <= 2 * 3600000 &&
+            time >= plan.pass.aos.time && time < plan.pass.los.time) { UiText(R.string.err_outside_pass) }
+        requireUi(CatProtocol.inBand(plan.downlinkHz / 10) && plan.downlinkHz % 10 == 0L) { UiText(R.string.err_downlink_band) }
         val position = look(time)
-        require(position.elevation >= 0) { "Satelite bajo el horizonte." }
+        requireUi(position.elevation >= 0) { UiText(R.string.err_satellite_below_horizon) }
         val rate = look(time + 500).rangeKm - look(time - 500).rangeKm
         val frequency = (plan.downlinkHz * (1 - rate / 299792.458) / 10).roundToLong()
-        require(CatProtocol.inBand(frequency)) { "Doppler fuera de banda RX." }
+        requireUi(CatProtocol.inBand(frequency)) { UiText(R.string.err_doppler_band) }
         return SatelliteTarget(frequency, position)
     }
     override fun close() {

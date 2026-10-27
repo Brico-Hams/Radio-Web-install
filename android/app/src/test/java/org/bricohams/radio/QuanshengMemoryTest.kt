@@ -22,6 +22,10 @@ class QuanshengMemoryTest {
         val writes = ArrayList<Int>()
         var rejectWriteAt = -1
         var crcOffset = 0
+        var crcFaultAddress = -1
+        val crcRequests = ArrayList<Pair<Int, Int>>()
+        var crcResponse: (ByteArray) -> ByteArray = { it }
+        val flashRequests = ArrayList<Pair<Int, Int>>()
         var flashReader = true
         init {
             calibration.copyInto(flash, 0x10000)
@@ -55,10 +59,19 @@ class QuanshengMemoryTest {
                     if (!flashReader) return
                     val address = view.getInt(0)
                     val length = view.getShort(4).toInt()
+                    flashRequests.add(address to length)
                     reply(0x0739, request.copyOfRange(0, 6) + byteArrayOf(0) + flash.copyOfRange(address, address + length))
                 }
-                0x073e -> reply(0x073f, ByteBuffer.allocate(13).order(ByteOrder.LITTLE_ENDIAN).putInt(0)
-                    .putInt(flash.size).putInt((QuanshengMemory.crc32(flash) + crcOffset).toInt()).put(0).array())
+                0x073e -> {
+                    val address = view.getInt(0)
+                    val length = view.getInt(4)
+                    require(address >= 0 && length in 1..4096 && address <= flash.size - length)
+                    crcRequests.add(address to length)
+                    val error = crcOffset + if (address == crcFaultAddress) 1 else 0
+                    reply(0x073f, crcResponse(ByteBuffer.allocate(13).order(ByteOrder.LITTLE_ENDIAN).putInt(address)
+                        .putInt(length).putInt((QuanshengMemory.crc32(flash.copyOfRange(address, address + length)) + error).toInt())
+                        .put(0).array()))
+                }
                 else -> fail("Comando inesperado 0x%04x".format(type))
             }
         }
@@ -81,6 +94,7 @@ class QuanshengMemoryTest {
         assertEquals(listOf("calibration.bin", "external-flash.bin", "base-firmware.bin"), files.keys.toList())
         assertArrayEquals(radio.calibration, files["calibration.bin"])
         assertArrayEquals(radio.flash, files["external-flash.bin"])
+        assertEquals((0 until QuanshengMemory.FLASH_SIZE step 4096).map { it to 4096 }, radio.crcRequests)
         assertEquals(4096, files.getValue("base-firmware.bin").size)
         val backups = QuanshengBackups(folder.root)
         val receipt = backups.save(memory.firmware, files, now = 1)
@@ -101,6 +115,24 @@ class QuanshengMemoryTest {
 
     private fun sequence(): () -> Long { var time = 0L; return { time += 500; time } }
 
+    @Test fun crcVerificationChecksLastSectorAndRejectsInvalidScopeBeforeTransport() {
+        val radio = Radio()
+        val memory = QuanshengMemory(radio)
+        assertThrows(IllegalArgumentException::class.java) { memory.verifyFlash(radio.flash) }
+        memory.identify()
+        assertThrows(IllegalArgumentException::class.java) { memory.verifyFlash(ByteArray(4096)) }
+        assertTrue(radio.crcRequests.isEmpty())
+        radio.crcFaultAddress = QuanshengMemory.FLASH_SIZE - 4096
+        val error = assertThrows(IllegalArgumentException::class.java) { memory.verifyFlash(radio.flash) }
+        assertTrue(error.message!!.contains("1ff000"))
+        assertEquals(512, radio.crcRequests.size)
+        assertTrue(radio.writes.isEmpty())
+        radio.crcFaultAddress = -1
+        radio.crcRequests.clear()
+        assertEquals(QuanshengMemory.crc32(radio.flash), memory.verifyFlash(radio.flash))
+        assertEquals(512, radio.crcRequests.size)
+    }
+
     @Test fun writeFollowsWebOrderAndIsConfirmedByReread() {
         val radio = Radio()
         val memory = QuanshengMemory(radio)
@@ -114,6 +146,39 @@ class QuanshengMemoryTest {
         assertEquals("D023N", channel.txTone.label)
         assertEquals(3, channel.power)
         assertTrue(channel.narrow)
+    }
+
+    @Test fun crcVerificationRejectsMalformedMetadataBeforeNextSector() {
+        val malformed: List<(ByteArray) -> ByteArray> = listOf(
+            { it.copyOf(12) },
+            { it + byteArrayOf(0) },
+            { it.copyOf().apply { this[0] = 1 } },
+            { it.copyOf().apply { this[5] = 0 } },
+            { it.copyOf().apply { this[12] = 1 } }
+        )
+        for (response in malformed) {
+            val radio = Radio().apply { crcResponse = response }
+            val memory = QuanshengMemory(radio).apply { identify() }
+            assertThrows(IllegalArgumentException::class.java) { memory.verifyFlash(radio.flash) }
+            assertEquals(listOf(0 to 4096), radio.crcRequests)
+            assertTrue(radio.writes.isEmpty())
+        }
+    }
+
+    @Test fun physicalFlashReadRequiresIdentityAndOverflowSafeRange() {
+        val radio = Radio()
+        val memory = QuanshengMemory(radio)
+        assertThrows(IllegalArgumentException::class.java) { memory.readFlashBlock(0, 128) }
+        memory.identify()
+        for ((address, length) in listOf(-1 to 1, 0 to 0, 0 to 129,
+            QuanshengMemory.FLASH_SIZE to 1, Int.MAX_VALUE to 128)) {
+            assertThrows(IllegalArgumentException::class.java) { memory.readFlashBlock(address, length) }
+        }
+        assertTrue(radio.flashRequests.isEmpty())
+        val last = QuanshengMemory.FLASH_SIZE - 128
+        assertArrayEquals(radio.flash.copyOfRange(last, radio.flash.size), memory.readFlashBlock(last, 128))
+        assertEquals(listOf(last to 128), radio.flashRequests)
+        assertTrue(radio.writes.isEmpty())
     }
 
     @Test fun writeIsBlockedWhenUnsafe() {
@@ -143,5 +208,31 @@ class QuanshengMemoryTest {
         // The memory stays hidden (attribute 7) rather than half-written and visible.
         assertEquals(listOf(0x8000), radio.writes)
         assertEquals(7, radio.config[0x8000].toInt() and 7)
+    }
+
+    @Test fun cancelledSessionDoesNotSendAnotherWriteOrResume() {
+        val radio = Radio()
+        var active = true
+        val memory = QuanshengMemory(radio, allowExchange = { active }).apply { identify() }
+        val original = memory.readConfiguration()
+        assertThrows(IllegalStateException::class.java) {
+            memory.writeConfiguration(edited(original), original) { active = false }
+        }
+        assertEquals(listOf(0x8000), radio.writes)
+        assertEquals(7, radio.config[0x8000].toInt() and 7)
+        assertThrows(IllegalStateException::class.java) { memory.writeConfiguration(edited(original), original) }
+        assertEquals(listOf(0x8000), radio.writes)
+    }
+
+    @Test fun cancelledBackupDoesNotRequestAnotherFlashBlock() {
+        val radio = Radio()
+        var active = true
+        val memory = QuanshengMemory(radio, allowExchange = { active })
+        assertThrows(IllegalStateException::class.java) {
+            memory.backup { stage, _ -> if (stage.id == R.string.backup_stage_flash) active = false }
+        }
+        assertEquals(listOf(0 to 128), radio.flashRequests)
+        assertTrue(radio.crcRequests.isEmpty())
+        assertTrue(radio.writes.isEmpty())
     }
 }

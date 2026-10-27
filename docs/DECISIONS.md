@@ -84,3 +84,12 @@ Cada decisión indica el contexto, lo decidido, las alternativas descartadas y s
 - **Decisión:** permitir el despliegue fuera de `<org>/<org>.github.io` solo si existe la variable de repositorio `PAGES_SHARED_ORIGIN_ACCEPTED=true`. Supera parcialmente ADR-013.
 - **Riesgo aceptado:** `anatolbricoham.github.io` es un origen compartido con las otras páginas de proyecto de esa cuenta (por ejemplo `Ham-Clock`, `antenaSatCommrotor`, `Fox_Hunt_Beacon`). Cualquiera de ellas, si se modificara, podría leer las copias de la radio y el perfil guardados por la web. Recomendación a los usuarios: exportar las copias `.rwb.json` y no depender del almacenamiento del navegador.
 - **Salida:** crear una cuenta u organización dedicada y mover la web a su raíz, borrando la variable.
+
+### Actualización de procedencia, 26-10-2026
+
+El repositorio actual es `Brico-Hams/Radio-Web-install` y la URL documentada
+de Pages es `https://brico-hams.github.io/Radio-Web-install/`. Las direcciones
+de `anatolbricoham` anteriores son contexto histórico de ADR-014, no la URL
+actual para desplegar o recuperar datos. La excepción sigue siendo de origen
+compartido: todos los proyectos de `brico-hams.github.io` comparten origen,
+no solo esta subruta. No se ha migrado automáticamente IndexedDB de usuarios.

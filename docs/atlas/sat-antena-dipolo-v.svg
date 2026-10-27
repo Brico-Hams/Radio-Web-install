@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="750" viewBox="0 0 1200 750" role="img" aria-labelledby="title desc">
+<title id="title">Plano del dipolo en V horizontal para 2 m</title>
+<desc id="desc">Plano propio acotado del dipolo en V con angulo y longitud de brazo calculados.</desc>
+<rect width="1200" height="750" fill="#14202c"/>
+<g font-family="sans-serif" fill="#fff">
+<text x="35" y="42" font-size="24" fill="#fff" text-anchor="start">Dipolo en V horizontal 2 m - plano acotado</text>
+<text x="35" y="70" font-size="15" fill="#fff" text-anchor="start">Diseno propio calculado con mom.py. Vista superior. Recepcion fija de ISS (SSTV, APRS) y satelites FM en VHF.</text>
+<path d="M600 470L360.2 268.7" stroke="#ffa342" stroke-width="6"/>
+<path d="M600 470L839.8 268.7" stroke="#ffa342" stroke-width="6"/>
+<circle cx="600" cy="470" r="22" fill="#26394b" stroke="#fff" stroke-width="2"/>
+<text x="600" y="525" font-size="15" fill="#fff" text-anchor="middle">Cubo impreso + mastil PVC 20 mm, coaxial 50 ohm con choke</text>
+<text x="350" y="254" font-size="16" fill="#ffa342" text-anchor="middle">Brazo 505 mm desde el centro</text>
+<text x="850" y="254" font-size="16" fill="#ffa342" text-anchor="middle">Varilla 497 mm (empieza a 8 mm del eje)</text>
+<text x="600" y="350" font-size="18" fill="#ffa342" text-anchor="middle">100 grados</text>
+<text x="35" y="600" font-size="17" fill="#fff" text-anchor="start">Resultado simulado (espacio libre):</text>
+<text x="35" y="630" font-size="15" fill="#fff" text-anchor="start">145.8 MHz: Z = 48.7 +2.0 j ohm, ROE 1.05, cenit 1.82 dBi</text>
+<text x="35" y="655" font-size="15" fill="#fff" text-anchor="start">145.9 MHz: Z = 48.9 +2.6 j ohm, ROE 1.06, cenit 1.82 dBi</text>
+<text x="35" y="680" font-size="15" fill="#fff" text-anchor="start">146.0 MHz: Z = 49.0 +3.3 j ohm, ROE 1.07, cenit 1.82 dBi</text>
+<text x="35" y="730" font-size="14" fill="#fff" text-anchor="start">Autores: Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF y Pedro Roca - bricohams.org / bricohams.com</text>
+</g></svg>

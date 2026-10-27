@@ -4,14 +4,13 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import java.io.Closeable
-import java.io.IOException
 
 object Callsign {
     private val pattern = Regex("^([A-Z0-9]{1,4}/)?[A-Z0-9]{1,3}[0-9][A-Z0-9]{0,4}(/[A-Z0-9]{1,4})?$")
     /** Station identification is mandatory before any CAT transmission. */
     fun normalize(text: String): String {
         val call = text.trim().uppercase()
-        require(pattern.matches(call) && call.any { it.isLetter() }) { "Indicativo obligatorio y valido (p. ej. EA1ABC o EA1ABC/P)." }
+        requireUi(pattern.matches(call) && call.any { it.isLetter() }) { UiText(R.string.err_sstv_call) }
         return call
     }
 }
@@ -28,7 +27,7 @@ internal class AudioTrackSink(private val sampleRate: Int) : AudioSink {
     private val track: AudioTrack
     init {
         val minimum = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        check(minimum > 0) { "El dispositivo no reproduce PCM mono a $sampleRate Hz." }
+        checkUi(minimum > 0) { UiText(R.string.err_audio_out_rate, sampleRate) }
         track = AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
@@ -37,7 +36,7 @@ internal class AudioTrackSink(private val sampleRate: Int) : AudioSink {
             .setTransferMode(AudioTrack.MODE_STREAM).setBufferSizeInBytes(maxOf(minimum, sampleRate / 5 * 2)).build()
         if (track.state != AudioTrack.STATE_INITIALIZED) {
             track.release()
-            throw IOException("No se pudo abrir la salida de audio.")
+            throw LocalizedIOException(UiText(R.string.err_audio_out_open))
         }
     }
     override fun start() = track.play()
@@ -60,21 +59,21 @@ internal class CatTransmitter(
         private const val RENEW_MS = 400L
     }
     fun send(audio: ShortArray, sampleRate: Int, sink: AudioSink, keepGoing: () -> Boolean) {
-        require(audio.isNotEmpty() && audio.size * 1000L / sampleRate <= MAX_AUDIO_MS) {
-            "Audio de 0-${MAX_AUDIO_MS / 1000} s: la radio corta a ${RADIO_LIMIT_MS / 1000} s."
+        requireUi(audio.isNotEmpty() && audio.size * 1000L / sampleRate <= MAX_AUDIO_MS) {
+            UiText(R.string.err_audio_length, MAX_AUDIO_MS / 1000, RADIO_LIMIT_MS / 1000)
         }
         val before = cat.pttQuery()
-        require(before.armed && before.deniedState == 0 && !before.limit) {
-            "PTT no armada o bloqueada: en la radio entra en SAT RX y pulsa la tecla 9."
+        requireUi(before.armed && before.deniedState == 0 && !before.limit) {
+            UiText(R.string.err_ptt_not_ready)
         }
-        check(!before.keyed) { "La radio ya esta transmitiendo." }
-        check(keepGoing()) { "Transmision cancelada antes de PTT." }
+        checkUi(!before.keyed) { UiText(R.string.err_already_transmitting) }
+        checkUi(keepGoing()) { UiText(R.string.err_tx_cancelled_before_ptt) }
         var failure: Throwable? = null
         try {
             var state = cat.pttKey()
             val deadline = clock() + 1500
             while (!state.keyed) {
-                if (clock() >= deadline) throw IOException("La radio no confirma la PTT.")
+                if (clock() >= deadline) throw LocalizedIOException(UiText(R.string.err_ptt_unconfirmed))
                 sleep(50)
                 state = cat.pttKey()
             }
@@ -83,14 +82,14 @@ internal class CatTransmitter(
             var offset = 0
             val chunk = maxOf(1, sampleRate / 10)
             while (offset < audio.size || sink.playedFrames() < audio.size) {
-                check(keepGoing()) { "Transmision cancelada." }
+                checkUi(keepGoing()) { UiText(R.string.err_tx_cancelled) }
                 if (clock() - renewed >= RENEW_MS) {
-                    check(cat.pttKey().keyed) { "La radio corto la PTT (tecla, limite o bloqueo)." }
+                    checkUi(cat.pttKey().keyed) { UiText(R.string.err_ptt_cut) }
                     renewed = clock()
                 }
                 if (offset < audio.size) {
                     val written = sink.write(audio, offset, minOf(chunk, audio.size - offset))
-                    if (written <= 0) throw IOException("La salida de audio fallo: $written.")
+                    if (written <= 0) throw LocalizedIOException(UiText(R.string.err_audio_out_failed, written))
                     offset += written
                 } else sleep(50)
             }
@@ -101,7 +100,7 @@ internal class CatTransmitter(
             // PTT release first and confirmed by a reread; if it fails the radio's 1.5 s lease drops PTT by itself.
             val cleanup = runCatching {
                 cat.pttRelease()
-                check(!cat.pttQuery().keyed) { "La radio no confirma fin de PTT; se apagara al vencer el lease." }
+                checkUi(!cat.pttQuery().keyed) { UiText(R.string.err_ptt_end_unconfirmed) }
             }.exceptionOrNull()
             try { sink.stop() } catch (_: IllegalStateException) { } finally { sink.close() }
             if (cleanup != null) {

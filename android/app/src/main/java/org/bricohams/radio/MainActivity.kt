@@ -41,7 +41,7 @@ class MainActivity : Activity() {
     private lateinit var store: RadioStore
     private lateinit var content: LinearLayout
     private lateinit var status: TextView
-    private var tab = "Inicio"
+    private var tab = TAB_HOME
     private var sessionId: String? = null
     private var editingId: String? = null
     private var contactSearch = ""
@@ -59,7 +59,7 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val timeout = Runnable {
         stopLocation()
-        message("Sin posicion reciente tras 30 s. Comprueba cielo abierto y GPS; no se ha inventado una ubicacion.")
+        message(getString(R.string.gps_timeout))
     }
     private val locationManager by lazy { getSystemService(LOCATION_SERVICE) as LocationManager }
     private val locationListener = object : LocationListener {
@@ -71,13 +71,13 @@ class MainActivity : Activity() {
                     Instant.ofEpochMilli(location.time)).validated()
                 fixElapsedNanos = location.elapsedRealtimeNanos
                 stopLocation()
-                message("Posicion obtenida; precision ${location.accuracy.toInt()} m. Valida durante 30 s. Guarda ahora una observacion.")
+                message(getString(R.string.gps_fix, location.accuracy.toInt()))
             }
         }
         override fun onProviderEnabled(provider: String) = Unit
         override fun onProviderDisabled(provider: String) {
             stopLocation()
-            message("GPS desactivado. Se pueden guardar observaciones sin coordenadas.")
+            message(getString(R.string.gps_disabled))
         }
         @Deprecated("Platform callback")
         override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
@@ -86,7 +86,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = RadioStore(this)
-        tab = savedInstanceState?.getString("tab") ?: "Inicio"
+        tab = savedInstanceState?.getString("tab") ?: TAB_HOME
         sessionId = savedInstanceState?.getString("session")
         editingId = savedInstanceState?.getString("editing")
         contactSearch = savedInstanceState?.getString("contactSearch") ?: ""
@@ -118,9 +118,9 @@ class MainActivity : Activity() {
             contentDescription = "Bricohams"
         }, LinearLayout.LayoutParams(dp(180), dp(67)))
         val nav = LinearLayout(this)
-        for (name in listOf("Inicio", "Guardia", "ARDF", "Morse")) {
+        for ((name, label) in TABS) {
             nav.addView(Button(this).apply {
-                text = name
+                setText(label)
                 textSize = 11f
                 setOnClickListener {
                     if (name != tab) {
@@ -153,9 +153,13 @@ class MainActivity : Activity() {
         text = value; textSize = 16f; setPadding(0, 12, 0, 12)
         content.addView(this)
     }
+    private fun text(value: Int) = text(getString(value))
     private fun button(value: String, action: () -> Unit) = Button(this).apply {
         text = value; setOnClickListener { userAction(action) }; content.addView(this)
     }
+    private fun button(value: Int, action: () -> Unit) = button(getString(value), action)
+    private fun input(label: Int, identifier: Int, initial: String = "", numeric: Boolean = false) =
+        input(getString(label), identifier, initial, numeric)
     private fun input(label: String, identifier: Int, initial: String = "", numeric: Boolean = false): EditText {
         text(label)
         return EditText(this).apply {
@@ -171,46 +175,46 @@ class MainActivity : Activity() {
         try {
             action()
         } catch (error: IllegalArgumentException) {
-            message(error.message ?: "Datos invalidos.")
+            message(errorText(error, R.string.main_invalid_data))
         } catch (error: DateTimeParseException) {
-            message("Fecha UTC invalida: ${error.parsedString}")
+            message(getString(R.string.main_invalid_utc, error.parsedString))
         } catch (error: SQLiteException) {
-            message("No se pudo guardar o leer la base local: ${error.message}")
+            message(getString(R.string.main_database_error, errorText(error)))
         } catch (error: IllegalStateException) {
-            message(error.message ?: "Estado de operacion no valido.")
+            message(errorText(error, R.string.main_invalid_state))
         } catch (error: SecurityException) {
-            message("Permiso denegado: ${error.message}")
+            message(getString(R.string.main_permission_denied, errorText(error)))
         }
     }
     private fun render() {
         content.removeAllViews()
-        message("BETA - datos locales. Exporta tus datos antes de desinstalar.")
+        message(getString(R.string.main_beta_banner))
         userAction {
             when (tab) {
-                "Guardia" -> logbook()
-                "ARDF" -> ardf()
-                "Morse" -> morse()
+                TAB_LOGBOOK -> logbook()
+                TAB_ARDF -> ardf()
+                TAB_MORSE -> morse()
                 else -> home()
             }
         }
     }
     private fun home() {
-        text("Bricohams Android 0.7.1 Beta")
-        text("Disponible sin red: libro de guardia local con busqueda, importacion ADIF con vista previa, exportacion ADIF/JSON, sesiones ARDF y observaciones GPS puntuales, Morse de texto y WAV PCM experimental.")
-        text("CAT RX experimental por USB OTG, CDC y adaptadores USB-serie reconocidos. Satelites SGP4 offline con TLE importados, observador manual, pases y seguimiento Doppler RX. SSTV Robot36 desde WAV con PNG. Captura de microfono Morse/Robot36 de hasta 60 s y decodificacion posterior. Editor Beta de canales Quansheng F4HWN v6 (frecuencia, subtonos y potencia) con respaldo completo y relectura. Pendiente: subida firmada a LoTW.")
-        text("Las observaciones ARDF son manuales. La posicion es la del telefono, no la de una baliza. No se graba un recorrido ni se localiza en segundo plano.")
-        text("No se recogen ni transmiten datos. El JSON incluye posiciones y contactos: compartelo solo con quien corresponda.")
-        button("Exportar todos los datos JSON") { export("json") }
-        button("Abrir CAT RX USB experimental") { startActivity(Intent(this, CatActivity::class.java)) }
-        button("Editar canales Quansheng por USB (Beta)") { startActivity(Intent(this, ChannelActivity::class.java)) }
-        button("Abrir SSTV Robot36 desde WAV") { startActivity(Intent(this, SstvActivity::class.java)) }
-        button("Recibir Morse / Robot36 con microfono") { startActivity(Intent(this, LiveAudioActivity::class.java)) }
-        button("Abrir satelites SGP4 y pases") { startActivity(Intent(this, SatelliteActivity::class.java)) }
-        button("Importar copia JSON Bricohams") {
-            AlertDialog.Builder(this).setTitle("Importar copia local")
-                .setMessage("Se agregan contactos, sesiones y observaciones. No se borra ni sobrescribe nada: un ID en conflicto cancela toda la importacion. Usa solo copias de confianza.")
-                .setNegativeButton("Cancelar", null)
-                .setPositiveButton("Elegir JSON") { _, _ ->
+        text("Bricohams Android ${packageManager.getPackageInfo(packageName, 0).versionName}")
+        text(R.string.home_offline)
+        text(R.string.home_features)
+        text(R.string.home_ardf_note)
+        text(R.string.home_privacy)
+        button(R.string.home_export_json) { export("json") }
+        button(R.string.home_open_cat) { startActivity(Intent(this, CatActivity::class.java)) }
+        button(R.string.home_open_channels) { startActivity(Intent(this, ChannelActivity::class.java)) }
+        button(R.string.home_open_sstv) { startActivity(Intent(this, SstvActivity::class.java)) }
+        button(R.string.home_open_live) { startActivity(Intent(this, LiveAudioActivity::class.java)) }
+        button(R.string.home_open_satellites) { startActivity(Intent(this, SatelliteActivity::class.java)) }
+        button(R.string.home_import_json) {
+            AlertDialog.Builder(this).setTitle(R.string.import_json_title)
+                .setMessage(R.string.import_json_message)
+                .setNegativeButton(R.string.action_cancel, null)
+                .setPositiveButton(R.string.import_json_choose) { _, _ ->
                     startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"
                     }, 40)
@@ -231,21 +235,21 @@ class MainActivity : Activity() {
         val current = logbooks.find { it.id == logbookId } ?: logbooks.first().also { logbookId = it.id; editingId = null }
         val contacts = store.contacts(current.id)
         val editing = editingId?.let { identifier ->
-            requireNotNull(contacts.find { it.id == identifier }) { "El contacto seleccionado ya no existe." }
+            requireNotNull(contacts.find { it.id == identifier }) { getString(R.string.logbook_missing_contact) }
         }
-        text("Libro: ${describe(current)} - ${contacts.size} contactos")
-        button("Cambiar de libro (${logbooks.size})") {
-            AlertDialog.Builder(this).setTitle("Libros de guardia")
+        text(getString(R.string.logbook_current, describe(current), contacts.size))
+        button(getString(R.string.logbook_switch, logbooks.size)) {
+            AlertDialog.Builder(this).setTitle(R.string.logbook_books)
                 .setItems(logbooks.map(::describe).toTypedArray()) { _, index ->
                     logbookId = logbooks[index].id; editingId = null; contactSearch = ""; render()
                 }.show()
         }
-        val call = input("Indicativo", R.id.contact_call, editing?.call ?: "")
-        val frequency = input("Frecuencia MHz", R.id.contact_frequency, editing?.frequencyMHz ?: lastFrequency, numeric = true)
+        val call = input(R.string.logbook_call, R.id.contact_call, editing?.call ?: "")
+        val frequency = input(R.string.logbook_frequency, R.id.contact_frequency, editing?.frequencyMHz ?: lastFrequency, numeric = true)
         val modes = listOf("FM", "SSB", "CW", "AM", "RTTY", "SSTV", "DMR", "DIGITALVOICE")
         val mode = spinner(R.id.contact_mode, modes, editing?.mode ?: lastMode)
-        val sent = input("RST enviado", R.id.contact_sent, editing?.sent ?: rstFor(lastMode))
-        val received = input("RST recibido", R.id.contact_received, editing?.received ?: rstFor(lastMode))
+        val sent = input(R.string.logbook_sent, R.id.contact_sent, editing?.sent ?: rstFor(lastMode))
+        val received = input(R.string.logbook_received, R.id.contact_received, editing?.received ?: rstFor(lastMode))
         // Quick entry: switching mode swaps untouched default reports (59 phone, 599 CW/RTTY); edits keep stored reports.
         if (editing == null) mode.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
@@ -253,9 +257,9 @@ class MainActivity : Activity() {
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
-        val utc = input("UTC ISO (vacio = hora actual al guardar)", R.id.contact_utc, editing?.utc?.toString() ?: "")
-        val notes = input("Notas", R.id.contact_notes, editing?.notes ?: "")
-        button(if (editing == null) "Guardar nuevo contacto" else "Guardar cambios del contacto") {
+        val utc = input(R.string.logbook_utc_auto, R.id.contact_utc, editing?.utc?.toString() ?: "")
+        val notes = input(R.string.logbook_notes, R.id.contact_notes, editing?.notes ?: "")
+        button(if (editing == null) R.string.logbook_save_new else R.string.logbook_save_changes) {
             val utcText = utc.text.toString().trim()
             val updated = Contact(call = call.text.toString().trim().uppercase(Locale.ROOT),
                 utc = if (utcText.isEmpty()) Instant.now().truncatedTo(ChronoUnit.SECONDS) else Instant.parse(utcText),
@@ -268,144 +272,145 @@ class MainActivity : Activity() {
                 if (editing == null) { lastFrequency = updated.frequencyMHz; lastMode = updated.mode }
                 editingId = null
                 render()
-                message("${updated.call} guardado en ${current.name} (${updated.utc} UTC).")
+                message(getString(R.string.logbook_saved_in, updated.call, current.name, updated.utc.toString()))
             }
             val duplicate = current.duplicateOf(updated, contacts)
             if (duplicate == null) commit()
-            else AlertDialog.Builder(this).setTitle("Duplicado: ${updated.call}")
-                .setMessage("Ya consta en ${current.name}: ${duplicate.utc} UTC, " +
-                    "${Adif.band(duplicate.frequencyMHz) ?: duplicate.frequencyMHz + " MHz"} ${duplicate.mode}. " +
-                    (if (current.kind == "GENERAL") "" else "En ${current.kind} cuenta una vez por banda, modo y dia UTC. ") +
-                    "Aun no se ha guardado nada.")
-                .setNegativeButton("No guardar") { _, _ -> message("Duplicado no guardado.") }
-                .setPositiveButton("Guardar igualmente") { _, _ -> userAction(::commit) }.show()
+            else AlertDialog.Builder(this).setTitle(getString(R.string.logbook_duplicate_title, updated.call))
+                .setMessage(getString(R.string.logbook_duplicate_message, current.name, duplicate.utc.toString(),
+                    Adif.band(duplicate.frequencyMHz) ?: duplicate.frequencyMHz + " MHz", duplicate.mode,
+                    if (current.kind == "GENERAL") "" else getString(R.string.logbook_duplicate_rule, current.kind)))
+                .setNegativeButton(R.string.logbook_dont_save) { _, _ -> message(getString(R.string.logbook_duplicate_not_saved)) }
+                .setPositiveButton(R.string.logbook_save_anyway) { _, _ -> userAction(::commit) }.show()
         }
         if (editing != null) {
-            button("Cancelar edicion") { editingId = null; render() }
-            button("Eliminar este contacto") {
-                AlertDialog.Builder(this).setTitle("Eliminar ${editing.call}")
-                    .setMessage("Esta accion no se puede deshacer. Exporta tus datos si necesitas conservar una copia.")
-                    .setNegativeButton("Cancelar", null)
-                    .setPositiveButton("Eliminar") { _, _ -> userAction {
-                        store.deleteContact(editing.id); editingId = null; render(); message("Contacto eliminado.")
+            button(R.string.logbook_cancel_edit) { editingId = null; render() }
+            button(R.string.logbook_delete) {
+                AlertDialog.Builder(this).setTitle(getString(R.string.logbook_delete_title, editing.call))
+                    .setMessage(R.string.logbook_delete_message)
+                    .setNegativeButton(R.string.action_cancel, null)
+                    .setPositiveButton(R.string.action_delete) { _, _ -> userAction {
+                        store.deleteContact(editing.id); editingId = null; render(); message(getString(R.string.logbook_deleted))
                     } }.show()
             }
         }
-        button("Exportar ADIF de este libro (ASCII)") { export("adif") }
-        button("Importar ADIF a este libro (vista previa)") {
-            require(!adifImportBusy) { "Ya hay una importacion ADIF en curso." }
+        button(R.string.logbook_export_adif) { export("adif") }
+        button(R.string.logbook_import_adif) {
+            require(!adifImportBusy) { getString(R.string.adif_busy) }
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"
             }, 41)
         }
-        button("Exportar JSON completo (con acentos)") { export("json") }
-        text("LoTW: esta APK exporta ADIF. La firma y subida deben realizarse con TQSL en un ordenador; no hay subida LoTW desde Android.")
-        text("Los formularios sin guardar se descartan al cambiar de seccion.")
-        val search = input("Buscar en este libro: indicativo, notas, modo o frecuencia", R.id.contact_search, contactSearch)
-        button("Buscar contactos") { contactSearch = search.text.toString().trim(); render() }
-        button("Mostrar todos los contactos") { contactSearch = ""; render() }
+        button(getString(R.string.logbook_export_json)) { export("json") }
+        text(getString(R.string.logbook_lotw))
+        text(getString(R.string.logbook_unsaved))
+        val search = input(R.string.logbook_search_label, R.id.contact_search, contactSearch)
+        button(getString(R.string.logbook_search)) { contactSearch = search.text.toString().trim(); render() }
+        button(getString(R.string.logbook_show_all)) { contactSearch = ""; render() }
         val filtered = contacts.filter {
             contactSearch.isEmpty() || listOf(it.call, it.notes, it.mode, it.frequencyMHz, it.utc.toString())
                 .any { value -> value.contains(contactSearch, ignoreCase = true) }
         }
-        text("${filtered.size} coincidencias; orden UTC mas reciente primero.")
+        text(getString(R.string.logbook_matches, filtered.size))
         for (contact in filtered.take(50)) {
             val band = Adif.band(contact.frequencyMHz)?.let { " ($it)" } ?: ""
             text("${contact.call} - ${contact.utc}\n${contact.frequencyMHz} MHz$band ${contact.mode} ${contact.sent}/${contact.received}\n${contact.notes}")
-            button("Editar ${contact.call} (${contact.utc})") { editingId = contact.id; render() }
+            button(getString(R.string.logbook_edit, contact.call, contact.utc.toString())) { editingId = contact.id; render() }
         }
-        if (filtered.size > 50) text("Se muestran las 50 coincidencias mas recientes; la exportacion incluye todo el libro, no solo la busqueda.")
-        text("Nuevo libro de actividad: General, POTA (parque, ejemplo EA-0123) o SOTA (cumbre, ejemplo EA4/MD-001). POTA y SOTA exigen tu indicativo de estacion; el ADIF lleva MY_POTA_REF o MY_SOTA_REF.")
-        val bookName = input("Nombre del libro", R.id.logbook_name)
+        if (filtered.size > 50) text(R.string.logbook_truncated)
+        text(R.string.logbook_create_help)
+        val bookName = input(R.string.logbook_name, R.id.logbook_name)
         val kind = spinner(R.id.logbook_kind, Logbook.KINDS, "GENERAL")
-        val reference = input("Referencia de parque o cumbre (vacio en General)", R.id.logbook_reference)
-        val station = input("Mi indicativo de estacion", R.id.logbook_station, current.stationCall)
-        button("Crear libro") {
+        val reference = input(R.string.logbook_reference, R.id.logbook_reference)
+        val station = input(R.string.logbook_station, R.id.logbook_station, current.stationCall)
+        button(R.string.logbook_create) {
             val created = store.createLogbook(Logbook(name = bookName.text.toString().trim(), kind = kind.selectedItem.toString(),
                 reference = reference.text.toString().trim().uppercase(Locale.ROOT),
                 stationCall = station.text.toString().trim().uppercase(Locale.ROOT)))
             logbookId = created.id; editingId = null; contactSearch = ""
             render()
-            message("Libro ${created.name} creado y seleccionado.")
+            message(getString(R.string.logbook_created, created.name))
         }
     }
     private fun ardf() {
         val sessions = store.sessions()
-        val name = input("Nombre de nueva sesion", R.id.session_name)
-        button("Crear sesion ARDF") {
+        val name = input(R.string.ardf_session_name, R.id.session_name)
+        button(R.string.ardf_create) {
             sessionId = store.session(name.text.toString().trim())
             render()
         }
         if (sessions.isEmpty()) {
-            text("Crea una sesion para registrar observaciones.")
+            text(R.string.ardf_create_first)
             return
         }
         if (sessions.none { it.first == sessionId }) sessionId = sessions.first().first
-        button("Seleccionar sesion: ${sessions.first { it.first == sessionId }.second}") {
-            AlertDialog.Builder(this).setTitle("Sesion ARDF")
+        button(getString(R.string.ardf_select, sessions.first { it.first == sessionId }.second)) {
+            AlertDialog.Builder(this).setTitle(R.string.ardf_session_title)
                 .setItems(sessions.map { it.second }.toTypedArray()) { _, index ->
                     sessionId = sessions[index].first; fix = null; render()
                 }.show()
         }
-        text(store.observationCounts(requireNotNull(sessionId)))
-        button("Estadisticas y observaciones de la sesion") {
+        text(store.observations(requireNotNull(sessionId)).groupBy { it.fox }.toSortedMap()
+            .map { (beacon, entries) -> getString(R.string.ardf_count_line, beacon, entries.size) }
+            .joinToString("\n").ifEmpty { getString(R.string.ardf_no_observations) })
+        button(R.string.ardf_stats_button) {
             val observations = store.observations(requireNotNull(sessionId))
             val summary = ArdfStatistics.calculate(observations)
             val report = buildString {
-                append("Observaciones: ${summary.count}; con coordenadas: ${summary.located}\n")
-                append(String.format(Locale.ROOT, "Intervalo entre primera y ultima: %.1f s\n", summary.spanSeconds))
-                append(String.format(Locale.ROOT, "Suma de segmentos GPS admitidos: %.1f m (%d segmentos)\n",
-                    summary.distanceMeters, summary.distanceSegments))
-                append("No es recorrido completo ni distancia a la baliza. Solo posiciones consecutivas del telefono con precision <=50 m, antiguedad <=30 s y separacion <=120 s; sin unir huecos ni estimar tramos ausentes.\n")
+                appendLine(getString(R.string.ardf_stats_observations, summary.count, summary.located))
+                appendLine(rootFormat(R.string.ardf_stats_span, summary.spanSeconds))
+                appendLine(rootFormat(R.string.ardf_stats_distance, summary.distanceMeters, summary.distanceSegments))
+                appendLine(getString(R.string.ardf_stats_disclaimer))
                 for (beacon in summary.beacons) {
-                    append("\nBaliza ${beacon.fox}: ${beacon.count} observaciones, ${beacon.located} con coordenadas\n")
-                    append("Primera: ${beacon.first}\nUltima: ${beacon.last}\n")
-                    append(beacon.meanIntervalSeconds?.let {
-                        String.format(Locale.ROOT, "Intervalo medio: %.1f s\n", it)
-                    } ?: "Intervalo medio: no disponible con una sola observacion\n")
+                    append('\n').appendLine(getString(R.string.ardf_stats_beacon, beacon.fox, beacon.count, beacon.located))
+                    appendLine(getString(R.string.ardf_stats_first_last, beacon.first.toString(), beacon.last.toString()))
+                    appendLine(beacon.meanIntervalSeconds?.let { rootFormat(R.string.ardf_stats_mean, it) }
+                        ?: getString(R.string.ardf_stats_mean_unavailable))
                 }
-                append("\nUltimas 100 observaciones (exportar JSON incluye todas):\n")
+                append('\n').appendLine(getString(R.string.ardf_stats_latest))
                 for (observation in observations.takeLast(100).asReversed()) {
-                    append("\n${observation.utc} - Baliza ${observation.fox}\n${observation.notes}\n")
+                    append('\n').appendLine(getString(R.string.ardf_stats_observation, observation.utc.toString(),
+                        observation.fox, observation.notes))
                     val position = observation.fix
-                    append(if (position == null) "SIN coordenadas\n" else
-                        "${position.latitude}, ${position.longitude}; precision ${position.accuracyMeters} m; fijacion ${position.utc}\n")
+                    appendLine(if (position == null) getString(R.string.ardf_stats_no_coordinates) else
+                        getString(R.string.ardf_stats_position, position.latitude.toString(), position.longitude.toString(),
+                            position.accuracyMeters.toString(), position.utc.toString()))
                 }
             }
-            AlertDialog.Builder(this).setTitle("Estadisticas ARDF Beta")
+            AlertDialog.Builder(this).setTitle(R.string.ardf_stats_title)
                 .setView(ScrollView(this).apply {
                     addView(TextView(this@MainActivity).apply { text = report; setPadding(dp(16), dp(12), dp(16), dp(12)) })
-                }).setPositiveButton("Cerrar", null).show()
+                }).setPositiveButton(R.string.action_close, null).show()
         }
-        val fox = input("Baliza (1-10)", R.id.fox_number, "1", true)
-        val notes = input("Notas de observacion", R.id.observation_notes)
-        text("La coordenada se guarda solo al pulsar Guardar. Sin posicion reciente se guarda explicitamente sin GPS. Ninguna coordenada representa la ubicacion de la baliza.")
-        button("Obtener posicion GPS una vez (30 s)") { requestLocation() }
-        button("Guardar observacion manual") {
+        val fox = input(R.string.ardf_fox_label, R.id.fox_number, "1", true)
+        val notes = input(R.string.ardf_notes_label, R.id.observation_notes)
+        text(R.string.ardf_coordinate_note)
+        button(R.string.ardf_gps_once) { requestLocation() }
+        button(R.string.ardf_save) {
             val age = SystemClock.elapsedRealtimeNanos() - fixElapsedNanos
             val current = if (age in 0..30_000_000_000L) fix else null
             val beacon = fox.text.toString().toIntOrNull()
-            require(beacon != null) { "Introduce una baliza entre 1 y 10." }
+            require(beacon != null) { getString(R.string.ardf_fox_invalid) }
             store.observe(requireNotNull(sessionId), beacon, notes.text.toString(), current)
             fix = null
             render()
-            message(if (current == null) "Observacion guardada SIN coordenadas." else "Observacion y posicion del telefono guardadas.")
+            message(getString(if (current == null) R.string.ardf_saved_without else R.string.ardf_saved_with))
         }
-        button("Exportar sesiones y contactos JSON") { export("json") }
+        button(R.string.ardf_export_json) { export("json") }
     }
     private fun morse() {
-        text("Morse de texto: espacios entre letras y / entre palabras; ? indica un codigo desconocido.")
-        val code = input("Puntos y rayas", R.id.morse_input, "... --- ...")
+        text(R.string.morse_text_help)
+        val code = input(R.string.morse_code_label, R.id.morse_input, "... --- ...")
         val result = text("")
-        button("Interpretar texto Morse") { result.text = Morse.decode(code.text.toString()) }
-        text("Audio experimental: importa WAV PCM mono 16 bits, 8-48 kHz, 0.1-60 s y hasta 8 MiB. Configura el tono y la velocidad reales. No usa microfono ni escucha USB. No es un decodificador adaptativo; verifica el resultado.")
-        val tone = input("Tono (300-1200 Hz)", R.id.morse_tone, audioTone.toString(), true)
-        val speed = input("Velocidad (5-45 palabras/minuto)", R.id.morse_speed, audioSpeed.toString(), true)
-        button("Importar y decodificar WAV Morse") {
+        button(R.string.morse_interpret) { result.text = Morse.decode(code.text.toString()) }
+        text(R.string.morse_audio_help)
+        val tone = input(R.string.morse_tone_label, R.id.morse_tone, audioTone.toString(), true)
+        val speed = input(R.string.morse_speed_label, R.id.morse_speed, audioSpeed.toString(), true)
+        button(R.string.morse_import_wav) {
             val selectedTone = tone.text.toString().toIntOrNull()
             val selectedSpeed = speed.text.toString().toIntOrNull()
             require(selectedTone != null && selectedTone in 300..1200 && selectedSpeed != null && selectedSpeed in 5..45) {
-                "Tono 300-1200 Hz y velocidad 5-45 ppm, ambos enteros."
+                getString(R.string.morse_invalid_settings)
             }
             audioTone = selectedTone
             audioSpeed = selectedSpeed
@@ -416,10 +421,10 @@ class MainActivity : Activity() {
         audioResult?.let { text(it) }
     }
     private fun requestLocation() {
-        AlertDialog.Builder(this).setTitle("Posicion para ARDF")
-            .setMessage("Se solicita una posicion del telefono durante un maximo de 30 s. Solo se guarda al registrar una observacion y se incluye en el JSON exportado. No hay seguimiento en segundo plano.")
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Continuar") { _, _ ->
+        AlertDialog.Builder(this).setTitle(R.string.location_title)
+            .setMessage(R.string.location_message)
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.action_continue) { _, _ ->
                 userAction {
                     if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                         requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 10)
@@ -431,14 +436,14 @@ class MainActivity : Activity() {
         fix = null
         stopLocation()
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            message("GPS preciso no autorizado. Puedes guardar sin coordenadas.")
+            message(getString(R.string.gps_not_authorized))
             return
         }
-        require(locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) { "Activa GPS antes de solicitar posicion." }
+        require(locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) { getString(R.string.gps_enable_required) }
         locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, locationListener, Looper.getMainLooper())
         listening = true
         handler.postDelayed(timeout, 30000L)
-        message("Esperando posicion GPS reciente (maximo 30 s)...")
+        message(getString(R.string.gps_waiting))
     }
     private fun stopLocation() {
         handler.removeCallbacks(timeout)
@@ -450,12 +455,12 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == 10) userAction {
-            if (tab == "ARDF" && hasWindowFocus()) startLocation()
-            else message("Vuelve a ARDF y solicita posicion cuando estes preparado.")
+            if (tab == TAB_ARDF && hasWindowFocus()) startLocation()
+            else message(getString(R.string.gps_return_to_ardf))
         }
     }
     private fun export(kind: String) {
-        require(exportKind == null) { "Ya hay una exportacion pendiente." }
+        require(exportKind == null) { getString(R.string.export_pending) }
         val book = store.logbooks().single { it.id == logbookId }
         if (kind == "adif") Adif.export(store.contacts(book.id), book)
         exportKind = kind
@@ -475,35 +480,35 @@ class MainActivity : Activity() {
         if (requestCode == 41) {
             val uri = data?.data
             if (resultCode != RESULT_OK || uri == null) {
-                message("Importacion ADIF cancelada.")
+                message(getString(R.string.adif_cancelled))
                 return
             }
             if (adifImportBusy) {
-                message("Ya hay una importacion ADIF en curso.")
+                message(getString(R.string.adif_busy))
                 return
             }
             adifImportBusy = true
             val book = logbookId
-            message("Validando ADIF; no se ha guardado ningun contacto.")
+            message(getString(R.string.adif_validating))
             thread(name = "bricohams-adif-preview") {
                 try {
                     val preview = AdifImport.parse(contentResolver.readDocument(uri, AdifImport.MAX_BYTES))
                     runOnUiThread {
                         if (isDestroyed || isFinishing) return@runOnUiThread
-                        val warnings = if (preview.ignoredFields.isEmpty()) "Todos los campos de contactos son compatibles."
-                            else "Campos NO conservados: ${preview.ignoredFields.joinToString(", ")}. El original no se modifica."
-                        AlertDialog.Builder(this).setTitle("Importar ${preview.contacts.size} contactos ADIF al libro actual")
-                            .setMessage("$warnings\n\nSe comparan todos los campos conservados: identicos se omiten; diferencias se agregan sin sobrescribir. No combina contactos por indicativo/hora. Exporta antes una copia JSON. Solo se guarda al aceptar.")
-                            .setNegativeButton("Cancelar") { _, _ -> adifImportBusy = false; message("Importacion ADIF cancelada sin cambios.") }
-                            .setOnCancelListener { adifImportBusy = false; message("Importacion ADIF cancelada sin cambios.") }
-                            .setPositiveButton("Importar") { _, _ -> saveAdif(preview, book) }.show()
+                        val warnings = if (preview.ignoredFields.isEmpty()) getString(R.string.adif_all_compatible)
+                            else getString(R.string.adif_ignored, preview.ignoredFields.joinToString(", "))
+                        AlertDialog.Builder(this).setTitle(getString(R.string.adif_preview_title, preview.contacts.size))
+                            .setMessage(getString(R.string.adif_preview_message, warnings))
+                            .setNegativeButton(R.string.action_cancel) { _, _ -> adifImportBusy = false; message(getString(R.string.adif_cancelled_unchanged)) }
+                            .setOnCancelListener { adifImportBusy = false; message(getString(R.string.adif_cancelled_unchanged)) }
+                            .setPositiveButton(R.string.action_import) { _, _ -> saveAdif(preview, book) }.show()
                     }
                 } catch (error: IllegalArgumentException) {
-                    adifImportError(error.message ?: "ADIF invalido.")
+                    adifImportError(errorText(error, R.string.adif_invalid))
                 } catch (error: IOException) {
-                    adifImportError("No se pudo leer ADIF: ${error.message}")
+                    adifImportError(getString(R.string.adif_read_error, errorText(error)))
                 } catch (error: SecurityException) {
-                    adifImportError("Sin permiso para leer ADIF: ${error.message}")
+                    adifImportError(getString(R.string.adif_permission_error, errorText(error)))
                 }
             }
             return
@@ -511,10 +516,10 @@ class MainActivity : Activity() {
         if (requestCode == 40) {
             val uri = data?.data
             if (resultCode != RESULT_OK || uri == null) {
-                message("Importacion JSON cancelada.")
+                message(getString(R.string.json_cancelled))
                 return
             }
-            message("Importando copia JSON...")
+            message(getString(R.string.json_importing))
             thread(name = "bricohams-import") {
                 try {
                     val imported = RadioStore(applicationContext).use { importStore ->
@@ -525,17 +530,17 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         if (!isDestroyed) {
                             render()
-                            message("Importacion completada: $imported registros nuevos. Los identicos se conservaron sin duplicar.")
+                            message(getString(R.string.json_imported, imported))
                         }
                     }
                 } catch (error: IllegalArgumentException) {
-                    exportError(error.message ?: "Copia JSON invalida; no se importo ningun registro.")
+                    exportError(errorText(error, R.string.json_invalid))
                 } catch (error: IOException) {
-                    exportError("No se pudo leer la copia: ${error.message}")
+                    exportError(getString(R.string.json_read_error, errorText(error)))
                 } catch (error: SecurityException) {
-                    exportError("Sin permiso de lectura: ${error.message}")
+                    exportError(getString(R.string.json_permission_error, errorText(error)))
                 } catch (error: SQLiteException) {
-                    exportError("Importacion cancelada y revertida: ${error.message}")
+                    exportError(getString(R.string.json_reverted, errorText(error)))
                 }
             }
             return
@@ -543,29 +548,29 @@ class MainActivity : Activity() {
         if (requestCode == 30) {
             val uri = data?.data
             if (resultCode != RESULT_OK || uri == null) {
-                message("Importacion de audio cancelada.")
+                message(getString(R.string.audio_cancelled))
                 return
             }
             val tone = audioTone
             val speed = audioSpeed
-            message("Decodificando WAV; manten esta pantalla abierta.")
+            message(getString(R.string.audio_decoding))
             thread(name = "bricohams-morse") {
                 try {
                     val bytes = contentResolver.readDocument(uri, MorseAudio.MAX_WAV_BYTES)
                     val decoded = MorseAudio.decode(MorseAudio.readWav(bytes), tone, speed)
                     runOnUiThread {
                         if (!isDestroyed) {
-                            audioResult = "${decoded.text}\n${decoded.morse}\n${decoded.warning}"
-                            if (tab == "Morse") render()
-                            message("Audio procesado. Revisa las limitaciones y contrasta el texto.")
+                            audioResult = "${decoded.text}\n${decoded.morse}\n${decoded.warning.resolve(this@MainActivity)}"
+                            if (tab == TAB_MORSE) render()
+                            message(getString(R.string.audio_done))
                         }
                     }
                 } catch (error: IllegalArgumentException) {
-                    exportError(error.message ?: "Audio invalido.")
+                    exportError(errorText(error, R.string.audio_invalid))
                 } catch (error: IOException) {
-                    exportError("No se pudo leer el WAV: ${error.message}")
+                    exportError(getString(R.string.audio_read_error, errorText(error)))
                 } catch (error: SecurityException) {
-                    exportError("Sin permiso para leer audio: ${error.message}")
+                    exportError(getString(R.string.audio_permission_error, errorText(error)))
                 }
             }
             return
@@ -575,10 +580,10 @@ class MainActivity : Activity() {
         exportKind = null
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null || kind == null) {
-            message("Exportacion cancelada; los datos locales se conservan.")
+            message(getString(R.string.export_cancelled))
             return
         }
-        message("Exportando datos...")
+        message(getString(R.string.export_running))
         val book = logbookId
         thread(name = "bricohams-export") {
             try {
@@ -586,17 +591,17 @@ class MainActivity : Activity() {
                     if (kind == "adif") Adif.export(exportStore.contacts(book), exportStore.logbooks().single { it.id == book })
                     else exportStore.export()
                 }
-                val stream = contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Proveedor sin flujo de escritura.")
+                val stream = contentResolver.openOutputStream(uri, "wt") ?: throw IOException(getString(R.string.provider_no_stream))
                 stream.bufferedWriter(Charsets.UTF_8).use { it.write(value) }
-                runOnUiThread { if (!isDestroyed) message("Archivo guardado. Verifica la copia antes de eliminar datos locales.") }
+                runOnUiThread { if (!isDestroyed) message(getString(R.string.export_saved)) }
             } catch (error: IOException) {
-                exportError("No se pudo completar el archivo: ${error.message}. Descarta cualquier archivo parcial.")
+                exportError(getString(R.string.export_write_error, errorText(error)))
             } catch (error: SecurityException) {
-                exportError("Sin permiso de escritura: ${error.message}")
+                exportError(getString(R.string.export_permission_error, errorText(error)))
             } catch (error: IllegalArgumentException) {
-                exportError(error.message ?: "Datos de exportacion invalidos.")
+                exportError(errorText(error, R.string.export_invalid))
             } catch (error: SQLiteException) {
-                exportError("No se pudo leer la base local: ${error.message}")
+                exportError(getString(R.string.export_database_error, errorText(error)))
             }
         }
     }
@@ -604,7 +609,7 @@ class MainActivity : Activity() {
         runOnUiThread { if (!isDestroyed) message(value) }
     }
     private fun saveAdif(preview: AdifPreview, book: String) {
-        message("Guardando ADIF en una transaccion...")
+        message(getString(R.string.adif_saving))
         thread(name = "bricohams-adif-save") {
             try {
                 val (inserted, skipped) = RadioStore(applicationContext).use { importStore ->
@@ -614,13 +619,13 @@ class MainActivity : Activity() {
                     adifImportBusy = false
                     if (!isDestroyed) {
                         render()
-                        message("ADIF importado: $inserted contactos nuevos, $skipped identicos omitidos. ${preview.ignoredFields.size} campos no conservados indicados en la vista previa.")
+                        message(getString(R.string.adif_imported, inserted, skipped, preview.ignoredFields.size))
                     }
                 }
             } catch (error: IllegalArgumentException) {
-                adifImportError("ADIF cancelado sin cambios: ${error.message}")
+                adifImportError(getString(R.string.adif_save_cancelled, errorText(error)))
             } catch (error: SQLiteException) {
-                adifImportError("Importacion ADIF revertida: ${error.message}")
+                adifImportError(getString(R.string.adif_reverted, errorText(error)))
             }
         }
     }
@@ -646,5 +651,16 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         store.close()
         super.onDestroy()
+    }
+    private fun rootFormat(format: Int, vararg values: Any): String = String.format(Locale.ROOT, getString(format), *values)
+
+    companion object {
+        // Stable tab identifiers persisted in the instance state; labels come from resources.
+        private const val TAB_HOME = "Inicio"
+        private const val TAB_LOGBOOK = "Guardia"
+        private const val TAB_ARDF = "ARDF"
+        private const val TAB_MORSE = "Morse"
+        private val TABS = linkedMapOf(TAB_HOME to R.string.tab_home, TAB_LOGBOOK to R.string.tab_logbook,
+            TAB_ARDF to R.string.tab_ardf, TAB_MORSE to R.string.tab_morse)
     }
 }

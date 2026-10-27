@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Comprehensive validation: UV-K5 V3, Android, and Bricohams firmware: Bricohams help by model and version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Comprehensive validation: UV-K5 V3, Android, and Bricohams firmware | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-validacion-v3-android.html">
+  <link rel="alternate" hreflang="en" href="ayuda-validacion-v3-android.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-validacion-v3-android.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-validacion-v3-android.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-validacion-v3-android.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Help"><a href="ayuda.html">App help (Spanish)</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Language"><a href="ayuda-validacion-v3-android.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-validacion-v3-android.en.html" hreflang="en" lang="en" aria-current="page">English</a> · <a href="ayuda-validacion-v3-android.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-validacion-v3-android.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-validacion-v3-android.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#identificacion-de-la-entrega">Release identification</a></li><li><a href="#niveles-de-evidencia">Evidence levels</a></li><li><a href="#hallazgo-corregido-crc-de-backup-android">Corrected finding: Android backup CRC</a></li><li><a href="#cancelacion-y-limites-del-editor-android">Android editor cancellation and limits</a></li><li><a href="#contactos-alcance-y-criterios">Contacts: scope and criteria</a></li><li><a href="#canales-y-aislamiento-por-slot">Channels and slot isolation</a></li><li><a href="#cat-en-sat-rx-y-android">CAT in SAT RX and Android</a></li><li><a href="#modificaciones-de-hardware-compatibilidad-y-limites">Hardware modifications: compatibility and limits</a></li><li><a href="#documentacion-y-generacion-del-firmware">Documentation and firmware generation</a></li><li><a href="#cierre-y-certificacion-pendientes">Pending closure and certification</a></li></ul></nav>
+    <article class="panel"><h1 id="validacion-integral-uv-k5-v3-android-y-firmware-bricohams">Comprehensive validation: UV-K5 V3, Android, and Bricohams firmware</h1>
+<p>Authors: Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF, and Pedro Roca, Bricohams founders and board members. Information: <a href="https://bricohams.org" target="_blank" rel="noopener noreferrer">https://bricohams.org</a> and <a href="https://bricohams.com" target="_blank" rel="noopener noreferrer">https://bricohams.com</a>.</p>
+<p>Initial review: 26-10-2026. <strong>Audit in progress; this is not a certificate of operation or a completed exhaustive review.</strong> Notices and attributions for third-party code, photos, and documents are retained.</p>
+<h2 id="identificacion-de-la-entrega">Release identification</h2>
+<p>It is not enough for two APKs to show <code>0.8.1-beta</code>: the commit, APK SHA-256, signature, and source hashes must identify exactly the release tested.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Release</th><th scope="col">Identity</th><th scope="col">Evidence</th></tr></thead><tbody>
+<tr><td>Initial working tree</td><td>Base <code>42fa5e014b270b929b58f7fd2fee2a28f482d1c0</code>, local changes</td><td>Android host, lint, and APK checked during this review</td></tr>
+<tr><td>Published main inspected</td><td><code>01c58563e6507d17bd2bec612ef669840abfeddb</code></td><td>Isolated review without replacing local changes; includes General/POTA/SOTA and the new pass list</td></tr>
+<tr><td>APK installed on phone</td><td>Unidentified</td><td>No phone visible in ADB; not checked</td></tr>
+<tr><td>Current SAT slot firmware</td><td>User reports slot 3</td><td>No radio port detected; index, bank, CRC, and version pending</td></tr>
+</tbody></table></div>
+<p>Results from the isolated published review: <strong>93 Android host tests passed, zero failures/errors</strong>, lint with no errors and 13 warnings, debug APK built. SHA-256 of that rebuild: <code>b739992a1b4cba67fdd87e97efdf5408e84f549068b51043d854da094ed1152d</code>. This is not the hash of an APK downloaded from the website or installed on a phone. The local CRC correction is not included in that main rebuild.</p>
+<p>The 13 lint warnings in both reviews concern two newer test dependency versions, five English dictionary warnings for “satellite,” one plural candidate, three typographic hyphens, one ellipsis, and the icon shape. Dependencies and branding are not changed to hide them.</p>
+<p>The published website is not necessarily identical to the local tree. The contents of the downloadable APK cannot be inferred from a guide&#39;s text. Tests from the local base must not be attributed to the published revision or an unidentified APK.</p>
+<figure><a href="docs/atlas/android-cat-validacion.svg"><img src="docs/atlas/android-cat-validacion.svg" alt="Functional chain for contacts, channels by slot, and CAT" loading="lazy"></a><figcaption>Functional chain for contacts, channels by slot, and CAT</figcaption></figure>
+<p>This drawing is an original functional representation, not an electrical schematic. It does not show inferred internal connections, component values, or voltage levels. Pin and memory maps are in the <a href="ayuda-atlas-uv-k5-v3.en.html">atlas</a>.</p>
+<h2 id="niveles-de-evidencia">Evidence levels</h2>
+<ol>
+<li>Reviewed source: shows intended implementation, not execution.</li>
+<li>Host/JVM/Robolectric test: verifies the specific simulated scenarios.</li>
+<li>Instrumented Android: requires an identified device/emulator.</li>
+<li>Real radio: requires identified version, slot, bank, and configuration.</li>
+<li>External RF/electrical measurement: requires instrument, connection, and procedure.</li>
+</ol>
+<p>A write ACK does not replace readback, persistence after reboot, or an RF measurement. A desktop SQLite test does not certify the phone&#39;s memory. The final status for each scenario must state its evidence level; do not turn “not run” into “passed.”</p>
+<h2 id="hallazgo-corregido-crc-de-backup-android">Corrected finding: Android backup CRC</h2>
+<p><code>QuanshengMemory.verifyFlash</code> requested <code>0x073E</code> for 2097152 bytes at once. The reference command limits each query to 4096 bytes. The mock allowed the impossible range and hid the error. The web version already checked by sectors; Android needed the same correction.</p>
+<p>The local correction queries all 512 sectors with address/length/status verified and compares each sector&#39;s CRC against the bytes read. It returns the total local CRC only after all sectors have been checked. A failure, including at the last sector <code>0x1ff000</code>, blocks the backup and does not enable writing. It does not delete existing backups, calibrate the radio, or write sectors.</p>
+<p>The mock now enforces 4096 bytes and checks that every sector is requested. A test was added for a corrupt last sector and rejection of an incomplete range before commands are sent. Local-base host tests: 92 passed after adding limits, cancellation, and channel-screen tests, zero failures/errors; lint with no errors and 13 warnings. The debug APK builds, but this correction is not published or installed on a phone.</p>
+<p>SHA-256 of the locally rebuilt APK after these corrections: <code>cd9d3bfd3bfe0405be23995dd906aae63614ec9d38de1a1ff8cea1997156ab25</code>. This hash replaces the earlier local rebuild; it does not identify the published or installed APK.</p>
+<p>The manifest generated by <code>build-android.ps1</code> was also corrected: it no longer lists CAT PTT, SSTV TX, and channel programming as nonexistent, since they are experimentally implemented. This does not certify these features.</p>
+<h2 id="cancelacion-y-limites-del-editor-android">Android editor cancellation and limits</h2>
+<p>Another issue was found while following the lifecycle: closing the screen queued transport closure behind the active task. As a result, a long backup or write could continue sending blocks after the interface had declared the session ended.</p>
+<p>The connection now retains a session generation and checks that it remains active and in the foreground before each exchange. Queued tasks also check their generation before starting. Closure remains on the worker to release the transport in order, but does not enable new commands for a cancelled operation. A response to an already-sent command may still be pending or the command may have been applied: rollback is not promised. A timeout or cancellation requires reconnecting and taking a new backup. Errors also close the transport and clear the in-memory reference, not just the backup permission: tapping Backup again does not reuse an invalid connection. A screen test injects a transport failure, checks closure, and verifies that the second attempt sends no more commands.</p>
+<p>Tests simulate cancellation after hiding the first channel: the next block is not sent and an incomplete record is not shown again. They also cancel the backup after its first Flash block and check that the next one is not queried and CRC is not reported as verified. Physical Flash reads require identification and validate ranges by subtraction to avoid <code>address + length</code> overflow. The last valid block is checked. CRC cases reject short/long responses, incorrect address, sector length, or status before the next sector.</p>
+<h2 id="contactos-alcance-y-criterios">Contacts: scope and criteria</h2>
+<p>Contacts are logbook QSOs, not radio DMR contacts or the Android phone address book. This project&#39;s UV-K5 V3 radio is not a DMR terminal. There is no ContactsProvider integration.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Case</th><th scope="col">Required check</th></tr></thead><tbody>
+<tr><td>Add</td><td>Save callsign, UTC, frequency, mode, reports, and notes; verify ID and every field</td></tr>
+<tr><td>Persistence</td><td>Fully close, reopen, and restart phone; remaining visible is not enough</td></tr>
+<tr><td>Edit</td><td>Same ID, one record only, unedited fields intact</td></tr>
+<tr><td>Delete</td><td>Cancel confirmation to retain record; confirm to delete only the selected one</td></tr>
+<tr><td>Search</td><td>Case, Unicode, no matches, over 50 records; export not truncated</td></tr>
+<tr><td>General/POTA/SOTA</td><td>Log selection and persistence; station/reference fields; isolation between logs</td></tr>
+<tr><td>Duplicates</td><td>Warning within a log, explicit confirmation; do not merge QSOs from different activities</td></tr>
+<tr><td>ADIF</td><td>Preview, cancel without writing, lengths, unpreserved fields, UTC, deduplication</td></tr>
+<tr><td>JSON</td><td>UTF-8 round trip, IDs, conflicts, and rollback; restore does not delete prior records</td></tr>
+<tr><td>Errors</td><td>Full storage, cancelled or unwritable URI, close/rotation, incomplete import</td></tr>
+<tr><td>Privacy</td><td>Private backups; do not add real callsigns, locations, or databases to the repository</td></tr>
+</tbody></table></div>
+<p>Existing host tests cover SQLite and reopening, Unicode, CRUD, atomic import, and restoration. Phone cases remain pending. LoTW export does not certify signing, upload, or TQSL acceptance.</p>
+<p>Instrumented <code>RadioStoreTest</code> tests no longer open or clear the user&#39;s <code>bricohams.db</code>. Each test remaps that name to a private <code>instrumentation-&lt;UUID&gt;.db</code> and deletes only its own database at the end. They include reopening after edit/delete/JSON restore, repeated restoration without duplicates, and invalid import without persisting partial records. The test APK and lint build successfully. <strong>These tests have not been run on a phone or emulator</strong>; compilation does not show that assertions passed.</p>
+<h2 id="canales-y-aislamiento-por-slot">Channels and slot isolation</h2>
+<p>The current Android editor edits <strong>existing FM channels</strong>: it is not equivalent to the web&#39;s full CRUD and does not allow inferring additions/deletions/copies between slots. Do not use it to claim DMR contact management.</p>
+<p>Before each physical test:</p>
+<ol>
+<li>Identify V3/PY32 hardware and exact firmware, not just the profile name.</li>
+<li>Read multiboot inventory, label, and CRC; record internal index and visible label separately. Do not assume “slot 3” means index 3.</li>
+<li>Confirm the active bank and make a complete verified backup to disk.</li>
+<li>Choose a test channel from the active bank without replacing user data.</li>
+<li>Test name/RX/TX/CTCSS/DCS/power/bandwidth/TX lock, avoiding physical TX.</li>
+<li>Reread all bytes and compare protected regions and calibration.</li>
+<li>Reboot and verify persistence; switch slots and check other banks retain their hashes. Restore and verify the original.</li>
+<li>Disconnection, timeout, and rejected block must close the session and require reread/backup; a power loss must not be presented as an atomic transaction.</li>
+</ol>
+<p>The write command must hide affected attributes, write records/names, and restore attributes before readback. Do not modify the calibration map or restore data from another radio.</p>
+<h2 id="cat-en-sat-rx-y-android">CAT in SAT RX and Android</h2>
+<p>CAT RX is temporary and distinct from writing channels. F4HWN v6.1 alone does not guarantee the Bricohams CAT module is present. A valid QUERY and expected capabilities are required, with the SAT RX app open and CAT enabled using key</p>
+<ol>
+<li>The initial test does not require PTT.</li>
+</ol>
+<div class="table-scroll"><table><thead><tr><th scope="col">Case</th><th scope="col">Expected result and evidence</th></tr></thead><tbody>
+<tr><td>Identify</td><td>Correct version and photo/screen of active slot; do not infer from name</td></tr>
+<tr><td>QUERY</td><td>Active session, consistent capabilities and frequency</td></tr>
+<tr><td>SET RX VHF/UHF</td><td>Pending ACK followed by applied QUERY; compare display and external frequency</td></tr>
+<tr><td>Out of band</td><td>Explicit rejection, no tuning change</td></tr>
+<tr><td>Noise/CRC/sequence</td><td>Bounded rejection or timeout; do not execute an unintended subsequent command</td></tr>
+<tr><td>STOP</td><td>Remote disabled and restoration confirmed; also check screen exit</td></tr>
+<tr><td>OTG disconnected</td><td>Session closed, explicit message, no delayed tuning</td></tr>
+<tr><td>Rotation/background</td><td>No duplicate worker or SET after leaving</td></tr>
+<tr><td>SGP4/Doppler pass</td><td>Observer/TLE/time identified; compare prediction and RX updates</td></tr>
+<tr><td>Persistent separation</td><td>Channels and calibration unchanged before/after CAT</td></tr>
+<tr><td>PTT lease</td><td>Separate test with authorization and appropriate load/instrumentation, not an antenna in the open by default</td></tr>
+</tbody></table></div>
+<p>For PTT, check local arming with key 9, denial for lock/band/state, release by STOP/disconnection, lease expiry, and 120 s limit. TX is not tested automatically, and power, harmonics, or frequency are not certified without instruments. Connecting CAT alone does not give the phone the radio&#39;s speaker/microphone.</p>
+<h2 id="modificaciones-de-hardware-compatibilidad-y-limites">Hardware modifications: compatibility and limits</h2>
+<p>Compatibility of a V1 modification does not carry over to V3 just because the case is shared. The MCU, memory, and RF are different. The consulted K1 teardown confirms PY32F071, 128 KB Flash, 16 KB SRAM, and 2 MB SPI memory; it does not demonstrate a particular modification across all V3 board revisions.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Family</th><th scope="col">Classification for this audit</th><th scope="col">Evidence needed before recommendation</th></tr></thead><tbody>
+<tr><td>External antenna/adapter</td><td>Accessory, not a board modification</td><td>Exact connector, mechanical load, SWR, and band; RX gain does not guarantee safe TX</td></tr>
+<tr><td>USB-C/OTG/data</td><td>Existing interface</td><td>Real data cable, host/permission, power, and enumeration</td></tr>
+<tr><td>Kenwood USB-serial cable</td><td>Conditional on adapter and pinout</td><td>Levels and suitable cable; do not connect RS-232 directly</td></tr>
+<tr><td>Expanded V1 EEPROM</td><td>Not directly applicable</td><td>V3 uses SPI Flash; do not insert EEPROM by analogy</td></tr>
+<tr><td>V1 SI4732/SSB/HF</td><td>Not verified for V3</td><td>Board, power, bus, space, PY32 firmware, and RX tests</td></tr>
+<tr><td>LNA/satellite filters</td><td>Not verified</td><td>Schematic for that revision, impedance, selectivity, saturation, TX isolation</td></tr>
+<tr><td>TX low-pass filter</td><td>Not verified</td><td>Frequency, power, losses, SWR, and harmonic measurement into a load</td></tr>
+<tr><td>Coil/27 MHz changes</td><td>Not extrapolatable from V1</td><td>Schematic, measured values, stability, and compliance; do not publish invented values</td></tr>
+<tr><td>Expand SPI Flash</td><td>Unsupported by current maps</td><td>JEDEC, voltage, pinout, commands, sectors, bootloader, and every reader/writer</td></tr>
+<tr><td>ESP32/coprocessor</td><td>Adaptation project, not plug-and-play</td><td>Buses and arbitration, levels, power, and V3-specific driver</td></tr>
+<tr><td>SWD/debugging</td><td>Conditional on board and firmware</td><td>Confirmed pads, levels, backup, and recovery without erasing calibration</td></tr>
+<tr><td>Audio/discriminator</td><td>Not verified</td><td>Analog schematic, isolation, load, and test without injecting voltage into ADC/DAC</td></tr>
+<tr><td>Battery/charging/power</td><td>Outside current validation</td><td>Do not change cells/protection or raise power using unverified instructions</td></tr>
+</tbody></table></div>
+<p>The radio was not opened or modified during this audit. There is no evidence to certify every possible modification. Complete internal connection diagrams require photos of both sides of the exact board, unpowered continuity tracing, and values/packages identified by qualified personnel; they cannot be derived from a block diagram. Battery, RF, and calibration protections are not bypassed.</p>
+<h2 id="documentacion-y-generacion-del-firmware">Documentation and firmware generation</h2>
+<p>Primary sources:</p>
+<ul>
+<li><a href="ayuda-atlas-uv-k5-v3.en.html">V3 hardware atlas and maps</a>.</li>
+<li><a href="ayuda-bricohams.en.html">Builds, BHA1/BHT1 formats, and independent resident</a>.</li>
+<li><a href="ayuda-android.en.html">Android: storage, CAT, channels, permissions, and limitations</a>.</li>
+<li><a href="ayuda-configuracion.en.html">Configuration and bank security</a>.</li>
+<li><a href="ayuda-quansheng.en.html">Quansheng guide</a>.</li>
+<li><a href="ayuda-entrega.en.html">Release status</a>.</li>
+</ul>
+<p>The comprehensive review must cross-check all documents and generated HTML against code and manifests, not fix only the main page. Release histories retain their old results and are not rewritten to attribute new validations to them.</p>
+<p>For each build, record: commit/dirty state, toolchain and flags, licenses, Flash-RAM-stack map/size, source/BIN/APK hashes, format and load address, test matrix, known errors, and recovery route. Issues already found include CRC beyond the firmware limit, an overly permissive mock, stale Android manifest, differences between published/local main, resident timebase, and lack of a physical app-transfer driver. The resident guide documents the corrections and does not confuse reproducible compilation with validated execution.</p>
+<h3 id="regresion-de-esta-revision">Regression for this review</h3>
+<p>After integrating the guide into help, local server, and installer list: 283 web tests passed, zero failures, and <code>npm run check</code> passed. This evidence belongs to the modified local tree, not published main. Android instrumentation and <code>lintDebug</code> also build successfully; no APK has been installed and no commands have been sent to the radio.</p>
+<p>Device checks show only COM3 Intel AMT SOL and an empty ADB list. COM3 is not used as a substitute for the Quansheng port. Radio enumeration and phone ADB authorization are required before running the physical tests described.</p>
+<h3 id="contraste-documental-realizado">Documentation cross-check performed</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">Document or group</th><th scope="col">Cross-check and correction in this review</th><th scope="col">Limit</th></tr></thead><tbody>
+<tr><td>Architecture</td><td>Removed the claim that Quansheng channel writing does not exist; distinguishes prior reading from pending tests</td><td>Does not certify protocols for other equipment</td></tr>
+<tr><td>Release status</td><td>Preserved historical matrix and added identification of local base versus published main</td><td>Old results are not rewritten</td></tr>
+<tr><td>Android</td><td>Sector CRC, cancellation, close after errors, and isolated instrumentation database</td><td>Local manual does not automatically describe the latest published APK</td></tr>
+<tr><td>V3 atlas</td><td>Modification matrix without V1 extrapolation, sources, and absence of a complete verified schematic in consulted materials</td><td>No electrical measurements or continuity checks on this unit</td></tr>
+<tr><td>Firmware library</td><td>AnyTone/Android/audit links and separation of F4HWN derivatives from the BHA1 platform</td><td>Cataloging is not installing or validating</td></tr>
+<tr><td>Quansheng guide</td><td>Reviewed viewer, catalog, slots, and DFU sections; retained scope and CRC of earlier tests</td><td>SAT startup and channel writing remain pending</td></tr>
+<tr><td>Configuration, OpenGD77, and AnyTone</td><td>Cross-checked backups, local editing, and write limits by family</td><td>A Quansheng does not validate DMR hardware or convert JSON/CSV to RDT</td></tr>
+<tr><td>Examples and ARDF</td><td>Provenance, licenses, and distinction between official ARDF and Bricohams module</td><td>Third-party binaries or RF modifications are not certified</td></tr>
+<tr><td>Bricohams</td><td>Corrected identity of derived line; independent resident and formats documented separately</td><td>Physical USB/Flash and integrated resident RAM budget are missing</td></tr>
+<tr><td>Karina, Dim0s, and third-party index</td><td>Corrected historical recording status; distinguished similarly named ZIPs of 2296162 and 2161962 bytes with different hashes</td><td>No verified Karina source or equivalence between the ZIPs</td></tr>
+<tr><td>Deployment, ADR, and branding</td><td>Separated dedicated-origin recommendation from actual shared Pages; retained historical URLs with clarification; compared Android orange theme with assets</td><td>No automatic data migration or on-device visual validation</td></tr>
+<tr><td>Community and licenses</td><td>Negative searches described with scope, not as proof of absence; lack of verified redistribution permission is not presented as a universal ruling</td><td>Not all remote licenses were re-audited</td></tr>
+<tr><td>HTML and packaging</td><td>Guides regenerated and checked with link, server, Pages/exporter, and installer tests</td><td>No new release published</td></tr>
+</tbody></table></div>
+<p>This table records the scope covered; it does not claim a line-by-line review of all documentation or external repositories. Remaining sections and sources must be checked before the requested exhaustive review is closed. Absence of observed issues is not converted into certification that all components work.</p>
+<p>The portable platform&#39;s storage scratch was reduced from 5184 to 4160 bytes to meet the combined BHA1 limit, saving 1024 bytes without reducing valid packets. Nine CTest tests pass, including JS/C transfer and maximum-size load with 3072 bytes of code plus 1024 bytes of data. This is not yet a measurement of resident RAM/stack with USB/Flash integrated.</p>
+<h3 id="revalidacion-local-del-27-10-2026">Local revalidation on 27-10-2026</h3>
+<p>In the current working tree, <code>npm test</code> completes with 285 passing tests and zero failures; <code>npm run check</code> also completes successfully. The Android tests could not be rerun: Gradle found Java 8, while Android Gradle Plugin 8.7.3 requires Java 11 or later, and no other installed JDK was found. The CTest suites could not be rebuilt either: CMake found neither NMake nor an available C compiler. These blockers concern the validation environment and are not code test results. No instrumentation, USB, radio, or RF tests were run.</p>
+<h2 id="cierre-y-certificacion-pendientes">Pending closure and certification</h2>
+<p>No certificate is issued until the installed APK, phone/Android, firmware, and slot/bank are identified; physical tests run without losses; private evidence is retained; and failures/repairs are recorded with retesting. A successful software audit does not certify RF compliance, electrical safety, or every third-party modification.</p></article>
+    <footer><p class="translation-note">Translation of the Spanish original. If there is any discrepancy, the Spanish version prevails.</p><p>Document generated from the versioned Markdown. Check the sources and limits of each guide. <a href="ayuda-firmwares.en.html">Back to the index</a>.</p></footer>
+  </main>
+</body>
+</html>

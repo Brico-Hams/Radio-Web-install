@@ -84,6 +84,12 @@ SHA-256 de la descarga:
 619368c7d08cd2dfdda13aeec4ae5d8fadd70eb78d60bbe908832d53385e2999
 ```
 
+El [indice de terceros](BINARIOS-TERCEROS.md) contiene una descarga de
+igual nombre pero de 2161962 bytes y otro SHA-256. No se han demostrado
+contenidos equivalentes entre ambos ZIP. Este inventario y los hashes
+extraidos siguientes corresponden exclusivamente a la descarga de 2296162
+bytes indicada arriba, no a cualquier archivo llamado `21.09.2026.zip`.
+
 Inventario interior: carpetas K1 y K5V3, dos RAW, dos packed, dos copias de
 `calib11.bin`, dos drivers CHIRP y tres PDF. No contiene proyecto C, Makefile,
 linker ni aviso LICENSE por nombre. Los nombres rusos de algunas entradas

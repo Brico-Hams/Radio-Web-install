@@ -92,13 +92,13 @@ class SstvActivity : Activity() {
                     runOnUiThread {
                         if (!isDestroyed) {
                             bitmap = decoded; image.setImageBitmap(decoded)
-                            status.text = getString(R.string.sstv_complete, result.startSeconds, result.warning)
+                            status.text = getString(R.string.sstv_complete, result.startSeconds, result.warning.resolve(this@SstvActivity))
                         } else decoded.recycle()
                     }
                 } else {
-                    requireNotNull(snapshot) { "La imagen se perdio al recrear la pantalla; decodifica de nuevo el WAV." }
-                    val stream = contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Proveedor sin flujo de escritura.")
-                    stream.use { check(snapshot.compress(Bitmap.CompressFormat.PNG, 100, it)) { "No se pudo codificar PNG." } }
+                    requireNotNull(snapshot) { getString(R.string.sstv_image_lost) }
+                    val stream = contentResolver.openOutputStream(uri, "wt") ?: throw IOException(getString(R.string.provider_no_stream))
+                    stream.use { check(snapshot.compress(Bitmap.CompressFormat.PNG, 100, it)) { getString(R.string.png_encode_error) } }
                     runOnUiThread { if (!isDestroyed) status.setText(R.string.sstv_saved) }
                 }
             } catch (error: IllegalArgumentException) {
@@ -117,7 +117,7 @@ class SstvActivity : Activity() {
         }
     }
     private fun report(error: Exception) {
-        runOnUiThread { if (!isDestroyed) status.text = getString(R.string.sstv_error, error.message) }
+        runOnUiThread { if (!isDestroyed) status.text = getString(R.string.sstv_error, errorText(error)) }
     }
     override fun onDestroy() {
         worker.shutdownNow()
