@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Brand guide · Bricohams: Bricohams help by model and version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Brand guide · Bricohams | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-marca.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-marca.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-marca.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-marca.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-marca.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=en-US"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Help"><a href="ayuda-referencias.en.html">Documentation and references</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=en-US">Quansheng</a> · <a href="opengd77.html?lang=en-US">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Language"><a href="ayuda-marca.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-marca.en.html" hreflang="en-US" lang="en-US" aria-current="page">English (US)</a> · <a href="ayuda-marca.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-marca.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-marca.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#nombre">Name</a></li><li><a href="#logotipo">Logo</a></li><li><a href="#paleta">Palette</a></li><li><a href="#estructura">Structure</a></li><li><a href="#tipografia">Typography</a></li><li><a href="#voz">Voice</a></li></ul></nav>
+    <article class="panel"><h1 id="guia-de-marca-bricohams">Brand guide · Bricohams</h1>
+<h2 id="nombre">Name</h2>
+<ul>
+<li>Product: <strong>Bricohams Radio Workspace</strong>.</li>
+<li>Short form: <strong>Bricohams</strong> (top bar and footer).</li>
+<li>Sidebar: original Bricohams logo with the subtitle <code>RADIO WORKSPACE</code>, without repeating the name already included in the image.</li>
+</ul>
+<h2 id="logotipo">Logo</h2>
+<p><a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/bricohams-logo.png" target="_blank" rel="noopener noreferrer">bricohams-logo.png</a> is the <strong>original 1200 × 446 PNG</strong> used by <a href="https://brico-hams.github.io/Bricohams-Studio/" target="_blank" rel="noopener noreferrer">Bricohams Studio</a>. It was obtained from <a href="https://github.com/Brico-Hams/Bricohams-Studio/blob/767edd66028d10f859346190d0c8044bd8e5a2b2/assets/logo-bricohams.png" target="_blank" rel="noopener noreferrer">assets/logo-bricohams.png, commit 767edd6</a>. Its SHA-256 is <code>0e1bec16953129cfc9c946d24e56347ddfb38878137ba43c7e84729acf811c87</code>, identical to the PNG embedded in the Studio page, checked on 2026-10-21.</p>
+<p>It replaces the previous SVG “B” icon with waves, which was not the Bricohams logo. Do not redraw it or invent a brand variant.</p>
+<p>Usage rules:</p>
+<ul>
+<li>Do not stretch, crop, recolor, or add shadows. Keep the original background and the 1200:446 aspect ratio, with <code>height: auto</code>.</li>
+<li>Sidebar: full image at 178 px wide (limited to the available space); on mobile, 144 px with the subtitle beside it. Do not hide the brand on small screens.</li>
+<li>README: 240 px wide with proportional height. Favicons and the Linux desktop shortcut use the same PNG; there is no approved square variant.</li>
+<li>Leave at least 10 px between image and subtitle on desktop, and 14 px on mobile. These measurements are project layout decisions, not additional official brand guidelines.</li>
+<li>Do not combine it with OpenGD77, Quansheng, F4HWN, or grid.radio logos in a way that suggests affiliation.</li>
+</ul>
+<p>Firmware-specific exception requested on 25-10-2026: the monochrome LCD requires a proportional 128 × 48 adaptation of the original, without color, on an empty background, with <code>Bricohams BETA</code> underneath. It is generated from the original PNG; no new brand mark is drawn. It does not replace the color PNG on the web or Android. Build details and limitations are in the <a href="ayuda-bricohams.en.html#branding-de-arranque-implementado">firmware guide</a>.</p>
+<h2 id="paleta">Palette</h2>
+<p><strong>Change requested on 25-10-2026:</strong> the corporate color specified by the user is <strong>orange</strong>. The teal palette below describes the current web implementation, not the target identity. Android already uses <code>#FF9800</code> as its theme accent; this does not establish contrast or usability across all controls and devices. The final web migration to orange will take place after features are complete and tested, following the requested sequence. The exact shade and contrast must be validated before replacing the tokens; do not recolor the original logo or rely on color alone to communicate states.</p>
+<p>Interface inspired by Bricohams Studio: dark background, cards, and a teal accent. The following palette belongs to Radio Workspace; it is not a claim of an exact match to Studio&#39;s colors or a recoloring of the logo.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Token</th><th scope="col">Color</th><th scope="col">Use</th><th scope="col">Contrast (AA)</th></tr></thead><tbody>
+<tr><td><code>--bg</code></td><td><code>#0b1418</code></td><td>Background</td><td>—</td></tr>
+<tr><td><code>--panel</code></td><td><code>#111d22</code></td><td>Cards and panels</td><td>—</td></tr>
+<tr><td><code>--line</code></td><td><code>#1f3238</code></td><td>Borders</td><td>decorative</td></tr>
+<tr><td><code>--text</code></td><td><code>#e6f1f2</code></td><td>Primary text</td><td>16.2:1 on background; 14.9:1 on panel</td></tr>
+<tr><td><code>--muted</code></td><td><code>#8fa7ab</code></td><td>Secondary text</td><td>7.4:1 on background; 6.8:1 on panel</td></tr>
+<tr><td><code>--accent</code> (<code>--mint</code>)</td><td><code>#2bb3a3</code></td><td>Accent, focus, and success states</td><td>7.2:1 on background; 6.6:1 on panel</td></tr>
+<tr><td><code>--blue</code></td><td><code>#89b9ff</code></td><td>Links and secondary accent</td><td>8.5:1 on panel</td></tr>
+</tbody></table></div>
+<p>Primary button text: <code>#042420</code> on the accent (6.3:1).</p>
+<h2 id="estructura">Structure</h2>
+<ul>
+<li>Fixed top bar: connection status (copy of <code>#radio-status</code>), mode badge (<code>#mode-badge</code>), and “⌁ Connect” button, which triggers the section&#39;s button and is disabled along with it.</li>
+<li>Sidebar: logo, navigation, and, on radio pages, numbered steps (0 Backups and connection … 4 Firmware) leading to each section.</li>
+<li>Label above the title: <code>RADIOAFICIÓN · HAZLO TÚ MISMO</code>.</li>
+</ul>
+<h2 id="tipografia">Typography</h2>
+<p>System font (<code>system-ui</code>, Segoe UI, Roboto…), without external web fonts, to comply with the CSP and avoid loading third-party resources.</p>
+<h2 id="voz">Voice</h2>
+<ul>
+<li>Clear, technical, honest Spanish: explain limitations before making promises.</li>
+<li>Direct safety warnings: what can go wrong and what to do.</li>
+<li>Do not claim compatibility or operations that have not been verified.</li>
+<li>Data source attribution is always visible.</li>
+</ul></article>
+    <footer><p class="translation-note">Translation of the Spanish original. If there is any discrepancy, the Spanish version prevails.</p><p>Document generated from the versioned Markdown. Check the sources and limits of each guide. <a href="ayuda-firmwares.en.html">Back to the index</a>.</p></footer>
+  </main>
+</body>
+</html>

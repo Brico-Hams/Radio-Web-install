@@ -1429,7 +1429,7 @@ contrasto, orientamento o leggibilità sulla radio. Non è stato flashato.
 
 ## Fase successiva richiesta: Bricohams Android
 
-L'APK nativa `0.8.1-beta` integra un logbook con ricerca e importazione ADIF, ADIF/JSON,
+L'APK nativa `0.8.2-beta` integra un logbook con ricerca e importazione ADIF, ADIF/JSON,
 ripristino JSON, sessioni ARDF con cronologia/statistiche e somma filtrata dei segmenti,
 GPS puntuale, Morse da testo/WAV sperimentale
 e CAT RX temporaneo via USB CDC ACM e adattatori riconosciuti CH34x/CP210x/FTDI/Prolific.

@@ -36,7 +36,7 @@ based on documented behavior. Availability of Karina source is no longer
 maintained as a prerequisite for writing new functions. It is still impossible to promise
 a Karina rebuild or 100% equivalence without implementation and testing. The first custom
 ARDF core, its contract, and pending integration points are described in
-[Bricohams](BRICOHAMS-FIRMWARE.md#nuevo-nucleo-independiente-ardf).
+[Bricohams](BRICOHAMS-FIRMWARE.md#new-independent-ardf-core).
 Three independent images are now built for V3 slots: ARDF with cycles,
 Satellites with manual RX Doppler, and Spectrum with 128 points, averaging, peak hold,
 and eight RAM session presets, plus its own receive-only VFO-PRO capture.

@@ -1,6 +1,6 @@
 # Bereitstellung
 
-Zwei Bereitstellungsarten werden unterstützt: **lokal** (Node-Server auf demselben Rechner, an den das Funkgerät angeschlossen wird) und **öffentliche Website auf GitHub Pages** (statische Website, siehe [Öffentliche Website auf GitHub Pages](#web-pública-en-github-pages)).
+Zwei Bereitstellungsarten werden unterstützt: **lokal** (Node-Server auf demselben Rechner, an den das Funkgerät angeschlossen wird) und **öffentliche Website auf GitHub Pages** (statische Website, siehe [Öffentliche Website auf GitHub Pages](#öffentliche-website-auf-github-pages)).
 
 ## Voraussetzungen
 
@@ -186,7 +186,7 @@ node scripts/i18n.cjs --fix --strict
 npm run build:help
 ```
 
-`--fix` passt relative Link- und Bildpfade an den Übersetzungsordner an und verweist auf die entsprechende Übersetzung. Bei Abweichungen zwischen Übersetzung und Original ist Spanisch maßgeblich.
+`--fix` passt relative Link- und Bildpfade an den Übersetzungsordner an und verweist auf die entsprechende Übersetzung. Auch Anker übersetzter Markdown-Überschriften werden korrigiert; die HTML-Hilfe behält sprachübergreifend stabile Anker. Die Prüfung umfasst Architektur, Marke, Entscheidungen und Bereitstellung. Der Referenzindex wird aus den übersetzten Titeln aller Anleitungen erzeugt und verlinkt jede Sprachversion einschließlich US-Englisch. Externe Quellen behalten die von ihren Autoren veröffentlichte Sprache; das bisherige FAQ-Zentrum ist als Spanisch gekennzeichnet. Bei Abweichungen zwischen Übersetzung und Original ist Spanisch maßgeblich.
 
 ## Automatischer Start (optional, aus dem Quellcode)
 
@@ -220,7 +220,7 @@ Aktivieren mit `systemctl --user enable --now bricohams-radio`.
 <a id="web-pública-en-github-pages"></a>
 ## Öffentliche Website auf GitHub Pages
 
-Die statische Website wird mit `npm run build:pages` (Ordner `dist/`) erzeugt und durch `.github/workflows/pages.yml` veröffentlicht. `server.cjs` ist nicht enthalten: `runtime.json` enthält `{"mode":"web"}`, und die Anwendung läuft im Webmodus (siehe [Architektur](ARCHITECTURE.md#modos-de-ejecución)).
+Die statische Website wird mit `npm run build:pages` (Ordner `dist/`) erzeugt und durch `.github/workflows/pages.yml` veröffentlicht. `server.cjs` ist nicht enthalten: `runtime.json` enthält `{"mode":"web"}`, und die Anwendung läuft im Webmodus (siehe [Architektur](ARCHITECTURE.md#betriebsarten)).
 
 ### Warum ein eigener Origin
 
@@ -275,7 +275,7 @@ Mit Node.js 22+, Git und den Archivwerkzeugen des Systems:
 npm run export:project -- --beta `
   --firmware 'C:\ruta\Multiboot\Bricohams' `
   --installers 'C:\ruta\instalables-verificados' `
-  --android 'C:\ruta\Android-0.8.1-beta' `
+  --android 'C:\ruta\Android-0.8.2-beta' `
   --output 'C:\ruta\entregas\Bricohams-desarrollo.zip'
 ```
 

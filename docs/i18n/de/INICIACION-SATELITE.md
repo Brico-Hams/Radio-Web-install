@@ -27,21 +27,21 @@ entsprechender Quellenangabe.
 
 ## Inhalt
 
-1. [Was ist ein Amateurfunksatellit](#que-es-un-satelite-de-radioaficionado)
-2. [Wer darf empfangen und wer darf senden](#quien-puede-escuchar-y-quien-puede-transmitir)
-3. [Begriffe zum Überflug](#conceptos-del-pase)
-4. [UTC-Zeit, Locator und Koordinaten](#hora-utc-localizador-y-coordenadas)
-5. [Überflüge vorhersagen und Satellitenaktivität prüfen](#predecir-pases-y-saber-si-el-satelite-esta-activo)
-6. [Doppler-Effekt](#efecto-doppler)
-7. [FM-Satelliten für den Einstieg](#satelites-fm-para-empezar)
-8. [Stationsausrüstung](#equipo-de-la-estacion)
-9. [Betrieb mit BH Satélite auf dem UV-K5](#operar-con-bh-satelite-en-la-uv-k5)
-10. [So führst du ein QSO über Satellit](#como-hacer-un-qso-por-satelite)
-11. [Kontakte protokollieren und bestätigen](#registrar-y-confirmar-contactos)
-12. [SSTV und APRS von der ISS](#sstv-y-aprs-desde-la-iss)
-13. [Checkliste für den Überflug](#lista-de-comprobacion-del-pase)
-14. [Glossar](#glosario)
-15. [Quellen](#referencias)
+1. [Was ist ein Amateurfunksatellit](#was-ist-ein-amateurfunksatellit)
+2. [Wer darf empfangen und wer darf senden](#wer-darf-empfangen-und-wer-darf-senden)
+3. [Begriffe zum Überflug](#begriffe-zum-überflug)
+4. [UTC-Zeit, Locator und Koordinaten](#utc-zeit-locator-und-koordinaten)
+5. [Überflüge vorhersagen und Satellitenaktivität prüfen](#überflüge-vorhersagen-und-satellitenaktivität-prüfen)
+6. [Doppler-Effekt](#doppler-effekt)
+7. [FM-Satelliten für den Einstieg](#fm-satelliten-für-den-einstieg)
+8. [Stationsausrüstung](#stationsausrüstung)
+9. [Betrieb mit BH Satélite auf dem UV-K5](#betrieb-mit-bh-satélite-auf-dem-uv-k5)
+10. [So führst du ein QSO über Satellit](#so-führst-du-ein-qso-über-satellit)
+11. [Kontakte protokollieren und bestätigen](#kontakte-protokollieren-und-bestätigen)
+12. [SSTV und APRS von der ISS](#sstv-und-aprs-von-der-iss)
+13. [Checkliste für den Überflug](#checkliste-für-den-überflug)
+14. [Glossar](#glossar)
+15. [Quellen](#quellen)
 
 ## Was ist ein Amateurfunksatellit
 

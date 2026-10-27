@@ -26,21 +26,21 @@ Si son auteur autorise la traduction, nous la publierons séparément avec son a
 
 ## Sommaire
 
-1. [Qu’est-ce qu’un satellite radioamateur](#que-es-un-satelite-de-radioaficionado)
-2. [Qui peut écouter et qui peut émettre](#quien-puede-escuchar-y-quien-puede-transmitir)
-3. [Notions sur le passage](#conceptos-del-pase)
-4. [Heure UTC, locator et coordonnées](#hora-utc-localizador-y-coordenadas)
-5. [Prévoir les passages et savoir si le satellite est actif](#predecir-pases-y-saber-si-el-satelite-esta-activo)
-6. [Effet Doppler](#efecto-doppler)
-7. [Satellites FM pour débuter](#satelites-fm-para-empezar)
-8. [Équipement de la station](#equipo-de-la-estacion)
-9. [Utiliser BH Satélite sur l’UV-K5](#operar-con-bh-satelite-en-la-uv-k5)
-10. [Comment établir un QSO par satellite](#como-hacer-un-qso-por-satelite)
-11. [Enregistrer et confirmer les contacts](#registrar-y-confirmar-contactos)
-12. [SSTV et APRS depuis l’ISS](#sstv-y-aprs-desde-la-iss)
-13. [Liste de contrôle du passage](#lista-de-comprobacion-del-pase)
-14. [Glossaire](#glosario)
-15. [Références](#referencias)
+1. [Qu’est-ce qu’un satellite radioamateur](#quest-ce-quun-satellite-radioamateur)
+2. [Qui peut écouter et qui peut émettre](#qui-peut-écouter-et-qui-peut-émettre)
+3. [Notions sur le passage](#notions-sur-le-passage)
+4. [Heure UTC, locator et coordonnées](#heure-utc-locator-et-coordonnées)
+5. [Prévoir les passages et savoir si le satellite est actif](#prévoir-les-passages-et-savoir-si-le-satellite-est-actif)
+6. [Effet Doppler](#effet-doppler)
+7. [Satellites FM pour débuter](#satellites-fm-pour-débuter)
+8. [Équipement de la station](#équipement-de-la-station)
+9. [Utiliser BH Satélite sur l’UV-K5](#utiliser-bh-satélite-sur-luv-k5)
+10. [Comment établir un QSO par satellite](#comment-établir-un-qso-par-satellite)
+11. [Enregistrer et confirmer les contacts](#enregistrer-et-confirmer-les-contacts)
+12. [SSTV et APRS depuis l’ISS](#sstv-et-aprs-depuis-liss)
+13. [Liste de contrôle du passage](#liste-de-contrôle-du-passage)
+14. [Glossaire](#glossaire)
+15. [Références](#références)
 
 ## Qu’est-ce qu’un satellite radioamateur
 

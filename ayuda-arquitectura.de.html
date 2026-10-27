@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Architektur von Bricohams Radio Workspace: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Architektur von Bricohams Radio Workspace | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-arquitectura.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-arquitectura.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-arquitectura.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-arquitectura.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-arquitectura.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=de"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda-referencias.de.html">Dokumentation und Referenzen</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=de">Quansheng</a> · <a href="opengd77.html?lang=de">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-arquitectura.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-arquitectura.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-arquitectura.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-arquitectura.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-arquitectura.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#modos-de-ejecucion">Betriebsarten</a></li><li><a href="#vista-de-componentes">Komponentenübersicht</a></li><li><a href="#modulos">Module</a></li><li><a href="#flujo-de-conexion-y-copia-automatica">Verbindungsablauf und automatische Sicherung</a></li><li><a href="#capas-de-seguridad">Sicherheitsebenen</a></li><li><a href="#limitaciones-conocidas">Bekannte Einschränkungen</a></li></ul></nav>
+    <article class="panel"><h1 id="arquitectura-de-bricohams-radio-workspace">Architektur von Bricohams Radio Workspace</h1>
+<p>Bricohams Radio Workspace ist eine <strong>lokale</strong> Webanwendung. Ein kleiner Node.js-Server stellt eine feste Positivliste statischer Dateien und einige schreibgeschützte APIs bereit. Die gesamte Kommunikation mit dem Funkgerät erfolgt im Browser über WebUSB oder Web Serial.</p>
+<p>&lt;a id=&quot;modos-de-ejecución&quot;&gt;&lt;/a&gt;</p>
+<h2 id="modos-de-ejecucion">Betriebsarten</h2>
+<p>Beim Start fordert <code>runtime-mode.js</code> die Datei <code>runtime.json</code> an (relativer Pfad, ohne Cache). Nur <code>{&quot;mode&quot;:&quot;local&quot;}</code> aktiviert den lokalen Modus; fehlt die Datei, liefert sie 404, enthält sie kein JSON oder wird die Seite über <code>file://</code> geöffnet, startet die Anwendung fehlerfrei im <strong>Webmodus</strong>. <code>server.cjs</code> liefert sie als <code>{&quot;mode&quot;:&quot;local&quot;}</code>, und <code>scripts/build-pages.cjs</code> erzeugt <code>{&quot;mode&quot;:&quot;web&quot;}</code> in <code>dist/</code>. Das Kennzeichen oben zeigt „Web · GitHub Pages“ oder „Lokal · installiert“.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Aspekt</th><th scope="col">Web (Pages)</th><th scope="col">Lokal</th></tr></thead><tbody>
+<tr><td>Server</td><td>Keiner, nur statische Dateien</td><td><code>server.cjs</code> auf <code>127.0.0.1:8787</code></td></tr>
+<tr><td>Firmware F4HWN / ARDF K1-K5 V3</td><td>Stabile Versionshistorie von Armel und reald über <code>api.github.com</code>; der Benutzer lädt die Datei, Größe und veröffentlichter SHA-256 werden geprüft</td><td>Vom Server verifizierter Download; ARDF, Versionen vor v6 und SA818 nur zum Download</td></tr>
+<tr><td>Firmware OpenGD77</td><td>Manuelles Laden der ZIP-Datei (Name und ZIP-Signatur; kein Hash des Herausgebers)</td><td>Download über den Server</td></tr>
+<tr><td>RadioID</td><td>Laden von <code>user.csv</code> (100 MiB, gefiltert, 5.000 angezeigte Zeilen) und optionales Profil in <code>localStorage</code></td><td>API über den Server</td></tr>
+<tr><td>RepeaterBook</td><td>Nicht verfügbar</td><td>Genehmigtes Token, nur auf dem Server</td></tr>
+<tr><td>Satelliten</td><td>Tägliche <code>data/satellites.json</code> (<code>scripts/fetch-satellites.cjs</code>)</td><td>Aktuelle TLEs</td></tr>
+</tbody></table></div>
+<p>Client-Pfade sind immer relativ. Die CSP jeder HTML-Datei steht in <code>&lt;meta&gt;</code>; da <code>&lt;meta&gt;</code> kein <code>frame-ancestors</code> unterstützt, bricht <code>app.js</code> ab, wenn die Seite in einem Frame läuft. Die Webversion hat einen eigenen Origin (siehe ADR-013).</p>
+<h2 id="vista-de-componentes">Komponentenübersicht</h2>
+<pre><code>flowchart LR
+  subgraph Equipo[&quot;Equipo del usuario (127.0.0.1)&quot;]
+    subgraph Navegador[&quot;Chrome / Edge de escritorio&quot;]
+      UI[&quot;app.js / radio-ui.js / planning-ui.js&lt;br/&gt;Interfaz&quot;]
+      CON[&quot;gd77-connector.js&lt;br/&gt;quansheng-connector.js&quot;]
+      TR[&quot;transports.js&lt;br/&gt;WebUSB / Web Serial&quot;]
+      CORE[&quot;radio-core.js&lt;br/&gt;CRC, tramas, permisos&quot;]
+      CP[&quot;codeplug-editor.js&lt;br/&gt;planning-core.js&quot;]
+      BK[&quot;backup-store.js&lt;br/&gt;IndexedDB + SHA-256&quot;]
+    end
+    SRV[&quot;server.cjs&lt;br/&gt;estáticos + API&quot;]
+    FW[&quot;firmware-service.cjs&lt;br/&gt;catálogo y descargas verificadas&quot;]
+    DS[&quot;data-service.cjs&lt;br/&gt;RadioID, RepeaterBook, SatNOGS, CelesTrak&quot;]
+  end
+  Radio[(&quot;Radio&lt;br/&gt;OpenGD77 / UV-K1 / UV-K5 V3&quot;)]
+  Ext[(&quot;Proveedores oficiales&lt;br/&gt;GitHub Releases, opengd77.com,&lt;br/&gt;RadioID, RepeaterBook, SatNOGS, CelesTrak&quot;)]
+  UI --&gt; CON --&gt; TR --&gt; Radio
+  CON --&gt; CORE
+  CON --&gt; BK
+  UI --&gt; CP
+  UI -- &quot;fetch /api/*&quot; --&gt; SRV
+  SRV --&gt; FW --&gt; Ext
+  SRV --&gt; DS --&gt; Ext</code></pre>
+<h2 id="modulos">Module</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Datei</th><th scope="col">Seite</th><th scope="col">Aufgabe</th></tr></thead><tbody>
+<tr><td><code>index.html</code>, <code>opengd77.html</code>, <code>quansheng.html</code>, <code>ayuda.html</code></td><td>Browser</td><td>Seitengerüste mit <code>body[data-page]</code>, ohne Inline-Skripte.</td></tr>
+<tr><td><code>app.js</code></td><td>Browser</td><td>Gemeinsame Oberfläche (Marke, Navigation, Fußzeile), Anleitungen und Hilfeseite mit Suche.</td></tr>
+<tr><td><code>radio-ui.js</code></td><td>Browser</td><td>Verbindungsbereich, automatische Sicherungen, Verlauf, Export und geschützte Aktionen.</td></tr>
+<tr><td><code>transports.js</code></td><td>Browser</td><td><code>USBTransport</code> (CDC über WebUSB, <code>1FC9:0094</code>) und <code>SerialTransport</code> (Web Serial), mit exaktem Lesen und Zeitlimit.</td></tr>
+<tr><td><code>radio-core.js</code></td><td>Browser / Node</td><td>CRC-16/CRC-32, Binärhilfsfunktionen, Schreibberechtigungen und SHA-256.</td></tr>
+<tr><td><code>gd77-connector.js</code></td><td>Browser</td><td>OpenGD77-CPS-Protokoll (<code>C</code>/<code>R</code>/<code>W</code>/<code>X</code>) und Speicherzuordnungen MK22, STM32 und SERIAL.</td></tr>
+<tr><td><code>quansheng-connector.js</code></td><td>Browser</td><td>F4HWN-UART-Protokoll (XOR-Verschleierung, CRC), Lesen von Kalibrierung und Flash, Multiboot-Slots.</td></tr>
+<tr><td><code>backup-store.js</code></td><td>Browser</td><td>Speicherung in IndexedDB, verifiziertes Rücklesen und <code>.rwb.json</code>-Export.</td></tr>
+<tr><td><code>codeplug-editor.js</code></td><td>Browser / Node</td><td>Binäres Lesen und Schreiben des OpenGD77-Codeplugs: Kanäle, Kontakte und SAT-Block Typ 3.</td></tr>
+<tr><td><code>planning-core.js</code></td><td>Browser / Node</td><td>Filter, Deduplizierung, CSV, TLE-Validierung und SGP4-Überflüge mit <code>satellite.js</code>.</td></tr>
+<tr><td><code>planning-ui.js</code></td><td>Browser</td><td>Bereich „Codeplug: Kontakte, Relais und SAT“.</td></tr>
+<tr><td><code>firmware-catalog.js</code></td><td>Browser / Node</td><td>Zugelassene Modelle und Firmwarequellen.</td></tr>
+<tr><td><code>server.cjs</code></td><td>Node</td><td>HTTP-Server auf <code>127.0.0.1:8787</code>, Dateipositivliste, Sicherheitsheader und Routing für <code>/api/*</code>.</td></tr>
+<tr><td><code>firmware-service.cjs</code></td><td>Node</td><td>Abfragen von GitHub Releases und opengd77.com mit kontrollierten Weiterleitungen, Größenlimits und Cache.</td></tr>
+<tr><td><code>runtime-mode.js</code></td><td>Browser</td><td>Erkennt den Modus (<code>runtime.json</code>; Webmodus bei fehlender Datei).</td></tr>
+<tr><td><code>radioid-csv.js</code></td><td>Browser / Node</td><td>Gefiltertes Lesen von <code>user.csv</code> und optionales lokales Profil.</td></tr>
+<tr><td><code>scripts/build-pages.cjs</code>, <code>scripts/fetch-satellites.cjs</code></td><td>Node</td><td>Erzeugen <code>dist/</code> und <code>data/satellites.json</code> für Pages.</td></tr>
+<tr><td><code>data-service.cjs</code></td><td>Node</td><td>Schreibgeschützter Proxy für RadioID, RepeaterBook (Zugangsdaten nur auf dem Server), SatNOGS und CelesTrak.</td></tr>
+</tbody></table></div>
+<h2 id="flujo-de-conexion-y-copia-automatica">Verbindungsablauf und automatische Sicherung</h2>
+<pre><code>sequenceDiagram
+  participant U as Usuario
+  participant UI as radio-ui.js
+  participant C as Conector
+  participant R as Radio
+  participant B as backup-store.js
+  U-&gt;&gt;UI: Selecciona el modelo y pulsa Conectar
+  UI-&gt;&gt;C: open() (gesto del usuario)
+  C-&gt;&gt;R: Identificación
+  C-&gt;&gt;R: Leer calibración
+  C-&gt;&gt;B: Guardar, calcular SHA-256 y releer
+  C-&gt;&gt;R: Leer Flash o codeplug completo (según la familia)
+  C-&gt;&gt;C: Verificar CRC, tamaños y cabeceras
+  C-&gt;&gt;B: Persistir y volver a verificar los hashes
+  B--&gt;&gt;UI: Copia completa o parcial
+  UI--&gt;&gt;U: Permiso de escritura solo si la copia es completa
+  UI-&gt;&gt;U: Descarga automática del .rwb.json</code></pre>
+<p>Vor jedem Schreibvorgang wird die Sicherung erneut gelesen und mit den Hashes der Berechtigung verglichen. Das Trennen oder Austauschen des Funkgeräts sowie das Löschen der Sicherung widerrufen die Berechtigung.</p>
+<h2 id="capas-de-seguridad">Sicherheitsebenen</h2>
+<ol>
+<li><strong>Netzwerk:</strong> der Server lauscht nur auf <code>127.0.0.1</code>, verlangt <code>Host: 127.0.0.1:&lt;puerto&gt;</code> und stellt eine feste Dateiliste bereit.</li>
+<li><strong>Browser:</strong> CSP <code>default-src &#39;self&#39;; script-src &#39;self&#39;; style-src &#39;self&#39;</code>, <code>Permissions-Policy</code>, <code>nosniff</code>, <code>no-referrer</code> und <code>no-store</code>. Kein <code>eval</code> und kein aus Funkgerätedaten erzeugtes HTML.</li>
+<li><strong>Gerät:</strong> Schreibvorgänge benötigen eine an eine verifizierte Sicherung gebundene *Fail-closed*-Berechtigung. Main ist niemals ein Ziel. Löschen oder Zurücksetzen erfordert eine eingetippte Bestätigung.</li>
+<li><strong>Externe Quellen:</strong> nur offizielle Anbieter, Weiterleitungen auf zugelassene Hosts, Größenlimits und sichtbarer SHA-256. RepeaterBook-Zugangsdaten werden nie an den Browser gesendet.</li>
+<li><strong>Daten:</strong> keine Telemetrie und keine Uploads. Sicherungen verbleiben in der IndexedDB des lokalen Profils und werden in Benutzerdateien exportiert.</li>
+</ol>
+<h2 id="limitaciones-conocidas">Bekannte Einschränkungen</h2>
+<ul>
+<li><strong>OpenGD77:</strong> hier existiert kein verifiziertes Protokoll zum Auslesen der vollständigen MCU-Firmware. Die Sicherung wird als <strong>unvollständig</strong> markiert; Schreiben auf das Funkgerät bleibt gesperrt.</li>
+<li><strong>Quansheng:</strong> eine vollständige physische Flash-Sicherung erfordert die Lese- und CRC-Funktionen von F4HWN Labs v6.1+. Die Webanwendung implementiert Beta-Schreibzugriff auf Konfiguration/Kanäle mit Sicherung und Rücklesen; Bricohams-SAT-Images enthalten experimentelles CAT RX. Das belegt weder dauerhaftes Schreiben noch CAT-Betrieb auf einem bestimmten Funkgerät; siehe <a href="ayuda-validacion-v3-android.de.html">Validierungsmatrix</a>.</li>
+<li><strong>RepeaterBook:</strong> erfordert ein von RepeaterBook genehmigtes Token und ist nur lokal verfügbar.</li>
+<li><strong>Web:</strong> Satellitendaten können bis zu einen Tag alt sein (Warnung ab 7 Tagen); Firmware/RadioID werden manuell geladen.</li>
+<li><strong>Hardware:</strong> frühere Lesevorgänge an einem Quansheng-Gerät sind vorhanden, zertifizieren aber weder Schreibvorgänge noch den eigenständigen Resident oder die aktuelle Kombination aus APK, SAT-Slot und Telefon. Physische Tests dieser Revision stehen aus.</li>
+</ul></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

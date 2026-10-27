@@ -186,7 +186,7 @@ node scripts/i18n.cjs --fix --strict
 npm run build:help
 ```
 
-`--fix` ajusta las rutas relativas de enlaces e imágenes a la carpeta de cada traducción y las dirige a la traducción hermana. Si el texto traducido y el original discrepan, prevalece el español.
+`--fix` ajusta las rutas relativas de enlaces e imágenes a la carpeta de cada traducción y las dirige a la traducción hermana. También corrige las anclas para los títulos traducidos de Markdown; la ayuda HTML conserva sus anclas estables en todos los idiomas. La comprobación incluye arquitectura, marca, decisiones y despliegue. El índice de referencias se genera desde los títulos traducidos de todas las guías y enlaza cada versión por idioma, incluido inglés de EE. UU. Las fuentes externas conservan el idioma publicado por sus autores; el centro de preguntas frecuentes histórico se identifica como español. Si el texto traducido y el original discrepan, prevalece el español.
 
 ## Arranque automático (opcional, desde código fuente)
 
@@ -273,7 +273,7 @@ Con Node.js 22+, Git y las herramientas de archivo del sistema:
 npm run export:project -- --beta `
   --firmware 'C:\ruta\Multiboot\Bricohams' `
   --installers 'C:\ruta\instalables-verificados' `
-  --android 'C:\ruta\Android-0.8.1-beta' `
+  --android 'C:\ruta\Android-0.8.2-beta' `
   --output 'C:\ruta\entregas\Bricohams-desarrollo.zip'
 ```
 

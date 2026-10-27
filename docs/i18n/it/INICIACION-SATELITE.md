@@ -26,21 +26,21 @@ relativa attribuzione.
 
 ## Contenuti
 
-1. [Che cos'è un satellite radioamatoriale](#que-es-un-satelite-de-radioaficionado)
-2. [Chi può ascoltare e chi può trasmettere](#quien-puede-escuchar-y-quien-puede-transmitir)
-3. [Concetti del passaggio](#conceptos-del-pase)
-4. [Ora UTC, locator e coordinate](#hora-utc-localizador-y-coordenadas)
-5. [Prevedere i passaggi e verificare se il satellite è attivo](#predecir-pases-y-saber-si-el-satelite-esta-activo)
-6. [Effetto Doppler](#efecto-doppler)
-7. [Satelliti FM per iniziare](#satelites-fm-para-empezar)
-8. [Apparecchiature della stazione](#equipo-de-la-estacion)
-9. [Operare con BH Satélite sulla UV-K5](#operar-con-bh-satelite-en-la-uv-k5)
-10. [Come fare un QSO via satellite](#como-hacer-un-qso-por-satelite)
-11. [Registrare e confermare i contatti](#registrar-y-confirmar-contactos)
-12. [SSTV e APRS dalla ISS](#sstv-y-aprs-desde-la-iss)
-13. [Lista di controllo del passaggio](#lista-de-comprobacion-del-pase)
-14. [Glossario](#glosario)
-15. [Riferimenti](#referencias)
+1. [Che cos'è un satellite radioamatoriale](#che-cosè-un-satellite-radioamatoriale)
+2. [Chi può ascoltare e chi può trasmettere](#chi-può-ascoltare-e-chi-può-trasmettere)
+3. [Concetti del passaggio](#concetti-del-passaggio)
+4. [Ora UTC, locator e coordinate](#ora-utc-locator-e-coordinate)
+5. [Prevedere i passaggi e verificare se il satellite è attivo](#prevedere-i-passaggi-e-verificare-se-il-satellite-è-attivo)
+6. [Effetto Doppler](#effetto-doppler)
+7. [Satelliti FM per iniziare](#satelliti-fm-per-iniziare)
+8. [Apparecchiature della stazione](#apparecchiature-della-stazione)
+9. [Operare con BH Satélite sulla UV-K5](#operare-con-bh-satélite-sulla-uv-k5)
+10. [Come fare un QSO via satellite](#come-fare-un-qso-via-satellite)
+11. [Registrare e confermare i contatti](#registrare-e-confermare-i-contatti)
+12. [SSTV e APRS dalla ISS](#sstv-e-aprs-dalla-iss)
+13. [Lista di controllo del passaggio](#lista-di-controllo-del-passaggio)
+14. [Glossario](#glossario)
+15. [Riferimenti](#riferimenti)
 
 ## Che cos'è un satellite radioamatoriale
 

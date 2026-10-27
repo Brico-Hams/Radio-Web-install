@@ -268,18 +268,18 @@ Chaque phase indique le critère de fin. Les phases 9 et 10 sont facultatives.
 
 | Phase | Action | Terminée lorsque | Détails |
 | --- | --- | --- | --- |
-| 0. Identifier | Étiquette sous la batterie, SysInf et version du bootloader | Vous savez s’il s’agit d’une UV-K5 V3, UV-K1 ou d’une autre révision | [Versions](ATLAS-UV-K5-V3.md#versiones-y-como-identificarlas) |
-| 1. Préparer le PC | Chrome ou Edge pour ordinateur, câble USB-C de données ou câble Kenwood, pilote | Le port apparaît et aucune autre application ne l’utilise | [Pilotes](../../../ayuda.html#drivers) et [USB](AYUDA-CONFIGURACION.md#conexion-usb-sin-confundir-modos) |
-| 2. Sauvegardes | Étalonnage (512 octets), configuration et, si le firmware le permet, Flash complète | Vous avez les fichiers hors du navigateur avec leur SHA-256 | [Étalonnage](ATLAS-UV-K5-V3.md#calibracion) |
-| 3. Choisir le firmware | Version et édition (Fusion, FieldOps, Transfer, Labs) correspondant au matériel | Fichier `.bin` téléchargé depuis la release officielle avec hash vérifié | [Éditions](#que-edicion-elegir) et [versions](#matriz-de-versiones-y-formatos) |
-| 4. Flasher | Radio éteinte, PTT maintenu à l’allumage, UV Studio ou Bricohams Studio | L’outil confirme toutes les pages et la radio redémarre | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-y-flasheo) |
+| 0. Identifier | Étiquette sous la batterie, SysInf et version du bootloader | Vous savez s’il s’agit d’une UV-K5 V3, UV-K1 ou d’une autre révision | [Versions](ATLAS-UV-K5-V3.md#versions-et-identification) |
+| 1. Préparer le PC | Chrome ou Edge pour ordinateur, câble USB-C de données ou câble Kenwood, pilote | Le port apparaît et aucune autre application ne l’utilise | [Pilotes](../../../ayuda.html#drivers) et [USB](AYUDA-CONFIGURACION.md#connexion-usb-sans-confondre-les-modes) |
+| 2. Sauvegardes | Étalonnage (512 octets), configuration et, si le firmware le permet, Flash complète | Vous avez les fichiers hors du navigateur avec leur SHA-256 | [Étalonnage](ATLAS-UV-K5-V3.md#calibration) |
+| 3. Choisir le firmware | Version et édition (Fusion, FieldOps, Transfer, Labs) correspondant au matériel | Fichier `.bin` téléchargé depuis la release officielle avec hash vérifié | [Éditions](#quelle-édition-choisir) et [versions](#matrice-des-versions-et-formats) |
+| 4. Flasher | Radio éteinte, PTT maintenu à l’allumage, UV Studio ou Bricohams Studio | L’outil confirme toutes les pages et la radio redémarre | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-et-flashage) |
 | 5. Premier démarrage | Lire SysInf et vérifier la version | La version correspond au fichier flashé | Section suivante |
 | 6. Réglages de base | Navigation, batterie, écran, squelch, TX et verrouillages | Les réglages sont conservés après extinction et rallumage | Tableau des réglages de base |
-| 7. Canaux | Relais, PMR en RX uniquement, satellites et noms | Les mémoires apparaissent et sont relues à l’identique | [Mémoires FM](#preparar-y-enviar-memorias-fm) |
-| 8. Balayage | Listes, priorités et reprise | Le balayage ne parcourt que les mémoires prévues | [Balayage](#escaneo-prioridades-y-teclas) |
-| 9. Multiboot (facultatif) | Slots 1-4 et banques CFG | Chaque slot valide le CRC et démarre | [Slots et banques](#slots-y-bancos-cfg-operaciones-distintas) |
-| 10. Labs (facultatif) | Apps en overlay de la même release | L’app démarre et retourne au firmware | [Labs](#labs-y-aplicaciones) |
-| 11. Vérification finale | Liste de contrôle et nouvelle sauvegarde | Vous possédez une sauvegarde de l’état final et les versions sont notées | [Liste finale](AYUDA-CONFIGURACION.md#lista-de-verificacion-posterior) |
+| 7. Canaux | Relais, PMR en RX uniquement, satellites et noms | Les mémoires apparaissent et sont relues à l’identique | [Mémoires FM](#préparer-et-envoyer-des-mémoires-fm) |
+| 8. Balayage | Listes, priorités et reprise | Le balayage ne parcourt que les mémoires prévues | [Balayage](#balayage-priorités-et-touches) |
+| 9. Multiboot (facultatif) | Slots 1-4 et banques CFG | Chaque slot valide le CRC et démarre | [Slots et banques](#slots-et-banques-cfg--opérations-distinctes) |
+| 10. Labs (facultatif) | Apps en overlay de la même release | L’app démarre et retourne au firmware | [Labs](#labs-et-applications) |
+| 11. Vérification finale | Liste de contrôle et nouvelle sauvegarde | Vous possédez une sauvegarde de l’état final et les versions sont notées | [Liste finale](AYUDA-CONFIGURACION.md#liste-de-vérification-après-lopération) |
 
 ### Phase 4 étape par étape : flasher le firmware principal
 
@@ -326,15 +326,15 @@ Chaque phase indique le critère de fin. Les phases 9 et 10 sont facultatives.
 | ChDisp | Nom | Afficher le nom de mémoire en mode MR |
 
 Après les réglages, éteindre et rallumer pour confirmer qu’ils ont été enregistrés.
-La signification de chaque menu figure dans le [dictionnaire des menus](#diccionario-de-menus-de-radio).
+La signification de chaque menu figure dans le [dictionnaire des menus](#dictionnaire-des-menus-de-la-radio).
 
 ### Phases 7 et 8 : canaux et balayage
 
 - Ce site prépare les canaux à partir d’un modèle et les écrit avec sauvegarde et
-  relecture ([mémoires FM](#preparar-y-enviar-memorias-fm)). Vous pouvez aussi utiliser
+  relecture ([mémoires FM](#préparer-et-envoyer-des-mémoires-fm)). Vous pouvez aussi utiliser
   le pilote CHIRP de chaque release F4HWN ou Bricohams Studio.
 - Les canaux importés sont verrouillés TX. Ne retirer ce verrou que pour des canaux vérifiés
-  et autorisés ([dictionnaire des canaux](AYUDA-CONFIGURACION.md#diccionario-de-canal-analogico)).
+  et autorisés ([dictionnaire des canaux](AYUDA-CONFIGURACION.md#référentiel-des-canaux-analogiques)).
 - Affecter chaque mémoire à sa liste (ScList), choisir les priorités (PriCh1/PriCh2)
   et le mode de reprise (ScnRev). Tester le balayage avec SQL réglé.
 
@@ -345,7 +345,7 @@ La signification de chaque menu figure dans le [dictionnaire des menus](#diccion
 | Vous voulez revenir au firmware d’usine | Restauration guidée d’[UV Studio](https://armel.github.io/uvstudio/) : reconstruit la flash externe sans toucher à l’étalonnage. Flasher uniquement le `.bin` d’usine peut empêcher le K1 de démarrer |
 | La radio ne démarre pas après flashage | Entrer en mode mise à jour (PTT à l’allumage) et flasher de nouveau un `.bin` du bon modèle |
 | Le bootloader ne répond pas ou le port n’apparaît pas | Essayer un autre câble de données et un autre port ; vérifier qu’aucun autre programme n’utilise le port |
-| Impossible d’entrer en mode mise à jour | Récupération par SWD avec ST-Link ([SWD](ATLAS-UV-K5-V3.md#swd-y-recuperacion)). Réservé aux personnes expérimentées |
+| Impossible d’entrer en mode mise à jour | Récupération par SWD avec ST-Link ([SWD](ATLAS-UV-K5-V3.md#swd-et-récupération)). Réservé aux personnes expérimentées |
 | Étalonnage perdu ou provenant d’une autre radio | Restaurer la sauvegarde de la phase 2. Ne pas utiliser l’étalonnage d’un autre appareil |
 
 ## Beta : test USB réel et canaux

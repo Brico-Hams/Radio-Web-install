@@ -25,7 +25,7 @@ monocromatico richiede un adattamento proporzionale dell'originale a 128 × 48,
 senza colore, su sfondo vuoto, con `Bricohams BETA` sotto. Viene generato
 dal PNG originale, senza disegnare un nuovo marchio. Non sostituisce il PNG
 a colori su web o Android. Costruzione e limiti nella
-[guida al firmware](BRICOHAMS-FIRMWARE.md#branding-de-arranque-implementado).
+[guida al firmware](BRICOHAMS-FIRMWARE.md#branding-di-avvio-implementato).
 
 ## Palette
 

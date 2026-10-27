@@ -25,19 +25,19 @@ Si su autor autoriza la traducción, la publicaremos aparte con su atribución.
 
 ## Contenido
 
-1. [Qué es un satélite de radioaficionado](#que-es-un-satelite-de-radioaficionado)
-2. [Quién puede escuchar y quién puede transmitir](#quien-puede-escuchar-y-quien-puede-transmitir)
+1. [Qué es un satélite de radioaficionado](#qué-es-un-satélite-de-radioaficionado)
+2. [Quién puede escuchar y quién puede transmitir](#quién-puede-escuchar-y-quién-puede-transmitir)
 3. [Conceptos del pase](#conceptos-del-pase)
 4. [Hora UTC, localizador y coordenadas](#hora-utc-localizador-y-coordenadas)
-5. [Predecir pases y saber si el satélite está activo](#predecir-pases-y-saber-si-el-satelite-esta-activo)
+5. [Predecir pases y saber si el satélite está activo](#predecir-pases-y-saber-si-el-satélite-está-activo)
 6. [Efecto Doppler](#efecto-doppler)
-7. [Satélites FM para empezar](#satelites-fm-para-empezar)
-8. [Equipo de la estación](#equipo-de-la-estacion)
-9. [Operar con BH Satélite en la UV-K5](#operar-con-bh-satelite-en-la-uv-k5)
-10. [Cómo hacer un QSO por satélite](#como-hacer-un-qso-por-satelite)
+7. [Satélites FM para empezar](#satélites-fm-para-empezar)
+8. [Equipo de la estación](#equipo-de-la-estación)
+9. [Operar con BH Satélite en la UV-K5](#operar-con-bh-satélite-en-la-uv-k5)
+10. [Cómo hacer un QSO por satélite](#cómo-hacer-un-qso-por-satélite)
 11. [Registrar y confirmar contactos](#registrar-y-confirmar-contactos)
 12. [SSTV y APRS desde la ISS](#sstv-y-aprs-desde-la-iss)
-13. [Lista de comprobación del pase](#lista-de-comprobacion-del-pase)
+13. [Lista de comprobación del pase](#lista-de-comprobación-del-pase)
 14. [Glosario](#glosario)
 15. [Referencias](#referencias)
 

@@ -6,7 +6,7 @@ Protokolle stammen aus dem heute auf diesen Funkgeräten laufenden offenen
 Quellcode ([F4HWN V3](https://github.com/armel/uv-k1-k5v3-firmware-custom), Apache-2.0)
 und dem [Teardown von armel](https://github.com/armel/k1-teardown), nicht aus
 Vermutungen. Für die schrittweise Einrichtung des Funkgeräts verwende den
-[Start von 0 bis 100 %](AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100).
+[Start von 0 bis 100 %](AYUDA-QUANSHENG.md#inbetriebnahme-von-0-bis-100-).
 
 | Block | Komponente |
 | --- | --- |

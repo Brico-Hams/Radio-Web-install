@@ -5,7 +5,7 @@ sviluppo per UV-K5 V3 e il suo gemello UV-K1. Pin, memorie e protocolli
 provengono dal codice sorgente aperto attualmente funzionante su queste radio
 ([F4HWN V3](https://github.com/armel/uv-k1-k5v3-firmware-custom), Apache-2.0) e
 dal [teardown di armel](https://github.com/armel/k1-teardown), non da supposizioni.
-Per configurare la radio passo dopo passo, usa la [guida introduttiva da 0 a 100 %](AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100).
+Per configurare la radio passo dopo passo, usa la [guida introduttiva da 0 a 100 %](AYUDA-QUANSHENG.md#avvio-da-0-al-100-).
 
 | Blocco | Componente |
 | --- | --- |

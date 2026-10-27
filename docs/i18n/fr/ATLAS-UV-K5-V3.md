@@ -1,6 +1,6 @@
 # Atlas technique du Quansheng UV-K5 V3 et UV-K1
 
-Révision : 26-10-2026. Base de connaissances sur le matériel, les communications, le flashage et le développement pour l’UV-K5 V3 et son jumeau UV-K1. Les broches, les mémoires et les protocoles proviennent du code source ouvert qui fonctionne actuellement sur ces radios ([F4HWN V3](https://github.com/armel/uv-k1-k5v3-firmware-custom), Apache-2.0) et du [démontage d’armel](https://github.com/armel/k1-teardown), et non de suppositions. Pour configurer la radio pas à pas, consultez le [guide de mise en service de 0 à 100 %](AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100).
+Révision : 26-10-2026. Base de connaissances sur le matériel, les communications, le flashage et le développement pour l’UV-K5 V3 et son jumeau UV-K1. Les broches, les mémoires et les protocoles proviennent du code source ouvert qui fonctionne actuellement sur ces radios ([F4HWN V3](https://github.com/armel/uv-k1-k5v3-firmware-custom), Apache-2.0) et du [démontage d’armel](https://github.com/armel/k1-teardown), et non de suppositions. Pour configurer la radio pas à pas, consultez le [guide de mise en service de 0 à 100 %](AYUDA-QUANSHENG.md#mise-en-service-de-0-à-100-).
 
 | Bloc | Composant |
 | --- | --- |

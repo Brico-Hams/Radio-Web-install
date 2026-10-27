@@ -52,7 +52,7 @@ equal physical USB/Flash support or validated boot.
 | ANY-04 | Airports if AnyTone supports the air band | RF frequency import with AIP source and manual AM confirmation | Exact model, current list, and AM/spacing verification; no national airport database included |
 | CAT-01 | Change frequency during the selected pass | CAT RX physically enabled, 3 s lease, web tracking with safe stop; separately, CAT TX v1 (PTT by lease, key 9) only for sending SSTV | Real USB/RF validation; no autonomous tracking in the radio or uplink Doppler |
 | CAT-02 | Edit frequency, subtones, and power per channel from Android | Android Beta channel editor for F4HWN v6 FM: name, RX/TX, RX and TX CTCSS/DCS, power, narrow, and TX lock; full backup with radio CRC and on-disk SHA-256, block writes in web order and reread; 10 host tests with simulated radio | Run tests in CI, real OTG write/reread test on a radio, and persistence after reboot |
-| AND-01 | Bricohams Android app | Kotlin project 0.8.1-beta; SQLite, ADIF, SSTV, ARDF statistics, microphone capture, and CAT RX over CDC ACM and recognized adapters, with host tests | Outstanding features, installation, permissions, and OTG/RF testing of each cable on a phone |
+| AND-01 | Bricohams Android app | Kotlin project 0.8.2-beta; SQLite, ADIF, SSTV, ARDF statistics, microphone capture, and CAT RX over CDC ACM and recognized adapters, with host tests | Outstanding features, installation, permissions, and OTG/RF testing of each cable on a phone |
 | AND-02 | Look4sat-like satellite features with a similar interface | Offline Android SGP4, imported TLEs, manual observer, 24 h passes, and CAT RX Doppler with safe stop | Look4sat-style interface (pass list, polar radar, map), automatic TLE/transponder downloads, observer GPS, phone/cable/radio matrix and field testing; Look4sat parity is not claimed |
 | AND-03 | Robot36 SSTV with CAT against Bricohams firmware | WAV decoder and microphone capture with VIS/parity, 320x240 color and PNG; CAT screen records Robot36 while Doppler or CAT tuning remains active; synthetic tests | AudioRecord, physical path, and RF validation; continuous streaming decoding, drift, and noise |
 | AND-04 | Decode Morse | Text, PCM WAV, and microphone capture up to 60 s with post-capture decoding and fixed tone/speed; synthetic tests | Real AudioRecord, continuous decoding, adaptation, and error measurements on real samples |
@@ -112,7 +112,7 @@ revision. Earlier builds remain developmental builds; a folder name containing
 The exporter creates a **Beta development snapshot**; it does not certify that
 the matrix is complete. It requires acceptance through `--beta`. It does not
 publish, build, or flash. Its use is described in
-[Deployment](../../DEPLOYMENT.md#exportar-el-proyecto). Final delivery remains
+[Deployment](DEPLOYMENT.md#exporting-the-project). Final delivery remains
 conditional on the items above.
 
 Development builds are verifiable Bricohams builds and the Git history of

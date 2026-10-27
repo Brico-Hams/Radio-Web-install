@@ -1393,7 +1393,7 @@ Kontrast, Ausrichtung oder Lesbarkeit auf dem Funkgerät. Es wurde nicht geflash
 
 ## Angeforderte spätere Phase: Bricohams Android
 
-Die native APK `0.8.1-beta` enthält ein Logbuch mit ADIF-Suche und -Import, ADIF/JSON,
+Die native APK `0.8.2-beta` enthält ein Logbuch mit ADIF-Suche und -Import, ADIF/JSON,
 JSON-Wiederherstellung, ARDF-Sitzungen mit Historie/Statistiken und gefilterter Segment-Summe,
 punktuellem GPS, experimentellem Morse aus Text/WAV
 sowie temporärem CAT RX über USB CDC ACM und erkannten CH34x/CP210x/FTDI/Prolific-Adaptern.

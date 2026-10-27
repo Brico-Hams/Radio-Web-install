@@ -134,15 +134,21 @@ Ver [construccion, controles, licencias y limites](docs/BRICOHAMS-FIRMWARE.md#nu
 
 ## Documentacion
 
+[Indice completo de documentacion y referencias por idioma](ayuda-referencias.html).
+
 ### Android Bricohams Beta
 
-La APK nativa 0.8.1-beta (versionCode 10) incluye libros General/POTA/SOTA y contactos locales editables con busqueda e importacion ADIF con vista previa, exportacion
+La APK nativa 0.8.2-beta (versionCode 11) incluye libros General/POTA/SOTA y contactos locales editables con busqueda e importacion ADIF con vista previa, exportacion
 ADIF/JSON, sesiones ARDF con historial, estadisticas, segmentos GPS filtrados y observaciones GPS puntuales, y Morse de texto
 y WAV PCM experimental. Incorpora CAT RX temporal por USB CDC ACM y
 adaptadores CH34x/CP210x/FTDI/Prolific reconocidos. Satelites al estilo Look4sat con marca
-Bricohams: TLE de CelesTrak y frecuencias de SatNOGS descargados a peticion (o
+Bricohams: TLE de CelesTrak y frecuencias de SatNOGS con actualizacion automatica opcional al abrir, cada 24 h (o
 TLE importados), pases SGP4 offline con radar polar y mapa mundial, Doppler RX
 del pase por CAT, grabacion del pase a WAV y busqueda de imagenes Robot36.
+El mapa aparece sin permiso GPS ni observador; los pases requieren guardar tu
+ubicacion. Conserva el catalogo sin red mientras sus TLE sigan vigentes y la
+seleccion guardada. Pruebas host, lint y APK 0.8.2 verificados en CI con
+JDK 17/SDK 35; instalacion y permisos en telefono fisico siguen pendientes.
 Captura microfono en primer plano hasta 60 s para decodificar despues Morse
 o Robot36; no es decodificacion continua. Incluye editor de canales F4HWN v6 con respaldo completo verificado y relectura;
 no incluye subida LoTW. Decodifica SSTV Robot36 experimental desde WAV y exporta PNG.
@@ -155,7 +161,7 @@ Consulta [funciones, permisos, compilacion y limites](docs/ANDROID.md).
 | [Estado de entrega](docs/ESTADO-ENTREGA.md) | Revision de todas las peticiones, evidencias, pendientes y condiciones de publicacion y exportacion |
 | [Ayuda y soporte](ayuda.html) (en la app: <http://127.0.0.1:8787/ayuda.html>) | Primeros pasos, controladores USB (soporte no oficial), errores frecuentes y preguntas frecuentes |
 | [Biblioteca completa de firmware](ayuda-firmwares.html) / [indice Markdown](docs/AYUDA-FIRMWARES.md) | Guias por familia, modelo, revision y version: F4HWN, ARDF, Karina, Bricohams y OpenGD77; menus, configuracion FM/DMR y todas las opciones del catalogo con matriz ON/OFF. Incluida sin red en instaladores y servidor local. Regenerar con `npm run build:help`. |
-| [Quansheng de 0 a 100 %](docs/AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100) | Ruta completa por fases: identificar, copias, elegir y flashear firmware, ajustes basicos, canales, escaneo, multiboot, verificacion y recuperacion |
+| [Quansheng de 0 a 100 %](docs/AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100-) | Ruta completa por fases: identificar, copias, elegir y flashear firmware, ajustes basicos, canales, escaneo, multiboot, verificacion y recuperacion |
 | [Atlas tecnico UV-K5 V3 / UV-K1](docs/ATLAS-UV-K5-V3.md) (web: [ayuda-atlas-uv-k5-v3.html](ayuda-atlas-uv-k5-v3.html)) | Hardware por dentro: pinout del PY32F071, flash interna y externa, mapa EEPROM, protocolo serie, bootloader DFU, SWD, compilacion, mods, esquemas, fotos del teardown y repositorios verificados |
 | [Baofeng DM-32UV](docs/DM32UV-FIRMWARE.md) (web: [ayuda-dm32uv.html](ayuda-dm32uv.html)) | Hardware HR_C7000/FD6818, estado y licencia de OpenGD77 en el DM-32, instalacion y copias, como compilar el firmware abierto RadioFoundry y protocolo del bootloader |
 | [Karina](docs/KARINA.md) / [repositorios de la comunidad](docs/ENLACES-COMUNIDAD.md) | Busqueda del codigo fuente de Karina (cerrado), especificacion funcional para reimplementarla y catalogo verificado de repositorios Quansheng y DM-32UV |
@@ -235,7 +241,7 @@ Ver [alcance web y respaldo obligatorio](docs/AYUDA-OPENGD77.md).
 ### Instaladores locales
 
 Descarga la [ultima Release](https://github.com/Brico-Hams/Radio-Web-install/releases/latest) y su archivo `SHA256SUMS`. Elige un instalador de **Assets**, no los ZIP/tar.gz automaticos de «Source code». [Guia completa de instalacion local](docs/DEPLOYMENT.md#instaladores-locales).
-Tras instalar, para preparar una Quansheng sigue la [puesta en marcha de 0 a 100 %](docs/AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100)
+Tras instalar, para preparar una Quansheng sigue la [puesta en marcha de 0 a 100 %](docs/AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100-)
 y consulta el [atlas tecnico UV-K5 V3](docs/ATLAS-UV-K5-V3.md).
 
 - Windows 11 x64: extrae todo `*-windows-x64.zip`, abre PowerShell en esa carpeta y ejecuta `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1`. Node.js incluido, sin administrador; inicia la app desde el menu Inicio.

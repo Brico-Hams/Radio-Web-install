@@ -229,18 +229,18 @@ Die Phasen 9 und 10 sind optional.
 
 | Phase | Aufgabe | Abgeschlossen, wenn | Details |
 | --- | --- | --- | --- |
-| 0. Identifizieren | Aufkleber unter dem Akku, SysInf und Bootloader-Version | UV-K5 V3, UV-K1 oder andere Revision bekannt | [Versionen](ATLAS-UV-K5-V3.md#versiones-y-como-identificarlas) |
-| 1. PC vorbereiten | Desktop-Chrome oder -Edge, USB-C-Datenkabel oder Kenwood-Kabel, Treiber | Anschluss erscheint und wird von keiner anderen App verwendet | [Treiber](../../../ayuda.html#drivers) und [USB](AYUDA-CONFIGURACION.md#conexion-usb-sin-confundir-modos) |
-| 2. Sicherungen | Kalibrierung (512 Byte), Konfiguration und, sofern Firmware dies zulässt, vollständiger Flash | Dateien samt SHA-256 außerhalb des Browsers vorhanden | [Kalibrierung](ATLAS-UV-K5-V3.md#calibracion) |
-| 3. Firmware wählen | Version und Edition (Fusion, FieldOps, Transfer, Labs) für Hardware | `.bin` aus offiziellem Release heruntergeladen und Hash geprüft | [Editionen](#que-edicion-elegir) und [Versionen](#matriz-de-versiones-y-formatos) |
-| 4. Flashen | Funkgerät aus, PTT beim Einschalten gedrückt, UV Studio oder Bricohams Studio | Tool bestätigt alle Seiten und Funkgerät startet neu | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-y-flasheo) |
+| 0. Identifizieren | Aufkleber unter dem Akku, SysInf und Bootloader-Version | UV-K5 V3, UV-K1 oder andere Revision bekannt | [Versionen](ATLAS-UV-K5-V3.md#versionen-und-ihre-identifikation) |
+| 1. PC vorbereiten | Desktop-Chrome oder -Edge, USB-C-Datenkabel oder Kenwood-Kabel, Treiber | Anschluss erscheint und wird von keiner anderen App verwendet | [Treiber](../../../ayuda.html#drivers) und [USB](AYUDA-CONFIGURACION.md#usb-verbindung-betriebsarten-nicht-verwechseln) |
+| 2. Sicherungen | Kalibrierung (512 Byte), Konfiguration und, sofern Firmware dies zulässt, vollständiger Flash | Dateien samt SHA-256 außerhalb des Browsers vorhanden | [Kalibrierung](ATLAS-UV-K5-V3.md#kalibrierung) |
+| 3. Firmware wählen | Version und Edition (Fusion, FieldOps, Transfer, Labs) für Hardware | `.bin` aus offiziellem Release heruntergeladen und Hash geprüft | [Editionen](#welche-edition-wählen) und [Versionen](#versions--und-formatmatrix) |
+| 4. Flashen | Funkgerät aus, PTT beim Einschalten gedrückt, UV Studio oder Bricohams Studio | Tool bestätigt alle Seiten und Funkgerät startet neu | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-und-flashen) |
 | 5. Erster Start | SysInf lesen und Version prüfen | Version stimmt mit geflashtem Image überein | Nächster Abschnitt |
 | 6. Grundeinstellungen | Navigation, Akku, Bildschirm, Squelch, TX und Sperren | Einstellungen bleiben nach Aus-/Einschalten erhalten | Tabelle der Grundeinstellungen |
-| 7. Kanäle | Repeater, PMR nur RX, Satelliten und Namen | Speicher erscheinen und werden identisch erneut gelesen | [FM-Speicher](#preparar-y-enviar-memorias-fm) |
-| 8. Scan | Listen, Prioritäten und Fortsetzung | Scan durchläuft nur die vorgesehenen Speicher | [Scan](#escaneo-prioridades-y-teclas) |
-| 9. Multiboot (optional) | Slots 1-4 und CFG-Bänke | Jeder Slot besteht CRC-Prüfung und startet | [Slots und Bänke](#slots-y-bancos-cfg-operaciones-distintas) |
-| 10. Labs (optional) | Overlay-Apps derselben Veröffentlichung | App startet und kehrt zur Firmware zurück | [Labs](#labs-y-aplicaciones) |
-| 11. Abschlussprüfung | Checkliste und neue Sicherung | Endzustand gesichert und Versionen notiert | [Abschlussliste](AYUDA-CONFIGURACION.md#lista-de-verificacion-posterior) |
+| 7. Kanäle | Repeater, PMR nur RX, Satelliten und Namen | Speicher erscheinen und werden identisch erneut gelesen | [FM-Speicher](#fm-speicher-vorbereiten-und-übertragen) |
+| 8. Scan | Listen, Prioritäten und Fortsetzung | Scan durchläuft nur die vorgesehenen Speicher | [Scan](#scan-prioritäten-und-tasten) |
+| 9. Multiboot (optional) | Slots 1-4 und CFG-Bänke | Jeder Slot besteht CRC-Prüfung und startet | [Slots und Bänke](#slots-und-cfg-bänke-unterschiedliche-vorgänge) |
+| 10. Labs (optional) | Overlay-Apps derselben Veröffentlichung | App startet und kehrt zur Firmware zurück | [Labs](#labs-und-anwendungen) |
+| 11. Abschlussprüfung | Checkliste und neue Sicherung | Endzustand gesichert und Versionen notiert | [Abschlussliste](AYUDA-CONFIGURACION.md#checkliste-nach-der-konfiguration) |
 
 ### Phase 4 Schritt für Schritt: Hauptfirmware flashen
 
@@ -285,15 +285,15 @@ Die Phasen 9 und 10 sind optional.
 | ChDisp | Name | Speichernamen im MR-Modus sehen |
 
 Nach den Änderungen aus- und einschalten, um das Speichern zu prüfen.
-Die Bedeutung jedes Menüs steht im [Menü-Wörterbuch](#diccionario-de-menus-de-radio).
+Die Bedeutung jedes Menüs steht im [Menü-Wörterbuch](#wörterbuch-der-funkgerätemenüs).
 
 ### Phasen 7 und 8: Kanäle und Scan
 
 - Diese Website bereitet Kanäle auf einer Vorlage vor und schreibt sie mit Sicherung und
-  erneutem Lesen ([FM-Speicher](#preparar-y-enviar-memorias-fm)). Alternativ kannst du
+  erneutem Lesen ([FM-Speicher](#fm-speicher-vorbereiten-und-übertragen)). Alternativ kannst du
   den CHIRP-Treiber jeder F4HWN-Veröffentlichung oder Bricohams Studio verwenden.
 - Importierte Kanäle haben TXLock aktiviert. Nur bei geprüften und autorisierten Kanälen entfernen
-  ([Kanalwörterbuch](AYUDA-CONFIGURACION.md#diccionario-de-canal-analogico)).
+  ([Kanalwörterbuch](AYUDA-CONFIGURACION.md#glossar-für-analogkanäle)).
 - Jeden Speicher einer Liste (ScList) zuweisen, Prioritäten (PriCh1/PriCh2)
   und Fortsetzungsmodus (ScnRev) wählen. Scan mit passendem SQL testen.
 
@@ -304,7 +304,7 @@ Die Bedeutung jedes Menüs steht im [Menü-Wörterbuch](#diccionario-de-menus-de
 | Zur Werksfirmware zurückkehren | Geführte Wiederherstellung von [UV Studio](https://armel.github.io/uvstudio/): rekonstruiert externen Flash, ohne Kalibrierung anzutasten. Nur das Werks-`.bin` zu flashen, kann dazu führen, dass K1 nicht mehr startet |
 | Funkgerät startet nach Flash nicht | Update-Modus betreten (PTT beim Einschalten) und erneut ein `.bin` für das richtige Modell flashen |
 | Bootloader reagiert nicht oder Anschluss wird nicht angezeigt | Anderes Datenkabel und anderen Anschluss versuchen; prüfen, ob eine andere App den Anschluss verwendet |
-| Update-Modus nicht erreichbar | SWD-Wiederherstellung mit ST-Link ([SWD](ATLAS-UV-K5-V3.md#swd-y-recuperacion)). Nur mit Erfahrung |
+| Update-Modus nicht erreichbar | SWD-Wiederherstellung mit ST-Link ([SWD](ATLAS-UV-K5-V3.md#swd-und-wiederherstellung)). Nur mit Erfahrung |
 | Kalibrierung verloren oder von einem anderen Funkgerät | Sicherung aus Phase 2 wiederherstellen. Keine Kalibrierung anderer Geräte verwenden |
 
 ## Beta: echter USB-Test und Kanäle

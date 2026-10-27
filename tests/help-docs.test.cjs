@@ -5,7 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { once } = require("node:events");
 const { pages, render, helpImages, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown,
-  LANGS, TRANSLATIONS, localized, checkParity, translatedPath } = require("../scripts/build-help.cjs");
+  LANGS, TRANSLATIONS, localized, checkParity, translatedPath, relink, markdownHeadingIds } = require("../scripts/build-help.cjs");
 const { ALLOWED_FILES, createServer } = require("../server.cjs");
 const root = path.join(__dirname, "..");
 // Generated docs are stored with LF; a Windows checkout with core.autocrlf turns them into CRLF.
@@ -63,8 +63,8 @@ test("las guias generadas tienen enlaces y anclas locales resolubles, sin script
     assert.doesNotMatch(markdown, /\]\([^)]*\\/, `Enlace no portable: ${source}`);
     const html = read(file);
     assert.ok(markdown.length > 1000, source);
-    assert.match(html, new RegExp(`<html lang="${lang}">`));
-    for (const code of LANGS) assert.ok(html.includes(`hreflang="${code}" href="${localized(spanish, code)}"`), `${file}: falta alternativo ${code}`);
+    assert.match(html, new RegExp(`<html lang="${lang === "en" ? "en-US" : lang}">`));
+    for (const code of LANGS) assert.ok(html.includes(`hreflang="${code === "en" ? "en-US" : code}" href="${localized(spanish, code)}"`), `${file}: falta alternativo ${code}`);
     assert.match(html, /Bricohams Radio Workspace<\/title>/);
     assert.doesNotMatch(html, /<script|\son\w+=|javascript:|\sstyle=/i, file);
     assert.ok(ALLOWED_FILES.includes(file), file);
@@ -73,7 +73,7 @@ test("las guias generadas tienen enlaces y anclas locales resolubles, sin script
     for (const [, link] of html.matchAll(/(?:href|src)="([^"]+)"/g)) {
       if (/^https?:/.test(link)) continue;
       const [target, anchor] = link.split("#");
-      const resolved = target || file;
+      const resolved = target.split("?")[0] || file;
       assert.ok(ALLOWED_FILES.includes(resolved), `${file}: enlace no servido ${link}`);
       assert.ok(fs.existsSync(path.join(root, resolved)), `${file}: enlace roto ${link}`);
       if (anchor) assert.ok(read(resolved).includes(`id="${anchor}"`), `${file}: ancla rota ${link}`);
@@ -370,5 +370,57 @@ test("las traducciones en, de, it y fr existen y conservan estructura, codigo, t
       assert.ok(fs.existsSync(path.join(root, target)), `falta traduccion ${target}`);
       assert.deepEqual(checkParity(read(document), path.join(root, document), read(target), path.join(root, target), lang), [], target);
     }
+  }
+});
+
+test("el indice de referencias incluye todas las guias y sus cinco versiones", () => {
+  for (const lang of LANGS) {
+    const file = localized("ayuda-referencias.html", lang);
+    const html = read(file);
+    assert.ok(ALLOWED_FILES.includes(file), file);
+    for (const guide of Object.values(pages)) {
+      for (const code of LANGS) assert.ok(html.includes(`href="${localized(guide, code)}"`), `${file}: ${guide}/${code}`);
+    }
+    assert.ok(html.includes("README" + (lang === "es" ? "" : `.${lang}`) + ".md"));
+    for (const guide of Object.values(pages)) {
+      const body = read(localized(guide, lang));
+      assert.ok(body.includes(`href="${file}"`), `${guide}: indice no enlazado`);
+      if (lang !== "it") {
+        const locale = lang === "en" ? "en-US" : lang;
+        assert.ok(body.includes(`href="quansheng.html?lang=${locale}"`));
+        assert.ok(body.includes(`href="index.html?lang=${locale}"`));
+      }
+    }
+  }
+});
+
+test("las referencias tecnicas y las anclas Markdown se localizan de forma estable", () => {
+  const document = "README.md";
+  for (const lang of TRANSLATIONS) {
+    const target = translatedPath(document, lang);
+    const text = read(target);
+    for (const source of ["ARCHITECTURE", "BRANDING", "DECISIONS", "DEPLOYMENT"]) {
+      assert.ok(text.includes(`](docs/i18n/${lang}/${source}.md`), `${target}: ${source}`);
+      assert.ok(!text.includes(`](docs/${source}.md`), `${target}: referencia al original`);
+    }
+    assert.equal(relink(text, path.join(root, document), path.join(root, target), lang), text);
+    const changed = text.replace(/#([^)\s]+)\)/, "#no-such-heading)");
+    assert.ok(checkParity(read(document), path.join(root, document), changed, path.join(root, target), lang)
+      .some(error => error.includes("ancla Markdown inexistente")));
+    const guide = read(`docs/i18n/${lang}/AYUDA-QUANSHENG.md`);
+    const anchor = markdownHeadingIds(guide).find(value => value.includes("100"));
+    assert.ok(text.includes(`AYUDA-QUANSHENG.md#${anchor}`), `${target}: ancla traducida`);
+    const html = render(`[Guide](AYUDA-QUANSHENG.md#${anchor})`, `i18n/${lang}/ANDROID.md`, { lang }).body;
+    assert.ok(html.includes(`href="ayuda-quansheng.${lang}.html#puesta-en-marcha-de-0-a-100"`), html);
+  }
+});
+
+test("las referencias del original espanol tambien tienen anclas Markdown validas", () => {
+  const { DOCUMENTS } = require("../scripts/i18n.cjs");
+  for (const document of DOCUMENTS) {
+    const text = read(document);
+    const file = path.join(root, document);
+    assert.deepEqual(checkParity(text, file, text, file, "es"), [], document);
+    assert.equal(relink(text, file, file, "es"), text, document);
   }
 });

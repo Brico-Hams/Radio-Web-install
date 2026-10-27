@@ -1444,7 +1444,7 @@ contraste, orientacion o legibilidad en la radio. No se han flasheado.
 
 ## Fase posterior solicitada: Bricohams Android
 
-La APK nativa `0.8.1-beta` incorpora libro de guardia con busqueda e importacion ADIF, ADIF/JSON,
+La APK nativa `0.8.2-beta` incorpora libro de guardia con busqueda e importacion ADIF, ADIF/JSON,
 restauracion JSON, sesiones ARDF con historial/estadisticas y suma filtrada de segmentos,
 GPS puntual, Morse de texto/WAV experimental
 y CAT RX temporal por USB CDC ACM y adaptadores reconocidos CH34x/CP210x/FTDI/Prolific.

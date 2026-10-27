@@ -10,7 +10,7 @@ firmware without that license (Karina, Baofeng, OpenGD77 DM32) appears only in t
 | Folder | Contents | License | For |
 | --- | --- | --- | --- |
 | [examples/firmware/f4hwn-v6.3.0](../../../examples/firmware/f4hwn-v6.3.0/SHA256SUMS) | `f4hwn.fusion`, `fieldops`, `labs`, and `transfer` v6.3.0, plus the CHIRP driver from the same release | Apache-2.0 (firmware, with `LICENSE` and `NOTICE`); GPL-2.0 or later (CHIRP driver, in its header) | Quansheng UV-K5 V3 and UV-K1 (PY32F071) |
-| [examples/firmware/moto-v1.3.2](../../../examples/firmware/moto-v1.3.2/SHA256SUMS) | Moto bootloader 1.3.2 in `.bin` and `.uf2` | Apache-2.0 | UV-K5 V3 / UV-K1. Changing the bootloader is risky: see the [atlas](ATLAS-UV-K5-V3.md#bootloader-y-flasheo) |
+| [examples/firmware/moto-v1.3.2](../../../examples/firmware/moto-v1.3.2/SHA256SUMS) | Moto bootloader 1.3.2 in `.bin` and `.uf2` | Apache-2.0 | UV-K5 V3 / UV-K1. Changing the bootloader is risky: see the [atlas](ATLAS-UV-K5-V3.md#bootloader-and-flashing) |
 
 Source: official releases of [armel/uv-k1-k5v3-firmware-custom](https://github.com/armel/uv-k1-k5v3-firmware-custom/releases/tag/v6.3.0)
 and [muzkr/moto](https://github.com/muzkr/moto/releases/tag/v1.3.2). The SHA-256 hashes match those published by GitHub for each file. Check before use:
@@ -20,7 +20,7 @@ cd examples/firmware/f4hwn-v6.3.0
 sha256sum -c SHA256SUMS
 ```
 
-Flashing the main firmware: [getting started from 0 to 100%](AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100).
+Flashing the main firmware: [getting started from 0 to 100%](AYUDA-QUANSHENG.md#getting-started-from-0-to-100).
 The latest version is always in the armel release; these copies are a fixed reference.
 
 ## Channels

@@ -272,18 +272,18 @@ Le fasi 9 e 10 sono facoltative.
 
 | Fase | Cosa fai | Completata quando | Dettaglio |
 | --- | --- | --- | --- |
-| 0. Identificazione | Etichetta sotto la batteria, SysInf e versione del bootloader | Sai se è UV-K5 V3, UV-K1 o un'altra revisione | [Versioni](ATLAS-UV-K5-V3.md#versiones-y-como-identificarlas) |
-| 1. Preparazione del PC | Chrome o Edge desktop, cavo USB-C dati o cavo Kenwood, driver | La porta appare e nessun'altra applicazione la usa | [Driver](../../../ayuda.html#drivers) e [USB](AYUDA-CONFIGURACION.md#conexion-usb-sin-confundir-modos) |
-| 2. Backup | Calibrazione (512 byte), configurazione e, se il firmware lo consente, Flash completa | Hai i file fuori dal browser con il loro SHA-256 | [Calibrazione](ATLAS-UV-K5-V3.md#calibracion) |
-| 3. Scelta del firmware | Versione ed edizione (Fusion, FieldOps, Transfer, Labs) per l'hardware | File `.bin` scaricato dalla release ufficiale con hash verificato | [Edizioni](#que-edicion-elegir) e [versioni](#matriz-de-versiones-y-formatos) |
-| 4. Flash | Radio spenta, PTT premuto all'accensione, UV Studio o Bricohams Studio | Lo strumento conferma tutte le pagine e la radio si riavvia | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-y-flasheo) |
+| 0. Identificazione | Etichetta sotto la batteria, SysInf e versione del bootloader | Sai se è UV-K5 V3, UV-K1 o un'altra revisione | [Versioni](ATLAS-UV-K5-V3.md#versioni-e-come-identificarle) |
+| 1. Preparazione del PC | Chrome o Edge desktop, cavo USB-C dati o cavo Kenwood, driver | La porta appare e nessun'altra applicazione la usa | [Driver](../../../ayuda.html#drivers) e [USB](AYUDA-CONFIGURACION.md#connessione-usb-senza-confondere-le-modalità) |
+| 2. Backup | Calibrazione (512 byte), configurazione e, se il firmware lo consente, Flash completa | Hai i file fuori dal browser con il loro SHA-256 | [Calibrazione](ATLAS-UV-K5-V3.md#calibrazione) |
+| 3. Scelta del firmware | Versione ed edizione (Fusion, FieldOps, Transfer, Labs) per l'hardware | File `.bin` scaricato dalla release ufficiale con hash verificato | [Edizioni](#quale-edizione-scegliere) e [versioni](#matrice-di-versioni-e-formati) |
+| 4. Flash | Radio spenta, PTT premuto all'accensione, UV Studio o Bricohams Studio | Lo strumento conferma tutte le pagine e la radio si riavvia | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-e-flashing) |
 | 5. Primo avvio | Leggere SysInf e verificare la versione | La versione corrisponde al file flashato | Sezione successiva |
 | 6. Impostazioni di base | Navigazione, batteria, schermo, squelch, TX e blocchi | Le impostazioni persistono dopo lo spegnimento e l'accensione | Tabella delle impostazioni di base |
-| 7. Canali | Ripetitori, PMR solo RX, satelliti e nomi | Le memorie compaiono e vengono rilette identiche | [Memorie FM](#preparar-y-enviar-memorias-fm) |
-| 8. Scansione | Elenchi, priorità e ripresa | La scansione percorre solo le memorie previste | [Scansione](#escaneo-prioridades-y-teclas) |
-| 9. Multiboot (facoltativo) | Slot 1-4 e banchi CFG | Ogni slot supera il CRC e si avvia | [Slot e banchi](#slots-y-bancos-cfg-operaciones-distintas) |
-| 10. Labs (facoltativo) | App overlay della stessa release | L'app si avvia e ritorna al firmware | [Labs](#labs-y-aplicaciones) |
-| 11. Verifica finale | Lista di controllo e nuovo backup | Hai un backup dello stato finale e le versioni annotate | [Lista finale](AYUDA-CONFIGURACION.md#lista-de-verificacion-posterior) |
+| 7. Canali | Ripetitori, PMR solo RX, satelliti e nomi | Le memorie compaiono e vengono rilette identiche | [Memorie FM](#preparare-e-inviare-memorie-fm) |
+| 8. Scansione | Elenchi, priorità e ripresa | La scansione percorre solo le memorie previste | [Scansione](#scansione-priorità-e-tasti) |
+| 9. Multiboot (facoltativo) | Slot 1-4 e banchi CFG | Ogni slot supera il CRC e si avvia | [Slot e banchi](#slot-e-banchi-cfg-operazioni-diverse) |
+| 10. Labs (facoltativo) | App overlay della stessa release | L'app si avvia e ritorna al firmware | [Labs](#labs-e-applicazioni) |
+| 11. Verifica finale | Lista di controllo e nuovo backup | Hai un backup dello stato finale e le versioni annotate | [Lista finale](AYUDA-CONFIGURACION.md#lista-di-controllo-finale) |
 
 ### Fase 4, passo per passo: flash del firmware principale
 
@@ -330,15 +330,15 @@ Le fasi 9 e 10 sono facoltative.
 | ChDisp | Nome | Visualizza il nome della memoria in modalità MR |
 
 Dopo aver modificato le impostazioni, spegni e riaccendi per verificare che siano state salvate.
-Il significato di ogni menu è nel [dizionario dei menu](#diccionario-de-menus-de-radio).
+Il significato di ogni menu è nel [dizionario dei menu](#dizionario-dei-menu-della-radio).
 
 ### Fasi 7 e 8: canali e scansione
 
 - Questo sito prepara canali su un modello e li scrive con backup e rilettura
-  ([memorie FM](#preparar-y-enviar-memorias-fm)). Puoi anche usare
+  ([memorie FM](#preparare-e-inviare-memorie-fm)). Puoi anche usare
   il driver CHIRP di ogni release F4HWN o Bricohams Studio.
 - I canali importati hanno TXLock attivo. Rimuovilo solo per canali verificati
-  e autorizzati ([dizionario dei canali](AYUDA-CONFIGURACION.md#diccionario-de-canal-analogico)).
+  e autorizzati ([dizionario dei canali](AYUDA-CONFIGURACION.md#glossario-del-canale-analogico)).
 - Assegna ogni memoria al suo elenco (ScList), scegli le priorità (PriCh1/PriCh2)
   e la modalità di ripresa (ScnRev). Prova la scansione con SQL regolato.
 
@@ -349,7 +349,7 @@ Il significato di ogni menu è nel [dizionario dei menu](#diccionario-de-menus-d
 | Vuoi tornare al firmware di fabbrica | Ripristino guidato di [UV Studio](https://armel.github.io/uvstudio/): ricostruisce la flash esterna senza toccare la calibrazione. Flashare solo il `.bin` di fabbrica può impedire l'avvio del K1 |
 | La radio non si avvia dopo il flash | Entra in modalità aggiornamento (PTT all'accensione) e flasha di nuovo un `.bin` del modello corretto |
 | Il bootloader non risponde o la porta non appare | Prova un altro cavo dati e un'altra porta; verifica che nessun altro usi la porta |
-| Non c'è modo di entrare in modalità aggiornamento | Recupero tramite SWD con ST-Link ([SWD](ATLAS-UV-K5-V3.md#swd-y-recuperacion)). Solo con esperienza |
+| Non c'è modo di entrare in modalità aggiornamento | Recupero tramite SWD con ST-Link ([SWD](ATLAS-UV-K5-V3.md#swd-e-recupero)). Solo con esperienza |
 | Calibrazione persa o di un'altra radio | Ripristina il backup della fase 2. Non usare calibrazioni di altre unità |
 
 ## Beta: test USB reale e canali

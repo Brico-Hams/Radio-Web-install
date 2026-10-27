@@ -26,7 +26,7 @@ ohne Farbe und auf leerem Hintergrund, mit `Bricohams BETA` darunter.
 Sie wird aus dem ursprünglichen PNG erzeugt; es wird kein neues
 Markenzeichen gezeichnet. Sie ersetzt nicht das farbige PNG auf Web
 oder Android. Erstellung und Grenzen im
-[Firmwareleitfaden](BRICOHAMS-FIRMWARE.md#branding-de-arranque-implementado).
+[Firmwareleitfaden](BRICOHAMS-FIRMWARE.md#boot-branding-implementiert).
 
 ## Farbpalette
 

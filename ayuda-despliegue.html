@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Despliegue: ayuda de Bricohams por modelo y version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Despliegue | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-despliegue.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-despliegue.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-despliegue.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-despliegue.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-despliegue.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=es"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Ayuda"><a href="ayuda-referencias.html">Documentacion y referencias</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=es">Quansheng</a> · <a href="opengd77.html?lang=es">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Idioma"><a href="ayuda-despliegue.html" hreflang="es" lang="es" aria-current="page">Español</a> · <a href="ayuda-despliegue.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-despliegue.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-despliegue.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-despliegue.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#requisitos">Requisitos</a></li><li><a href="#instalacion-desde-el-codigo-fuente">Instalación desde el código fuente</a></li><li><a href="#verificacion">Verificación</a></li><li><a href="#instaladores-locales">Instaladores locales</a></li><li><a href="#configuracion">Configuración</a></li><li><a href="#actualizacion">Actualización</a></li><li><a href="#documentacion-multilingue">Documentación multilingüe</a></li><li><a href="#arranque-automatico-opcional-desde-codigo-fuente">Arranque automático (opcional, desde código fuente)</a></li><li><a href="#web-publica-en-github-pages">Web pública en GitHub Pages</a></li><li><a href="#exportar-el-proyecto">Exportar el proyecto</a></li><li><a href="#despliegues-no-soportados">Despliegues no soportados</a></li><li><a href="#desinstalacion">Desinstalación</a></li></ul></nav>
+    <article class="panel"><h1 id="despliegue">Despliegue</h1>
+<p>Hay dos despliegues soportados: <strong>local</strong> (servidor Node en el mismo equipo al que se conecta la radio) y <strong>web pública en GitHub Pages</strong> (sitio estático, ver <a href="#web-publica-en-github-pages">Web pública en GitHub Pages</a>).</p>
+<h2 id="requisitos">Requisitos</h2>
+<p>La entrada pública oficial es <a href="https://brico-hams.github.io/Radio-Web-install/" target="_blank" rel="noopener noreferrer">https://brico-hams.github.io/Radio-Web-install/</a>. Comparte esta URL, no copias antiguas ni vistas previas locales. <code>index.html</code> declara esa URL como canónica; las páginas de herramientas y ayuda son secciones del mismo sitio, no versiones alternativas.</p>
+<ul>
+<li>Node.js 22 o superior <strong>solo para ejecutar desde el código fuente, Arch y FreeBSD</strong>. Los paquetes <code>.deb</code> y el ZIP de Windows incluyen Node.</li>
+<li>Git solo para clonar y actualizar una instalación desde código fuente.</li>
+<li>Chrome, Edge o Brave de escritorio, por WebUSB/Web Serial. Firefox y Safari no son compatibles.</li>
+<li>Los controladores USB que pida la radio: ver <a href="ayuda.html#drivers">Ayuda › Controladores</a>.</li>
+</ul>
+<h2 id="instalacion-desde-el-codigo-fuente">Instalación desde el código fuente</h2>
+<pre><code>git clone https://github.com/Brico-Hams/Radio-Web-install.git
+cd Radio-Web-install
+npm ci --ignore-scripts
+npm start</code></pre>
+<p>Abre <a href="http://127.0.0.1:8787" target="_blank" rel="noopener noreferrer">http://127.0.0.1:8787</a>. Si abres <code>localhost</code>, el servidor te redirige a <code>127.0.0.1</code>: valida el encabezado <code>Host</code> y solo sirve ese origen. Usa siempre el mismo origen para conservar el historial de IndexedDB.</p>
+<p>Para incluir Bricohams Quansheng Studio en la copia local, ejecuta <code>npm run fetch:studio</code>. Descarga <code>studio.html</code> desde <code>Brico-Hams/Bricohams-Studio</code>, en el commit fijado en <code>studio.lock.json</code>, y comprueba su tamaño y su SHA-256. El archivo no se versiona porque lleva firmware incrustado.</p>
+<p><strong>Actualizar Studio (autor):</strong> cuando el commit nuevo ya esté en GitHub, ejecuta <code>node scripts/fetch-studio.cjs --update &lt;commit-completo&gt;</code>. El comando reescribe <code>studio.lock.json</code> con el tamaño, el SHA-256 y los hashes CSP de sus scripts. Revisa el diff y haz commit del lock.</p>
+<p><code>--ignore-scripts</code> evita que se ejecuten scripts de instalación de terceros. La versión de <code>satellite.js</code> está fijada en <code>package-lock.json</code>.</p>
+<h2 id="verificacion">Verificación</h2>
+<pre><code>npm test
+npm run check</code></pre>
+<p>Ambos comandos deben terminar sin fallos. Después, abre la página de ayuda y comprueba que se muestra el logotipo de Bricohams.</p>
+<h2 id="instaladores-locales">Instaladores locales</h2>
+<p>Descarga el archivo de tu sistema y <code>SHA256SUMS</code> desde los <strong>Assets</strong> de la <a href="https://github.com/Brico-Hams/Radio-Web-install/releases/latest" target="_blank" rel="noopener noreferrer">última Release</a>. Ya hay paquetes publicados desde <code>v0.3.0</code>. Los enlaces automáticos «Source code (zip)» y «Source code (tar.gz)» no son instaladores.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Sistema</th><th scope="col">Archivo</th><th scope="col">Instalación</th></tr></thead><tbody>
+<tr><td>Debian 12/13, Ubuntu 22.04/24.04, Raspberry Pi OS arm64/armhf</td><td><code>.deb</code> para amd64, arm64 o armhf</td><td><code>sudo apt install ./nombre-del-paquete.deb</code> (elige solo tu arquitectura)</td></tr>
+<tr><td>Arch Linux</td><td><code>*-arch.tar.gz</code></td><td>Extrae el archivo y ejecuta <code>makepkg -si</code> (requiere <code>base-devel</code> y <code>nodejs</code>).</td></tr>
+<tr><td>FreeBSD 14 amd64</td><td><code>*-freebsd-amd64.tar.gz</code></td><td>Extrae el archivo y ejecuta <code>su -c &#39;./install.sh&#39;</code> (instala <code>node22</code> mediante <code>pkg</code> si hace falta).</td></tr>
+<tr><td>Windows 11 x64</td><td><code>*-windows-x64.zip</code></td><td>Extrae el ZIP y ejecuta <code>powershell -ExecutionPolicy Bypass -File .\Install.ps1</code>; añade un acceso al menú Inicio.</td></tr>
+</tbody></table></div>
+<p>Los <code>.deb</code> y el ZIP de Windows incluyen Node.js 22. Arch usa el paquete <code>nodejs</code> de su distribución. FreeBSD requiere <code>pkg</code> y el paquete <code>node22</code>. Raspberry Pi OS de 32 bits necesita un procesador ARMv7 o posterior. El instalador no configura arranque automático ni eleva permisos para iniciar la aplicación.</p>
+<p>Tras instalar, inicia <strong>Bricohams Radio Workspace</strong> desde el menú de aplicaciones/Inicio o ejecuta <code>bricohams-radio</code> en Arch y FreeBSD. El servidor queda ligado a <code>127.0.0.1:8787</code>; no lo expongas a la red. En FreeBSD, Chromium puede no ofrecer WebUSB/Web Serial, por lo que el acceso a radios es de mejor esfuerzo.</p>
+<h3 id="verificar-la-descarga">Verificar la descarga</h3>
+<p>Comprueba el hash antes de ejecutar el instalador. En PowerShell:</p>
+<pre><code>Get-FileHash .\bricohams-radio-workspace-v0.3.0-windows-x64.zip -Algorithm SHA256
+Get-Content .\SHA256SUMS</code></pre>
+<p>Compara el hash completo con la línea del mismo nombre en <code>SHA256SUMS</code> (no importa mayúsculas/minúsculas). En Linux:</p>
+<pre><code>sha256sum bricohams-radio-workspace-v0.3.0-amd64.deb
+cat SHA256SUMS</code></pre>
+<p>En FreeBSD usa <code>sha256 nombre-del-archivo</code>. Sustituye el nombre/version por el archivo realmente descargado. No instales si el hash difiere. Las sumas comprueban integridad, no una firma de editor: los paquetes no tienen firma de código.</p>
+<h3 id="windows-11-x64">Windows 11 x64</h3>
+<ol>
+<li>Descarga <code>*-windows-x64.zip</code> y <strong>extrae todo su contenido</strong>; no ejecutes el script dentro del ZIP.</li>
+<li>Abre PowerShell en la carpeta que contiene <code>Install.ps1</code>, <code>Start.ps1</code>, <code>app</code> y <code>runtime</code>.</li>
+<li>Ejecuta, como usuario normal:</li>
+</ol>
+<pre><code>   powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1</code></pre>
+<ol>
+<li>Se instala en <code>%LOCALAPPDATA%\Programs\Bricohams Radio Workspace</code> y crea <strong>Bricohams Radio Workspace</strong> en el menú Inicio. No necesita UAC ni instalar Node aparte.</li>
+<li>Abre ese acceso. Si el navegador predeterminado no es Chrome, Edge o Brave, abre manualmente <a href="http://127.0.0.1:8787" target="_blank" rel="noopener noreferrer">http://127.0.0.1:8787</a> en uno de ellos.</li>
+</ol>
+<p><code>ExecutionPolicy Bypass</code> afecta únicamente al proceso que ejecuta el comando; no cambies permanentemente la política de PowerShell. Una política corporativa puede impedir scripts incluso con esta opción: consulta al administrador. El instalador actual es un ZIP con scripts, no un <code>.exe</code>/MSI firmado, y no instala controladores WinUSB.</p>
+<h3 id="debian-ubuntu-y-raspberry-pi-os">Debian, Ubuntu y Raspberry Pi OS</h3>
+<p>Consulta la arquitectura del <strong>sistema operativo</strong> (no solo la del procesador):</p>
+<pre><code>dpkg --print-architecture</code></pre>
+<p>Descarga únicamente el <code>.deb</code> cuyo sufijo coincida: <code>amd64</code>, <code>arm64</code> o <code>armhf</code>. Raspberry Pi OS de 64 bits usa <code>arm64</code>; el de 32 bits usa <code>armhf</code> y necesita ARMv7 o posterior. No se soportan Raspberry Pi 1 ni Zero/Zero W originales con ARMv6.</p>
+<p>Desde la carpeta de descargas, para un equipo amd64 y la versión inicial:</p>
+<pre><code>sudo apt install ./bricohams-radio-workspace-v0.3.0-amd64.deb
+bricohams-radio</code></pre>
+<p>Cambia el nombre por tu archivo. Node queda incluido en <code>/opt/bricohams-radio-workspace</code>; el lanzador también aparece en el menú de aplicaciones. No ejecutes <code>bricohams-radio</code> con <code>sudo</code>: las copias y permisos del navegador deben pertenecer a tu usuario.</p>
+<h3 id="arch-linux">Arch Linux</h3>
+<pre><code>sudo pacman -S --needed base-devel nodejs
+mkdir bricohams-installer
+tar -xzf bricohams-radio-workspace-v0.3.0-arch.tar.gz -C bricohams-installer
+cd bricohams-installer
+less PKGBUILD
+makepkg -si
+bricohams-radio</code></pre>
+<p>Ejecuta <code>makepkg</code> como usuario normal. El archivo <code>*-arch.tar.gz</code> contiene la receta; <code>*-arch-source.tar.gz</code> contiene la aplicación que esa receta descarga de la misma Release y verifica por SHA-256. No es un paquete binario listo para <code>pacman -U</code>, ni un paquete publicado en AUR. Requiere Internet durante la construcción y Node.js 22 o superior.</p>
+<h3 id="freebsd-14-amd64">FreeBSD 14 amd64</h3>
+<pre><code>mkdir bricohams-installer
+tar -xzf bricohams-radio-workspace-v0.3.0-freebsd-amd64.tar.gz -C bricohams-installer
+cd bricohams-installer
+su -c &#39;./install.sh&#39;
+bricohams-radio</code></pre>
+<p>La instalación necesita root y repositorios <code>pkg</code> disponibles para instalar <code>node22</code> si falta. El programa se instala en <code>/usr/local/libexec/bricohams-radio-workspace</code>, con lanzador <code>/usr/local/bin/bricohams-radio</code>. Vuelve a tu usuario normal para arrancarlo. No es un paquete nativo <code>.pkg</code> ni un port oficial. El servidor local y la edición de archivos no garantizan conexión a la radio: depende de que Chromium ofrezca las APIs y permisos USB/serie necesarios.</p>
+<h3 id="primer-arranque-permisos-y-parada">Primer arranque, permisos y parada</h3>
+<ul>
+<li>Abre siempre <a href="http://127.0.0.1:8787" target="_blank" rel="noopener noreferrer">http://127.0.0.1:8787</a> en el mismo navegador y perfil: las copias pertenecen a ese origen, no a la carpeta de instalación. La insignia debe mostrar <strong>Local · instalado</strong>.</li>
+<li>Los lanzadores arrancan el servidor en segundo plano; cerrar la pestaña no lo detiene. No se configura inicio automático al iniciar sesión. Desde código fuente, <code>npm start</code> queda en la terminal y se detiene con <code>Ctrl+C</code>.</li>
+<li>Los controladores y permisos USB no los configura el instalador. Consulta <a href="ayuda.html#drivers">Ayuda › Controladores</a>: WinUSB cuando corresponda en Windows, reglas udev y grupo <code>dialout</code>/<code>uucp</code> según la distribución en Linux. Reinicia sesión después de cambiar grupos y no ejecutes el navegador como root.</li>
+<li>Si el puerto está ocupado, identifica el proceso antes de detenerlo. En Windows: <code>Get-NetTCPConnection -LocalPort 8787 -State Listen | Select-Object OwningProcess</code>, después <code>Get-Process -Id &lt;PID&gt;</code> y, solo si corresponde al servidor Bricohams, <code>Stop-Process -Id &lt;PID&gt;</code>. En Linux usa <code>ss -lptn &#39;sport = :8787&#39;</code>; en FreeBSD, <code>sockstat -4 -l</code>. Confirma el comando y usuario del PID y detén solo ese proceso con <code>kill &lt;PID&gt;</code>.</li>
+<li>Los registros de Linux/FreeBSD están en <code>${XDG_STATE_HOME:-$HOME/.local/state}/bricohams-radio/server.log</code>. En Windows, si no arranca, ejecuta desde PowerShell <code>&amp; &quot;$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\runtime\node.exe&quot; &quot;$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\app\server.cjs&quot;</code> para ver el error.</li>
+<li>No hace falta conexión a Internet para servir la interfaz y editar archivos locales. Las consultas a proveedores y las descargas de firmware sí la requieren.</li>
+</ul>
+<h2 id="configuracion">Configuración</h2>
+<div class="table-scroll"><table><thead><tr><th scope="col">Variable</th><th scope="col">Uso</th></tr></thead><tbody>
+<tr><td><code>RB_USER_TOKEN</code></td><td>Token de aplicación aprobado por RepeaterBook (<code>rbuapp_…</code>).</td></tr>
+<tr><td><code>RB_APPROVED_USER_AGENT</code></td><td>User-Agent registrado en la aprobación.</td></tr>
+<tr><td><code>RB_APPROVED</code></td><td>Debe valer <code>yes</code> para activar la función.</td></tr>
+</tbody></table></div>
+<p>Solo el servidor lee estas variables. No las guardes en el repositorio. El puerto <code>8787</code> y la interfaz <code>127.0.0.1</code> están fijados en <code>server.cjs</code> por seguridad.</p>
+<p>Ejemplo en PowerShell para código fuente, válido solo para la sesión actual:</p>
+<pre><code>$env:RB_USER_TOKEN = &quot;&lt;token aprobado&gt;&quot;
+$env:RB_APPROVED_USER_AGENT = &quot;&lt;user-agent aprobado&gt;&quot;
+$env:RB_APPROVED = &quot;yes&quot;
+npm start</code></pre>
+<p>Si usas el ZIP instalado, configura esas variables en PowerShell y ejecuta <code>&amp; &quot;$env:LOCALAPPDATA\Programs\Bricohams Radio Workspace\Start.ps1&quot;</code> desde esa misma sesión. Detén antes cualquier servidor ya iniciado: un proceso existente conserva su entorno anterior. No hay todavía una pantalla de ajustes que guarde estas claves; no las pegues en el navegador ni en archivos públicos.</p>
+<h2 id="actualizacion">Actualización</h2>
+<p><strong>Instaladores:</strong> exporta primero las copias <code>.rwb.json</code>, detén el servidor y descarga/verifica la nueva Release. En Windows vuelve a ejecutar el instalador extraído; en Debian/Ubuntu/Raspberry Pi usa <code>sudo apt install ./nuevo-paquete.deb</code>; en Arch reconstruye la nueva receta con <code>makepkg -si</code>; en FreeBSD ejecuta el nuevo <code>install.sh</code>. Inicia de nuevo el lanzador y recarga el navegador. Las releases ya publicadas no cambian cuando se actualiza <code>main</code>; las correcciones requieren otra versión.</p>
+<p><strong>Código fuente:</strong></p>
+<pre><code>git pull
+npm ci --ignore-scripts
+npm test
+npm start</code></pre>
+<p>Exporta tus copias antes de actualizar el navegador o de borrar los datos del sitio.</p>
+<h2 id="documentacion-multilingue">Documentación multilingüe</h2>
+<p>La ayuda se publica en español (original), inglés de EE. UU., alemán, italiano y francés. Las fuentes traducidas están en <code>docs/i18n/&lt;idioma&gt;/</code> (mismo nombre que el original) y <code>README.&lt;idioma&gt;.md</code>; <code>npm run build:help</code> genera <code>ayuda-*.html</code> y <code>ayuda-*.&lt;idioma&gt;.html</code> con selector de idioma. <code>docs/i18n/&lt;idioma&gt;/F4HWN-PRESETS.md</code> se genera automáticamente.</p>
+<p>Al cambiar un documento en español, actualiza las cuatro traducciones y comprueba que conservan títulos, bloques de código, código en línea, filas de tabla, imágenes y enlaces:</p>
+<pre><code>node scripts/i18n.cjs --fix --strict
+npm run build:help</code></pre>
+<p><code>--fix</code> ajusta las rutas relativas de enlaces e imágenes a la carpeta de cada traducción y las dirige a la traducción hermana. También corrige las anclas para los títulos traducidos de Markdown; la ayuda HTML conserva sus anclas estables en todos los idiomas. La comprobación incluye arquitectura, marca, decisiones y despliegue. El índice de referencias se genera desde los títulos traducidos de todas las guías y enlaza cada versión por idioma, incluido inglés de EE. UU. Las fuentes externas conservan el idioma publicado por sus autores; el centro de preguntas frecuentes histórico se identifica como español. Si el texto traducido y el original discrepan, prevalece el español.</p>
+<h2 id="arranque-automatico-opcional-desde-codigo-fuente">Arranque automático (opcional, desde código fuente)</h2>
+<p>Los instaladores ya arrancan en segundo plano al abrir el lanzador, pero no al iniciar sesión. Estos ejemplos son para una copia del repositorio con Node instalado; adapta las rutas y no los combines con otro servidor en el mismo puerto.</p>
+<p>En Windows, como tarea programada al iniciar sesión:</p>
+<pre><code>$action = New-ScheduledTaskAction -Execute &quot;node.exe&quot; -Argument &quot;server.cjs&quot; -WorkingDirectory &quot;C:\ruta\Radio-Web-install&quot;
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+Register-ScheduledTask -TaskName &quot;Bricohams Radio Workspace&quot; -Action $action -Trigger $trigger</code></pre>
+<p>En Linux, como servicio de usuario de systemd (<code>~/.config/systemd/user/bricohams-radio.service</code>):</p>
+<pre><code>[Unit]
+Description=Bricohams Radio Workspace
+
+[Service]
+WorkingDirectory=%h/Radio-Web-install
+ExecStart=/usr/bin/node server.cjs
+Restart=on-failure
+
+[Install]
+WantedBy=default.target</code></pre>
+<p>Actívalo con <code>systemctl --user enable --now bricohams-radio</code>.</p>
+<h2 id="web-publica-en-github-pages">Web pública en GitHub Pages</h2>
+<p>El sitio estático se genera con <code>npm run build:pages</code> (carpeta <code>dist/</code>) y lo publica <code>.github/workflows/pages.yml</code>. No incluye <code>server.cjs</code>: <code>runtime.json</code> es <code>{&quot;mode&quot;:&quot;web&quot;}</code> y la aplicación funciona en modo web (ver <a href="ayuda-arquitectura.html#modos-de-ejecucion">Arquitectura</a>).</p>
+<h3 id="por-que-un-origen-propio">Por qué un origen propio</h3>
+<p>IndexedDB (copias de la radio) y <code>localStorage</code> (perfil) se aíslan por origen, no por ruta. La recomendación inicial era una cuenta dedicada en <code>https://&lt;org&gt;.github.io/</code>. El sitio actual <code>https://brico-hams.github.io/Radio-Web-install/</code> usa la excepción de origen compartido: comparte almacenamiento con otros proyectos de <code>brico-hams.github.io</code>, incluido Bricohams Studio. No se debe presentar la subruta como aislamiento. Exporta las copias fuera del navegador; cambiar de origen no migra automáticamente los datos del perfil. Todas las rutas del cliente siguen siendo relativas.</p>
+<h3 id="pasos-los-hace-el-autor">Pasos (los hace el autor)</h3>
+<ol>
+<li>Crear la cuenta u organización <code>&lt;org&gt;</code>.</li>
+<li>Crear el repositorio <code>&lt;org&gt;.github.io</code> y subir este código (el push requiere confirmación explícita del autor).</li>
+<li>En *Settings › Pages*, elegir «GitHub Actions» como origen y activar «Enforce HTTPS».</li>
+<li>Crear la variable de Actions <code>PAGES_ORIGIN</code> con <code>https://&lt;org&gt;.github.io</code> (sin barra final). El workflow la usa para recuperar el <code>data/satellites.json</code> anterior. El workflow solo se ejecuta en el repositorio <code>&lt;org&gt;/&lt;org&gt;.github.io</code> (guarda <code>if: github.repository == ...</code>): en cualquier otro repositorio se omite, para no publicar bajo un origen compartido que expondría las copias y el perfil (IndexedDB) a otras páginas. Excepción consciente: si el autor acepta compartir origen, crea la variable <code>PAGES_SHARED_ORIGIN_ACCEPTED</code> con el valor <code>true</code> en el repositorio. Las variables no se copian a los forks, así que un fork sigue protegido. El sitio oficial actual usa esta excepción en <code>https://brico-hams.github.io/Radio-Web-install/</code> (ver ADR-014). El primer push puede ejecutarse antes de definir <code>PAGES_ORIGIN</code>: es inofensivo, se omite la recuperación de datos anteriores y se emite un aviso.</li>
+<li>Ejecutar el workflow manualmente la primera vez (*Actions › Pages › Run workflow*).</li>
+</ol>
+<h3 id="que-hace-el-workflow">Qué hace el workflow</h3>
+<ul>
+<li>Se ejecuta en cada push a <code>main</code>, a diario a las 05:17 UTC y a mano.</li>
+<li>Instala con <code>npm ci --ignore-scripts</code>, ejecuta <code>npm test</code>, construye <code>dist/</code> y genera <code>dist/data/satellites.json</code> con <code>scripts/fetch-satellites.cjs</code>.</li>
+<li>Permisos mínimos (<code>contents: read</code>, <code>pages: write</code>, <code>id-token: write</code>), sin secretos, y cada acción fijada por SHA de commit.</li>
+</ul>
+<h3 id="satelites">Satélites</h3>
+<p><code>scripts/fetch-satellites.cjs</code> consulta SatNOGS para los NORAD de <code>data/satellites.config.json</code> (25544, 27607, 43017 y 43678). Si un satélite falla o su TLE no es válido, conserva sus últimos datos buenos del archivo anterior; la web avisa cuando <code>fetchedAt</code> supera los 7 días. Atribución: SatNOGS DB / Libre Space Foundation, <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a>.</p>
+<h3 id="seguridad-del-sitio-estatico">Seguridad del sitio estático</h3>
+<p>Cada HTML lleva una CSP en <code>&lt;meta&gt;</code> (sin scripts ni estilos en línea; <code>connect-src</code> solo <code>&#39;self&#39;</code> y <code>https://api.github.com</code>) y la aplicación se niega a ejecutarse dentro de un marco, porque GitHub Pages no permite cabeceras propias. No hay cuentas, subidas ni telemetría. RadioID no se replica y RepeaterBook no está disponible en la web.</p>
+<p>Los instaladores disponibles se publican en <a href="https://github.com/Brico-Hams/Radio-Web-install/releases" target="_blank" rel="noopener noreferrer">GitHub Releases</a>. Para generar una nueva publicación, crea y sube una etiqueta <code>v*</code>; GitHub Actions valida el proyecto, descarga runtimes de Node.js 22 verificando sus checksums y adjunta los instaladores junto con <code>SHA256SUMS</code>. Las releases incluyen <code>.deb</code> amd64/arm64/armhf, <code>PKGBUILD</code> para Arch, instalador tarball para FreeBSD y ZIP de Windows 11 x64. El primer release debe publicarse subiendo una etiqueta; este repositorio no crea ni sube etiquetas automáticamente.</p>
+<h2 id="exportar-el-proyecto">Exportar el proyecto</h2>
+<p>La <a href="ayuda-entrega.html">revision de requisitos</a> enumera lo implementado y los pendientes. Mientras siga incompleta, la exportacion requiere <code>--beta</code>: genera una instantanea de desarrollo, no una entrega final certificada. No construye instaladores, no publica y no programa ninguna radio.</p>
+<p>Con Node.js 22+, Git y las herramientas de archivo del sistema:</p>
+<pre><code>npm run export:project -- --beta `
+  --firmware &#39;C:\ruta\Multiboot\Bricohams&#39; `
+  --installers &#39;C:\ruta\instalables-verificados&#39; `
+  --android &#39;C:\ruta\Android-0.8.2-beta&#39; `
+  --output &#39;C:\ruta\entregas\Bricohams-desarrollo.zip&#39;</code></pre>
+<p>El destino debe ser un ZIP nuevo. En Windows se usa <code>tar.exe</code> (bsdtar); Linux/FreeBSD necesitan <code>zip</code>. La herramienta utiliza un directorio temporal propio y lo limpia al terminar, incluso ante errores.</p>
+<p>Si no hay instaladores de escritorio reconstruidos, sustituye <code>--installers</code> por <code>--without-installers</code>. Es una omision explicita solo para instantaneas Beta: el manifiesto registra <code>desktopInstallersIncluded: false</code> y no hay carpeta <code>installers</code>. No se reutilizan paquetes antiguos como si fueran nuevos. La APK indicada con <code>--android</code> si se incluye y verifica independientemente.</p>
+<p>Contenido:</p>
+<ul>
+<li><code>android</code>, cuando se indica <code>--android</code>: APK Beta debug, APK de pruebas, guia, licencias, manifiesto de compilacion y SHA256SUMS de una entrega creada por <code>scripts/build-android.ps1</code>. Comprueba todos sus hashes, pruebas host sin fallos, lint sin errores y correspondencia exacta de cada fuente Android con <code>project</code>, sin omitir ni duplicar archivos. Tambien compara version y guia. Si la APK pertenece a fuentes anteriores, aborta: reconstruye antes de exportar. Conserva los indicadores de pruebas instrumentadas y hardware, no los convierte en pruebas ejecutadas. La verificacion criptografica de firma APK corresponde al constructor; el exportador verifica integridad/procedencia declarada, no ejecuta el APK. Sin <code>--android</code>, el manifiesto registra <code>android: null</code> y no se incluye ninguna APK; no se presenta como una entrega con instalable Android.</li>
+</ul>
+<ul>
+<li><code>project</code>: fuentes actuales, incluidas las nuevas no ignoradas por Git, documentacion y herramientas. No incluye dependencias instaladas: ejecutar <code>npm ci --ignore-scripts</code> tras extraer. Studio se recupera con <code>npm run fetch:studio</code> usando el lock; los instaladores si lo incluyen.</li>
+<li><code>history.bundle</code>: historial de HEAD, recuperable con <code>git clone history.bundle historial</code>. Los cambios aun sin commit estan en <code>project</code>, no en el bundle. El manifiesto indica revision y estado dirty.</li>
+<li><code>firmware</code>: todas las subcarpetas de la raiz indicada que tengan <code>artifacts/build-info.json</code>, sus artefactos verificados y las fuentes de su clon aislado. Comprueba SHA256SUMS, revision upstream y hashes de fuentes declarados. Una fuente modificada o manifiesto invalido aborta. Los destinos sin artefactos se enumeran como excluidos, no como compilaciones. Si una carpeta historica solo contiene los artefactos directamente (por ejemplo Fusion/Labs), aborta en vez de omitir ese firmware: localiza su construccion original con <code>source</code> y <code>artifacts</code> en <code>firmware-builds</code>. Reune las construcciones completas en una raiz de entrega antes de exportar.</li>
+<li><code>installers</code>: los paquetes enumerados en SHA256SUMS de la carpeta indicada. Debe contener Windows x64, Debian amd64/arm64/armhf, receta y fuentes Arch y FreeBSD amd64. Verifica integridad, no ejecucion ni procedencia de la revision: construirlos y probarlos primero. No mezclar versiones antiguas para aparentar una entrega nueva.</li>
+<li><code>export-info.json</code> y <code>SHA256SUMS</code>: inventario, tamanos, hashes, revisiones, compilaciones incluidas/excluidas y advertencia de estado incompleto.</li>
+</ul>
+<p>No copia <code>.git</code>, <code>.env</code>, claves/certificados, cachés, <code>node_modules</code>, <code>dist</code>, backups de radio ni datos descargados desde el arbol del proyecto. De <code>data</code> solo incluye <code>satellites.config.json</code>. No copia la biblioteca Multiboot ajena, calibraciones de radios ni la configuracion del navegador. Las carpetas de firmware e instaladores deben ser salidas de construccion, no carpetas de datos personales. Revisa tambien el historial Git antes de compartirlo: excluir un secreto actual no lo elimina de commits antiguos. Las exclusiones no sustituyen esa revision ni autorizan redistribuir componentes sin sus licencias.</p>
+<p>Extrae en una carpeta nueva y verifica dentro de <code>Bricohams</code>:</p>
+<pre><code>sha256sum --check SHA256SUMS</code></pre>
+<p>En PowerShell, compara cada linea con <code>Get-FileHash -Algorithm SHA256</code>, o usa <code>export-info.json</code> para recorrer las rutas y contrastar tamano y SHA-256. Comprueba tambien el hash del ZIP que muestra el exportador. Ninguno de estos hashes es una firma digital. El ensayo de extraccion/arranque y la cobertura funcional siguen siendo condiciones independientes de entrega.</p>
+<h2 id="despliegues-no-soportados">Despliegues no soportados</h2>
+<ul>
+<li><strong>Otro alojamiento estático</strong> distinto de GitHub Pages: no está probado. Para Pages, ver la sección anterior.</li>
+<li><strong>Red local o Internet:</strong> requeriría HTTPS, autenticación, cambiar la validación de <code>Host</code> y revisar CSRF. No está soportado: las credenciales y los datos de la radio quedarían expuestos.</li>
+<li><strong>Contenedores:</strong> WebUSB/Web Serial se ejecutan en el navegador del anfitrión. Un contenedor solo aportaría el servidor y complica el acceso a <code>127.0.0.1</code>.</li>
+</ul>
+<h2 id="desinstalacion">Desinstalación</h2>
+<p>Primero exporta tus copias y detén solo el proceso del servidor identificado como se explica arriba.</p>
+<ul>
+<li><strong>Windows:</strong> elimina la carpeta <code>%LOCALAPPDATA%\Programs\Bricohams Radio Workspace</code> y su acceso del menú Inicio (<code>%APPDATA%\Microsoft\Windows\Start Menu\Programs\Bricohams Radio Workspace.lnk</code>). El instalador ZIP no registra un desinstalador en «Aplicaciones instaladas».</li>
+<li><strong>Debian/Ubuntu/Raspberry Pi OS:</strong> <code>sudo apt remove bricohams-radio-workspace</code>.</li>
+<li><strong>Arch:</strong> <code>sudo pacman -R bricohams-radio-workspace</code>.</li>
+<li><strong>FreeBSD:</strong> el instalador no registra un paquete de aplicación en <code>pkg</code>. Elimina únicamente <code>/usr/local/libexec/bricohams-radio-workspace</code> y <code>/usr/local/bin/bricohams-radio</code> como root. No desinstales Node si otras aplicaciones lo usan.</li>
+<li><strong>Código fuente:</strong> elimina tu copia del repositorio y, si lo configuraste, su tarea programada o servicio de usuario.</li>
+</ul>
+<p>Desinstalar no elimina las copias del navegador. Si también quieres borrarlas, <strong>exporta antes los archivos</strong> y después elimina los datos del sitio <code>http://127.0.0.1:8787</code> en el navegador. Los registros de usuario de Linux/FreeBSD se pueden borrar aparte, tras revisarlos.</p></article>
+    <footer><p>Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia. <a href="ayuda-firmwares.html">Volver al indice</a>.</p></footer>
+  </main>
+</body>
+</html>

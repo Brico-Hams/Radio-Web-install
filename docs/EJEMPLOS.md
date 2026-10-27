@@ -21,7 +21,7 @@ cd examples/firmware/f4hwn-v6.3.0
 sha256sum -c SHA256SUMS
 ```
 
-Flashear el firmware principal: [puesta en marcha de 0 a 100 %](AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100).
+Flashear el firmware principal: [puesta en marcha de 0 a 100 %](AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100-).
 La version mas reciente esta siempre en la release de armel; estas copias son una referencia fija.
 
 ## Canales

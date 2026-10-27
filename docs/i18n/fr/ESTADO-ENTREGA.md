@@ -52,7 +52,7 @@ portables ne valent pas une prise en charge physique USB/Flash ni un démarrage 
 | ANY-04 | Aéroports si AnyTone prend en charge la bande aéronautique | Import de fréquences RF depuis la source AIP et confirmation manuelle AM | Modèle exact, liste à jour et vérification AM/espacement ; aucune base nationale des aéroports n’est incluse |
 | CAT-01 | Changer la fréquence pendant le passage sélectionné | CAT RX activé physiquement, lease de 3 s et suivi web avec arrêt sécurisé ; séparément, CAT TX v1 (PTT par lease, touche 9) réservé à l’envoi SSTV | Validation USB/RF réelle ; pas de suivi autonome dans la radio ni de Doppler montant |
 | CAT-02 | Modifier fréquence, sous-tons et puissance par canal depuis Android | Éditeur de canaux Android Beta pour FM F4HWN v6 : nom, RX/TX, CTCSS/DCS RX et TX, puissance, étroit et verrouillage TX ; sauvegarde complète avec CRC de la radio et SHA-256 sur disque, écriture par blocs dans l’ordre web et relecture ; 10 tests host avec radio simulée | Exécuter les tests en CI, essai OTG réel avec écriture/relecture sur une radio et persistance après redémarrage |
-| AND-01 | Application Android Bricohams | Projet Kotlin 0.8.1-beta ; SQLite, ADIF, SSTV, statistiques ARDF, capture micro et CAT RX via CDC ACM et adaptateurs reconnus, avec tests host | Fonctions en attente, installation, autorisations et essai OTG/RF de chaque câble sur téléphone |
+| AND-01 | Application Android Bricohams | Projet Kotlin 0.8.2-beta ; SQLite, ADIF, SSTV, statistiques ARDF, capture micro et CAT RX via CDC ACM et adaptateurs reconnus, avec tests host | Fonctions en attente, installation, autorisations et essai OTG/RF de chaque câble sur téléphone |
 | AND-02 | Fonctions satellite de type Look4sat, avec une interface similaire | SGP4 Android hors ligne, TLE importés, observateur manuel, passages sur 24 h et Doppler CAT RX avec arrêt sécurisé | Interface de type Look4sat (liste de passages, radar polaire, carte), téléchargements automatiques des TLE et transpondeurs, GPS de l’observateur, matrice téléphone/câble/radio et essais terrain ; aucune parité Look4sat revendiquée |
 | AND-03 | SSTV Robot36 avec CAT sur le firmware Bricohams | Décodeur WAV et capture micro avec VIS/parité, couleur 320x240 et PNG ; l’écran CAT enregistre Robot36 pendant que Doppler ou la syntonisation CAT reste actif ; tests synthétiques | Validation AudioRecord, chemin physique et RF ; décodage continu en streaming, dérive et bruit |
 | AND-04 | Interpréter le Morse | Texte, WAV PCM et capture micro jusqu’à 60 s avec décodage ultérieur et tonalité/vitesse fixes ; tests synthétiques | AudioRecord réel, décodage continu, adaptation et mesures d’erreur sur des échantillons réels |
@@ -108,7 +108,7 @@ Vérifier qu’il ne contient ni identifiants, ni sauvegardes de radios, ni éta
 
 L’exportateur génère un **instantané de développement Beta**, il ne certifie pas que
 la matrice est terminée. Il faut l’accepter via `--beta`. Il ne publie pas,
-ne compile pas et ne flashe pas. Son utilisation est décrite dans [Déploiement](../../DEPLOYMENT.md#exportar-el-proyecto).
+ne compile pas et ne flashe pas. Son utilisation est décrite dans [Déploiement](DEPLOYMENT.md#exporter-le-projet).
 La livraison définitive reste conditionnée aux points précédents.
 
 Les évolutions sont des compilations Bricohams vérifiables et l’historique Git de

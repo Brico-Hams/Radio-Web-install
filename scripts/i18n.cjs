@@ -8,7 +8,6 @@ const root = path.join(__dirname, "..");
 // F4HWN-PRESETS.md is generated per language by build-help.cjs, so it is never translated by hand.
 const DOCUMENTS = Object.freeze([
   ...Object.keys(pages).filter(name => name !== "F4HWN-PRESETS.md").map(name => `docs/${name}`),
-  ...["ARCHITECTURE.md", "BRANDING.md", "DECISIONS.md", "DEPLOYMENT.md"].map(name => `docs/${name}`),
   "README.md"
 ]);
 
@@ -29,6 +28,20 @@ function run() {
   if (files && documents.length !== files.length) throw new Error(`Documento desconocido en --files: ${files.join(", ")}`);
   let failures = 0;
   let missing = 0;
+  for (const document of documents) {
+    const file = path.join(root, document);
+    let text = fs.readFileSync(file, "utf8");
+    if (fix) {
+      const fixed = relink(text, file, file, "es");
+      if (fixed !== text) fs.writeFileSync(file, fixed);
+      text = fixed;
+    }
+    const problems = checkParity(normalizeFences(text), file, normalizeFences(text), file, "es");
+    if (problems.length) {
+      failures++;
+      console.log(`ERROR  es ${document}\n  - ${problems.join("\n  - ")}`);
+    } else console.log(`OK     es ${document}`);
+  }
   for (const lang of langs) {
     if (!TRANSLATIONS.includes(lang)) throw new Error(`Idioma no soportado: ${lang}`);
     for (const document of documents) {

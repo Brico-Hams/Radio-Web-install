@@ -5,7 +5,7 @@ knowledge base for the UV-K5 V3 and its twin, the UV-K1. Pins, memories, and
 protocols come from the open-source code currently running on these radios
 ([F4HWN V3](https://github.com/armel/uv-k1-k5v3-firmware-custom), Apache-2.0) and
 the [armel teardown](https://github.com/armel/k1-teardown), not assumptions.
-For step-by-step radio setup, use the [getting started from 0 to 100%](AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100).
+For step-by-step radio setup, use the [getting started from 0 to 100%](AYUDA-QUANSHENG.md#getting-started-from-0-to-100).
 
 | Block | Component |
 | --- | --- |

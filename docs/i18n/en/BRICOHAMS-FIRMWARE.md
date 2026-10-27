@@ -1399,7 +1399,7 @@ legibility on the radio. They have not been flashed.
 
 ## Later Requested Phase: Bricohams Android
 
-The native `0.8.1-beta` APK includes a logbook with search and ADIF import,
+The native `0.8.2-beta` APK includes a logbook with search and ADIF import,
 ADIF/JSON, JSON restore, ARDF sessions with history/statistics and filtered
 segment totals, one-off GPS, experimental text/WAV Morse,
 and temporary CAT RX over USB CDC ACM and recognized CH34x/CP210x/FTDI/Prolific

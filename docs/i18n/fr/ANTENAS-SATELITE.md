@@ -19,8 +19,8 @@ ni de PY5LO inclus dans le guide de PT2VM, dont l’autorisation a été accord�
 
 | Antenne | Utilisation | Gain simulé | Difficulté |
 | --- | --- | --- | --- |
-| [Yagi bibande à main](#yagi-bibanda-de-mano) | Satellites FM avec montée et descente sur des bandes distinctes (SO-50, répéteur ISS, PO-101) | 8,4 dBi VHF / 11,4 dBi UHF | Moyenne |
-| [Dipôle en V horizontal 2 m](#dipolo-en-v-horizontal-2-m) | Écoute fixe sans suivi : SSTV et APRS de l’ISS, descentes VHF | 1,8 dBi au zénith | Faible |
+| [Yagi bibande à main](#yagi-bibande-à-main) | Satellites FM avec montée et descente sur des bandes distinctes (SO-50, répéteur ISS, PO-101) | 8,4 dBi VHF / 11,4 dBi UHF | Moyenne |
+| [Dipôle en V horizontal 2 m](#dipôle-en-v-horizontal-2-m) | Écoute fixe sans suivi : SSTV et APRS de l’ISS, descentes VHF | 1,8 dBi au zénith | Faible |
 | Antenne d’origine de la radio | Premières écoutes de l’ISS lors de passages hauts | Très inférieur aux précédentes | Aucune |
 
 Avec l’antenne d’origine, il est possible d’entendre l’ISS lors de passages hauts,
@@ -82,7 +82,7 @@ environ 2 % de la puissance ; c’est acceptable pour une radio portable.
 - Tige d’aluminium de 4 mm, environ 5,5 m au total. Une tige en laiton convient aussi ;
 le ruban à mesurer nécessite un autre bloc.
 - Pièces imprimées : 6 pinces d’élément, 2 blocs d’élément alimenté et
-1 poignée ; voir [pièces STL](#piezas-imprimibles-stl).
+1 poignée ; voir [pièces STL](#pièces-imprimables-stl).
 - Vis M3 x 8 pour fixer les tiges et les pièces et M3 x 10 avec cosse à œillet
 pour les éléments alimentés.
 - Deux longueurs de coaxial fin de 50 Ω, par exemple RG-316 ou RG-58, chacune

@@ -1,6 +1,6 @@
 # Déploiement
 
-Deux déploiements sont pris en charge : **local** (serveur Node sur l'ordinateur auquel la radio est connectée) et **web public sur GitHub Pages** (site statique, voir [Web public sur GitHub Pages](#web-pública-en-github-pages)).
+Deux déploiements sont pris en charge : **local** (serveur Node sur l'ordinateur auquel la radio est connectée) et **web public sur GitHub Pages** (site statique, voir [Web public sur GitHub Pages](#web-public-sur-github-pages)).
 
 ## Prérequis
 
@@ -186,7 +186,7 @@ node scripts/i18n.cjs --fix --strict
 npm run build:help
 ```
 
-`--fix` ajuste les chemins relatifs des liens et images au dossier de chaque traduction et les dirige vers la traduction correspondante. En cas de divergence entre traduction et original, l'espagnol prévaut.
+`--fix` ajuste les chemins relatifs des liens et images au dossier de chaque traduction et les dirige vers la traduction correspondante. Il corrige aussi les ancres des titres Markdown traduits ; l'aide HTML conserve des ancres stables dans toutes les langues. La vérification inclut architecture, marque, décisions et déploiement. L'index des références est généré à partir des titres traduits de tous les guides et relie chaque version linguistique, dont l'anglais des États-Unis. Les sources externes conservent la langue publiée par leurs auteurs ; le centre historique de questions fréquentes est identifié comme espagnol. En cas de divergence entre traduction et original, l'espagnol prévaut.
 
 ## Démarrage automatique (facultatif, depuis les sources)
 
@@ -220,7 +220,7 @@ L'activer avec `systemctl --user enable --now bricohams-radio`.
 <a id="web-pública-en-github-pages"></a>
 ## Web public sur GitHub Pages
 
-Le site statique est généré par `npm run build:pages` (dossier `dist/`) et publié par `.github/workflows/pages.yml`. Il n'inclut pas `server.cjs` : `runtime.json` vaut `{"mode":"web"}` et l'application fonctionne en mode web (voir [Architecture](ARCHITECTURE.md#modos-de-ejecución)).
+Le site statique est généré par `npm run build:pages` (dossier `dist/`) et publié par `.github/workflows/pages.yml`. Il n'inclut pas `server.cjs` : `runtime.json` vaut `{"mode":"web"}` et l'application fonctionne en mode web (voir [Architecture](ARCHITECTURE.md#modes-dexécution)).
 
 ### Pourquoi une origine dédiée
 
@@ -275,7 +275,7 @@ Avec Node.js 22+, Git et les outils d'archivage du système :
 npm run export:project -- --beta `
   --firmware 'C:\ruta\Multiboot\Bricohams' `
   --installers 'C:\ruta\instalables-verificados' `
-  --android 'C:\ruta\Android-0.8.1-beta' `
+  --android 'C:\ruta\Android-0.8.2-beta' `
   --output 'C:\ruta\entregas\Bricohams-desarrollo.zip'
 ```
 

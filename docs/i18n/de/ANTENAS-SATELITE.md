@@ -20,8 +20,8 @@ gestattet wurde.
 
 | Antenne | Verwendung | Simulierter Gewinn | Schwierigkeit |
 | --- | --- | --- | --- |
-| [Handgeführte Dualband-Yagi](#yagi-bibanda-de-mano) | FM-Satelliten mit Uplink und Downlink in verschiedenen Bändern (SO-50, ISS-Repeater, PO-101) | 8,4 dBi VHF / 11,4 dBi UHF | Mittel |
-| [Horizontaler V-Dipol für 2 m](#dipolo-en-v-horizontal-2-m) | Fester Empfang ohne Nachführung: SSTV und APRS der ISS, VHF-Downlinks | 1,8 dBi im Zenit | Einfach |
+| [Handgeführte Dualband-Yagi](#handgeführte-dualband-yagi) | FM-Satelliten mit Uplink und Downlink in verschiedenen Bändern (SO-50, ISS-Repeater, PO-101) | 8,4 dBi VHF / 11,4 dBi UHF | Mittel |
+| [Horizontaler V-Dipol für 2 m](#horizontaler-v-dipol-für-2-m) | Fester Empfang ohne Nachführung: SSTV und APRS der ISS, VHF-Downlinks | 1,8 dBi im Zenit | Einfach |
 | Originalantenne des Funkgeräts | Erste ISS-Empfangsversuche bei hohen Überflügen | Deutlich geringer als bei den obigen | Keine |
 
 Mit der Originalantenne ist die ISS bei hohen Überflügen hörbar; für den Betrieb
@@ -83,7 +83,7 @@ reflektiert etwa 2 % der Leistung; für ein Handfunkgerät ist das akzeptabel.
 - Aluminiumstab mit 4 mm Durchmesser, insgesamt etwa 5,5 m. Messingstab ist
   ebenfalls geeignet; für ein Maßband ist ein anderer Block erforderlich.
 - Gedruckte Teile: 6 Elementklemmen, 2 Strahlerblöcke und 1 Griff; siehe
-  [STL-Teile](#piezas-imprimibles-stl).
+  [STL-Teile](#druckbare-stl-teile).
 - M3 x 8-Schrauben zur Befestigung der Stäbe und Teile sowie M3 x 10 mit
   Ösenkabelschuh für die Strahler.
 - Zwei Stücke dünnes 50-Ω-Koaxialkabel, etwa RG-316 oder RG-58, jeweils mit

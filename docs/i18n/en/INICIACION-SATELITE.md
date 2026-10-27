@@ -27,21 +27,21 @@ attribution.
 
 ## Contents
 
-1. [What is an amateur radio satellite](#que-es-un-satelite-de-radioaficionado)
-2. [Who can listen and who can transmit](#quien-puede-escuchar-y-quien-puede-transmitir)
-3. [Pass concepts](#conceptos-del-pase)
-4. [UTC time, grid locator, and coordinates](#hora-utc-localizador-y-coordenadas)
-5. [Predicting passes and checking satellite activity](#predecir-pases-y-saber-si-el-satelite-esta-activo)
-6. [Doppler effect](#efecto-doppler)
-7. [FM satellites for beginners](#satelites-fm-para-empezar)
-8. [Station equipment](#equipo-de-la-estacion)
-9. [Operating BH Satélite on the UV-K5](#operar-con-bh-satelite-en-la-uv-k5)
-10. [Making a satellite QSO](#como-hacer-un-qso-por-satelite)
-11. [Logging and confirming contacts](#registrar-y-confirmar-contactos)
-12. [SSTV and APRS from the ISS](#sstv-y-aprs-desde-la-iss)
-13. [Pass checklist](#lista-de-comprobacion-del-pase)
-14. [Glossary](#glosario)
-15. [References](#referencias)
+1. [What is an amateur radio satellite](#what-is-an-amateur-radio-satellite)
+2. [Who can listen and who can transmit](#who-can-listen-and-who-can-transmit)
+3. [Pass concepts](#pass-concepts)
+4. [UTC time, grid locator, and coordinates](#utc-time-grid-locator-and-coordinates)
+5. [Predicting passes and checking satellite activity](#predicting-passes-and-checking-satellite-activity)
+6. [Doppler effect](#doppler-effect)
+7. [FM satellites for beginners](#fm-satellites-for-beginners)
+8. [Station equipment](#station-equipment)
+9. [Operating BH Satélite on the UV-K5](#operating-bh-satélite-on-the-uv-k5)
+10. [Making a satellite QSO](#making-a-satellite-qso)
+11. [Logging and confirming contacts](#logging-and-confirming-contacts)
+12. [SSTV and APRS from the ISS](#sstv-and-aprs-from-the-iss)
+13. [Pass checklist](#pass-checklist)
+14. [Glossary](#glossary)
+15. [References](#references)
 
 ## What is an amateur radio satellite
 

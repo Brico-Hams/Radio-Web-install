@@ -125,7 +125,7 @@ Real-world detection remains
 pending validation. New builds include a Beta welcome message and a
 monochrome logo embedded in LOGO mode, without overwriting the external logo
 or changing startup preferences.
-See [build, controls, licenses, and limitations](docs/i18n/en/BRICOHAMS-FIRMWARE.md#nuevo-nucleo-independiente-ardf).
+See [build, controls, licenses, and limitations](docs/i18n/en/BRICOHAMS-FIRMWARE.md#new-independent-ardf-core).
 
 **BETA - under validation and testing.** **PRO Mode**, explicitly enabled for this session,
 avoids repetitive confirmations when pressing operations, but does not remove USB permissions,
@@ -135,28 +135,30 @@ full backup, hardware/firmware checks, hashes, CRC, reread, or Main protection. 
 
 ## Documentation
 
+[Complete documentation and reference index by language](ayuda-referencias.en.html).
+
 ### Bricohams Beta for Android
 
-The native 0.8.1-beta APK includes editable local contacts with search and ADIF import with preview, ADIF/JSON export, ARDF sessions with history, statistics, filtered GPS segments and point GPS observations, and experimental text and PCM WAV Morse. It includes temporary RX CAT over USB CDC ACM and recognized CH34x/CP210x/FTDI/Prolific adapters. Calculates SGP4 passes offline with imported TLE and supports RX Doppler tracking of the selected pass. Captures microphone audio in the foreground for up to 60 s for subsequent Morse or Robot36 decoding; this is not continuous decoding. Includes F4HWN v6 channel editing with full verified backup and readback; no LoTW upload. Decodes experimental Robot36 SSTV from WAV and exports PNG. Builds for Android 8.0+;
+The native 0.8.2-beta APK includes editable local contacts with search and ADIF import with preview, ADIF/JSON export, ARDF sessions with history, statistics, filtered GPS segments and point GPS observations, and experimental text and PCM WAV Morse. It includes temporary RX CAT over USB CDC ACM and recognized CH34x/CP210x/FTDI/Prolific adapters. Calculates SGP4 passes offline with imported TLE and supports RX Doppler tracking of the selected pass. Captures microphone audio in the foreground for up to 60 s for subsequent Morse or Robot36 decoding; this is not continuous decoding. Includes F4HWN v6 channel editing with full verified backup and readback; no LoTW upload. Decodes experimental Robot36 SSTV from WAV and exports PNG. Builds for Android 8.0+;
 host tests do not replace tests on a phone.
 See [features, permissions, build, and limitations](docs/i18n/en/ANDROID.md).
 
-VersionCode 10 preserves the 0.8.0 activity logbooks (General/POTA/SOTA), quick entry and duplicate confirmation, plus on-request CelesTrak/SatNOGS updates, satellite selection, polar pass radar, offline world map, full-pass WAV recording and SSTV image search. It adds localized controls and validation without replacing the redesigned screens. Android builds remain pending JDK 17/SDK 35 CI.
+VersionCode 11 preserves the 0.8.0 activity logbooks (General/POTA/SOTA), quick entry and duplicate confirmation, satellite selection, polar pass radar, offline world map, full-pass WAV recording, and SSTV image search. Optional CelesTrak/SatNOGS updates run on opening, every 24 h. The map appears without GPS permission or an observer; pass predictions require your saved location. Cached valid TLE work offline, and saved selections are preserved. Controls and validation are localized. Host tests, lint, and APK 0.8.2 passed CI with JDK 17/SDK 35; physical phone installation and permissions remain untested.
 
 | Document | Contents |
 | --- | --- |
 | [Delivery status](docs/i18n/en/ESTADO-ENTREGA.md) | Review of all requests, evidence, outstanding items, and publication and export conditions |
 | [Help and support](ayuda.html) (in the app: <http://127.0.0.1:8787/ayuda.html>) | Getting started, USB drivers (unofficial support), common errors, and frequently asked questions |
-| [Complete firmware library](ayuda-firmwares.html) / [Markdown index](docs/i18n/en/AYUDA-FIRMWARES.md) | Guides by family, model, revision, and version: F4HWN, ARDF, Karina, Bricohams, and OpenGD77; menus, FM/DMR configuration, and every catalog option with an ON/OFF matrix. Included offline in installers and the local server. Regenerate with `npm run build:help`. |
-| [Quansheng from 0 to 100%](docs/i18n/en/AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100) | Complete phased path: identify, backups, choose and flash firmware, basic settings, channels, scanning, multiboot, verification, and recovery |
-| [UV-K5 V3 / UV-K1 technical atlas](docs/i18n/en/ATLAS-UV-K5-V3.md) (web: [ayuda-atlas-uv-k5-v3.html](ayuda-atlas-uv-k5-v3.html)) | Internal hardware: PY32F071 pinout, internal and external Flash, EEPROM map, serial protocol, DFU bootloader, SWD, build, mods, schematics, teardown photos, and verified repositories |
-| [Baofeng DM-32UV](docs/i18n/en/DM32UV-FIRMWARE.md) (web: [ayuda-dm32uv.html](ayuda-dm32uv.html)) | HR_C7000/FD6818 hardware, OpenGD77 status and license on the DM-32, installation and backups, how to build the open RadioFoundry firmware, and bootloader protocol |
+| [Complete firmware library](ayuda-firmwares.en.html) / [Markdown index](docs/i18n/en/AYUDA-FIRMWARES.md) | Guides by family, model, revision, and version: F4HWN, ARDF, Karina, Bricohams, and OpenGD77; menus, FM/DMR configuration, and every catalog option with an ON/OFF matrix. Included offline in installers and the local server. Regenerate with `npm run build:help`. |
+| [Quansheng from 0 to 100%](docs/i18n/en/AYUDA-QUANSHENG.md#getting-started-from-0-to-100) | Complete phased path: identify, backups, choose and flash firmware, basic settings, channels, scanning, multiboot, verification, and recovery |
+| [UV-K5 V3 / UV-K1 technical atlas](docs/i18n/en/ATLAS-UV-K5-V3.md) (web: [ayuda-atlas-uv-k5-v3.html](ayuda-atlas-uv-k5-v3.en.html)) | Internal hardware: PY32F071 pinout, internal and external Flash, EEPROM map, serial protocol, DFU bootloader, SWD, build, mods, schematics, teardown photos, and verified repositories |
+| [Baofeng DM-32UV](docs/i18n/en/DM32UV-FIRMWARE.md) (web: [ayuda-dm32uv.html](ayuda-dm32uv.en.html)) | HR_C7000/FD6818 hardware, OpenGD77 status and license on the DM-32, installation and backups, how to build the open RadioFoundry firmware, and bootloader protocol |
 | [Karina](docs/i18n/en/KARINA.md) / [community repositories](docs/i18n/en/ENLACES-COMUNIDAD.md) | Search for Karina source code (closed source), functional specification for reimplementing it, and verified catalog of Quansheng and DM-32UV repositories |
 | [Examples](docs/i18n/en/EJEMPLOS.md) / [third-party hashes](docs/i18n/en/BINARIOS-TERCEROS.md) | `examples/`: open firmware (F4HWN v6.3.0, moto) with its license, PMR446 channels, and analysis scripts; SHA-256 index and origin of third-party binaries, which are not redistributed |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, data flow, modules, and security layers |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | Architecture decisions and why each technology was chosen |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Installation, configuration, updates, and unsupported deployments |
-| [docs/BRANDING.md](docs/BRANDING.md) | Bricohams brand: logo, palette, typography, and tone |
+| [docs/ARCHITECTURE.md](docs/i18n/en/ARCHITECTURE.md) | Components, data flow, modules, and security layers |
+| [docs/DECISIONS.md](docs/i18n/en/DECISIONS.md) | Architecture decisions and why each technology was chosen |
+| [docs/DEPLOYMENT.md](docs/i18n/en/DEPLOYMENT.md) | Installation, configuration, updates, and unsupported deployments |
+| [docs/BRANDING.md](docs/i18n/en/BRANDING.md) | Bricohams brand: logo, palette, typography, and tone |
 | [AUTHORS.md](AUTHORS.md) | Authors |
 | [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | Acknowledgments, sources, and third-party licenses |
 | [SUPPORT.md](SUPPORT.md) / [SECURITY.md](SECURITY.md) | Support and private vulnerability reporting |
@@ -213,7 +215,7 @@ The same application can be used in two ways. At startup it reads `runtime.json`
 | BrandMeister groups | Direct query by prefix and import into the local file | Query through server |
 | Satellites | `data/satellites.json` generated daily from SatNOGS | Live TLE |
 
-Satellite data covers NORAD 25544, 27607, 43017, and 43678 (SatNOGS DB / Libre Space Foundation, CC BY-SA 4.0); a warning appears if it is more than 7 days old. To publish your own copy on GitHub Pages, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Satellite data covers NORAD 25544, 27607, 43017, and 43678 (SatNOGS DB / Libre Space Foundation, CC BY-SA 4.0); a warning appears if it is more than 7 days old. To publish your own copy on GitHub Pages, see [docs/DEPLOYMENT.md](docs/i18n/en/DEPLOYMENT.md).
 
 **OpenGD77 CPS check:** a visible capabilities and limitations matrix
 is available on its page. No full parity or automatic complete MCU firmware copy is claimed. Connecting automatically starts calibration and codeplug reads, persists the copy and its hashes, and opens the codeplug for offline work. While the original firmware is missing, subsequent radio operations—including reread and capture—are blocked, also in PRO. A downloaded official image is not a backup of the unit and does not restore the commercial firmware already replaced.
@@ -221,8 +223,8 @@ See [web scope and mandatory backup](docs/i18n/en/AYUDA-OPENGD77.md).
 
 ### Local installers
 
-Download the [latest Release](https://github.com/Brico-Hams/Radio-Web-install/releases/latest) and its `SHA256SUMS` file. Choose an installer from **Assets**, not the automatically generated ZIP/tar.gz files under “Source code.” [Complete local installation guide](docs/DEPLOYMENT.md#instaladores-locales).
-After installation, to prepare a Quansheng, follow [getting started from 0 to 100%](docs/i18n/en/AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100)
+Download the [latest Release](https://github.com/Brico-Hams/Radio-Web-install/releases/latest) and its `SHA256SUMS` file. Choose an installer from **Assets**, not the automatically generated ZIP/tar.gz files under “Source code.” [Complete local installation guide](docs/i18n/en/DEPLOYMENT.md#local-installers).
+After installation, to prepare a Quansheng, follow [getting started from 0 to 100%](docs/i18n/en/AYUDA-QUANSHENG.md#getting-started-from-0-to-100)
 and consult the [UV-K5 V3 technical atlas](docs/i18n/en/ATLAS-UV-K5-V3.md).
 
 - Windows 11 x64: extract the entire `*-windows-x64.zip`, open PowerShell in that folder, and run `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1`. Node.js included, no administrator privileges; launch the app from the Start menu.

@@ -267,18 +267,18 @@ verified. Each phase explains when it is complete. Phases 9 and 10 are optional.
 
 | Phase | What you do | Complete when | Details |
 | --- | --- | --- | --- |
-| 0. Identify | Check label under the battery, SysInf, and bootloader version | You know whether it is UV-K5 V3, UV-K1, or another revision | [Versions](ATLAS-UV-K5-V3.md#versiones-y-como-identificarlas) |
-| 1. Prepare PC | Desktop Chrome or Edge, USB-C data cable or Kenwood cable, driver | Port appears and no other application is using it | [Drivers](../../../ayuda.html#drivers) and [USB](AYUDA-CONFIGURACION.md#conexion-usb-sin-confundir-modos) |
-| 2. Backups | Calibration (512 bytes), configuration, and, if firmware allows, full Flash | Files are outside the browser and have SHA-256 hashes | [Calibration](ATLAS-UV-K5-V3.md#calibracion) |
-| 3. Choose firmware | Version and edition (Fusion, FieldOps, Transfer, Labs) for your hardware | `.bin` file downloaded from the official release with its hash checked | [Editions](#que-edicion-elegir) and [versions](#matriz-de-versiones-y-formatos) |
-| 4. Flash | Radio off, hold PTT while powering on, use UV Studio or Bricohams Studio | Tool confirms every page and the radio restarts | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-y-flasheo) |
+| 0. Identify | Check label under the battery, SysInf, and bootloader version | You know whether it is UV-K5 V3, UV-K1, or another revision | [Versions](ATLAS-UV-K5-V3.md#versions-and-how-to-identify-them) |
+| 1. Prepare PC | Desktop Chrome or Edge, USB-C data cable or Kenwood cable, driver | Port appears and no other application is using it | [Drivers](../../../ayuda.html#drivers) and [USB](AYUDA-CONFIGURACION.md#usb-connection-do-not-confuse-modes) |
+| 2. Backups | Calibration (512 bytes), configuration, and, if firmware allows, full Flash | Files are outside the browser and have SHA-256 hashes | [Calibration](ATLAS-UV-K5-V3.md#calibration) |
+| 3. Choose firmware | Version and edition (Fusion, FieldOps, Transfer, Labs) for your hardware | `.bin` file downloaded from the official release with its hash checked | [Editions](#which-edition-to-choose) and [versions](#version-and-format-matrix) |
+| 4. Flash | Radio off, hold PTT while powering on, use UV Studio or Bricohams Studio | Tool confirms every page and the radio restarts | [Bootloader](ATLAS-UV-K5-V3.md#bootloader-and-flashing) |
 | 5. First boot | Read SysInf and check the version | Version matches the flashed file | Next section |
 | 6. Basic settings | Navigation, battery, display, squelch, TX, and locks | Settings persist after power cycling | Basic settings table |
-| 7. Channels | Repeaters, receive-only PMR, satellites, and names | Memories appear and read back unchanged | [FM memories](#preparar-y-enviar-memorias-fm) |
-| 8. Scanning | Lists, priorities, and resume behavior | Scanning covers only the intended memories | [Scanning](#escaneo-prioridades-y-teclas) |
-| 9. Multiboot (optional) | Slots 1-4 and CFG banks | Each slot passes CRC and boots | [Slots and banks](#slots-y-bancos-cfg-operaciones-distintas) |
-| 10. Labs (optional) | Overlay apps from the same release | App boots and returns to firmware | [Labs](#labs-y-aplicaciones) |
-| 11. Final verification | Checklist and a fresh backup | You have a final-state backup and recorded versions | [Final checklist](AYUDA-CONFIGURACION.md#lista-de-verificacion-posterior) |
+| 7. Channels | Repeaters, receive-only PMR, satellites, and names | Memories appear and read back unchanged | [FM memories](#prepare-and-send-fm-memories) |
+| 8. Scanning | Lists, priorities, and resume behavior | Scanning covers only the intended memories | [Scanning](#scanning-priorities-and-keys) |
+| 9. Multiboot (optional) | Slots 1-4 and CFG banks | Each slot passes CRC and boots | [Slots and banks](#slots-and-cfg-banks-different-operations) |
+| 10. Labs (optional) | Overlay apps from the same release | App boots and returns to firmware | [Labs](#labs-and-apps) |
+| 11. Final verification | Checklist and a fresh backup | You have a final-state backup and recorded versions | [Final checklist](AYUDA-CONFIGURACION.md#post-operation-checklist) |
 
 ### Phase 4 step by step: flash the main firmware
 
@@ -326,15 +326,15 @@ verified. Each phase explains when it is complete. Phases 9 and 10 are optional.
 | ChDisp | Name | Show the memory name in MR mode |
 
 After changing settings, power-cycle to confirm they were saved. See the
-[menu glossary](#diccionario-de-menus-de-radio) for each menu's meaning.
+[menu glossary](#radio-menu-glossary) for each menu's meaning.
 
 ### Phases 7 and 8: channels and scanning
 
 - This website prepares channels from a template and writes them with a backup
-  and readback ([FM memories](#preparar-y-enviar-memorias-fm)). You can also use
+  and readback ([FM memories](#prepare-and-send-fm-memories)). You can also use
   the CHIRP driver for each F4HWN release or Bricohams Studio.
 - Imported channels start with TXLock. Remove it only for verified, authorized
-  channels ([channel glossary](AYUDA-CONFIGURACION.md#diccionario-de-canal-analogico)).
+  channels ([channel glossary](AYUDA-CONFIGURACION.md#analog-channel-glossary)).
 - Assign each memory to its list (ScList), choose priorities (PriCh1/PriCh2),
   and set resume mode (ScnRev). Test scanning with SQL adjusted.
 
@@ -345,7 +345,7 @@ After changing settings, power-cycle to confirm they were saved. See the
 | You want to return to factory firmware | Use guided [UV Studio](https://armel.github.io/uvstudio/) restoration: it rebuilds external Flash without touching calibration. Flashing only the factory `.bin` may leave the K1 unable to boot |
 | The radio will not boot after flashing | Enter update mode (hold PTT while powering on) and reflash the correct model's `.bin` |
 | The bootloader does not respond or the port does not appear | Try another data cable and port; check that no other program is using the port |
-| You cannot enter update mode | SWD recovery with ST-Link ([SWD](ATLAS-UV-K5-V3.md#swd-y-recuperacion)). Experienced users only |
+| You cannot enter update mode | SWD recovery with ST-Link ([SWD](ATLAS-UV-K5-V3.md#swd-and-recovery)). Experienced users only |
 | Calibration is lost or belongs to another radio | Restore the Phase 2 backup. Do not use calibration from another unit |
 
 ## Beta: real USB test and channels

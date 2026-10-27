@@ -139,6 +139,14 @@ test("Android 0.8.2 packaging and tag release artifacts match versionCode 11", (
   assert.match(script, /applicationVersion = '0\.8\.2-beta'/);
   assert.match(script, /applicationVersionCode = 11\b/);
   assert.doesNotMatch(workflow + script, /0\.8\.0-beta|0\.7\.1-beta/);
+  for (const suffix of ["", ".en", ".fr", ".de", ".it"]) {
+    const readme = read(`README${suffix}.md`);
+    assert.match(readme, /0\.8\.2-beta/);
+    assert.doesNotMatch(readme, /0\.8\.1-beta|[Vv]ersionCode 10/);
+    const directory = suffix ? `docs/i18n/${suffix.slice(1)}` : "docs";
+    assert.match(read(`${directory}/BRICOHAMS-FIRMWARE.md`), /`0\.8\.2-beta`/);
+    assert.match(read(`${directory}/ESTADO-ENTREGA.md`), /AND-01[^\n]+0\.8\.2-beta/);
+  }
 });
 
 test("Pages links retain relative paths, other query parameters and fragments", () => {
@@ -147,6 +155,11 @@ test("Pages links retain relative paths, other query parameters and fragments", 
   assert.equal(I.localizedURL("../opengd77.html?x=1#connection", base, "en-US"),
     "../opengd77.html?x=1&lang=en-US#connection");
   assert.equal(I.localizedURL("anytone.html?lang=de", base, "es"), "anytone.html?lang=es");
+  assert.equal(I.localizedURL("ayuda-quansheng.html#puesta-en-marcha-de-0-a-100", base, "fr"),
+    "ayuda-quansheng.fr.html#puesta-en-marcha-de-0-a-100");
+  assert.equal(I.localizedURL("ayuda-android.de.html?x=1#mapa", base, "en-US"), "ayuda-android.en.html?x=1#mapa");
+  assert.equal(I.localizedURL("ayuda-referencias.fr.html", base, "es"), "ayuda-referencias.html");
+  assert.equal(I.localizedURL("../ayuda-despliegue.html", base, "de"), "../ayuda-despliegue.de.html");
   for (const href of ["#planning-panel", "?q=a", "https://grid.radio/opengd77/", "studio.html",
     "ayuda.html#drivers", "precompiled/catalog.json", "https://elsewhere.invalid/index.html"]) {
     assert.equal(I.localizedURL(href, base, "fr"), href);

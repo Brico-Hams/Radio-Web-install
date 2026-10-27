@@ -36,7 +36,7 @@ delle sorgenti Karina non è un requisito per scrivere nuove funzioni. Non
 è comunque possibile promettere una ricompilazione Karina o un’equivalenza del 100 %
 senza implementazione e test. Il primo nucleo proprietario
 ARDF, il suo contratto e i punti di integrazione ancora da completare sono descritti in
-[Bricohams](BRICOHAMS-FIRMWARE.md#nuevo-nucleo-independiente-ardf).
+[Bricohams](BRICOHAMS-FIRMWARE.md#nuovo-nucleo-ardf-originale).
 Sono già create tre immagini indipendenti per gli slot V3: ARDF con cicli,
 Satellite con Doppler RX manuale e Spettro con 128 punti, media, peak hold
 e otto preset di sessione RAM, oltre a una cattura VFO-PRO proprietaria di sola ricezione.

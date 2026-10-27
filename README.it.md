@@ -122,7 +122,7 @@ convalida atomica e rilettura; non scrive EEPROM.
 Il rilevamento reale deve ancora essere convalidato. Le nuove build includono
 messaggio di benvenuto Beta e logo monocromatico incorporato nella modalità LOGO, senza sovrascrivere il logo esterno
 né modificare le preferenze di accensione.
-Vedere [compilazione, controlli, licenze e limiti](docs/i18n/it/BRICOHAMS-FIRMWARE.md#nuevo-nucleo-independiente-ardf).
+Vedere [compilazione, controlli, licenze e limiti](docs/i18n/it/BRICOHAMS-FIRMWARE.md#nuovo-nucleo-ardf-originale).
 
 **BETA - in convalida e test.** La **Modalità PRO**, attivata espressamente per questa sessione, evita conferme ripetute alla pressione delle operazioni, ma non elimina permessi USB, backup completo, controlli hardware/firmware, hash, CRC, rilettura né protezione di Main. Non abilita scritture con copie parziali.
 
@@ -130,9 +130,11 @@ Vedere [compilazione, controlli, licenze e limiti](docs/i18n/it/BRICOHAMS-FIRMWA
 
 ## Documentazione
 
+[Indice completo della documentazione e dei riferimenti per lingua](ayuda-referencias.it.html).
+
 ### Android Bricohams Beta
 
-L’APK nativa 0.8.1-beta include contatti locali modificabili con ricerca e importazione ADIF con anteprima, esportazione
+L’APK nativa 0.8.2-beta include contatti locali modificabili con ricerca e importazione ADIF con anteprima, esportazione
 ADIF/JSON, sessioni ARDF con cronologia, statistiche, segmenti GPS filtrati e osservazioni GPS puntuali, e Morse da testo
 e WAV PCM sperimentale. Integra CAT RX temporaneo tramite USB CDC ACM e
 adattatori riconosciuti CH34x/CP210x/FTDI/Prolific. Calcola i passaggi SGP4 offline
@@ -144,22 +146,22 @@ Compila per Android 8.0+;
 i test host non sostituiscono le prove sul telefono.
 Consulta [funzioni, permessi, compilazione e limiti](docs/i18n/it/ANDROID.md).
 
-VersionCode 10 conserva i libri 0.8.0 (Generale/POTA/SOTA), inserimento rapido e conferma duplicati, aggiornamenti CelesTrak/SatNOGS su richiesta, selezione satelliti, radar polare, mappa mondiale offline, registrazione WAV del passaggio e ricerca SSTV. Controlli e validazione localizzati senza sostituire le schermate ridisegnate. Compilazione Android da verificare in CI con JDK 17/SDK 35.
+VersionCode 11 conserva i libri 0.8.0 (Generale/POTA/SOTA), inserimento rapido, conferma duplicati, selezione satelliti, radar polare, mappa mondiale offline, registrazione WAV del passaggio e ricerca SSTV. Gli aggiornamenti CelesTrak/SatNOGS opzionali avvengono all'apertura, ogni 24 h. La mappa appare senza permesso GPS o osservatore; i passaggi richiedono la posizione salvata. I TLE validi conservati funzionano offline e la selezione resta salvata. Controlli e validazione sono tradotti. Test host, lint e APK 0.8.2 verificati in CI con JDK 17/SDK 35; installazione e permessi su telefono fisico restano da provare.
 
 | Documento | Contenuto |
 | --- | --- |
 | [Stato della consegna](docs/i18n/it/ESTADO-ENTREGA.md) | Revisione di tutte le richieste, evidenze, attività ancora da fare e condizioni di pubblicazione ed esportazione |
 | [Guida e supporto](ayuda.html) (nell’app: <http://127.0.0.1:8787/ayuda.html>) | Primi passi, driver USB (supporto non ufficiale), errori frequenti e domande frequenti |
-| [Libreria firmware completa](ayuda-firmwares.html) / [indice Markdown](docs/i18n/it/AYUDA-FIRMWARES.md) | Guide per famiglia, modello, revisione e versione: F4HWN, ARDF, Karina, Bricohams e OpenGD77; menu, configurazione FM/DMR e tutte le opzioni del catalogo con matrice ON/OFF. Inclusa offline negli installer e nel server locale. Rigenerare con `npm run build:help`. |
-| [Quansheng da 0 a 100 %](docs/i18n/it/AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100) | Percorso completo per fasi: identificazione, backup, scelta e flash del firmware, impostazioni di base, canali, scansione, multiboot, verifica e ripristino |
-| [Atlante tecnico UV-K5 V3 / UV-K1](docs/i18n/it/ATLAS-UV-K5-V3.md) (web: [ayuda-atlas-uv-k5-v3.html](ayuda-atlas-uv-k5-v3.html)) | Hardware interno: pinout PY32F071, flash interna ed esterna, mappa EEPROM, protocollo seriale, bootloader DFU, SWD, compilazione, modifiche, schemi, foto del teardown e repository verificati |
-| [Baofeng DM-32UV](docs/i18n/it/DM32UV-FIRMWARE.md) (web: [ayuda-dm32uv.html](ayuda-dm32uv.html)) | Hardware HR_C7000/FD6818, stato e licenza di OpenGD77 sul DM-32, installazione e backup, compilazione del firmware aperto RadioFoundry e protocollo del bootloader |
+| [Libreria firmware completa](ayuda-firmwares.it.html) / [indice Markdown](docs/i18n/it/AYUDA-FIRMWARES.md) | Guide per famiglia, modello, revisione e versione: F4HWN, ARDF, Karina, Bricohams e OpenGD77; menu, configurazione FM/DMR e tutte le opzioni del catalogo con matrice ON/OFF. Inclusa offline negli installer e nel server locale. Rigenerare con `npm run build:help`. |
+| [Quansheng da 0 a 100 %](docs/i18n/it/AYUDA-QUANSHENG.md#avvio-da-0-al-100-) | Percorso completo per fasi: identificazione, backup, scelta e flash del firmware, impostazioni di base, canali, scansione, multiboot, verifica e ripristino |
+| [Atlante tecnico UV-K5 V3 / UV-K1](docs/i18n/it/ATLAS-UV-K5-V3.md) (web: [ayuda-atlas-uv-k5-v3.html](ayuda-atlas-uv-k5-v3.it.html)) | Hardware interno: pinout PY32F071, flash interna ed esterna, mappa EEPROM, protocollo seriale, bootloader DFU, SWD, compilazione, modifiche, schemi, foto del teardown e repository verificati |
+| [Baofeng DM-32UV](docs/i18n/it/DM32UV-FIRMWARE.md) (web: [ayuda-dm32uv.html](ayuda-dm32uv.it.html)) | Hardware HR_C7000/FD6818, stato e licenza di OpenGD77 sul DM-32, installazione e backup, compilazione del firmware aperto RadioFoundry e protocollo del bootloader |
 | [Karina](docs/i18n/it/KARINA.md) / [repository della comunità](docs/i18n/it/ENLACES-COMUNIDAD.md) | Ricerca del codice sorgente Karina (chiuso), specifica funzionale per reimplementarlo e catalogo verificato dei repository Quansheng e DM-32UV |
 | [Esempi](docs/i18n/it/EJEMPLOS.md) / [hash di terzi](docs/i18n/it/BINARIOS-TERCEROS.md) | `examples/`: firmware aperti (F4HWN v6.3.0, moto) con licenza, canali PMR446 e script di analisi; indice SHA-256 e origine dei binari di terzi, che non vengono ridistribuiti |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Componenti, flusso dei dati, moduli e livelli di sicurezza |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | Decisioni architetturali e motivi della scelta di ogni tecnologia |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Installazione, configurazione, aggiornamento e distribuzioni non supportate |
-| [docs/BRANDING.md](docs/BRANDING.md) | Marchio Bricohams: logo, palette, tipografia e tono |
+| [docs/ARCHITECTURE.md](docs/i18n/it/ARCHITECTURE.md) | Componenti, flusso dei dati, moduli e livelli di sicurezza |
+| [docs/DECISIONS.md](docs/i18n/it/DECISIONS.md) | Decisioni architetturali e motivi della scelta di ogni tecnologia |
+| [docs/DEPLOYMENT.md](docs/i18n/it/DEPLOYMENT.md) | Installazione, configurazione, aggiornamento e distribuzioni non supportate |
+| [docs/BRANDING.md](docs/i18n/it/BRANDING.md) | Marchio Bricohams: logo, palette, tipografia e tono |
 | [AUTHORS.md](AUTHORS.md) | Autori |
 | [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) | Riconoscimenti, fonti e licenze di terzi |
 | [SUPPORT.md](SUPPORT.md) / [SECURITY.md](SECURITY.md) | Supporto e segnalazione privata di vulnerabilità |
@@ -216,7 +218,7 @@ La stessa applicazione può essere usata in due modi. All’avvio legge `runtime
 | Gruppi BrandMeister | Consultazione diretta per prefisso e importazione nel file locale | Consultazione tramite server |
 | Satelliti | `data/satellites.json` generato ogni giorno da SatNOGS | TLE in tempo reale |
 
-I dati satellitari coprono NORAD 25544, 27607, 43017 e 43678 (SatNOGS DB / Libre Space Foundation, CC BY-SA 4.0); viene mostrato un avviso se hanno più di 7 giorni. Per pubblicare la propria copia su GitHub Pages, vedere [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+I dati satellitari coprono NORAD 25544, 27607, 43017 e 43678 (SatNOGS DB / Libre Space Foundation, CC BY-SA 4.0); viene mostrato un avviso se hanno più di 7 giorni. Per pubblicare la propria copia su GitHub Pages, vedere [docs/DEPLOYMENT.md](docs/i18n/it/DEPLOYMENT.md).
 
 **Verifica CPS OpenGD77:** la relativa pagina include una matrice visibile di capacità e limiti. Non si dichiara parità completa né backup automatico integrale del
 firmware MCU. La connessione avvia automaticamente la calibrazione e il codeplug, salva
@@ -228,8 +230,8 @@ Vedere [ambito web e backup obbligatorio](docs/i18n/it/AYUDA-OPENGD77.md).
 
 ### Installer locali
 
-Scarica l’[ultima Release](https://github.com/Brico-Hams/Radio-Web-install/releases/latest) e il relativo file `SHA256SUMS`. Scegli un installer dagli **Assets**, non gli ZIP/tar.gz automatici di «Source code». [Guida completa all’installazione locale](docs/DEPLOYMENT.md#instaladores-locales).
-Dopo l’installazione, per preparare una Quansheng segui la [messa in servizio da 0 a 100 %](docs/i18n/it/AYUDA-QUANSHENG.md#puesta-en-marcha-de-0-a-100)
+Scarica l’[ultima Release](https://github.com/Brico-Hams/Radio-Web-install/releases/latest) e il relativo file `SHA256SUMS`. Scegli un installer dagli **Assets**, non gli ZIP/tar.gz automatici di «Source code». [Guida completa all’installazione locale](docs/i18n/it/DEPLOYMENT.md#installer-locali).
+Dopo l’installazione, per preparare una Quansheng segui la [messa in servizio da 0 a 100 %](docs/i18n/it/AYUDA-QUANSHENG.md#avvio-da-0-al-100-)
 e consulta l’[atlante tecnico UV-K5 V3](docs/i18n/it/ATLAS-UV-K5-V3.md).
 
 - Windows 11 x64: estrai tutto `*-windows-x64.zip`, apri PowerShell in quella cartella ed esegui `powershell -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1`. Node.js incluso, senza privilegi di amministratore; avvia l’app dal menu Start.

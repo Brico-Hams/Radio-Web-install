@@ -25,7 +25,7 @@ exige une adaptation proportionnelle de l'original à 128 × 48, sans couleur,
 sur fond vide, avec `Bricohams BETA` en dessous. Elle est générée à partir
 du PNG original, sans dessiner une nouvelle marque. Elle ne remplace pas
 le PNG couleur sur le web ou Android. Construction et limites dans le
-[guide du firmware](BRICOHAMS-FIRMWARE.md#branding-de-arranque-implementado).
+[guide du firmware](BRICOHAMS-FIRMWARE.md#branding-de-démarrage-implémenté).
 
 ## Palette
 

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-US">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="help-docs.css">
   <link rel="alternate" hreflang="es" href="ayuda-bricohams.html">
-  <link rel="alternate" hreflang="en" href="ayuda-bricohams.en.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-bricohams.en.html">
   <link rel="alternate" hreflang="de" href="ayuda-bricohams.de.html">
   <link rel="alternate" hreflang="it" href="ayuda-bricohams.it.html">
   <link rel="alternate" hreflang="fr" href="ayuda-bricohams.fr.html">
@@ -19,9 +19,9 @@
 <body>
   <a class="skip" href="#main">Skip to content</a>
   <main id="main" class="firmware-help">
-    <header><a href="index.html"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
-      <nav aria-label="Help"><a href="ayuda.html">App help (Spanish)</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html">Quansheng</a> · <a href="opengd77.html">OpenGD77</a></nav>
-      <nav class="languages" aria-label="Language"><a href="ayuda-bricohams.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-bricohams.en.html" hreflang="en" lang="en" aria-current="page">English</a> · <a href="ayuda-bricohams.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-bricohams.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-bricohams.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    <header><a href="index.html?lang=en-US"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Help"><a href="ayuda-referencias.en.html">Documentation and references</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=en-US">Quansheng</a> · <a href="opengd77.html?lang=en-US">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Language"><a href="ayuda-bricohams.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-bricohams.en.html" hreflang="en-US" lang="en-US" aria-current="page">English (US)</a> · <a href="ayuda-bricohams.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-bricohams.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-bricohams.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
     <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#identidad-y-alcance">Identity and Scope</a></li><li><a href="#compilar-a-demanda">Build on Demand</a></li><li><a href="#fuentes-compilacion-y-reproducibilidad">Sources, Build, and Reproducibility</a></li><li><a href="#binarios-generados-el-25-10-2026">Binaries Generated on 2026-10-25</a></li><li><a href="#uso-en-la-web-y-slots">Use on the Web and Slots</a></li><li><a href="#validacion-pendiente-en-hardware">Hardware Validation Pending</a></li><li><a href="#branding-de-arranque-implementado">Boot Branding Implemented</a></li><li><a href="#fase-posterior-solicitada-bricohams-android">Later Requested Phase: Bricohams Android</a></li></ul></nav>
     <article class="panel"><h1 id="bricohams-v3-compilacion-modular-local">Bricohams V3: Local Modular Build</h1>
@@ -441,7 +441,7 @@ Documents\Multiboot\Bricohams\Labs</code></pre>
 </tbody></table></div>
 <p>Earlier measurements in other folders are from previous builds, without this bitmap. The logo still needs physical verification on the LCD; compiling and rendering the bitmap on a computer does not validate contrast, orientation, or legibility on the radio. They have not been flashed.</p>
 <h2 id="fase-posterior-solicitada-bricohams-android">Later Requested Phase: Bricohams Android</h2>
-<p>The native <code>0.8.1-beta</code> APK includes a logbook with search and ADIF import, ADIF/JSON, JSON restore, ARDF sessions with history/statistics and filtered segment totals, one-off GPS, experimental text/WAV Morse, and temporary CAT RX over USB CDC ACM and recognized CH34x/CP210x/FTDI/Prolific adapters. The <a href="ayuda-android.en.html">Android guide</a> distinguishes available features from following objectives. It includes Robot36 SSTV from WAV with PNG export, and offline SGP4 with imported TLE catalogs, passes, and RX Doppler tracking. It includes foreground microphone capture up to 60 s for later Morse/Robot36 decoding. It does not include continuous decoding, channel writing, or LoTW upload. Full equivalence with Karina and physical firmware/phone validation remain pending.</p>
+<p>The native <code>0.8.2-beta</code> APK includes a logbook with search and ADIF import, ADIF/JSON, JSON restore, ARDF sessions with history/statistics and filtered segment totals, one-off GPS, experimental text/WAV Morse, and temporary CAT RX over USB CDC ACM and recognized CH34x/CP210x/FTDI/Prolific adapters. The <a href="ayuda-android.en.html">Android guide</a> distinguishes available features from following objectives. It includes Robot36 SSTV from WAV with PNG export, and offline SGP4 with imported TLE catalogs, passes, and RX Doppler tracking. It includes foreground microphone capture up to 60 s for later Morse/Robot36 decoding. It does not include continuous decoding, channel writing, or LoTW upload. Full equivalence with Karina and physical firmware/phone validation remain pending.</p>
 <h3 id="funciones-objetivo">Target Functions</h3>
 <ul>
 <li>Control Quansheng from Android: read state, adjust frequency, tones, and per-channel power, and access other options actually exposed by the hardware/firmware. Distinguish temporary VFO settings from persistent writes; do not rewrite the entire codeplug to change one field if the protocol allows a narrower operation.</li>

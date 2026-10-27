@@ -19,8 +19,8 @@ un analizzatore d'antenna (NanoVNA o simile) prima di trasmettere.
 
 | Antenna | Uso | Guadagno simulato | Difficoltà |
 | --- | --- | --- | --- |
-| [Yagi bibanda portatile](#yagi-bibanda-de-mano) | Satelliti FM con uplink e downlink su bande diverse (SO-50, ripetitore ISS, PO-101) | 8,4 dBi VHF / 11,4 dBi UHF | Media |
-| [Dipolo a V orizzontale 2 m](#dipolo-en-v-horizontal-2-m) | Ascolto fisso senza inseguimento: SSTV e APRS della ISS, downlink VHF | 1,8 dBi allo zenit | Bassa |
+| [Yagi bibanda portatile](#yagi-bibanda-portatile) | Satelliti FM con uplink e downlink su bande diverse (SO-50, ripetitore ISS, PO-101) | 8,4 dBi VHF / 11,4 dBi UHF | Media |
+| [Dipolo a V orizzontale 2 m](#dipolo-a-v-orizzontale-2-m) | Ascolto fisso senza inseguimento: SSTV e APRS della ISS, downlink VHF | 1,8 dBi allo zenit | Bassa |
 | Antenna originale della radio | Primi ascolti della ISS nei passaggi alti | Molto inferiore alle precedenti | Nessuna |
 
 Con l'antenna originale si può ricevere la ISS nei passaggi alti, ma per
@@ -81,7 +81,7 @@ radio portatile.
 - Asta di alluminio da 4 mm, circa 5,5 m in totale. Va bene anche l'ottone;
   per un metro a nastro occorre un blocco diverso.
 - Componenti stampati: 6 morsetti per elementi, 2 blocchi attivi e
-  1 impugnatura; vedi [componenti STL](#piezas-imprimibles-stl).
+  1 impugnatura; vedi [componenti STL](#componenti-stampabili-stl).
 - Viti M3 x 8 per fissare aste e componenti e M3 x 10 con terminale ad anello
   per gli elementi attivi.
 - Due tratti di coassiale sottile da 50 Ω, come RG-316 o RG-58, con choke di

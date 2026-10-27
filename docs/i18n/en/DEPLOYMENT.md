@@ -1,6 +1,6 @@
 # Deployment
 
-Two deployments are supported: **local** (a Node server on the computer connected to the radio) and **public web on GitHub Pages** (a static site; see [Public web on GitHub Pages](#web-pública-en-github-pages)).
+Two deployments are supported: **local** (a Node server on the computer connected to the radio) and **public web on GitHub Pages** (a static site; see [Public web on GitHub Pages](#public-web-on-github-pages)).
 
 ## Requirements
 
@@ -186,7 +186,7 @@ node scripts/i18n.cjs --fix --strict
 npm run build:help
 ```
 
-`--fix` adjusts relative link and image paths for each translation's folder and points them to the sibling translation. If the translated text and original disagree, Spanish takes precedence.
+`--fix` adjusts relative link and image paths for each translation's folder and points them to the sibling translation. It also repairs anchors for translated Markdown headings; HTML help keeps stable anchors across languages. Validation includes architecture, branding, decisions, and deployment. The reference index is generated from every guide's translated title and links each language version, including U.S. English. External sources retain the language published by their authors; the legacy FAQ center is identified as Spanish. If the translated text and original disagree, Spanish takes precedence.
 
 ## Automatic startup (optional, from source)
 
@@ -220,7 +220,7 @@ Enable it with `systemctl --user enable --now bricohams-radio`.
 <a id="web-pública-en-github-pages"></a>
 ## Public web on GitHub Pages
 
-The static site is generated with `npm run build:pages` (`dist/` folder) and published by `.github/workflows/pages.yml`. It does not include `server.cjs`: `runtime.json` is `{"mode":"web"}` and the application runs in web mode (see [Architecture](ARCHITECTURE.md#modos-de-ejecución)).
+The static site is generated with `npm run build:pages` (`dist/` folder) and published by `.github/workflows/pages.yml`. It does not include `server.cjs`: `runtime.json` is `{"mode":"web"}` and the application runs in web mode (see [Architecture](ARCHITECTURE.md#runtime-modes)).
 
 ### Why a dedicated origin
 
@@ -274,7 +274,7 @@ With Node.js 22+, Git, and the system's archive tools:
 npm run export:project -- --beta `
   --firmware 'C:\ruta\Multiboot\Bricohams' `
   --installers 'C:\ruta\instalables-verificados' `
-  --android 'C:\ruta\Android-0.8.1-beta' `
+  --android 'C:\ruta\Android-0.8.2-beta' `
   --output 'C:\ruta\entregas\Bricohams-desarrollo.zip'
 ```
 

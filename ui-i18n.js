@@ -56,9 +56,17 @@
   function localizedURL(href, base, language = locale) {
     if (!href || href.startsWith("#") || href.startsWith("?")) return href;
     const url = new URL(href, base);
-    if (url.origin !== new URL(base).origin || !/\/(?:index|opengd77|quansheng|anytone)\.html$/.test(url.pathname)) return href;
-    url.searchParams.set("lang", language);
-    return `${href.split(/[?#]/, 1)[0]}${url.search}${url.hash}`;
+    if (url.origin !== new URL(base).origin) return href;
+    const file = href.split(/[?#]/, 1)[0];
+    if (/\/(?:index|opengd77|quansheng|anytone)\.html$/.test(url.pathname)) {
+      url.searchParams.set("lang", language);
+      return `${file}${url.search}${url.hash}`;
+    }
+    if (/\/ayuda-[^/]+\.html$/.test(url.pathname)) {
+      const suffix = language === "en-US" ? "en" : language;
+      return `${file.replace(/(?:\.(?:en|fr|de|it))?\.html$/, suffix === "es" ? ".html" : `.${suffix}.html`)}${url.search}${url.hash}`;
+    }
+    return href;
   }
   function mount(document) {
     const originals = new WeakMap();

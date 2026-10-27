@@ -19,8 +19,8 @@ in PT2VM's guide, whose permission was granted to that author.
 
 | Antenna | Use | Simulated gain | Difficulty |
 | --- | --- | --- | --- |
-| [Handheld dual-band Yagi](#yagi-bibanda-de-mano) | FM satellites with uplink and downlink on different bands (SO-50, ISS repeater, PO-101) | 8,4 dBi VHF / 11,4 dBi UHF | Medium |
-| [Horizontal 2 m V dipole](#dipolo-en-v-horizontal-2-m) | Fixed listening without tracking: ISS SSTV and APRS, VHF downlinks | 1,8 dBi at zenith | Low |
+| [Handheld dual-band Yagi](#handheld-dual-band-yagi) | FM satellites with uplink and downlink on different bands (SO-50, ISS repeater, PO-101) | 8,4 dBi VHF / 11,4 dBi UHF | Medium |
+| [Horizontal 2 m V dipole](#horizontal-2-m-v-dipole) | Fixed listening without tracking: ISS SSTV and APRS, VHF downlinks | 1,8 dBi at zenith | Low |
 | Radio's original antenna | First ISS listening attempts on high passes | Far below the antennas above | None |
 
 You can hear the ISS with the original antenna on high passes, but working
@@ -81,7 +81,7 @@ is acceptable for a handheld radio.
 - 4 mm aluminum rod, about 5,5 m total. Brass rod also works; the measuring
 tape requires a different block.
 - Printed parts: 6 element clamps, 2 driven-element blocks, and 1 handle; see
-  [STL parts](#piezas-imprimibles-stl).
+  [STL parts](#printable-stl-parts).
 - M3 x 8 screws to secure rods and parts, and M3 x 10 screws with ring
   terminals for the driven elements.
 - Two lengths of thin 50 Ω coax, such as RG-316 or RG-58, with a common-mode

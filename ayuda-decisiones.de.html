@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Entscheidungsprotokoll (ADR): Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Entscheidungsprotokoll (ADR) | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-decisiones.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-decisiones.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-decisiones.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-decisiones.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-decisiones.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=de"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda-referencias.de.html">Dokumentation und Referenzen</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=de">Quansheng</a> · <a href="opengd77.html?lang=de">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-decisiones.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-decisiones.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-decisiones.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-decisiones.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-decisiones.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#adr-001-javascript-sin-framework-ni-paso-de-compilacion">ADR-001 · JavaScript ohne Framework und Build-Schritt</a></li><li><a href="#adr-002-webusb-y-web-serial-para-hablar-con-la-radio">ADR-002 · WebUSB und Web Serial für die Funkgerätekommunikation</a></li><li><a href="#adr-003-servidor-node-local-con-una-sola-dependencia">ADR-003 · Lokaler Node-Server mit einer einzigen Abhängigkeit</a></li><li><a href="#adr-004-solo-loopback-csp-estricta-y-lista-de-archivos-permitidos">ADR-004 · Nur Loopback, strikte CSP und Dateipositivliste</a></li><li><a href="#adr-005-copia-automatica-obligatoria-antes-de-escribir">ADR-005 · Verpflichtende automatische Sicherung vor dem Schreiben</a></li><li><a href="#adr-006-indexeddb-y-exportacion-rwb-json">ADR-006 · IndexedDB und `.rwb.json`-Export</a></li><li><a href="#adr-007-solo-fuentes-oficiales-de-firmware-sin-espejos">ADR-007 · Nur offizielle Firmwarequellen, keine Spiegelserver</a></li><li><a href="#adr-008-credenciales-de-repeaterbook-solo-en-el-servidor">ADR-008 · RepeaterBook-Zugangsdaten nur auf dem Server</a></li><li><a href="#adr-009-calculo-sgp4-local">ADR-009 · Lokale SGP4-Berechnung</a></li><li><a href="#adr-010-pruebas-con-node-test-y-dispositivos-simulados">ADR-010 · Tests mit `node:test` und simulierten Geräten</a></li><li><a href="#adr-011-licencia-gpl-3-0-or-later">ADR-011 · Lizenz GPL-3.0-or-later</a></li><li><a href="#adr-012-marca-bricohams-con-recursos-propios">ADR-012 · Bricohams-Marke mit eigenen Ressourcen</a></li><li><a href="#adr-013-web-estatica-en-origen-dedicado">ADR-013 · Statische Webanwendung auf eigenem Origin</a></li><li><a href="#adr-014-publicacion-aceptada-en-origen-compartido">ADR-014 · Veröffentlichung auf gemeinsamem Origin akzeptiert</a></li></ul></nav>
+    <article class="panel"><h1 id="registro-de-decisiones-adr">Entscheidungsprotokoll (ADR)</h1>
+<p>Jede Entscheidung nennt Kontext, Beschluss, verworfene Alternativen und Folgen.</p>
+<h2 id="adr-001-javascript-sin-framework-ni-paso-de-compilacion">ADR-001 · JavaScript ohne Framework und Build-Schritt</h2>
+<ul>
+<li><strong>Kontext:</strong> Das Werkzeug verarbeitet Binärprotokolle und muss von jedem Funkamateur geprüft werden können.</li>
+<li><strong>Entscheidung:</strong> native JavaScript-Module, HTML und CSS, ohne React, Vue, Bundler oder Transpiler.</li>
+<li><strong>Alternativen:</strong> React/Vite (mehr Abhängigkeiten und Lieferkettenrisiken) oder TypeScript (erfordert Kompilierung).</li>
+<li><strong>Folgen:</strong> Der gelesene Code ist genau der ausgeführte; der Browser lädt keine <code>node_modules</code>. Dafür wird der Oberflächenzustand manuell verwaltet.</li>
+</ul>
+<h2 id="adr-002-webusb-y-web-serial-para-hablar-con-la-radio">ADR-002 · WebUSB und Web Serial für die Funkgerätekommunikation</h2>
+<ul>
+<li><strong>Kontext:</strong> OpenGD77 MK22/STM32 stellt CDC über USB bereit; DM-32/UV008 und Quansheng verwenden eine serielle Schnittstelle.</li>
+<li><strong>Entscheidung:</strong> WebUSB für <code>1FC9:0094</code> und Web Serial für serielle Kabel, wie beim Referenz-Web-CPS.</li>
+<li><strong>Alternativen:</strong> native Anwendung (Installation und Signierung je Betriebssystem) oder Electron (große Angriffsfläche).</li>
+<li><strong>Folgen:</strong> funktioniert nur in Chrome, Edge und Brave auf dem Desktop. Unter Windows benötigt OpenGD77 USB WinUSB (siehe <a href="ayuda.html#drivers">Hilfe</a>).</li>
+</ul>
+<h2 id="adr-003-servidor-node-local-con-una-sola-dependencia">ADR-003 · Lokaler Node-Server mit einer einzigen Abhängigkeit</h2>
+<ul>
+<li><strong>Kontext:</strong> Firmwaredownloads und Anbieterdaten müssen CORS umgehen, Host-Positivlisten durchsetzen und Zugangsdaten verbergen.</li>
+<li><strong>Entscheidung:</strong> <code>server.cjs</code> mit Node-22-Standardmodulen (<code>http</code>, <code>fetch</code>, <code>crypto</code>) und festgeschriebenem <code>satellite.js</code> 6.0.1 als einziger Abhängigkeit.</li>
+<li><strong>Alternativen:</strong> Express/Fastify (mehr Abhängigkeiten) oder öffentlicher Proxy (legt Daten und Zugangsdaten offen).</li>
+<li><strong>Folgen:</strong> Installation mit <code>npm ci --ignore-scripts</code> und geringeres Lieferkettenrisiko.</li>
+</ul>
+<h2 id="adr-004-solo-loopback-csp-estricta-y-lista-de-archivos-permitidos">ADR-004 · Nur Loopback, strikte CSP und Dateipositivliste</h2>
+<ul>
+<li><strong>Entscheidung:</strong> auf <code>127.0.0.1:8787</code> lauschen, <code>Host</code> prüfen, nur aufgelistete Dateien ausliefern und eine CSP ohne <code>unsafe-inline</code> senden.</li>
+<li><strong>Grund:</strong> DNS-Rebinding, beliebige Dateizugriffe und XSS abmildern.</li>
+<li><strong>Folge:</strong> <code>localhost</code> wird nicht bedient: GET/HEAD-Navigationen werden (307) auf <code>127.0.0.1</code> umgeleitet, um einen einzigen IndexedDB-Origin zu erhalten; mit <code>Origin</code>-Header werden sie abgewiesen. Netzwerkbetrieb würde eine Neugestaltung mit HTTPS und Authentifizierung erfordern und wird nicht unterstützt.</li>
+</ul>
+<h2 id="adr-005-copia-automatica-obligatoria-antes-de-escribir">ADR-005 · Verpflichtende automatische Sicherung vor dem Schreiben</h2>
+<ul>
+<li><strong>Entscheidung:</strong> Beim Verbinden werden Kalibrierung und Basisfirmware oder Codeplug kopiert, in IndexedDB gespeichert, mit SHA-256 gehasht und erneut gelesen. Erst dann wird eine an die Verbindung gebundene Schreibberechtigung erteilt. Jeder Fehler hält das Schreiben gesperrt (*fail-closed*).</li>
+<li><strong>Verworfene Alternative:</strong> optionale Sicherung mit dem Risiko eines unwiederbringlichen Kalibrierungsverlusts.</li>
+<li><strong>Folgen:</strong> Das Verbinden dauert länger (2 MiB eines Quansheng bei 38.400 Baud benötigen 10–20 Minuten), aber ohne verifizierte Sicherung wird nie geschrieben.</li>
+</ul>
+<h2 id="adr-006-indexeddb-y-exportacion-rwb-json">ADR-006 · IndexedDB und <code>.rwb.json</code>-Export</h2>
+<ul>
+<li><strong>Entscheidung:</strong> IndexedDB im Browser für den Verlauf, JSON-Export mit Manifest, Base64-Inhalt und Hashes.</li>
+<li><strong>Alternativen:</strong> Sicherungen auf dem Server speichern (würde das Versprechen „keine Uploads“ brechen) oder File System Access API (nicht in allen Browsern verfügbar).</li>
+<li><strong>Folgen:</strong> Die Anwendung verschlüsselt Sicherungen nicht. Benutzer müssen sie exportieren und ihr Browserprofil schützen.</li>
+</ul>
+<h2 id="adr-007-solo-fuentes-oficiales-de-firmware-sin-espejos">ADR-007 · Nur offizielle Firmwarequellen, keine Spiegelserver</h2>
+<ul>
+<li><strong>Entscheidung:</strong> Der Katalog beschränkt sich auf GitHub Releases des offiziellen F4HWN-Repositorys (<code>armel/uv-k1-k5v3-firmware-custom</code>), des ARDF-Projekts für K1/K5 V3 (<code>reald/uv-k1-k5v3-firmware-custom</code>) sowie opengd77.com, mit eingeschränkten Weiterleitungen und Größenlimits. Quansheng umfasst die anerkannte stabile Versionshistorie mit veröffentlichtem SHA-256. ARDF, F4HWN vor v6 und SA818 werden nur zum Download angeboten; sie erweitern nicht die Schreibunterstützung.</li>
+<li><strong>Folgen:</strong> Ändert ein Anbieter seine Struktur, schlägt der Download ausdrücklich fehl, statt auf ungeprüfte Quellen auszuweichen. SHA-256 erkennt Beschädigungen, belegt aber keine Echtheit.</li>
+</ul>
+<h2 id="adr-008-credenciales-de-repeaterbook-solo-en-el-servidor">ADR-008 · RepeaterBook-Zugangsdaten nur auf dem Server</h2>
+<ul>
+<li><strong>Entscheidung:</strong> <code>data-service.cjs</code> liest <code>RB_USER_TOKEN</code>, <code>RB_APPROVED_USER_AGENT</code> und <code>RB_APPROVED</code> aus Umgebungsvariablen; der Browser erhält sie nie. Nach HTTP 429 gilt eine Wartezeit, und die Quellenangabe „Data courtesy of RepeaterBook.com“ wird angezeigt.</li>
+<li><strong>Folgen:</strong> Ohne genehmigtes Token erscheint die Funktion deaktiviert.</li>
+</ul>
+<h2 id="adr-009-calculo-sgp4-local">ADR-009 · Lokale SGP4-Berechnung</h2>
+<ul>
+<li><strong>Entscheidung:</strong> TLEs kommen von SatNOGS/CelesTrak; die Bahnberechnung erfolgt im Browser mit <code>satellite.js</code>. Die Benutzerposition verlässt den Rechner nicht.</li>
+<li><strong>Validierung:</strong> Tests verwenden einen unabhängigen Vallado-Testvektor.</li>
+</ul>
+<h2 id="adr-010-pruebas-con-node-test-y-dispositivos-simulados">ADR-010 · Tests mit <code>node:test</code> und simulierten Geräten</h2>
+<ul>
+<li><strong>Entscheidung:</strong> Nodes nativen Testläufer verwenden, ohne Jest oder Mocha. Funkgeräte, Netzwerk und Server werden simuliert; Tests schreiben nie auf Hardware und verwenden keine echten Zugangsdaten.</li>
+</ul>
+<h2 id="adr-011-licencia-gpl-3-0-or-later">ADR-011 · Lizenz GPL-3.0-or-later</h2>
+<ul>
+<li><strong>Kontext:</strong> Interoperabilitätsreferenzen verwenden Apache-2.0 (F4HWN, egzumer, DualTachyon), MIT (satellite.js) und GPL-2.0 (OpenGD77).</li>
+<li><strong>Entscheidung:</strong> GPL-3.0-or-later, eine Copyleft-Lizenz, die Verbesserungen frei hält und mit Apache-2.0- und MIT-Abhängigkeiten kompatibel ist.</li>
+<li><strong>Hinweis:</strong> Es wird kein Code von OpenGD77 oder den anderen Referenzen verteilt; die Implementierung ist unabhängig. Der Rechteinhaber kann die Lizenz ändern, bevor Beiträge Dritter eingehen.</li>
+</ul>
+<h2 id="adr-012-marca-bricohams-con-recursos-propios">ADR-012 · Bricohams-Marke mit eigenen Ressourcen</h2>
+<ul>
+<li><strong>Entscheidung:</strong> Name „Bricohams Radio Workspace“ und ursprüngliches Bricohams-Studio-PNG, ohne Neuzeichnen oder Umfärben und mit unverändertem Seitenverhältnis. Die Oberfläche behält ihre eigene dunkle Palette. Am 2026-10-21 wurde das SVG-Symbol eines „B“ ersetzt, das nicht der Markenidentität entsprach. Herkunft und Hash in <a href="ayuda-marca.de.html">BRANDING.md</a>.</li>
+<li><strong>Folge:</strong> Keine Logos von OpenGD77, Quansheng oder F4HWN; auf die fehlende Zugehörigkeit wird hingewiesen.</li>
+</ul>
+<h2 id="adr-013-web-estatica-en-origen-dedicado">ADR-013 · Statische Webanwendung auf eigenem Origin</h2>
+<ul>
+<li><strong>Kontext:</strong> Nutzung ohne Installation ist erwünscht, aber IndexedDB und <code>localStorage</code> sind nach Origin isoliert, und Funkgerätesicherungen sind sensible Daten.</li>
+<li><strong>Entscheidung:</strong> Statische Website auf GitHub Pages im Stamm einer eigenen Organisation oder eines eigenen Kontos (<code>https://&lt;org&gt;.github.io/</code>), nicht in einem Unterpfad von <code>bricohams.github.io</code> (wo Bricohams Studio liegt). Die Anwendung erkennt den Modus über <code>runtime.json</code> (Webmodus bei fehlender Datei), nutzt nur relative Pfade und deklariert die CSP in <code>&lt;meta&gt;</code>. Satellitendaten werden täglich durch einen Workflow erzeugt. Funktionen mit Server- oder Zugangsdatenbedarf (RepeaterBook, Firmwaredownload, RadioID-API) werden durch manuelles Laden ersetzt oder bleiben lokal.</li>
+<li><strong>Verworfene Alternativen:</strong> Unterpfad von <code>bricohams.github.io</code> (teilt Origin und Speicher mit anderen Projekten); öffentlicher Proxy (Daten und Zugangsdaten würden über Dritte laufen); RadioID replizieren (Umfang und Lizenz).</li>
+<li><strong>Folgen:</strong> Die Webversion bietet weniger Funktionen als die lokale Version; der Autor muss Konto oder Organisation erstellen und Pages konfigurieren. Installierbare Pakete folgen demnächst.</li>
+</ul>
+<h2 id="adr-014-publicacion-aceptada-en-origen-compartido">ADR-014 · Veröffentlichung auf gemeinsamem Origin akzeptiert</h2>
+<ul>
+<li><strong>Kontext:</strong> Der Autor entschied sich für <code>https://anatolbricoham.github.io/Radio-Web-install/</code>, ohne ein eigenes Konto anzulegen.</li>
+<li><strong>Entscheidung:</strong> Bereitstellung außerhalb von <code>&lt;org&gt;/&lt;org&gt;.github.io</code> nur zulassen, wenn die Repositoryvariable <code>PAGES_SHARED_ORIGIN_ACCEPTED=true</code> existiert. Ersetzt ADR-013 teilweise.</li>
+<li><strong>Akzeptiertes Risiko:</strong> <code>anatolbricoham.github.io</code> teilt den Origin mit anderen Projektseiten dieses Kontos (etwa <code>Ham-Clock</code>, <code>antenaSatCommrotor</code>, <code>Fox_Hunt_Beacon</code>). Jede davon könnte nach einer Änderung die gespeicherten Funkgerätesicherungen und das Profil lesen. Empfehlung: <code>.rwb.json</code>-Sicherungen exportieren und sich nicht auf den Browserspeicher verlassen.</li>
+<li><strong>Ausstieg:</strong> Eigenes Konto oder eigene Organisation erstellen, die Website in deren Stamm verschieben und die Variable löschen.</li>
+</ul>
+<h3 id="actualizacion-de-procedencia-26-10-2026">Aktualisierung der Herkunft, 26-10-2026</h3>
+<p>Das aktuelle Repository ist <code>Brico-Hams/Radio-Web-install</code>, die dokumentierte Pages-URL lautet <code>https://brico-hams.github.io/Radio-Web-install/</code>. Die früheren <code>anatolbricoham</code>-Adressen sind historischer Kontext zu ADR-014, nicht die aktuelle URL für Bereitstellung oder Datenabruf. Die Ausnahme bleibt ein gemeinsamer Origin: Alle Projekte von <code>brico-hams.github.io</code> teilen ihn, nicht nur dieser Unterpfad. Benutzer-IndexedDB wurde nicht automatisch migriert.</p></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

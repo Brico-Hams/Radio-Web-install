@@ -36,7 +36,7 @@ fondée sur des comportements documentés. La disponibilité des sources Karina 
 une condition préalable à l’écriture de nouvelles fonctions. Il demeure impossible de promettre
 une recompilation de Karina ou une équivalence à 100 % sans implémentation ni tests.
 Le premier noyau ARDF propre, son contrat et les points d’intégration restants sont décrits dans
-[Bricohams](BRICOHAMS-FIRMWARE.md#nuevo-nucleo-independiente-ardf). Trois images indépendantes
+[Bricohams](BRICOHAMS-FIRMWARE.md#nouveau-noyau-indépendant-ardf). Trois images indépendantes
 pour les slots V3 sont maintenant construites : ARDF avec cycles, Satellites avec Doppler RX manuel
 et Spectre avec 128 points, moyenne, peak hold et huit presets de session RAM, ainsi qu’une capture
 VFO-PRO RX propre. La capture permet la syntonisation par pas, la saisie numérique RX, l’audio et
