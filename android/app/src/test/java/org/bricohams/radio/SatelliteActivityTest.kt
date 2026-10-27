@@ -30,6 +30,7 @@ import java.io.IOException
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
@@ -71,7 +72,9 @@ class SatelliteActivityTest {
         observer()
         val tle = freshTle()
         val requests = ArrayList<String>()
+        val allowDownload = CountDownLatch(1)
         SatelliteActivity.fetch = { url, _ ->
+            assertTrue("Download was not released", allowDownload.await(60, TimeUnit.SECONDS))
             requests.add(url)
             if (url == SatelliteSources.TLE_URL) "${tle.name}          \n${tle.line1}\n${tle.line2}\n".toByteArray()
             else """[{"norad_cat_id":25544,"alive":true,"status":"active","downlink_low":437800000,"mode":"FM","description":"Repeater"},
@@ -83,6 +86,7 @@ class SatelliteActivityTest {
             assertTrue(text(activity).contains("Sin satelites"))
             // Opening the screen starts the download; a second tap must not duplicate it.
             click(activity, "Actualizar TLE y frecuencias")
+            allowDownload.countDown()
             idle(activity)
             assertEquals(listOf(SatelliteSources.TLE_URL, SatelliteSources.TRANSMITTERS_URL), requests)
             val cards = all(activity).filter { it.isClickable && it.contentDescription?.startsWith("ISS (ZARYA) (25544)") == true }
@@ -108,7 +112,10 @@ class SatelliteActivityTest {
             click(activity, "Mapa")
             idle(activity)
             assertTrue(text(activity), text(activity).contains("25544 - ISS (ZARYA)\nLat "))
-        } finally { controller.pause().stop().destroy() }
+        } finally {
+            allowDownload.countDown()
+            controller.pause().stop().destroy()
+        }
     }
 
     @Test
