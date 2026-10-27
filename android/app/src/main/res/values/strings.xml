@@ -628,4 +628,10 @@
     <string name="pass_partial">" (cortado por la ventana)"</string>
     <string name="pass_current">Ahora az %1$.1f°, el %2$.1f°, %3$.0f km</string>
     <string name="pass_detail">%1$s\nAOS %2$s az %3$.0f°\nMax %4$s el %5$.1f°\nLOS %6$s az %7$.0f°\nParcial inicio=%8$s fin=%9$s\nObservador %10$.6f, %11$.6f, %12$.3f km; RX %13$d Hz\n%14$s</string>
+    <string name="satellite_intro">Bricohams Beta - Satélites SGP4 sin conexión.</string>
+    <string name="satellite_help">Importa TLE actuales desde un archivo o pega sus dos líneas. Posición manual del observador, altura en km. Solo downlink FM VHF/UHF puntual confirmado por ti, sin TX. Predicción de 24 h con TLE de hasta 7 días; no se descargan datos ni se verifica el modo del satélite. Esta pantalla no incluye mapa ni GPS automático.</string>
+    <string name="satellite_name">Nombre del satélite</string>
+    <string name="satellite_line1">Línea 1 del TLE (69 caracteres)</string>
+    <string name="satellite_line2">Línea 2 del TLE (69 caracteres)</string>
+    <string name="satellite_downlink">Downlink FM RX nominal (MHz)</string>
 </resources>

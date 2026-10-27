@@ -82,6 +82,16 @@ class LocalizationTest {
     @Test fun french() = assertLocale("fr", "Enregistrer l'image PNG", "Carnet")
     @Test fun german() = assertLocale("de", "PNG-Bild speichern", "Logbuch")
 
+    @Test fun legacySatelliteStringsHaveSpanishFallback() {
+        RuntimeEnvironment.setQualifiers("es")
+        val context = RuntimeEnvironment.getApplication()
+        assertEquals("Bricohams Beta - Satélites SGP4 sin conexión.", context.getString(R.string.satellite_intro))
+        assertEquals("Nombre del satélite", context.getString(R.string.satellite_name))
+        assertEquals("Línea 1 del TLE (69 caracteres)", context.getString(R.string.satellite_line1))
+        assertEquals("Línea 2 del TLE (69 caracteres)", context.getString(R.string.satellite_line2))
+        assertEquals("Downlink FM RX nominal (MHz)", context.getString(R.string.satellite_downlink))
+    }
+
     @Test fun redesignedSatelliteFormatsAndLogbookValidation() {
         for ((qualifiers, ended) in listOf("es" to "Terminado", "en-rUS" to "Ended",
             "fr" to "Terminé", "de" to "Beendet")) {
