@@ -31,6 +31,7 @@ jobs:
       - name: Check wrapper integrity
         run: echo "498495120a03b9a6ab5d155f5de3c8f0d986a449153702fb80fc80e134484f17  android/gradle/wrapper/gradle-wrapper.jar" | sha256sum --check
       - name: Build APK, lint and run host tests
+        shell: bash
         run: bash android/gradlew -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon 2>&1 | tee android-build.log
       - name: Report build failure
         if: failure()
