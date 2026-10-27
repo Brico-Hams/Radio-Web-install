@@ -54,32 +54,59 @@ data class SatellitePass(val aos: SatelliteLook, val maximum: SatelliteLook, val
 data class SatellitePlan(val tle: Tle, val observer: ObserverPosition, val downlinkHz: Long, val pass: SatellitePass)
 data class SatelliteTarget(val frequency10Hz: Long, val look: SatelliteLook)
 
-class SatelliteOrbit(
-    private val tle: Tle,
-    private val observer: ObserverPosition,
-    source: String,
-    adapter: String
-) : Closeable {
-    private val context = Context.enter().apply {
+data class SubPoint(val latitude: Double, val longitude: Double, val altitudeKm: Double)
+
+/** One Rhino context with satellite.js loaded once; many SatelliteOrbit instances can share it on its thread. */
+class OrbitalEngine(source: String, adapter: String) : Closeable {
+    internal val context: Context = Context.enter().apply {
         optimizationLevel = -1
         languageVersion = Context.VERSION_ES6
         setClassShutter { false }
     }
-    private val scope: Scriptable
+    internal val scope: Scriptable
+    private val factory: Scriptable
+    private var closed = false
+    init {
+        try {
+            scope = context.initSafeStandardObjects()
+            context.evaluateString(scope, source, "satellite-6.0.1.js", 1, null)
+            context.evaluateString(scope, adapter, "orbital-engine.js", 1, null)
+            factory = ScriptableObject.getProperty(scope, "BricohamsOrbit") as Scriptable
+        } catch (error: Exception) {
+            Context.exit()
+            throw IllegalArgumentException("No se pudo cargar SGP4: ${error.message}", error)
+        }
+    }
+    internal fun create(): Scriptable {
+        check(!closed) { "Motor orbital cerrado." }
+        return (ScriptableObject.getProperty(factory, "create") as Function).call(context, scope, factory, emptyArray()) as Scriptable
+    }
+    override fun close() {
+        if (!closed) { closed = true; Context.exit() }
+    }
+}
+
+class SatelliteOrbit(
+    private val tle: Tle,
+    private val observer: ObserverPosition,
+    private val shared: OrbitalEngine,
+    private val ownsEngine: Boolean = false
+) : Closeable {
+    constructor(tle: Tle, observer: ObserverPosition, source: String, adapter: String) :
+        this(tle, observer, OrbitalEngine(source, adapter), true)
+    private val context = shared.context
+    private val scope = shared.scope
     private val engine: Scriptable
     val epoch: Long
     private var closed = false
     init {
         try {
             tle.validated(); observer.validated()
-            scope = context.initSafeStandardObjects()
-            context.evaluateString(scope, source, "satellite-6.0.1.js", 1, null)
-            context.evaluateString(scope, adapter, "orbital-engine.js", 1, null)
-            engine = ScriptableObject.getProperty(scope, "BricohamsOrbit") as Scriptable
+            engine = shared.create()
             epoch = (call("prepare", arrayOf(tle.line1, tle.line2, observer.latitude, observer.longitude, observer.heightKm)) as Number)
                 .toDouble().roundToLong()
         } catch (error: Exception) {
-            Context.exit()
+            if (ownsEngine) shared.close()
             throw IllegalArgumentException("No se pudo preparar SGP4: ${error.message}", error)
         }
     }
@@ -102,6 +129,18 @@ class SatelliteOrbit(
             point.elevation.isFinite() && point.elevation in -90.0..90.0 && point.rangeKm.isFinite() && point.rangeKm > 0) { "Geometria SGP4 no valida." }
         return point
     }
+    fun geo(time: Long): SubPoint {
+        check(!closed) { "Motor orbital cerrado." }
+        validateAge(time)
+        val array = try { call("geo", arrayOf(time.toDouble())) as NativeArray } catch (error: org.mozilla.javascript.RhinoException) {
+            throw IllegalArgumentException("Error de propagacion SGP4: ${error.message}", error)
+        }
+        fun number(index: Int) = (array.get(index, array) as Number).toDouble()
+        val point = SubPoint(number(0), number(1), number(2))
+        require(point.latitude.isFinite() && point.latitude in -90.0..90.0 && point.longitude.isFinite() &&
+            point.longitude in -180.0..180.0 && point.altitudeKm.isFinite() && point.altitudeKm > 0) { "Posicion SGP4 no valida." }
+        return point
+    }
     fun predict(start: Long, hours: Int = 24, minimum: Double = 10.0): List<SatellitePass> {
         require(hours in 1..48 && minimum.isFinite() && minimum in 0.0..60.0) { "Prediccion: 1-48 horas, elevacion 0-60 grados." }
         val end = start + hours * 3600000L
@@ -122,7 +161,9 @@ class SatelliteOrbit(
         var time = start
         while (time < end) {
             if (Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("Prediccion cancelada.")
-            time = minOf(time + 5000, end)
+            // Below the horizon range > 1500 km, so even a 200 km LEO changes elevation under 0.3 deg/s: no crossing is skipped.
+            val step = if (aos == null) maxOf(1L, ((minimum - previous.elevation) / 0.4 / 5).toLong()) * 5000 else 5000L
+            time = minOf(time + step, end)
             val point = look(time)
             if (aos == null && point.elevation >= minimum) {
                 aos = crossing(previous.time, time, true); maximum = point
@@ -152,6 +193,6 @@ class SatelliteOrbit(
         return SatelliteTarget(frequency, position)
     }
     override fun close() {
-        if (!closed) { closed = true; Context.exit() }
+        if (!closed) { closed = true; if (ownsEngine) shared.close() }
     }
 }

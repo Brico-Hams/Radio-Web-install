@@ -35,3 +35,10 @@ not application features or bundled Android SDK runtimes.
 
 The original Bricohams logo is preserved. This application is not affiliated
 with Look4sat, Robot36, HAMRS, LoTW or radio manufacturers.
+
+Data used by the satellite screen (not bundled code):
+Natural Earth 1:110m land outlines (public domain), simplified in world-land-110m.txt.
+Source: https://github.com/nvkelso/natural-earth-vector
+TLE downloaded on request from CelesTrak (https://celestrak.org).
+Transmitter frequencies downloaded on request from SatNOGS DB
+(https://db.satnogs.org), licensed CC BY-SA 4.0.
