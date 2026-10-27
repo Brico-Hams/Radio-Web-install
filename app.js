@@ -99,7 +99,20 @@ const current = tools[page];
 const helpTemplate = document.getElementById("help-content");
 const anytoneTemplate = document.getElementById("anytone-content");
 const external = 'target="_blank" rel="noopener noreferrer"';
-const steps = [["Copias y conexión", "#connection"], ["Codeplug", "#radio-operations"], [page === "quansheng" ? "Canales" : "Canales y contactos", "#planning-panel"], ["Satélites", "#planning-panel", "sat"], ["Firmware", ".firmware-panel"]];
+// Quansheng shows one view at a time (no in-page anchors); the other pages keep scrolling to the step.
+const steps = page === "quansheng"
+  ? [["Copias y conexión", "conexion"], ["Canales", "canales"], ["Satélites", "satelites"], ["Firmware", "firmware"], ["Herramientas", "herramientas"]]
+  : [["Copias y conexión", "#connection"], ["Codeplug", "#radio-operations"], ["Canales y contactos", "#planning-panel"], ["Satélites", "#planning-panel", "sat"], ["Firmware", ".firmware-panel"]];
+// Blocks of each Quansheng view; [data-group] are the h2 sections of #radio-operations, grouped at start-up.
+const VIEWS = {
+  conexion: [".detail-grid", ".backups-panel", "#log-panel", "#main > .notice", "#main > .sources"],
+  canales: ["#radio-operations", '[data-group="canales"]', "#planning-panel"],
+  satelites: ["#radio-operations", '[data-group="cat"]', "#planning-panel"],
+  firmware: ["#official-firmware", "#precompiled-panel", "#precompiled-apps-panel", "#radio-operations", '[data-group="slots"]', '[data-group="apps"]', "#custom-firmware"],
+  herramientas: ["#qs-native-menu", "#qs-native-tools", "#qs-factory-native", "#qs-live-panel", "#qs-rf-panel", "#radio-operations", '[data-group="ardf"]', '[data-group="espectro"]']
+};
+const VIEW_TABS = { canales: "repeaters", satelites: "sat" };
+let currentView = null;
 const nav = (key, label, mark) => `<a href="${key === "home" ? "index" : key}.html" ${page === key ? 'aria-current="page"' : ""}><span class="nav-icon" aria-hidden="true">${mark}</span>${label}</a>`;
 
 function card(key, tool) {
@@ -171,7 +184,7 @@ function detail(tool) {
     </section>` : ""}
     <section id="radio-operations" class="panel operations" aria-label="Operaciones reales"></section>
     <section class="panel backups-panel"><h2>Copias locales de esta web</h2><p class="muted">Se guardan en IndexedDB en este navegador y origen. Exportalas: borrar datos del navegador elimina las copias locales. Incluyen canales y otros datos privados; no las publiques.</p><button id="refresh-backups" class="button secondary" type="button">Actualizar historial</button><ul id="backup-list"></ul></section>
-    <section class="panel"><h2>Registro de operaciones</h2><pre id="radio-log" role="log" aria-label="Registro local"></pre></section>
+    <section id="log-panel" class="panel"><h2>Registro de operaciones</h2><pre id="radio-log" role="log" aria-label="Registro local"></pre></section>
     <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Beta: antes de escribir, verifica.</h2><p>En fase de validacion: lectura USB probada en una unidad declarada UV-K5 V3 con F4HWN v6.0.0; no se han probado escrituras fisicas ni radios OpenGD77. No es una certificacion de todos los modelos. La seleccion de modelo Quansheng es manual. No cierres ni desconectes durante una operacion.</p></div></aside>
     <section class="sources"><h2>Documentacion de referencia</h2><a href="ayuda.html#drivers">Controladores USB y solucion de errores</a><a href="${tool.url}" ${external}>${tool.action} &nearr;</a>${page === "quansheng" ? `<a href="ayuda-quansheng.html#puesta-en-marcha-de-0-a-100">Puesta en marcha de 0 a 100 %</a><a href="ayuda-atlas-uv-k5-v3.html">Atlas tecnico UV-K5 V3: hardware, protocolos y esquemas</a><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/Multiboot-and-Multiconfig" ${external}>Multiboot y Multiconfig &nearr;</a><a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki/UV-Studio" ${external}>Guia de UV Studio &nearr;</a><a id="studio-link" href="https://brico-hams.github.io/Bricohams-Studio/" ${external}>Bricohams Quansheng Studio (UV-K1 / UV-K5 V3) &nearr;</a>` : ""}</section>`;
 }
@@ -180,7 +193,9 @@ document.getElementById("app").innerHTML = `
   <aside class="sidebar">
     <a class="brand" href="index.html" aria-label="Bricohams Radio Workspace: inicio"><img class="brand-logo" src="bricohams-logo.png" alt="Bricohams" width="1200" height="446"><span class="brand-product">${BRAND.product.toUpperCase()}</span></a>
     <p class="nav-label">TU ESTACION</p><nav aria-label="Navegacion principal">${nav("home", "Vista general", "&#9638;")}${nav("opengd77", "OpenGD77", "GD")}${nav("quansheng", "Quansheng", "UV")}${nav("anytone", "AnyTone Beta", "AT")}${nav("ayuda", "Ayuda y soporte", "?")}</nav>
-    ${current ? `<p class="nav-label">PASOS</p><nav class="steps" aria-label="Pasos de este espacio">${steps.map(([label, target, tab], index) => `<a href="${target.startsWith("#") ? target : "#radio-operations"}" data-step="${target}"${tab ? ` data-tab="${tab}"` : ""}><span class="step-num" aria-hidden="true">${index}</span>${label}</a>`).join("")}</nav>` : ""}
+    ${current ? `<p class="nav-label">PASOS</p><nav class="steps" aria-label="Pasos de este espacio">${steps.map(([label, target, tab], index) => page === "quansheng"
+      ? `<button type="button" class="step-view" data-view="${target}"><span class="step-num" aria-hidden="true">${index}</span>${label}</button>`
+      : `<a href="${target.startsWith("#") ? target : "#radio-operations"}" data-step="${target}"${tab ? ` data-tab="${tab}"` : ""}><span class="step-num" aria-hidden="true">${index}</span>${label}</a>`).join("")}</nav>` : ""}
     <div class="sidebar-bottom"><span class="local-dot"></span> USB / Serial local<p>Sin envio de datos a servidores.<br>Copias antes de escribir.</p></div>
   </aside>
   <div class="workspace"><header class="topbar">
@@ -241,6 +256,7 @@ if (current) {
     if (launch.disabled) return;
     if (page === "quansheng") {
       const panel = document.getElementById("qs-native-menu");
+      showView("herramientas");
       panel.tabIndex = -1;
       panel.scrollIntoView({ block: "start" });
       panel.focus({ preventScroll: true });
@@ -294,6 +310,56 @@ if (current) {
     target.scrollIntoView({ block: "start" });
     target.focus({ preventScroll: true });
   }));
+  if (page === "quansheng") setupViews();
+}
+
+// Shows only the blocks of one view; everything else in <main> stays in the DOM but is not displayed.
+function applyView(name) {
+  const main = document.getElementById("main");
+  const wanted = new Set(VIEWS[name].flatMap(selector => [...main.querySelectorAll(selector)]));
+  for (const block of [...main.children, ...main.querySelectorAll("#radio-operations > .ops-group")]) {
+    if (block.matches("a.back, .detail-hero")) continue;
+    block.toggleAttribute("data-view-off", !wanted.has(block));
+  }
+}
+function showView(name, focus = null) {
+  if (!VIEWS[name]) return;
+  currentView = name;
+  applyView(name);
+  document.querySelectorAll("[data-view]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.view === name)));
+  if (VIEW_TABS[name]) document.querySelector(`[data-plan-tab="${VIEW_TABS[name]}"]`)?.click();
+  const target = focus || document.getElementById("main");
+  target.tabIndex = -1;
+  target.scrollIntoView({ block: "start" });
+  target.focus({ preventScroll: true });
+}
+function setupViews() {
+  const operations = document.getElementById("radio-operations");
+  const groups = [[/^CAT RX/, "cat"], [/ARDF/, "ardf"], [/Espectro/, "espectro"], [/Slots/, "slots"], [/^Apps/, "apps"], [/^Canales/, "canales"]];
+  let group = null;
+  for (const node of [...operations.children]) {
+    if (node.tagName === "H2" || !group) {
+      group = document.createElement("div");
+      group.className = "ops-group";
+      group.dataset.group = groups.find(([pattern]) => pattern.test(node.textContent.trim()))?.[1] ?? "otros";
+      operations.insertBefore(group, node);
+    }
+    group.append(node);
+  }
+  document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
+  // In-page links (tool menu, help shortcuts) switch to the view that holds their target instead of scrolling the page.
+  document.getElementById("main").addEventListener("click", event => {
+    const link = event.target.closest('a[href^="#"]');
+    const target = link && link.getAttribute("href").length > 1 && document.getElementById(decodeURIComponent(link.getAttribute("href").slice(1)));
+    if (!target) return;
+    const view = Object.keys(VIEWS).find(name => VIEWS[name].some(selector => target.closest(selector) && selector !== "#radio-operations"));
+    if (!view) return;
+    event.preventDefault();
+    showView(view, target);
+  });
+  // Panels mounted later (live viewer, RF log) follow the current view.
+  new MutationObserver(() => { if (currentView) applyView(currentView); }).observe(document.getElementById("main"), { childList: true });
+  showView("conexion");
 }
 
 (globalThis.RadioWorkspace?.runtime ?? Promise.resolve({ mode: "web" })).then(({ mode }) => {

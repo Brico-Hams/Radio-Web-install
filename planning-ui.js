@@ -1,7 +1,7 @@
 (function (root) {
   "use strict";
   const R = root.RadioWorkspace;
-  function mountPlanningUI({ page, model, action, download, saveFile = download, log, importChannels, importContacts, importSatellites, readSatellites, templates, cat = null }) {
+  function mountPlanningUI({ page, model, action, download, saveFile = download, log, importChannels, importContacts, importSatellites, readSatellites, templates, cat = null, onStaged = () => {} }) {
     const panel = document.createElement("section");
     panel.id = "planning-panel";
     panel.className = "panel operations planning-panel";
@@ -384,6 +384,7 @@
         $("plan-channel-results").append(row);
       }
       $("plan-channel-count").textContent = `${staged.size} canales preparados. Tonos RX/TX desactivados al importar; TX bloqueada. DMR hereda TS, contacto y lista RX de la plantilla: revisar antes de transmitir.`;
+      onStaged();
     }
     function stage(entries) {
       R.assert(entries.length > 0, "Selecciona registros primero.");
@@ -825,6 +826,7 @@
     renderREMER();
     return {
       setBusy(value) { busy = value; uiBusy = value; $("plan-controls").disabled = value || Boolean(tracker); },
+      stagedEntries: () => [...staged.values()],
       refreshTemplates
     };
   }

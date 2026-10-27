@@ -315,6 +315,31 @@ function quanshengConfig() {
   image.set(new TextEncoder().encode("v6.0.0"), 0xa160);
   return image;
 }
+test("Quansheng inserta memorias desplazando solo hasta el primer hueco y codifica canales de catalogo", () => {
+  // Memories 1-4 occupied, 5 free, 6 occupied: inserting at 2 shifts 2-4 into 3-5 and leaves 6 alone.
+  const base = R.appendQuanshengChannels(quanshengConfig(), R.pmrChannels().slice(0, 3), 1).image;
+  const withSix = R.copyQuanshengChannel(base, 1, 6).image;
+  const memory = (image, number) => [...R.readQuanshengMemory(image, number).record, ...R.readQuanshengMemory(image, number).name];
+  const pasted = R.readQuanshengMemory(withSix, 3);
+  const inserted = R.insertQuanshengMemory(withSix, pasted, 2);
+  assert.deepEqual([2, 3, 4, 5, 6].map(number => memory(inserted, number)),
+    [memory(withSix, 3), memory(withSix, 2), memory(withSix, 3), memory(withSix, 4), memory(withSix, 6)]);
+  assert.deepEqual(memory(inserted, 1), memory(withSix, 1));
+  assert.deepEqual(inserted.subarray(0x8800), withSix.subarray(0x8800));
+  // Inserting at a free memory just writes it there.
+  assert.deepEqual(memory(R.insertQuanshengMemory(withSix, pasted, 5), 5), memory(withSix, 3));
+  assert.throws(() => R.insertQuanshengMemory(withSix, { ...pasted, attributes: Uint8Array.of(7, 0) }, 2), /vacia/);
+  assert.throws(() => R.readQuanshengMemory(withSix, 5), /vacio/);
+  const full = quanshengConfig();
+  for (let number = 2; number <= 1024; number++) full.set(full.subarray(0, 16), (number - 1) * 16), full[0x8000 + (number - 1) * 2] = 2;
+  assert.throws(() => R.insertQuanshengMemory(full, pasted, 1), /No hay memorias libres/);
+  // A catalog channel becomes an RX-only FM memory on the template, readable by the same parser.
+  const planned = R.plannedQuanshengMemory(base, { name: "ISS-VOZ-EUROPA", rx: "145.80000", tx: "145.20000", mode: 0, narrow: true }, 1, 7);
+  const parsed = R.readQuanshengChannels(R.insertQuanshengMemory(base, planned, 1))[0];
+  assert.deepEqual([parsed.name, parsed.rx, parsed.tx, parsed.rxOnly, parsed.narrow, parsed.scanList], ["ISS-VOZ-EU", "145.80000", "145.20000", true, true, 7]);
+  assert.throws(() => R.plannedQuanshengMemory(base, { name: "X", rx: "145.8", tx: "145.8", mode: 0 }, 9), /plantilla/);
+  assert.throws(() => R.plannedQuanshengMemory(base, { name: "DMR", rx: "145.8", tx: "145.8", mode: 1 }, 1), /FM/);
+});
 test("Quansheng copia y mueve memorias byte a byte, incluidos DCS y banderas no editables", () => {
   const original = R.appendQuanshengChannels(quanshengConfig(), R.pmrChannels().slice(0, 3), 1).image;
   original[16 + 10] = 0x20; // DCS on TX: not representable in the editor, must survive untouched

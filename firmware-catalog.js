@@ -63,6 +63,7 @@
     const web = (await R.runtime).mode === "web";
     const { TARGETS, loadQuanshengEntries } = R.firmwareCore;
     const panel = document.createElement("section");
+    panel.id = "official-firmware";
     panel.className = "panel operations firmware-panel";
     panel.setAttribute("aria-label", "Catalogo oficial de firmware");
     panel.innerHTML = `<h2>Descargar firmware de fuentes oficiales</h2>

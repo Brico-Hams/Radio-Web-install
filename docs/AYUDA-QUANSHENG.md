@@ -457,6 +457,42 @@ Esta simulacion no ejecuta el firmware compilado, no prueba arranque, RF,
 pantalla, audio ni el aislamiento fisico de bancos de la radio conectada.
 No desbloquea escrituras ni sustituye el respaldo completo de esa unidad.
 
+### Secciones de la pagina y tablas de canales
+
+Los pasos de la barra lateral (Copias y conexion, Canales, Satelites, Firmware y
+Herramientas) muestran **solo esa seccion**, sin saltar por la pagina. Los
+enlaces del menu de herramientas abren la seccion que contiene su destino.
+
+En **Canales** hay dos tablas:
+
+- **Canales del walkie**: lo leido con *Leer canales del banco activo* o el
+  archivo abierto. Arrastra una fila sobre otra para moverla; las intermedias
+  se desplazan una posicion.
+- **Canales para cargar**: los preparados en Canales y Satelites (repetidores,
+  REMER, PMR446, SAT y Doppler, aeropuertos, FM y CSV) mas las copias de
+  canales del walkie.
+
+**Pasar canales de una tabla a otra:**
+
+- **Arrastrando:** de *para cargar* al walkie se insertan delante de la fila
+  donde los sueltes, o al final si los sueltas en zona vacia. Del walkie a
+  *para cargar* se copian con todos sus bytes, DCS incluido.
+- **Copiando y pegando:** selecciona filas y usa *Copiar seleccion* y *Pegar
+  aqui*, o Ctrl+C / Ctrl+V con la tabla enfocada. Al pegar en el walkie, los
+  canales se insertan delante de la primera fila marcada, o al final si no hay
+  ninguna marcada.
+
+Al insertar, solo se desplazan las memorias contiguas hasta el primer hueco;
+las de despues del hueco no cambian.
+
+**Anadir canal** pide numero, nombre, RX y TX. Si el numero ya esta ocupado,
+pregunta si el canal nuevo va **antes** o **despues** del existente y desplaza
+el resto. Los canales de catalogo y los nuevos se crean solo RX sobre la
+plantilla FM, como el resto de importaciones de esta web.
+
+Nada se escribe en la radio hasta pulsar *Escribir y releer canales*, que
+exige el respaldo completo y releer byte a byte.
+
 ### Botones Backup y Restore de canales
 
 #### Sustitucion excepcional de firmware legacy autorizada

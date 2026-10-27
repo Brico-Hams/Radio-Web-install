@@ -179,6 +179,21 @@
 <pre><code>node --test --test-name-pattern=&quot;simulacion multiboot completa&quot; tests\connectors.test.cjs</code></pre>
 <p>Usa exclusivamente un transporte en memoria: no abre Web Serial, COM ni USB. Simula cuatro instalaciones con imagenes de prueba, respaldo completo y permiso por sesion, cabecera escrita al final y CRC de cada slot. Selecciona manualmente en el modelo bancos CFG distintos del numero de slot, para no confundir ambos. En cada banco importa 16 PMR, 11 REMER y un repetidor CSV ficticio; escribe, relee, edita, cambia lista, borra y reutiliza la memoria. Comprueba aislamiento de bancos, Main, calibracion y ajustes protegidos. En Satelites simula CAT RX y STOP sin cambios persistentes. Rechaza AM, que este importador no convierte.</p>
 <p>Los CSV admiten ceros decimales finales como <code>145.600000</code> y offset <code>0.600000</code>, sin redondear valores que necesitan mas de cinco decimales significativos. Los repetidores de prueba no son un directorio de frecuencias reales vigente. Esta simulacion no ejecuta el firmware compilado, no prueba arranque, RF, pantalla, audio ni el aislamiento fisico de bancos de la radio conectada. No desbloquea escrituras ni sustituye el respaldo completo de esa unidad.</p>
+<h3 id="secciones-de-la-pagina-y-tablas-de-canales">Secciones de la pagina y tablas de canales</h3>
+<p>Los pasos de la barra lateral (Copias y conexion, Canales, Satelites, Firmware y Herramientas) muestran <strong>solo esa seccion</strong>, sin saltar por la pagina. Los enlaces del menu de herramientas abren la seccion que contiene su destino.</p>
+<p>En <strong>Canales</strong> hay dos tablas:</p>
+<ul>
+<li><strong>Canales del walkie</strong>: lo leido con *Leer canales del banco activo* o el archivo abierto. Arrastra una fila sobre otra para moverla; las intermedias se desplazan una posicion.</li>
+<li><strong>Canales para cargar</strong>: los preparados en Canales y Satelites (repetidores, REMER, PMR446, SAT y Doppler, aeropuertos, FM y CSV) mas las copias de canales del walkie.</li>
+</ul>
+<p><strong>Pasar canales de una tabla a otra:</strong></p>
+<ul>
+<li><strong>Arrastrando:</strong> de *para cargar* al walkie se insertan delante de la fila donde los sueltes, o al final si los sueltas en zona vacia. Del walkie a *para cargar* se copian con todos sus bytes, DCS incluido.</li>
+<li><strong>Copiando y pegando:</strong> selecciona filas y usa *Copiar seleccion* y *Pegar aqui*, o Ctrl+C / Ctrl+V con la tabla enfocada. Al pegar en el walkie, los canales se insertan delante de la primera fila marcada, o al final si no hay ninguna marcada.</li>
+</ul>
+<p>Al insertar, solo se desplazan las memorias contiguas hasta el primer hueco; las de despues del hueco no cambian.</p>
+<p><strong>Anadir canal</strong> pide numero, nombre, RX y TX. Si el numero ya esta ocupado, pregunta si el canal nuevo va <strong>antes</strong> o <strong>despues</strong> del existente y desplaza el resto. Los canales de catalogo y los nuevos se crean solo RX sobre la plantilla FM, como el resto de importaciones de esta web.</p>
+<p>Nada se escribe en la radio hasta pulsar *Escribir y releer canales*, que exige el respaldo completo y releer byte a byte.</p>
 <h3 id="botones-backup-y-restore-de-canales">Botones Backup y Restore de canales</h3>
 <h4 id="sustitucion-excepcional-de-firmware-legacy-autorizada">Sustitucion excepcional de firmware legacy autorizada</h4>
 <p>La API avanzada <code>BackupManager.authorizeSlotReplacement</code> permite autorizar exclusivamente instalaciones de firmware en slots 1-4 para F4HWN legacy con respaldo parcial, despues de aceptar literalmente <code>REEMPLAZAR SLOTS SIN RESPALDO DE FIRMWARE</code>. Esta aceptacion significa perder las imagenes anteriores sin copia recuperable; sus CRC no son un respaldo. No se activa por conectar, por PRO ni por importar un archivo.</p>

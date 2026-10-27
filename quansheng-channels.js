@@ -57,45 +57,46 @@
     const source = positions(templateNumber);
     const targetList = scanList(options.scanList ?? 25);
     const result = image.slice();
-    const view = R.view(result);
     const identity = channel => `${channel.name}:${channel.rx}:${channel.tx}:${channel.mode}`;
     const known = new Set(existing.filter(channel => channel.rxOnly).map(identity));
+    const templateRecord = image.slice(source.record, source.record + 16);
     let added = 0;
     let duplicates = 0;
     for (const channel of channels) {
-      R.assert(channel.mode === 0, "Quansheng solo importa canales FM analogicos.");
-      R.assert(/^[\x20-\x7e]{1,16}$/.test(channel.name), "Nombre Quansheng: 1-16 caracteres ASCII (se guardan los primeros 10).");
-      const rx = frequency(channel.rx);
-      const tx = frequency(channel.tx);
-      R.assert((rx < 35000000) === (tx < 35000000), "RX y TX deben permanecer en la misma banda.");
-      const list = scanList(channel.scanList ?? targetList);
-      const name = channel.name.slice(0, 10);
-      const key = identity({ name, rx: (rx / 100000).toFixed(5), tx: (tx / 100000).toFixed(5), mode: 0 });
+      const memory = plannedMemory(templateRecord, channel, scanList(channel.scanList ?? targetList));
+      const key = identity({ name: channel.name.slice(0, 10), rx: (memory.rx / 100000).toFixed(5), tx: (memory.tx / 100000).toFixed(5), mode: 0 });
       if (known.has(key)) { duplicates++; continue; }
-      let destination;
-      for (let number = 1; number <= 1024; number++) {
-        const position = positions(number);
-        const storedRX = view.getUint32(position.record, true);
-        if ((result[position.attributes] & 7) === 7 || storedRX === 0 || storedRX === 0xffffffff) { destination = position; break; }
-      }
+      let destination = 0;
+      for (let number = 1; number <= 1024 && !destination; number++) if (!occupied(result, number)) destination = number;
       R.assert(destination, "No quedan memorias Quansheng libres. Archivo original intacto.");
-      const { record, attributes } = destination;
-      result.set(image.subarray(source.record, source.record + 16), record);
-      view.setUint32(record, rx, true);
-      view.setUint32(record + 4, Math.abs(tx - rx), true);
-      result.fill(0, record + 8, record + 11);
-      result[record + 11] = tx > rx ? 1 : tx < rx ? 2 : 0;
-      result[record + 12] = (result[record + 12] & ~1) | 64;
-      if (channel.narrow !== undefined) result[record + 12] = (result[record + 12] & ~2) | (channel.narrow ? 2 : 0);
-      result[record + 13] = 0;
-      result.fill(0, destination.name, destination.name + 16);
-      result.set(new TextEncoder().encode(name), destination.name);
-      // F4HWN frequencyBandTable: BAND2 108-137, BAND3 137-174 ... BAND6 400-470 MHz (attribute value = band index).
-      view.setUint16(attributes, bandFor(rx) | (list << 8), true);
+      putMemory(result, memory, destination);
       known.add(key);
       added++;
     }
     return { image: result, added, duplicates };
+  }
+  // One planned FM channel on a template record: RX-only, tones off, band and scan list set.
+  function plannedMemory(templateRecord, channel, list) {
+    R.assert(channel.mode === 0, "Quansheng solo importa canales FM analogicos.");
+    R.assert(/^[\x20-\x7e]{1,16}$/.test(channel.name), "Nombre Quansheng: 1-16 caracteres ASCII (se guardan los primeros 10).");
+    const rx = frequency(channel.rx);
+    const tx = frequency(channel.tx);
+    R.assert((rx < 35000000) === (tx < 35000000), "RX y TX deben permanecer en la misma banda.");
+    const record = templateRecord.slice();
+    const view = R.view(record);
+    view.setUint32(0, rx, true);
+    view.setUint32(4, Math.abs(tx - rx), true);
+    record.fill(0, 8, 11);
+    record[11] = tx > rx ? 1 : tx < rx ? 2 : 0;
+    record[12] = (record[12] & ~1) | 64;
+    if (channel.narrow !== undefined) record[12] = (record[12] & ~2) | (channel.narrow ? 2 : 0);
+    record[13] = 0;
+    const name = new Uint8Array(16);
+    name.set(new TextEncoder().encode(channel.name.slice(0, 10)));
+    const attributes = new Uint8Array(2);
+    // F4HWN frequencyBandTable: BAND2 108-137, BAND3 137-174 ... BAND6 400-470 MHz (attribute value = band index).
+    R.view(attributes).setUint16(0, bandFor(rx) | (list << 8), true);
+    return { record, name, attributes, rx, tx };
   }
   function updateQuanshengChannel(image, channel) {
     configuration(image);
@@ -165,14 +166,52 @@
     R.view(result).setUint16(attributes, 7, true);
     return result;
   }
-  const occupied = (image, number) => (image[positions(number).attributes] & 7) !== 7;
+  // Same rule as readQuanshengChannels: a hidden attribute or an unset frequency is a free memory.
+  function occupied(image, number) {
+    const { record, attributes } = positions(number);
+    const rx = R.view(image).getUint32(record, true);
+    return (image[attributes] & 7) !== 7 && rx !== 0 && rx !== 0xffffffff;
+  }
   // Copies and moves carry every byte of the memory (tones, DCS, step, flags), not only the fields this editor shows.
   function copyRaw(result, image, from, to) {
-    const source = positions(from);
-    const target = positions(to);
-    result.set(image.subarray(source.record, source.record + 16), target.record);
-    result.set(image.subarray(source.name, source.name + 16), target.name);
-    result.set(image.subarray(source.attributes, source.attributes + 2), target.attributes);
+    putMemory(result, memoryAt(image, from), to);
+  }
+  function memoryAt(image, number) {
+    const { record, name, attributes } = positions(number);
+    return { record: image.slice(record, record + 16), name: image.slice(name, name + 16), attributes: image.slice(attributes, attributes + 2) };
+  }
+  function putMemory(result, memory, number) {
+    R.assert(memory?.record?.length === 16 && memory.name?.length === 16 && memory.attributes?.length === 2,
+      "Memoria Quansheng incompleta: 16 bytes de registro, 16 de nombre y 2 de atributos.");
+    const { record, name, attributes } = positions(number);
+    result.set(memory.record, record);
+    result.set(memory.name, name);
+    result.set(memory.attributes, attributes);
+  }
+  // Raw bytes of one memory, for copy and paste between tables or radios.
+  function readQuanshengMemory(image, number) {
+    configuration(image);
+    R.assert(occupied(image, number), `El canal Quansheng ${number} esta vacio.`);
+    return memoryAt(image, number);
+  }
+  function plannedQuanshengMemory(image, channel, templateNumber, list = 25) {
+    configuration(image);
+    R.assert(occupied(image, templateNumber) && (image[positions(templateNumber).record + 11] >>> 4) === 0,
+      "Selecciona un canal FM existente como plantilla Quansheng.");
+    return plannedMemory(memoryAt(image, templateNumber).record, channel, scanList(list));
+  }
+  // Inserts a memory at a position; the occupied memories from there move down one place, up to the next free one.
+  function insertQuanshengMemory(image, memory, position) {
+    configuration(image);
+    positions(position);
+    R.assert((memory?.attributes?.[0] & 7) !== 7, "No se puede insertar una memoria vacia.");
+    let free = position;
+    while (free <= 1024 && occupied(image, free)) free++;
+    R.assert(free <= 1024, `No hay memorias libres desde la ${position}; borra alguna antes de insertar.`);
+    const result = image.slice();
+    for (let number = free; number > position; number--) copyRaw(result, image, number - 1, number);
+    putMemory(result, memory, position);
+    return result;
   }
   function copyQuanshengChannel(image, number, target) {
     configuration(image);
@@ -210,6 +249,6 @@
   }
   Object.assign(R, { QUANSHENG_CONFIG_SIZE: CONFIG_SIZE, readQuanshengChannels, appendQuanshengChannels, restoreQuanshengChannels,
     updateQuanshengChannel, deleteQuanshengChannel, copyQuanshengChannel, moveQuanshengChannel, assignQuanshengScanList,
-    groupQuanshengChannels });
+    groupQuanshengChannels, readQuanshengMemory, plannedQuanshengMemory, insertQuanshengMemory });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

@@ -41,6 +41,7 @@
     let editNumber = null;
     let planning = null;
     let renderCodeplug = null;
+    let renderLoadable = null;
     let live = null;
     let autoLivePending = false;
     let rfRows = [];
@@ -662,13 +663,39 @@
         <label for="qs-scan-list">Asignar seleccion a lista (0 ninguna, 1-24, 25 todas)</label><input id="qs-scan-list" type="number" min="0" max="25" value="1">
         <button id="qs-scan-apply" class="button secondary" type="button">Aplicar lista al archivo local</button>
         <p>Las listas son numeros nativos del firmware, no zonas DMR. Cada memoria pertenece a una lista; 25 participa en todas. Los nombres de zona/geografia se muestran en el informe de importacion, no se escriben como nombres de lista.</p>
-        <div class="table-scroll"><table><thead><tr><th>Elegir</th><th>Canal</th><th>Nombre</th><th>RX MHz</th><th>TX nominal MHz</th><th>Modo</th><th>TX bloqueada</th><th>Escaneo</th><th>Archivo local</th></tr></thead><tbody id="qs-channels"></tbody></table></div>`);
+        <form id="qs-add-form" hidden><h3>Anadir canal</h3>
+        <label for="qs-add-number">Numero de memoria (1-1024; vacio = al final)</label><input id="qs-add-number" type="number" min="1" max="1024">
+        <label for="qs-add-name">Nombre ASCII (maximo 10 caracteres)</label><input id="qs-add-name" maxlength="10" required pattern="[ -~]{1,10}">
+        <label for="qs-add-rx">RX MHz</label><input id="qs-add-rx" inputmode="decimal" required>
+        <label for="qs-add-tx">TX nominal MHz (vacio = igual que RX)</label><input id="qs-add-tx" inputmode="decimal">
+        <p class="card-note">Se crea solo RX sobre la plantilla FM, como el resto de canales anadidos desde esta web.</p>
+        <div class="operation-buttons"><button class="button primary" type="submit">Anadir al archivo local</button><button id="qs-add-cancel" class="button secondary" type="button">Cancelar</button></div></form>
+        <dialog id="qs-place-dialog" class="qs-dialog"><form method="dialog"><p id="qs-place-text"></p>
+        <div class="operation-buttons"><button class="button primary" value="before">Antes</button><button class="button primary" value="after">Despues</button><button class="button secondary" value="cancel">Cancelar</button></div></form></dialog>
+        <p class="card-note">Arrastra un canal del walkie para cambiar su posicion. Arrastra canales entre las dos tablas, o seleccionalos y usa Copiar y Pegar (Ctrl+C / Ctrl+V con la tabla enfocada): en el walkie se insertan delante de la fila elegida o, sin seleccion, al final. Nada se escribe en la radio hasta pulsar Escribir y releer canales.</p>
+        <div class="qs-tables">
+          <section class="qs-table-box" aria-labelledby="qs-radio-title"><h3 id="qs-radio-title">Canales del walkie</h3>
+            <div class="operation-buttons"><button id="qs-add-open" class="button secondary" type="button">Anadir canal</button><button id="qs-radio-copy" class="button secondary" type="button">Copiar seleccion</button><button id="qs-radio-paste" class="button secondary" type="button">Pegar aqui</button></div>
+            <div id="qs-radio-zone" class="table-scroll qs-drop" tabindex="0" aria-label="Canales del walkie: arrastra o pega aqui"><table><thead><tr><th>Mover</th><th>Elegir</th><th>Canal</th><th>Nombre</th><th>RX MHz</th><th>TX nominal MHz</th><th>Modo</th><th>TX bloqueada</th><th>Escaneo</th><th>Archivo local</th></tr></thead><tbody id="qs-channels"></tbody></table></div></section>
+          <section class="qs-table-box" aria-labelledby="qs-loadable-title"><h3 id="qs-loadable-title">Canales para cargar</h3>
+            <p class="card-note">Los preparados en Canales y Satelites (repetidores, REMER, PMR446, SAT y Doppler, aeropuertos, FM, CSV) y los que copies del walkie.</p>
+            <div class="operation-buttons"><button id="qs-loadable-copy" class="button secondary" type="button">Copiar seleccion</button><button id="qs-loadable-paste" class="button secondary" type="button">Pegar aqui</button><button id="qs-loadable-load" class="button secondary" type="button">Cargar seleccion al final del walkie</button></div>
+            <div id="qs-loadable-zone" class="table-scroll qs-drop" tabindex="0" aria-label="Canales para cargar: arrastra o pega aqui"><table><thead><tr><th>Mover</th><th>Elegir</th><th>Nombre</th><th>RX MHz</th><th>TX MHz</th><th>Origen</th><th></th></tr></thead><tbody id="qs-loadable"></tbody></table></div>
+            <p id="qs-loadable-count" role="status"></p></section>
+        </div>`);
       function renderQuansheng() {
         const channels = R.readQuanshengChannels(image);
         $("qs-select-all").checked = false;
         $("qs-channels").replaceChildren();
         for (const channel of channels) {
           const row = document.createElement("tr");
+          row.dataset.number = channel.number;
+          row.draggable = true;
+          const handle = document.createElement("td");
+          handle.className = "qs-handle";
+          handle.textContent = "\u2817";
+          handle.title = "Arrastra para mover o copiar";
+          row.append(handle);
           const selected = document.createElement("input");
           selected.type = "checkbox";
           selected.dataset.qsChannel = channel.number;
@@ -741,8 +768,225 @@
         }
         $("qs-count").textContent = `${channels.length} canales en el archivo local; los cambios no se escriben automaticamente en la radio.`;
         planning?.refreshTemplates();
+        renderLoadable?.();
       }
       renderCodeplug = renderQuansheng;
+      // Channels ready to load: catalog channels prepared in the planning panel plus raw copies taken from the radio.
+      let copiedMemories = [];
+      let clipboard = null;
+      let dragging = null;
+      const radioSelection = () => [...document.querySelectorAll("[data-qs-channel]:checked")].map(input => Number(input.dataset.qsChannel));
+      const loadableSelection = () => [...document.querySelectorAll("[data-qs-loadable]:checked")].map(input => input.dataset.qsLoadable);
+      function loadableItems() {
+        const planned = (planning?.stagedEntries() ?? []).filter(entry => entry.mode === 0).map(entry => ({ key: `plan:${entry.key}`,
+          name: entry.name.slice(0, 10), rx: entry.rx, tx: entry.tx, source: entry.window ? `${entry.source} · ${entry.window}` : entry.source, entry }));
+        return [...copiedMemories, ...planned];
+      }
+      function templateNumber() {
+        const chosen = Number($("plan-template")?.value);
+        if (chosen) return chosen;
+        const fm = R.readQuanshengChannels(image).find(channel => channel.mode === 0);
+        R.assert(fm, "El walkie necesita al menos un canal FM que sirva de plantilla para cargar canales de catalogo.");
+        return fm.number;
+      }
+      // Memories are built before inserting: an insertion may move the template channel.
+      function memoriesOf(items) {
+        const list = Number($("plan-scan-list")?.value || 25);
+        const template = items.some(item => !item.memory) ? templateNumber() : 0;
+        return items.map(item => item.memory ?? R.plannedQuanshengMemory(image, item.entry, template, item.entry.scanList ?? list));
+      }
+      function radioItems(numbers) {
+        const channels = R.readQuanshengChannels(image);
+        return numbers.map(number => {
+          const channel = channels.find(item => item.number === number);
+          return { key: `copy:${Date.now()}:${number}:${Math.random().toString(36).slice(2, 8)}`, name: channel.name, rx: channel.rx, tx: channel.tx,
+            source: `Copia del canal ${number} del walkie`, memory: R.readQuanshengMemory(image, number) };
+        });
+      }
+      function endPosition() {
+        const channels = R.readQuanshengChannels(image);
+        return channels.length ? Math.min(1024, channels[channels.length - 1].number + 1) : 1;
+      }
+      function insertItems(items, position) {
+        R.assert(image, "Lee o abre primero los canales del walkie.");
+        R.assert(items.length > 0, "No hay canales que insertar.");
+        let next = image;
+        memoriesOf(items).forEach((memory, index) => { next = R.insertQuanshengMemory(next, memory, position + index); });
+        image = next;
+        renderQuansheng();
+        log(`${items.length} canales insertados desde la memoria ${position} del archivo local. La radio no se modifica hasta Escribir y releer canales.`);
+      }
+      function addCopies(items) {
+        copiedMemories = [...copiedMemories, ...items];
+        renderLoadable();
+        log(`${items.length} canales del walkie copiados a la tabla de canales para cargar.`);
+      }
+      renderLoadable = function () {
+        const items = loadableItems();
+        $("qs-loadable").replaceChildren();
+        for (const item of items) {
+          const row = document.createElement("tr");
+          row.dataset.key = item.key;
+          row.draggable = true;
+          const handle = document.createElement("td");
+          handle.className = "qs-handle";
+          handle.textContent = "\u2817";
+          handle.title = "Arrastra al walkie para insertar";
+          const choose = document.createElement("td");
+          const box = document.createElement("input");
+          box.type = "checkbox";
+          box.dataset.qsLoadable = item.key;
+          box.setAttribute("aria-label", `Seleccionar ${item.name}`);
+          choose.append(box);
+          row.append(handle, choose);
+          for (const value of [item.name, item.rx, item.tx, item.source]) {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.append(cell);
+          }
+          const actions = document.createElement("td");
+          if (item.memory) {
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "guide-tab";
+            remove.textContent = "Quitar";
+            remove.addEventListener("click", () => { copiedMemories = copiedMemories.filter(entry => entry.key !== item.key); renderLoadable(); });
+            actions.append(remove);
+          }
+          row.append(actions);
+          $("qs-loadable").append(row);
+        }
+        $("qs-loadable-count").textContent = items.length ? `${items.length} canales para cargar.` :
+          "Sin canales para cargar: preparalos en Canales o Satelites, o copia canales del walkie.";
+      };
+      const loadableByKeys = keys => loadableItems().filter(item => keys.includes(item.key));
+      function copyFrom(source) {
+        const items = source === "radio" ? radioItems(radioSelection()) : loadableByKeys(loadableSelection());
+        R.assert(items.length > 0, "Selecciona primero los canales que quieres copiar.");
+        clipboard = { source, items };
+        log(`${items.length} canales copiados. Pegalos en la otra tabla o en otra posicion del walkie.`);
+      }
+      function pasteInto(target) {
+        R.assert(clipboard?.items.length, "No hay canales copiados.");
+        if (target === "radio") insertItems(clipboard.items, radioSelection()[0] ?? endPosition());
+        else {
+          R.assert(clipboard.source === "radio", "Esos canales ya estan en la tabla de canales para cargar.");
+          addCopies(clipboard.items.map(item => ({ ...item, key: `${item.key}:${Date.now()}` })));
+        }
+      }
+      attach("qs-radio-copy", "Copiar canales del walkie", async () => copyFrom("radio"));
+      attach("qs-loadable-copy", "Copiar canales para cargar", async () => copyFrom("loadable"));
+      attach("qs-radio-paste", "Pegar canales en el walkie", async () => pasteInto("radio"));
+      attach("qs-loadable-paste", "Pegar canales en la tabla para cargar", async () => pasteInto("loadable"));
+      attach("qs-loadable-load", "Cargar canales seleccionados", async () => {
+        const items = loadableByKeys(loadableSelection());
+        R.assert(items.length > 0, "Selecciona los canales que quieres cargar.");
+        insertItems(items, endPosition());
+      });
+      for (const [zone, target] of [["qs-radio-zone", "radio"], ["qs-loadable-zone", "loadable"]]) {
+        $(zone).addEventListener("keydown", event => {
+          if (!(event.ctrlKey || event.metaKey) || event.target.closest("input:not([type=checkbox]),select,textarea")) return;
+          const key = event.key.toLowerCase();
+          if (key !== "c" && key !== "v") return;
+          event.preventDefault();
+          action(key === "c" ? "Copiar canales" : "Pegar canales", async () => key === "c" ? copyFrom(target) : pasteInto(target));
+        });
+        $(zone).addEventListener("dragstart", event => {
+          const row = event.target.closest("tr[data-number], tr[data-key]");
+          if (!row || busy || catTracking) { event.preventDefault(); return; }
+          // Dragging a selected row carries the whole selection; otherwise just that row.
+          if (target === "radio") {
+            const number = Number(row.dataset.number);
+            const chosen = radioSelection();
+            dragging = { source: "radio", numbers: chosen.includes(number) ? chosen : [number], grabbed: number };
+          } else {
+            const chosen = loadableSelection();
+            dragging = { source: "loadable", keys: chosen.includes(row.dataset.key) ? chosen : [row.dataset.key] };
+          }
+          event.dataTransfer.effectAllowed = "copyMove";
+          event.dataTransfer.setData("text/plain", "bricohams-quansheng");
+          row.classList.add("qs-dragging");
+        });
+        $(zone).addEventListener("dragend", () => {
+          dragging = null;
+          document.querySelectorAll(".qs-dragging, .qs-drop-target").forEach(node => node.classList.remove("qs-dragging", "qs-drop-target"));
+        });
+        $(zone).addEventListener("dragover", event => {
+          if (!dragging) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = dragging.source === target && target === "radio" ? "move" : "copy";
+          document.querySelectorAll(".qs-drop-target").forEach(node => node.classList.remove("qs-drop-target"));
+          (event.target.closest("tr[data-number]") || $(zone)).classList.add("qs-drop-target");
+        });
+        $(zone).addEventListener("drop", event => {
+          if (!dragging) return;
+          event.preventDefault();
+          const drag = dragging;
+          const row = event.target.closest("tr[data-number]");
+          dragging = null;
+          action(target === "radio" ? "Soltar canales en el walkie" : "Soltar canales en la tabla para cargar", async () => {
+            if (target === "loadable") {
+              R.assert(drag.source === "radio", "Esos canales ya estan en la tabla de canales para cargar.");
+              addCopies(radioItems(drag.numbers));
+            } else if (drag.source === "radio") {
+              R.assert(row, "Suelta el canal sobre la fila de la posicion que quieres.");
+              const to = Number(row.dataset.number);
+              if (to === drag.grabbed) return;
+              image = R.moveQuanshengChannel(image, drag.grabbed, to);
+              renderQuansheng();
+              log(`Canal ${drag.grabbed} movido a la memoria ${to} del archivo local; los intermedios se desplazan una posicion.`);
+            } else insertItems(loadableByKeys(drag.keys), row ? Number(row.dataset.number) : endPosition());
+          });
+        });
+      }
+      // Add channel: if the number is taken, ask whether the new one goes before or after the existing channel.
+      $("qs-add-open").addEventListener("click", () => {
+        if (busy || catTracking) return;
+        $("qs-add-form").hidden = false;
+        $("qs-add-name").focus();
+      });
+      $("qs-add-cancel").addEventListener("click", () => { $("qs-add-form").reset(); $("qs-add-form").hidden = true; });
+      function askPlacement(channel) {
+        const dialog = $("qs-place-dialog");
+        $("qs-place-text").textContent = `La memoria ${channel.number} ya tiene «${channel.name}» (${channel.rx} MHz). ¿Pongo el canal nuevo antes o despues?`;
+        // The form's submit (button) and the dialog's cancel (Esc) fire synchronously; "close" is not reliable in background tabs.
+        return new Promise(resolve => {
+          const form = dialog.querySelector("form");
+          const done = value => {
+            form.removeEventListener("submit", onSubmit);
+            dialog.removeEventListener("cancel", onCancel);
+            if (dialog.open) dialog.close(value);
+            resolve(value);
+          };
+          const onSubmit = event => { event.preventDefault(); done(event.submitter?.value || "cancel"); };
+          const onCancel = event => { event.preventDefault(); done("cancel"); };
+          form.addEventListener("submit", onSubmit);
+          dialog.addEventListener("cancel", onCancel);
+          dialog.showModal();
+        });
+      }
+      $("qs-add-form").addEventListener("submit", event => {
+        event.preventDefault();
+        action("Anadir canal Quansheng local", async () => {
+          R.assert(image, "Lee o abre primero los canales del walkie.");
+          const rx = $("qs-add-rx").value.trim();
+          const entry = { key: "nuevo", name: $("qs-add-name").value, rx, tx: $("qs-add-tx").value.trim() || rx, mode: 0 };
+          const memory = R.plannedQuanshengMemory(image, entry, templateNumber(), 25);
+          let position = $("qs-add-number").value ? Number($("qs-add-number").value) : endPosition();
+          R.assert(Number.isInteger(position) && position >= 1 && position <= 1024, "Numero de memoria entre 1 y 1024.");
+          const existing = R.readQuanshengChannels(image).find(channel => channel.number === position);
+          if (existing) {
+            const choice = await askPlacement(existing);
+            if (choice === "cancel") { log("Canal nuevo no anadido."); return; }
+            if (choice === "after") position += 1;
+            R.assert(position <= 1024, "No hay memoria despues de la 1024.");
+          }
+          insertItems([{ name: entry.name, rx, tx: entry.tx, source: "Canal nuevo", memory }], position);
+          $("qs-add-form").reset();
+          $("qs-add-form").hidden = true;
+        });
+      });
+      renderLoadable();
       $("qs-select-all").addEventListener("change", () => {
         document.querySelectorAll("[data-qs-channel]").forEach(input => { input.checked = $("qs-select-all").checked; });
       });
@@ -921,7 +1165,7 @@
       });
     }
     planning = R.mountPlanningUI({
-      page, model, action, download, saveFile: saveLocalFile, log,
+      page, model, action, download, saveFile: saveLocalFile, log, onStaged: () => renderLoadable?.(),
       cat: page === "quansheng" ? {
         connector: () => {
           R.assert(!factoryControls?.pending(), "Completa la recuperacion de fabrica antes de iniciar CAT.");
