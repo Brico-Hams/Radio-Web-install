@@ -134,7 +134,7 @@ Vedere [compilazione, controlli, licenze e limiti](docs/i18n/it/BRICOHAMS-FIRMWA
 
 ### Android Bricohams Beta
 
-L’APK nativa 0.8.2-beta include contatti locali modificabili con ricerca e importazione ADIF con anteprima, esportazione
+L’APK nativa 0.8.3-beta include contatti locali modificabili con ricerca e importazione ADIF con anteprima, esportazione
 ADIF/JSON, sessioni ARDF con cronologia, statistiche, segmenti GPS filtrati e osservazioni GPS puntuali, e Morse da testo
 e WAV PCM sperimentale. Integra CAT RX temporaneo tramite USB CDC ACM e
 adattatori riconosciuti CH34x/CP210x/FTDI/Prolific. Calcola i passaggi SGP4 offline
@@ -146,7 +146,7 @@ Compila per Android 8.0+;
 i test host non sostituiscono le prove sul telefono.
 Consulta [funzioni, permessi, compilazione e limiti](docs/i18n/it/ANDROID.md).
 
-VersionCode 11 conserva i libri 0.8.0 (Generale/POTA/SOTA), inserimento rapido, conferma duplicati, selezione satelliti, radar polare, mappa mondiale offline, registrazione WAV del passaggio e ricerca SSTV. Gli aggiornamenti CelesTrak/SatNOGS opzionali avvengono all'apertura, ogni 24 h. La mappa appare senza permesso GPS o osservatore; i passaggi richiedono la posizione salvata. I TLE validi conservati funzionano offline e la selezione resta salvata. Controlli e validazione sono tradotti. Test host, lint e APK 0.8.2 verificati in CI con JDK 17/SDK 35; installazione e permessi su telefono fisico restano da provare.
+VersionCode 12 conserva i libri 0.8.0 (Generale/POTA/SOTA), inserimento rapido, conferma duplicati, selezione satelliti, radar polare, mappa mondiale offline, registrazione WAV del passaggio e ricerca SSTV. Gli aggiornamenti CelesTrak/SatNOGS opzionali avvengono all'apertura, ogni 24 h. La mappa appare senza permesso GPS o osservatore; i passaggi richiedono la posizione salvata. I TLE validi conservati funzionano offline e la selezione resta salvata. Controlli e validazione sono tradotti. Test host, lint e APK 0.8.3 verificati in CI con JDK 17/SDK 35; installazione e permessi su telefono fisico restano da provare.
 
 | Documento | Contenuto |
 | --- | --- |

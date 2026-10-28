@@ -10,8 +10,9 @@
       "edition": "BH ARDF",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "size": 113960,
-      "sha256": "f6dca1967e83c6b699439b45cf6051a5558cd20dd7fc1ed81bcbada9593a8be5",
+      "distributionVersion": "v0.5.2",
+      "size": 113972,
+      "sha256": "edb1ef30107791643d6cc016025e621acb5f27199f73aa45ccbef5224deb5403",
       "path": "precompiled/bricohams-ardf.bin",
       "targets": [
         "UV-K1",
@@ -135,7 +136,15 @@
           "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.1"
         },
-        "imageBytes": 113960,
+        "imageBytes": 113972,
+        "memory": {
+          "ramUsedBytes": 12576,
+          "ramCapacityBytes": 16384,
+          "ramFreeBytes": 3808,
+          "imageBytes": 113972,
+          "slotCapacityBytes": 120832,
+          "slotFreeBytes": 6860
+        },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
         "derivedFromKarina": false,
@@ -145,7 +154,7 @@
         "moduleSources": [
           {
             "file": "App/bricohams/ardf.c",
-            "sha256": "1f475083af35de22e90b3f3d118c60fa8001fe25a6d09984d9540b83f6558520"
+            "sha256": "7775938bc557a0b1c345936ee6e76fab5576353564c476fcfebe5624d9ad12ec"
           },
           {
             "file": "App/bricohams/ardf.h",
@@ -206,8 +215,9 @@
       "edition": "BH Satellite",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "size": 113868,
-      "sha256": "f32de9974cd5b72d9add863ea644648426cbc91a8dbe80089849e16e8c892ab3",
+      "distributionVersion": "v0.5.2",
+      "size": 114836,
+      "sha256": "cb4aaf604d6a05a0cc1ddf6287453fdf79a914123d4d930bad89dbb1c9f5cf57",
       "path": "precompiled/bricohams-satellite.bin",
       "targets": [
         "UV-K1",
@@ -331,7 +341,15 @@
           "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.1"
         },
-        "imageBytes": 113868,
+        "imageBytes": 114836,
+        "memory": {
+          "ramUsedBytes": 12384,
+          "ramCapacityBytes": 16384,
+          "ramFreeBytes": 4000,
+          "imageBytes": 114836,
+          "slotCapacityBytes": 120832,
+          "slotFreeBytes": 5996
+        },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
         "derivedFromKarina": false,
@@ -349,7 +367,7 @@
           },
           {
             "file": "App/bricohams/satellite_foxhunt.inc",
-            "sha256": "d9fb81c8a652ae40a26fdf867b93db7dd6b3b2db7e6789b24186163be2679da0"
+            "sha256": "1afb62f2cd27a90f6bdbe21068ea861c6949b14cf4ccc6a77fec5de078018aec"
           },
           {
             "file": "App/bricohams/cat_rx.c",
@@ -360,8 +378,16 @@
             "sha256": "dd23ef17629f69e1cfa03d5f1347f3e2ba2b604d64ef993f471f5632c6eabbe3"
           },
           {
+            "file": "App/bricohams/cat_tx.c",
+            "sha256": "950c657e772ab86491f68fe0433a17a9a5283f09c4cb30ad18c858dd24fc4290"
+          },
+          {
+            "file": "App/bricohams/cat_tx.h",
+            "sha256": "6b65a5a1a7a4d148adab4f159198d13ada7fa4d6cdd4d2a1f9e6c0e8b49e2b48"
+          },
+          {
             "file": "App/CMakeLists.txt",
-            "sha256": "c6d3ef0b151f481d7702d2565977295db5db7dfa0b86f763633324c7878f745f"
+            "sha256": "a515c8e4ab8bf390bb8db027c0bdf0f4c5c7f7deffe24ec580cacbb404b26c9e"
           },
           {
             "file": "App/scheduler.c",
@@ -376,8 +402,12 @@
             "sha256": "a18a68123bc602187b11591efe0f1dc76a05d72b5bdd0873df4078d7754c23bb"
           },
           {
+            "file": "App/ui/menu.c",
+            "sha256": "04f9b2327cab009ebf7ad05d311872d213139a2bf609bfd177c1330ff8291c0f"
+          },
+          {
             "file": "App/app/uart.c",
-            "sha256": "31d97b716e943f7b8fb5b9ec0713171e4fc2ccee1de72b32c3c60e0accbe384b"
+            "sha256": "0ddf5b0696193956409052c254b76570f81638086af95c2539fa74dd1e46fddf"
           }
         ],
         "brandingSources": [
@@ -401,6 +431,18 @@
           "transmitControl": false,
           "hardwareValidated": false
         },
+        "catTx": {
+          "version": 1,
+          "command": 31490,
+          "reply": 31491,
+          "leaseMilliseconds": 1500,
+          "maxTransmitMilliseconds": 120000,
+          "physicalArmKey": "9",
+          "anyKeyAborts": true,
+          "radioTxGates": true,
+          "persistentWrites": false,
+          "hardwareValidated": false
+        },
         "stability": "beta",
         "validation": "Structural checks only; physical validation pending"
       }
@@ -411,8 +453,9 @@
       "edition": "BH Spectrum",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "size": 118040,
-      "sha256": "1fc3498869e4e77a668427825a5e88bb3226983820e9735a2143988fb21afd6a",
+      "distributionVersion": "v0.5.2",
+      "size": 118232,
+      "sha256": "61480d5203bbed25d19d71bedd97fef31375495389c8ea60988b0490cbe2edf8",
       "path": "precompiled/bricohams-spectrum.bin",
       "targets": [
         "UV-K1",
@@ -536,7 +579,15 @@
           "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.1"
         },
-        "imageBytes": 118040,
+        "imageBytes": 118232,
+        "memory": {
+          "ramUsedBytes": 13472,
+          "ramCapacityBytes": 16384,
+          "ramFreeBytes": 2912,
+          "imageBytes": 118232,
+          "slotCapacityBytes": 120832,
+          "slotFreeBytes": 2600
+        },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
         "derivedFromKarina": false,
@@ -554,7 +605,7 @@
           },
           {
             "file": "App/bricohams/spectrum_foxhunt.inc",
-            "sha256": "3fb45552691b35d394ad6b24f6e24a91ddb657670c1eadded706a8d6b5d3b068"
+            "sha256": "ee4639e0735b7f2332e09e4cbfdbf06697b6772e311792faa3a052763e850a57"
           },
           {
             "file": "App/bricohams/presets.c",
@@ -616,8 +667,9 @@
       "edition": "BH Labs",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "size": 114124,
-      "sha256": "7a4cbb4fc6cd8363c776e2982c10b15e92ef779ec1867f49826556514a47bed4",
+      "distributionVersion": "v0.5.2",
+      "size": 114900,
+      "sha256": "bd7fbe4bcb0c5e4def304d5ab95d25c9d4362bc791661b90479ecb2c84df4717",
       "path": "precompiled/bricohams-labs.bin",
       "targets": [
         "UV-K1",
@@ -742,10 +794,33 @@
           "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.1"
         },
-        "imageBytes": 114124,
+        "imageBytes": 114900,
+        "memory": {
+          "ramUsedBytes": 12544,
+          "ramCapacityBytes": 16384,
+          "ramFreeBytes": 3840,
+          "imageBytes": 114900,
+          "slotCapacityBytes": 120832,
+          "slotFreeBytes": 5932
+        },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
-        "derivedFromKarina": false
+        "derivedFromKarina": false,
+        "modules": [],
+        "moduleSources": [],
+        "brandingSources": [
+          {
+            "file": "App/ui/welcome.c",
+            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+          },
+          {
+            "file": "App/bricohams/bootlogo.h",
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
+          }
+        ],
+        "integrationTestedOnHardware": false,
+        "stability": "beta",
+        "validation": "Structural checks only; physical validation pending"
       }
     },
     {
@@ -754,8 +829,9 @@
       "edition": "BH Fusion",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "size": 106808,
-      "sha256": "65d877114264d8337cdd6e9a5a52dcb85689ac03e02ed0a98b2063bfcc281f23",
+      "distributionVersion": "v0.5.2",
+      "size": 107584,
+      "sha256": "d75d6fecd5722f6eb49760abafdf4efbbc272608a0be01d702b8d5297adacac5",
       "path": "precompiled/bricohams-fusion.bin",
       "targets": [
         "UV-K1",
@@ -878,10 +954,33 @@
           "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.1"
         },
-        "imageBytes": 106808,
+        "imageBytes": 107584,
+        "memory": {
+          "ramUsedBytes": 12160,
+          "ramCapacityBytes": 16384,
+          "ramFreeBytes": 4224,
+          "imageBytes": 107584,
+          "slotCapacityBytes": 120832,
+          "slotFreeBytes": 13248
+        },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
-        "derivedFromKarina": false
+        "derivedFromKarina": false,
+        "modules": [],
+        "moduleSources": [],
+        "brandingSources": [
+          {
+            "file": "App/ui/welcome.c",
+            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+          },
+          {
+            "file": "App/bricohams/bootlogo.h",
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
+          }
+        ],
+        "integrationTestedOnHardware": false,
+        "stability": "beta",
+        "validation": "Structural checks only; physical validation pending"
       }
     },
     {

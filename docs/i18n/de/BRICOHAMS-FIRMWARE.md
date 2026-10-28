@@ -388,8 +388,10 @@ mit einer vollständig geprüften Sicherung und einem verifizierten Wiederherste
 Fusion, Labs, ARDF, Satellite und Spectrum wurden aus der festgelegten Basis
 mit aktuellem Branding und denselben dokumentierten Funktionsoptionen
 erzeugt. Die lokale Fusion61-Einstellungsänderung bleibt ausgeschlossen;
-es erfolgt kein Schreiben auf das Funkgerät. Die Images bleiben Beta ohne
-Hardwarevalidierung und ersetzen den Webkatalog nicht automatisch.
+es erfolgt kein Schreiben auf das Funkgerät. Distribution v0.5.2 vom
+28.10.2026 ersetzt die fünf Bricohams-Images im Web- und Installer-Katalog;
+die offiziellen F4HWN-Images bleiben erhalten. Die Images bleiben Beta ohne
+Hardwarevalidierung.
 
 | Profil | BIN (Bytes) | Reserviertes RAM (Bytes) | Freies RAM (Bytes) | Freier Slot (Bytes) |
 | --- | ---: | ---: | ---: | ---: |
@@ -1437,7 +1439,7 @@ Kontrast, Ausrichtung oder Lesbarkeit auf dem Funkgerät. Es wurde nicht geflash
 
 ## Angeforderte spätere Phase: Bricohams Android
 
-Die native APK `0.8.2-beta` enthält ein Logbuch mit ADIF-Suche und -Import, ADIF/JSON,
+Die native APK `0.8.3-beta` enthält ein Logbuch mit ADIF-Suche und -Import, ADIF/JSON,
 JSON-Wiederherstellung, ARDF-Sitzungen mit Historie/Statistiken und gefilterter Segment-Summe,
 punktuellem GPS, experimentellem Morse aus Text/WAV
 sowie temporärem CAT RX über USB CDC ACM und erkannten CH34x/CP210x/FTDI/Prolific-Adaptern.

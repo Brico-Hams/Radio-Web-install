@@ -7,11 +7,11 @@ and **Deutsch**. The choice is saved locally and applies to every screen, includ
 channels, CAT, satellites, and SSTV. Switching languages does not translate callsigns,
 channel names, or user files; the branding remains Bricohams.
 
-Opening Satellites automatically updates TLE/frequencies over HTTPS from CelesTrak and SatNOGS if the catalog is missing or at least 24 h old. Settings can disable automatic updates. Your saved location and radio channels are not sent; servers receive the normal HTTPS request, including the IP address. Offline import remains available. This revision preserves the 0.8.0 features and prepares 0.8.2-beta APKs, versionCode 11. Android tests, lint and builds require JDK 17 and SDK 35; they cannot run locally with Java 8. CI must verify the new APK before distribution.
+Opening Satellites automatically updates TLE/frequencies over HTTPS from CelesTrak and SatNOGS if the catalog is missing or at least 24 h old. Settings can disable automatic updates. Your saved location and radio channels are not sent; servers receive the normal HTTPS request, including the IP address. Offline import remains available. This revision preserves the 0.8.0 features and prepares 0.8.3-beta APKs, versionCode 12. Android tests, lint and builds require JDK 17 and SDK 35; they cannot run locally with Java 8. CI must verify the new APK before distribution.
 
 Without a saved observer the screen opens on the offline world map, without asking for GPS permission or inventing a location. Satellites, footprints and the selected track appear after valid TLE are available and refresh every 5 s while the map is visible. Cached TLE work offline until they expire. On the first catalog load, receivable satellites are selected (up to 20 catalog entries if frequencies are unavailable); saved selections, including None, are preserved. Pass predictions still require your position in Settings. Errors remain visible.
 
-On a later v0.5.2 tag push, Android Beta attaches both 0.8.2-beta APKs (debug app and instrumented tests) and SHA256SUMS-android to the release created by the installer workflow. Nothing is published locally.
+On a later v0.5.2 tag push, Android Beta attaches both 0.8.3-beta APKs (debug app and instrumented tests) and SHA256SUMS-android to the release created by the installer workflow. Nothing is published locally.
 
 The [V3/Android comprehensive validation](VALIDACION-INTEGRAL-V3-ANDROID.md) distinguishes
 host tests from phone/radio tests and includes the contact, channels-by-slot,
@@ -20,7 +20,7 @@ and CAT matrices. The audit is in progress, not certified.
 Native Kotlin application for Android 8.0/API 26 or later, with no server
 or accounts. It is an independent implementation: it
 does not include code or resources from Look4sat, Robot36, or HAMRS.
-Version `0.8.2-beta` does not replace their full feature sets.
+Version `0.8.3-beta` does not replace their full feature sets.
 
 | Feature | Status |
 | --- | --- |
@@ -502,7 +502,7 @@ Outputs:
 To deliver a verified set on Windows with the same requirements:
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.2-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.3-beta'
 ```
 
 The destination must be new. The script runs tests/lint, verifies APK

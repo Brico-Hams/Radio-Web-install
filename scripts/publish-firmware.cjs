@@ -37,17 +37,17 @@ async function publishApps() {
   console.log(`Catalogo apps publicado: ${entries.length} apps con SHA-256 y FAP1 verificados.`);
 }
 const builds = [
-  ["bricohams-ardf", "bricohams-ardf-preflight", "BH ARDF", "f6dca1967e83c6b699439b45cf6051a5558cd20dd7fc1ed81bcbada9593a8be5"],
-  ["bricohams-satellite", "bricohams-satellite-preflight", "BH Satellite", "f32de9974cd5b72d9add863ea644648426cbc91a8dbe80089849e16e8c892ab3"],
-  ["bricohams-spectrum", "bricohams-spectrum-preflight", "BH Spectrum", "1fc3498869e4e77a668427825a5e88bb3226983820e9735a2143988fb21afd6a"],
-  ["bricohams-labs", "bricohams-labs-v6.1.0", "BH Labs", "7a4cbb4fc6cd8363c776e2982c10b15e92ef779ec1867f49826556514a47bed4"],
-  ["bricohams-fusion", "bricohams-fusion-v6.1.0", "BH Fusion", "65d877114264d8337cdd6e9a5a52dcb85689ac03e02ed0a98b2063bfcc281f23"]
+  ["bricohams-ardf", "ardf", "BH ARDF", "edb1ef30107791643d6cc016025e621acb5f27199f73aa45ccbef5224deb5403"],
+  ["bricohams-satellite", "satellite", "BH Satellite", "cb4aaf604d6a05a0cc1ddf6287453fdf79a914123d4d930bad89dbb1c9f5cf57"],
+  ["bricohams-spectrum", "spectrum", "BH Spectrum", "61480d5203bbed25d19d71bedd97fef31375495389c8ea60988b0490cbe2edf8"],
+  ["bricohams-labs", "labs", "BH Labs", "bd7fbe4bcb0c5e4def304d5ab95d25c9d4362bc791661b90479ecb2c84df4717"],
+  ["bricohams-fusion", "fusion", "BH Fusion", "d75d6fecd5722f6eb49760abafdf4efbbc272608a0be01d702b8d5297adacac5"]
 ];
 async function publish({ official = false } = {}) {
   const entries = [];
   const files = [];
   for (const [id, folder, edition, expected] of builds) {
-    const directory = path.join(root, "firmware-builds", folder, "artifacts");
+    const directory = path.join(root, "firmware-builds", "bricohams-20261027", folder, "artifacts");
     const artifacts = await Promise.all((await fs.readdir(directory)).map(async name =>
       ({ name, bytes: new Uint8Array(await fs.readFile(path.join(directory, name))) })));
     const checked = await R.verifyCustomBuild(artifacts);
@@ -57,6 +57,7 @@ async function publish({ official = false } = {}) {
     files.push([name, checked.firmware.bytes]);
     entries.push({
       id, name, edition, publisher: "Bricohams", version: "v6.1.0",
+      distributionVersion: "v0.5.2",
       size: checked.firmware.bytes.length, sha256: expected, path: `precompiled/${name}`,
       targets: ["UV-K1", "UV-K5-V3"], stability: "beta", hardwareBootTested: false,
       license: "GPL-3.0-or-later AND Apache-2.0",
@@ -89,7 +90,7 @@ async function publish({ official = false } = {}) {
   await fs.mkdir(output, { recursive: true });
   for (const [name, bytes] of files) await fs.writeFile(path.join(output, name), bytes);
   await fs.copyFile(path.join(root, "LICENSE"), path.join(output, "LICENSE.txt"));
-  const notices = path.join(root, "firmware-builds", "bricohams-ardf-preflight", "artifacts");
+  const notices = path.join(root, "firmware-builds", "bricohams-20261027", "ardf", "artifacts");
   await fs.copyFile(path.join(notices, "LICENSE"), path.join(output, "APACHE-2.0.txt"));
   await fs.copyFile(path.join(notices, "NOTICE"), path.join(output, "NOTICE.txt"));
   await fs.copyFile(path.join(notices, "MODULE-NOTICE.txt"), path.join(output, "BRICOHAMS-NOTICE.txt"));

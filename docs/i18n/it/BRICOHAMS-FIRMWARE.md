@@ -404,8 +404,9 @@ essere eseguito con copia completa verificata e una via di recupero collaudata.
 Fusion, Labs, ARDF, Satellite e Spectrum sono stati generati dalla base
 fissata, con il branding attuale e le stesse opzioni funzionali documentate.
 La modifica locale alle impostazioni Fusion61 è esclusa e non si scrive
-sulla radio. Le immagini restano Beta senza validazione fisica e non
-sostituiscono automaticamente quelle precedenti nel catalogo web.
+sulla radio. La distribuzione v0.5.2 del 28-10-2026 sostituisce le cinque
+immagini Bricohams nei cataloghi web e degli installer, conservando quelle
+ufficiali F4HWN. Le immagini restano Beta senza validazione fisica.
 
 | Profilo | BIN (byte) | RAM riservata (byte) | RAM libera (byte) | Slot libero (byte) |
 | --- | ---: | ---: | ---: | ---: |
@@ -1472,7 +1473,7 @@ contrasto, orientamento o leggibilità sulla radio. Non è stato flashato.
 
 ## Fase successiva richiesta: Bricohams Android
 
-L'APK nativa `0.8.2-beta` integra un logbook con ricerca e importazione ADIF, ADIF/JSON,
+L'APK nativa `0.8.3-beta` integra un logbook con ricerca e importazione ADIF, ADIF/JSON,
 ripristino JSON, sessioni ARDF con cronologia/statistiche e somma filtrata dei segmenti,
 GPS puntuale, Morse da testo/WAV sperimentale
 e CAT RX temporaneo via USB CDC ACM e adattatori riconosciuti CH34x/CP210x/FTDI/Prolific.

@@ -79,13 +79,15 @@ jobs:
           pattern: bricohams-firmware-*
           path: firmware
       - name: Package one ZIP per variant
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           mkdir upload
           for dir in firmware/bricohams-firmware-*; do
             variant=${dir#firmware/bricohams-firmware-}
             (cd "$dir" && sha256sum --check --quiet SHA256SUMS)
-            (cd "$dir" && zip -q -r "$GITHUB_WORKSPACE/upload/bricohams-firmware-$variant-v6.1.0.zip" .)
+            (cd "$dir" && zip -q -r "$GITHUB_WORKSPACE/upload/bricohams-firmware-$variant-$TAG.zip" .)
             cp "$dir"/bricohams.*.bin upload/
           done
           (cd upload && sha256sum -- * > SHA256SUMS-firmware && cat SHA256SUMS-firmware)

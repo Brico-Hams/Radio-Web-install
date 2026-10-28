@@ -21,8 +21,8 @@ try {
     & .\android\gradlew.bat -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
     if ($LASTEXITCODE -ne 0) { throw "La compilacion Android fallo: $LASTEXITCODE" }
     $artifacts = @(
-        @{ Source = 'android\app\build\outputs\apk\debug\app-debug.apk'; Name = 'bricohams-android-0.8.2-beta-debug.apk' },
-        @{ Source = 'android\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'; Name = 'bricohams-android-0.8.2-beta-androidTest.apk' }
+        @{ Source = 'android\app\build\outputs\apk\debug\app-debug.apk'; Name = 'bricohams-android-0.8.3-beta-debug.apk' },
+        @{ Source = 'android\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'; Name = 'bricohams-android-0.8.3-beta-androidTest.apk' }
     )
     foreach ($artifact in $artifacts) {
         & $signer verify $artifact.Source
@@ -62,8 +62,8 @@ try {
         format = 'bricohams-android-build'
         version = 1
         applicationId = 'org.bricohams.radio'
-        applicationVersion = '0.8.2-beta'
-        applicationVersionCode = 11
+        applicationVersion = '0.8.3-beta'
+        applicationVersionCode = 12
         stability = 'beta'
         signing = 'debug'
         minimumApi = 26

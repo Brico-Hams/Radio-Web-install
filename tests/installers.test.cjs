@@ -44,6 +44,23 @@ test("los instalables incluyen avisos legales, estado de entrega y licencia del 
   }
 });
 
+test("los instalables incluyen el catalogo y todos los recursos web permitidos", () => {
+  const build = read("scripts/build-installers.sh");
+  const files = build.match(/app_files=\(([\s\S]*?)\n\)/)[1].trim().split(/\s+/);
+  const { ALLOWED_FILES } = require("../server.cjs");
+  for (const file of ALLOWED_FILES) {
+    if (files.includes(file) || /^ayuda-.+\.(en|de|it|fr)\.html$/.test(file) ||
+      /^docs\/atlas\/.+\.(jpg|svg)$/.test(file) || file === "satellite.min.js") continue;
+    if (/^precompiled\/[^/]+\.(bin|json|txt)$/.test(file)) {
+      assert(build.includes('"$root"/precompiled/*.bin "$root"/precompiled/*.json "$root"/precompiled/*.txt'));
+    } else if (/^precompiled\/apps\/[^/]+\.(app|json)$/.test(file)) {
+      assert(build.includes('"$root"/precompiled/apps/*.app "$root"/precompiled/apps/*.json'));
+    } else {
+      assert.fail(`Recurso ausente del instalador: ${file}`);
+    }
+  }
+});
+
 test("Linux y FreeBSD comparten un unico lanzador y Windows reemplaza la app al actualizar", () => {
   const build = read("scripts/build-installers.sh");
   assert.equal(build.match(/installers\/unix\/bricohams-radio"/g).length, 3);
