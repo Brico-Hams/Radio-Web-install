@@ -124,17 +124,18 @@ ctest --test-dir firmware-builds\platform-tests --no-tests=error --output-on-fai
 <h3 id="distribucion-por-imagenes-funcionales">Distribucion por imagenes funcionales</h3>
 <h4 id="generacion-y-optimizacion-del-27-10-2026">Generacion y optimizacion del 27-10-2026</h4>
 <p>Se generaron Fusion, Labs, ARDF, Satellite y Spectrum desde la base fijada, con branding actual y las mismas opciones funcionales documentadas. No se incorpora el cambio local de ajustes de Fusion61 ni se escribe la radio. La distribucion v0.5.2 del 28-10-2026 sustituye las cinco imagenes Bricohams del catalogo web y de los instaladores, conservando las oficiales F4HWN. Las imagenes nuevas siguen siendo Beta sin validacion fisica.</p>
+<p>La tabla corresponde a CI Linux del 28-10-2026: cada BIN ocupa 4 bytes menos que la compilacion local Windows del dia anterior, con igual RAM. La comparacion ARDF posterior conserva las mediciones locales Windows.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Perfil</th><th scope="col">BIN (bytes)</th><th scope="col">RAM reservada (bytes)</th><th scope="col">RAM libre (bytes)</th><th scope="col">Slot libre (bytes)</th></tr></thead><tbody>
-<tr><td>Fusion</td><td>107584</td><td>12160</td><td>4224</td><td>13248</td></tr>
-<tr><td>Labs</td><td>114900</td><td>12544</td><td>3840</td><td>5932</td></tr>
-<tr><td>ARDF</td><td>113972</td><td>12576</td><td>3808</td><td>6860</td></tr>
-<tr><td>Satellite</td><td>114836</td><td>12384</td><td>4000</td><td>5996</td></tr>
-<tr><td>Spectrum</td><td>118232</td><td>13472</td><td>2912</td><td>2600</td></tr>
+<tr><td>Fusion</td><td>107580</td><td>12160</td><td>4224</td><td>13252</td></tr>
+<tr><td>Labs</td><td>114896</td><td>12544</td><td>3840</td><td>5936</td></tr>
+<tr><td>ARDF</td><td>113968</td><td>12576</td><td>3808</td><td>6864</td></tr>
+<tr><td>Satellite</td><td>114832</td><td>12384</td><td>4000</td><td>6000</td></tr>
+<tr><td>Spectrum</td><td>118228</td><td>13472</td><td>2912</td><td>2604</td></tr>
 </tbody></table></div>
 <p>El presupuesto es 120832 bytes de imagen y 16384 de RAM. El constructor anade <code>memory</code> a <code>build-info.json</code> y rechaza excesos o secciones obligatorias ausentes. Cuenta el extremo de las regiones RAM, incluidos huecos, workspace, pila y reservas; no suma dos veces el stub que solapa su workspace. La RAM libre no demuestra el maximo consumo dinamico de pila en hardware.</p>
 <p>La optimizacion ARDF conserva el estado y la precision fraccional en 64 bits, pero omite el modulo cuando no se cruza el ciclo. Los ciclos validados duran como maximo 9999900 ms: el calculo de baliza y tiempo restante usa 32 bits. El desensamblado Cortex-M0+ confirma que el camino habitual pasa de tres divisiones de 64 bits a una de 64 y una de 32; tras un salto de ciclo se mantiene el modulo completo. No se cambian correcciones ppm, sincronizacion, avisos ni tratamiento del desbordamiento del reloj.</p>
 <p>Una compilacion ARDF de referencia con el mismo codigo restante ocupa 113960 bytes; la optimizada ocupa 113972: <strong>12 bytes mas, igual RAM</strong>. No se afirma una reduccion global del tamano ni una medida de latencia RF. La prueba diferencial compara 200000 actualizaciones con la formula original, incluyendo 1-10 balizas, duraciones extremas, correcciones positivas/negativas, sincronizacion al final del ciclo y saltos de reloj hasta UINT32_MAX.</p>
-<p>Los artefactos estan en <code>firmware-builds/bricohams-20261027</code>, separados por perfil, con BIN, ELF, mapa, informes, licencias y SHA-256. Antes de probarlos en hardware, exportar el respaldo completo y comprobar el modelo y los hashes. Spectrum conserva solo 2600 bytes de margen de slot: no anadir funciones sin recompilar y revisar ambos presupuestos.</p>
+<p>Los artefactos estan en <code>firmware-builds/bricohams-20261028</code>, separados por perfil, con BIN, ELF, mapa, informes, licencias y SHA-256. Antes de probarlos en hardware, exportar el respaldo completo y comprobar el modelo y los hashes. Spectrum conserva solo 2604 bytes de margen de slot: no anadir funciones sin recompilar y revisar ambos presupuestos.</p>
 <h4 id="recompilacion-y-pruebas-de-modulos-del-26-10-2026">Recompilacion y pruebas de modulos del 26-10-2026</h4>
 <p>Se recompilaron los tres perfiles desde el commit fijado, con branding Bricohams, Beacon y VOX desactivados. No se incorporo codigo del binario Karina ni se instalaron estas compilaciones durante esta comprobacion.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Perfil</th><th scope="col">BIN (bytes)</th><th scope="col">Flash enlazada / 120832</th><th scope="col">RAM / 16384</th></tr></thead><tbody>

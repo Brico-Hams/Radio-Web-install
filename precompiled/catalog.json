@@ -11,8 +11,8 @@
       "publisher": "Bricohams",
       "version": "v6.1.0",
       "distributionVersion": "v0.5.2",
-      "size": 113972,
-      "sha256": "edb1ef30107791643d6cc016025e621acb5f27199f73aa45ccbef5224deb5403",
+      "size": 113968,
+      "sha256": "152027eb1e53f25fc5c0b1d6af0c762743ce0a8da3e76825ef7f94beecb5fbf8",
       "path": "precompiled/bricohams-ardf.bin",
       "targets": [
         "UV-K1",
@@ -132,18 +132,18 @@
         },
         "sourceDateEpoch": 1791342406,
         "toolchain": {
-          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\r\nCopyright (C) 2023 Free Software Foundation, Inc.\r\nThis is free software; see the source for copying conditions.  There is NO\r\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
-          "ninja": "1.13.1"
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 3.31.6\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "ninja": "1.13.2"
         },
-        "imageBytes": 113972,
+        "imageBytes": 113968,
         "memory": {
           "ramUsedBytes": 12576,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 3808,
-          "imageBytes": 113972,
+          "imageBytes": 113968,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 6860
+          "slotFreeBytes": 6864
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -154,15 +154,15 @@
         "moduleSources": [
           {
             "file": "App/bricohams/ardf.c",
-            "sha256": "7775938bc557a0b1c345936ee6e76fab5576353564c476fcfebe5624d9ad12ec"
+            "sha256": "201457df6bca68290c8a26aafc98bafd755b2742f1a485e0129cdf3c0f984860"
           },
           {
             "file": "App/bricohams/ardf.h",
-            "sha256": "448cf598d8d061853c5e49b3cee0dba82d3e8650ddfee5689f38370d49b1ca6e"
+            "sha256": "4b12d66266a791147b70cd234bd2e3a59c996f022edf5f439c78a2f8a28a59a4"
           },
           {
             "file": "App/bricohams/ardf_foxhunt.inc",
-            "sha256": "5fa7121bd880e04da8b7c6cc564fc34fe3ddfd081ce74151df607058f4a65bdc"
+            "sha256": "51d36534f4ab001ab195a6f626a3d57ef0ff275105d12a3aedc19db1a6906e34"
           },
           {
             "file": "App/CMakeLists.txt",
@@ -216,8 +216,8 @@
       "publisher": "Bricohams",
       "version": "v6.1.0",
       "distributionVersion": "v0.5.2",
-      "size": 114836,
-      "sha256": "cb4aaf604d6a05a0cc1ddf6287453fdf79a914123d4d930bad89dbb1c9f5cf57",
+      "size": 114832,
+      "sha256": "673e203d229fa11705152f07579d0c1f0538334bc794eef6c88c7241e9c909ab",
       "path": "precompiled/bricohams-satellite.bin",
       "targets": [
         "UV-K1",
@@ -337,18 +337,18 @@
         },
         "sourceDateEpoch": 1791342406,
         "toolchain": {
-          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\r\nCopyright (C) 2023 Free Software Foundation, Inc.\r\nThis is free software; see the source for copying conditions.  There is NO\r\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
-          "ninja": "1.13.1"
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 3.31.6\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "ninja": "1.13.2"
         },
-        "imageBytes": 114836,
+        "imageBytes": 114832,
         "memory": {
           "ramUsedBytes": 12384,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 4000,
-          "imageBytes": 114836,
+          "imageBytes": 114832,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 5996
+          "slotFreeBytes": 6000
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -359,31 +359,31 @@
         "moduleSources": [
           {
             "file": "App/bricohams/doppler.c",
-            "sha256": "8eee2300fa329a7759ef8ce8b3b8f28184f372883643f3101496cabc7518334b"
+            "sha256": "1183133f13fc89691c29333d307921336d230c6b0baef35f33e23c743d771c1f"
           },
           {
             "file": "App/bricohams/doppler.h",
-            "sha256": "afb6cf8fa13d148163135389599b13d3769a8c32ed642a2b46ef56f1521296df"
+            "sha256": "8fb590cd5d6fc0f938a77faaa3997dece019cc348fe05c4c99bf564211535aaa"
           },
           {
             "file": "App/bricohams/satellite_foxhunt.inc",
-            "sha256": "1afb62f2cd27a90f6bdbe21068ea861c6949b14cf4ccc6a77fec5de078018aec"
+            "sha256": "4dcf6ca1923df4730fa2adb823a1b9c4acc885810b81dcd7acaa48c4457c65ab"
           },
           {
             "file": "App/bricohams/cat_rx.c",
-            "sha256": "2a89f591013fafe3c4a3e09ee407a455f3760dc108a023f234a2e232c92ee54a"
+            "sha256": "f787846772f25bdfaff119db6ed12ce2e7f18bc0eb26a71d2445a14656215a20"
           },
           {
             "file": "App/bricohams/cat_rx.h",
-            "sha256": "dd23ef17629f69e1cfa03d5f1347f3e2ba2b604d64ef993f471f5632c6eabbe3"
+            "sha256": "c36009671e87f4d878ece76006f4f352d2e1f4e661a2d177531a72200bfab132"
           },
           {
             "file": "App/bricohams/cat_tx.c",
-            "sha256": "950c657e772ab86491f68fe0433a17a9a5283f09c4cb30ad18c858dd24fc4290"
+            "sha256": "d8f6a95f0f11473c663f84f87996a8173d033945047caccd8f003c293eab9308"
           },
           {
             "file": "App/bricohams/cat_tx.h",
-            "sha256": "6b65a5a1a7a4d148adab4f159198d13ada7fa4d6cdd4d2a1f9e6c0e8b49e2b48"
+            "sha256": "05974f296313b36ba8f2596bb24d2fe71e0018320233347213f1b13e32fe4491"
           },
           {
             "file": "App/CMakeLists.txt",
@@ -454,8 +454,8 @@
       "publisher": "Bricohams",
       "version": "v6.1.0",
       "distributionVersion": "v0.5.2",
-      "size": 118232,
-      "sha256": "61480d5203bbed25d19d71bedd97fef31375495389c8ea60988b0490cbe2edf8",
+      "size": 118228,
+      "sha256": "8a17561d01dced397c5f0f711e853e628c33a57d861895723abc90293757d468",
       "path": "precompiled/bricohams-spectrum.bin",
       "targets": [
         "UV-K1",
@@ -575,18 +575,18 @@
         },
         "sourceDateEpoch": 1791342406,
         "toolchain": {
-          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\r\nCopyright (C) 2023 Free Software Foundation, Inc.\r\nThis is free software; see the source for copying conditions.  There is NO\r\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
-          "ninja": "1.13.1"
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 3.31.6\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "ninja": "1.13.2"
         },
-        "imageBytes": 118232,
+        "imageBytes": 118228,
         "memory": {
           "ramUsedBytes": 13472,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 2912,
-          "imageBytes": 118232,
+          "imageBytes": 118228,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 2600
+          "slotFreeBytes": 2604
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -597,23 +597,23 @@
         "moduleSources": [
           {
             "file": "App/bricohams/spectrum.c",
-            "sha256": "767d96d57dc8d40edd5b03b091e7a5f91157cf6df8b075fa3726a58c8e206c54"
+            "sha256": "b79f6423d9fffc10f14ace2bdf55b5fbe3cc6e07279fe61ed203d5650b6d5d60"
           },
           {
             "file": "App/bricohams/spectrum.h",
-            "sha256": "346f10b4aeda84b67f38cf72224da48b02f2df756232a4294b72a75334fb7e64"
+            "sha256": "8b778fe5f6f042335115d56c6f4337fd728afd136884d4b1f0697ee20373967f"
           },
           {
             "file": "App/bricohams/spectrum_foxhunt.inc",
-            "sha256": "ee4639e0735b7f2332e09e4cbfdbf06697b6772e311792faa3a052763e850a57"
+            "sha256": "4acd2e0e5ee1a113ab9e3d934277d1e86daf16813cd5628ec3771e54ef2e11e0"
           },
           {
             "file": "App/bricohams/presets.c",
-            "sha256": "4cc03959fa0da880193707961fafaa53381105c38c9a312d244aebbd908a466f"
+            "sha256": "e56c57ac7f18584d96c21cc10bc4943deaaaecb6a44c3709a683446829e8c977"
           },
           {
             "file": "App/bricohams/presets.h",
-            "sha256": "565c47611a2f3feecb2c5d7744bc8fe10a2f8d83d245b6bf5930f7315a39680c"
+            "sha256": "7a868c024ef569937045ab9d84b2c4578a7e69afbebb5626f25f0dc0bd6eae0c"
           },
           {
             "file": "App/CMakeLists.txt",
@@ -668,8 +668,8 @@
       "publisher": "Bricohams",
       "version": "v6.1.0",
       "distributionVersion": "v0.5.2",
-      "size": 114900,
-      "sha256": "bd7fbe4bcb0c5e4def304d5ab95d25c9d4362bc791661b90479ecb2c84df4717",
+      "size": 114896,
+      "sha256": "938a7cd80b489c9c1746b710c7ae4533526674b13e5f97083f6bea850721140a",
       "path": "precompiled/bricohams-labs.bin",
       "targets": [
         "UV-K1",
@@ -790,18 +790,18 @@
         },
         "sourceDateEpoch": 1791342406,
         "toolchain": {
-          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\r\nCopyright (C) 2023 Free Software Foundation, Inc.\r\nThis is free software; see the source for copying conditions.  There is NO\r\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
-          "ninja": "1.13.1"
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 3.31.6\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "ninja": "1.13.2"
         },
-        "imageBytes": 114900,
+        "imageBytes": 114896,
         "memory": {
           "ramUsedBytes": 12544,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 3840,
-          "imageBytes": 114900,
+          "imageBytes": 114896,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 5932
+          "slotFreeBytes": 5936
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -830,8 +830,8 @@
       "publisher": "Bricohams",
       "version": "v6.1.0",
       "distributionVersion": "v0.5.2",
-      "size": 107584,
-      "sha256": "d75d6fecd5722f6eb49760abafdf4efbbc272608a0be01d702b8d5297adacac5",
+      "size": 107580,
+      "sha256": "162c3eced8666748887c837c4591a95ff60725977600a96796054855aba9946d",
       "path": "precompiled/bricohams-fusion.bin",
       "targets": [
         "UV-K1",
@@ -950,18 +950,18 @@
         },
         "sourceDateEpoch": 1791342406,
         "toolchain": {
-          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\r\nCopyright (C) 2023 Free Software Foundation, Inc.\r\nThis is free software; see the source for copying conditions.  There is NO\r\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 3.31.8\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
-          "ninja": "1.13.1"
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 3.31.6\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "ninja": "1.13.2"
         },
-        "imageBytes": 107584,
+        "imageBytes": 107580,
         "memory": {
           "ramUsedBytes": 12160,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 4224,
-          "imageBytes": 107584,
+          "imageBytes": 107580,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 13248
+          "slotFreeBytes": 13252
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,

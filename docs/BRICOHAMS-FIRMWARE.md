@@ -410,13 +410,17 @@ La distribucion v0.5.2 del 28-10-2026 sustituye las cinco imagenes Bricohams
 del catalogo web y de los instaladores, conservando las oficiales F4HWN.
 Las imagenes nuevas siguen siendo Beta sin validacion fisica.
 
+La tabla corresponde a CI Linux del 28-10-2026: cada BIN ocupa 4 bytes menos
+que la compilacion local Windows del dia anterior, con igual RAM.
+La comparacion ARDF posterior conserva las mediciones locales Windows.
+
 | Perfil | BIN (bytes) | RAM reservada (bytes) | RAM libre (bytes) | Slot libre (bytes) |
 | --- | ---: | ---: | ---: | ---: |
-| Fusion | 107584 | 12160 | 4224 | 13248 |
-| Labs | 114900 | 12544 | 3840 | 5932 |
-| ARDF | 113972 | 12576 | 3808 | 6860 |
-| Satellite | 114836 | 12384 | 4000 | 5996 |
-| Spectrum | 118232 | 13472 | 2912 | 2600 |
+| Fusion | 107580 | 12160 | 4224 | 13252 |
+| Labs | 114896 | 12544 | 3840 | 5936 |
+| ARDF | 113968 | 12576 | 3808 | 6864 |
+| Satellite | 114832 | 12384 | 4000 | 6000 |
+| Spectrum | 118228 | 13472 | 2912 | 2604 |
 
 El presupuesto es 120832 bytes de imagen y 16384 de RAM. El constructor
 anade `memory` a `build-info.json` y rechaza excesos o secciones obligatorias
@@ -439,10 +443,10 @@ La prueba diferencial compara 200000 actualizaciones con la formula original,
 incluyendo 1-10 balizas, duraciones extremas, correcciones positivas/negativas,
 sincronizacion al final del ciclo y saltos de reloj hasta UINT32_MAX.
 
-Los artefactos estan en `firmware-builds/bricohams-20261027`, separados por
+Los artefactos estan en `firmware-builds/bricohams-20261028`, separados por
 perfil, con BIN, ELF, mapa, informes, licencias y SHA-256. Antes de probarlos
 en hardware, exportar el respaldo completo y comprobar el modelo y los hashes.
-Spectrum conserva solo 2600 bytes de margen de slot: no anadir funciones sin
+Spectrum conserva solo 2604 bytes de margen de slot: no anadir funciones sin
 recompilar y revisar ambos presupuestos.
 
 #### Recompilacion y pruebas de modulos del 26-10-2026

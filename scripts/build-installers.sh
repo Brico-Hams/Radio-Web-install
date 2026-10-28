@@ -46,6 +46,27 @@ stage_app() {
   cp "$root"/precompiled/apps/*.app "$root"/precompiled/apps/*.json "$destination/precompiled/apps/"
   mkdir -p "$destination/node_modules"
   cp -R "$root/node_modules/satellite.js" "$destination/node_modules/satellite.js"
+  node - "$destination" <<'NODE'
+const fs = require("node:fs");
+const path = require("node:path");
+const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
+const destination = path.resolve(process.argv[2]);
+const { ALLOWED_FILES } = require(path.join(destination, "server.cjs"));
+for (const name of ALLOWED_FILES) {
+  const file = name === "satellite.min.js" ? "node_modules/satellite.js/dist/satellite.min.js" : name;
+  assert(fs.statSync(path.join(destination, file)).isFile(), `Missing installer asset: ${name}`);
+}
+for (const catalogPath of ["precompiled/catalog.json", "precompiled/apps/catalog.json"]) {
+  const catalog = JSON.parse(fs.readFileSync(path.join(destination, catalogPath), "utf8"));
+  for (const entry of catalog.entries) {
+    const bytes = fs.readFileSync(path.join(destination, entry.path));
+    assert.equal(bytes.length, entry.size, `Installer size mismatch: ${entry.path}`);
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), entry.sha256,
+      `Installer SHA-256 mismatch: ${entry.path}`);
+  }
+}
+NODE
 }
 
 download_node() {

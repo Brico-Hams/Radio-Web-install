@@ -37,17 +37,17 @@ async function publishApps() {
   console.log(`Catalogo apps publicado: ${entries.length} apps con SHA-256 y FAP1 verificados.`);
 }
 const builds = [
-  ["bricohams-ardf", "ardf", "BH ARDF", "edb1ef30107791643d6cc016025e621acb5f27199f73aa45ccbef5224deb5403"],
-  ["bricohams-satellite", "satellite", "BH Satellite", "cb4aaf604d6a05a0cc1ddf6287453fdf79a914123d4d930bad89dbb1c9f5cf57"],
-  ["bricohams-spectrum", "spectrum", "BH Spectrum", "61480d5203bbed25d19d71bedd97fef31375495389c8ea60988b0490cbe2edf8"],
-  ["bricohams-labs", "labs", "BH Labs", "bd7fbe4bcb0c5e4def304d5ab95d25c9d4362bc791661b90479ecb2c84df4717"],
-  ["bricohams-fusion", "fusion", "BH Fusion", "d75d6fecd5722f6eb49760abafdf4efbbc272608a0be01d702b8d5297adacac5"]
+  ["bricohams-ardf", "ardf", "BH ARDF", "152027eb1e53f25fc5c0b1d6af0c762743ce0a8da3e76825ef7f94beecb5fbf8"],
+  ["bricohams-satellite", "satellite", "BH Satellite", "673e203d229fa11705152f07579d0c1f0538334bc794eef6c88c7241e9c909ab"],
+  ["bricohams-spectrum", "spectrum", "BH Spectrum", "8a17561d01dced397c5f0f711e853e628c33a57d861895723abc90293757d468"],
+  ["bricohams-labs", "labs", "BH Labs", "938a7cd80b489c9c1746b710c7ae4533526674b13e5f97083f6bea850721140a"],
+  ["bricohams-fusion", "fusion", "BH Fusion", "162c3eced8666748887c837c4591a95ff60725977600a96796054855aba9946d"]
 ];
 async function publish({ official = false } = {}) {
   const entries = [];
   const files = [];
   for (const [id, folder, edition, expected] of builds) {
-    const directory = path.join(root, "firmware-builds", "bricohams-20261027", folder, "artifacts");
+    const directory = path.join(root, "firmware-builds", "bricohams-20261028", folder, "artifacts");
     const artifacts = await Promise.all((await fs.readdir(directory)).map(async name =>
       ({ name, bytes: new Uint8Array(await fs.readFile(path.join(directory, name))) })));
     const checked = await R.verifyCustomBuild(artifacts);
@@ -90,7 +90,7 @@ async function publish({ official = false } = {}) {
   await fs.mkdir(output, { recursive: true });
   for (const [name, bytes] of files) await fs.writeFile(path.join(output, name), bytes);
   await fs.copyFile(path.join(root, "LICENSE"), path.join(output, "LICENSE.txt"));
-  const notices = path.join(root, "firmware-builds", "bricohams-20261027", "ardf", "artifacts");
+  const notices = path.join(root, "firmware-builds", "bricohams-20261028", "ardf", "artifacts");
   await fs.copyFile(path.join(notices, "LICENSE"), path.join(output, "APACHE-2.0.txt"));
   await fs.copyFile(path.join(notices, "NOTICE"), path.join(output, "NOTICE.txt"));
   await fs.copyFile(path.join(notices, "MODULE-NOTICE.txt"), path.join(output, "BRICOHAMS-NOTICE.txt"));

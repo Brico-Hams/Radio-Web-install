@@ -418,13 +418,17 @@ remplace les cinq images Bricohams des catalogues web et des installateurs,
 en conservant les images officielles F4HWN. Ces images restent Beta sans
 validation physique.
 
+Le tableau correspond aux artefacts CI Linux du 28-10-2026 : chaque BIN
+occupe 4 octets de moins que la compilation Windows locale de la veille,
+avec la même RAM. La comparaison ARDF ci-dessous conserve les mesures Windows.
+
 | Profil | BIN (octets) | RAM réservée (octets) | RAM libre (octets) | Slot libre (octets) |
 | --- | ---: | ---: | ---: | ---: |
-| Fusion | 107584 | 12160 | 4224 | 13248 |
-| Labs | 114900 | 12544 | 3840 | 5932 |
-| ARDF | 113972 | 12576 | 3808 | 6860 |
-| Satellite | 114836 | 12384 | 4000 | 5996 |
-| Spectrum | 118232 | 13472 | 2912 | 2600 |
+| Fusion | 107580 | 12160 | 4224 | 13252 |
+| Labs | 114896 | 12544 | 3840 | 5936 |
+| ARDF | 113968 | 12576 | 3808 | 6864 |
+| Satellite | 114832 | 12384 | 4000 | 6000 |
+| Spectrum | 118228 | 13472 | 2912 | 2604 |
 
 Les limites sont 120832 octets d'image et 16384 de RAM. Le constructeur
 ajoute `memory` à `build-info.json` et rejette dépassements ou sections
@@ -448,10 +452,10 @@ Le test différentiel compare 200000 mises à jour à la formule initiale :
 1-10 balises, durées extrêmes, corrections positives/négatives,
 synchronisation en fin de cycle et sauts d'horloge jusqu'à UINT32_MAX.
 
-Les artefacts sont dans `firmware-builds/bricohams-20261027`, séparés par
+Les artefacts sont dans `firmware-builds/bricohams-20261028`, séparés par
 profil, avec BIN, ELF, carte, rapports, licences et SHA-256. Avant tout essai
 matériel, exporter une sauvegarde complète et vérifier modèle et empreintes.
-Spectrum ne garde que 2600 octets libres dans le slot : ne pas ajouter de
+Spectrum ne garde que 2604 octets libres dans le slot : ne pas ajouter de
 fonctions sans recompiler et contrôler les deux budgets.
 
 #### Recompilation et tests des modules du 26-10-2026

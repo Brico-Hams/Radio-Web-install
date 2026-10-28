@@ -124,17 +124,18 @@ ctest --test-dir firmware-builds\platform-tests --no-tests=error --output-on-fai
 <h3 id="distribucion-por-imagenes-funcionales">Distribution par images fonctionnelles</h3>
 <h4 id="generacion-y-optimizacion-del-27-10-2026">Génération et optimisation du 27-10-2026</h4>
 <p>Fusion, Labs, ARDF, Satellite et Spectrum ont été générés depuis la base fixée, avec l&#39;identité actuelle et les mêmes options fonctionnelles documentées. La modification locale des réglages Fusion61 est exclue et aucune écriture radio n&#39;est effectuée. La distribution v0.5.2 du 28-10-2026 remplace les cinq images Bricohams des catalogues web et des installateurs, en conservant les images officielles F4HWN. Ces images restent Beta sans validation physique.</p>
+<p>Le tableau correspond aux artefacts CI Linux du 28-10-2026 : chaque BIN occupe 4 octets de moins que la compilation Windows locale de la veille, avec la même RAM. La comparaison ARDF ci-dessous conserve les mesures Windows.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Profil</th><th scope="col">BIN (octets)</th><th scope="col">RAM réservée (octets)</th><th scope="col">RAM libre (octets)</th><th scope="col">Slot libre (octets)</th></tr></thead><tbody>
-<tr><td>Fusion</td><td>107584</td><td>12160</td><td>4224</td><td>13248</td></tr>
-<tr><td>Labs</td><td>114900</td><td>12544</td><td>3840</td><td>5932</td></tr>
-<tr><td>ARDF</td><td>113972</td><td>12576</td><td>3808</td><td>6860</td></tr>
-<tr><td>Satellite</td><td>114836</td><td>12384</td><td>4000</td><td>5996</td></tr>
-<tr><td>Spectrum</td><td>118232</td><td>13472</td><td>2912</td><td>2600</td></tr>
+<tr><td>Fusion</td><td>107580</td><td>12160</td><td>4224</td><td>13252</td></tr>
+<tr><td>Labs</td><td>114896</td><td>12544</td><td>3840</td><td>5936</td></tr>
+<tr><td>ARDF</td><td>113968</td><td>12576</td><td>3808</td><td>6864</td></tr>
+<tr><td>Satellite</td><td>114832</td><td>12384</td><td>4000</td><td>6000</td></tr>
+<tr><td>Spectrum</td><td>118228</td><td>13472</td><td>2912</td><td>2604</td></tr>
 </tbody></table></div>
 <p>Les limites sont 120832 octets d&#39;image et 16384 de RAM. Le constructeur ajoute <code>memory</code> à <code>build-info.json</code> et rejette dépassements ou sections obligatoires absentes. Il compte l&#39;extrémité des régions RAM, y compris trous, workspace, pile et réserves, sans compter deux fois le chevauchement du stub avec son workspace. La RAM libre ne prouve pas l&#39;usage dynamique maximal de la pile sur matériel.</p>
 <p>L&#39;optimisation ARDF conserve état et précision fractionnaire en 64 bits, mais évite le modulo lorsque le cycle n&#39;est pas franchi. Les cycles validés durent au maximum 9999900 ms : le calcul de balise et du temps écoulé passe en 32 bits. Le désassemblage Cortex-M0+ confirme que le chemin habituel passe de trois divisions 64 bits à une 64 bits et une 32 bits ; un saut de cycle conserve le modulo complet. Corrections ppm, synchronisation, alertes et gestion du débordement de l&#39;horloge restent inchangées.</p>
 <p>La référence ARDF avec le reste du code identique occupe 113960 octets ; l&#39;image optimisée 113972 : <strong>12 octets de plus, RAM identique</strong>. Aucune réduction globale de taille ni mesure de latence RF n&#39;est revendiquée. Le test différentiel compare 200000 mises à jour à la formule initiale : 1-10 balises, durées extrêmes, corrections positives/négatives, synchronisation en fin de cycle et sauts d&#39;horloge jusqu&#39;à UINT32_MAX.</p>
-<p>Les artefacts sont dans <code>firmware-builds/bricohams-20261027</code>, séparés par profil, avec BIN, ELF, carte, rapports, licences et SHA-256. Avant tout essai matériel, exporter une sauvegarde complète et vérifier modèle et empreintes. Spectrum ne garde que 2600 octets libres dans le slot : ne pas ajouter de fonctions sans recompiler et contrôler les deux budgets.</p>
+<p>Les artefacts sont dans <code>firmware-builds/bricohams-20261028</code>, séparés par profil, avec BIN, ELF, carte, rapports, licences et SHA-256. Avant tout essai matériel, exporter une sauvegarde complète et vérifier modèle et empreintes. Spectrum ne garde que 2604 octets libres dans le slot : ne pas ajouter de fonctions sans recompiler et contrôler les deux budgets.</p>
 <h4 id="recompilacion-y-pruebas-de-modulos-del-26-10-2026">Recompilation et tests des modules du 26-10-2026</h4>
 <p>Les trois profils ont été recompilés à partir du commit figé, avec le branding Bricohams, Beacon et VOX désactivés. Aucun code du binaire Karina n&#39;a été incorporé et ces compilations n&#39;ont pas été installées lors de cette vérification.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Profil</th><th scope="col">BIN (octets)</th><th scope="col">Flash liée / 120832</th><th scope="col">RAM / 16384</th></tr></thead><tbody>

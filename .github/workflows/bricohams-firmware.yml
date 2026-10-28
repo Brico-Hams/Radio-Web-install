@@ -61,6 +61,25 @@ jobs:
           # ARGS is a fixed matrix value, never user input; word splitting is intended.
           node scripts/build-bricohams.cjs --source upstream --output "$RUNNER_TEMP/out" $ARGS
           cd "$RUNNER_TEMP/out/artifacts" && sha256sum --check --quiet SHA256SUMS && ls -l
+      - name: Verify release firmware matches the web and installer catalog
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const assert = require("node:assert/strict");
+          const { createHash } = require("node:crypto");
+          const catalog = require("./precompiled/catalog.json");
+          const entry = catalog.entries.find(item => item.id === `bricohams-${process.env.VARIANT}`);
+          assert(entry, "Missing published firmware entry");
+          const directory = path.join(process.env.RUNNER_TEMP, "out/artifacts");
+          const info = JSON.parse(fs.readFileSync(path.join(directory, "build-info.json"), "utf8"));
+          const bytes = fs.readFileSync(path.join(directory, info.firmware));
+          assert.equal(createHash("sha256").update(bytes).digest("hex"), entry.sha256,
+            "Release firmware differs from the published catalog");
+          NODE
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bricohams-firmware-${{ matrix.variant }}

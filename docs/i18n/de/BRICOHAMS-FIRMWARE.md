@@ -393,13 +393,17 @@ es erfolgt kein Schreiben auf das Funkgerät. Distribution v0.5.2 vom
 die offiziellen F4HWN-Images bleiben erhalten. Die Images bleiben Beta ohne
 Hardwarevalidierung.
 
+Die Tabelle verwendet Linux-CI-Artefakte vom 28.10.2026: jedes BIN ist
+4 Bytes kleiner als der lokale Windows-Build vom Vortag, bei gleichem RAM.
+Der folgende ARDF-Vergleich behält die lokalen Windows-Messwerte bei.
+
 | Profil | BIN (Bytes) | Reserviertes RAM (Bytes) | Freies RAM (Bytes) | Freier Slot (Bytes) |
 | --- | ---: | ---: | ---: | ---: |
-| Fusion | 107584 | 12160 | 4224 | 13248 |
-| Labs | 114900 | 12544 | 3840 | 5932 |
-| ARDF | 113972 | 12576 | 3808 | 6860 |
-| Satellite | 114836 | 12384 | 4000 | 5996 |
-| Spectrum | 118232 | 13472 | 2912 | 2600 |
+| Fusion | 107580 | 12160 | 4224 | 13252 |
+| Labs | 114896 | 12544 | 3840 | 5936 |
+| ARDF | 113968 | 12576 | 3808 | 6864 |
+| Satellite | 114832 | 12384 | 4000 | 6000 |
+| Spectrum | 118228 | 13472 | 2912 | 2604 |
 
 Die Grenzen betragen 120832 Image-Bytes und 16384 RAM-Bytes. Der Builder
 ergänzt `memory` in `build-info.json` und weist Überschreitungen oder fehlende
@@ -423,10 +427,10 @@ Der Differenztest vergleicht 200000 Aktualisierungen mit der Originalformel:
 1-10 Füchse, extreme Dauern, positive/negative Korrekturen, Synchronisation
 am Zyklusende und Zählersprünge bis UINT32_MAX.
 
-Die Artefakte liegen unter `firmware-builds/bricohams-20261027`, nach Profil
+Die Artefakte liegen unter `firmware-builds/bricohams-20261028`, nach Profil
 getrennt, mit BIN, ELF, Map, Berichten, Lizenzen und SHA-256. Vor Hardwaretests
 eine vollständige Sicherung exportieren und Modell sowie Hashes prüfen.
-Spectrum hat nur 2600 Bytes Slotreserve: keine Funktionen ergänzen, ohne
+Spectrum hat nur 2604 Bytes Slotreserve: keine Funktionen ergänzen, ohne
 neu zu kompilieren und beide Speicherbudgets zu prüfen.
 
 #### Neukompilierung und Modultests vom 26.10.2026
