@@ -6,6 +6,31 @@
 
 Two workspaces with their own WebUSB/Web Serial connectors, local operations, and automatic backup before enabling writes.
 
+## Project layout and distribution testing
+
+- [docs/](docs) holds original documentation; translations live in
+  [docs/i18n/](docs/i18n). The [Android/F-Droid operations guide](docs/i18n/en/FDROID.md)
+  links all four languages.
+- [android/](android) contains the native app and tests;
+  [installers/](installers) contains platform launchers and installation scripts.
+- [fdroid/](fdroid) holds the candidate build recipe;
+  [fastlane/](fastlane) holds localized store listings.
+- [scripts/](scripts) and [.github/workflows/](.github/workflows) contain
+  tooling and automation. Generated packages go to `dist/installers/`, not
+  versioned source; downloads are published in
+  [GitHub Releases](https://github.com/Brico-Hams/Radio-Web-install/releases).
+- Public web paths remain unchanged to preserve links, installers, and
+  connectors. Historical files and backups are not deleted.
+
+To test a release, download the package for your architecture and
+`SHA256SUMS`, verify integrity, and follow [Deployment](docs/i18n/en/DEPLOYMENT.md).
+Targets are Debian/Ubuntu and Raspberry Pi packages, an Arch Linux recipe,
+a FreeBSD installer, and a Windows x64 ZIP; these are not macOS packages
+or store-signed applications. Start without a radio: check language, theme,
+navigation, and map. Then test reads with compatible hardware and a prior
+backup; do not write or transmit just to verify installation. Package
+generation does not certify testing on every physical operating system.
+
 ## Quansheng: prebuilt catalog, viewer, and RF log
 
 - Nine v6.1.0 images served with the website: Bricohams ARDF, Satellite,

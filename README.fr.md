@@ -6,6 +6,31 @@
 
 Deux espaces de travail avec leurs propres connecteurs WebUSB/Web Serial, des opérations locales et une sauvegarde automatique avant toute écriture.
 
+## Organisation et essais de distribution
+
+- [docs/](docs) contient les documents originaux ; les traductions sont dans
+  [docs/i18n/](docs/i18n). Le [guide Android/F-Droid](docs/i18n/fr/FDROID.md)
+  relie les quatre langues.
+- [android/](android) contient l'application native et les tests ;
+  [installers/](installers) contient lanceurs et scripts par système.
+- [fdroid/](fdroid) contient la recette candidate ;
+  [fastlane/](fastlane) contient les fiches de boutique multilingues.
+- [scripts/](scripts) et [.github/workflows/](.github/workflows) regroupent
+  les outils et automatisations. Les paquets générés vont dans
+  `dist/installers/`, pas dans les sources versionnées ; les téléchargements
+  sont publiés dans [GitHub Releases](https://github.com/Brico-Hams/Radio-Web-install/releases).
+- Les chemins Web publics restent inchangés pour préserver liens, installateurs
+  et connecteurs. Aucun historique ni sauvegarde n'est supprimé.
+
+Pour tester, télécharger le paquet de son architecture et `SHA256SUMS`,
+vérifier l'intégrité, puis suivre [Déploiement](docs/i18n/fr/DEPLOYMENT.md).
+Cibles : Debian/Ubuntu et Raspberry Pi, recette Arch Linux, installateur
+FreeBSD et ZIP Windows x64 ; pas de paquet macOS ni d'application signée par
+une boutique. Commencer sans radio : langue, thème, navigation et carte.
+Puis tester la lecture avec du matériel compatible et une sauvegarde préalable ;
+ne pas écrire ni émettre pour vérifier l'installation. Générer les paquets
+ne certifie pas des essais sur chaque système physique.
+
 ## Quansheng : catalogue précompilé, visualiseur et journal RF
 
 - Neuf images v6.1.0 sont distribuées avec l’application : Bricohams ARDF, Satellite, Spectrum, Labs et Fusion, ainsi que les versions officielles F4HWN Fusion, FieldOps, Transfer et Labs. Aucune compilation ni sélection de dossier n’est nécessaire. SHA-256, taille et structure sont vérifiés avant la préparation d’un slot ; l’installation exige toujours une sauvegarde.

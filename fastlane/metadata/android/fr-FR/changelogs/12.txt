@@ -1,0 +1,1 @@
+Bricohams 0.8.3 bêta : interface native moderne, thèmes clair/sombre et quatre langues, carnets locaux, canaux USB, carte et prévisions des satellites, ARDF et audio Morse/Robot36 expérimental. Les fonctions USB et d'émission exigent du matériel compatible et des contrôles de sécurité explicites.

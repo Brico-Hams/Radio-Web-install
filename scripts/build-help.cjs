@@ -511,10 +511,11 @@ function canonical(target, fromFile, fallbackFile) {
   }
   return { path: original, anchor };
 }
-const translatable = relative => relative === "README.md" || SIBLING_DOCUMENTS.includes(relative) ||
+const translatable = relative => relative === "README.md" || relative === "docs/FDROID.md" || SIBLING_DOCUMENTS.includes(relative) ||
   (relative.startsWith("docs/") && Object.hasOwn(pages, relative.slice(5)));
 function translatedPath(relative, lang) {
   if (lang === "es") return relative;
+  if (relative === "docs/FDROID.md" && lang === "it") return relative;
   if (relative === "README.md") return `README.${lang}.md`;
   if (SIBLING_DOCUMENTS.includes(relative)) {
     const sibling = relative.replace(/\.md$/, `.${lang}.md`);

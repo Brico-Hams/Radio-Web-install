@@ -1,0 +1,1 @@
+Bricohams 0.8.3 Beta: moderne native Oberfläche mit hellem/dunklem Design und vier Sprachen, lokale Logbücher, USB-Kanäle, Satellitenkarte und Überflugvorhersagen, ARDF und experimentelles Morse/Robot36-Audio. USB und Senden erfordern kompatible Hardware und ausdrückliche Sicherheitsprüfungen.

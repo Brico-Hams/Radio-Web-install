@@ -112,6 +112,11 @@ object Brand {
         body.setPadding(dp(context, 18), dp(context, 12), dp(context, 18), dp(context, 24))
         for (index in 0 until body.childCount) {
             val view = body.getChildAt(index)
+            if (view is Button) {
+                val touchHeight = dp(context, 48)
+                view.minHeight = maxOf(view.minHeight, touchHeight)
+                view.minimumHeight = maxOf(view.minimumHeight, touchHeight)
+            }
             (view.layoutParams as? ViewGroup.MarginLayoutParams)?.let {
                 it.topMargin = dp(context, 6)
                 it.bottomMargin = dp(context, 6)

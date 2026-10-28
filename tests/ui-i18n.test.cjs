@@ -129,7 +129,7 @@ test("Android 0.8.3 packaging and tag release artifacts match versionCode 12", (
   assert.match(gradle, /versionName = "0\.8\.3-beta"/);
   const workflow = read(".github/workflows/android.yml");
   const script = read("scripts/build-android.ps1");
-  assert.match(workflow, /tags: \["v\*"\]/);
+  assert.match(workflow, /tags: \["v\*", "android-v\*"\]/);
   assert.match(workflow, /java-version: "17"/);
   assert.match(workflow, /needs: build/);
   assert.match(workflow, /gh release upload "\$TAG"/);

@@ -9,9 +9,8 @@
         <item name="android:colorBackground">@color/brand_background</item>
         <item name="android:windowBackground">@color/brand_background</item>
         <item name="android:statusBarColor">@color/brand_background</item>
-        <item name="android:navigationBarColor">@color/brand_background</item>
+        <item name="android:navigationBarColor">#0E1420</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:textColorPrimary">@color/brand_text</item>
         <item name="android:textColorSecondary">@color/brand_muted</item>

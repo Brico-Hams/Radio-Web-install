@@ -1,0 +1,11 @@
+Bricohams est un outil radioamateur indépendant et natif pour Android, sans compte, publicité ni télémétrie. Android 8.0 ou ultérieur est requis. L'interface propose l'espagnol, l'anglais américain, le français et l'allemand, avec des thèmes clair et sombre.
+
+Conservez des carnets locaux pour les activités General, POTA et SOTA ; échangez des fichiers ADIF et des sauvegardes JSON. Enregistrez des observations ARDF, obtenez une position GPS avec autorisation et expérimentez l'audio Morse et la SSTV Robot36.
+
+L'écran des satellites comprend une carte mondiale hors ligne, des trajectoires orbitales, des prévisions de passages et une aide à la réception Doppler. Des téléchargements HTTPS facultatifs actualisent les éléments orbitaux de CelesTrak et les fréquences de SatNOGS. Vous pouvez aussi importer des fichiers TLE. Votre position n'est pas transmise à ces services.
+
+Les radios USB compatibles permettent le CAT expérimental et l'édition de canaux FM F4HWN v6. L'écriture exige une sauvegarde complète et une vérification par relecture. L'émission nécessite du matériel compatible, un armement explicite et l'autorisation radioamateur appropriée.
+
+Il s'agit d'un logiciel bêta, non d'un outil certifié de programmation radio ou de communication d'urgence. La compatibilité USB dépend de la radio, du micrologiciel, de l'adaptateur et de l'appareil Android. Aucune équivalence fonctionnelle avec Look4sat, Robot36 ou HAMRS, ni affiliation avec ces projets ou fabricants, n'est revendiquée.
+
+Contacts, enregistrements et observations restent locaux sauf exportation explicite. Les autorisations de microphone et de localisation sont demandées pour les fonctions concernées. Exportez une sauvegarde avant de désinstaller ou de changer de signature APK : la désinstallation efface les données locales.

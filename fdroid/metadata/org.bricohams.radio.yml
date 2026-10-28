@@ -1,0 +1,46 @@
+Categories:
+  - Connectivity
+  - Science & Education
+License: GPL-3.0-or-later
+WebSite: https://brico-hams.github.io/Radio-Web-install/
+SourceCode: https://github.com/Brico-Hams/Radio-Web-install
+IssueTracker: https://github.com/Brico-Hams/Radio-Web-install/issues
+
+AutoName: Bricohams
+
+RepoType: git
+Repo: https://github.com/Brico-Hams/Radio-Web-install.git
+
+Builds:
+  - versionName: 0.8.3-beta
+    versionCode: 12
+    commit: android-v0.8.3-beta
+    subdir: android
+    gradle:
+      - yes
+    rm:
+      - android/Bricohams-Android
+      - examples/firmware
+      - precompiled
+
+MaintainerNotes: |-
+    Submission candidate, not an accepted F-Droid listing. Publish the Android
+    tag before submission and resolve the initial commit to its full SHA in
+    fdroiddata. JDK 17, SDK 35, AGP 8.7.3 and Gradle 8.9.
+    Historical APKs and unrelated radio firmware are removed only from the
+    F-Droid build checkout; none are used by this Android application.
+    satellite-6.0.1.js is a readable, unminified satellite.js UMD distribution,
+    not downloaded executable code. Its MIT notice and upstream source URL
+    are in android/app/src/main/assets/NOTICE.txt.
+    Rhino (MPL-2.0), usb-serial-for-android (MIT) and Kotlin (Apache-2.0)
+    are the runtime libraries; JUnit/Robolectric/AndroidX Test are test-only.
+    CelesTrak and SatNOGS downloads are data, optional and replaceable through
+    local TLE import; no location is submitted. Review network-service
+    classification and branding redistribution rights during inclusion.
+    Store descriptions are in fastlane/metadata/android at repository root.
+
+AutoUpdateMode: Version
+UpdateCheckMode: Tags ^android-v[0-9]+[.][0-9]+[.][0-9]+(-beta[0-9]*)?$
+UpdateCheckData: 'android/app/build.gradle.kts|versionCode\s*=\s*(\d+)|.|versionName\s*=\s*"([^"]+)"'
+CurrentVersion: 0.8.3-beta
+CurrentVersionCode: 12

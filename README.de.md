@@ -6,6 +6,31 @@
 
 Zwei Bereiche mit jeweils eigenen Anschlüssen WebUSB/Web Serial, lokale Vorgänge und automatische Sicherung, bevor Schreibvorgänge zugelassen werden.
 
+## Projektstruktur und Distributionstests
+
+- [docs/](docs) enthält Originaldokumentation, [docs/i18n/](docs/i18n)
+  die Übersetzungen. Die [Android-/F-Droid-Anleitung](docs/i18n/de/FDROID.md)
+  verknüpft alle vier Sprachen.
+- [android/](android) enthält native App und Tests;
+  [installers/](installers) enthält plattformspezifische Starter und Installation.
+- [fdroid/](fdroid) enthält den Rezeptentwurf;
+  [fastlane/](fastlane) enthält mehrsprachige Store-Texte.
+- [scripts/](scripts) und [.github/workflows/](.github/workflows) bündeln
+  Werkzeuge und Automatisierung. Generierte Pakete liegen in `dist/installers/`,
+  nicht im versionierten Quellcode. Downloads erscheinen unter
+  [GitHub Releases](https://github.com/Brico-Hams/Radio-Web-install/releases).
+- Öffentliche Web-Pfade bleiben für Links, Installer und Konnektoren stabil.
+  Historische Dateien und Sicherungen werden nicht gelöscht.
+
+Zum Testen das Paket der eigenen Architektur und `SHA256SUMS` herunterladen,
+Integrität prüfen und [Bereitstellung](docs/i18n/de/DEPLOYMENT.md) befolgen.
+Ziele: Debian/Ubuntu und Raspberry Pi, Arch-Linux-Rezept, FreeBSD-Installer
+und Windows-x64-ZIP; keine macOS-Pakete oder Store-signierten Anwendungen.
+Ohne Funkgerät beginnen: Sprache, Design, Navigation und Karte prüfen.
+Danach mit kompatibler Hardware und vorheriger Sicherung lesend testen;
+nicht nur zum Installationstest schreiben oder senden. Paketerzeugung
+bestätigt keine Tests auf jedem physischen Betriebssystem.
+
 ## Quansheng: Vorkompilierter Katalog, Viewer und RF-Protokoll
 
 - Neun Images v6.1.0, die über das Web bereitgestellt werden: Bricohams ARDF, Satellite,

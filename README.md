@@ -6,6 +6,31 @@
 
 Dos espacios con conectores propios WebUSB/Web Serial, operaciones locales y respaldo automatico antes de habilitar escrituras.
 
+## Organización y pruebas de distribución
+
+- [docs/](docs): documentación original; traducciones en
+  [docs/i18n/](docs/i18n). La guía operativa de Android/F-Droid está en
+  [FDROID.md](docs/FDROID.md), con enlaces a los cuatro idiomas.
+- [android/](android): aplicación nativa y pruebas; [installers/](installers)
+  contiene los lanzadores e instalación por sistema.
+- [fdroid/](fdroid): receta de compilación candidata;
+  [fastlane/](fastlane): fichas multilingües de tienda.
+- [scripts/](scripts) y [.github/workflows/](.github/workflows): herramientas
+  y automatización. Los paquetes generados van a `dist/installers/`, no al
+  código versionado; las publicaciones se descargan desde
+  [GitHub Releases](https://github.com/Brico-Hams/Radio-Web-install/releases).
+- Los recursos web conservan sus rutas públicas para no romper enlaces,
+  instaladores ni conectores. No se eliminan archivos históricos o respaldos.
+
+Para probar una versión: descarga el paquete de tu arquitectura y su
+`SHA256SUMS`, verifica su integridad y sigue [Despliegue](docs/DEPLOYMENT.md).
+Hay paquetes Debian/Ubuntu y Raspberry Pi, receta Arch Linux, instalador
+FreeBSD y ZIP Windows x64; no son paquetes macOS ni aplicaciones firmadas
+por una tienda. Empieza sin radio: comprueba idioma, tema, navegación y mapa.
+Después prueba lectura con equipo compatible y respaldo previo; no escribas
+ni transmitas como simple comprobación de instalación. La generación de
+paquetes no certifica que se hayan probado en cada sistema físico.
+
 ## Quansheng: catalogo precompilado, visor y registro RF
 
 - Nueve imagenes v6.1.0 servidas con la web: Bricohams ARDF, Satellite,

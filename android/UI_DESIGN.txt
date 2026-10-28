@@ -10,6 +10,10 @@ Controls use at least 48dp touch targets, sp text, wrapping labels, and native
 focus/ripple feedback. LocalizedActivity adds localized back navigation and
 consistent form spacing to USB/CAT, channels, SSTV and live audio without
 replacing their controls or changing USB/audio safety callbacks.
+Shared form styling also enforces the minimum height on native checkboxes.
+Light navigation-bar icons require API 27; versioned theme resources keep
+API 26 on a dark navigation bar and select the appropriate system icons
+from API 27 onward.
 
 Main navigation remains visible below a scrollable workspace. The home cards
 separate radio tools, data/backup actions and the original scope/privacy notes.
@@ -28,3 +32,7 @@ BrandUiTest checks palette contrast, localized secondary-screen chrome, touch
 targets, field labels, home destinations and large-text navigation. Existing
 activity tests cover workflow, permission and safety behavior. Device/TalkBack,
 keyboard and system-bar checks remain necessary before distribution.
+
+Independent Android distribution and the F-Droid submission/update process
+are described in ../docs/FDROID.md (translations in ../docs/i18n/). Keep release APKs unsigned for F-Droid to build
+and sign; do not distribute debug-signed APKs as an official store release.

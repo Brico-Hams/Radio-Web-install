@@ -6,6 +6,30 @@
 
 Due ambienti con connettori proprietari WebUSB/Web Serial, operazioni locali e backup automatico prima di abilitare le scritture.
 
+## Organizzazione e prove di distribuzione
+
+- [docs/](docs) contiene la documentazione originale, [docs/i18n/](docs/i18n)
+  le traduzioni. La [guida Android/F-Droid](docs/FDROID.md) collega le quattro lingue.
+- [android/](android) contiene l'app nativa e i test;
+  [installers/](installers) contiene gli script di installazione per sistema.
+- [fdroid/](fdroid) contiene la ricetta candidata;
+  [fastlane/](fastlane) contiene le schede multilingue del negozio.
+- [scripts/](scripts) e [.github/workflows/](.github/workflows) contengono
+  strumenti e automazione. I pacchetti generati vanno in `dist/installers/`,
+  non nel codice versionato; i download sono pubblicati in
+  [GitHub Releases](https://github.com/Brico-Hams/Radio-Web-install/releases).
+- I percorsi web pubblici restano stabili per collegamenti, installatori e
+  connettori. Nessun file storico o backup viene eliminato.
+
+Per provare una versione, scaricare il pacchetto della propria architettura e
+`SHA256SUMS`, verificarne l'integrità e seguire [Distribuzione](docs/i18n/it/DEPLOYMENT.md).
+Sono disponibili pacchetti Debian/Ubuntu e Raspberry Pi, ricetta Arch Linux,
+installatore FreeBSD e ZIP Windows x64, non pacchetti macOS o app firmate da
+un negozio. Iniziare senza radio: lingua, tema, navigazione e mappa.
+Poi provare la lettura con hardware compatibile e backup precedente; non
+scrivere o trasmettere per verificare l'installazione. La generazione dei
+pacchetti non certifica prove su ogni sistema fisico.
+
 ## Quansheng: catalogo precompilato, visualizzatore e registro RF
 
 - Nove immagini v6.1.0 distribuite con il sito: Bricohams ARDF, Satellite,
