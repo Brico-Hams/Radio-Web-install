@@ -15,7 +15,7 @@ Il remplace l'ancienne icône SVG représentant un « B » avec des ondes, qui n
 Règles d'utilisation :
 
 - Ne pas le déformer, le recadrer, le recolorer ni lui ajouter d'ombres. Conserver son fond original et le rapport 1200:446, avec `height: auto`.
-- Barre latérale : image entière de 178 px de large (limitée à l'espace disponible) ; sur mobile, 144 px avec sous-titre à côté. Ne pas masquer la marque sur les petits écrans.
+- Barre latérale : image entière de 166 px de large (limitée à l'espace disponible) ; sur mobile, 128 px avec sous-titre à côté. Ne pas masquer la marque sur les petits écrans.
 - README : largeur de 240 px avec hauteur proportionnelle. Les favicons et le raccourci de bureau Linux utilisent le même PNG ; aucune variante carrée n'est approuvée.
 - Laisser au moins 10 px entre image et sous-titre sur ordinateur, et 14 px sur mobile. Ces mesures relèvent de la mise en page du projet, pas d'une charte officielle supplémentaire.
 - Ne pas l'associer aux logos OpenGD77, Quansheng, F4HWN ou grid.radio d'une manière suggérant une affiliation.
@@ -29,29 +29,27 @@ le PNG couleur sur le web ou Android. Construction et limites dans le
 
 ## Palette
 
-**Changement demandé le 25-10-2026 :** la couleur de marque indiquée par
-l'utilisateur est **l'orange**. La palette bleu-vert ci-dessous décrit
-l'implémentation web actuelle, pas l'identité visuelle cible. Android
-utilise déjà `#FF9800` comme accent de thème ; cela ne valide ni le
-contraste ni l'utilisabilité de tous les contrôles et appareils.
-La migration définitive du web vers l'orange aura lieu après achèvement
-et test des fonctions, selon l'ordre demandé. La teinte exacte et les
-contrastes devront être validés avant de remplacer les tokens ; ne pas
-recolorer le logo original ni communiquer les états uniquement par la couleur.
+Refonte du 28-10-2026 : orange Bricohams, surfaces neutres et cartes
+clairement structurées. Le site et les installateurs partagent le même design.
+Apparence propose Système, Clair et Sombre ; le choix est enregistré localement,
+sans compte, et suit les changements du système en mode Système. L'aide utilise
+le même choix. Android adapte ses contrôles natifs au système.
+Le logo original reste inchangé. Les états conservent toujours un texte explicite.
 
-Interface inspirée de Bricohams Studio : fond sombre, cartes et accent bleu-vert. La palette suivante est celle de Radio Workspace ; elle ne prétend pas correspondre exactement aux couleurs de Studio et ne recolore pas le logo.
-
-| Token | Couleur | Usage | Contraste (AA) |
+| Token | Clair | Sombre | Usage |
 | --- | --- | --- | --- |
-| `--bg` | `#0b1418` | Fond | — |
-| `--panel` | `#111d22` | Cartes et panneaux | — |
-| `--line` | `#1f3238` | Bordures | décoratif |
-| `--text` | `#e6f1f2` | Texte principal | 16,2:1 sur fond ; 14,9:1 sur panneau |
-| `--muted` | `#8fa7ab` | Texte secondaire | 7,4:1 sur fond ; 6,8:1 sur panneau |
-| `--accent` (`--mint`) | `#2bb3a3` | Accent, focus et états de réussite | 7,2:1 sur fond ; 6,6:1 sur panneau |
-| `--blue` | `#89b9ff` | Liens et accent secondaire | 8,5:1 sur panneau |
+| `--bg` | `#f3f5f9` | `#0e1420` | Fond |
+| `--panel` | `#ffffff` | `#172131` | Cartes et panneaux |
+| `--line` | `#dce2eb` | `#334157` | Bordures décoratives |
+| `--text` | `#19263b` | `#edf2fb` | Texte principal |
+| `--muted` | `#526179` | `#afbdd1` | Texte secondaire |
+| `--mint` | `#a64b00` | `#ffb456` | Texte d'accent |
+| `--blue` | `#205da8` | `#9dc5ff` | Liens et focus |
 
-Texte des boutons principaux : `#042420` sur l'accent (6,3:1).
+Boutons principaux : texte `#241407` sur `--accent: #f7941d`. Les tests vérifient
+un contraste minimal de 4,5:1 pour les textes dans les deux palettes. Contrôles
+principaux de 44 px, focus visible, tableaux à défilement interne, navigation
+mobile horizontale et animations uniquement sans réduction des mouvements.
 
 ## Structure
 

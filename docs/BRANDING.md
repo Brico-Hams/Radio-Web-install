@@ -15,7 +15,7 @@ Sustituye al anterior icono SVG de una «B» con ondas, que no era el logotipo d
 Reglas de uso:
 
 - No deformarlo, recortarlo, recolorearlo ni añadirle sombras. Mantener su fondo original y la proporción 1200:446, con `height: auto`.
-- Barra lateral: imagen completa a 178 px de ancho (limitada al espacio disponible); en móvil, 144 px y subtítulo al lado. No ocultar la marca en pantallas pequeñas.
+- Barra lateral: imagen completa a 166 px de ancho (limitada al espacio disponible); en móvil, 128 px y subtítulo al lado. No ocultar la marca en pantallas pequeñas.
 - README: 240 px de ancho con altura proporcional. Favicons y acceso del escritorio Linux usan el mismo PNG; no hay una variante cuadrada aprobada.
 - Dejar al menos 10 px entre la imagen y el subtítulo en escritorio, y 14 px en móvil. Estas medidas son decisiones de maquetación del proyecto, no una guía oficial adicional de marca.
 - No combinarlo con logotipos de OpenGD77, Quansheng, F4HWN ni grid.radio de forma que sugiera afiliación.
@@ -29,29 +29,27 @@ a color en web o Android. Construcción y límites en la
 
 ## Paleta
 
-**Cambio solicitado el 25-10-2026:** el color corporativo indicado por el
-usuario es el **naranja**. La paleta verde azulada de abajo describe la
-implementación web actual, no la identidad objetivo. Android ya usa
-`#FF9800` como acento en su tema; esto no acredita contraste ni usabilidad
-en todos los controles y dispositivos. La migración final de la web a
-naranja se realizará después de completar y probar las funciones, según
-la secuencia solicitada. El tono exacto y los contrastes
-deberán validarse antes de sustituir los tokens; no recolorear el logotipo
-original ni usar únicamente el color para comunicar estados.
+Rediseño del 28-10-2026: naranja Bricohams, superficies neutras y tarjetas
+con jerarquía clara. La web y los instaladores comparten el mismo diseño.
+El selector Apariencia permite Sistema, Claro y Oscuro; se guarda localmente,
+sin cuenta, y sigue los cambios del sistema cuando está en Sistema. La ayuda
+usa la misma preferencia. Android adapta sus controles nativos al sistema.
+El logotipo original no cambia. Los estados siempre conservan texto explícito.
 
-Interfaz inspirada en Bricohams Studio: fondo oscuro, tarjetas y acento verde azulado. La siguiente paleta es la de Radio Workspace, no una afirmación de coincidencia exacta con los colores de Studio ni una recoloración del logotipo.
-
-| Token | Color | Uso | Contraste (AA) |
+| Token | Claro | Oscuro | Uso |
 | --- | --- | --- | --- |
-| `--bg` | `#0b1418` | Fondo | — |
-| `--panel` | `#111d22` | Tarjetas y paneles | — |
-| `--line` | `#1f3238` | Bordes | decorativo |
-| `--text` | `#e6f1f2` | Texto principal | 16,2:1 sobre fondo; 14,9:1 sobre panel |
-| `--muted` | `#8fa7ab` | Texto secundario | 7,4:1 sobre fondo; 6,8:1 sobre panel |
-| `--accent` (`--mint`) | `#2bb3a3` | Acento, foco y estados correctos | 7,2:1 sobre fondo; 6,6:1 sobre panel |
-| `--blue` | `#89b9ff` | Enlaces y acento secundario | 8,5:1 sobre panel |
+| `--bg` | `#f3f5f9` | `#0e1420` | Fondo |
+| `--panel` | `#ffffff` | `#172131` | Tarjetas y paneles |
+| `--line` | `#dce2eb` | `#334157` | Bordes decorativos |
+| `--text` | `#19263b` | `#edf2fb` | Texto principal |
+| `--muted` | `#526179` | `#afbdd1` | Texto secundario |
+| `--mint` | `#a64b00` | `#ffb456` | Texto de acento |
+| `--blue` | `#205da8` | `#9dc5ff` | Enlaces y foco |
 
-Texto de los botones primarios: `#042420` sobre el acento (6,3:1).
+Botones primarios: texto `#241407` sobre `--accent: #f7941d`. Las pruebas
+comprueban contraste mínimo 4,5:1 para texto en ambas paletas. Controles
+principales de 44 px, foco visible, tablas con desplazamiento interno,
+navegación móvil horizontal y animación solo sin reducción de movimiento.
 
 ## Estructura
 

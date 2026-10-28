@@ -15,7 +15,7 @@ Sie ersetzt das frühere SVG-Symbol eines „B“ mit Wellen, das nicht das Bric
 Verwendungsregeln:
 
 - Nicht verzerren, beschneiden, umfärben oder mit Schatten versehen. Den ursprünglichen Hintergrund und das Seitenverhältnis 1200:446 mit `height: auto` beibehalten.
-- Seitenleiste: vollständiges Bild mit 178 px Breite (auf den verfügbaren Platz begrenzt); mobil 144 px mit Untertitel daneben. Die Marke auf kleinen Bildschirmen nicht ausblenden.
+- Seitenleiste: vollständiges Bild mit 166 px Breite (auf den verfügbaren Platz begrenzt); mobil 128 px mit Untertitel daneben. Die Marke auf kleinen Bildschirmen nicht ausblenden.
 - README: 240 px breit bei proportionaler Höhe. Favicons und die Linux-Desktopverknüpfung verwenden dasselbe PNG; es gibt keine genehmigte quadratische Variante.
 - Zwischen Bild und Untertitel mindestens 10 px auf dem Desktop und 14 px mobil lassen. Diese Maße sind Layoutentscheidungen des Projekts, keine zusätzlichen offiziellen Markenvorgaben.
 - Nicht so mit Logos von OpenGD77, Quansheng, F4HWN oder grid.radio kombinieren, dass eine Zugehörigkeit suggeriert wird.
@@ -30,30 +30,27 @@ oder Android. Erstellung und Grenzen im
 
 ## Farbpalette
 
-**Am 25-10-2026 angeforderte Änderung:** Die vom Benutzer vorgegebene
-Unternehmensfarbe ist **Orange**. Die unten aufgeführte blaugrüne Palette
-beschreibt die aktuelle Webimplementierung, nicht das angestrebte
-Erscheinungsbild. Android verwendet bereits `#FF9800` als Themenakzent;
-das belegt weder Kontrast noch Bedienbarkeit aller Bedienelemente und Geräte.
-Die endgültige Umstellung der Weboberfläche auf Orange erfolgt nach
-Fertigstellung und Test der Funktionen in der gewünschten Reihenfolge.
-Exakter Farbton und Kontraste müssen vor dem Ersetzen der Tokens geprüft
-werden; das Originallogo nicht umfärben und Zustände nicht nur durch Farbe
-vermitteln.
+Neugestaltung vom 28.10.2026: Bricohams-Orange, neutrale Flächen und klar
+gegliederte Karten. Website und Installationspakete verwenden dasselbe Design.
+Darstellung bietet System, Hell und Dunkel; die Auswahl wird lokal ohne Konto
+gespeichert und folgt im Systemmodus den Systemeinstellungen. Die Hilfe nutzt
+dieselbe Auswahl. Android passt seine nativen Bedienelemente an das System an.
+Das Originallogo bleibt unverändert. Zustände behalten immer ausdrücklichen Text.
 
-Von Bricohams Studio inspirierte Oberfläche: dunkler Hintergrund, Karten und blaugrüner Akzent. Die folgende Palette gehört zu Radio Workspace; sie behauptet weder eine exakte Übereinstimmung mit den Studio-Farben noch eine Umfärbung des Logos.
-
-| Token | Farbe | Verwendung | Kontrast (AA) |
+| Token | Hell | Dunkel | Verwendung |
 | --- | --- | --- | --- |
-| `--bg` | `#0b1418` | Hintergrund | — |
-| `--panel` | `#111d22` | Karten und Bereiche | — |
-| `--line` | `#1f3238` | Ränder | dekorativ |
-| `--text` | `#e6f1f2` | Haupttext | 16,2:1 auf Hintergrund; 14,9:1 auf Bereich |
-| `--muted` | `#8fa7ab` | Sekundärtext | 7,4:1 auf Hintergrund; 6,8:1 auf Bereich |
-| `--accent` (`--mint`) | `#2bb3a3` | Akzent, Fokus und Erfolgszustände | 7,2:1 auf Hintergrund; 6,6:1 auf Bereich |
-| `--blue` | `#89b9ff` | Links und sekundärer Akzent | 8,5:1 auf Bereich |
+| `--bg` | `#f3f5f9` | `#0e1420` | Hintergrund |
+| `--panel` | `#ffffff` | `#172131` | Karten und Bereiche |
+| `--line` | `#dce2eb` | `#334157` | Dekorative Ränder |
+| `--text` | `#19263b` | `#edf2fb` | Haupttext |
+| `--muted` | `#526179` | `#afbdd1` | Sekundärtext |
+| `--mint` | `#a64b00` | `#ffb456` | Akzenttext |
+| `--blue` | `#205da8` | `#9dc5ff` | Links und Fokus |
 
-Text primärer Schaltflächen: `#042420` auf der Akzentfarbe (6,3:1).
+Primäre Schaltflächen: Text `#241407` auf `--accent: #f7941d`. Tests prüfen
+mindestens 4,5:1 Textkontrast in beiden Paletten. Hauptbedienelemente mit 44 px,
+sichtbarer Fokus, intern scrollende Tabellen, horizontale mobile Navigation
+und Animationen nur ohne angeforderte Bewegungsreduktion.
 
 ## Aufbau
 

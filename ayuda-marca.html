@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light dark">
   <meta name="description" content="Guía de marca · Bricohams: ayuda de Bricohams por modelo y version.">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Guía de marca · Bricohams | Bricohams Radio Workspace</title>
   <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
   <link rel="stylesheet" href="help-docs.css">
   <link rel="alternate" hreflang="es" href="ayuda-marca.html">
   <link rel="alternate" hreflang="en-US" href="ayuda-marca.en.html">
@@ -37,25 +38,24 @@
 <p>Reglas de uso:</p>
 <ul>
 <li>No deformarlo, recortarlo, recolorearlo ni añadirle sombras. Mantener su fondo original y la proporción 1200:446, con <code>height: auto</code>.</li>
-<li>Barra lateral: imagen completa a 178 px de ancho (limitada al espacio disponible); en móvil, 144 px y subtítulo al lado. No ocultar la marca en pantallas pequeñas.</li>
+<li>Barra lateral: imagen completa a 166 px de ancho (limitada al espacio disponible); en móvil, 128 px y subtítulo al lado. No ocultar la marca en pantallas pequeñas.</li>
 <li>README: 240 px de ancho con altura proporcional. Favicons y acceso del escritorio Linux usan el mismo PNG; no hay una variante cuadrada aprobada.</li>
 <li>Dejar al menos 10 px entre la imagen y el subtítulo en escritorio, y 14 px en móvil. Estas medidas son decisiones de maquetación del proyecto, no una guía oficial adicional de marca.</li>
 <li>No combinarlo con logotipos de OpenGD77, Quansheng, F4HWN ni grid.radio de forma que sugiera afiliación.</li>
 </ul>
 <p>Excepción específica del firmware solicitada el 25-10-2026: el LCD monocromo requiere una adaptación proporcional del original a 128 × 48, sin color, sobre fondo vacío, con la identificación <code>Bricohams BETA</code> debajo. Se genera desde el PNG original, no se dibuja una marca nueva. No sustituye el PNG a color en web o Android. Construcción y límites en la <a href="ayuda-bricohams.html#branding-de-arranque-implementado">guía de firmware</a>.</p>
 <h2 id="paleta">Paleta</h2>
-<p><strong>Cambio solicitado el 25-10-2026:</strong> el color corporativo indicado por el usuario es el <strong>naranja</strong>. La paleta verde azulada de abajo describe la implementación web actual, no la identidad objetivo. Android ya usa <code>#FF9800</code> como acento en su tema; esto no acredita contraste ni usabilidad en todos los controles y dispositivos. La migración final de la web a naranja se realizará después de completar y probar las funciones, según la secuencia solicitada. El tono exacto y los contrastes deberán validarse antes de sustituir los tokens; no recolorear el logotipo original ni usar únicamente el color para comunicar estados.</p>
-<p>Interfaz inspirada en Bricohams Studio: fondo oscuro, tarjetas y acento verde azulado. La siguiente paleta es la de Radio Workspace, no una afirmación de coincidencia exacta con los colores de Studio ni una recoloración del logotipo.</p>
-<div class="table-scroll"><table><thead><tr><th scope="col">Token</th><th scope="col">Color</th><th scope="col">Uso</th><th scope="col">Contraste (AA)</th></tr></thead><tbody>
-<tr><td><code>--bg</code></td><td><code>#0b1418</code></td><td>Fondo</td><td>—</td></tr>
-<tr><td><code>--panel</code></td><td><code>#111d22</code></td><td>Tarjetas y paneles</td><td>—</td></tr>
-<tr><td><code>--line</code></td><td><code>#1f3238</code></td><td>Bordes</td><td>decorativo</td></tr>
-<tr><td><code>--text</code></td><td><code>#e6f1f2</code></td><td>Texto principal</td><td>16,2:1 sobre fondo; 14,9:1 sobre panel</td></tr>
-<tr><td><code>--muted</code></td><td><code>#8fa7ab</code></td><td>Texto secundario</td><td>7,4:1 sobre fondo; 6,8:1 sobre panel</td></tr>
-<tr><td><code>--accent</code> (<code>--mint</code>)</td><td><code>#2bb3a3</code></td><td>Acento, foco y estados correctos</td><td>7,2:1 sobre fondo; 6,6:1 sobre panel</td></tr>
-<tr><td><code>--blue</code></td><td><code>#89b9ff</code></td><td>Enlaces y acento secundario</td><td>8,5:1 sobre panel</td></tr>
+<p>Rediseño del 28-10-2026: naranja Bricohams, superficies neutras y tarjetas con jerarquía clara. La web y los instaladores comparten el mismo diseño. El selector Apariencia permite Sistema, Claro y Oscuro; se guarda localmente, sin cuenta, y sigue los cambios del sistema cuando está en Sistema. La ayuda usa la misma preferencia. Android adapta sus controles nativos al sistema. El logotipo original no cambia. Los estados siempre conservan texto explícito.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Token</th><th scope="col">Claro</th><th scope="col">Oscuro</th><th scope="col">Uso</th></tr></thead><tbody>
+<tr><td><code>--bg</code></td><td><code>#f3f5f9</code></td><td><code>#0e1420</code></td><td>Fondo</td></tr>
+<tr><td><code>--panel</code></td><td><code>#ffffff</code></td><td><code>#172131</code></td><td>Tarjetas y paneles</td></tr>
+<tr><td><code>--line</code></td><td><code>#dce2eb</code></td><td><code>#334157</code></td><td>Bordes decorativos</td></tr>
+<tr><td><code>--text</code></td><td><code>#19263b</code></td><td><code>#edf2fb</code></td><td>Texto principal</td></tr>
+<tr><td><code>--muted</code></td><td><code>#526179</code></td><td><code>#afbdd1</code></td><td>Texto secundario</td></tr>
+<tr><td><code>--mint</code></td><td><code>#a64b00</code></td><td><code>#ffb456</code></td><td>Texto de acento</td></tr>
+<tr><td><code>--blue</code></td><td><code>#205da8</code></td><td><code>#9dc5ff</code></td><td>Enlaces y foco</td></tr>
 </tbody></table></div>
-<p>Texto de los botones primarios: <code>#042420</code> sobre el acento (6,3:1).</p>
+<p>Botones primarios: texto <code>#241407</code> sobre <code>--accent: #f7941d</code>. Las pruebas comprueban contraste mínimo 4,5:1 para texto en ambas paletas. Controles principales de 44 px, foco visible, tablas con desplazamiento interno, navegación móvil horizontal y animación solo sin reducción de movimiento.</p>
 <h2 id="estructura">Estructura</h2>
 <ul>
 <li>Barra superior fija: estado de la conexión (copia de <code>#radio-status</code>), distintivo de modo (<code>#mode-badge</code>) y botón «⌁ Conectar», que acciona el de la sección y se deshabilita con él.</li>

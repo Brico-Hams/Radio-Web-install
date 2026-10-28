@@ -15,7 +15,7 @@
   },
   "scripts": {
     "start": "node server.cjs",
-    "precheck": "node --check anytone-core.js && node --check anytone-ui.js",
+    "precheck": "node --check appearance.js && node --check anytone-core.js && node --check anytone-ui.js",
     "postcheck": "node --check quansheng-live.js && node --check quansheng-tools.js && node --check quansheng-factory.js && node --check precompiled-catalog.js && node --check scripts/publish-firmware.cjs && npm run check:templates",
     "build:pages": "node scripts/build-help.cjs && node scripts/build-pages.cjs",
     "test": "node --test tests/connectors.test.cjs tests/quansheng-live.test.cjs tests/quansheng-factory.test.cjs tests/firmware.test.cjs tests/planning.test.cjs tests/channel-templates.test.cjs tests/site.test.cjs tests/web-mode.test.cjs tests/installers.test.cjs tests/export-project.test.cjs tests/custom-firmware.test.cjs tests/bricohams-build.test.cjs tests/help-docs.test.cjs tests/anytone.test.cjs tests/ui-i18n.test.cjs",

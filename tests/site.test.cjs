@@ -14,6 +14,65 @@ const docs = ["README.md", "AUTHORS.md", "ACKNOWLEDGEMENTS.md", "SUPPORT.md", "S
 const helpSections = ["inicio", "funcionamiento", "opengd77", "quansheng", "codeplug", "firmware",
   "copias", "drivers", "errores", "faq", "soporte", "creditos"];
 
+test("appearance defaults to the system and tolerates invalid or unavailable storage", () => {
+  const { readPreference, resolvedTheme } = require("../appearance.js");
+  assert.equal(readPreference(null), "system");
+  assert.equal(readPreference({ getItem() { throw new Error("blocked"); } }), "system");
+  assert.equal(readPreference({ getItem: () => "legacy" }), "system");
+  for (const value of ["light", "dark", "system"]) {
+    assert.equal(readPreference({ getItem: key => key === "bricohams.appearance" ? value : null }), value);
+  }
+  assert.equal(resolvedTheme("system", true), "dark");
+  assert.equal(resolvedTheme("system", false), "light");
+  assert.equal(resolvedTheme("light", true), "light");
+  assert.equal(resolvedTheme("dark", false), "dark");
+});
+
+test("modern palettes preserve AA text contrast, orange branding and distinct warnings", () => {
+  const css = read("styles.css").split("/* Shared design system")[1];
+  const tokens = selector => Object.fromEntries([...css.match(selector)[1].matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/g)]
+    .map(([, name, value]) => [name, value]));
+  const luminance = hex => {
+    const components = hex.slice(1).match(/../g).map(value => {
+      const channel = parseInt(value, 16) / 255;
+      return channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4;
+    });
+    return components[0] * .2126 + components[1] * .7152 + components[2] * .0722;
+  };
+  const contrast = (foreground, background) => {
+    const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+    return (values[0] + .05) / (values[1] + .05);
+  };
+  const light = tokens(/:root \{([\s\S]*?)\}/);
+  const dark = { ...light, ...tokens(/:root\[data-theme="dark"\] \{([\s\S]*?)\}/) };
+  for (const [mode, palette] of [["light", light], ["dark", dark]]) {
+    for (const text of ["text", "muted", "mint", "blue"]) {
+      for (const surface of ["bg", "panel", "surface-soft"]) {
+        assert(contrast(palette[text], palette[surface]) >= 4.5, `${mode}: ${text} on ${surface}`);
+      }
+    }
+    assert(contrast(palette["warning-text"], palette["warning-bg"]) >= 4.5, `${mode}: warning`);
+    assert(contrast(palette.error, palette.panel) >= 4.5, `${mode}: error`);
+  }
+  assert(contrast("#241407", light.accent) >= 4.5);
+  assert.equal(light.accent, "#f7941d");
+  assert(css.includes("prefers-reduced-motion: no-preference"));
+  assert(css.includes("forced-colors: active"));
+});
+
+test("appearance is delivered on all application and generated help surfaces", () => {
+  for (const file of [...pages, "ayuda.en.html", "ayuda.fr.html", "ayuda.de.html", "scripts/build-help.cjs"]) {
+    assert(read(file).includes('<script src="appearance.js" defer></script>'), file);
+    assert(read(file).includes('name="color-scheme" content="light dark"'), file);
+  }
+  const { ALLOWED_FILES } = require("../server.cjs");
+  assert(ALLOWED_FILES.includes("appearance.js"));
+  for (const file of ALLOWED_FILES.filter(name => /^ayuda-.+\.html$/.test(name))) {
+    assert(read(file).includes('<script src="appearance.js" defer></script>'), file);
+  }
+  assert(read("scripts/build-installers.sh").includes("app.js appearance.js ui-i18n.js"));
+});
+
 test("documentacion auxiliar actual ofrece cuatro idiomas y referencias locales existentes", () => {
   const sources = ["AUTHORS.md", "ACKNOWLEDGEMENTS.md", "SUPPORT.md", "SECURITY.md",
     "hardware/antenas/README.md", "precompiled/sources/README.md", "test-bench/schema.md"];

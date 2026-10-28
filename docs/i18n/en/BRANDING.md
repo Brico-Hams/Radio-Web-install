@@ -15,7 +15,7 @@ It replaces the previous SVG “B” icon with waves, which was not the Bricoham
 Usage rules:
 
 - Do not stretch, crop, recolor, or add shadows. Keep the original background and the 1200:446 aspect ratio, with `height: auto`.
-- Sidebar: full image at 178 px wide (limited to the available space); on mobile, 144 px with the subtitle beside it. Do not hide the brand on small screens.
+- Sidebar: full image at 166 px wide (limited to the available space); on mobile, 128 px with the subtitle beside it. Do not hide the brand on small screens.
 - README: 240 px wide with proportional height. Favicons and the Linux desktop shortcut use the same PNG; there is no approved square variant.
 - Leave at least 10 px between image and subtitle on desktop, and 14 px on mobile. These measurements are project layout decisions, not additional official brand guidelines.
 - Do not combine it with OpenGD77, Quansheng, F4HWN, or grid.radio logos in a way that suggests affiliation.
@@ -29,29 +29,27 @@ color PNG on the web or Android. Build details and limitations are in the
 
 ## Palette
 
-**Change requested on 25-10-2026:** the corporate color specified by the
-user is **orange**. The teal palette below describes the current web
-implementation, not the target identity. Android already uses
-`#FF9800` as its theme accent; this does not establish contrast or usability
-across all controls and devices. The final web migration to orange will
-take place after features are complete and tested, following the requested
-sequence. The exact shade and contrast must be validated before replacing
-the tokens; do not recolor the original logo or rely on color alone to
-communicate states.
+Redesigned on 2026-10-28: Bricohams orange, neutral surfaces, and clearly
+structured cards. The website and installers share the same design.
+Appearance offers System, Light, and Dark; the preference is stored locally,
+without an account, and follows system changes when set to System. Help uses
+the same preference. Android adapts its native controls to the system.
+The original logo is unchanged. States always retain explicit text.
 
-Interface inspired by Bricohams Studio: dark background, cards, and a teal accent. The following palette belongs to Radio Workspace; it is not a claim of an exact match to Studio's colors or a recoloring of the logo.
-
-| Token | Color | Use | Contrast (AA) |
+| Token | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `--bg` | `#0b1418` | Background | — |
-| `--panel` | `#111d22` | Cards and panels | — |
-| `--line` | `#1f3238` | Borders | decorative |
-| `--text` | `#e6f1f2` | Primary text | 16.2:1 on background; 14.9:1 on panel |
-| `--muted` | `#8fa7ab` | Secondary text | 7.4:1 on background; 6.8:1 on panel |
-| `--accent` (`--mint`) | `#2bb3a3` | Accent, focus, and success states | 7.2:1 on background; 6.6:1 on panel |
-| `--blue` | `#89b9ff` | Links and secondary accent | 8.5:1 on panel |
+| `--bg` | `#f3f5f9` | `#0e1420` | Background |
+| `--panel` | `#ffffff` | `#172131` | Cards and panels |
+| `--line` | `#dce2eb` | `#334157` | Decorative borders |
+| `--text` | `#19263b` | `#edf2fb` | Primary text |
+| `--muted` | `#526179` | `#afbdd1` | Secondary text |
+| `--mint` | `#a64b00` | `#ffb456` | Accent text |
+| `--blue` | `#205da8` | `#9dc5ff` | Links and focus |
 
-Primary button text: `#042420` on the accent (6.3:1).
+Primary buttons: `#241407` text on `--accent: #f7941d`. Tests check a
+minimum 4.5:1 text contrast in both palettes. Main controls are 44 px,
+with visible focus, internally scrolling tables, horizontal mobile navigation,
+and animations only when reduced motion is not requested.
 
 ## Structure
 

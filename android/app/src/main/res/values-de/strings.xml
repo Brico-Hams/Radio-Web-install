@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="navigate_back">Zurück</string>
+    <string name="screen_cat">USB / CAT-Funkgerät</string>
+    <string name="screen_channels">Quansheng-Kanäle</string>
+    <string name="screen_sstv">SSTV aus Audiodateien</string>
+    <string name="screen_live">Audioempfang</string>
+    <string name="home_workspace">Deine Funkstation</string>
+    <string name="home_tools">Funk und Empfang</string>
+    <string name="home_data">Deine Daten und Sicherungen</string>
+    <string name="home_about">Umfang und Datenschutz</string>
     <string name="language_label">Bricohams-Sprache</string>
     <string name="language_system">Systemsprache</string>
     <string name="language_save_error">Die Sprache konnte nicht gespeichert werden. Bitte erneut versuchen.</string>

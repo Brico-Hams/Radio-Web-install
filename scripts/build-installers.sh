@@ -25,7 +25,7 @@ app_files=(
   ayuda-egzumer.html ayuda-pack-dim0s.html ayuda-atlas-uv-k5-v3.html
   ayuda-dm32uv.html ayuda-enlaces-comunidad.html ayuda-binarios-terceros.html ayuda-ejemplos.html
   ayuda-iniciacion-satelite.html ayuda-antenas-satelite.html
-  app.js ui-i18n.js ui-translations.js radio-core.js transports.js quansheng-connector.js quansheng-channels.js gd77-connector.js
+  app.js appearance.js ui-i18n.js ui-translations.js radio-core.js transports.js quansheng-connector.js quansheng-channels.js gd77-connector.js
   backup-store.js codeplug-editor.js radio-ui.js firmware-core.js firmware-catalog.js
   planning-core.js radioid-csv.js planning-ui.js runtime-mode.js server.cjs studio-pin.cjs studio.html studio.lock.json
   firmware-service.cjs data-service.cjs f4hwn-options.js custom-firmware-ui.js

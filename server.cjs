@@ -15,7 +15,7 @@ const BASE_FILES = [
   ...["SystemInfo", "BroadcastFM", "Cube3D", "Tetris", "Breakout", "Minesweeper"].map(id => `precompiled/apps/${id}.app`),
   ...["bricohams-ardf", "bricohams-satellite", "bricohams-spectrum", "bricohams-labs", "bricohams-fusion",
     "f4hwn-fusion", "f4hwn-fieldops", "f4hwn-transfer", "f4hwn-labs"].map(id => `precompiled/${id}.bin`),
-  "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "ayuda.en.html", "ayuda.fr.html", "ayuda.de.html", "bricohams-logo.png", "styles.css", "app.js", "radio-core.js", "ui-i18n.js", "ui-translations.js",
+  "index.html", "opengd77.html", "quansheng.html", "ayuda.html", "ayuda.en.html", "ayuda.fr.html", "ayuda.de.html", "bricohams-logo.png", "styles.css", "appearance.js", "app.js", "radio-core.js", "ui-i18n.js", "ui-translations.js",
   "transports.js", "quansheng-connector.js", "quansheng-channels.js", "quansheng-live.js", "quansheng-tools.js", "gd77-connector.js", "backup-store.js",
   "codeplug-editor.js", "radio-ui.js", "firmware-core.js", "firmware-catalog.js", "planning-core.js", "radioid-csv.js", "planning-ui.js", "satellite.min.js", "runtime-mode.js", "f4hwn-options.js", "custom-firmware-ui.js",
   "ayuda-firmwares.html", "ayuda-configuracion.html", "ayuda-quansheng.html",

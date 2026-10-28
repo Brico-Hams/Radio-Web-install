@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="navigate_back">Volver</string>
+    <string name="screen_cat">Radio USB / CAT</string>
+    <string name="screen_channels">Canales Quansheng</string>
+    <string name="screen_sstv">SSTV desde audio</string>
+    <string name="screen_live">Recepción de audio</string>
+    <string name="home_workspace">Tu estación de radio</string>
+    <string name="home_tools">Radio y recepción</string>
+    <string name="home_data">Tus datos y copias</string>
+    <string name="home_about">Alcance y privacidad</string>
     <string name="language_label">Idioma de Bricohams</string>
     <string name="language_system">Idioma del sistema</string>
     <string name="language_save_error">No se pudo guardar el idioma. Vuelve a intentarlo.</string>

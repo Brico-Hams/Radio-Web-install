@@ -41,6 +41,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 
 class SatelliteActivity : LocalizedActivity() {
+    private val colors by lazy { Brand.Palette(this) }
     companion object {
         /** Host tests replace the HTTPS catalogue transport. */
         internal var fetch: (String, Int) -> ByteArray = SatelliteSources::fetch
@@ -98,7 +99,7 @@ class SatelliteActivity : LocalizedActivity() {
         preferences.getString("selected", null)?.split(',')?.mapNotNull { it.toIntOrNull() }?.let { selected.addAll(it) }
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Brand.BACKGROUND)
+            setBackgroundColor(colors.background)
             setOnApplyWindowInsetsListener { view, insets ->
                 if (Build.VERSION.SDK_INT >= 30) {
                     val bars = insets.getInsets(WindowInsets.Type.systemBars())
@@ -120,18 +121,19 @@ class SatelliteActivity : LocalizedActivity() {
             },
             LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 setPadding(Brand.dp(this@SatelliteActivity, 12), 0, 0, 0)
                 addView(Brand.text(this@SatelliteActivity, 20f, bold = true).apply { setText(R.string.satellite_title) })
-                status = Brand.text(this@SatelliteActivity, 13f, Brand.MUTED)
+                status = Brand.text(this@SatelliteActivity, 14f, colors.muted)
                 addView(status)
             }).apply { setPadding(gutter, gutter, gutter, Brand.dp(this@SatelliteActivity, 8)) })
         val banner = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            background = Brand.rounded(this@SatelliteActivity, Brand.SURFACE, 20)
+            background = Brand.rounded(this@SatelliteActivity, colors.surface, 20)
             setPadding(gutter, Brand.dp(this@SatelliteActivity, 10), gutter, Brand.dp(this@SatelliteActivity, 10))
-            countdown = Brand.text(this@SatelliteActivity, 34f, Brand.ORANGE, bold = true).apply { gravity = Gravity.CENTER }
-            countdownName = Brand.text(this@SatelliteActivity, 14f, Brand.MUTED).apply { gravity = Gravity.CENTER }
+            countdown = Brand.text(this@SatelliteActivity, 34f, colors.accent, bold = true).apply { gravity = Gravity.CENTER }
+            countdownName = Brand.text(this@SatelliteActivity, 14f, colors.muted).apply { gravity = Gravity.CENTER }
             addView(countdown); addView(countdownName)
             isClickable = true; isFocusable = true
             setOnClickListener { nextPass()?.let { openPass(it) } }
@@ -289,7 +291,7 @@ class SatelliteActivity : LocalizedActivity() {
             val now = System.currentTimeMillis()
             val upcoming = passes.filter { it.plan.pass.los.time > now }.take(200)
             if (upcoming.isEmpty()) {
-                addView(Brand.text(this@SatelliteActivity, 15f, Brand.MUTED).apply {
+                addView(Brand.text(this@SatelliteActivity, 15f, colors.muted).apply {
                     setText(when {
                         catalog.isEmpty() -> R.string.satellite_no_catalog
                         observer() == null -> R.string.satellite_no_observer
@@ -311,16 +313,16 @@ class SatelliteActivity : LocalizedActivity() {
                     setOnClickListener { openPass(track) }
                 }
                 card.addView(Brand.row(this@SatelliteActivity,
-                    Brand.text(this@SatelliteActivity, 15f, Brand.ORANGE, true).apply { text = String.format(Locale.ROOT, "%d", track.plan.tle.norad) },
+                    Brand.text(this@SatelliteActivity, 15f, colors.accent, true).apply { text = String.format(Locale.ROOT, "%d", track.plan.tle.norad) },
                     Brand.text(this@SatelliteActivity, 15f, bold = true).apply {
                         text = track.plan.tle.name
                         setPadding(Brand.dp(this@SatelliteActivity, 8), 0, 0, 0)
                         layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     },
-                    Brand.text(this@SatelliteActivity, 15f, Brand.ORANGE, true).apply {
+                    Brand.text(this@SatelliteActivity, 15f, colors.accent, true).apply {
                         text = String.format(Locale.ROOT, "%.0f°", pass.maximum.elevation)
                     }))
-                card.addView(Brand.text(this@SatelliteActivity, 14f, Brand.MUTED).apply {
+                card.addView(Brand.text(this@SatelliteActivity, 14f, colors.muted).apply {
                     text = getString(R.string.satellite_card_times, day.format(Instant.ofEpochMilli(pass.aos.time)),
                         clock.format(Instant.ofEpochMilli(pass.aos.time)), clock.format(Instant.ofEpochMilli(pass.los.time)),
                         pass.aos.azimuth, pass.los.azimuth)
@@ -329,10 +331,10 @@ class SatelliteActivity : LocalizedActivity() {
                 val remaining = Brand.text(this@SatelliteActivity, 13f)
                 card.addView(Brand.row(this@SatelliteActivity, remaining.apply {
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                }, Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply { text = modes }))
+                }, Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { text = modes }))
                 val bar = ProgressBar(this@SatelliteActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
                     max = 1000
-                    progressTintList = android.content.res.ColorStateList.valueOf(Brand.ORANGE)
+                    progressTintList = android.content.res.ColorStateList.valueOf(colors.accent)
                 }
                 card.addView(bar)
                 cards.add(Card(track, remaining, bar))
@@ -360,14 +362,14 @@ class SatelliteActivity : LocalizedActivity() {
             radar = view
             addView(view)
             detailStats = Brand.text(this@SatelliteActivity, 15f).also { addView(it) }
-            addView(Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply { text = SatellitePasses.detail(track, 0, this@SatelliteActivity).substringBeforeLast('\n') })
-            addView(Brand.text(this@SatelliteActivity, 16f, Brand.ORANGE, true).apply {
+            addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { text = SatellitePasses.detail(track, 0, this@SatelliteActivity).substringBeforeLast('\n') })
+            addView(Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply {
                 setText(R.string.satellite_downlinks); setPadding(0, Brand.dp(this@SatelliteActivity, 12), 0, 0)
             })
             val manual = EditText(this@SatelliteActivity).apply {
                 id = R.id.satellite_downlink
                 setHint(R.string.satellite_manual_downlink)
-                setTextColor(Brand.TEXT); setHintTextColor(Brand.MUTED)
+                setTextColor(colors.text); setHintTextColor(colors.muted)
                 inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             }
             val group = RadioGroup(this@SatelliteActivity)
@@ -376,15 +378,15 @@ class SatelliteActivity : LocalizedActivity() {
                 group.addView(RadioButton(this@SatelliteActivity).apply {
                     id = View.generateViewId()
                     tag = transmitter.downlinkHz
-                    setTextColor(Brand.TEXT)
-                    buttonTintList = android.content.res.ColorStateList.valueOf(Brand.ORANGE)
+                    setTextColor(colors.text)
+                    buttonTintList = android.content.res.ColorStateList.valueOf(colors.accent)
                     text = String.format(Locale.ROOT, "%.4f MHz  %s  %s", transmitter.downlinkHz / 1e6, transmitter.mode, transmitter.description)
                     minHeight = Brand.dp(this@SatelliteActivity, 48)
                     isChecked = transmitter.downlinkHz == track.plan.downlinkHz || (index == 0 && list.none { it.downlinkHz == track.plan.downlinkHz })
                 })
             }
             if (list.isEmpty()) {
-                addView(Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply { setText(R.string.satellite_no_downlinks) })
+                addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.satellite_no_downlinks) })
                 manual.setText(String.format(Locale.ROOT, "%.5f", track.plan.downlinkHz / 1e6))
             }
             addView(group); addView(manual)
@@ -403,7 +405,7 @@ class SatelliteActivity : LocalizedActivity() {
                 catch (error: ArithmeticException) { report(error) }
                 catch (error: IllegalArgumentException) { report(error) }
             })
-            addView(Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply { setText(R.string.satellite_cat_hint) })
+            addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.satellite_cat_hint) })
         }
         show(Page.DETAIL)
         if (track.track.isEmpty()) {
@@ -430,7 +432,7 @@ class SatelliteActivity : LocalizedActivity() {
             (mapInfo.parent as? LinearLayout)?.removeView(mapInfo)
             addView(map)
             addView(mapInfo.apply { setPadding(0, Brand.dp(this@SatelliteActivity, 10), 0, 0) })
-            addView(Brand.text(this@SatelliteActivity, 12f, Brand.MUTED).apply { setText(R.string.satellite_map_hint) })
+            addView(Brand.text(this@SatelliteActivity, 14f, colors.muted).apply { setText(R.string.satellite_map_hint) })
             if (observer() == null) addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_no_observer)) {
                 show(Page.SETTINGS)
             })
@@ -495,7 +497,7 @@ class SatelliteActivity : LocalizedActivity() {
             val search = EditText(this@SatelliteActivity).apply {
                 id = R.id.satellite_search
                 setHint(R.string.satellite_search)
-                setTextColor(Brand.TEXT); setHintTextColor(Brand.MUTED)
+                setTextColor(colors.text); setHintTextColor(colors.muted)
                 setSingleLine(true)
                 setText(query)
             }
@@ -509,8 +511,8 @@ class SatelliteActivity : LocalizedActivity() {
                         val modes = transmitters[tle.norad]?.map { it.mode }?.distinct()?.joinToString(" · ")
                         this.text = if (modes == null) getString(R.string.satellite_row, tle.norad, tle.name)
                             else getString(R.string.satellite_row_modes, tle.norad, tle.name, modes)
-                        setTextColor(Brand.TEXT)
-                        buttonTintList = android.content.res.ColorStateList.valueOf(Brand.ORANGE)
+                        setTextColor(colors.text)
+                        buttonTintList = android.content.res.ColorStateList.valueOf(colors.accent)
                         minHeight = Brand.dp(this@SatelliteActivity, 48)
                         isChecked = tle.norad in selected
                         setOnCheckedChangeListener { _, checked ->
@@ -531,7 +533,7 @@ class SatelliteActivity : LocalizedActivity() {
                 Brand.chip(this@SatelliteActivity, getString(R.string.satellite_select_none), false) {
                     selected.clear(); saveSelection(); fill()
                 }))
-            if (catalog.isEmpty()) addView(Brand.text(this@SatelliteActivity, 15f, Brand.MUTED).apply { setText(R.string.satellite_no_catalog) })
+            if (catalog.isEmpty()) addView(Brand.text(this@SatelliteActivity, 15f, colors.muted).apply { setText(R.string.satellite_no_catalog) })
             addView(list)
             search.addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(value: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -545,16 +547,16 @@ class SatelliteActivity : LocalizedActivity() {
 
     private fun renderSettings() {
         page(Page.SETTINGS) {
-            fun heading(label: Int) = addView(Brand.text(this@SatelliteActivity, 16f, Brand.ORANGE, true).apply {
+            fun heading(label: Int) = addView(Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply {
                 setText(label); setPadding(0, Brand.dp(this@SatelliteActivity, 14), 0, Brand.dp(this@SatelliteActivity, 4))
             })
             val fields = LinkedHashMap<String, EditText>()
             fun field(key: String, id: Int, label: Int, initial: String) {
-                addView(Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply { setText(label) })
+                addView(Brand.text(this@SatelliteActivity, 14f, colors.muted).apply { setText(label) })
                 val input = EditText(this@SatelliteActivity).apply {
                     this.id = id
                     setText(preferences.getString(key, initial))
-                    setTextColor(Brand.TEXT)
+                    setTextColor(colors.text)
                     setSingleLine(true)
                     inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
                 }
@@ -584,8 +586,8 @@ class SatelliteActivity : LocalizedActivity() {
             heading(R.string.satellite_data)
             addView(CheckBox(this@SatelliteActivity).apply {
                 setText(R.string.satellite_auto_update)
-                setTextColor(Brand.TEXT)
-                buttonTintList = android.content.res.ColorStateList.valueOf(Brand.ORANGE)
+                setTextColor(colors.text)
+                buttonTintList = android.content.res.ColorStateList.valueOf(colors.accent)
                 isChecked = preferences.getBoolean("auto-update", true)
                 setOnCheckedChangeListener { _, checked ->
                     if (!preferences.edit().putBoolean("auto-update", checked).commit()) {
@@ -593,7 +595,7 @@ class SatelliteActivity : LocalizedActivity() {
                     } else if (checked) updateCatalogIfNeeded()
                 }
             })
-            addView(Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply {
+            addView(Brand.text(this@SatelliteActivity, 14f, colors.muted).apply {
                 text = if (catalog.isEmpty()) getString(R.string.satellite_no_catalog) else getString(R.string.satellite_data_state, catalog.size,
                     transmitters.values.sumOf { it.size }, Instant.ofEpochMilli(store.updated).toString())
             })
@@ -601,10 +603,10 @@ class SatelliteActivity : LocalizedActivity() {
             addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_import)) {
                 startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }, 60)
             })
-            addView(Brand.text(this@SatelliteActivity, 12f, Brand.MUTED).apply { setText(R.string.satellite_credits) })
+            addView(Brand.text(this@SatelliteActivity, 14f, colors.muted).apply { setText(R.string.satellite_credits) })
             heading(R.string.satellite_recordings)
             val recordings = File(filesDir, "recordings").listFiles { file -> file.name.endsWith(".wav") }.orEmpty().sortedByDescending { it.lastModified() }
-            if (recordings.isEmpty()) addView(Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply { setText(R.string.satellite_no_recordings) })
+            if (recordings.isEmpty()) addView(Brand.text(this@SatelliteActivity, 14f, colors.muted).apply { setText(R.string.satellite_no_recordings) })
             for (file in recordings) addView(recordingCard(file))
         }
     }
@@ -612,7 +614,7 @@ class SatelliteActivity : LocalizedActivity() {
     private fun recordingCard(file: File): View = Brand.card(this).apply {
         val seconds = (file.length() - 44).coerceAtLeast(0) / 2 / PassRecorder.RATE
         addView(Brand.text(this@SatelliteActivity, 15f, bold = true).apply { text = file.nameWithoutExtension })
-        addView(Brand.text(this@SatelliteActivity, 13f, Brand.MUTED).apply {
+        addView(Brand.text(this@SatelliteActivity, 14f, colors.muted).apply {
             text = getString(R.string.satellite_recording_info, seconds / 60, seconds % 60, file.length() / 1048576.0)
         })
         val images = LinearLayout(this@SatelliteActivity).apply { orientation = LinearLayout.VERTICAL }
@@ -747,7 +749,7 @@ class SatelliteActivity : LocalizedActivity() {
         for (card in cards) {
             val pass = card.track.plan.pass
             card.countdown.text = SatellitePasses.countdown(pass, now, this)
-            card.countdown.setTextColor(if (now >= pass.aos.time) Brand.GREEN else Brand.TEXT)
+            card.countdown.setTextColor(if (now >= pass.aos.time) colors.positive else colors.text)
             card.progress.progress = (((now - pass.aos.time).toDouble() / (pass.los.time - pass.aos.time)).coerceIn(0.0, 1.0) * 1000).toInt()
         }
         val track = opened

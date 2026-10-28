@@ -57,7 +57,7 @@ test("las 18 versiones historicas resuelven herencia sin proyectar opciones nuev
   assert.throws(() => resolvePresets({ configurePresets: [{ name: "x", inherits: "x" }] }), /circular/);
 });
 
-test("las guias generadas tienen enlaces y anclas locales resolubles, sin scripts, en todos los idiomas", () => {
+test("las guias generadas tienen enlaces y anclas resolubles y solo el script local de apariencia", () => {
   for (const lang of LANGS) for (const [source, spanish] of Object.entries(pages)) {
     const file = localized(spanish, lang);
     const markdown = read(lang === "es" ? `docs/${source}` : `docs/i18n/${lang}/${source}`);
@@ -67,7 +67,10 @@ test("las guias generadas tienen enlaces y anclas locales resolubles, sin script
     assert.match(html, new RegExp(`<html lang="${lang === "en" ? "en-US" : lang}">`));
     for (const code of LANGS) assert.ok(html.includes(`hreflang="${code === "en" ? "en-US" : code}" href="${localized(spanish, code)}"`), `${file}: falta alternativo ${code}`);
     assert.match(html, /Bricohams Radio Workspace<\/title>/);
-    assert.doesNotMatch(html, /<script|\son\w+=|javascript:|\sstyle=/i, file);
+    const scripts = [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/gi)].map(match => match[0]);
+    assert.deepEqual(scripts, ['<script src="appearance.js" defer></script>'], file);
+    assert.match(html, /script-src 'self'/, file);
+    assert.doesNotMatch(html.replace(scripts[0], ""), /<script|\son\w+=|javascript:|\sstyle=/i, file);
     assert.ok(ALLOWED_FILES.includes(file), file);
     const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map(match => match[1]);
     assert.equal(new Set(ids).size, ids.length, `ID duplicado: ${file}`);
@@ -310,7 +313,7 @@ test("la auditoria conserva limites fisicos, snapshots distintos y presupuesto R
   }
   assert(read("docs/DEPLOYMENT.md").includes("no por ruta"));
   assert(read("docs/DECISIONS.md").includes("no la URL"));
-  assert(read("docs/BRANDING.md").includes("#FF9800"));
+  assert(read("docs/BRANDING.md").includes("--accent: #f7941d"));
 });
 
 test("la revision de entrega mantiene cada peticion y distingue objetivos de capacidades", () => {

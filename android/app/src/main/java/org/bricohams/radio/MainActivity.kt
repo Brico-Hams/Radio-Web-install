@@ -6,7 +6,6 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteException
-import android.graphics.Color
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -41,6 +40,7 @@ class MainActivity : LocalizedActivity() {
     private lateinit var store: RadioStore
     private lateinit var content: LinearLayout
     private lateinit var status: TextView
+    private val navigation = linkedMapOf<String, Button>()
     private var tab = TAB_HOME
     private var sessionId: String? = null
     private var editingId: String? = null
@@ -112,13 +112,16 @@ class MainActivity : LocalizedActivity() {
                 insets
             }
         }
-        layout.addView(ImageView(this).apply {
+        val header = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        header.addView(ImageView(this).apply {
             setImageResource(org.bricohams.radio.R.drawable.bricohams_logo)
             adjustViewBounds = true
             contentDescription = "Bricohams"
-        }, LinearLayout.LayoutParams(dp(180), dp(67)))
-        layout.addView(TextView(this).apply { setText(R.string.language_label); labelFor = R.id.app_language })
-        layout.addView(Spinner(this).apply {
+        }, LinearLayout.LayoutParams(dp(144), dp(54)))
+        header.addView(Brand.text(this, 13f, Brand.Palette(this).muted).apply {
+            setText(R.string.language_label); labelFor = R.id.app_language
+        })
+        header.addView(Spinner(this).apply {
             id = R.id.app_language
             adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
                 listOf(getString(R.string.language_system), "Español", "English (US)", "Français", "Deutsch"))
@@ -136,55 +139,56 @@ class MainActivity : LocalizedActivity() {
         })
         val nav = LinearLayout(this)
         for ((name, label) in TABS) {
-            nav.addView(Button(this).apply {
-                setText(label)
-                textSize = 11f
-                setOnClickListener {
-                    if (name != tab) {
-                        stopLocation()
-                        fix = null
-                        tab = name
-                        render()
-                    }
+            nav.addView(Brand.button(this, getString(label)) {
+                if (name != tab) {
+                    stopLocation()
+                    fix = null
+                    tab = name
+                    render()
                 }
-            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            }.also { navigation[name] = it }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
+                val gap = dp(3); setMargins(gap, dp(8), gap, 0)
+            })
         }
-        layout.addView(nav)
-        status = TextView(this).apply {
-            setTextColor(Color.rgb(255, 183, 77))
-            setPadding(0, 8, 0, 8)
+        status = Brand.text(this, 14f, Brand.Palette(this).accent).apply {
+            setPadding(0, dp(10), 0, dp(14))
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
-        layout.addView(status)
-        val scroll = ScrollView(this)
+        val scroll = ScrollView(this).apply { isFillViewport = true }
         content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        scroll.addView(content)
+        scroll.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(header)
+            addView(status)
+            addView(content)
+        })
         layout.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        layout.addView(nav)
         setContentView(layout)
         render()
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
-    private fun text(value: String) = TextView(this).apply {
-        text = value; textSize = 16f; setPadding(0, 12, 0, 12)
+    private fun text(value: String) = Brand.text(this).apply {
+        text = value; setPadding(0, dp(8), 0, dp(8))
         content.addView(this)
     }
     private fun text(value: Int) = text(getString(value))
-    private fun button(value: String, action: () -> Unit) = Button(this).apply {
-        text = value; setOnClickListener { userAction(action) }; content.addView(this)
-    }
+    private fun button(value: String, action: () -> Unit) =
+        Brand.button(this, value) { userAction(action) }.also(content::addView)
     private fun button(value: Int, action: () -> Unit) = button(getString(value), action)
     private fun input(label: Int, identifier: Int, initial: String = "", numeric: Boolean = false) =
         input(getString(label), identifier, initial, numeric)
     private fun input(label: String, identifier: Int, initial: String = "", numeric: Boolean = false): EditText {
-        text(label)
+        val caption = text(label)
         return EditText(this).apply {
             id = identifier
             hint = label
             setText(initial)
             if (numeric) inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
             content.addView(this)
+            caption.labelFor = identifier
         }
     }
     private fun message(value: String) { status.text = value }
@@ -205,6 +209,19 @@ class MainActivity : LocalizedActivity() {
     }
     private fun render() {
         content.removeAllViews()
+        val colors = Brand.Palette(this)
+        navigation.forEach { (name, button) ->
+            val active = name == tab
+            button.isSelected = active
+            button.setTextColor(if (active) colors.onAccent else colors.text)
+            button.background = android.graphics.drawable.RippleDrawable(
+                android.content.res.ColorStateList.valueOf(colors.ripple),
+                Brand.rounded(this, if (active) colors.accent else colors.surfaceHigh, 16), null)
+        }
+        content.background = if (tab == TAB_HOME) null else Brand.rounded(this, colors.surface, 20)
+        val padding = if (tab == TAB_HOME) 0 else dp(16)
+        content.setPadding(padding, padding, padding, padding)
+        if (tab != TAB_HOME) content.addView(Brand.heading(this, getString(TABS[tab] ?: R.string.tab_home)))
         message(getString(R.string.main_beta_banner))
         userAction {
             when (tab) {
@@ -216,26 +233,43 @@ class MainActivity : LocalizedActivity() {
         }
     }
     private fun home() {
-        text("Bricohams Android ${packageManager.getPackageInfo(packageName, 0).versionName}")
-        text(R.string.home_offline)
-        text(R.string.home_features)
-        text(R.string.home_ardf_note)
-        text(R.string.home_privacy)
-        button(R.string.home_export_json) { export("json") }
-        button(R.string.home_open_cat) { startActivity(Intent(this, CatActivity::class.java)) }
-        button(R.string.home_open_channels) { startActivity(Intent(this, ChannelActivity::class.java)) }
-        button(R.string.home_open_sstv) { startActivity(Intent(this, SstvActivity::class.java)) }
-        button(R.string.home_open_live) { startActivity(Intent(this, LiveAudioActivity::class.java)) }
-        button(R.string.home_open_satellites) { startActivity(Intent(this, SatelliteActivity::class.java)) }
-        button(R.string.home_import_json) {
-            AlertDialog.Builder(this).setTitle(R.string.import_json_title)
-                .setMessage(R.string.import_json_message)
-                .setNegativeButton(R.string.action_cancel, null)
-                .setPositiveButton(R.string.import_json_choose) { _, _ ->
-                    startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                        addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"
-                    }, 40)
-                }.show()
+        content.addView(Brand.heading(this, getString(R.string.home_workspace)))
+        fun section(title: Int, build: () -> Unit) {
+            val parent = content
+            val card = Brand.card(this)
+            parent.addView(card)
+            content = card
+            try {
+                content.addView(Brand.heading(this, getString(title)))
+                build()
+            } finally { content = parent }
+        }
+        section(R.string.home_tools) {
+            button(R.string.home_open_cat) { startActivity(Intent(this, CatActivity::class.java)) }
+            button(R.string.home_open_channels) { startActivity(Intent(this, ChannelActivity::class.java)) }
+            button(R.string.home_open_sstv) { startActivity(Intent(this, SstvActivity::class.java)) }
+            button(R.string.home_open_live) { startActivity(Intent(this, LiveAudioActivity::class.java)) }
+            button(R.string.home_open_satellites) { startActivity(Intent(this, SatelliteActivity::class.java)) }
+        }
+        section(R.string.home_data) {
+            button(R.string.home_export_json) { export("json") }
+            button(R.string.home_import_json) {
+                AlertDialog.Builder(this).setTitle(R.string.import_json_title)
+                    .setMessage(R.string.import_json_message)
+                    .setNegativeButton(R.string.action_cancel, null)
+                    .setPositiveButton(R.string.import_json_choose) { _, _ ->
+                        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE); type = "application/json"
+                        }, 40)
+                    }.show()
+            }
+        }
+        section(R.string.home_about) {
+            text("Bricohams Android ${packageManager.getPackageInfo(packageName, 0).versionName}")
+            text(R.string.home_offline)
+            text(R.string.home_features)
+            text(R.string.home_ardf_note)
+            text(R.string.home_privacy)
         }
     }
     private fun spinner(identifier: Int, values: List<String>, selected: String) = Spinner(this).apply {

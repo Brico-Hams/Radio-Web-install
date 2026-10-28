@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand_background">#F3F5F9</color>
+    <color name="brand_surface">#FFFFFF</color>
+    <color name="brand_surface_high">#EDF1F7</color>
+    <color name="brand_text">#19263B</color>
+    <color name="brand_muted">#526179</color>
+    <color name="brand_accent">#A64B00</color>
+    <color name="brand_on_accent">#FFFFFF</color>
+    <color name="brand_outline">#DCE2EB</color>
+    <color name="brand_ripple">#26A64B00</color>
+    <color name="brand_positive">#247440</color>
+</resources>

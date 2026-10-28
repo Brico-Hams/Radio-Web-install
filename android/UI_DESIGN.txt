@@ -1,0 +1,30 @@
+Bricohams native Android interface
+
+All six activities share the platform-native AppTheme and Brand components.
+The system light/dark setting selects semantic colours in values/colors.xml
+and values-night/colors.xml; no preference, network request or dependency is
+needed. Keep ordinary text, supporting text and orange action labels at a
+minimum 4.5:1 contrast against their surfaces.
+
+Controls use at least 48dp touch targets, sp text, wrapping labels, and native
+focus/ripple feedback. LocalizedActivity adds localized back navigation and
+consistent form spacing to USB/CAT, channels, SSTV and live audio without
+replacing their controls or changing USB/audio safety callbacks.
+
+Main navigation remains visible below a scrollable workspace. The home cards
+separate radio tools, data/backup actions and the original scope/privacy notes.
+Logbook, ARDF and Morse retain their existing fields and action handlers.
+Satellite cards use the same semantic palette; the world map retains its
+purpose-built dark cartography and its interaction and orbital calculations.
+
+New labels must be supplied in values, values-en-rUS, values-fr and values-de.
+Do not cap font scale or introduce fixed-height text controls.
+
+Validation (JDK 17, Android SDK 35):
+  gradlew.bat -p android :app:compileDebugKotlin :app:testDebugUnitTest :app:lintDebug --no-daemon
+Run from the repository root using android\gradlew.bat, or omit "-p android"
+when running the wrapper inside android. No release/signing task is needed.
+BrandUiTest checks palette contrast, localized secondary-screen chrome, touch
+targets, field labels, home destinations and large-text navigation. Existing
+activity tests cover workflow, permission and safety behavior. Device/TalkBack,
+keyboard and system-bar checks remain necessary before distribution.
