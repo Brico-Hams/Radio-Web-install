@@ -81,7 +81,7 @@ test("all authored static native tool controls have translations or explicit tec
     "App", "RX MHz", "TX MHz", "FM", "DMR", "AM", "Color Code", "Time Slot", "RF MHz", "REMER", "RX / TX MHz",
     "ID", "ISS / 25544", "SO-50 / 27607", "AO-91 / 43017", "PO-101 / 43678", "SatNOGS DB (TLE)",
     "CelesTrak (TLE)", "CC/TS/TG"]);
-  for (const file of ["app.js", "radio-ui.js", "planning-ui.js", "firmware-catalog.js", "custom-firmware-ui.js",
+  for (const file of ["app.js", "radio-ui.js", "planning-ui.js", "channel-template-ui.js", "firmware-catalog.js", "custom-firmware-ui.js",
     "quansheng-tools.js", "quansheng-factory.js", "precompiled-catalog.js", "anytone.html"]) {
     for (const [, raw] of read(file).matchAll(/<(?:h[1-3]|button|label|summary|option|th)\b[^>]*>([^<>]+)</g)) {
       const label = raw.replace(/\s+/g, " ").trim();

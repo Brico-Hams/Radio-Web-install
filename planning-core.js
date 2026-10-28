@@ -340,6 +340,23 @@
       Number.isFinite(observer.height) && observer.height >= -0.5 && observer.height <= 9, "Posicion no valida (altura en km).");
     const { record, epoch } = validateTLE(orbital, start);
     R.assert(start + hours * 3600000 - epoch <= 7 * 86400000, "La ventana supera la validez maxima de siete dias del TLE.");
+    return calculatePassWindow(orbital, observer, { start, hours, minimum, record, epoch, sampleSeconds: 5 });
+  }
+  function predictMonthlyPasses(orbital, observer, now = Date.now()) {
+    const { record, epoch } = validateTLE(orbital, now);
+    R.assert(Number.isFinite(observer.latitude) && Math.abs(observer.latitude) <= 90 &&
+      Number.isFinite(observer.longitude) && Math.abs(observer.longitude) <= 180 &&
+      Number.isFinite(observer.height) && observer.height >= -0.5 && observer.height <= 9, "Posicion no valida (altura en km).");
+    const date = new Date(now);
+    const end = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
+    const prediction = calculatePassWindow(orbital, observer, {
+      start: now, hours: (end - now) / 3600000, minimum: 10, record, epoch, sampleSeconds: 60
+    });
+    return { ...prediction, planningOnly: true, operational: false,
+      validUntil: new Date(epoch + 7 * 86400000).toISOString(),
+      warning: "Monthly forecast only, not an operational pass plan. Reference coordinates are not your position. Beyond seven days from the TLE epoch predictions are tentative. Recalculate with fresh TLE and your position before use." };
+  }
+  function calculatePassWindow(orbital, observer, { start, hours, minimum, record, epoch, sampleSeconds }) {
     const look = lookFor(record, observer);
     function crossing(left, right, rising) {
       while (right - left > 500) {
@@ -352,7 +369,8 @@
     const passes = [];
     let previous = look(start);
     let current = previous.elevation >= minimum ? { aos: previous, maximum: previous, partialStart: true } : null;
-    for (let time = Math.min(start + 5000, end); ; time = Math.min(time + 5000, end)) {
+    const step = sampleSeconds * 1000;
+    for (let time = Math.min(start + step, end); ; time = Math.min(time + step, end)) {
       const point = look(time);
       if (!current && point.elevation >= minimum) current = { aos: crossing(previous.time, time, true), maximum: point, partialStart: false };
       if (current) {
@@ -369,7 +387,7 @@
     if (current) passes.push({ ...current, los: look(end), partialEnd: true });
     return { norad: orbital.norad, name: orbital.name, epoch: new Date(epoch).toISOString(),
       source: orbital.source, calculatedAt: new Date().toISOString(), start: new Date(start).toISOString(),
-      hours, minimumElevation: minimum, observer: { ...observer }, sampleSeconds: 5, passes };
+      hours, minimumElevation: minimum, observer: { ...observer }, sampleSeconds, passes };
   }
   function satelliteChannel(orbital, transmitter) {
     R.assert(transmitter && ["FM", "FMN"].includes(transmitter.mode) &&
@@ -516,6 +534,6 @@
     R.assert(entries.length > 0 && entries.length <= 1024, "Seleccion TG vacia o superior a 1024. Ajusta el prefijo.");
     return { provider: "BrandMeister", entries };
   }
-  Object.assign(R, { norm, asciiName, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, remerVHFChannels, remerHFChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
+  Object.assign(R, { norm, asciiName, validMHz, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, predictMonthlyPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, remerVHFChannels, remerHFChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

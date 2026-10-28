@@ -7,6 +7,42 @@ Esta guia no atribuye automaticamente las funciones v6.1/v6.3 a v4 o v5.
 Como funciona la radio por dentro (pines, memorias, protocolo, bootloader,
 esquemas y fotos): [Atlas tecnico UV-K5 V3](ATLAS-UV-K5-V3.md).
 
+## Canales sencillos y plantillas por pais
+
+En Canales sigue tres pasos: leer el walkie, elegir una plantilla y revisar/guardar.
+El panel derecho permite elegir España, UK, Estados Unidos, Alemania, Francia,
+Hungria o Italia y filtrar por region/estado o localidad. Se muestran 50 resultados
+por pagina; no se selecciona nada automaticamente. Seleccionar resultados exige
+como maximo 1024 canales: para EE. UU. elige primero un estado. Anadir la seleccion
+modifica solo el archivo local y requiere una memoria FM existente como base.
+Guardar descarga el archivo; escribir conserva todas las exigencias de respaldo
+y relectura. Copias, listas de escaneo, CSV y arrastre siguen en opciones avanzadas.
+
+Los datos proceden de [HearHam](https://hearham.com/repeaters), que permite usar
+su API en aplicaciones online/offline, y de limites administrativos Natural Earth
+de dominio publico. No se replica RepeaterBook. El catalogo incluye los registros
+FM operativos disponibles en VHF/UHF, no todos los repetidores de cada pais:
+la cobertura es especialmente reducida en Hungria e Italia. Revisa fecha, zona,
+actividad y permisos. Los tonos y TX nominal son informativos; importar bloquea TX.
+PMR446 es opcional, solo RX, no aparece para EE. UU. y no autoriza transmitir con
+un equipo de radioaficionado. SAT anade solo memorias FM nominales, sin Doppler.
+
+Pases del mes muestra los dias restantes del mes UTC para 75 puntos de referencia:
+ciudades en Europa y un punto aproximado por cada uno de los 50 estados y Washington
+DC. No son pases validos para todo un pais. Cada lista incluye coordenadas, fecha,
+epoca TLE y elevacion minima de 10 grados. El muestreo es de 60 s; las previsiones
+a mas de siete dias del TLE se marcan provisionales. No son planes operativos ni
+se envian a CAT. Puedes descargar el JSON completo o recalcular en segundo plano
+con tus coordenadas; antes de una operacion usa TLE reciente y el calculo preciso
+de 24/48 horas de Satelites. La precision futura no esta garantizada.
+
+La tarea diaria de GitHub Actions se ejecuta a las 04:35 UTC; descarga los datos,
+recalcula los pases, prueba los resultados y publica solo si todo pasa. Un fallo
+es visible en Actions y conserva la ultima version publicada; no se inventan datos.
+Para regenerar localmente: `npm run fetch:channel-templates` seguido de
+`npm run fetch:template-passes`. Los instaladores incluyen los mismos ficheros;
+su copia offline solo cambia al instalar otra version.
+
 ## Visor en directo y registro RF
 
 En **Canales**, las dos tablas se muestran una junto a otra en escritorio y apiladas

@@ -7,6 +7,42 @@ Questa guida non attribuisce automaticamente le funzioni v6.1/v6.3 a v4 o v5.
 Per il funzionamento interno della radio (pin, memorie, protocollo, bootloader,
 schemi e foto): [Atlante tecnico UV-K5 V3](ATLAS-UV-K5-V3.md).
 
+## Canali semplici e modelli per paese
+
+In Canali segui tre passi: leggi la radio, scegli un modello, verifica/salva.
+A destra trovi Spagna, UK, Stati Uniti, Germania, Francia, Ungheria e Italia con
+filtri per regione/stato e località. I risultati sono paginati a gruppi di 50;
+nessuna selezione automatica. Seleziona tutto richiede al massimo 1024 canali:
+per gli USA scegli prima uno stato. L'aggiunta modifica solo il file locale e
+richiede una memoria FM esistente. Salva scarica il file; la scrittura richiede
+ancora backup completo e rilettura. Copie, liste di scansione, CSV e trascinamento
+restano nelle opzioni avanzate.
+
+I dati provengono da [HearHam](https://hearham.com/repeaters), che permette l'API
+nelle app online/offline, e dai confini amministrativi Natural Earth di dominio
+pubblico. RepeaterBook non viene replicato. Il catalogo contiene i record FM VHF/UHF
+operativi disponibili, non tutti i ripetitori di ogni paese: copertura molto limitata
+in Ungheria e Italia. Verifica data, zona, attività e autorizzazioni. Toni e TX nominale
+sono informativi; l'import blocca TX. PMR446 è facoltativo, solo RX, assente per
+gli USA e non autorizza trasmissioni con apparati radioamatoriali.
+SAT aggiunge solo memorie FM nominali, senza Doppler.
+
+I passaggi coprono i giorni restanti del mese UTC per 75 punti di riferimento:
+città europee e un punto approssimativo in ciascuno dei 50 stati USA e Washington
+DC. Non valgono per tutto un paese. Sono inclusi coordinate, data, epoca TLE ed
+elevazione minima di 10 gradi. Campionamento ogni 60 s; oltre sette giorni dal TLE
+i passaggi sono provvisori. Non sono piani operativi e non vengono inviati a CAT.
+Scarica il JSON completo o ricalcola in background con le tue coordinate; prima
+dell'uso utilizza TLE recenti e il calcolo preciso 24/48 ore di Satelliti.
+La precisione futura non è garantita.
+
+Il processo giornaliero GitHub Actions parte alle 04:35 UTC, scarica i dati,
+ricalcola, verifica e pubblica solo se tutti i controlli riescono. Gli errori sono
+visibili in Actions e rimane l'ultima versione pubblicata; nessun dato inventato.
+Per rigenerare localmente: `npm run fetch:channel-templates` seguito da
+`npm run fetch:template-passes`. Gli installer includono gli stessi file;
+la copia offline cambia solo installando un'altra versione.
+
 ## Visualizzatore in diretta e registro RF
 
 In **Canali**, le due tabelle sono affiancate su desktop e impilate su mobile.

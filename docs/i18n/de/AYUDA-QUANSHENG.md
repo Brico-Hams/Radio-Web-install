@@ -7,6 +7,42 @@ Diese Anleitung schreibt Funktionen von v6.1/v6.3 nicht automatisch v4 oder v5 z
 Wie das Funkgerät intern funktioniert (Pins, Speicher, Protokoll, Bootloader,
 Schaltpläne und Fotos): [Technischer Atlas UV-K5 V3](ATLAS-UV-K5-V3.md).
 
+## Einfache Kanäle und Ländervorlagen
+
+Unter Kanäle gibt es drei Schritte: Funkgerät lesen, Vorlage wählen und prüfen/
+speichern. Rechts stehen Spanien, UK, USA, Deutschland, Frankreich, Ungarn und Italien
+mit Regions-/Bundesstaat- und Ortsfiltern bereit. Je Seite werden 50 Ergebnisse
+angezeigt; nichts wird automatisch ausgewählt. Alle auswählen erlaubt höchstens
+1024 Kanäle: in den USA zuerst einen Bundesstaat wählen. Hinzufügen ändert nur die
+lokale Datei und benötigt einen vorhandenen FM-Speicher. Speichern lädt die Datei
+herunter; Schreiben erfordert weiterhin vollständige Sicherung und erneutes Lesen.
+Sicherungen, Scanlisten, CSV und Ziehen bleiben unter den erweiterten Optionen.
+
+Quelle ist [HearHam](https://hearham.com/repeaters), dessen API in Online-/Offline-
+Apps verwendet werden darf, mit gemeinfreien Verwaltungsgrenzen von Natural Earth.
+RepeaterBook wird nicht gespiegelt. Enthalten sind verfügbare aktive VHF/UHF-FM-
+Einträge, nicht alle Repeater jedes Landes: besonders Ungarn und Italien haben
+geringe Abdeckung. Datum, Gebiet, Betrieb und Berechtigungen prüfen. Töne und
+nominelles TX dienen nur zur Information; Import sperrt TX. PMR446 ist optional,
+nur RX, nicht für die USA verfügbar und erlaubt kein Senden mit Amateurfunkgeräten.
+SAT ergänzt nur nominelle FM-Speicher, ohne Doppler.
+
+Monatsüberflüge umfassen die verbleibenden Tage des UTC-Monats für 75 Referenzpunkte:
+europäische Städte und je einen ungefähren Punkt in den 50 US-Bundesstaaten und
+Washington DC. Sie gelten nicht landesweit. Koordinaten, Datum, TLE-Epoche und
+Mindesthöhe von 10 Grad werden angegeben. Abtastung alle 60 s; mehr als sieben Tage
+nach der TLE-Epoche sind Überflüge vorläufig. Keine operativen Pläne und keine
+CAT-Übertragung. Vollständiges JSON herunterladen oder im Hintergrund mit eigenen
+Koordinaten neu berechnen; vor Betrieb aktuelle TLE und die genaue 24/48-Stunden-
+Berechnung unter Satelliten verwenden. Zukünftige Genauigkeit ist nicht garantiert.
+
+Der tägliche GitHub-Actions-Auftrag läuft um 04:35 UTC, lädt Daten, berechnet neu,
+testet und veröffentlicht nur bei Erfolg aller Prüfungen. Fehler sind in Actions
+sichtbar; die letzte Veröffentlichung bleibt bestehen, ohne erfundene Daten.
+Lokal regenerieren mit `npm run fetch:channel-templates` und anschließend
+`npm run fetch:template-passes`. Installer enthalten dieselben Dateien;
+ihre Offline-Kopie ändert sich erst mit Installation einer neuen Version.
+
 ## Live-Viewer und RF-Protokoll
 
 Unter **Kanäle** stehen die beiden Tabellen am Desktop nebeneinander und mobil untereinander.

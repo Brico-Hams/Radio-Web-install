@@ -7,6 +7,43 @@ Ce guide n’attribue pas automatiquement les fonctions v6.1/v6.3 à v4 ou v5.
 Fonctionnement interne de la radio (broches, mémoires, protocole, bootloader,
 schémas et photos) : [Atlas technique UV-K5 V3](ATLAS-UV-K5-V3.md).
 
+## Canaux simples et modèles par pays
+
+Dans Canaux, suivez trois étapes : lire le talkie, choisir un modèle et vérifier/
+enregistrer. Le panneau droit propose Espagne, UK, États-Unis, Allemagne, France,
+Hongrie et Italie, avec filtres région/État et localité. Les résultats sont affichés
+par pages de 50 ; rien n'est sélectionné automatiquement. Tout sélectionner exige
+au plus 1024 canaux : choisissez d'abord un État aux États-Unis. L'ajout change
+uniquement le fichier local et nécessite une mémoire FM existante. Enregistrer
+télécharge le fichier ; l'écriture exige toujours sauvegarde complète et relecture.
+Copies, listes de balayage, CSV et glisser-déposer restent dans les options avancées.
+
+Les données viennent de [HearHam](https://hearham.com/repeaters), qui autorise son API
+dans les applications en ligne/hors ligne, et des limites Natural Earth du domaine
+public. RepeaterBook n'est pas répliqué. Le catalogue contient les relais FM VHF/UHF
+opérationnels disponibles, pas tous les relais de chaque pays : couverture très
+limitée en Hongrie et Italie. Vérifiez date, zone, activité et autorisations. Tonalités
+et TX nominal sont informatifs ; l'import bloque TX. PMR446 est facultatif, RX seul,
+absent pour les États-Unis et n'autorise pas l'émission avec un talkie radioamateur.
+SAT ajoute seulement des mémoires FM nominales, sans Doppler.
+
+Les passages couvrent les jours restants du mois UTC pour 75 points de référence :
+villes européennes et un point approximatif dans chacun des 50 États américains et
+Washington DC. Ils ne sont pas valables pour tout un pays. Coordonnées, date, époque
+TLE et élévation minimale de 10 degrés sont fournies. Échantillonnage de 60 s ;
+au-delà de sept jours depuis le TLE, les passages sont provisoires. Ce ne sont pas
+des plans opérationnels et rien n'est envoyé à CAT. Téléchargez le JSON complet ou
+recalculez en arrière-plan avec vos coordonnées ; avant utilisation, employez un TLE
+récent et le calcul précis 24/48 heures de Satellites. La précision future n'est
+pas garantie.
+
+La tâche quotidienne GitHub Actions s'exécute à 04:35 UTC, télécharge les données,
+recalcule, teste et publie uniquement si tout réussit. Les erreurs sont visibles
+dans Actions ; la dernière version reste publiée, sans données inventées.
+Pour régénérer localement : `npm run fetch:channel-templates` puis
+`npm run fetch:template-passes`. Les installateurs incluent les mêmes fichiers ;
+leur copie hors ligne change seulement lors de l'installation d'une autre version.
+
 ## Visualiseur en direct et journal RF
 
 Dans **Canaux**, les deux tables sont côte à côte sur ordinateur et empilées sur mobile.

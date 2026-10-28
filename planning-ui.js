@@ -140,6 +140,13 @@
       <div class="operation-buttons"><button id="plan-channels-add" type="button" class="button primary">Anadir canales al archivo local abierto</button>${page === "quansheng" ? '<button id="plan-chirp-save" type="button" class="button secondary">Exportar canales FM CSV CHIRP (solo RX)</button>' : ""}<button id="plan-channel-save" type="button" class="button secondary">Guardar proyecto de canales JSON</button></div>
       <button type="button" class="button secondary" disabled>Instalacion directa de estos datos no disponible con las garantias actuales</button>
       </fieldset><p id="plan-status" role="status">Listo. Sin solicitudes externas ni geolocalizacion automatica.</p>`;
+    if (page === "quansheng") {
+      const advanced = document.createElement("details"), summary = document.createElement("summary");
+      advanced.id = "plan-advanced";
+      summary.textContent = "Fuentes y herramientas avanzadas";
+      while (panel.firstChild) advanced.append(panel.firstChild);
+      advanced.prepend(summary); panel.append(advanced);
+    }
     document.getElementById("radio-operations").before(panel);
     const $ = id => document.getElementById(id);
     let busy = false;
@@ -420,6 +427,7 @@
     }
     panel.querySelectorAll("[data-plan-tab]").forEach(button => button.addEventListener("click", () => {
       currentTab = button.dataset.planTab;
+      if ($("plan-advanced") && currentTab === "sat") $("plan-advanced").open = true;
       for (const tab of ["repeaters", "remer", "contacts", "sat"]) $(`plan-${tab}`).hidden = tab !== currentTab;
       $("plan-geographic").hidden = currentTab === "sat" || currentTab === "remer";
       panel.querySelectorAll("[data-plan-tab]").forEach(item => item.setAttribute("aria-pressed", item === button));
@@ -827,6 +835,11 @@
     return {
       setBusy(value) { busy = value; uiBusy = value; $("plan-controls").disabled = value || Boolean(tracker); },
       stagedEntries: () => [...staged.values()],
+      addTemplateChannels(channels) {
+        const template = templates().find(channel => channel.mode === 0);
+        R.assert(template, "Lee o abre primero un archivo con al menos un canal FM.");
+        return importChannels(channels, template.number);
+      },
       refreshTemplates
     };
   }

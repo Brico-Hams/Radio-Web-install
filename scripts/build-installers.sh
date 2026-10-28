@@ -30,6 +30,7 @@ app_files=(
   planning-core.js radioid-csv.js planning-ui.js runtime-mode.js server.cjs studio-pin.cjs studio.html studio.lock.json
   firmware-service.cjs data-service.cjs f4hwn-options.js custom-firmware-ui.js
   precompiled-catalog.js quansheng-factory.js quansheng-live.js quansheng-tools.js
+  channel-templates.js channel-template-ui.js channel-template-worker.js
 )
 
 stage_app() {
@@ -44,6 +45,8 @@ stage_app() {
   mkdir -p "$destination/precompiled/apps"
   cp "$root"/precompiled/*.bin "$root"/precompiled/*.json "$root"/precompiled/*.txt "$destination/precompiled/"
   cp "$root"/precompiled/apps/*.app "$root"/precompiled/apps/*.json "$destination/precompiled/apps/"
+  mkdir -p "$destination/data/channel-templates"
+  cp "$root"/data/channel-templates/*.json "$destination/data/channel-templates/"
   mkdir -p "$destination/node_modules"
   cp -R "$root/node_modules/satellite.js" "$destination/node_modules/satellite.js"
   node - "$destination" <<'NODE'

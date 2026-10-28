@@ -42,6 +42,7 @@
     let planning = null;
     let renderCodeplug = null;
     let renderLoadable = null;
+    let countryTemplates = null;
     let live = null;
     let autoLivePending = false;
     let rfRows = [];
@@ -87,6 +88,7 @@
       document.querySelectorAll("#radio-operations input, #radio-operations select").forEach(input => { input.disabled = busy; });
       $("backup-status").dataset.ready = Boolean(permit);
       planning?.setBusy(busy);
+      countryTemplates?.setBusy(busy || catTracking);
       $("radio-operations").inert = catTracking;
       if ($("qs-live-start")) $("qs-live-start").disabled = busy || catTracking || !connected || Boolean(live);
       if ($("qs-live-stop")) $("qs-live-stop").disabled = busy || !live;
@@ -656,31 +658,35 @@
         await refreshApps();
       });
       operations.insertAdjacentHTML("beforeend", `<hr><h2>Canales Quansheng - Beta</h2>
+        <p class="qs-steps">1. Leer el walkie · 2. Elegir plantilla · 3. Revisar y guardar</p>
+        <details><summary>Compatibilidad y seguridad</summary>
         <p>Configuracion F4HWN v6 de 41344 bytes del banco activo (1024 memorias). Importa PMR, repetidores y memorias SAT FM desde el panel de preparacion usando una plantilla FM. Todo se anade solo RX, sin tonos ni senalizacion DTMF heredados; nombres limitados a 10 caracteres.</p>
         <p class="card-note">La lectura y la edicion local no necesitan permiso de escritura. Escribir exige respaldo Flash completo verificado; en v6.0 queda bloqueado. No cambia de banco, no borra slots y no modifica calibracion. No equivale a seguimiento SAT nativo.</p>
+        </details><h3>1. Leer el walkie</h3>
         <label for="qs-channel-model">Modelo / familia de hardware</label><select id="qs-channel-model"></select>
         <label class="check"><input id="qs-channel-consent" type="checkbox"><span>He comprobado el modelo y el firmware. Autorizo leer la radio y guardar automaticamente copias locales.</span></label>
         <p id="qs-channel-status" role="status">Sin conexion.</p><progress id="qs-channel-progress" max="1" value="0" aria-label="Progreso de la operacion"></progress>
-        <div class="operation-buttons"><button id="qs-connect-channels" class="button primary" type="button" disabled>Conectar y leer canales (solo lectura)</button><button id="qs-read" data-connected class="button secondary" type="button" disabled>Leer canales del banco activo</button><button id="qs-channel-disconnect" class="button secondary" type="button" disabled>Desconectar</button><button id="qs-save" class="button secondary" type="button">Guardar configuracion local</button><button id="qs-write" data-write class="button primary" type="button" disabled>Escribir y releer canales (Beta)</button></div>
-        <p>Selecciona aqui el modelo y autoriza la lectura. Conectar y leer muestra los canales del walkie a la izquierda; Descargar guarda una copia original. Edita, anade canales o arrastra una seleccion antes o despues de otra fila. Prepara las plantillas a la derecha. Solo Escribir modifica la radio y requiere respaldo completo.</p>
-        <h3>Backup / Restore de canales</h3>
+        <div class="operation-buttons"><button id="qs-connect-channels" class="button primary" type="button" disabled>Conectar y leer canales (solo lectura)</button><button id="qs-read" data-connected class="button secondary" type="button" disabled>Leer canales del banco activo</button><button id="qs-channel-disconnect" class="button secondary" type="button" disabled>Desconectar</button></div>
+        <p>Lee el walkie o abre una copia. Anadir y editar cambia solo el archivo local; Escribir requiere respaldo completo.</p>
+        <details class="qs-advanced"><summary>Copias y abrir archivo local</summary><h3>Backup / Restore de canales</h3>
         <p>Backup lee de nuevo el banco activo y guarda una copia original, sin reemplazar tu edicion local. No es una copia Flash completa. Restore prepara las memorias del archivo sobre el banco leido, conserva sus ajustes y exige la misma version. Puede recuperar canales con TX habilitada: revisalos antes de escribir. No cambia slots, apps ni calibracion.</p>
         <div class="operation-buttons"><button id="qs-backup" data-connected class="button secondary" type="button" disabled>Descargar canales del walkie (copia original)</button><button id="qs-restore" class="button secondary" type="button">Restore: abrir copia de canales</button></div>
         <input id="qs-restore-file" type="file" accept=".bin" hidden>
         <p id="qs-backup-result" role="status">Sin backup de canales en esta vista.</p>
         <label for="qs-file">Abrir configuracion logica F4HWN v6 de 41344 bytes (no firmware, Flash completa ni calibracion)</label><input id="qs-file" type="file" accept=".bin">
-        <form id="qs-channel-form" hidden><h3>Editar canal Quansheng</h3>
+        </details><form id="qs-channel-form" hidden><h3>Editar canal Quansheng</h3>
         <label for="qs-channel-name">Nombre ASCII (maximo 10 caracteres)</label><input id="qs-channel-name" maxlength="10" required pattern="[ -~]{1,10}">
         <label for="qs-channel-rx">RX MHz</label><input id="qs-channel-rx" inputmode="decimal" required>
         <label for="qs-channel-tx">TX nominal MHz (editar activa el bloqueo TX)</label><input id="qs-channel-tx" inputmode="decimal" required>
         <label for="qs-channel-scan">Lista de escaneo (0 ninguna, 1-24, 25 todas)</label><input id="qs-channel-scan" type="number" min="0" max="25" required>
         <div class="operation-buttons"><button class="button primary" type="submit">Aplicar al archivo local</button><button id="qs-channel-cancel" class="button secondary" type="button">Cancelar</button></div></form>
         <p id="qs-count" role="status">Lee o abre una configuracion para ver los canales.</p>
+        <details class="qs-advanced"><summary>Seleccion y listas de escaneo</summary>
         <label class="check"><input id="qs-select-all" type="checkbox"> Seleccionar todos los canales del archivo</label>
         <label for="qs-scan-list">Asignar seleccion a lista (0 ninguna, 1-24, 25 todas)</label><input id="qs-scan-list" type="number" min="0" max="25" value="1">
         <button id="qs-scan-apply" class="button secondary" type="button">Aplicar lista al archivo local</button>
         <p>Las listas son numeros nativos del firmware, no zonas DMR. Cada memoria pertenece a una lista; 25 participa en todas. Los nombres de zona/geografia se muestran en el informe de importacion, no se escriben como nombres de lista.</p>
-        <form id="qs-add-form" hidden><h3>Anadir canal</h3>
+        </details><form id="qs-add-form" hidden><h3>Anadir canal</h3>
         <label for="qs-add-number">Numero de memoria (1-1024; vacio = al final)</label><input id="qs-add-number" type="number" min="1" max="1024">
         <label for="qs-add-name">Nombre ASCII (maximo 10 caracteres)</label><input id="qs-add-name" maxlength="10" required pattern="[ -~]{1,10}">
         <label for="qs-add-rx">RX MHz</label><input id="qs-add-rx" inputmode="decimal" required>
@@ -690,20 +696,24 @@
         <div class="operation-buttons"><button class="button primary" type="submit">Anadir al archivo local</button><button id="qs-add-cancel" class="button secondary" type="button">Cancelar</button></div></form>
         <dialog id="qs-place-dialog" class="qs-dialog"><form method="dialog"><p id="qs-place-text"></p>
         <div class="operation-buttons"><button class="button primary" value="before">Antes</button><button class="button primary" value="after">Despues</button><button class="button secondary" value="cancel">Cancelar</button></div></form></dialog>
-        <p class="card-note">Arrastra un canal del walkie para cambiar su posicion. Arrastra canales entre las dos tablas, o seleccionalos y usa Copiar y Pegar (Ctrl+C / Ctrl+V con la tabla enfocada): en el walkie se insertan delante de la fila elegida o, sin seleccion, al final. Nada se escribe en la radio hasta pulsar Escribir y releer canales.</p>
+        <details class="qs-advanced"><summary>Ayuda para ordenar y copiar</summary><p class="card-note">Arrastra un canal del walkie para cambiar su posicion. Arrastra canales entre las dos tablas, o seleccionalos y usa Copiar y Pegar (Ctrl+C / Ctrl+V con la tabla enfocada): en el walkie se insertan delante de la fila elegida o, sin seleccion, al final. Nada se escribe en la radio hasta pulsar Escribir y releer canales.</p></details>
         <div class="qs-tables">
           <section class="qs-table-box" aria-labelledby="qs-radio-title"><h3 id="qs-radio-title">Canales del walkie</h3>
             <div class="operation-buttons"><button id="qs-add-open" class="button secondary" type="button">Anadir canal</button><button id="qs-radio-copy" class="button secondary" type="button">Copiar seleccion</button><button id="qs-radio-paste" class="button secondary" type="button">Pegar aqui</button></div>
             <div id="qs-radio-zone" class="table-scroll qs-drop" tabindex="0" aria-label="Canales del walkie: arrastra o pega aqui"><table><thead><tr><th>Mover</th><th>Elegir</th><th>Canal</th><th>Nombre</th><th>RX MHz</th><th>TX nominal MHz</th><th>Modo</th><th>TX bloqueada</th><th>Escaneo</th><th>Archivo local</th></tr></thead><tbody id="qs-channels"></tbody></table></div></section>
           <section class="qs-table-box" aria-labelledby="qs-loadable-title"><h3 id="qs-loadable-title">Canales para cargar</h3>
+            <div id="qs-country-templates"></div>
+            <details class="qs-advanced"><summary>Importacion avanzada y arrastrar</summary>
             <label for="qs-template-source">Plantillas de canales</label><select id="qs-template-source"><option value="pmr">PMR446 analogicos 1-16 (solo RX)</option><option value="remer">REMER VHF (solo RX)</option><option value="bricohams">Repetidores Bricohams Murcia (solo RX)</option></select>
             <button id="qs-template-prepare" class="button secondary" type="button">Preparar plantilla para arrastrar</button>
             <label class="check"><input id="qs-loadable-select-all" type="checkbox"> Seleccionar todos los canales para cargar</label>
             <p class="card-note">Los preparados en Canales y Satelites (repetidores, REMER, PMR446, SAT y Doppler, aeropuertos, FM, CSV) y los que copies del walkie.</p>
             <div class="operation-buttons"><button id="qs-loadable-copy" class="button secondary" type="button">Copiar seleccion</button><button id="qs-loadable-paste" class="button secondary" type="button">Pegar aqui</button><button id="qs-loadable-load" class="button secondary" type="button">Cargar seleccion al final del walkie</button></div>
             <div id="qs-loadable-zone" class="table-scroll qs-drop" tabindex="0" aria-label="Canales para cargar: arrastra o pega aqui"><table><thead><tr><th>Mover</th><th>Elegir</th><th>Nombre</th><th>RX MHz</th><th>TX MHz</th><th>Origen</th><th></th></tr></thead><tbody id="qs-loadable"></tbody></table></div>
-            <p id="qs-loadable-count" role="status"></p></section>
-        </div>`);
+            <p id="qs-loadable-count" role="status"></p></details></section>
+        </div><h3>3. Revisar y guardar</h3>
+        <p>Guardar descarga el archivo editado. Solo Escribir y releer modifica la radio.</p>
+        <div class="operation-buttons"><button id="qs-save" class="button secondary" type="button">Guardar configuracion local</button><button id="qs-write" data-write class="button primary" type="button" disabled>Escribir y releer canales (Beta)</button></div>`);
       $("qs-channel-model").replaceChildren(...[...model.options].map(option => option.cloneNode(true)));
       $("qs-channel-model").addEventListener("change", () => {
         model.value = $("qs-channel-model").value;
@@ -770,6 +780,8 @@
             $("qs-channel-name").focus();
           });
           cell.append(edit);
+          const menu = document.createElement("details"), summary = document.createElement("summary");
+          summary.textContent = "Mas acciones"; menu.append(summary); cell.append(menu);
           const remove = document.createElement("button");
           remove.type = "button";
           remove.className = "guide-tab";
@@ -781,7 +793,7 @@
             $("qs-channel-form").hidden = true;
             renderQuansheng();
           }));
-          cell.append(remove);
+          menu.append(remove);
           const copy = document.createElement("button");
           copy.type = "button";
           copy.className = "guide-tab";
@@ -792,7 +804,7 @@
             renderQuansheng();
             log(`Canal ${channel.number} copiado en la memoria ${copied.number} del archivo local. La radio no se modifica.`);
           }));
-          cell.append(copy);
+          menu.append(copy);
           const move = document.createElement("button");
           move.type = "button";
           move.className = "guide-tab";
@@ -805,7 +817,7 @@
             renderQuansheng();
             log(`Canal ${channel.number} movido a la memoria ${target} del archivo local. La radio no se modifica.`);
           }));
-          cell.append(move);
+          menu.append(move);
           row.append(cell);
           $("qs-channels").append(row);
         }
@@ -1288,6 +1300,17 @@
       readSatellites() {
         R.assert(page === "opengd77" && image, "Abre o lee primero un codeplug estandar OpenGD77 de 128 KiB.");
         return R.readSatellites(image);
+      }
+    });
+    const countryContainer = page === "quansheng" ? $("qs-country-templates") : document.createElement("section");
+    if (page !== "quansheng") {
+      countryContainer.className = "panel";
+      $("planning-panel").before(countryContainer);
+    }
+    countryTemplates = R.mountCountryTemplates({
+      container: countryContainer, action, download,
+      addChannels(channels) {
+        return planning.addTemplateChannels(channels);
       }
     });
     const useImage = (data, edition) => {

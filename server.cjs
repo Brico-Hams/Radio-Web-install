@@ -4,6 +4,10 @@ const path = require("node:path");
 const { FirmwareService, TARGETS } = require("./firmware-service.cjs");
 const { DataService } = require("./data-service.cjs");
 const BASE_FILES = [
+  "channel-templates.js", "channel-template-ui.js", "channel-template-worker.js",
+  "data/channel-templates/satellites.json",
+  ...["ES", "GB", "US", "DE", "FR", "HU", "IT"].flatMap(code =>
+    [`data/channel-templates/${code}.json`, `data/channel-templates/${code}-passes.json`]),
   "anytone.html", "anytone-core.js", "anytone-ui.js",
   "precompiled-catalog.js", "quansheng-factory.js", "precompiled/catalog.json", "precompiled/LICENSE.txt",
   "precompiled/APACHE-2.0.txt", "precompiled/NOTICE.txt", "precompiled/BRICOHAMS-NOTICE.txt",

@@ -11,6 +11,7 @@ node_modules/
 *.rwb.json
 *.provenance.json
 *-passes.json
+!data/channel-templates/*-passes.json
 *.tle
 sat-*.source.json
 radioid-contact-selection.json

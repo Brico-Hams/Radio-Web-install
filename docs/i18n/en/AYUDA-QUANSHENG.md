@@ -7,6 +7,42 @@ This guide does not automatically attribute v6.1/v6.3 features to v4 or v5.
 For how the radio works internally (pins, memories, protocol, bootloader,
 schematics, and photos), see [UV-K5 V3 technical atlas](ATLAS-UV-K5-V3.md).
 
+## Simple channels and country templates
+
+In Channels follow three steps: read the radio, choose a template, then review/save.
+The right panel offers Spain, UK, United States, Germany, France, Hungary and Italy,
+with region/state and location filters. Results are paginated in groups of 50;
+nothing is selected automatically. Selecting all requires at most 1024 channels:
+choose a state first for the USA. Adding changes only the local file and needs an
+existing FM memory as its base. Save downloads the file; writing still requires
+the complete backup and reread protections. Backups, scan lists, CSV and dragging
+remain available in advanced options.
+
+Data comes from [HearHam](https://hearham.com/repeaters), which permits its API in
+online/offline apps, and public-domain Natural Earth administrative boundaries.
+RepeaterBook is not mirrored. The catalog contains available operational VHF/UHF FM
+records, not every repeater in each country: coverage is particularly limited in
+Hungary and Italy. Check the date, area, activity and permissions. Tones and nominal
+TX are informational; importing blocks TX. PMR446 is optional, RX only, unavailable
+for the USA and does not authorize amateur-radio equipment to transmit.
+SAT adds nominal FM memories only, without Doppler.
+
+Monthly passes cover the remaining days of the UTC month for 75 reference points:
+European cities and an approximate point in each of the 50 US states plus Washington
+DC. They are not valid throughout a country. Lists include coordinates, generation
+date, TLE epoch and a minimum elevation of 10 degrees. Sampling is 60 s; passes more
+than seven days after the TLE epoch are tentative. These are not operational plans
+and are never sent to CAT. Download the complete JSON or recalculate in a background
+worker for your coordinates; before operating, use fresh TLE and the precise 24/48
+hour calculation in Satellites. Future accuracy is not guaranteed.
+
+The daily GitHub Actions job runs at 04:35 UTC, downloads the data, recalculates
+passes, tests the results and publishes only when all checks pass. Failures are
+visible in Actions and retain the last published version; no data is fabricated.
+To regenerate locally run `npm run fetch:channel-templates` followed by
+`npm run fetch:template-passes`. Installers include the same files;
+their offline copy changes only when another version is installed.
+
 ## Live viewer and RF log
 
 In **Channels**, the two tables appear side by side on desktop and stacked on mobile.
