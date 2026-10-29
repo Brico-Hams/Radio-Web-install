@@ -1,0 +1,230 @@
+diff --git a/firmware/include/ble_protocol.h b/firmware/include/ble_protocol.h
+index 20e62c7..01b0c06 100644
+--- a/firmware/include/ble_protocol.h
++++ b/firmware/include/ble_protocol.h
+@@ -4,8 +4,8 @@
+ #include <cstring>
+ namespace ControlBLE {
+ constexpr uint32_t protocolVersion = 1;
+-constexpr uint32_t apiVersion = 1;
+-constexpr const char *firmwareVersion = "0.2.0-prototype";
++constexpr uint32_t apiVersion = 2; // 2: POST /api/time and mechanical profile in status
++constexpr const char *firmwareVersion = "0.3.0-prototype";
+ constexpr size_t maxRequest = 2048;
+ constexpr size_t frameBytes = 20, headerBytes = 4, payloadBytes = 16;
+ constexpr uint8_t magic = 0x53, startFlag = 1, endFlag = 2;
+diff --git a/firmware/include/control_logic.h b/firmware/include/control_logic.h
+index 4c0ada7..3f7a81f 100644
+--- a/firmware/include/control_logic.h
++++ b/firmware/include/control_logic.h
+@@ -5,16 +5,40 @@
+ #include <cstring>
+ #include <initializer_list>
+ 
++// Build-time mechanical profile. Defaults are the reference NEMA14 build;
++// other profiles (e.g. env:esp32_nema17) override them with -D flags.
++#ifndef ROTOR_MICROSTEPS
++#define ROTOR_MICROSTEPS 16
++#endif
++#ifndef ROTOR_TRANSMISSION_RATIO
++#define ROTOR_TRANSMISSION_RATIO 25
++#endif
++#ifndef ROTOR_MAX_RATE_STEPS
++#define ROTOR_MAX_RATE_STEPS 500.0
++#endif
++#ifndef ROTOR_ACCELERATION_STEPS
++#define ROTOR_ACCELERATION_STEPS 300.0
++#endif
++
+ namespace Control {
+ constexpr int fullStepsPerRevolution = 200;
+-constexpr int microsteps = 16;
+-constexpr int transmissionRatio = 25; // two purchased 20:100 belt stages, 5 x 5
++constexpr int microsteps = ROTOR_MICROSTEPS;
++constexpr int transmissionRatio = ROTOR_TRANSMISSION_RATIO; // reference: two 20:100 belt stages, 5 x 5
+ constexpr int stepsPerRevolution =
+   fullStepsPerRevolution * microsteps * transmissionRatio;
+-static_assert(stepsPerRevolution == 80000, "Recalibrate motion if gearing changes");
++static_assert(microsteps >= 1 && microsteps <= 256 &&
++              (microsteps & (microsteps - 1)) == 0, "Microsteps must be a power of two");
++static_assert(transmissionRatio >= 1 && transmissionRatio <= 100, "Unsupported transmission ratio");
++static_assert(stepsPerRevolution >= 3600, "Need at least 0.1 deg per microstep");
++// Homing offsets are exact fractions of a revolution; keep them integral.
++static_assert(stepsPerRevolution % 800 == 0, "Revolution must be divisible by 800 microsteps");
+ constexpr double stepsPerDegree = stepsPerRevolution / 360.0;
+-constexpr double maxRate = 500.0;  // microsteps/s; 2.25 deg/s
+-constexpr double acceleration = 300.0; // microsteps/s^2
++constexpr double maxRate = ROTOR_MAX_RATE_STEPS;  // microsteps/s; reference 500 = 2.25 deg/s
++constexpr double acceleration = ROTOR_ACCELERATION_STEPS; // microsteps/s^2
++// Motor task runs near 1 kHz and emits at most one step per tick.
++static_assert(maxRate > 0 && maxRate <= 700.0, "maxRate must stay below the 1 kHz step tick");
++static_assert(acceleration > 0 && acceleration <= 2000.0, "Unsupported acceleration");
++constexpr double maxDegreesPerSecond = maxRate / stepsPerDegree;
+ constexpr uint32_t maxTleAge = 14 * 86400;
+ inline bool validCredentials(const char *ssid, const char *password, const char *token) {
+   size_t s = std::strlen(ssid), p = std::strlen(password), t = std::strlen(token);
+diff --git a/firmware/platformio.ini b/firmware/platformio.ini
+index 2acf1b5..50bb3c0 100644
+--- a/firmware/platformio.ini
++++ b/firmware/platformio.ini
+@@ -26,3 +26,14 @@ platform = native@1.2.1
+ test_filter = test_native
+ build_flags = -std=c++11
+ test_build_src = no
++
++; Low-cost profile: reuse owned NEMA17 (17HS8401 on EL, 17HS3401 on AZ) with
++; TMC2209 at 1/8 microstep (StealthChop interpolates to 256). Same 25:1 belts.
++; 40000 usteps/rev, 6.0 deg/s maximum for high-elevation LEO passes.
++[env:esp32_nema17]
++extends = env:esp32
++build_flags =
++  ${env:esp32.build_flags}
++  -D ROTOR_MICROSTEPS=8
++  -D ROTOR_MAX_RATE_STEPS=660.0
++  -D ROTOR_ACCELERATION_STEPS=450.0
+diff --git a/firmware/src/main.cpp b/firmware/src/main.cpp
+index d4a9de4..884fd35 100644
+--- a/firmware/src/main.cpp
++++ b/firmware/src/main.cpp
+@@ -32,6 +32,14 @@ enum Mode { DISARMED, HOMING, READY, MOVING, TRACKING, FAULT };
+ const char *modeNames[] = {"DISARMED","HOMING","READY","MOVING","TRACKING","FAULT"};
+ Mode mode = DISARMED;
+ Control::Axis az, el;
++// Homing travel as exact fractions of one output revolution (reference 80000).
++constexpr int32_t halfRevolution = Control::stepsPerRevolution / 2;             // 180 deg
++constexpr int32_t homeAzSearch = Control::stepsPerRevolution / 16 * 17;        // 382.5 deg
++constexpr int32_t homeElSearch = Control::stepsPerRevolution / 16 * 5;         // 112.5 deg
++constexpr int32_t homeBackOff = Control::stepsPerRevolution / 800 * 7;         // 3.15 deg
++constexpr int32_t homeApproach = Control::stepsPerRevolution / 160 * 3;        // 6.75 deg
++static_assert(halfRevolution != 40000 || (homeAzSearch == 85000 && homeElSearch == 25000 &&
++              homeBackOff == 700 && homeApproach == 1500), "Reference homing changed");
+ bool hardware = false, homed = false, calibrated = false, level = false;
+ bool encoderZero = false, fsOK = false;
+ String apSsid, apPassword, apiToken, staSsid, staPassword;
+@@ -97,8 +105,17 @@ void halt(bool hard, const String &reason = "") {
+     mode = FAULT; fault = reason;
+   } else mode = homed ? READY : DISARMED;
+ }
++// GNSS keeps priority. A trusted app (token + secure link) may provide UTC when
++// no GNSS is fitted; the ESP32 clock is good enough for 10 min between syncs.
++enum TimeSource { NO_TIME, GNSS_TIME, CLIENT_TIME };
++const char *timeSourceNames[] = {"none","gnss","app"};
++TimeSource timeSource = NO_TIME;
++constexpr uint32_t gnssTimeWindow = 3000, clientTimeWindow = 600000;
+ int64_t nowUTC() { return unixTime + uint32_t(millis() - timeStamp) / 1000; }
+-bool validUTC() { return unixTime > 0 && uint32_t(millis() - timeStamp) < 3000; }
++bool validUTC() {
++  return unixTime > 0 && uint32_t(millis() - timeStamp) <
++    (timeSource == CLIENT_TIME ? clientTimeWindow : gnssTimeWindow);
++}
+ bool validSite() {
+   return siteValid && (manualSite || uint32_t(millis() - fixStamp) < 5000);
+ }
+@@ -107,7 +124,7 @@ String trackingBlocker() {
+   if (mode == FAULT) return fault;
+   if (!homed) return "Requiere homing";
+   if (!calibrated || !level) return "Requiere norte verdadero y nivelacion";
+-  if (!validUTC()) return "UTC GNSS invalida/caducada";
++  if (!validUTC()) return "UTC invalida/caducada (GNSS o app)";
+   if (!validSite()) return "Ubicacion GNSS invalida/caducada";
+   if (selected < 0 || selected >= int(satellites.size())) return "Seleccione satelite";
+   if (!Control::fresh(nowUTC(), satellites[selected].epoch)) return "TLE caducado/futuro";
+@@ -156,15 +173,15 @@ void motorTask(void *) {
+             if (contact != switchStable) { switchStable = contact; switchSince = millis(); }
+             if (uint32_t(millis() - switchSince) > 30) {
+               if (homePhase == 0 && contact) {
+-                axis.stop(); homePhase = 1; axis.target = axis.position + 700;
++                axis.stop(); homePhase = 1; axis.target = axis.position + homeBackOff;
+               } else if (homePhase == 1 && !contact && std::fabs(axis.target - axis.position) < 1) {
+-                homePhase = 2; axis.target = axis.position - 1500;
++                homePhase = 2; axis.target = axis.position - homeApproach;
+               } else if (homePhase == 2 && contact) {
+                 axis.stop();
+-                axis.position = homeAxis == 0 ? -40000 : 0; axis.stop();
++                axis.position = homeAxis == 0 ? -halfRevolution : 0; axis.stop();
+                 if (homeAxis == 0) {
+                   homeAxis = 1; homePhase = 0; homeStarted = millis();
+-                  el.target = el.position - 25000;
++                  el.target = el.position - homeElSearch;
+                   changedAxis = true;
+                 } else {
+                   homed = true; mode = READY; enable(false);
+@@ -207,7 +224,7 @@ void motorTask(void *) {
+         bool ok = readEncoder(azBus, a) && readEncoder(elBus, e);
+         if (ok) ok = std::fabs(Control::difference(
+           Board::azEncoderDirection * (a - encoderAz),
+-          (az.position + 40000) / Control::stepsPerDegree)) < 3 &&
++          (az.position + halfRevolution) / Control::stepsPerDegree)) < 3 &&
+           std::fabs(Control::difference(Board::elEncoderDirection * (e - encoderEl),
+           el.position / Control::stepsPerDegree)) < 3;
+         badFeedback = ok ? 0 : badFeedback + 1;
+@@ -417,7 +434,28 @@ void routes() {
+     d["doppler435Hz"] = -rangeRate / 299792.458 * 435000000;
+     d["trackingBlocker"] = trackingBlocker(); d["download"] = downloadStatus;
+     d["staConnected"] = WiFi.status() == WL_CONNECTED; d["encoders"] = Board::encoders;
+-    d["selected"] = selected; d["pttCat"] = false; json(d);
++    d["selected"] = selected; d["pttCat"] = false;
++    d["timeSource"] = validUTC() ? timeSourceNames[timeSource] : "none";
++    d["microsteps"] = Control::microsteps;
++    d["transmissionRatio"] = Control::transmissionRatio;
++    d["stepsPerDegree"] = Control::stepsPerDegree;
++    d["maxDegPerSecond"] = Control::maxDegreesPerSecond; json(d);
++  });
++  route("/api/time", HTTP_POST, [] {
++    if (!auth()) return;
++    DynamicJsonDocument d(256); if (!body(d)) return; Guard guard;
++    double ms;
++    if (!number(d["utcMs"], ms) || ms < 1704067200000.0 || ms >= 4102444800000.0) {
++      reply(400, "utcMs epoch Unix en milisegundos requerido"); return;
++    }
++    if (timeSource == GNSS_TIME && validUTC()) { reply(409, "UTC GNSS activa; tiene prioridad"); return; }
++    int64_t t = int64_t(ms / 1000);
++    uint32_t fraction = uint32_t(int64_t(ms) - t * 1000);
++    if (validUTC() && busy() && std::llabs(t - nowUTC()) > 2) {
++      reply(409, "Salto UTC >2 s con motores activos; detenga primero"); return;
++    }
++    unixTime = t; timeStamp = millis() - fraction; timeSource = CLIENT_TIME;
++    reply(200, "UTC de la app aceptada durante 10 min");
+   });
+   route("/api/stop", HTTP_POST, [] {
+     if (!auth()) return; Guard guard;
+@@ -438,7 +476,7 @@ void routes() {
+     }
+     homed = calibrated = encoderZero = false; az.stop(); el.stop();
+     homeAxis = homePhase = 0; homeStarted = switchSince = millis();
+-    switchStable = limit(Board::azMin); az.target = az.position - 85000;
++    switchStable = limit(Board::azMin); az.target = az.position - homeAzSearch;
+     mode = HOMING; enable(true); reply(202, "Homing AZ y EL iniciado");
+   });
+   route("/api/move", HTTP_POST, [] {
+@@ -464,7 +502,7 @@ void routes() {
+     latitude=a; longitude=b; altitude=c; manualSite=d["manual"]; siteValid=manualSite;
+     prefs.putDouble("lat",a); prefs.putDouble("lon",b); prefs.putDouble("alt",c);
+     prefs.putBool("manual",manualSite); prefs.putBool("site",true);
+-    orbitLoaded=false; predicting=predictionCached=false; passes.clear(); reply(200,"Sitio guardado; UTC siempre GNSS");
++    orbitLoaded=false; predicting=predictionCached=false; passes.clear(); reply(200,"Sitio guardado; UTC por GNSS o /api/time");
+   });
+   route("/api/calibrate", HTTP_POST, [] {
+     if (!auth()) return;
+@@ -869,7 +907,7 @@ void loop() {
+         gps.time.hour(),gps.time.minute(),gps.time.second());
+       if(t) {
+         if(validUTC() && std::llabs(t-nowUTC())>2 && busy()) halt(true,"Salto UTC GNSS");
+-        unixTime=t; timeStamp=millis();
++        unixTime=t; timeStamp=millis(); timeSource=GNSS_TIME;
+       }
+     }
+     if(!manualSite && gps.location.isValid() && gps.location.age()<2000 &&
+diff --git a/tests/control_logic/test_native/test_main.cpp b/tests/control_logic/test_native/test_main.cpp
+index 19f22ed..cfdae7e 100644
+--- a/tests/control_logic/test_native/test_main.cpp
++++ b/tests/control_logic/test_native/test_main.cpp
+@@ -6,6 +6,8 @@ void setUp() {}
+ void tearDown() {}
+ void ranges() {
+   TEST_ASSERT_EQUAL_INT(80000,stepsPerRevolution);
++  TEST_ASSERT_FLOAT_WITHIN(.000001,2.25,maxDegreesPerSecond);
++  TEST_ASSERT_EQUAL_INT(0,stepsPerRevolution%800); // integral homing fractions
+   TEST_ASSERT_TRUE(inRange(-180,0)); TEST_ASSERT_TRUE(inRange(180,90));
+   TEST_ASSERT_FALSE(inRange(180.01,45)); TEST_ASSERT_FALSE(inRange(0,-.01));
+   TEST_ASSERT_FALSE(inRange(NAN,0));

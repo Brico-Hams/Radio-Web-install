@@ -106,6 +106,12 @@ class SatelliteActivityTest {
             assertEquals(tle.line1, plan.tle.line1)
             assertEquals(radar.track.first().time, plan.pass.aos.time)
             assertEquals(radar.track.last().time, plan.pass.los.time)
+            click(activity, "Rotor AZ/EL: preparar y seguir este pase")
+            val rotor = shadowOf(activity).nextStartedActivity
+            assertEquals(RotorActivity::class.java.name, rotor.component?.className)
+            val rotorPlan = SatellitePlanJson.decode(requireNotNull(rotor.getStringExtra(RotorActivity.EXTRA_PLAN)))
+            assertEquals(tle.line1, rotorPlan.tle.line1)
+            assertEquals(plan.pass.aos.time, rotorPlan.pass.aos.time)
             activity.findViewById<EditText>(R.id.satellite_downlink).setText("200")
             click(activity, "Conectar CAT: Doppler, SSTV y grabacion")
             assertNull(shadowOf(activity).nextStartedActivity)

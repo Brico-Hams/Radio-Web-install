@@ -406,6 +406,13 @@ class SatelliteActivity : LocalizedActivity() {
                 catch (error: IllegalArgumentException) { report(error) }
             })
             addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.satellite_cat_hint) })
+            addView(Brand.button(this@SatelliteActivity, getString(R.string.rotor_open), false) {
+                val current = track.plan.downlinkHz
+                val downlink = if (current % 10 == 0L && CatProtocol.inBand(current / 10)) current else DEFAULT_DOWNLINK
+                startActivity(Intent(this@SatelliteActivity, RotorActivity::class.java)
+                    .putExtra(RotorActivity.EXTRA_PLAN, SatellitePlanJson.encode(track.plan.copy(downlinkHz = downlink))))
+            })
+            addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.rotor_hint) })
         }
         show(Page.DETAIL)
         if (track.track.isEmpty()) {

@@ -455,6 +455,18 @@ descarta duplicados a menos de 10 s y guarda las imagenes PNG junto al WAV.
 **Exportar** copia el WAV donde elijas y **Borrar** elimina el WAV y sus PNG
 tras confirmar. No hay otros modos SSTV ni medida de calidad de la senal.
 
+### Rotor AZ/EL Bricohams
+
+En el detalle de un pase, **Rotor AZ/EL: preparar y seguir este pase** abre el
+control del rotor de [antenaSatCommrotor](https://github.com/Brico-Hams/antenaSatCommrotor)
+por su Wi-Fi (`192.168.4.1`, unico destino HTTP sin TLS permitido) o por BLE
+cifrado con PIN. El movil le envia hora UTC, ubicacion, TLE y calibracion de
+norte/nivel con su brujula; la app avisa de cruces del tope de cable, pases
+demasiado rapidos o cenitales, lleva la antena al AOS y arma el seguimiento
+automatico mientras CAT corrige el Doppler. Guia completa en [ROTOR.md](ROTOR.md);
+parche de firmware y version de bajo coste en
+[hardware/rotor](../hardware/rotor/README.md). Sin prueba con rotor fisico.
+
 ## Morse WAV experimental
 
 El selector admite audio, pero el parser exige RIFF/WAVE PCM lineal mono

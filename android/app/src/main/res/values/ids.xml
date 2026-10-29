@@ -30,4 +30,6 @@
     <item name="satellite_downlink" type="id" />
     <item name="satellite_minimum" type="id" />
     <item name="satellite_search" type="id" />
+    <item name="rotor_token" type="id" />
+    <item name="rotor_true_azimuth" type="id" />
 </resources>
