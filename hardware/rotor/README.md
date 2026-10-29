@@ -2,19 +2,18 @@
 
 Este directorio une el rotor de
 [Brico-Hams/antenaSatCommrotor](https://github.com/Brico-Hams/antenaSatCommrotor)
-con la app Android (ver [docs/ROTOR.md](../../docs/ROTOR.md)). El parche vive aquí
-porque el firmware del rotor está en otro repositorio.
+con la app Android (ver [docs/ROTOR.md](../../docs/ROTOR.md)). El parche ya está
+integrado en `main` de antenaSatCommrotor (commit
+[`b0b62b7`](https://github.com/Brico-Hams/antenaSatCommrotor/commit/b0b62b7),
+firmware `0.3.0-prototype`); aquí se conserva como referencia del cambio.
 
 ## Parche `0001-bricohams-android-integration.patch`
 
-Se aplica sobre la rama `main` de antenaSatCommrotor:
+Ya no hace falta aplicarlo: basta con compilar `main` de antenaSatCommrotor:
 
 ```sh
 git clone https://github.com/Brico-Hams/antenaSatCommrotor
-cd antenaSatCommrotor
-git apply --check /ruta/a/RadioConfgWeb/hardware/rotor/firmware-patch/0001-bricohams-android-integration.patch
-git apply /ruta/a/RadioConfgWeb/hardware/rotor/firmware-patch/0001-bricohams-android-integration.patch
-cd firmware
+cd antenaSatCommrotor/firmware
 pio run -e esp32          # montaje de referencia, sin cambios de movimiento
 pio run -e esp32_nema17   # NEMA17 + TMC2209 a 1/8 de micropaso (más rápido)
 pio test -e native        # si el repositorio tiene el entorno de pruebas nativo
@@ -38,10 +37,12 @@ Qué cambia:
    `maxDegPerSecond`; la app los usa para avisar de pases demasiado rápidos.
 4. `apiVersion` 2, firmware `0.3.0-prototype`; prueba nativa ampliada.
 
-Validación hecha: el parche aplica limpio sobre `main`, y las cabeceras compilan
-(`-fsyntax-only`) con el perfil por defecto y el NEMA17; un perfil inválido
-falla en compilación como se espera. **Pendiente**: compilar `main.cpp` con
-PlatformIO/ESP32 y probar en el rotor físico.
+Validación hecha: `esp32` y `esp32_nema17` compilan con PlatformIO 6.1.18 y
+Arduino-ESP32 2.0.17; las 104 comprobaciones digitales del repositorio y las
+pruebas de la app PortableSatStation (actualizada al contrato API 2) pasan; un
+perfil inválido falla en compilación como se espera. **Pendiente**: pruebas
+nativas `control_native` (necesitan un compilador C++ de host) y prueba en el
+rotor físico.
 
 ## Perfil `esp32_nema17`: más rápido con los motores que ya tienes
 

@@ -19,10 +19,10 @@ corrige el Doppler de la radio en paralelo.
 
 ## Requisitos
 
-- Rotor con el firmware de antenaSatCommrotor y, para usar la hora del móvil, el
-  parche de [hardware/rotor](../hardware/rotor/README.md) (API 2). Con firmware
-  sin parchear (API 1) la app funciona, pero la hora UTC debe venir del GNSS del
-  rotor.
+- Rotor con el firmware de antenaSatCommrotor `0.3.0-prototype` o posterior
+  (API 2, integra el cambio de [hardware/rotor](../hardware/rotor/README.md))
+  para usar la hora del móvil. Con firmware anterior (API 1) la app funciona,
+  pero la hora UTC debe venir del GNSS del rotor.
 - Token de control configurado por USB en el rotor (24-128 caracteres) y, para
   BLE, el PIN de 6 dígitos del rotor.
 - Ubicación configurada en Satélites › Ajustes (o la del pase seleccionado).
@@ -61,7 +61,7 @@ corrige el Doppler de la radio en paralelo.
 - **Cable**: el firmware se detiene si el azimut mecánico cruzaría ±180°. Con el
   rotor calibrado la app avisa y propone el nuevo rumbo del corte.
 - **Velocidad**: si el pase exige más °/s que el perfil del motor, el rotor se
-  para cerca del máximo. El perfil `esp32_nema17` del parche sube de 2,25 a
+  para cerca del máximo. El perfil `esp32_nema17` del firmware sube de 2,25 a
   ~5,9°/s.
 - **Cénit**: por encima de 89° el firmware detiene el seguimiento.
 - Se muestra el porcentaje de pase que se puede seguir sin paradas.
@@ -100,5 +100,6 @@ corrige el Doppler de la radio en paralelo.
   STOP, límites, TLE, estados API 1/2, cliente, planificador) y
   `RotorActivityTest` (conexión con transporte simulado, preparar pase, parar,
   errores) y el botón desde `SatelliteActivityTest`.
-- **Pendiente**: prueba con rotor físico, Wi-Fi y BLE reales, brújula de móvil
-  real y compilación del firmware parcheado con PlatformIO.
+- Firmware `0.3.0-prototype`: `esp32` y `esp32_nema17` compilan con PlatformIO.
+- **Pendiente**: prueba con rotor físico, Wi-Fi y BLE reales y brújula de móvil
+  real.
