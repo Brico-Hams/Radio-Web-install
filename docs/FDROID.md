@@ -34,8 +34,8 @@ compartir todos los componentes de interfaz.
   de las APK debug. La receta oficial compila el código fuente, no utiliza
   ese artefacto de CI.
 
-La receta inicial sigue `0.8.3-beta` / `versionCode 12`. La etiqueta propuesta
-`android-v0.8.3-beta` todavía debe publicarse con estos cambios. No se ha
+La receta inicial sigue `0.9.0-beta` / `versionCode 13`. La etiqueta propuesta
+`android-v0.9.0-beta` todavía debe publicarse con estos cambios. No se ha
 solicitado ni obtenido la inclusión en F-Droid y no se ha creado un repositorio
 F-Droid propio. No se ha ejecutado `fdroid build --server` en este Windows;
 compilar con Gradle y comprobar metadatos no equivale a pasar esa validación.
@@ -94,8 +94,8 @@ revisados, inspeccionar `git diff --cached` y crear el commit:
 
 ```powershell
 git commit -m "Prepare independent Android distribution for F-Droid" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
-node scripts\check-android-store.cjs --tag android-v0.8.3-beta
-git tag --list android-v0.8.3-beta
+node scripts\check-android-store.cjs --tag android-v0.9.0-beta
+git tag --list android-v0.9.0-beta
 ```
 
 Si la etiqueta ya existe, **detenerse**: no borrarla ni moverla. Para una
@@ -104,10 +104,10 @@ después de actualizar versión, código y metadatos.
 
 ```powershell
 git push origin main
-git tag -a android-v0.8.3-beta -m "Bricohams Android 0.8.3-beta"
-git push origin android-v0.8.3-beta
-git rev-parse "android-v0.8.3-beta^{commit}"
-git ls-remote --tags origin "android-v0.8.3-beta*"
+git tag -a android-v0.9.0-beta -m "Bricohams Android 0.9.0-beta"
+git push origin android-v0.9.0-beta
+git rev-parse "android-v0.9.0-beta^{commit}"
+git ls-remote --tags origin "android-v0.9.0-beta*"
 ```
 
 Ejecutar sobre `main` revisada; no confundirla con otra rama local. Conservar
@@ -121,7 +121,7 @@ crea una GitHub Release para ellas ni envía una solicitud a F-Droid.
 1. Revisar y publicar el código y los metadatos de esta preparación. La
    etiqueta Android debe apuntar a ese código publicado, no a una compilación
    antigua sin los metadatos. No reutilizar ni mover etiquetas ya publicadas.
-2. Ejecutar el comprobador con `--tag android-v0.8.3-beta`. Si se decide
+2. Ejecutar el comprobador con `--tag android-v0.9.0-beta`. Si se decide
    publicar otra versión, actualizar primero versión, código, receta y notas.
 3. Abrir una solicitud en **Requests For Packaging** o una propuesta en
    **fdroiddata**, siguiendo el procedimiento vigente enlazado al final.

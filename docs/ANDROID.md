@@ -16,14 +16,14 @@ ni cuentas. Al abrir Satelites actualiza automaticamente TLE y frecuencias
 por HTTPS si no hay catalogo o tiene al menos 24 h; se puede desactivar en
 Ajustes. No envia tu ubicacion a CelesTrak ni SatNOGS. Es una implementacion independiente: no
 incluye codigo ni recursos de Look4sat, Robot36 o HAMRS.
-La version `0.8.3-beta` no sustituye sus funciones completas.
+La version `0.9.0-beta` no sustituye sus funciones completas.
 
 Esta revision conserva las funciones de 0.8.0 y prepara APK nuevas con
-versionCode 12. La compilacion, lint y pruebas Android de esta integracion
+versionCode 13. La compilacion, lint y pruebas Android de esta integracion
 requieren JDK 17 y SDK 35; no se han ejecutado con exito en el entorno local
 con Java 8. La CI debe verificarlas antes de distribuir la APK.
 Al publicar mas adelante la etiqueta v0.5.2, Android Beta adjuntara la APK
-debug y la APK instrumentada 0.8.3-beta con SHA256SUMS-android a la Release
+debug y la APK instrumentada 0.9.0-beta con SHA256SUMS-android a la Release
 creada por el flujo de instaladores. No se publica nada desde el entorno local.
 
 | Funcion | Estado |
@@ -629,7 +629,7 @@ Salidas:
 Para entregar un conjunto verificado en Windows, con los mismos requisitos:
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.3-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.9.0-beta'
 ```
 
 El destino debe ser nuevo. El script ejecuta pruebas/lint, verifica las firmas

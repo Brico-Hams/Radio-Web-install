@@ -7,11 +7,11 @@ L'écran principal propose **Langue du système**, **Español**, **English (US)*
 écrans, y compris les canaux USB, CAT, satellites et SSTV. Les indicatifs, noms de canaux
 et fichiers utilisateur ne sont pas traduits ; la marque reste Bricohams.
 
-À l'ouverture de Satellites, les TLE/fréquences de CelesTrak et SatNOGS sont actualisés automatiquement par HTTPS si le catalogue manque ou a au moins 24 h. Cette option peut être désactivée dans Réglages. La position enregistrée et les canaux radio ne sont pas envoyés ; les serveurs reçoivent la requête HTTPS habituelle, dont l'adresse IP. L’import hors ligne reste disponible. Cette révision conserve les fonctions 0.8.0 et prépare les APK 0.8.3-beta, versionCode 12. Tests, lint et compilation exigent JDK 17 et SDK 35 et ne peuvent pas fonctionner localement avec Java 8. La CI doit vérifier la nouvelle APK avant distribution.
+À l'ouverture de Satellites, les TLE/fréquences de CelesTrak et SatNOGS sont actualisés automatiquement par HTTPS si le catalogue manque ou a au moins 24 h. Cette option peut être désactivée dans Réglages. La position enregistrée et les canaux radio ne sont pas envoyés ; les serveurs reçoivent la requête HTTPS habituelle, dont l'adresse IP. L’import hors ligne reste disponible. Cette révision conserve les fonctions 0.8.0 et prépare les APK 0.9.0-beta, versionCode 13. Tests, lint et compilation exigent JDK 17 et SDK 35 et ne peuvent pas fonctionner localement avec Java 8. La CI doit vérifier la nouvelle APK avant distribution.
 
 Sans observateur enregistré, l'écran ouvre la carte mondiale hors ligne sans demander de permission GPS ni inventer de position. Satellites, empreintes et trajectoire sélectionnée apparaissent avec des TLE valides et sont actualisés toutes les 5 s lorsque la carte est visible. Le catalogue conservé fonctionne hors ligne jusqu'à expiration des TLE. Au premier chargement, les satellites recevables sont sélectionnés (jusqu'à 20 entrées sans fréquences) ; le choix enregistré, y compris Aucun, est conservé. Les passages exigent toujours votre position dans Réglages. Les erreurs sont affichées.
 
-Lors de l’envoi ultérieur du tag v0.5.2, Android Beta joindra les deux APK 0.8.3-beta (app debug et tests instrumentés) et SHA256SUMS-android à la release créée par les installateurs. Aucune publication locale.
+Lors de l’envoi ultérieur du tag v0.5.2, Android Beta joindra les deux APK 0.9.0-beta (app debug et tests instrumentés) et SHA256SUMS-android à la release créée par les installateurs. Aucune publication locale.
 
 La [validation intégrale V3/Android](VALIDACION-INTEGRAL-V3-ANDROID.md) distingue
 les tests sur l’hôte des essais sur téléphone/radio et inclut la matrice des contacts,
@@ -20,7 +20,7 @@ les canaux par slot et CAT. L’audit est en cours, il n’est pas certifié.
 Application native Kotlin pour Android 8.0/API 26 ou version ultérieure, sans serveur
 ni compte. Il s’agit d’une implémentation indépendante : elle
 n’inclut aucun code ni ressource de Look4sat, Robot36 ou HAMRS.
-La version `0.8.3-beta` ne remplace pas l’ensemble de leurs fonctionnalités.
+La version `0.9.0-beta` ne remplace pas l’ensemble de leurs fonctionnalités.
 
 | Fonction | État |
 | --- | --- |
@@ -354,6 +354,18 @@ Dans CAT, Enregistrer le passage complet (WAV jusqu’à LOS) capture le microph
 
 Satellites, Réglages, Enregistrements de passages affiche durée et taille. SSTV analyse des fenêtres de 60 s tous les 23 s pour contenir une image complète de 37 s, élimine les doublons séparés de moins de 10 s et sauvegarde les PNG près du WAV. Exporter copie le WAV au choix. Supprimer efface WAV et PNG associés après confirmation, sans annulation possible. Les tests synthétiques ne certifient ni réception RF ni matériel AudioRecord réel.
 
+### Rotor AZ/EL Bricohams
+
+Dans le détail d'un passage, **Rotor AZ/EL : préparer et suivre ce passage** ouvre le
+contrôle du rotor de [antenaSatCommrotor](https://github.com/Brico-Hams/antenaSatCommrotor)
+via son Wi-Fi (`192.168.4.1`, seule destination HTTP sans TLS autorisée) ou via
+BLE chiffré par PIN. Le téléphone envoie l'heure UTC, la position, les TLE et la
+calibration nord/niveau avec sa boussole ; l'app signale les franchissements de butée de câble,
+les passages trop rapides ou zénithaux, amène l'antenne à l'AOS et arme le suivi
+automatique pendant que CAT corrige le Doppler. Guide complet dans [ROTOR.md](../../ROTOR.md) ;
+patch du firmware et version économique dans
+[hardware/rotor](../../../hardware/rotor/README.md). Non testé avec un rotor physique.
+
 ## Morse WAV expérimental
 
 Le sélecteur accepte des fichiers audio, mais l’analyseur exige un fichier RIFF/WAVE PCM linéaire
@@ -508,7 +520,7 @@ Sorties :
 Pour fournir un ensemble vérifié sous Windows, avec les mêmes prérequis :
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.3-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.9.0-beta'
 ```
 
 La destination doit être nouvelle. Le script exécute les tests/lint, vérifie les signatures

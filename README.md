@@ -163,7 +163,7 @@ Ver [construccion, controles, licencias y limites](docs/BRICOHAMS-FIRMWARE.md#nu
 
 ### Android Bricohams Beta
 
-La APK nativa 0.8.3-beta (versionCode 12) incluye libros General/POTA/SOTA y contactos locales editables con busqueda e importacion ADIF con vista previa, exportacion
+La APK nativa 0.9.0-beta (versionCode 13) incluye libros General/POTA/SOTA y contactos locales editables con busqueda e importacion ADIF con vista previa, exportacion
 ADIF/JSON, sesiones ARDF con historial, estadisticas, segmentos GPS filtrados y observaciones GPS puntuales, y Morse de texto
 y WAV PCM experimental. Incorpora CAT RX temporal por USB CDC ACM y
 adaptadores CH34x/CP210x/FTDI/Prolific reconocidos. Satelites al estilo Look4sat con marca

@@ -1,0 +1,1 @@
+Bricohams 0.9.0 Beta: Steuerung des Bricohams-AZ/EL-Rotors per WLAN oder sicherem Bluetooth aus einem Überflug (Zeit, Standort, TLE, Nordkalibrierung per Kompass, Kabel-/Tempowarnungen und automatische Verfolgung parallel zum CAT-Doppler). Erfordert den Rotor und Sicherheitsprüfungen.

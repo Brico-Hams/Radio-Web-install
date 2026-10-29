@@ -1,0 +1,1 @@
+Bricohams 0.9.0 bêta : pilotage du rotor AZ/EL Bricohams en Wi-Fi ou Bluetooth sécurisé depuis un passage (heure, position, TLE, calibration du nord à la boussole, alertes câble/vitesse et suivi automatique avec le Doppler CAT). Nécessite le rotor et des contrôles de sécurité.

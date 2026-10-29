@@ -12,9 +12,9 @@ RepoType: git
 Repo: https://github.com/Brico-Hams/Radio-Web-install.git
 
 Builds:
-  - versionName: 0.8.3-beta
-    versionCode: 12
-    commit: android-v0.8.3-beta
+  - versionName: 0.9.0-beta
+    versionCode: 13
+    commit: android-v0.9.0-beta
     subdir: android
     gradle:
       - yes
@@ -42,5 +42,5 @@ MaintainerNotes: |-
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^android-v[0-9]+[.][0-9]+[.][0-9]+(-beta[0-9]*)?$
 UpdateCheckData: 'android/app/build.gradle.kts|versionCode\s*=\s*(\d+)|.|versionName\s*=\s*"([^"]+)"'
-CurrentVersion: 0.8.3-beta
-CurrentVersionCode: 12
+CurrentVersion: 0.9.0-beta
+CurrentVersionCode: 13

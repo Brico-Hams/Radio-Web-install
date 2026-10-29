@@ -7,11 +7,11 @@ La schermata principale offre **Lingua del sistema**, **Español**, **English (U
 schermate, inclusi canali USB, CAT, satelliti e SSTV. Nominativi, nomi dei canali e file
 utente non vengono tradotti; il marchio rimane Bricohams.
 
-Aprendo Satelliti, TLE/frequenze vengono aggiornati automaticamente via HTTPS da CelesTrak e SatNOGS se il catalogo manca o ha almeno 24 h. L'opzione si disattiva in Impostazioni. Posizione salvata e canali radio non vengono inviati; i server ricevono la normale richiesta HTTPS, incluso l'indirizzo IP. L’importazione offline resta disponibile. Questa revisione conserva le funzioni 0.8.0 e prepara APK 0.8.3-beta, versionCode 12. Test, lint e compilazione richiedono JDK 17 e SDK 35 e non possono funzionare localmente con Java 8. La CI deve verificare la nuova APK prima della distribuzione.
+Aprendo Satelliti, TLE/frequenze vengono aggiornati automaticamente via HTTPS da CelesTrak e SatNOGS se il catalogo manca o ha almeno 24 h. L'opzione si disattiva in Impostazioni. Posizione salvata e canali radio non vengono inviati; i server ricevono la normale richiesta HTTPS, incluso l'indirizzo IP. L’importazione offline resta disponibile. Questa revisione conserva le funzioni 0.8.0 e prepara APK 0.9.0-beta, versionCode 13. Test, lint e compilazione richiedono JDK 17 e SDK 35 e non possono funzionare localmente con Java 8. La CI deve verificare la nuova APK prima della distribuzione.
 
 Senza osservatore salvato si apre la mappa mondiale offline, senza permesso GPS o posizione inventata. Satelliti, coperture e traccia selezionata appaiono con TLE validi e si aggiornano ogni 5 s quando la mappa è visibile. Il catalogo salvato funziona offline fino alla scadenza dei TLE. Al primo caricamento si selezionano i satelliti ricevibili (fino a 20 voci senza frequenze); la scelta salvata, compreso Nessuno, viene conservata. I passaggi richiedono ancora la posizione in Impostazioni. Gli errori sono mostrati.
 
-Al successivo push del tag v0.5.2, Android Beta allega entrambe le APK 0.8.3-beta (app debug e test strumentati) e SHA256SUMS-android alla release creata dagli installer. Nessuna pubblicazione locale.
+Al successivo push del tag v0.5.2, Android Beta allega entrambe le APK 0.9.0-beta (app debug e test strumentati) e SHA256SUMS-android alla release creata dagli installer. Nessuna pubblicazione locale.
 
 La [validazione integrale V3/Android](VALIDACION-INTEGRAL-V3-ANDROID.md) distingue
 le prove host dai test su telefono/radio e include la matrice dei contatti,
@@ -20,7 +20,7 @@ i canali per slot e CAT. L'audit è in corso, non certificato.
 Applicazione nativa Kotlin per Android 8.0/API 26 o successivi, senza server
 né account. È un'implementazione indipendente: non
 include codice o risorse di Look4sat, Robot36 o HAMRS.
-La versione `0.8.3-beta` non sostituisce le loro funzionalità complete.
+La versione `0.9.0-beta` non sostituisce le loro funzionalità complete.
 
 | Funzione | Stato |
 | --- | --- |
@@ -357,6 +357,18 @@ In CAT, Registra passaggio completo (WAV fino a LOS) acquisisce il microfono men
 
 Satelliti, Impostazioni, Registrazioni dei passaggi mostra durata e dimensioni. SSTV analizza finestre di 60 s ogni 23 s per contenere un’immagine intera di 37 s, scarta duplicati distanti meno di 10 s e salva PNG accanto al WAV. Esporta copia WAV alla destinazione scelta. Elimina rimuove WAV e PNG associati dopo conferma, senza possibilità di annullare. I test sintetici non certificano ricezione RF né hardware AudioRecord reale.
 
+### Rotore AZ/EL Bricohams
+
+Nel dettaglio di un passaggio, **Rotore AZ/EL: prepara e segui questo passaggio** apre il
+controllo del rotore di [antenaSatCommrotor](https://github.com/Brico-Hams/antenaSatCommrotor)
+tramite il suo Wi-Fi (`192.168.4.1`, unica destinazione HTTP senza TLS consentita) o tramite
+BLE cifrato con PIN. Il telefono invia ora UTC, posizione, TLE e calibrazione di
+nord/livello con la bussola; l'app avvisa degli attraversamenti del fine corsa del cavo,
+dei passaggi troppo rapidi o zenitali, porta l'antenna all'AOS e attiva l'inseguimento
+automatico mentre CAT corregge il Doppler. Guida completa in [ROTOR.md](../../ROTOR.md);
+patch del firmware e versione a basso costo in
+[hardware/rotor](../../../hardware/rotor/README.md). Non provato con un rotore fisico.
+
 ## Morse WAV sperimentale
 
 Il selettore accetta audio, ma il parser richiede RIFF/WAVE PCM lineare mono
@@ -519,7 +531,7 @@ Output:
 Per distribuire un insieme verificato su Windows, con gli stessi requisiti:
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.3-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.9.0-beta'
 ```
 
 La destinazione deve essere nuova. Lo script esegue test/lint, verifica le firme

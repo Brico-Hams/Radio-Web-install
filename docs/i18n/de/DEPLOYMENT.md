@@ -275,7 +275,7 @@ Mit Node.js 22+, Git und den Archivwerkzeugen des Systems:
 npm run export:project -- --beta `
   --firmware 'C:\ruta\Multiboot\Bricohams' `
   --installers 'C:\ruta\instalables-verificados' `
-  --android 'C:\ruta\Android-0.8.3-beta' `
+  --android 'C:\ruta\Android-0.9.0-beta' `
   --output 'C:\ruta\entregas\Bricohams-desarrollo.zip'
 ```
 

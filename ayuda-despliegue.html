@@ -185,7 +185,7 @@ WantedBy=default.target</code></pre>
 <pre><code>npm run export:project -- --beta `
   --firmware &#39;C:\ruta\Multiboot\Bricohams&#39; `
   --installers &#39;C:\ruta\instalables-verificados&#39; `
-  --android &#39;C:\ruta\Android-0.8.3-beta&#39; `
+  --android &#39;C:\ruta\Android-0.9.0-beta&#39; `
   --output &#39;C:\ruta\entregas\Bricohams-desarrollo.zip&#39;</code></pre>
 <p>El destino debe ser un ZIP nuevo. En Windows se usa <code>tar.exe</code> (bsdtar); Linux/FreeBSD necesitan <code>zip</code>. La herramienta utiliza un directorio temporal propio y lo limpia al terminar, incluso ante errores.</p>
 <p>Si no hay instaladores de escritorio reconstruidos, sustituye <code>--installers</code> por <code>--without-installers</code>. Es una omision explicita solo para instantaneas Beta: el manifiesto registra <code>desktopInstallersIncluded: false</code> y no hay carpeta <code>installers</code>. No se reutilizan paquetes antiguos como si fueran nuevos. La APK indicada con <code>--android</code> si se incluye y verifica independientemente.</p>

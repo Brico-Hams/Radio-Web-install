@@ -158,7 +158,7 @@ Vedere [compilazione, controlli, licenze e limiti](docs/i18n/it/BRICOHAMS-FIRMWA
 
 ### Android Bricohams Beta
 
-L’APK nativa 0.8.3-beta include contatti locali modificabili con ricerca e importazione ADIF con anteprima, esportazione
+L’APK nativa 0.9.0-beta include contatti locali modificabili con ricerca e importazione ADIF con anteprima, esportazione
 ADIF/JSON, sessioni ARDF con cronologia, statistiche, segmenti GPS filtrati e osservazioni GPS puntuali, e Morse da testo
 e WAV PCM sperimentale. Integra CAT RX temporaneo tramite USB CDC ACM e
 adattatori riconosciuti CH34x/CP210x/FTDI/Prolific. Calcola i passaggi SGP4 offline

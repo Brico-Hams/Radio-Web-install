@@ -30,8 +30,8 @@ shared branding and translations do not require a shared UI framework.
   lints release, and keeps an **unsigned release APK** separate from debug APKs.
   F-Droid builds the sources; it does not use this CI artifact.
 
-The candidate is `0.8.3-beta`, `versionCode 12`. The proposed tag
-`android-v0.8.3-beta` still needs publishing with this preparation. No inclusion
+The candidate is `0.9.0-beta`, `versionCode 13`. The proposed tag
+`android-v0.9.0-beta` still needs publishing with this preparation. No inclusion
 request or approval exists from this work, and no private F-Droid repository
 has been set up. `fdroid build --server` has not been run on this Windows host.
 Gradle compilation is not equivalent to F-Droid infrastructure validation.
@@ -84,8 +84,8 @@ Stage only reviewed files with `git add`, inspect `git diff --cached`, then:
 
 ```powershell
 git commit -m "Prepare independent Android distribution for F-Droid" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
-node scripts\check-android-store.cjs --tag android-v0.8.3-beta
-git tag --list android-v0.8.3-beta
+node scripts\check-android-store.cjs --tag android-v0.9.0-beta
+git tag --list android-v0.9.0-beta
 ```
 
 If that tag exists, **stop**: do not delete or move it. For another version,
@@ -94,10 +94,10 @@ update the version, code, recipe, and notes before replacing the example with
 
 ```powershell
 git push origin main
-git tag -a android-v0.8.3-beta -m "Bricohams Android 0.8.3-beta"
-git push origin android-v0.8.3-beta
-git rev-parse "android-v0.8.3-beta^{commit}"
-git ls-remote --tags origin "android-v0.8.3-beta*"
+git tag -a android-v0.9.0-beta -m "Bricohams Android 0.9.0-beta"
+git push origin android-v0.9.0-beta
+git rev-parse "android-v0.9.0-beta^{commit}"
+git ls-remote --tags origin "android-v0.9.0-beta*"
 ```
 
 Run on reviewed `main`, not another local branch. Record the resolved SHA for
@@ -109,7 +109,7 @@ not create a GitHub Release for them or submit anything to F-Droid.
 
 1. Publish reviewed source and metadata. The Android tag must include this
    preparation, not an earlier build without metadata. Never reuse tags.
-2. Run the checker with `--tag android-v0.8.3-beta`, or the actual version
+2. Run the checker with `--tag android-v0.9.0-beta`, or the actual version
    after updating all version fields and notes.
 3. Open a **Requests For Packaging** issue or a **fdroiddata** proposal using
    the official process below. Copy the candidate into fdroiddata's `metadata`.

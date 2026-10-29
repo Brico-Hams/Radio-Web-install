@@ -7,11 +7,11 @@ und **Deutsch**. Die Auswahl wird lokal gespeichert und gilt für alle Ansichten
 einschließlich USB-Kanäle, CAT, Satelliten und SSTV. Rufzeichen, Kanalnamen und
 Benutzerdateien werden nicht übersetzt; die Marke bleibt Bricohams.
 
-Beim Öffnen von Satelliten werden TLE/Frequenzen von CelesTrak und SatNOGS per HTTPS automatisch aktualisiert, wenn der Katalog fehlt oder mindestens 24 h alt ist. In Einstellungen lässt sich dies abschalten. Gespeicherter Standort und Funkkanäle werden nicht gesendet; die Server erhalten die normale HTTPS-Anfrage einschließlich IP-Adresse. Offline-Import bleibt verfügbar. Diese Revision bewahrt die Funktionen von 0.8.0 und bereitet APKs 0.8.3-beta mit versionCode 12 vor. Tests, Lint und Build benötigen JDK 17 und SDK 35 und sind lokal mit Java 8 nicht ausführbar. CI muss die neue APK vor der Verteilung prüfen.
+Beim Öffnen von Satelliten werden TLE/Frequenzen von CelesTrak und SatNOGS per HTTPS automatisch aktualisiert, wenn der Katalog fehlt oder mindestens 24 h alt ist. In Einstellungen lässt sich dies abschalten. Gespeicherter Standort und Funkkanäle werden nicht gesendet; die Server erhalten die normale HTTPS-Anfrage einschließlich IP-Adresse. Offline-Import bleibt verfügbar. Diese Revision bewahrt die Funktionen von 0.8.0 und bereitet APKs 0.9.0-beta mit versionCode 13 vor. Tests, Lint und Build benötigen JDK 17 und SDK 35 und sind lokal mit Java 8 nicht ausführbar. CI muss die neue APK vor der Verteilung prüfen.
 
 Ohne gespeicherten Beobachter öffnet sich die Offline-Weltkarte ohne GPS-Berechtigung oder erfundenen Standort. Satelliten, Abdeckungen und ausgewählte Flugbahn erscheinen mit gültigen TLE und werden bei sichtbarer Karte alle 5 s aktualisiert. Der gespeicherte Katalog funktioniert offline bis zum TLE-Verfall. Beim ersten Laden werden empfangbare Satelliten ausgewählt (bis zu 20 Einträge ohne Frequenzen); die gespeicherte Auswahl einschließlich Keine bleibt erhalten. Überflugberechnungen benötigen weiterhin den Standort in Einstellungen. Fehler werden angezeigt.
 
-Beim späteren Push des Tags v0.5.2 hängt Android Beta beide APKs 0.8.3-beta (Debug-App und instrumentierte Tests) sowie SHA256SUMS-android an die vom Installer-Workflow erstellte Release an. Keine lokale Veröffentlichung.
+Beim späteren Push des Tags v0.5.2 hängt Android Beta beide APKs 0.9.0-beta (Debug-App und instrumentierte Tests) sowie SHA256SUMS-android an die vom Installer-Workflow erstellte Release an. Keine lokale Veröffentlichung.
 
 Die [integrierte Validierung V3/Android](VALIDACION-INTEGRAL-V3-ANDROID.md) unterscheidet
 Host-Tests von Tests mit Telefon/Funkgerät und enthält die Matrix für Kontakte,
@@ -20,7 +20,7 @@ Kanäle je Slot und CAT. Das Audit läuft noch und ist nicht zertifiziert.
 Native Kotlin-Anwendung für Android 8.0/API 26 oder höher, ohne Server
 oder Konten. Es handelt sich um eine unabhängige
 Implementierung: Sie enthält weder Code noch Ressourcen von Look4sat, Robot36
-oder HAMRS. Die Version `0.8.3-beta` ersetzt deren vollständigen Funktionsumfang nicht.
+oder HAMRS. Die Version `0.9.0-beta` ersetzt deren vollständigen Funktionsumfang nicht.
 
 | Funktion | Status |
 | --- | --- |
@@ -380,6 +380,18 @@ In CAT nimmt Ganzen Überflug aufnehmen (WAV bis LOS) das Mikrofon bei aktivem D
 
 Satelliten, Einstellungen, Überflugaufnahmen zeigt Dauer und Größe. SSTV prüft 60-s-Fenster alle 23 s, damit ein ganzes 37-s-Bild hineinpasst, verwirft Duplikate mit weniger als 10 s Abstand und speichert PNG neben WAV. Exportieren kopiert WAV zum gewählten Ziel. Löschen entfernt WAV und zugehörige PNG nach Bestätigung unwiderruflich. Synthetische Tests zertifizieren weder HF-Empfang noch reale AudioRecord-Hardware.
 
+### Bricohams-AZ/EL-Rotor
+
+Im Detail eines Überflugs öffnet **AZ/EL-Rotor: diesen Überflug vorbereiten und verfolgen**
+die Rotorsteuerung von [antenaSatCommrotor](https://github.com/Brico-Hams/antenaSatCommrotor)
+über dessen WLAN (`192.168.4.1`, einziges erlaubtes HTTP-Ziel ohne TLS) oder über
+PIN-verschlüsseltes BLE. Das Telefon sendet UTC-Zeit, Standort, TLE und
+Nord-/Neigungskalibrierung per Kompass; die App warnt vor Kabelanschlag-Querungen,
+zu schnellen oder Zenit-Überflügen, fährt die Antenne zum AOS und aktiviert die
+automatische Nachführung, während CAT den Doppler korrigiert. Vollständige Anleitung in [ROTOR.md](../../ROTOR.md);
+Firmware-Patch und günstige Bauvariante in
+[hardware/rotor](../../../hardware/rotor/README.md). Nicht mit einem echten Rotor getestet.
+
 ## Experimentelles Morse-WAV
 
 Der Dateiauswahldialog lässt Audio zu, der Parser verlangt jedoch RIFF/WAVE
@@ -553,7 +565,7 @@ Ausgaben:
 Um unter Windows ein geprüftes Paket mit denselben Voraussetzungen zu liefern:
 
 ```powershell
-.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.8.3-beta'
+.\scripts\build-android.ps1 -OutputDirectory 'C:\ruta\entregas\Android-0.9.0-beta'
 ```
 
 Das Zielverzeichnis muss neu sein. Das Skript führt Tests/lint aus, prüft die
