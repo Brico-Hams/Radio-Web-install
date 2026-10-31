@@ -64,7 +64,7 @@ async function publish() {
     files.push([name, checked.firmware.bytes]);
     entries.push({
       id, name, edition, publisher: "Bricohams", version: "v6.1.0",
-      distributionVersion: "v0.5.4",
+      distributionVersion: "v0.5.5",
       size: checked.firmware.bytes.length, sha256: expected, path: `precompiled/${name}`,
       targets: ["UV-K1", "UV-K5-V3"], stability: "beta", hardwareBootTested: false,
       license: "GPL-3.0-or-later AND Apache-2.0",
