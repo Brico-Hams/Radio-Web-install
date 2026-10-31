@@ -347,3 +347,48 @@ test("builder local: valida version, identidad, vectores y limites de la imagen 
   assert.throws(() => inspectFirmware(wrong), /Version/);
   assert.throws(() => inspectFirmware(Buffer.alloc(0x1d801)), /118 KiB/);
 });
+
+test("satellite module stores passes in a banked sector and gates 0x7B30 on the session timestamp", t => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const { integrateModule } = require("../scripts/bricohams-modules.cjs");
+  const header = fs.readFileSync(path.join(__dirname, "..", "firmware", "bricohams", "passes.h"), "utf8");
+  const define = name => Number(new RegExp(`#define ${name} (0x[0-9A-F]+|[0-9]+)U`).exec(header)[1]);
+  const base = define("BH_PASS_FLASH_ADDR");
+  const end = base + define("BH_PASS_ENTRIES_OFFSET") + define("BH_PASS_MAX") * define("BH_PASS_ENTRY_BYTES");
+  // Past the live config (0x00A178), inside one sector, below PY25Q16_BANK_SHARED_FROM/calibration.
+  assert.equal(base % 0x1000, 0);
+  assert(base >= 0x00b000 && end <= base + 0x1000 && base + 0x1000 <= 0x010000);
+  assert(define("BH_PASS_REQUEST_HEADER") + define("BH_PASS_FRAME_MAX") * define("BH_PASS_ENTRY_BYTES") <= 252);
+  // Upstream MAX_REPLY_SIZE (144) bounds header + reply data in SendReply.
+  assert(4 + define("BH_PASS_REPLY_HEADER") + define("BH_PASS_FRAME_MAX") * define("BH_PASS_ENTRY_BYTES") <= 144);
+  const work = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "bh-sat-module-"));
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  const sources = {
+    "CMakeLists.txt": "add_library(App INTERFACE)\n",
+    "scheduler.c": "#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS\n#endif\n",
+    "scheduler.h": "#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS\n#endif\n",
+    "ui/menu.c": 'X(ACTION_OPT_FOXHUNT,        "FOX HUNT")\n',
+    "app/uart.c": '#include "app/uart.h"\nstatic uint32_t mb_port_timestamp(uint32_t Port);\n        case 0x0514:\n',
+    "app/foxhunt.c": ['#include "app/foxhunt.h"', "    FOXHUNT_DrawFreqBR(gRxVfo->pRX->Frequency);",
+      '    GUI_DisplaySmallestInverse("FOX HUNT", 2, 0, true, true, 34);',
+      "    const int8_t dir = gWasFKeyPressed ? -1 : 1;\n\n    switch (kbd.current)",
+      "void APP_RunFoxHunt(void)\n{\n    FOXHUNT_Begin();", "        FOXHUNT_HandleKeys();",
+      "    FOXHUNT_End();\n}\n\nvoid APP_RunBeacon"].join("\n")
+  };
+  for (const [file, text] of Object.entries(sources)) {
+    fs.mkdirSync(path.dirname(path.join(work, "App", file)), { recursive: true });
+    fs.writeFileSync(path.join(work, "App", file), text.replace(/\n/g, "\r\n"));
+  }
+  const recorded = integrateModule(work, "satellite").map(item => item.file);
+  for (const file of ["App/bricohams/passes.c", "App/bricohams/passes.h", "App/app/uart.c"]) assert(recorded.includes(file));
+  assert.match(fs.readFileSync(path.join(work, "App/CMakeLists.txt"), "utf8"), /bricohams\/passes\.c/);
+  const uart = fs.readFileSync(path.join(work, "App/app/uart.c"), "utf8");
+  assert.match(uart, /#include "bricohams\/passes.h"/);
+  assert(uart.indexOf("case 0x7B30:") < uart.indexOf("case 0x7B00:") && uart.indexOf("case 0x7B00:") < uart.indexOf("case 0x0514:"));
+  assert.match(uart, /\) == mb_port_timestamp\(Port\);/);
+  assert.match(uart, /Reply.Header.ID = 0x7B31;/);
+  const passes = fs.readFileSync(path.join(work, "App/bricohams/passes.c"), "utf8");
+  assert.doesNotMatch(passes, /Physical|0x010000|0x10000/);
+  assert.match(fs.readFileSync(path.join(work, "App/bricohams/satellite_foxhunt.inc"), "utf8"), /key == KEY_0/);
+});

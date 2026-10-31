@@ -110,6 +110,64 @@
     }
     return { selected: bytes[6], entries };
   }
+  // Bricohams pass table v1 (0x7B30/0x7B31): 32-byte records in the active config bank.
+  const PASS = Object.freeze({ max: 64, entryBytes: 32, frameEntries: 4, maxDurationSeconds: 7200 });
+  const PASS_STATUS = ["OK", "Reservado", "Longitud invalida", "Version no admitida", "Operacion no admitida",
+    "Sesion no autorizada: reconecta", "Indice fuera de rango", "Pase rechazado por el firmware", "Verificacion de Flash fallida"];
+  const rxBand10Hz = value => (value >= 13600000 && value <= 17400000) || (value >= 40000000 && value <= 47000000);
+  function passName(name) {
+    const clean = String(name).replace(/\s*\(.*?\)\s*/g, " ").replace(/[^\x20-\x7e]/g, "").trim().toUpperCase().slice(0, 8).trim();
+    R.assert(clean, "Pase sin nombre ASCII.");
+    return clean;
+  }
+  function encodeSatellitePass(pass) {
+    const aos = Math.floor(pass.start / 1000);
+    const tca = Math.round(pass.maximum / 1000) - aos;
+    const los = Math.ceil(pass.end / 1000) - aos;
+    const downlink10Hz = pass.downlink ? Math.round(pass.downlink / 10) : 0;
+    R.assert(Number.isInteger(pass.norad) && pass.norad > 0 && pass.norad < 0xffffffff &&
+      Number.isFinite(aos) && aos > 0 && aos < 0xffffffff && los > 0 && los <= PASS.maxDurationSeconds &&
+      tca >= 0 && tca <= los && Number.isFinite(pass.elevation) &&
+      Number.isFinite(pass.azimuthStart) && Number.isFinite(pass.azimuthEnd) &&
+      (downlink10Hz === 0 || rxBand10Hz(downlink10Hz)), `Pase no valido para la radio: ${pass.name}.`);
+    const bytes = new Uint8Array(PASS.entryBytes);
+    const view = R.view(bytes);
+    view.setUint32(0, pass.norad, true);
+    bytes.set([...passName(pass.name)].map(c => c.charCodeAt(0)), 4);
+    view.setUint32(12, aos, true);
+    view.setUint16(16, tca, true);
+    view.setUint16(18, los, true);
+    bytes[20] = Math.min(90, Math.max(0, Math.round(pass.elevation)));
+    view.setUint16(22, ((Math.round(pass.azimuthStart) % 360) + 360) % 360, true);
+    view.setUint16(24, ((Math.round(pass.azimuthEnd) % 360) + 360) % 360, true);
+    view.setUint32(28, downlink10Hz, true);
+    return bytes;
+  }
+  function decodeSatellitePass(bytes) {
+    R.bytes(bytes, PASS.entryBytes);
+    const view = R.view(bytes);
+    const name = bytes.subarray(4, 12);
+    const end = name.indexOf(0);
+    const aos = view.getUint32(12, true);
+    const pass = { norad: view.getUint32(0, true), name: R.text(name),
+      start: aos * 1000, maximum: (aos + view.getUint16(16, true)) * 1000, end: (aos + view.getUint16(18, true)) * 1000,
+      elevation: bytes[20], azimuthStart: view.getUint16(22, true), azimuthEnd: view.getUint16(24, true),
+      downlink: view.getUint32(28, true) * 10 };
+    R.assert(pass.norad > 0 && pass.norad < 0xffffffff && aos > 0 && aos < 0xffffffff &&
+      pass.end > pass.start && pass.end - pass.start <= PASS.maxDurationSeconds * 1000 && pass.maximum <= pass.end &&
+      pass.elevation <= 90 && pass.azimuthStart < 360 && pass.azimuthEnd < 360 && bytes[21] === 0 &&
+      view.getUint16(26, true) === 0 && (pass.downlink === 0 || rxBand10Hz(pass.downlink / 10)) &&
+      end !== 0 && name.subarray(0, end < 0 ? 8 : end).every(c => c >= 0x20 && c <= 0x7e) &&
+      (end < 0 || name.subarray(end).every(c => c === 0)), "Registro de pase de la radio no valido.");
+    return pass;
+  }
+  // Upcoming passes, soonest first, capped to what the radio stores.
+  function selectSatellitePasses(passes, now = Date.now()) {
+    R.assert(Array.isArray(passes), "Lista de pases no valida.");
+    const upcoming = passes.filter(pass => pass.end > now).sort((a, b) => a.start - b.start).slice(0, PASS.max);
+    R.assert(upcoming.length, "No hay pases futuros que cargar.");
+    return upcoming;
+  }
   function appHeader(data) {
     R.bytes(data, 64);
     const v = R.view(data);
@@ -327,6 +385,62 @@
         const checked = await this.readSpectrumPresetsRaw();
         R.assert(R.equal(checked, bytes), "Los presets RAM releidos no coinciden con el archivo. Importacion no verificada.");
         return inspectSpectrumPresets(checked);
+      });
+    }
+    async passTableExchange(operation, index = 0, count = 0, entries = new Uint8Array()) {
+      const request = new Uint8Array(12 + entries.length);
+      const view = R.view(request);
+      request[0] = 1;
+      request[1] = operation;
+      view.setUint32(2, this.timestamp, true);
+      view.setUint32(6, Math.floor(Date.now() / 1000), true); // keeps the radio's pass clock in UTC
+      request[10] = index;
+      request[11] = count;
+      request.set(entries, 12);
+      const reply = await this.exchange(0x7b30, request, 0x7b31, operation === 1 ? 5000 : 2000);
+      R.assert(reply.length >= 12 && reply[0] === 1 && reply[2] === operation && reply[10] === PASS.max &&
+        reply[11] === PASS.entryBytes, "Respuesta de tabla de pases Bricohams invalida: usa la imagen Satelites con pases.");
+      R.assert(reply[1] === 0, `Tabla de pases rechazada: ${PASS_STATUS[reply[1]] || `estado ${reply[1]}`}.`);
+      R.assert(reply.length === 12 + (operation === 4 ? count * PASS.entryBytes : 0), "Longitud de respuesta de pases incorrecta.");
+      return { count: reply[3], clock: R.view(reply).getUint32(4, true), entries: reply.subarray(12) };
+    }
+    async readSatellitePassesRaw() {
+      const { count, clock } = await this.passTableExchange(0);
+      R.assert(count <= PASS.max, "Numero de pases de la radio fuera de rango.");
+      const passes = [];
+      for (let index = 0; index < count; index += PASS.frameEntries) {
+        const size = Math.min(PASS.frameEntries, count - index);
+        const { entries } = await this.passTableExchange(4, index, size);
+        for (let item = 0; item < size; item++)
+          passes.push(decodeSatellitePass(entries.subarray(item * PASS.entryBytes, (item + 1) * PASS.entryBytes)));
+      }
+      return { format: "bricohams-radio-passes", version: 1, radioClock: clock ? new Date(clock * 1000).toISOString() : null, passes };
+    }
+    readSatellitePasses() {
+      return this.run("Leer pases SAT de la radio", () => this.readSatellitePassesRaw());
+    }
+    clearSatellitePasses() {
+      return this.run("Borrar pases SAT de la radio", () => this.passTableExchange(1));
+    }
+    writeSatellitePasses(passes) {
+      const selected = selectSatellitePasses(passes);
+      const records = selected.map(encodeSatellitePass);
+      return this.run("Cargar pases SAT en la radio", async () => {
+        await this.passTableExchange(1);
+        for (let index = 0; index < records.length; index += PASS.frameEntries) {
+          const chunk = records.slice(index, index + PASS.frameEntries);
+          const bytes = new Uint8Array(chunk.length * PASS.entryBytes);
+          chunk.forEach((record, item) => bytes.set(record, item * PASS.entryBytes));
+          await this.passTableExchange(2, index, chunk.length, bytes);
+          this.progress((index + chunk.length) / records.length, "Escribiendo pases");
+        }
+        const committed = await this.passTableExchange(3, 0, records.length);
+        R.assert(committed.count === records.length, "La radio no confirma el numero de pases.");
+        const checked = await this.readSatellitePassesRaw();
+        R.assert(checked.passes.length === records.length &&
+          checked.passes.every((pass, index) => R.equal(encodeSatellitePass(pass), records[index])),
+        "Los pases releidos no coinciden con los enviados.");
+        return checked;
       });
     }
     async readConfigurationRaw() {
@@ -716,6 +830,7 @@
       });
     }
   }
-  Object.assign(R, { QuanshengConnector, inspectSpectrumPresets, quanshengPacket: packet, decodeQuanshengPacket: decodePacket, quanshengBaseFromFlash: baseFromFlash, crc16, parseQuanshengApp: parseApp, QUANSHENG_APP_STATUS: APP_STATUS, inspectQuanshengSlotImage: inspectSlotImage });
+  Object.assign(R, { QuanshengConnector, inspectSpectrumPresets, encodeSatellitePass, decodeSatellitePass,
+    selectSatellitePasses, SATELLITE_PASS_TABLE: PASS, quanshengPacket: packet, decodeQuanshengPacket: decodePacket, quanshengBaseFromFlash: baseFromFlash, crc16, parseQuanshengApp: parseApp, QUANSHENG_APP_STATUS: APP_STATUS, inspectQuanshengSlotImage: inspectSlotImage });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

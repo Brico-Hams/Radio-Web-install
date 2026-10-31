@@ -51,6 +51,8 @@
     ["Descargar pases JSON", "Download passes as JSON", "Télécharger les passages JSON", "Überflüge als JSON herunterladen"],
     ["Recalcular para mi posicion", "Recalculate for my location", "Recalculer pour ma position", "Für meinen Standort neu berechnen"],
     ["Recalcular mes (solo prevision)", "Recalculate month (forecast only)", "Recalculer le mois (prévision uniquement)", "Monat neu berechnen (nur Prognose)"],
+    ["Calcular 7 dias para mi posicion", "Calculate 7 days for my location", "Calculer 7 jours pour ma position", "7 Tage für meinen Standort berechnen"],
+    ["Cargar pases en la radio (SAT)", "Load passes into the radio (SAT)", "Charger les passages dans la radio (SAT)", "Überflüge ins Funkgerät laden (SAT)"],
     ["Satelite", "Satellite", "Satellite", "Satellit"],
     ["Provisional", "Tentative", "Provisoire", "Vorläufig"],
     ["Prevision orientativa, no operativa. Solo dias restantes del mes UTC. Mas de 7 dias desde el TLE: provisional. Recalcula con tu posicion y TLE reciente antes de usar.", "Planning forecast, not operational. Remaining days of the UTC month only. Beyond 7 days from the TLE: tentative. Recalculate with your location and fresh TLE before use.", "Prévision indicative, non opérationnelle. Jours restants du mois UTC uniquement. Au-delà de 7 jours depuis le TLE : provisoire. Recalculez avec votre position et un TLE récent avant utilisation.", "Unverbindliche, nicht operative Prognose. Nur verbleibende Tage des UTC-Monats. Mehr als 7 Tage nach TLE: vorläufig. Vor Nutzung mit eigenem Standort und aktuellem TLE neu berechnen."],

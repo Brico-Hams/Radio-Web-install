@@ -45,17 +45,51 @@
       R.validateSatellitesFile(satellites);
       for (const orbital of satellites.satellites) {
         R.validateSatelliteEntry(orbital);
-        for (const transmitter of orbital.transmitters) {
-          if (["FM", "FMN"].includes(transmitter.mode) && Number.isFinite(transmitter.downlink) &&
-            (!transmitter.downlinkHigh || transmitter.downlinkHigh === transmitter.downlink) &&
-            ((transmitter.downlink >= 136e6 && transmitter.downlink <= 174e6) ||
-              (transmitter.downlink >= 400e6 && transmitter.downlink <= 470e6))) {
-            channels.push(R.satelliteChannel(orbital, transmitter));
-          }
-        }
+        for (const transmitter of orbital.transmitters.filter(fmReceivable))
+          channels.push(R.satelliteChannel(orbital, transmitter));
       }
     }
     return [...new Map(channels.map(channel => [channel.key, channel])).values()];
+  }
+  function fmReceivable(transmitter) {
+    return ["FM", "FMN"].includes(transmitter.mode) && Number.isFinite(transmitter.downlink) &&
+      (!transmitter.downlinkHigh || transmitter.downlinkHigh === transmitter.downlink) &&
+      ((transmitter.downlink >= 136e6 && transmitter.downlink <= 174e6) ||
+        (transmitter.downlink >= 400e6 && transmitter.downlink <= 470e6));
+  }
+  // Operational 7-day passes from predictPasses (5 s sampling) in 48 h windows, inside TLE validity.
+  function weeklyTemplatePasses(satellites, observer, now = Date.now()) {
+    R.validateSatellitesFile(satellites);
+    const passes = [];
+    for (const orbital of satellites.satellites) {
+      const { epoch } = R.validateSatelliteEntry(orbital, now);
+      const end = Math.min(now + 7 * 86400000, epoch + 7 * 86400000);
+      const downlink = orbital.transmitters.find(fmReceivable)?.downlink ?? 0;
+      let previous = null;
+      for (let start = now; end - start >= 60000; start += 48 * 3600000) {
+        const hours = Math.min(48, (end - start) / 3600000);
+        for (const pass of R.predictPasses(orbital, observer, { start, hours, minimum: 10 }).passes) {
+          // A pass cut by the window edge continues as the first pass of the next window.
+          if (previous?.partialEnd && pass.partialStart && pass.aos.time - previous.end <= 60000) {
+            previous.end = pass.los.time;
+            previous.azimuthEnd = Number(pass.los.azimuth.toFixed(1));
+            previous.partialEnd = Boolean(pass.partialEnd);
+            if (pass.maximum.elevation > previous.elevation) {
+              previous.maximum = pass.maximum.time;
+              previous.elevation = Number(pass.maximum.elevation.toFixed(1));
+            }
+            continue;
+          }
+          previous = { norad: orbital.norad, name: orbital.name, start: pass.aos.time, maximum: pass.maximum.time,
+            end: pass.los.time, elevation: Number(pass.maximum.elevation.toFixed(1)),
+            azimuthStart: Number(pass.aos.azimuth.toFixed(1)), azimuthEnd: Number(pass.los.azimuth.toFixed(1)),
+            partialStart: Boolean(pass.partialStart), partialEnd: Boolean(pass.partialEnd),
+            tentative: false, epoch: new Date(epoch).toISOString(), downlink };
+          passes.push(previous);
+        }
+      }
+    }
+    return passes.sort((a, b) => a.start - b.start);
   }
   function monthlyTemplatePasses(satellites, observer, now = Date.now()) {
     R.validateSatellitesFile(satellites);
@@ -73,6 +107,6 @@
     }
     return passes.sort((a, b) => a.start - b.start);
   }
-  Object.assign(R, { TEMPLATE_COUNTRIES: COUNTRIES, validateCountryTemplate, countryTemplateChannels, monthlyTemplatePasses });
+  Object.assign(R, { TEMPLATE_COUNTRIES: COUNTRIES, validateCountryTemplate, countryTemplateChannels, monthlyTemplatePasses, weeklyTemplatePasses });
   if (typeof module !== "undefined") module.exports = R;
 })(typeof globalThis !== "undefined" ? globalThis : this);
