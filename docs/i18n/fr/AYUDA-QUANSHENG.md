@@ -100,12 +100,24 @@ l’écran web et le CSV ont également été vérifiés avec des trames de test
 
 ## Catalogue précompilé sans outils de compilation
 
-Le site inclut neuf images v6.1.0 : Bricohams ARDF, Satellite, Spectrum,
-Labs et Fusion, ainsi que les images officielles F4HWN Fusion, FieldOps, Transfer et Labs.
+Le site inclut neuf dérivés Bricohams Beta v6.1.0 : ARDF, Satellite, Spectrum,
+Labs et Fusion, ainsi que les profils de compatibilité Fusion, FieldOps, Transfer et Labs.
+Ce ne sont pas les binaires officiels intacts ; les originaux restent dans
+le catalogue dynamique séparé des publications upstream.
 Aucun dossier n’est à sélectionner. Le même catalogue est disponible sur le serveur local
 et dans l’exportation statique. Il ne s’agit pas d’un téléchargement dynamique depuis une URL quelconque.
 
 ### CHIRP v6.1.0
+
+CHIRP lit les canaux via la configuration logique ; cela ne prouve pas que le
+firmware actif puisse sauvegarder la Flash physique. Une sauvegarde complète
+exige une compilation avec lecture `0x0738` et CRC `0x073e` ; le nom Labs ou la
+version v6.1.0 ne le garantit pas. Le site vérifie d'abord 128 octets et leur CRC
+avant la copie de 2 MiB, puis les 512 secteurs de 4 KiB. Sans réponse, l'étalonnage
+déjà enregistré est conservé et l'écriture reste bloquée. Vérifier la compilation
+et la connexion USB ; ne pas attribuer le délai au seul câble ni forcer les droits
+d'écriture. Ce contrôle a été simulé et ne certifie pas une nouvelle compilation
+sur du matériel réel.
 
 Les neuf images du catalogue utilisent le protocole F4HWN v6.1.0. Choisir
 **Quansheng / UV-K5** générique dans CHIRP peut identifier la radio mais marquer
@@ -150,9 +162,9 @@ Le catalogue conserve les métadonnées d’origine : un test structurel n’est
 en certification matérielle. Pour les autres versions, le catalogue des releases officielles
 reste disponible ; les variantes incompatibles avec les slots ne sont proposées qu’au téléchargement.
 
-Maintenance : `npm run publish:firmware` vérifie les cinq compilations
-locales fixées par SHA-256 et récupère la release officielle v6.1.0 avec les
-hashes de GitHub. Le catalogue n’est écrit qu’après validation de tous les fichiers.
+Maintenance : `npm run publish:firmware` vérifie les neuf compilations locales
+de `firmware-builds/backup-read-20261031`, fixées par SHA-256, sans télécharger
+les originaux officiels. Le catalogue n’est écrit qu’après validation de tous les fichiers.
 Les licences GPL de Bricohams et Apache upstream, ainsi que leurs avis, sont distribués.
 Les options, hashs des sources intégrées et commit upstream figurent dans chaque
 entrée de `precompiled/catalog.json` ; le constructeur et les modules sources
@@ -497,7 +509,7 @@ sur ce firmware : il n’implémente pas la commande CAT v1 de l’image Bricoha
    ferme le fichier avant de confirmer. Dans les navigateurs sans ce sélecteur, il ne fait que demander un téléchargement : vérifier le dossier Téléchargements et ne pas confondre
    la demande avec un enregistrement confirmé. Enregistrer le projet JSON ou CSV ne remplace pas ce binaire.
 6. **Écrire et relire les canaux (Beta)** n’est activé qu’avec une sauvegarde complète
-   de cette session, au moyen de Labs v6.1+ avec lecture Flash et CRC. Vérifier que la
+   de cette session, au moyen d'une compilation avec lecture Flash physique et CRC. Vérifier que la
    radio est toujours dans le même état qu’à la lecture ; écrire des blocs de 8 octets et tout relire.
    Pendant l’écriture, les mémoires affectées sont temporairement marquées vides ;
    elles sont réactivées après leurs données/noms. Il ne s’agit pas d’une transaction résistante

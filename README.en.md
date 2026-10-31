@@ -33,8 +33,10 @@ generation does not certify testing on every physical operating system.
 
 ## Quansheng: prebuilt catalog, viewer, and RF log
 
-- Nine v6.1.0 images served with the website: Bricohams ARDF, Satellite,
-  Spectrum, Labs, and Fusion, plus official F4HWN Fusion, FieldOps, Transfer, and Labs.
+- Nine Bricohams Beta v6.1.0 derivatives with RAW backup read and CRC:
+  ARDF, Satellite, Spectrum, Labs, and Fusion, plus compatibility profiles
+  Fusion, FieldOps, Transfer, and Labs. These are not intact official binaries;
+  originals remain in the separate upstream release catalog.
   No build or folder selection is required. SHA-256, size,
   and structure are checked before preparing a slot; installation still requires a backup.
 - LCD viewer at startup, automatic start on connection, pause before

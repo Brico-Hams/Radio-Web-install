@@ -392,7 +392,7 @@
         <div class="operation-buttons"><button id="spectrum-presets-export" data-connected class="button secondary" type="button" disabled>Exportar presets RAM a archivo</button><button id="spectrum-presets-import" data-connected class="button secondary" type="button" disabled>Importar archivo a RAM (reemplaza tabla)</button></div>
         <p id="spectrum-presets-status" role="status">Sin transferencia. Al salir/apagar se pierde la tabla RAM; conserva el archivo para recuperarla. Importar no sintoniza ni reanuda el barrido: 9 recupera un preset y 4 reanuda.</p>
         <h2>Firmware Slots / Multiconfig</h2>
-        <p class="muted">Escrituras solo tras respaldo completo. La copia Flash requiere Labs v6.1+ con comandos de lectura fisica; otras ediciones quedan en solo lectura. Main es la aplicacion base inicializada por el firmware, no el bootloader.</p>
+        <p class="muted">Escrituras solo tras respaldo completo. La copia Flash requiere una compilacion con lectura fisica 0x0738 y CRC 0x073e; el nombre Labs o la version no lo garantizan. Main es la aplicacion base inicializada por el firmware, no el bootloader.</p>
         <div class="operation-buttons"><button id="slots-refresh" data-connected class="button secondary" type="button" disabled>Consultar slots</button></div>
         <div class="table-scroll"><table><thead><tr><th>Slot</th><th>Nombre</th><th>Version</th><th>Bytes</th><th>Estado</th><th>CRC</th></tr></thead><tbody id="slots-body"></tbody></table></div>
         <label for="slot-number">Slot / banco de destino (Main protegido)</label><select id="slot-number"><option value="1">1 / CFG 1</option><option value="2">2 / CFG 2</option><option value="3">3 / CFG 3</option><option value="4">4 / CFG 4</option></select>

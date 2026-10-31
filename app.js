@@ -64,10 +64,10 @@ const tools = {
       ["UV-K1", "Quansheng UV-K1 (PY32F071)", "Web Serial. Cable USB-C de datos o cable USB-serie compatible de doble conector."],
       ["UV-K5-V3", "Quansheng UV-K5 V3 (PY32F071)", "Web Serial. Comprueba que sea V3 y que use el MCU PY32F071, no una revision anterior."]
     ],
-    features: ["4 slots editables + Main protegido", "Restablecer bancos CFG 1-4", "CRC despues de instalar", "Backup Flash completo en Labs"],
+    features: ["4 slots editables + Main protegido", "Restablecer bancos CFG 1-4", "CRC despues de instalar", "Backup Flash con lectura fisica y CRC"],
     guides: [
       ["Multiboot", [
-        "Haz una copia de calibracion y de los canales. Para una copia completa de Flash externa se necesita Labs v6.1.0 o posterior.",
+        "Haz una copia de calibracion y de los canales. La copia Flash completa requiere una compilacion con lectura fisica y CRC; el nombre Labs o la version no lo garantizan.",
         "Inicia normalmente con F4HWN compatible. Usa Consultar slots en esta web; no uses DFU para gestionar slots.",
         "Elige un firmware F4HWN estable v6.x compatible, un slot del 1 al 4 y, opcionalmente, un nombre de hasta 15 caracteres.",
         "Instalar y verificar CRC borra, escribe y verifica el slot. No desconectes el cable. El limite de imagen por slot es 118 KiB.",
@@ -85,7 +85,7 @@ const tools = {
       ["Copias y recuperacion", [
         "Calibration guarda datos especificos de tu unidad. No restaures la calibracion de otra radio.",
         "Una imagen CHIRP guarda los canales y ajustes que entiende su driver; no sustituye la copia de calibracion.",
-        "External Flash requiere Labs v6.1.0 o posterior. Su restauracion preserva la calibracion ya presente en el equipo de destino.",
+        "External Flash requiere una compilacion con lectura fisica y CRC. Su restauracion preserva la calibracion ya presente en el equipo de destino.",
         "DFU se utiliza para Flash Firmware: radio apagada, manten PTT al encender y sueltalo antes de conectar el cable.",
         "Nunca coloques firmware stock o v5.x en slots Multiboot: puede impedir volver al selector."
       ]]

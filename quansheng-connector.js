@@ -426,13 +426,21 @@
       v.setUint32(0, address, true);
       v.setUint16(4, length, true);
       v.setUint32(6, this.timestamp, true);
-      const data = await this.exchange(0x0738, request);
+      let data;
+      try { data = await this.exchange(0x0738, request); }
+      catch (error) {
+        throw new Error(`Lectura Flash 0x0738 en 0x${address.toString(16)} (${length} bytes): ${error.message}. El firmware activo puede carecer de lectura fisica; leer canales con CHIRP no confirma esta capacidad. Comprueba una compilacion compatible y la conexion USB. No se habilitara escritura.`, { cause: error });
+      }
       R.assert(data.length === length + 7 && R.view(data).getUint32(0, true) === address &&
         R.view(data).getUint16(4, true) === length && data[6] === 0,
-      `Lectura Flash rechazada en 0x${address.toString(16)}. Se requiere Labs con acceso Flash externa.`);
+      `Lectura Flash 0x0738 rechazada en 0x${address.toString(16)}. Se requiere una compilacion con lectura fisica de Flash externa.`);
       return data.slice(7);
     }
     async readFlashRaw(progress = () => {}) {
+      this.progress(0, "Comprobando lectura fisica Flash y CRC con 128 bytes");
+      const probe = await this.readFlashBlockRaw(0, 128);
+      R.assert(await this.flashRangeCRCRaw(0, probe.length) === R.crc32(probe),
+        "El CRC de la prueba de 128 bytes de Flash no coincide con la radio. No se habilitara escritura.");
       const out = new Uint8Array(0x200000);
       for (let address = 0; address < out.length; address += 128) {
         out.set(await this.readFlashBlockRaw(address, 128), address);
@@ -448,10 +456,14 @@
       v.setUint32(0, address, true);
       v.setUint32(4, length, true);
       v.setUint32(8, this.timestamp, true);
-      const response = await this.exchange(0x073e, request, 0x073f, 30000);
+      let response;
+      try { response = await this.exchange(0x073e, request, 0x073f, 30000); }
+      catch (error) {
+        throw new Error(`CRC Flash 0x073e en 0x${address.toString(16)} (${length} bytes): ${error.message}. El firmware activo puede carecer de CRC de lectura fisica. Comprueba una compilacion compatible y la conexion USB. No se habilitara escritura.`, { cause: error });
+      }
       R.assert(response.length === 13 && R.view(response).getUint32(0, true) === address &&
         R.view(response).getUint32(4, true) === length && response[12] === 0,
-      `CRC Flash rechazado en 0x${address.toString(16)}. Se requiere Labs con CRC de lectura fisica.`);
+      `CRC Flash 0x073e rechazado en 0x${address.toString(16)}. Se requiere una compilacion con CRC de lectura fisica.`);
       return R.view(response).getUint32(8, true);
     }
     async verifyFlashRaw(flash) {
@@ -472,7 +484,7 @@
         if (this.info.legacyReadOnly) {
           const configuration = await this.readConfigurationRaw();
           await emit("configuration", configuration, { address: 0, contains: "Configuracion logica del banco activo; NO es una copia de toda la Flash" });
-          return { complete: false, scope: "Solo lectura: F4HWN v6.0 no admite el respaldo Flash completo requerido. Calibracion y configuracion guardadas; escritura bloqueada. Se requiere Labs v6.1+ con acceso Flash externa y CRC." };
+          return { complete: false, scope: "Solo lectura: F4HWN v6.0 no admite el respaldo Flash completo requerido. Calibracion y configuracion guardadas; escritura bloqueada. Se requiere una compilacion compatible con lectura fisica de Flash externa y CRC." };
         }
         this.progress(0, "Flash externa 2 MiB: puede tardar 10-20 minutos a 38400 baudios. No desconectes.");
         const flash = await this.readFlashRaw(value => this.progress(value, "Leyendo Flash externa completa (2 MiB)"));

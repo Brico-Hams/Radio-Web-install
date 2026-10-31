@@ -755,7 +755,15 @@ test("Backup completo Quansheng persiste antes de conceder permiso", async () =>
   assert.equal(record.status, "complete");
   assert.deepEqual(record.files.map(file => file.name), ["calibration", "external-flash", "base-firmware"]);
   assert.equal(record.files[1].bytes.length, 0x200000);
-  assert.equal(device.commands.filter(item => item.type === 0x0738).length, 16384);
+  assert.equal(device.commands.filter(item => item.type === 0x0738).length, 16385);
+  const crcReads = device.commands.filter(item => item.type === 0x073e);
+  assert.equal(crcReads.length, 513);
+  assert.equal(le(crcReads[0].data).getUint32(4, true), 128);
+  assert.ok(crcReads.slice(1).every(command => le(command.data).getUint32(4, true) === 4096));
+  const flashCommands = device.commands.filter(item => [0x0738, 0x073e].includes(item.type));
+  assert.deepEqual(flashCommands.slice(0, 3).map(item => item.type), [0x0738, 0x073e, 0x0738]);
+  assert.deepEqual(crcReads.slice(1).map(command => le(command.data).getUint32(0, true)),
+    Array.from({ length: 512 }, (_, index) => index * 4096));
   assert(store.puts >= 5);
   R.assertBackup(connector, permit);
   const json = JSON.parse(await R.exportBackup(await store.get(record.id)));
@@ -773,11 +781,49 @@ test("No se emite permiso si Main esta corrupto; conserva calibracion y Flash", 
   assert.equal(record.files.length, 2);
   await assert.rejects(connector.eraseSlot(1, {}), /bloqueada/);
 });
+for (const scenario of ["read-timeout", "crc-timeout", "crc-rejected", "crc-mismatch"]) test(`Preflight Flash ${scenario} conserva calibracion sin volcado ni permiso`, async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  assert.equal((await connector.readConfiguration()).length, 0xa180);
+  const exchange = connector.exchange.bind(connector);
+  connector.exchange = async (type, data, ...args) => {
+    if ((scenario === "read-timeout" && type === 0x0738) || (scenario === "crc-timeout" && type === 0x073e)) {
+      device.commands.push({ type, data: data.slice() });
+      const error = Object.assign(new Error("Tiempo agotado: recibidos 0/1 bytes."), { code: "READ_TIMEOUT" });
+      device.fail(error);
+      throw error;
+    }
+    const result = await exchange(type, data, ...args);
+    if (type === 0x073e && scenario === "crc-rejected") result[12] = 8;
+    if (type === 0x073e && scenario === "crc-mismatch") result[8] ^= 1;
+    return result;
+  };
+  const store = new MemoryStore();
+  const expected = scenario === "read-timeout" ? /0x0738.*0x0.*firmware.*USB/i :
+    scenario === "crc-mismatch" ? /CRC.*128.*No se habilitara escritura/ : /0x073e.*0x0/;
+  await assert.rejects(new R.BackupManager(store).create(connector), expected);
+  const record = [...store.records.values()][0];
+  assert.equal(record.status, "failed");
+  assert.deepEqual(record.files.map(file => file.name), ["calibration"]);
+  assert.deepEqual(record.files[0].bytes, device.flash.slice(0x10000, 0x10200));
+  assert.equal(connector.connected, false);
+  const rawReads = device.commands.filter(command => command.type === 0x0738);
+  assert.equal(rawReads.length, 1);
+  assert.equal(le(rawReads[0].data).getUint32(0, true), 0);
+  assert.equal(le(rawReads[0].data).getUint16(4, true), 128);
+  const crcReads = device.commands.filter(command => command.type === 0x073e);
+  assert.equal(crcReads.length, scenario === "read-timeout" ? 0 : 1);
+  if (crcReads.length) assert.equal(le(crcReads[0].data).getUint32(4, true), 128);
+  assert.ok(device.commands.every(command => [0x0514, 0x051b, 0x0738, 0x073e].includes(command.type)));
+  await assert.rejects(connector.eraseSlot(1, {}), /bloqueada/);
+});
+
 test("Acceso Flash no soportado conserva copia parcial y no autoriza escritura", async () => {
   const device = new QuanshengDevice(); device.rejectFlash = true;
   const connector = new R.QuanshengConnector(device); await connector.connect("UV-K1");
   const store = new MemoryStore();
-  await assert.rejects(new R.BackupManager(store).create(connector), /Labs/);
+  await assert.rejects(new R.BackupManager(store).create(connector), /0x0738/);
   assert.equal([...store.records.values()][0].files[0].name, "calibration");
 });
 test("v6.0 guarda calibracion y configuracion, sigue conectado y no intenta Flash no soportada", async () => {

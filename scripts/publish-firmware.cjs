@@ -5,7 +5,6 @@ const R = require("../radio-core.js");
 require("../transports.js");
 require("../quansheng-connector.js");
 require("../custom-firmware-ui.js");
-const { parseF4Release } = require("../firmware-service.cjs");
 const root = path.join(__dirname, "..");
 const appBuilds = [
   ["SystemInfo", "aec8dce24c5b216844f09730141556bca2bc072cdf0313097b64cf38fe1fc38a"],
@@ -37,27 +36,35 @@ async function publishApps() {
   console.log(`Catalogo apps publicado: ${entries.length} apps con SHA-256 y FAP1 verificados.`);
 }
 const builds = [
-  ["bricohams-ardf", "ardf", "BH ARDF", "152027eb1e53f25fc5c0b1d6af0c762743ce0a8da3e76825ef7f94beecb5fbf8"],
-  ["bricohams-satellite", "satellite", "BH Satellite", "673e203d229fa11705152f07579d0c1f0538334bc794eef6c88c7241e9c909ab"],
-  ["bricohams-spectrum", "spectrum", "BH Spectrum", "8a17561d01dced397c5f0f711e853e628c33a57d861895723abc90293757d468"],
+  ["bricohams-ardf", "ardf", "BH ARDF", "5e2aec16b7a8d6c6d1880fdcb82e66fada4e29c5a5fdafe3397e585e629ef661"],
+  ["bricohams-satellite", "satellite", "BH Satellite", "957679f323684a7e2a68b05455f34b88c226b4647fdbfe14dd48035feb39245b"],
+  ["bricohams-spectrum", "spectrum", "BH Spectrum", "3164be3c7cd49725897bc680d7f379a9f861ce4addb9c2b9ca460cc37bfb7ee4"],
   ["bricohams-labs", "labs", "BH Labs", "938a7cd80b489c9c1746b710c7ae4533526674b13e5f97083f6bea850721140a"],
-  ["bricohams-fusion", "fusion", "BH Fusion", "162c3eced8666748887c837c4591a95ff60725977600a96796054855aba9946d"]
+  ["bricohams-fusion", "fusion", "BH Fusion", "e053c1d3671a33bb2361d91ec5555404763bd69e4f0d2548549e6b2a68d86356"],
+  ["f4hwn-fusion", "f4hwn-fusion", "BH F4 Fusion", "1009c0f54b29b8d4ea0d81b2fffcfabe09056bccd336dabcba4c102b3a810503"],
+  ["f4hwn-fieldops", "f4hwn-fieldops", "BH F4 FieldOps", "cbf556ed40c6bdbb684ef6cf651960f87ca77014c32422b0e5bdb11553413d7f"],
+  ["f4hwn-labs", "f4hwn-labs", "BH F4 Labs", "f851dde8532aaba66c9110279b5891f332a25823a0e63e0f6c308ffe44d1a794"],
+  ["f4hwn-transfer", "f4hwn-transfer", "BH F4 Transfer", "1584bfd010fa171c1ddc5b48fa31ed07409d585c23147f9a644d426661b8fea2"]
 ];
-async function publish({ official = false } = {}) {
+async function publish() {
   const entries = [];
   const files = [];
   for (const [id, folder, edition, expected] of builds) {
-    const directory = path.join(root, "firmware-builds", "bricohams-20261028", folder, "artifacts");
+    const directory = path.join(root, "firmware-builds", "backup-read-20261031", folder, "artifacts");
     const artifacts = await Promise.all((await fs.readdir(directory)).map(async name =>
       ({ name, bytes: new Uint8Array(await fs.readFile(path.join(directory, name))) })));
     const checked = await R.verifyCustomBuild(artifacts);
     R.assert(checked.firmware.sha256 === expected, `Imagen distinta de la fijada: ${id}.`);
+    R.assert(checked.info.backupReadIntegration?.physicalRead === true &&
+      checked.info.backupReadIntegration?.crc === true &&
+      checked.info.backupReadIntegration?.persistentWritesAdded === false,
+      `Integracion de respaldo de solo lectura ausente: ${id}.`);
     R.inspectQuanshengSlotImage(checked.firmware.bytes);
     const name = `${id}.bin`;
     files.push([name, checked.firmware.bytes]);
     entries.push({
       id, name, edition, publisher: "Bricohams", version: "v6.1.0",
-      distributionVersion: "v0.5.2",
+      distributionVersion: "v0.5.4",
       size: checked.firmware.bytes.length, sha256: expected, path: `precompiled/${name}`,
       targets: ["UV-K1", "UV-K5-V3"], stability: "beta", hardwareBootTested: false,
       license: "GPL-3.0-or-later AND Apache-2.0",
@@ -65,35 +72,14 @@ async function publish({ official = false } = {}) {
       upstream: checked.info.upstream, build: checked.info
     });
   }
-  if (official) {
-    const response = await fetch("https://api.github.com/repos/armel/uv-k1-k5v3-firmware-custom/releases/tags/v6.1.0",
-      { signal: AbortSignal.timeout(60000), headers: { "User-Agent": "Bricohams-Radio-Workspace" } });
-    R.assert(response.ok, `GitHub: HTTP ${response.status}.`);
-    for (const entry of parseF4Release(await response.json(), "UV-K5-V3").filter(item => item.slotCompatible)) {
-      const response = await fetch(entry.url, { signal: AbortSignal.timeout(60000) });
-      R.assert(response.ok, `Descarga oficial: HTTP ${response.status}.`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      R.assert(bytes.length === entry.size && await R.sha256(bytes) === entry.expectedSHA256,
-        `SHA-256 o tamano oficial incorrecto: ${entry.name}.`);
-      R.inspectQuanshengSlotImage(bytes, entry.name);
-      const id = `f4hwn-${entry.edition}`;
-      const name = `${id}.bin`;
-      files.push([name, bytes]);
-      entries.push({ id, name, edition: `F4HWN ${entry.edition}`, publisher: entry.publisher, version: entry.version,
-        size: entry.size, sha256: entry.expectedSHA256, path: `precompiled/${name}`,
-        targets: ["UV-K1", "UV-K5-V3"], stability: "upstream-stable", hardwareBootTested: false,
-        license: "Apache-2.0", source: entry.source, originalURL: entry.url,
-        upstream: { repository: "https://github.com/armel/uv-k1-k5v3-firmware-custom", tag: entry.version } });
-    }
-  }
+  const notices = path.join(root, "firmware-builds", "backup-read-20261031", "ardf", "artifacts");
+  files.push(["LICENSE.txt", await fs.readFile(path.join(root, "LICENSE"))],
+    ["APACHE-2.0.txt", await fs.readFile(path.join(notices, "LICENSE"))],
+    ["NOTICE.txt", await fs.readFile(path.join(notices, "NOTICE"))],
+    ["BRICOHAMS-NOTICE.txt", await fs.readFile(path.join(notices, "MODULE-NOTICE.txt"))]);
   const output = path.join(root, "precompiled");
   await fs.mkdir(output, { recursive: true });
   for (const [name, bytes] of files) await fs.writeFile(path.join(output, name), bytes);
-  await fs.copyFile(path.join(root, "LICENSE"), path.join(output, "LICENSE.txt"));
-  const notices = path.join(root, "firmware-builds", "bricohams-20261028", "ardf", "artifacts");
-  await fs.copyFile(path.join(notices, "LICENSE"), path.join(output, "APACHE-2.0.txt"));
-  await fs.copyFile(path.join(notices, "NOTICE"), path.join(output, "NOTICE.txt"));
-  await fs.copyFile(path.join(notices, "MODULE-NOTICE.txt"), path.join(output, "BRICOHAMS-NOTICE.txt"));
   await fs.writeFile(path.join(output, "catalog.json"), JSON.stringify({
     format: "bricohams-precompiled-catalog", version: 1, license: "GPL-3.0-or-later",
     licensePath: "precompiled/LICENSE.txt", entries
@@ -101,8 +87,7 @@ async function publish({ official = false } = {}) {
   console.log(`Catalogo publicado: ${entries.length} imagenes con SHA-256 verificado.`);
   return entries;
 }
-if (require.main === module) (process.argv.includes("--apps-only") ? publishApps() :
-  publish({ official: process.argv.includes("--official") }).then(publishApps)).catch(error => {
+if (require.main === module) (process.argv.includes("--apps-only") ? publishApps() : publish()).catch(error => {
   console.error(error.message);
   process.exitCode = 1;
 });

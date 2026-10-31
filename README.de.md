@@ -33,8 +33,9 @@ bestätigt keine Tests auf jedem physischen Betriebssystem.
 
 ## Quansheng: Vorkompilierter Katalog, Viewer und RF-Protokoll
 
-- Neun Images v6.1.0, die über das Web bereitgestellt werden: Bricohams ARDF, Satellite,
-Spectrum, Labs und Fusion, sowie F4HWN die offiziellen Fusion, FieldOps, Transfer und Labs.
+- Neun Bricohams-Beta-Derivate v6.1.0 mit RAW-Backup-Lesen und CRC: ARDF, Satellite,
+Spectrum, Labs und Fusion sowie die Kompatibilitätsprofile Fusion, FieldOps, Transfer und Labs.
+Dies sind keine unveränderten offiziellen Binärdateien; die Originale bleiben im separaten Upstream-Release-Katalog.
 Es ist keine Kompilierung oder Ordnerauswahl erforderlich. Vor der Vorbereitung eines slot werden SHA-256, Größe
 und Struktur überprüft; für die Installation ist weiterhin eine Sicherung erforderlich.
 - LCD-Anzeige zu Beginn, automatischer Start beim Anschließen, Pause vor

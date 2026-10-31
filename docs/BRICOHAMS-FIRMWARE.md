@@ -1,5 +1,25 @@
 # Bricohams V3: compilacion modular local
 
+## Respaldo RAW: nueve derivados Beta (31-10-2026)
+
+El catalogo local contiene nueve compilaciones Bricohams desde el commit
+upstream fijado abajo: ARDF, Satellite, Spectrum, Labs, Fusion y cuatro
+derivados de compatibilidad con los presets Fusion, FieldOps, Labs y Transfer
+sin opciones adicionales. Estos cuatro conservan los identificadores
+`f4hwn-*` por compatibilidad de rutas, pero **no son binarios oficiales intactos**.
+Conservan la atribucion F4HWN/Armel y las licencias originales. Las descargas
+oficiales siguen disponibles en el catalogo dinamico separado de releases upstream.
+
+Todas incorporan lectura fisica `0x0738` y CRC `0x073e` para respaldar Flash
+desde cualquier perfil multiboot, sin ampliar los permisos de borrado `0x073a`
+ni escritura RAW `0x073c` del preset. Son Beta, con
+`hardwareBootTested: false`: compilar y verificar SHA-256 no prueba el arranque.
+Los artefactos reproducibles y `build-info.json` estan bajo
+`firmware-builds/backup-read-20261031/<perfil>/artifacts`.
+`npm run publish:firmware` verifica las nueve imagenes, sus manifiestos y avisos
+antes de escribir el catalogo local; no descarga firmware ni republica apps.
+Las mediciones y distribuciones anteriores que siguen son historicas.
+
 ## Identidad y alcance
 
 **BETA, en validacion y pruebas.** Las nuevas compilaciones declaran

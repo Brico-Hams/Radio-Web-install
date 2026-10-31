@@ -1,5 +1,25 @@
 # Bricohams V3: lokale modulare Kompilierung
 
+## RAW-Backup: neun Beta-Derivate (31.10.2026)
+
+Der lokale Katalog enthält neun Bricohams-Builds aus dem unten fixierten
+Upstream-Commit: ARDF, Satellite, Spectrum, Labs, Fusion sowie vier
+Kompatibilitätsderivate mit den Standard-Presets Fusion, FieldOps, Labs und
+Transfer ohne zusätzliche Optionen. Diese vier behalten die IDs `f4hwn-*`
+für bestehende Pfade; **sie sind keine unveränderten offiziellen Binärdateien**.
+F4HWN/Armel-Nennung und ursprüngliche Lizenzen bleiben erhalten. Offizielle
+Downloads bleiben im separaten dynamischen Upstream-Release-Katalog.
+
+Alle neun unterstützen physisches Lesen `0x0738` und CRC `0x073e` für
+Flash-Backups aus jedem Multiboot-Profil, ohne zusätzliche Berechtigungen zum
+RAW-Löschen `0x073a` oder Schreiben `0x073c`. Sie bleiben Beta mit
+`hardwareBootTested: false`; Build und SHA-256 bestätigen keinen Hardwarestart.
+Artefakte und `build-info.json` liegen unter
+`firmware-builds/backup-read-20261031/<perfil>/artifacts`.
+`npm run publish:firmware` prüft alle neun Images, Manifeste und Hinweise vor
+dem Schreiben des lokalen Katalogs, ohne Firmware-Download oder App-Neuveröffentlichung.
+Ältere Messungen und Distributionen weiter unten sind historisch.
+
 ## Identität und Geltungsbereich
 
 **BETA, in Validierung und Erprobung.** Neue Builds geben

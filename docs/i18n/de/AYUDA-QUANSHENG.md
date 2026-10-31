@@ -99,12 +99,24 @@ Test-Frames geprüft. K5Viewer muss in der aktiven Firmware aktiviert sein.
 
 ## Vorgefertigter Katalog ohne Build-Werkzeuge
 
-Die Website enthält neun v6.1.0-Images: Bricohams ARDF, Satellite, Spectrum,
-Labs und Fusion sowie die offiziellen F4HWN Fusion, FieldOps, Transfer und Labs.
+Die Website enthält neun Bricohams-Beta-Derivate v6.1.0: ARDF, Satellite, Spectrum,
+Labs und Fusion sowie die Kompatibilitätsprofile Fusion, FieldOps, Transfer und Labs.
+Dies sind keine unveränderten offiziellen Binärdateien; die Originale bleiben
+im separaten dynamischen Upstream-Release-Katalog.
 Ein Ordner muss nicht ausgewählt werden. Derselbe Katalog gilt für den lokalen Server
 und den statischen Export. Es handelt sich nicht um einen dynamischen Download beliebiger URLs.
 
 ### CHIRP v6.1.0
+
+CHIRP liest Kanäle über die logische Konfiguration. Das beweist nicht, dass die
+aktive Firmware den physischen Flash sichern kann. Eine vollständige Sicherung
+erfordert einen Build mit Lesen `0x0738` und CRC `0x073e`; der Name Labs oder die
+Version v6.1.0 garantiert dies nicht. Die Website prüft zuerst 128 Byte samt CRC
+vor dem 2-MiB-Abbild und danach alle 512 Sektoren zu 4 KiB. Bei fehlender Antwort
+bleibt die bereits gespeicherte Kalibrierung erhalten; Schreiben bleibt gesperrt.
+Build und USB-Verbindung prüfen; einen Timeout nicht allein dem Kabel zuschreiben
+oder Schreibrechte erzwingen. Diese Prüfung wurde simuliert und bestätigt keinen
+neuen Firmware-Build auf echter Hardware.
 
 Alle neun Katalogabbilder verwenden das F4HWN-v6.1.0-Protokoll. Der generische
 CHIRP-Eintrag **Quansheng / UV-K5** kann das Gerät erkennen, sein Abbild jedoch
@@ -149,8 +161,8 @@ Der Katalog bewahrt die ursprünglichen Metadaten: Ein Strukturtest wird dadurch
 Hardwarezertifizierung. Für andere Versionen ist weiterhin der Katalog offizieller
 Releases verfügbar; mit Slots inkompatible Varianten können nur heruntergeladen werden.
 
-Wartung: `npm run publish:firmware` prüft die fünf lokalen Builds mit festgelegten
-SHA-256-Werten und ruft das offizielle v6.1.0-Release mit den GitHub-Hashes ab. Erst nach
+Wartung: `npm run publish:firmware` prüft die neun lokalen Builds aus
+`firmware-builds/backup-read-20261031` mit festgelegten SHA-256-Werten, ohne offizielle Originale herunterzuladen. Erst nach
 Prüfung aller Dateien wird der Katalog geschrieben. Die GPL-Lizenzen von Bricohams und Apache-Upstream-Lizenzen
 sowie Hinweise werden mitgeliefert. Optionen, integrierte Quell-Hashes und Upstream-Commit stehen in jedem
 Eintrag von `precompiled/catalog.json`; Builder und Quellmodule befinden sich in diesem Repository.
@@ -453,7 +465,7 @@ Sie implementiert den CAT-v1-Befehl des Bricohams-Satelliten-Images nicht.
    In Browsern ohne diesen Dialog wird nur ein Download angefordert: Downloads prüfen und die Anforderung
    nicht mit einer bestätigten Speicherung verwechseln. Das Speichern des JSON-Projekts oder der CSV ersetzt diese Binärdatei nicht.
 6. **Kanäle schreiben und erneut lesen (Beta)** wird nur mit vollständiger Sicherung dieser Sitzung
-   und über Labs v6.1+ mit Flash-Lesen und CRC freigeschaltet. Es wird geprüft, dass das Funkgerät noch dem
+   und über einen Build mit physischem Flash-Lesen und CRC freigeschaltet. Es wird geprüft, dass das Funkgerät noch dem
    Lesestand entspricht; 8-Byte-Blöcke werden geschrieben und alles erneut gelesen.
    Während des Schreibens werden betroffene Speicher vorübergehend als leer markiert;
    nach Daten/Namen werden sie wieder aktiviert. Der Vorgang ist nicht ausfallsicher bei Stromverlust.

@@ -5,6 +5,7 @@ const { execFileSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const assert = require("node:assert/strict");
 const { modulePlan, integrateModule, replaceOnce } = require("./bricohams-modules.cjs");
+const { integrateBackupRead } = require("./firmware-backup-read.cjs");
 
 const UPSTREAM = Object.freeze({
   repository: "https://github.com/armel/uv-k1-k5v3-firmware-custom",
@@ -148,6 +149,9 @@ function build(args) {
   run("git", ["clone", "--local", "--no-hardlinks", "--no-checkout", source, work]);
   run("git", ["-C", work, "checkout", "--detach", UPSTREAM.commit]);
   const moduleSources = modules.length ? integrateModule(work, modules[0]) : [];
+  const backupReadIntegration = integrateBackupRead(work);
+  for (const item of moduleSources)
+    item.sha256 = createHash("sha256").update(fs.readFileSync(path.join(work, item.file))).digest("hex");
   const welcomeFile = path.join(work, "App", "ui", "welcome.c");
   const welcome = brandLogo(brandWelcome(fs.readFileSync(welcomeFile, "utf8")));
   fs.writeFileSync(welcomeFile, welcome);
@@ -174,7 +178,7 @@ function build(args) {
     sourceDateEpoch: Number(epoch), toolchain: { compiler, cmake, ninja },
     imageBytes: inspected.size, memory, sourceChangesIncluded: false,
     hardwareTested: false, derivedFromKarina: false,
-    modules, moduleSources, brandingSources, integrationTestedOnHardware: false,
+    modules, moduleSources, brandingSources, backupReadIntegration, integrationTestedOnHardware: false,
     ...(modules.includes("satellite") ? { catRx: { version: 1, command: 0x7b00,
       reply: 0x7b01, leaseMilliseconds: 3000, physicalEnableKey: "8",
       persistentWrites: false, transmitControl: false, hardwareValidated: false },

@@ -33,7 +33,7 @@ ne certifie pas des essais sur chaque système physique.
 
 ## Quansheng : catalogue précompilé, visualiseur et journal RF
 
-- Neuf images v6.1.0 sont distribuées avec l’application : Bricohams ARDF, Satellite, Spectrum, Labs et Fusion, ainsi que les versions officielles F4HWN Fusion, FieldOps, Transfer et Labs. Aucune compilation ni sélection de dossier n’est nécessaire. SHA-256, taille et structure sont vérifiés avant la préparation d’un slot ; l’installation exige toujours une sauvegarde.
+- Neuf dérivés Bricohams Beta v6.1.0 avec lecture RAW de sauvegarde et CRC : ARDF, Satellite, Spectrum, Labs et Fusion, ainsi que les profils de compatibilité Fusion, FieldOps, Transfer et Labs. Ce ne sont pas les binaires officiels intacts ; les originaux restent dans le catalogue séparé des releases upstream. Aucune compilation ni sélection de dossier n’est nécessaire. SHA-256, taille et structure sont vérifiés avant la préparation d’un slot ; l’installation exige toujours une sauvegarde.
 - Visualiseur LCD affiché en premier, démarrage automatique à la connexion, pause avant toute opération et capture PNG. Un seul lecteur utilise le port à la fois.
 - Clavier distant avec appuis courts/longs, sans PTT, sauvegarde complète, activation manuelle et confirmation par touche. F1/F2 peuvent déclencher des fonctions d’émission selon la radio ; l’envoi UART ne confirme pas que la commande a été exécutée.
 - Redémarrage natif avec confirmation littérale, sans nouvelle tentative ni changement de slot ; le port est fermé et les autorisations sont révoquées. Vérifier manuellement le démarrage.

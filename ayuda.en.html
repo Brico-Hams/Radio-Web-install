@@ -108,7 +108,7 @@
       <ul class="feature-list">
         <li>Only PY32F071 with F4HWN v6 or later and Multiboot. Not suitable for older UV-K5 models or factory firmware.</li>
         <li>Web Serial at 38400 baud through a USB-C data cable or USB-to-serial programming cable.</li>
-        <li>Automatic backup: calibration, the full 2 MiB external Flash (requires <strong>Labs v6.1+</strong> with hardware CRC), and the <code>Main</code>image. The 2 MiB backup may take 10–20 minutes.</li>
+        <li>Automatic backup: calibration, the full 2 MiB external Flash (requires <code>0x0738 / 0x073e</code> enabled for RAW read and CRC), and the <code>Main</code>image. The 2 MiB backup may take 10–20 minutes.</li>
         <li>With a verified backup: install/erase slots 1–4 and reset CFG banks 1–4. <code>Main</code> is never a target.</li>
         <li>Switch slots on the radio: power on while holding <kbd>M</kbd> (not PTT), choose the slot, and confirm twice.</li>
       </ul>
@@ -168,7 +168,7 @@
         <tr><td><samp>Error al configurar CDC. Comprueba el controlador USB.</samp></td><td>Windows without WinUSB for <code>1FC9:0094</code>.</td><td>Install WinUSB with Zadig.</td></tr>
         <tr><td><samp>Cable USB desconectado.</samp> <samp>Cable serie desconectado.</samp> <samp>La radio cerro el puerto.</samp></td><td>Loose connector, USB power saving, or radio turned off.</td><td>Reconnect and retry; a new backup will be required.</td></tr>
         <tr><td><samp>CRC UART incorrecto.</samp> <samp>Trama UART demasiado corta.</samp></td><td>Cable noise, mismatched baud rate, or non-F4HWN firmware.</td><td>Try another cable or port; confirm F4HWN v6+.</td></tr>
-        <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Transmission error or firmware without hardware CRC (not Labs v6.1+).</td><td>Retry. Use Labs v6.1+ for a full backup. Writes remain blocked.</td></tr>
+        <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Transmission error or firmware without RAW read and physical CRC.</td><td>Check the active build and USB connection. The Labs name or version does not guarantee these capabilities. Writes remain blocked.</td></tr>
         <tr><td><samp>Main no inicializado o cabecera no compatible.</samp></td><td>The radio does not have a valid Main image.</td><td>Writing will not be enabled. Consult the F4HWN documentation.</td></tr>
         <tr><td><samp>IndexedDB no disponible</samp> <samp>La copia no se pudo confirmar en disco.</samp></td><td>Private window, full disk, or blocked storage.</td><td>Use a regular window, free disk space, and allow site storage.</td></tr>
         <tr><td><samp>Base de copias bloqueada por otra pestana.</samp></td><td>Another app tab is open.</td><td>Close the other tabs and reload.</td></tr>

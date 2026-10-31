@@ -98,12 +98,23 @@ also checked with test frames. K5Viewer must be enabled in the active firmware.
 
 ## Precompiled catalog without build tools
 
-The website includes nine v6.1.0 images: Bricohams ARDF, Satellite, Spectrum,
-Labs, and Fusion, plus the official F4HWN Fusion, FieldOps, Transfer, and Labs.
+The website includes nine Bricohams Beta v6.1.0 derivatives: ARDF, Satellite,
+Spectrum, Labs, and Fusion, plus compatibility profiles Fusion, FieldOps, Transfer, and Labs.
+These are not intact official binaries; originals remain in the separate
+dynamic upstream release catalog.
 No folder selection is required. The same catalog is used on the local server
 and in the static export. It is not a dynamic download from an arbitrary URL.
 
 ### CHIRP v6.1.0
+
+CHIRP reads channels through logical configuration; this does not prove the active
+firmware can back up physical Flash. A full backup requires a build with read
+`0x0738` and CRC `0x073e`; the Labs name or v6.1.0 version does not guarantee them.
+The website first checks 128 bytes and their CRC before the 2 MiB dump, then
+verifies all 512 sectors of 4 KiB. A missing reply preserves calibration already
+saved and blocks writing. Check the build and USB connection; do not attribute a
+timeout only to the cable or force write permission. This check was tested in
+simulation; it does not certify a new firmware build on hardware.
 
 All nine catalog images use the F4HWN v6.1.0 protocol. Selecting generic
 **Quansheng / UV-K5** in CHIRP can identify the radio but mark its image as
@@ -148,8 +159,8 @@ metadata: a structural test is not converted into hardware certification.
 The official release catalog remains available for other versions; variants
 incompatible with slots are download-only.
 
-Maintenance: `npm run publish:firmware` verifies the five local builds pinned by
-SHA-256 and retrieves the official v6.1.0 release with GitHub hashes. It writes
+Maintenance: `npm run publish:firmware` verifies the nine local builds from
+`firmware-builds/backup-read-20261031`, pinned by SHA-256, without downloading official originals. It writes
 the catalog only after validating every file. The Bricohams GPL and upstream
 Apache licenses and notices are distributed. Options, integrated-source hashes,
 and upstream commit are listed in each `precompiled/catalog.json` entry; the
@@ -503,7 +514,7 @@ the Bricohams Satellites image.
    and do not mistake the request for a confirmed save. Saving a JSON or CSV
    project is not a substitute for this binary.
 6. **Write and read back channels (Beta)** is enabled only with a full backup
-   from this session, using Labs v6.1+ with Flash read and CRC support. It
+   from this session, using a build with physical Flash read and CRC support. It
    checks that the radio is unchanged since the read, writes 8-byte blocks,
    and reads everything back. During writing, affected memories are temporarily
    marked empty; they are reactivated after their data/names are written. This

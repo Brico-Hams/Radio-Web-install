@@ -108,7 +108,7 @@
       <ul class="feature-list">
         <li>Solo PY32F071 con F4HWN v6 o posterior y Multiboot. No sirve para UV-K5 antiguos ni firmware de fábrica.</li>
         <li>Web Serial a 38400 baudios mediante USB-C de datos o cable de programación USB-serie.</li>
-        <li>Copia automática: calibración, Flash externa completa de 2 MiB (requiere <strong>Labs v6.1+</strong> con CRC físico) e imagen <code>Main</code>. La copia de 2 MiB puede tardar 10-20 minutos.</li>
+        <li>Copia automática: calibración, Flash externa completa de 2 MiB (requiere <code>0x0738 / 0x073e</code> activos para lectura RAW y CRC) e imagen <code>Main</code>. La copia de 2 MiB puede tardar 10-20 minutos.</li>
         <li>Con copia verificada: instalar/borrar slots 1-4 y restablecer bancos CFG 1-4. <code>Main</code> nunca es destino.</li>
         <li>Cambiar de slot se hace en la radio: enciende manteniendo <kbd>M</kbd> (no PTT), elige el slot y confirma dos veces.</li>
       </ul>
@@ -168,7 +168,7 @@
         <tr><td><samp>Error al configurar CDC. Comprueba el controlador USB.</samp></td><td>Windows sin WinUSB para <code>1FC9:0094</code>.</td><td>Instala WinUSB con Zadig.</td></tr>
         <tr><td><samp>Cable USB desconectado.</samp> <samp>Cable serie desconectado.</samp> <samp>La radio cerro el puerto.</samp></td><td>Conector flojo, ahorro de energía USB o radio apagada.</td><td>Reconecta y repite; se exigirá una copia nueva.</td></tr>
         <tr><td><samp>CRC UART incorrecto.</samp> <samp>Trama UART demasiado corta.</samp></td><td>Ruido en el cable, baudios distintos o firmware no F4HWN.</td><td>Prueba otro cable o puerto; confirma F4HWN v6+.</td></tr>
-        <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Error de transmisión o firmware sin CRC físico (no Labs v6.1+).</td><td>Repite. Para la copia completa usa Labs v6.1+. Las escrituras siguen bloqueadas.</td></tr>
+        <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Error de transmisión o firmware sin lectura RAW y CRC físico.</td><td>Comprueba la compilación activa y la conexión USB. El nombre Labs o la versión no garantizan estas capacidades. Las escrituras siguen bloqueadas.</td></tr>
         <tr><td><samp>Main no inicializado o cabecera no compatible.</samp></td><td>La radio no tiene una imagen Main válida.</td><td>No se habilitará la escritura. Consulta la documentación de F4HWN.</td></tr>
         <tr><td><samp>IndexedDB no disponible</samp> <samp>La copia no se pudo confirmar en disco.</samp></td><td>Ventana privada, disco lleno o almacenamiento bloqueado.</td><td>Usa una ventana normal, libera espacio y permite el almacenamiento del sitio.</td></tr>
         <tr><td><samp>Base de copias bloqueada por otra pestana.</samp></td><td>Otra pestaña de la aplicación está abierta.</td><td>Cierra las demás pestañas y recarga.</td></tr>

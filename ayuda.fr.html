@@ -108,7 +108,7 @@
       <ul class="feature-list">
         <li>Uniquement PY32F071 avec F4HWN v6 ou ultérieur et Multiboot. Ne convient ni aux anciens UV-K5 ni au firmware d’usine.</li>
         <li>Web Serial à 38400 bauds via un câble USB-C de données ou un câble de programmation USB-série.</li>
-        <li>Sauvegarde automatique : calibration, intégralité de la Flash externe de 2 MiB (nécessite <strong>Labs v6.1+</strong> avec CRC matériel) et image <code>Main</code>. La sauvegarde de 2 MiB peut prendre 10 à 20 minutes.</li>
+        <li>Sauvegarde automatique : calibration, intégralité de la Flash externe de 2 MiB (nécessite <code>0x0738 / 0x073e</code> actifs pour lecture RAW et CRC) et image <code>Main</code>. La sauvegarde de 2 MiB peut prendre 10 à 20 minutes.</li>
         <li>Avec une sauvegarde vérifiée : installer/effacer les slots 1 à 4 et réinitialiser les banques CFG 1 à 4. <code>Main</code> n’est jamais une destination.</li>
         <li>Le changement de slot se fait sur la radio : allumez en maintenant <kbd>M</kbd> (pas PTT), choisissez le slot et confirmez deux fois.</li>
       </ul>
@@ -168,7 +168,7 @@
         <tr><td><samp>Error al configurar CDC. Comprueba el controlador USB.</samp></td><td>Windows sans WinUSB pour <code>1FC9:0094</code>.</td><td>Installez WinUSB avec Zadig.</td></tr>
         <tr><td><samp>Cable USB desconectado.</samp> <samp>Cable serie desconectado.</samp> <samp>La radio cerro el puerto.</samp></td><td>Connecteur mal fixé, économie d’énergie USB ou radio éteinte.</td><td>Reconnectez et réessayez ; une nouvelle sauvegarde sera exigée.</td></tr>
         <tr><td><samp>CRC UART incorrecto.</samp> <samp>Trama UART demasiado corta.</samp></td><td>Parasites sur le câble, débit différent ou firmware autre que F4HWN.</td><td>Essayez un autre câble ou port ; confirmez F4HWN v6+.</td></tr>
-        <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Erreur de transmission ou firmware sans CRC matériel (pas Labs v6.1+).</td><td>Réessayez. Pour une sauvegarde complète, utilisez Labs v6.1+. Les écritures restent bloquées.</td></tr>
+        <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Erreur de transmission ou firmware sans lecture RAW et CRC physique.</td><td>Vérifiez la compilation active et la connexion USB. Le nom Labs ou la version ne garantit pas ces capacités. Les écritures restent bloquées.</td></tr>
         <tr><td><samp>Main no inicializado o cabecera no compatible.</samp></td><td>La radio n’a pas d’image Main valide.</td><td>L’écriture ne sera pas autorisée. Consultez la documentation F4HWN.</td></tr>
         <tr><td><samp>IndexedDB no disponible</samp> <samp>La copia no se pudo confirmar en disco.</samp></td><td>Fenêtre privée, disque plein ou stockage bloqué.</td><td>Utilisez une fenêtre normale, libérez de l’espace et autorisez le stockage du site.</td></tr>
         <tr><td><samp>Base de copias bloqueada por otra pestana.</samp></td><td>Un autre onglet de l’application est ouvert.</td><td>Fermez les autres onglets et rechargez.</td></tr>

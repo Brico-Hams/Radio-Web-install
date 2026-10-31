@@ -99,12 +99,23 @@ deve essere abilitato nel firmware attivo.
 
 ## Catalogo precompilato senza strumenti di compilazione
 
-Il sito include nove immagini v6.1.0: Bricohams ARDF, Satellite, Spectrum,
-Labs e Fusion, oltre alle immagini ufficiali F4HWN Fusion, FieldOps, Transfer e Labs.
+Il sito include nove derivati Bricohams Beta v6.1.0: ARDF, Satellite, Spectrum,
+Labs e Fusion, oltre ai profili di compatibilità Fusion, FieldOps, Transfer e Labs.
+Non sono binari ufficiali intatti; gli originali restano nel catalogo dinamico
+separato delle release upstream.
 Non occorre selezionare una cartella. Il catalogo è identico sul server locale
 e nell'esportazione statica. Non si tratta di un download dinamico da qualsiasi URL.
 
 ### CHIRP v6.1.0
+
+CHIRP legge i canali tramite la configurazione logica; questo non dimostra che il
+firmware attivo possa salvare la Flash fisica. Il backup completo richiede una
+compilazione con lettura `0x0738` e CRC `0x073e`; il nome Labs o la versione v6.1.0
+non lo garantisce. Il sito verifica prima 128 byte e il loro CRC, poi legge i 2 MiB
+e verifica tutti i 512 settori da 4 KiB. Se manca la risposta, conserva la
+calibrazione già salvata e blocca la scrittura. Verifica compilazione e connessione
+USB; non attribuire il timeout solo al cavo e non forzare i permessi. Il controllo
+è stato simulato; non certifica una nuova compilazione su hardware reale.
 
 Le nove immagini del catalogo usano il protocollo F4HWN v6.1.0. Selezionare
 **Quansheng / UV-K5** generico in CHIRP può identificare la radio ma segnare
@@ -149,9 +160,9 @@ conserva i metadati originali: una verifica strutturale non diventa una
 certificazione hardware. Per altre versioni è ancora disponibile il catalogo
 delle release ufficiali; le varianti non compatibili con gli slot sono solo scaricabili.
 
-Manutenzione: `npm run publish:firmware` verifica le cinque compilazioni
-locali fissate tramite SHA-256 e recupera la release ufficiale v6.1.0 con gli
-hash di GitHub. Il catalogo viene scritto solo dopo la convalida di tutti i file.
+Manutenzione: `npm run publish:firmware` verifica le nove compilazioni locali
+di `firmware-builds/backup-read-20261031`, fissate tramite SHA-256, senza scaricare
+gli originali ufficiali. Il catalogo viene scritto solo dopo la convalida di tutti i file.
 Sono distribuite le licenze GPL Bricohams e Apache upstream e i relativi avvisi.
 Le opzioni, gli hash dei sorgenti integrati e il commit upstream sono in ogni
 voce di `precompiled/catalog.json`; il generatore e i moduli sorgente si trovano
@@ -506,7 +517,7 @@ e passare prima dalla tabella di selezione.
    richiesta una download: controlla Download e non confondere la richiesta con
    un salvataggio confermato. Salvare il progetto JSON o CSV non sostituisce questo binario.
 6. **Scrivi e rileggi i canali (Beta)** è abilitato solo con un backup completo
-   di questa sessione, tramite Labs v6.1+ con lettura Flash e CRC. Verifica che la
+   di questa sessione, tramite una compilazione con lettura Flash fisica e CRC. Verifica che la
    radio sia ancora uguale a quando è stata letta, scrive blocchi da 8 byte e rilegge tutto.
    Durante la scrittura le memorie interessate vengono temporaneamente segnate vuote;
    vengono riattivate dopo i dati/nomi. Non è una transazione resistente a interruzioni di corrente.

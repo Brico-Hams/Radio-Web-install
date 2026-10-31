@@ -108,7 +108,7 @@
       <ul class="feature-list">
         <li>Nur PY32F071 mit F4HWN v6 oder neuer und Multiboot. Nicht für ältere UV-K5 oder Werksfirmware geeignet.</li>
         <li>Web Serial mit 38400 Baud über ein USB-C-Datenkabel oder USB-Seriell-Programmierkabel.</li>
-        <li>Automatische Sicherung: Kalibrierung, gesamter externer 2-MiB-Flash (erfordert <strong>Labs v6.1+</strong> mit Hardware-CRC) und das Abbild <code>Main</code>. Die 2-MiB-Sicherung kann 10–20 Minuten dauern.</li>
+        <li>Automatische Sicherung: Kalibrierung, gesamter externer 2-MiB-Flash (erfordert <code>0x0738 / 0x073e</code> aktiv für RAW-Lesen und CRC) und das Abbild <code>Main</code>. Die 2-MiB-Sicherung kann 10–20 Minuten dauern.</li>
         <li>Mit geprüfter Sicherung: Slots 1–4 installieren/löschen und CFG-Bänke 1–4 zurücksetzen. <code>Main</code> ist niemals ein Ziel.</li>
         <li>Slots werden am Funkgerät gewechselt: Halte beim Einschalten <kbd>M</kbd> (nicht PTT) gedrückt, wähle den Slot und bestätige zweimal.</li>
       </ul>
@@ -168,7 +168,7 @@
         <tr><td><samp>Error al configurar CDC. Comprueba el controlador USB.</samp></td><td>Windows ohne WinUSB für <code>1FC9:0094</code>.</td><td>Installiere WinUSB mit Zadig.</td></tr>
         <tr><td><samp>Cable USB desconectado.</samp> <samp>Cable serie desconectado.</samp> <samp>La radio cerro el puerto.</samp></td><td>Lockerer Stecker, USB-Energiesparmodus oder ausgeschaltetes Funkgerät.</td><td>Verbinde erneut und wiederhole den Vorgang; eine neue Sicherung ist erforderlich.</td></tr>
         <tr><td><samp>CRC UART incorrecto.</samp> <samp>Trama UART demasiado corta.</samp></td><td>Störungen im Kabel, abweichende Baudrate oder andere Firmware als F4HWN.</td><td>Probiere ein anderes Kabel oder einen anderen Port; bestätige F4HWN v6+.</td></tr>
-        <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Übertragungsfehler oder Firmware ohne Hardware-CRC (nicht Labs v6.1+).</td><td>Wiederhole den Vorgang. Verwende Labs v6.1+ für die vollständige Sicherung. Schreibzugriffe bleiben gesperrt.</td></tr>
+        <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Übertragungsfehler oder Firmware ohne RAW-Lesen und physischen CRC.</td><td>Prüfe den aktiven Build und die USB-Verbindung. Der Name Labs oder die Version garantiert diese Fähigkeiten nicht. Schreibzugriffe bleiben gesperrt.</td></tr>
         <tr><td><samp>Main no inicializado o cabecera no compatible.</samp></td><td>Das Funkgerät hat kein gültiges Main-Abbild.</td><td>Schreibzugriffe werden nicht freigegeben. Lies die F4HWN-Dokumentation.</td></tr>
         <tr><td><samp>IndexedDB no disponible</samp> <samp>La copia no se pudo confirmar en disco.</samp></td><td>Privates Fenster, voller Datenträger oder gesperrter Speicher.</td><td>Verwende ein normales Fenster, schaffe Speicherplatz und erlaube den Website-Speicher.</td></tr>
         <tr><td><samp>Base de copias bloqueada por otra pestana.</samp></td><td>Ein weiterer Tab der Anwendung ist geöffnet.</td><td>Schließe die anderen Tabs und lade neu.</td></tr>

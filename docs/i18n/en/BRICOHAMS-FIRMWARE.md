@@ -1,5 +1,25 @@
 # Bricohams V3: Local Modular Build
 
+## RAW backup: nine Beta derivatives (2026-10-31)
+
+The local catalog contains nine Bricohams builds from the pinned upstream
+commit below: ARDF, Satellite, Spectrum, Labs, Fusion, plus four compatibility
+derivatives using the default Fusion, FieldOps, Labs and Transfer presets
+without additional options. These four keep the `f4hwn-*` IDs for path
+compatibility; **they are not intact official binaries**. F4HWN/Armel credit
+and original licenses are retained. Official downloads remain in the separate
+dynamic upstream release catalog.
+
+All nine include physical read `0x0738` and CRC `0x073e` for Flash backups
+from any multiboot profile, without adding permissions for RAW erase `0x073a`
+or write `0x073c`. They are Beta with `hardwareBootTested: false`; builds and
+SHA-256 verification do not prove hardware boot. Reproducible artifacts and
+`build-info.json` are under
+`firmware-builds/backup-read-20261031/<perfil>/artifacts`.
+`npm run publish:firmware` verifies all nine images, manifests and notices
+before writing the local catalog; it does not download firmware or republish apps.
+Earlier measurements and distributions below are historical.
+
 ## Identity and Scope
 
 **BETA, undergoing validation and testing.** New builds declare

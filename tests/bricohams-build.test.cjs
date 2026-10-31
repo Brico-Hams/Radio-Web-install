@@ -6,6 +6,119 @@ const { modulePlan, replaceOnce } = require("../scripts/bricohams-modules.cjs");
 const { inspectResident } = require("../scripts/build-platform-resident.cjs");
 const { OP, STATE, encodeRequest, decodeReply, uploadPackage } = require("../scripts/platform-transfer.cjs");
 const { crc32 } = require("../radio-core.js");
+const { patchBackupReadSource, integrateBackupRead } = require("../scripts/firmware-backup-read.cjs");
+
+function backupSources() {
+  const guard = "#if defined(ENABLE_FEAT_F4HWN_EXT_FLASH_RW) || defined(ENABLE_AIRCOPY_FLASH)";
+  return {
+    "App/app/uart.c": [
+      '#ifdef ENABLE_FEAT_F4HWN_MULTIBOOT\n    #include "driver/mb_flash.h"\n    #ifdef ENABLE_FEAT_F4HWN_EXT_FLASH_RW\n        #include "driver/py25q16.h"\n    #endif\n#endif',
+      "#ifdef ENABLE_FEAT_F4HWN_MULTIBOOT",
+      "#ifdef ENABLE_FEAT_F4HWN_EXT_FLASH_RW",
+      "        // ---- full external-flash dump / restore (host: UV Studio) ----------",
+      "        case 0x0738: // physical read",
+      "            if (ts != mb_port_timestamp(Port)) status = MB_ERR_AUTH;",
+      "            else if (len == 0u || len > sizeof(Reply.Data)) status = MB_ERR_SIZE;",
+      "        case 0x073A: // erase one 4 KiB external-flash sector by physical address",
+      "        case 0x073C: // physical write",
+      "        case 0x073E: // CRC-32 of a physical external-flash range",
+      "            if (ts != mb_port_timestamp(Port)) status = MB_ERR_AUTH;",
+      "#endif // ENABLE_FEAT_F4HWN_EXT_FLASH_RW",
+      "#endif"
+    ].join("\n"),
+    "App/driver/py25q16.h": [guard,
+      "#define PY25Q16_TOTAL_SIZE 0x00200000u",
+      "#define PY25Q16_RAW_CHUNK_SIZE 128u",
+      "/* Raw 4 KiB sector erase; Address must already be sector-aligned. */",
+      "void PY25Q16_SectorErasePhysical(uint32_t Address);",
+      "void PY25Q16_WriteBufferPhysical(uint32_t Address, const void *pBuffer, uint32_t Size);",
+      "#endif"
+    ].join("\n"),
+    "App/driver/mb_flash.h": `${guard}\nuint8_t MB_ExternalFlashCrc32(uint32_t address, uint32_t length, uint32_t *out_crc);\n#endif`,
+    "App/driver/mb_flash.c": `${guard}\nuint8_t MB_ExternalFlashCrc32(uint32_t address, uint32_t length, uint32_t *out_crc) { return MB_OK; }\n#endif`
+  };
+}
+
+// Evaluate only the #ifdef / OR-of-defined guard subset used by these fixtures.
+function activeBackupSource(source, defines) {
+  const stack = [true];
+  const output = [];
+  for (const line of source.split("\n")) {
+    const directive = /^\s*#(ifdef|if|endif)\b(.*)/.exec(line);
+    if (!directive) { if (stack.at(-1)) output.push(line); continue; }
+    const [, kind, value] = directive;
+    if (kind === "endif") { assert(stack.length > 1); stack.pop(); }
+    else {
+      const enabled = kind === "ifdef" ? defines.has(value.trim()) :
+        [...value.matchAll(/defined\(([^)]+)\)/g)].some(([, name]) => defines.has(name));
+      stack.push(stack.at(-1) && enabled);
+    }
+  }
+  assert.equal(stack.length, 1, "Unbalanced backup guards");
+  return output.join("\n");
+}
+
+test("backup read integration exposes physical reads and CRC without adding raw writes", () => {
+  const source = backupSources();
+  const patched = Object.fromEntries(Object.entries(source).map(([file, text]) => [file, patchBackupReadSource(file, text)]));
+  for (const rw of [false, true]) {
+    const defines = new Set(["ENABLE_FEAT_F4HWN_MULTIBOOT", ...(rw ? ["ENABLE_FEAT_F4HWN_EXT_FLASH_RW"] : [])]);
+    const uart = activeBackupSource(patched["App/app/uart.c"], defines);
+    for (const command of ["0x0738", "0x073E"]) assert.ok(uart.includes(`case ${command}:`));
+    for (const command of ["0x073A", "0x073C"]) assert.equal(uart.includes(`case ${command}:`), rw);
+    assert.ok(uart.includes('#include "driver/py25q16.h"'));
+    assert.equal((uart.match(/ts != mb_port_timestamp\(Port\)/g) || []).length, 2);
+    assert.match(uart, /len == 0u \|\| len > sizeof\(Reply.Data\)/);
+    const header = activeBackupSource(patched["App/driver/py25q16.h"], defines);
+    assert.match(header, /#define PY25Q16_TOTAL_SIZE/);
+    assert.equal(header.includes("PY25Q16_SectorErasePhysical"), rw);
+    assert.equal(header.includes("PY25Q16_WriteBufferPhysical"), rw);
+    for (const file of ["App/driver/mb_flash.h", "App/driver/mb_flash.c"])
+      assert.match(activeBackupSource(patched[file], defines), /MB_ExternalFlashCrc32/);
+  }
+  assert.doesNotMatch(activeBackupSource(patched["App/app/uart.c"], new Set()), /case 0x073/);
+  const aircopy = new Set(["ENABLE_AIRCOPY_FLASH"]);
+  assert.match(activeBackupSource(patched["App/driver/py25q16.h"], aircopy), /PY25Q16_WriteBufferPhysical/);
+});
+
+test("backup patch rejects changed, duplicated or already-patched sources and normalizes CRLF", () => {
+  for (const [file, source] of Object.entries(backupSources())) {
+    const result = patchBackupReadSource(file, source);
+    assert.equal(patchBackupReadSource(file, source.replace(/\n/g, "\r\n")), result);
+    assert.throws(() => patchBackupReadSource(file, result), /ya aplicada/);
+    assert.throws(() => patchBackupReadSource(file, `${source}\n${source}`), /ambiguo/);
+    assert.throws(() => patchBackupReadSource(file, "changed upstream"), /ausente/);
+  }
+  assert.throws(() => patchBackupReadSource("unknown.c", ""), /no admitida/);
+});
+
+test("backup integration records final hashes including prior module edits and stages before writes", t => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const { createHash } = require("node:crypto");
+  const work = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "bh-backup-read-"));
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  const source = backupSources();
+  source["App/app/uart.c"] += "\n/* Existing module integration: 0x7B20 */\n";
+  for (const [file, text] of Object.entries(source)) {
+    fs.mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
+    fs.writeFileSync(path.join(work, file), text);
+  }
+  fs.writeFileSync(path.join(work, "App/driver/mb_flash.c"), "unexpected upstream");
+  assert.throws(() => integrateBackupRead(work), /ausente/);
+  assert.equal(fs.readFileSync(path.join(work, "App/app/uart.c"), "utf8"), source["App/app/uart.c"]);
+  fs.writeFileSync(path.join(work, "App/driver/mb_flash.c"), source["App/driver/mb_flash.c"]);
+  const info = integrateBackupRead(work);
+  assert.equal(info.physicalRead, true);
+  assert.equal(info.crc, true);
+  assert.equal(info.persistentWritesAdded, false);
+  assert.equal(info.sources.length, 4);
+  for (const item of info.sources) {
+    const bytes = fs.readFileSync(path.join(work, item.file));
+    assert.equal(item.sha256, createHash("sha256").update(bytes).digest("hex"));
+  }
+  assert.match(fs.readFileSync(path.join(work, "App/app/uart.c"), "utf8"), /Existing module integration: 0x7B20/);
+});
 
 test("informe de memoria incluye reservas, huecos y solapamiento del restaurador sin contarlo dos veces", () => {
   const report = [
