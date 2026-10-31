@@ -30,3 +30,6 @@ android/**/build/
 android/local.properties
 *.jks
 *.keystore
+
+# CHIRP CSVs built from third-party repeater listings without an open licence (scripts/build-chirp-spain.py --with-web)
+chirp/local/
