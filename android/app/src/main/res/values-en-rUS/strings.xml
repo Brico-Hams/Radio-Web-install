@@ -814,6 +814,22 @@
     <string name="rig_memories_stopped">Read stopped after %1$d memories.</string>
     <string name="rig_memory_row">CH %1$03d  %2$s MHz  %3$s  %4$s</string>
     <string name="rig_memory_applied">Channel %1$d applied to VFO A.</string>
+    <string name="rig_mem_new">New channel</string>
+    <string name="rig_mem_edit">Edit</string>
+    <string name="rig_mem_tune">Tune</string>
+    <string name="rig_mem_edit_title">Memory channel</string>
+    <string name="rig_mem_save">Save</string>
+    <string name="rig_mem_channel_hint">Channel</string>
+    <string name="rig_mem_freq_hint">RX frequency (MHz)</string>
+    <string name="rig_mem_mode_label">Mode</string>
+    <string name="rig_mem_name_hint">Name (max. 12 characters)</string>
+    <string name="rig_mem_tx_hint">Split TX frequency (MHz, empty = simplex)</string>
+    <string name="rig_mem_invalid">Invalid input: channel %1$d to %2$d and frequencies in MHz.</string>
+    <string name="rig_mem_overwrite">Channel %1$d already has data and will be replaced:\n%2$s</string>
+    <string name="rig_mem_writing">Writing memory…</string>
+    <string name="rig_mem_saved">Channel %1$d saved and verified.</string>
+    <string name="rig_mem_save_sat">Save transponder to memory</string>
+    <string name="rig_mem_write_unsupported">This radio cannot write memories.</string>
     <string name="rig_section_satellite">Satellite</string>
     <string name="rig_pass_info">%1$s\nAOS %2$s  LOS %3$s  max elevation %4$.0f°</string>
     <string name="rig_transponder_duplex">%1$s MHz down / %2$s MHz up  %3$s  %4$s</string>

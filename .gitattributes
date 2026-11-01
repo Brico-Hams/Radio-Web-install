@@ -5,3 +5,5 @@ android/Bricohams-Android/** -text
 android/app/src/main/assets/** -text
 examples/firmware/** -text
 hardware/rotor/firmware-patch/*.patch -text
+# The Gradle wrapper is a POSIX shell script: CRLF breaks its shebang under bash on Windows.
+android/gradlew text eol=lf

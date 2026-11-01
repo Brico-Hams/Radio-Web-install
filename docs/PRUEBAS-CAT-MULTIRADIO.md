@@ -193,17 +193,32 @@ Antes de cada actualización conviene guardar la EEPROM (`-U eeprom:r:copia.hex:
 | Streaming RX (`UA2;`): unos 8.200 bytes/s, por encima de las 7.825 muestras/s | OK |
 | Streaming TX (carga ficticia): 3 s de tono enviados en 3,0 s, TX visto en la radio, vuelve a RX | OK. El CAT tarda ~1 s en responder tras el streaming; la APK espera ese segundo |
 
-## 6. Bluetooth y modos digitales (pendiente en el móvil)
+### FTX-1: escritura de memorias (02-11-2026)
+
+Probado desde el PC con las mismas cadenas que genera la APK, por el puerto
+CAT-2 (Standard COM, 4800 baudios):
+
+| Prueba | Resultado |
+| --- | --- |
+| Canales 1-411 ocupados, 412 vacío (`MR` responde `?;`) | OK |
+| `MW`, `MT` y `MZ` en el canal vacío 412: ISS, RX 145,800 FM, TX 437,800 en split; relectura `MR`/`MT`/`MZ` idéntica | OK (el canal 412 queda con ISS de prueba) |
+| `MZ` simplex: la radio responde `0` + frecuencia de RX, y acepta escribirlo así | OK |
+
+Hallazgo: tras una ráfaga larga de lecturas `MR` por el puerto **CAT-1**
+(Enhanced COM, 38400) ese puerto dejó de responder, mientras CAT-2 seguía
+funcionando. Apagar y encender la radio debería recuperarlo; pendiente de
+confirmar.
+
+## 6. Modos digitales y memorias (pendiente en el móvil)
 
 | # | Prueba | Resultado |
 | --- | --- | --- |
-| B1 | IC-705: emparejar como dispositivo de datos (SET > Bluetooth Set > Pairing Reception) y conectar por Bluetooth en la APK | |
-| B2 | IC-705 por Bluetooth: C3, C4, C6 y C9 | |
-| B3 | Otra radio con adaptador serie Bluetooth (SPP) en su puerto CAT, mismo baudio: C2-C4 | |
-| B4 | FTX-1: la APK explica que la BU-6 es solo para auriculares | |
 | D1 | Digitales: elegir FT8 y banda, Sintonizar → frecuencia y modo DATA/USB en la radio | |
 | D2 | Reloj UTC y cuenta atrás del ciclo coinciden con una app FT8 (FT8CN) | |
 | D3 | "Liberar puerto" y abrir FT8CN/JS8Call con la misma radio: decodifica y transmite | |
+| M1 | FTX-1: "Nuevo canal" en un canal libre; aparece en la radio con nombre, modo y split | |
+| M2 | FTX-1: editar un canal existente pide confirmación y lo sustituye | |
+| M3 | Pase de satélite → "Guardar transpondedor en memoria": RX bajada, TX subida, nombre del satélite | |
 
 ## 7. Certificación de uso
 

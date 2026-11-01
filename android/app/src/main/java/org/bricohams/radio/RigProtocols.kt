@@ -132,6 +132,8 @@ class YaesuFiveByteRig(private val transport: RadioBytes, override val model: Ri
     override fun ptt(on: Boolean) = send(YaesuFiveByte.ptt(on))
     override fun setSplit(on: Boolean) = send(YaesuFiveByte.split(on))
     override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> = unsupported("memories")
+    override val supportsMemoryWrite = false
+    override fun writeMemory(memory: RigMemory) = unsupported("memory write")
     private companion object {
         const val WRITE_MS = 500
         const val READ_MS = 500
@@ -355,6 +357,8 @@ class IcomCivRig(
         }
         return list
     }
+    override val supportsMemoryWrite = false
+    override fun writeMemory(memory: RigMemory) = unsupported("memory write")
 }
 
 /** Yaesu FTX-1, from the "FTX-1 Series CAT Operation Reference Manual" ENG 2508-C (38400 bps, 8N1; format p.4). */
@@ -445,6 +449,43 @@ object YaesuFtx1 {
             !reply.substring(2, 7).all { it in '0'..'9' }) invalidReply()
         return reply.substring(7, 19).filter { it.code in 32..126 }.trim()
     }
+    // FTX-1 CAT Operation Reference Manual 2508-C, p.19 "MW MEMORY CHANNEL WRITE": same 30-character layout as the MR answer
+    // (P1 channel, P2 frequency, P3 clarifier direction + offset, P4/P5 RX/TX clarifier, P6 mode, P7 1 = memory, P8 tone, P9 fixed, P10 simplex)
+    fun writeMemory(channel: Int, hz: Long, mode: RigMode): String {
+        requireUi(channel in 1..999) { UiText(R.string.err_rig_channel, channel) }
+        requireUi(hz in 30_000L..470_000_000L) { UiText(R.string.err_rig_range, mhzText(hz)) }
+        val code = requireNotNullUi(modeCode(mode)) { UiText(R.string.err_rig_mode, mode.name) }
+        return String.format(Locale.ROOT, "MW%05d%09d+0000", channel, hz) + "00" + code + "10" + "00" + "0;"
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C, p.20 "MT MEMORY CHANNEL TAG": 12 characters, padded with spaces
+    fun writeTag(channel: Int, tag: String): String {
+        requireUi(channel in 1..999) { UiText(R.string.err_rig_channel, channel) }
+        val text = tag.take(12).map { if (it.code in 0x20..0x7E && it != ';') it else ' ' }.joinToString("")
+        return String.format(Locale.ROOT, "MT%05d", channel) + text.padEnd(12) + ";"
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C, p.20 "MZ SPLIT MEMORY": P2 0 = simplex, 1 = split; P3 TX frequency (9 digits)
+    // A real FTX-1 answers MZ for a simplex channel with P2 = 0 followed by its RX frequency, so the same form is written.
+    fun writeSplit(channel: Int, txHz: Long?, rxHz: Long): String {
+        requireUi(channel in 1..999) { UiText(R.string.err_rig_channel, channel) }
+        if (txHz == null) return String.format(Locale.ROOT, "MZ%05d0%09d;", channel, rxHz)
+        requireUi(txHz in 30_000L..470_000_000L) { UiText(R.string.err_rig_range, mhzText(txHz)) }
+        return String.format(Locale.ROOT, "MZ%05d1%09d;", channel, txHz)
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C, p.20 "MZ SPLIT MEMORY"
+    fun readSplit(channel: Int): String {
+        requireUi(channel in 1..999) { UiText(R.string.err_rig_channel, channel) }
+        return String.format(Locale.ROOT, "MZ%05d;", channel)
+    }
+    /** TX frequency of a split channel, null for a simplex one. */
+    fun parseSplit(reply: String): Long? {
+        if (reply.length != 18 || !reply.startsWith("MZ") || !reply.endsWith(";") ||
+            !reply.substring(2, 17).all { it in '0'..'9' }) invalidReply()
+        return when (reply[7]) {
+            '0' -> null
+            '1' -> reply.substring(8, 17).toLong()
+            else -> invalidReply()
+        }
+    }
 }
 
 /** VFO A = MAIN (FA), VFO B = SUB (FB). */
@@ -494,9 +535,31 @@ class Ftx1Rig(transport: RadioBytes) : Rig {
             } catch (error: LocalizedIOException) {
                 if (isRejected(error)) "" else throw error
             }
-            list.add(memory.copy(name = name))
+            val split = try {
+                YaesuFtx1.parseSplit(link.request(YaesuFtx1.readSplit(channel), "MZ"))
+            } catch (error: LocalizedIOException) {
+                if (isRejected(error)) null else throw error
+            }
+            list.add(memory.copy(name = name, txHz = split))
         }
         return list
+    }
+    override val supportsMemoryWrite = true
+    override fun writeMemory(memory: RigMemory) {
+        val channel = memory.channel
+        val mode = requireNotNullUi(memory.mode) { UiText(R.string.err_rig_mode, "?") }
+        checkRange(model, memory.frequencyHz)
+        memory.txHz?.let { checkRange(model, it) }
+        val tag = YaesuFtx1.writeTag(channel, memory.name)
+        link.send(YaesuFtx1.writeMemory(channel, memory.frequencyHz, mode))
+        link.send(tag)
+        link.send(YaesuFtx1.writeSplit(channel, memory.txHz, memory.frequencyHz))
+        // The writes have no answer (manual p.4): read the channel back.
+        val stored = YaesuFtx1.parseMemory(link.request(YaesuFtx1.readMemory(channel), "MR"))
+        val name = YaesuFtx1.parseTag(link.request(YaesuFtx1.readTag(channel), "MT"))
+        val split = YaesuFtx1.parseSplit(link.request(YaesuFtx1.readSplit(channel), "MZ"))
+        checkUi(stored.frequencyHz == memory.frequencyHz && stored.mode == mode &&
+            name == YaesuFtx1.parseTag(tag) && split == memory.txHz) { UiText(R.string.err_rig_unconfirmed) }
     }
 }
 
@@ -631,6 +694,8 @@ class TruSdxRig(
     override fun ptt(on: Boolean) = link.send(KenwoodTs480Subset.ptt(on))
     override fun setSplit(on: Boolean) = unsupported("split")
     override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> = unsupported("memories")
+    override val supportsMemoryWrite = false
+    override fun writeMemory(memory: RigMemory) = unsupported("memory write")
 
     /** Transmits [samples11520] through the CAT audio stream; the radio is always released afterwards. */
     fun transmitAudio(samples11520: ShortArray, keepGoing: () -> Boolean) {

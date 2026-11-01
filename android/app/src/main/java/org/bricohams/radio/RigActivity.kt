@@ -22,6 +22,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputFilter
 import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
@@ -99,6 +100,9 @@ class RigActivity : LocalizedActivity() {
     private lateinit var memFrom: EditText
     private lateinit var memTo: EditText
     private lateinit var memoriesButton: Button
+    private lateinit var newMemoryButton: Button
+    private var lastMemories: List<RigMemory> = emptyList()
+    private var satMode = RigMode.USB
     private lateinit var stopMemories: Button
     private lateinit var memStatus: TextView
     private lateinit var memList: LinearLayout
@@ -392,6 +396,10 @@ class RigActivity : LocalizedActivity() {
         card.addView(memFrom)
         card.addView(memTo)
         memoriesButton = button(card, R.string.rig_read_memories, tracked = false) { readMemories() }
+        newMemoryButton = button(card, R.string.rig_mem_new, tracked = false) {
+            val limits = channelLimits(rig?.model ?: RigModel.FTX1)
+            showMemoryEditor(firstFreeChannel(limits), "", RigMode.FM, "", "", memStatus)
+        }
         stopMemories = button(card, R.string.rig_stop, tracked = false) { memoryCancel = true }
         card.addView(memStatus)
         memList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -439,6 +447,7 @@ class RigActivity : LocalizedActivity() {
                 card.addView(down); card.addView(up); card.addView(step)
                 button(card, R.string.rig_start_tracking, true) { startTracking() }
                 button(card, R.string.rig_stop_tracking, tracked = false) { stopTracking() }
+                button(card, R.string.rig_mem_save_sat) { saveTransponder() }
             } catch (error: IllegalArgumentException) {
                 card.addView(Brand.text(this, 14f).apply { text = getString(R.string.rig_plan_error, errorText(error)) })
             }
@@ -476,6 +485,7 @@ class RigActivity : LocalizedActivity() {
         downEdit?.setText(String.format(Locale.ROOT, "%.6f", transmitter.downlinkHz / 1e6))
         upEdit?.setText(transmitter.uplinkHz?.let { String.format(Locale.ROOT, "%.6f", it / 1e6) } ?: "")
         stepEdit?.setText(if (transmitter.mode.contains("FM", ignoreCase = true)) "100" else "20")
+        satMode = if (transmitter.mode.contains("FM", ignoreCase = true)) RigMode.FM else RigMode.USB
     }
 
     private fun buildSstv(body: LinearLayout) = section(body, R.string.rig_section_sstv) { card ->
@@ -500,6 +510,7 @@ class RigActivity : LocalizedActivity() {
         controls.forEach { it.isEnabled = ready }
         val r = rig
         memoriesButton.isEnabled = ready && r?.supportsMemories != false
+        newMemoryButton.isEnabled = ready && r?.supportsMemoryWrite != false
         setVfoB.visibility = if (r != null && !r.supportsVfoB) View.GONE else View.VISIBLE
         stopMemories.isEnabled = busy
         stopTx.isEnabled = txActive
@@ -812,17 +823,116 @@ class RigActivity : LocalizedActivity() {
         }
     }
 
+    private fun memoryText(memory: RigMemory): String {
+        val text = getString(R.string.rig_memory_row, memory.channel, mhzText(memory.frequencyHz), memory.mode?.name ?: "-", memory.name)
+        return if (memory.txHz == null) text else text + "  TX " + mhzText(memory.txHz)
+    }
+
     private fun showMemories(list: List<RigMemory>) {
+        lastMemories = list
         memList.removeAllViews()
         for (memory in list) {
-            val text = getString(R.string.rig_memory_row, memory.channel, mhzText(memory.frequencyHz), memory.mode?.name ?: "-", memory.name)
+            val text = memoryText(memory)
             memList.addView(Brand.card(this).apply {
                 isClickable = true; isFocusable = true
                 contentDescription = text
                 addView(Brand.text(this@RigActivity, 14f).apply { this.text = text })
-                setOnClickListener { applyMemory(memory) }
+                setOnClickListener { chooseMemoryAction(memory, text) }
             })
         }
+    }
+
+    private fun chooseMemoryAction(memory: RigMemory, text: String) {
+        val writable = rig?.supportsMemoryWrite == true
+        val labels = listOfNotNull(getString(R.string.rig_mem_tune), if (writable) getString(R.string.rig_mem_edit) else null)
+        AlertDialog.Builder(this).setTitle(text).setItems(labels.toTypedArray()) { _, which ->
+            if (which == 0) applyMemory(memory)
+            else showMemoryEditor(memory.channel, mhzText(memory.frequencyHz), memory.mode ?: RigMode.FM, memory.name,
+                memory.txHz?.let(::mhzText) ?: "", memStatus)
+        }.show()
+    }
+
+    private fun firstFreeChannel(limits: IntRange): Int {
+        val used = lastMemories.map { it.channel }.toSet()
+        return limits.firstOrNull { it !in used } ?: limits.first
+    }
+
+    private fun showMemoryEditor(channel: Int, rx: String, mode: RigMode, name: String, tx: String, target: TextView) {
+        val r = rig ?: run { target.setText(R.string.rig_connect_first); return }
+        if (!r.supportsMemoryWrite) { target.setText(R.string.rig_mem_write_unsupported); return }
+        val limits = channelLimits(r.model)
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val padding = Brand.dp(this@RigActivity, 20)
+            setPadding(padding, padding / 2, padding, padding / 2)
+            background = Brand.rounded(this@RigActivity, colors.surface, 20)
+        }
+        val channelEdit = field(R.string.rig_mem_channel_hint, channel.toString(), InputType.TYPE_CLASS_NUMBER)
+        val rxEdit = field(R.string.rig_mem_freq_hint, rx, decimal)
+        val modePicker = spinner(rigModes.map { it.name }).apply { setSelection(rigModes.indexOf(mode).coerceAtLeast(0)) }
+        val nameEdit = field(R.string.rig_mem_name_hint, name, InputType.TYPE_CLASS_TEXT).apply {
+            filters = arrayOf(InputFilter.LengthFilter(12))
+        }
+        val txEdit = field(R.string.rig_mem_tx_hint, tx, decimal)
+        form.addView(channelEdit)
+        form.addView(rxEdit)
+        label(form, R.string.rig_mem_mode_label)
+        form.addView(modePicker)
+        form.addView(nameEdit)
+        form.addView(txEdit)
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.rig_mem_edit_title).setView(ScrollView(this).apply { addView(form) })
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.rig_mem_save, null).create()
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val invalid = getString(R.string.rig_mem_invalid, limits.first, limits.last)
+            val number = channelEdit.text.toString().trim().toIntOrNull()
+            val rxHz = parseMhz(rxEdit.text.toString())
+            val txText = txEdit.text.toString().trim()
+            val txHz = if (txText.isEmpty()) null else parseMhz(txText)
+            val range = r.model.rangeHz
+            when {
+                number == null || number !in limits -> channelEdit.error = invalid
+                rxHz == null || rxHz !in range -> rxEdit.error = invalid
+                txText.isNotEmpty() && (txHz == null || txHz !in range) -> txEdit.error = invalid
+                else -> {
+                    dialog.dismiss()
+                    val picked = rigModes[modePicker.selectedItemPosition.coerceIn(0, rigModes.lastIndex)]
+                    saveMemory(r, RigMemory(number, rxHz, picked, nameEdit.text.toString().trim(), txHz), target)
+                }
+            }
+        }
+    }
+
+    private fun saveMemory(r: Rig, memory: RigMemory, target: TextView) {
+        val write = {
+            operation(target, R.string.rig_mem_writing) {
+                r.writeMemory(memory)
+                val stored = r.memories(memory.channel..memory.channel).firstOrNull()
+                runOnUiThread {
+                    if (!isDestroyed && rig === r) {
+                        showMemories((lastMemories.filter { it.channel != memory.channel } + listOfNotNull(stored)).sortedBy { it.channel })
+                    }
+                }
+                getString(R.string.rig_mem_saved, memory.channel)
+            }
+        }
+        val existing = lastMemories.firstOrNull { it.channel == memory.channel }
+        if (existing == null) write() else AlertDialog.Builder(this).setTitle(R.string.rig_mem_edit_title)
+            .setMessage(getString(R.string.rig_mem_overwrite, memory.channel, memoryText(existing)))
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.rig_mem_save) { _, _ -> write() }.show()
+    }
+
+    private fun saveTransponder() {
+        val r = rig ?: run { satStatus.setText(R.string.rig_connect_first); return }
+        if (!r.supportsMemoryWrite) { satStatus.setText(R.string.rig_mem_write_unsupported); return }
+        val down = parseMhz(downEdit?.text?.toString().orEmpty())
+        val upText = upEdit?.text?.toString().orEmpty().trim()
+        val up = if (upText.isEmpty()) null else parseMhz(upText)
+        if (down == null || (upText.isNotEmpty() && up == null)) { satStatus.setText(R.string.rig_invalid_sat_frequency); return }
+        val name = selectedPlan?.tle?.name.orEmpty().take(12)
+        showMemoryEditor(firstFreeChannel(channelLimits(r.model)), mhzText(down), satMode, name, up?.let(::mhzText) ?: "", satStatus)
     }
 
     private fun applyMemory(memory: RigMemory) {

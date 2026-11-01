@@ -824,6 +824,22 @@
     <string name="rig_memories_stopped">Lectura detenida tras %1$d memorias.</string>
     <string name="rig_memory_row">CH %1$03d  %2$s MHz  %3$s  %4$s</string>
     <string name="rig_memory_applied">Canal %1$d aplicado al VFO A.</string>
+    <string name="rig_mem_new">Nuevo canal</string>
+    <string name="rig_mem_edit">Editar</string>
+    <string name="rig_mem_tune">Sintonizar</string>
+    <string name="rig_mem_edit_title">Canal de memoria</string>
+    <string name="rig_mem_save">Guardar</string>
+    <string name="rig_mem_channel_hint">Canal</string>
+    <string name="rig_mem_freq_hint">Frecuencia RX (MHz)</string>
+    <string name="rig_mem_mode_label">Modo</string>
+    <string name="rig_mem_name_hint">Nombre (máx. 12 caracteres)</string>
+    <string name="rig_mem_tx_hint">Frecuencia TX para split (MHz, vacío = símplex)</string>
+    <string name="rig_mem_invalid">Datos no válidos: canal de %1$d a %2$d y frecuencias en MHz.</string>
+    <string name="rig_mem_overwrite">El canal %1$d ya tiene datos y se sustituirá:\n%2$s</string>
+    <string name="rig_mem_writing">Escribiendo memoria…</string>
+    <string name="rig_mem_saved">Canal %1$d guardado y verificado.</string>
+    <string name="rig_mem_save_sat">Guardar transpondedor en memoria</string>
+    <string name="rig_mem_write_unsupported">Este equipo no permite escribir memorias.</string>
     <string name="rig_section_satellite">Satélite</string>
     <string name="rig_pass_info">%1$s\nAOS %2$s  LOS %3$s  elevación máx. %4$.0f°</string>
     <string name="rig_transponder_duplex">%1$s MHz bajada / %2$s MHz subida  %3$s  %4$s</string>
