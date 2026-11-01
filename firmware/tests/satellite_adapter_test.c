@@ -253,7 +253,7 @@ int main(void)
     /* Pass list: KEY_0 toggles it, arrows scroll, SAT controls are swallowed. */
     memset(bh_test_flash, 0xff, sizeof(bh_test_flash));
     uint8_t frame[BH_PASS_REQUEST_HEADER + 3 * BH_PASS_ENTRY_BYTES] = {1, BH_PASS_OP_WRITE};
-    uint8_t reply[BH_PASS_REPLY_MAX];
+    uint8_t pass_reply[BH_PASS_REPLY_MAX];
     const char *names[] = {"OLD", "AO-91", "ISS"};
     const uint32_t aos[] = {1761955200U - 3600U, 1761955200U + 5400U, 1761955200U + 2U * 86400U};
     frame[11] = 3;
@@ -266,12 +266,12 @@ int main(void)
         e[20] = 72;
         e[22] = 0x5f; e[23] = 0x01; /* AOS azimuth 351 */
     }
-    CHECK(BH_PASS_Request(frame, sizeof(frame), true, 0, reply) && reply[1] == BH_PASS_STATUS_OK);
+    CHECK(BH_PASS_Request(frame, sizeof(frame), true, 0, pass_reply) && pass_reply[1] == BH_PASS_STATUS_OK);
     memset(frame, 0, BH_PASS_REQUEST_HEADER);
     frame[0] = 1; frame[1] = BH_PASS_OP_COMMIT; frame[11] = 3;
     for (unsigned b = 0; b < 4; ++b) frame[6 + b] = (uint8_t)(1761955200U >> (b * 8U));
     tick = 0;
-    CHECK(BH_PASS_Request(frame, BH_PASS_REQUEST_HEADER, true, 0, reply) && reply[3] == 3);
+    CHECK(BH_PASS_Request(frame, BH_PASS_REQUEST_HEADER, true, 0, pass_reply) && pass_reply[3] == 3);
     BH_SAT_Start();
     CHECK(BH_SAT_Key(KEY_0) && bhSatPassView);
     BH_SAT_Draw();
