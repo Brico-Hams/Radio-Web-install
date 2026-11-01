@@ -174,7 +174,7 @@ PTT sobre carga ficticia (01-11-2026, con permiso del operador):
 | Radio | Comprobado | Resultado |
 | --- | --- | --- |
 | FTX-1 | `TX1;` → `TX;` responde `TX1`; `TX0;` → `TX0` | OK |
-| (tr)uSDX | `TX0;` / `RX;` aceptados; su trama `IF` no indica TX, así que la entrada en TX se confirma solo a la vista de la radio | Pendiente de confirmación visual |
+| (tr)uSDX | `TX0;` / `RX;` aceptados; su trama `IF` no indica TX. El operador vio la radio entrar en TX y volver a RX | OK (confirmación visual) |
 | (tr)uSDX streaming | 3 s de tono a 1000 Hz con `UA2;TX0;US…;RX;UA0;` a 38400: el envío tardó 9 s (~3840 muestras/s frente a las 11520 necesarias). La radio vuelve a RX y responde después | A 38400 **no sirve** para SSTV; la APK solo usa el streaming a 115200 y si no, el audio del móvil por el jack de micro |
 
 La APK prueba sola 38400 si el (tr)uSDX no responde a 115200, y al revés.
