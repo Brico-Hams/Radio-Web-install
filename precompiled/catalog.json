@@ -10,7 +10,7 @@
       "edition": "BH ARDF",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.5",
+      "distributionVersion": "v0.5.6",
       "size": 114324,
       "sha256": "5e2aec16b7a8d6c6d1880fdcb82e66fada4e29c5a5fdafe3397e585e629ef661",
       "path": "precompiled/bricohams-ardf.bin",
@@ -239,9 +239,9 @@
       "edition": "BH Satellite",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.5",
-      "size": 115188,
-      "sha256": "957679f323684a7e2a68b05455f34b88c226b4647fdbfe14dd48035feb39245b",
+      "distributionVersion": "v0.5.6",
+      "size": 117080,
+      "sha256": "655a5e69c0d4050f39dd04565a8e5c36d4a9c4792e4c8624c677fac9751cfa3b",
       "path": "precompiled/bricohams-satellite.bin",
       "targets": [
         "UV-K1",
@@ -365,14 +365,14 @@
           "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 115188,
+        "imageBytes": 117080,
         "memory": {
-          "ramUsedBytes": 12384,
+          "ramUsedBytes": 12416,
           "ramCapacityBytes": 16384,
-          "ramFreeBytes": 4000,
-          "imageBytes": 115188,
+          "ramFreeBytes": 3968,
+          "imageBytes": 117080,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 5644
+          "slotFreeBytes": 3752
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -391,7 +391,7 @@
           },
           {
             "file": "App/bricohams/satellite_foxhunt.inc",
-            "sha256": "1afb62f2cd27a90f6bdbe21068ea861c6949b14cf4ccc6a77fec5de078018aec"
+            "sha256": "f663292d3e70e87d6679035b73c237be5aa26b170816665baf3906902afa12ac"
           },
           {
             "file": "App/bricohams/cat_rx.c",
@@ -403,15 +403,23 @@
           },
           {
             "file": "App/bricohams/cat_tx.c",
-            "sha256": "d8f6a95f0f11473c663f84f87996a8173d033945047caccd8f003c293eab9308"
+            "sha256": "950c657e772ab86491f68fe0433a17a9a5283f09c4cb30ad18c858dd24fc4290"
           },
           {
             "file": "App/bricohams/cat_tx.h",
-            "sha256": "05974f296313b36ba8f2596bb24d2fe71e0018320233347213f1b13e32fe4491"
+            "sha256": "6b65a5a1a7a4d148adab4f159198d13ada7fa4d6cdd4d2a1f9e6c0e8b49e2b48"
+          },
+          {
+            "file": "App/bricohams/passes.c",
+            "sha256": "20ca47a5327d71128d18705014885163ec87b441fca67e877ffd9fc504a8c837"
+          },
+          {
+            "file": "App/bricohams/passes.h",
+            "sha256": "c0e472be56bf8b7bcf26fdb357cc07ae8e8aae31196ae5e591a6ec386796c3d6"
           },
           {
             "file": "App/CMakeLists.txt",
-            "sha256": "a515c8e4ab8bf390bb8db027c0bdf0f4c5c7f7deffe24ec580cacbb404b26c9e"
+            "sha256": "7c489f8dae1aea0cbcf979b3b24c7f50d0ed37ebd6c6fd9e60076e6dd867d0fa"
           },
           {
             "file": "App/scheduler.c",
@@ -431,7 +439,7 @@
           },
           {
             "file": "App/app/uart.c",
-            "sha256": "a468bd4fc00119e80c2186d019fb90e9d3e88a47e1e0538485b1d75827985364"
+            "sha256": "1eefc8af78adf69f5281227db60dc5a40f7d5508a6ae98ffe60e815def255937"
           }
         ],
         "brandingSources": [
@@ -452,7 +460,7 @@
           "sources": [
             {
               "file": "App/app/uart.c",
-              "sha256": "a468bd4fc00119e80c2186d019fb90e9d3e88a47e1e0538485b1d75827985364"
+              "sha256": "1eefc8af78adf69f5281227db60dc5a40f7d5508a6ae98ffe60e815def255937"
             },
             {
               "file": "App/driver/py25q16.h",
@@ -491,6 +499,20 @@
           "persistentWrites": false,
           "hardwareValidated": false
         },
+        "satPasses": {
+          "version": 1,
+          "command": 31536,
+          "reply": 31537,
+          "entries": 64,
+          "entryBytes": 32,
+          "flashAddress": 61440,
+          "banked": true,
+          "sessionTimestampAuth": true,
+          "viewKey": "0",
+          "persistentWrites": true,
+          "calibrationUntouched": true,
+          "hardwareValidated": true
+        },
         "stability": "beta",
         "validation": "Structural checks only; physical validation pending"
       }
@@ -501,7 +523,7 @@
       "edition": "BH Spectrum",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.5",
+      "distributionVersion": "v0.5.6",
       "size": 118584,
       "sha256": "3164be3c7cd49725897bc680d7f379a9f861ce4addb9c2b9ca460cc37bfb7ee4",
       "path": "precompiled/bricohams-spectrum.bin",
@@ -739,7 +761,7 @@
       "edition": "BH Labs",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.5",
+      "distributionVersion": "v0.5.6",
       "size": 114896,
       "sha256": "938a7cd80b489c9c1746b710c7ae4533526674b13e5f97083f6bea850721140a",
       "path": "precompiled/bricohams-labs.bin",
@@ -925,7 +947,7 @@
       "edition": "BH Fusion",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.5",
+      "distributionVersion": "v0.5.6",
       "size": 107940,
       "sha256": "e053c1d3671a33bb2361d91ec5555404763bd69e4f0d2548549e6b2a68d86356",
       "path": "precompiled/bricohams-fusion.bin",
@@ -1109,7 +1131,7 @@
       "edition": "BH F4 Fusion",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.5",
+      "distributionVersion": "v0.5.6",
       "size": 108784,
       "sha256": "1009c0f54b29b8d4ea0d81b2fffcfabe09056bccd336dabcba4c102b3a810503",
       "path": "precompiled/f4hwn-fusion.bin",
@@ -1291,7 +1313,7 @@
       "edition": "BH F4 FieldOps",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.5",
+      "distributionVersion": "v0.5.6",
       "size": 114916,
       "sha256": "cbf556ed40c6bdbb684ef6cf651960f87ca77014c32422b0e5bdb11553413d7f",
       "path": "precompiled/f4hwn-fieldops.bin",
@@ -1473,7 +1495,7 @@
       "edition": "BH F4 Labs",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.5",
+      "distributionVersion": "v0.5.6",
       "size": 115704,
       "sha256": "f851dde8532aaba66c9110279b5891f332a25823a0e63e0f6c308ffe44d1a794",
       "path": "precompiled/f4hwn-labs.bin",
@@ -1657,7 +1679,7 @@
       "edition": "BH F4 Transfer",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.5",
+      "distributionVersion": "v0.5.6",
       "size": 116852,
       "sha256": "1584bfd010fa171c1ddc5b48fa31ed07409d585c23147f9a644d426661b8fea2",
       "path": "precompiled/f4hwn-transfer.bin",

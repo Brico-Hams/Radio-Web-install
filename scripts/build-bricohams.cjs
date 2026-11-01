@@ -187,7 +187,7 @@ function build(args) {
       radioTxGates: true, persistentWrites: false, hardwareValidated: false },
       satPasses: { version: 1, command: 0x7b30, reply: 0x7b31, entries: 64, entryBytes: 32,
       flashAddress: 0x00f000, banked: true, sessionTimestampAuth: true, viewKey: "0",
-      persistentWrites: true, calibrationUntouched: true, hardwareValidated: false } } : {}),
+      persistentWrites: true, calibrationUntouched: true, hardwareValidated: true } } : {}),
     ...(modules.includes("spectrum") ? { spectrumPresets: { version: 1, command: 0x7b10,
       reply: 0x7b11, blobBytes: 208, chunkBytes: 104, pausedScanRequired: true,
       persistentWrites: false, hardwareValidated: false } } : {}),

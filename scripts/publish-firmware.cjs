@@ -37,7 +37,7 @@ async function publishApps() {
 }
 const builds = [
   ["bricohams-ardf", "ardf", "BH ARDF", "5e2aec16b7a8d6c6d1880fdcb82e66fada4e29c5a5fdafe3397e585e629ef661"],
-  ["bricohams-satellite", "satellite", "BH Satellite", "957679f323684a7e2a68b05455f34b88c226b4647fdbfe14dd48035feb39245b"],
+  ["bricohams-satellite", "satellite", "BH Satellite", "655a5e69c0d4050f39dd04565a8e5c36d4a9c4792e4c8624c677fac9751cfa3b"],
   ["bricohams-spectrum", "spectrum", "BH Spectrum", "3164be3c7cd49725897bc680d7f379a9f861ce4addb9c2b9ca460cc37bfb7ee4"],
   ["bricohams-labs", "labs", "BH Labs", "938a7cd80b489c9c1746b710c7ae4533526674b13e5f97083f6bea850721140a"],
   ["bricohams-fusion", "fusion", "BH Fusion", "e053c1d3671a33bb2361d91ec5555404763bd69e4f0d2548549e6b2a68d86356"],
@@ -64,7 +64,7 @@ async function publish() {
     files.push([name, checked.firmware.bytes]);
     entries.push({
       id, name, edition, publisher: "Bricohams", version: "v6.1.0",
-      distributionVersion: "v0.5.5",
+      distributionVersion: "v0.5.6",
       size: checked.firmware.bytes.length, sha256: expected, path: `precompiled/${name}`,
       targets: ["UV-K1", "UV-K5-V3"], stability: "beta", hardwareBootTested: false,
       license: "GPL-3.0-or-later AND Apache-2.0",
