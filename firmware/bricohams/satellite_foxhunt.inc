@@ -2,6 +2,7 @@
 #include "bricohams/doppler.h"
 #include "bricohams/cat_rx.h"
 #include "bricohams/cat_tx.h"
+#include "bricohams/passes.h"
 #include "scheduler.h"
 
 static uint32_t bhSatDownlink;
@@ -10,6 +11,9 @@ static int32_t bhSatRate;
 static bh_doppler_frequencies bhSatFrequencies;
 static bool bhSatError;
 static bool bhSatCatTimeout;
+static bool bhSatPassView;
+static uint8_t bhSatPassFirst;
+static uint8_t bhSatPassUpcoming;
 
 static void BH_SAT_Draw(void);
 
@@ -40,6 +44,7 @@ static void BH_SAT_Start(void)
     bh_cat_stop(&bh_cat_receiver);
     bh_cat_tx_arm(&bh_cat_transmitter, false);
     bhSatCatTimeout = false;
+    bhSatPassView = false;
     bhSatDownlink = gRxVfo->pRX->Frequency;
     bhSatUplink = gRxVfo->pTX->Frequency;
     bhSatRate = 0;
@@ -118,6 +123,19 @@ static void BH_SAT_Stop(void)
 
 static bool BH_SAT_Key(KEY_Code_t key)
 {
+    if (key == KEY_0) {
+        bhSatPassView = !bhSatPassView;
+        bhSatPassFirst = 0;
+        return true;
+    }
+    if (bhSatPassView) {
+        if (key == KEY_UP && bhSatPassFirst > 0)
+            bhSatPassFirst--;
+        else if (key == KEY_DOWN && bhSatPassFirst + 1U < bhSatPassUpcoming)
+            bhSatPassFirst++;
+        /* The list hides the SAT status, so no hidden arming or retuning from here. */
+        return key != KEY_EXIT;
+    }
     if (key == KEY_9) {
         /* Local confirmation: only the keypad arms CAT PTT, never the host. */
         bh_cat_tx_arm(&bh_cat_transmitter, !bh_cat_transmitter.armed && !bhSatError);
@@ -151,9 +169,62 @@ static bool BH_SAT_Key(KEY_Code_t key)
     return true;
 }
 
+/* Passes stored by the host (0x7B30), timed by the clock the host last set. */
+static void BH_SAT_DrawPasses(void)
+{
+    char line[24];
+    char when[12];
+    uint8_t day, hour, minute;
+    bh_pass pass;
+    for (unsigned row = 0; row < 7; ++row)
+        memset(gFrameBuffer[row], 0, sizeof(gFrameBuffer[row]));
+    const uint32_t now = bh_pass_clock(SCHEDULER_GetTick10ms() * 10U);
+    const uint8_t count = bh_pass_count();
+    if (now == 0) {
+        strcpy(line, "PASSES NO TIME");
+    } else {
+        bh_pass_civil(now, &day, &hour, &minute);
+        sprintf(line, "PASSES %02u:%02uZ", (unsigned)hour, (unsigned)minute);
+    }
+    UI_PrintStringSmallNormal(line, 0, 127, 0);
+    uint8_t shown = 0;
+    bhSatPassUpcoming = 0;
+    for (uint8_t i = 0; i < count; ++i) {
+        if (!bh_pass_read(i, &pass) || (now != 0 && pass.aos + pass.los_offset <= now))
+            continue;
+        if (bhSatPassUpcoming++ < bhSatPassFirst || shown >= 3)
+            continue;
+        if (now == 0)
+            when[0] = '\0';
+        else if (pass.aos <= now)
+            strcpy(when, "NOW");
+        else if (pass.aos - now < 86400U)
+            /* The modulo bounds let -Wformat-overflow prove the result fits. */
+            sprintf(when, "+%02uh%02um", (unsigned)((pass.aos - now) / 3600U % 24U),
+                (unsigned)((pass.aos - now) / 60U % 60U));
+        else
+            sprintf(when, "+%ud%02uh", (unsigned)((uint32_t)(pass.aos - now) / 86400U),
+                (unsigned)((pass.aos - now) / 3600U % 24U));
+        const uint8_t row = (uint8_t)(1U + shown * 2U);
+        sprintf(line, "%-8s %s", pass.name, when);
+        UI_PrintStringSmallNormal(line, 0, 0, row);
+        bh_pass_civil(pass.aos, &day, &hour, &minute);
+        sprintf(line, "%02u %02u:%02u E%02u A%03u", (unsigned)day, (unsigned)hour,
+            (unsigned)minute, (unsigned)pass.max_elevation, (unsigned)pass.aos_azimuth);
+        UI_PrintStringSmallNormal(line, 0, 0, (uint8_t)(row + 1U));
+        shown++;
+    }
+    if (shown == 0)
+        UI_PrintStringSmallNormal(count ? "NO UPCOMING PASS" : "NO PASSES LOADED", 0, 127, 3);
+}
+
 static void BH_SAT_Draw(void)
 {
     char line[24];
+    if (bhSatPassView && !bh_cat_transmitter.keyed) {
+        BH_SAT_DrawPasses();
+        return;
+    }
     memset(gFrameBuffer[2], 0, sizeof(gFrameBuffer[2]));
     memset(gFrameBuffer[6], 0, sizeof(gFrameBuffer[6]));
     if (bhSatError) {

@@ -1311,7 +1311,12 @@
       container: countryContainer, action, download,
       addChannels(channels) {
         return planning.addTemplateChannels(channels);
-      }
+      },
+      // Only the Bricohams Satellite image answers 0x7B30; other firmwares fail with a clear error.
+      loadPasses: page === "quansheng" ? passes => {
+        R.assert(connector?.connected && connector.info, "Conecta primero la radio con la imagen Bricohams Satelites.");
+        return connector.writeSatellitePasses(passes);
+      } : undefined
     });
     const useImage = (data, edition) => {
       if (data && page === "quansheng") R.inspectQuanshengSlotImage(data);

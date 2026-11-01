@@ -1,7 +1,7 @@
 (function (root) {
   "use strict";
   const R = root.RadioWorkspace;
-  function mountCountryTemplates({ container, action, download, addChannels }) {
+  function mountCountryTemplates({ container, action, download, addChannels, loadPasses }) {
     container.innerHTML = `<h3>2. Elegir plantilla</h3>
       <p>Elige pais y zona, revisa la seleccion y anadela al archivo local. La radio no se modifica.</p>
       <div class="template-filters">
@@ -22,11 +22,13 @@
         <p>Prevision orientativa, no operativa. Solo dias restantes del mes UTC. Mas de 7 dias desde el TLE: provisional. Recalcula con tu posicion y TLE reciente antes de usar.</p>
         <label for="template-pass-zone">Ciudad / punto de referencia</label><select id="template-pass-zone"></select>
         <p id="template-pass-position"></p>
-        <div class="operation-buttons"><button id="template-pass-show" type="button" class="button secondary">Ver pases de referencia</button><button id="template-pass-export" type="button" class="button secondary">Descargar pases JSON</button></div>
+        <div class="operation-buttons"><button id="template-pass-show" type="button" class="button secondary">Ver pases de referencia</button><button id="template-pass-export" type="button" class="button secondary">Descargar pases JSON</button><button id="template-pass-radio" type="button" class="button primary" hidden>Cargar pases en la radio (SAT)</button></div>
+        <p id="template-pass-radio-note" hidden>Graba hasta 64 pases futuros en el banco CFG activo de la imagen Bricohams Satelites y pone en hora UTC su reloj de pases. En la radio: SAT RX y tecla 0. Usa preferiblemente el calculo de 7 dias para tu posicion.</p>
         <details><summary>Recalcular para mi posicion</summary>
           <label for="template-lat">Latitud</label><input id="template-lat" type="number" min="-90" max="90" step="any">
           <label for="template-lon">Longitud</label><input id="template-lon" type="number" min="-180" max="180" step="any">
           <button id="template-recalculate" type="button" class="button secondary">Recalcular mes (solo prevision)</button>
+          <button id="template-week" type="button" class="button secondary">Calcular 7 dias para mi posicion</button>
         </details>
         <p id="template-pass-status" role="status"></p>
         <div class="table-scroll template-preview"><table><thead><tr><th>Satelite</th><th>Inicio UTC</th><th>Fin UTC</th><th>Elevacion max.</th><th>Provisional</th></tr></thead><tbody id="template-pass-rows"></tbody></table></div>
@@ -63,6 +65,8 @@
       $("template-add").disabled = blocked || !file || !selected.size;
       $("template-export").disabled = blocked || !selected.size;
       $("template-recalculate").disabled = blocked || calculating || !file;
+      $("template-week").disabled = blocked || calculating || !file;
+      $("template-pass-radio").disabled = blocked || calculating || !passRows.length;
     }
     function render() {
       $("template-preview").replaceChildren();
@@ -131,6 +135,7 @@
       text("template-pass-page", `${passPage + 1} / ${pages}`);
       $("template-pass-previous").disabled = passPage === 0;
       $("template-pass-next").disabled = passPage + 1 >= pages;
+      updateButtons();
     }
     function useZone() {
       const zone = forecast?.zones.find(item => item.id === $("template-pass-zone").value);
@@ -156,7 +161,7 @@
       R.assert(passSource, "Muestra o recalcula primero los pases.");
       download(`sat-${$("country-template").value}-monthly-passes.json`, JSON.stringify(passSource, null, 2), "application/json");
     });
-    on("template-recalculate", "Recalcular mes (solo prevision)", async () => {
+    async function calculate(weekly) {
       R.assert($("template-lat").value.trim() && $("template-lon").value.trim(), "Introduce latitud y longitud.");
       const observer = { latitude: Number($("template-lat").value), longitude: Number($("template-lon").value), height: 0 };
       R.assert(Number.isFinite(observer.latitude) && Math.abs(observer.latitude) <= 90 &&
@@ -169,15 +174,26 @@
         const result = await new Promise((resolve, reject) => {
           worker.onmessage = event => event.data.error ? reject(new Error(event.data.error)) : resolve(event.data.result);
           worker.onerror = event => reject(new Error(event.message || "Error al calcular los pases."));
-          worker.postMessage({ satellites, observer, now: Date.now() });
+          worker.postMessage({ satellites, observer, now: Date.now(), weekly });
         });
         if (code !== $("country-template").value) return;
         passRows = result.passes; passPage = 0; passSource = result;
         text("template-pass-position", `${observer.latitude}, ${observer.longitude} · UTC`);
-        text("template-pass-status", `${passRows.length} pases. Solo prevision; no usar para CAT.`);
+        text("template-pass-status", weekly ? `${passRows.length} pases en 7 dias (limitado a 7 dias desde cada TLE).` :
+          `${passRows.length} pases. Solo prevision; no usar para CAT.`);
         renderPasses();
       } finally { worker.terminate(); calculating = false; updateButtons(); }
-    });
+    }
+    on("template-recalculate", "Recalcular mes (solo prevision)", () => calculate(false));
+    on("template-week", "Calcular pases de 7 dias", () => calculate(true));
+    if (loadPasses) {
+      $("template-pass-radio").hidden = false;
+      $("template-pass-radio-note").hidden = false;
+      on("template-pass-radio", "Cargar pases SAT en la radio", async () => {
+        const result = await loadPasses(passRows);
+        text("template-pass-status", `${result.passes.length} pases grabados y releidos en la radio; reloj UTC ${result.radioClock}. En SAT RX pulsa 0 para verlos.`);
+      });
+    }
     $("country-template").addEventListener("change", () => run("Cargar plantilla de pais", load));
     for (const id of ["region-template", "pmr-template", "sat-template"]) $(id).addEventListener("change", () => run("Actualizar plantilla", preview));
     $("search-template").addEventListener("input", () => run("Actualizar plantilla", preview));

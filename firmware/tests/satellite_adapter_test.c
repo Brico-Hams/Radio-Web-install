@@ -4,7 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef enum { KEY_INVALID, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_PTT, KEY_9 } KEY_Code_t;
+typedef enum { KEY_INVALID, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_PTT, KEY_9,
+    KEY_0, KEY_UP, KEY_DOWN, KEY_EXIT } KEY_Code_t;
 typedef struct { uint32_t Frequency; } frequency_t;
 typedef struct { frequency_t *pRX; frequency_t *pTX; } vfo_t;
 static frequency_t rx = {43500000}, tx = {14500000};
@@ -20,7 +21,7 @@ static unsigned delays;
 static uint32_t tick;
 static bool foxLocked;
 uint32_t SCHEDULER_GetTick10ms(void) { return tick; }
-static char line2[32], line6[32];
+static char line2[32], line6[32], rows[7][32];
 #define BK4819_REG_30 0x30
 static void BK4819_SetFrequency(uint32_t f) { tuned_frequency = f; tunes++; }
 static void BK4819_PickRXFilterPathBasedOnFrequency(uint32_t f) { filter_frequency = f; }
@@ -31,7 +32,9 @@ static void FOXHUNT_RebaseMeasurements(void) { rebases++; }
 static void UI_PrintStringSmallNormal(const char *text, unsigned left, unsigned right, unsigned line)
 {
     (void)left; (void)right;
-    snprintf(line == 2 ? line2 : line6, 32, "%s", text);
+    snprintf(rows[line], 32, "%s", text);
+    if (line == 2 || line == 6)
+        snprintf(line == 2 ? line2 : line6, 32, "%s", text);
 }
 #include "bricohams/cat_tx.h"
 #define ENABLE_UART
@@ -77,6 +80,7 @@ static void UART_ServiceCommands(void)
         pressed = KEY_3;
 }
 #include "bricohams/satellite_foxhunt.inc"
+extern uint8_t bh_test_flash[0x10000];
 
 #define CHECK(expression) do { if (!(expression)) { \
     fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #expression); return EXIT_FAILURE; \
@@ -245,6 +249,48 @@ int main(void)
     BH_SAT_Key(KEY_9);
     BH_SAT_Stop();
     CHECK(!bh_cat_transmitter.armed && keyups == 3);
+
+    /* Pass list: KEY_0 toggles it, arrows scroll, SAT controls are swallowed. */
+    memset(bh_test_flash, 0xff, sizeof(bh_test_flash));
+    uint8_t frame[BH_PASS_REQUEST_HEADER + 3 * BH_PASS_ENTRY_BYTES] = {1, BH_PASS_OP_WRITE};
+    uint8_t pass_reply[BH_PASS_REPLY_MAX];
+    const char *names[] = {"OLD", "AO-91", "ISS"};
+    const uint32_t aos[] = {1761955200U - 3600U, 1761955200U + 5400U, 1761955200U + 2U * 86400U};
+    frame[11] = 3;
+    for (unsigned i = 0; i < 3; ++i) {
+        uint8_t *e = &frame[BH_PASS_REQUEST_HEADER + i * BH_PASS_ENTRY_BYTES];
+        e[0] = (uint8_t)(i + 1);
+        memcpy(&e[4], names[i], strlen(names[i]));
+        for (unsigned b = 0; b < 4; ++b) e[12 + b] = (uint8_t)(aos[i] >> (b * 8U));
+        e[18] = 0x58; e[19] = 0x02; /* LOS at +600 s */
+        e[20] = 72;
+        e[22] = 0x5f; e[23] = 0x01; /* AOS azimuth 351 */
+    }
+    CHECK(BH_PASS_Request(frame, sizeof(frame), true, 0, pass_reply) && pass_reply[1] == BH_PASS_STATUS_OK);
+    memset(frame, 0, BH_PASS_REQUEST_HEADER);
+    frame[0] = 1; frame[1] = BH_PASS_OP_COMMIT; frame[11] = 3;
+    for (unsigned b = 0; b < 4; ++b) frame[6 + b] = (uint8_t)(1761955200U >> (b * 8U));
+    tick = 0;
+    CHECK(BH_PASS_Request(frame, BH_PASS_REQUEST_HEADER, true, 0, pass_reply) && pass_reply[3] == 3);
+    BH_SAT_Start();
+    CHECK(BH_SAT_Key(KEY_0) && bhSatPassView);
+    BH_SAT_Draw();
+    CHECK(strcmp(rows[0], "PASSES 00:00Z") == 0);
+    CHECK(strcmp(rows[1], "AO-91    +01h30m") == 0 && strcmp(rows[2], "01 01:30 E72 A351") == 0);
+    CHECK(strcmp(rows[3], "ISS      +2d00h") == 0 && strcmp(rows[4], "03 00:00 E72 A351") == 0);
+    CHECK(bhSatPassUpcoming == 2);
+    CHECK(BH_SAT_Key(KEY_9) && !bh_cat_transmitter.armed);
+    CHECK(BH_SAT_Key(KEY_DOWN) && bhSatPassFirst == 1);
+    CHECK(BH_SAT_Key(KEY_DOWN) && bhSatPassFirst == 1);
+    BH_SAT_Draw();
+    CHECK(strcmp(rows[1], "ISS      +2d00h") == 0);
+    CHECK(BH_SAT_Key(KEY_UP) && bhSatPassFirst == 0 && !BH_SAT_Key(KEY_EXIT));
+    tick = 6000; /* 60 s later */
+    BH_SAT_Draw();
+    CHECK(strcmp(rows[0], "PASSES 00:01Z") == 0 && strcmp(rows[1], "AO-91    +01h29m") == 0);
+    CHECK(BH_SAT_Key(KEY_0) && !bhSatPassView);
+    BH_SAT_Draw();
+    CHECK(strncmp(line2, "SAT RX", 6) == 0);
     puts("Satellite adapter checks passed with mocked RF calls; no hardware validation");
     return EXIT_SUCCESS;
 }

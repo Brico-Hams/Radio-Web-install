@@ -65,6 +65,7 @@ class QuanshengDevice extends R.BufferedTransport {
     this.commands.push({ type, data: data.slice() });
     let result;
     if (type === 0x0514) {
+      this.sessionTimestamp = le(data).getUint32(0, true);
       result = new Uint8Array(36);
       result.set(new TextEncoder().encode(this.version || "F4HWN v6.2.0"));
     } else if (type === 0x7b20) {
@@ -120,6 +121,28 @@ class QuanshengDevice extends R.BufferedTransport {
       if (this.presetWrongToken) result[2] ^= 1;
       if (this.presetRejected) result[1] = 3;
       if (this.presetCorruptRead && operation === 1) result[10] ^= 1;
+    } else if (type === 0x7b30) {
+      // Firmware model of BH_PASS_Request: session auth, erase, staged writes, verified commit.
+      const operation = data[1], index = data[10], count = data[11];
+      this.passEntries ||= new Uint8Array(64 * 32).fill(0x5a);
+      this.passCount ??= 0;
+      result = new Uint8Array(12 + (operation === 4 ? count * 32 : 0));
+      result[0] = 1; result[2] = operation; result[8] = index; result[9] = count; result[10] = 64; result[11] = 32;
+      let status = 0;
+      if (le(data).getUint32(2, true) !== this.sessionTimestamp) status = 5;
+      else if (operation === 1) { this.passEntries.fill(255); this.passCount = 0; }
+      else if (operation === 2) {
+        assert.equal(data.length, 12 + count * 32);
+        assert(count >= 1 && count <= 4 && index + count <= 64);
+        if (!this.passIgnoreWrite) this.passEntries.set(data.subarray(12), index * 32);
+      } else if (operation === 3) {
+        try { for (let i = 0; i < count; i++) R.decodeSatellitePass(this.passEntries.subarray(i * 32, i * 32 + 32)); this.passCount = count; }
+        catch { status = 8; }
+      } else if (operation === 4) result.set(this.passEntries.subarray(index * 32, (index + count) * 32), 12);
+      if (le(data).getUint32(6, true) && status !== 5) this.passClock = le(data).getUint32(6, true);
+      result[1] = status;
+      result[3] = this.passCount;
+      le(result).setUint32(4, this.passClock || 0, true);
     } else if (type === 0x7b00) {
       assert.equal(data.length, 8);
       assert.equal(data[0], 1);
@@ -1726,4 +1749,64 @@ test("Apps Labs: un ACK positivo no oculta una escritura corrupta ni confirma la
   assert.equal(connector.connected, false);
   assert(!device.commands.some(item => item.type === 0x0734 && le(item.data).getUint32(2, true) === 0));
   assert(!device.commands.some(item => item.type === 0x0736));
+});
+function weekPasses(now, count) {
+  return Array.from({ length: count }, (_, index) => ({ norad: 43017 + (index % 3), name: ["AO-91", "ISS (ZARYA)", "SAUDISAT 1C"][index % 3],
+    start: now + (index + 1) * 5400000 + 123, maximum: now + (index + 1) * 5400000 + 300000, end: now + (index + 1) * 5400000 + 600400,
+    elevation: 10 + (index % 80) + 0.4, azimuthStart: 359.6, azimuthEnd: 120.2, downlink: index % 2 ? 145800000 : 0 }));
+}
+test("pases SAT se graban por tramas de 4, se confirman y se releen con la sesion de identificacion", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const now = Date.now();
+  const passes = [{ ...weekPasses(now, 1)[0], start: now - 7200000, end: now - 6600000 }, ...weekPasses(now, 70)];
+  const result = await connector.writeSatellitePasses(passes);
+  assert.equal(result.format, "bricohams-radio-passes");
+  assert.equal(result.passes.length, 64);
+  assert.equal(device.passCount, 64);
+  assert(Math.abs(Date.parse(result.radioClock) - now) < 5000);
+  assert.equal(result.passes[0].name, "AO-91");
+  assert.equal(result.passes[1].name, "ISS");
+  assert.equal(result.passes[2].name, "SAUDISAT");
+  assert.equal(result.passes[0].azimuthStart, 0);
+  assert.equal(result.passes[1].downlink, 145800000);
+  assert(result.passes.every((pass, index) => index === 0 || pass.start > result.passes[index - 1].start));
+  const ops = device.commands.filter(command => command.type === 0x7b30).map(command => command.data[1]);
+  assert.deepEqual(ops.slice(0, 18), [1, ...Array(16).fill(2), 3]);
+  assert(device.commands.filter(command => command.type === 0x7b30)
+    .every(command => le(command.data).getUint32(2, true) === connector.timestamp));
+  assert.equal((await connector.readSatellitePasses()).passes.length, 64);
+  await connector.clearSatellitePasses();
+  assert.equal(device.passCount, 0);
+  assert.deepEqual((await connector.readSatellitePasses()).passes, []);
+  await connector.disconnect();
+});
+test("pases SAT rechazan datos invalidos antes de enviar y no dan por buena una escritura perdida", async () => {
+  const now = Date.now();
+  const [pass] = weekPasses(now, 1);
+  for (const patch of [{ norad: 0 }, { name: "ÑÑ" }, { end: pass.start + 7300000 }, { maximum: pass.end + 2000 },
+    { downlink: 530000000 }, { elevation: NaN }])
+    assert.throws(() => R.encodeSatellitePass({ ...pass, ...patch }));
+  assert.throws(() => R.selectSatellitePasses([{ ...pass, end: now - 1 }], now), /futuros/);
+  const bytes = R.encodeSatellitePass(pass);
+  assert.equal(bytes.length, 32);
+  assert.deepEqual(R.encodeSatellitePass(R.decodeSatellitePass(bytes)), bytes);
+  for (const offset of [21, 26]) {
+    const bad = bytes.slice(); bad[offset] = 1;
+    assert.throws(() => R.decodeSatellitePass(bad), /no valido/);
+  }
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  device.passIgnoreWrite = true;
+  await assert.rejects(connector.writeSatellitePasses(weekPasses(now, 3)), /Verificacion de Flash/);
+  assert.equal(device.passCount, 0);
+  await connector.disconnect().catch(() => {});
+  const stale = new QuanshengDevice();
+  const other = new R.QuanshengConnector(stale);
+  await other.connect("UV-K5-V3");
+  other.timestamp ^= 1;
+  await assert.rejects(other.writeSatellitePasses(weekPasses(now, 1)), /Sesion no autorizada/);
+  assert.equal(stale.passCount ?? 0, 0);
 });

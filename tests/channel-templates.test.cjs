@@ -159,6 +159,28 @@ test("monthly browser worker uses the same forecast engine and rejects stale TLE
   context.self.onmessage({ data: { satellites, observer, now: now + 10 * 86400000 } });
   assert.match(messages[1].error, /TLE/);
 });
+test("weekly radio passes join 48 h predictPasses windows inside TLE validity for Murcia", () => {
+  const murcia = { latitude: 37.9922, longitude: -1.1307, height: 0 };
+  const { epoch } = R.validateTLE(orbital, now);
+  const passes = R.weeklyTemplatePasses(satellites, murcia, now);
+  assert(passes.length >= 20);
+  for (const [index, pass] of passes.entries()) {
+    assert(pass.start >= now && pass.end <= epoch + 7 * 86400000);
+    assert(pass.maximum >= pass.start && pass.maximum <= pass.end && pass.end - pass.start < 20 * 60000);
+    assert(pass.elevation >= 10 && pass.downlink === 145800000 && pass.tentative === false);
+    // Window seams are stitched, so only the very first pass may start already visible.
+    assert(!pass.partialStart || pass.start === now);
+    if (index) assert(pass.start > passes[index - 1].end);
+  }
+  assert(passes.some(pass => pass.end > now + 48 * 3600000), "later 48 h windows are included");
+  const messages = [];
+  const context = { importScripts() {}, self: { RadioWorkspace: R, postMessage: value => messages.push(value) } };
+  vm.runInNewContext(read("channel-template-worker.js"), context);
+  context.self.onmessage({ data: { satellites, observer: murcia, now, weekly: true } });
+  assert.equal(messages[0].result.format, "bricohams-weekly-passes");
+  assert.deepEqual(messages[0].result.passes, passes);
+  assert.throws(() => R.weeklyTemplatePasses(satellites, murcia, now + 10 * 86400000), /TLE/);
+});
 test("schedule publishes only validated permitted data and explicitly deploys Pages after bot commits", () => {
   assert(read(".gitignore").includes("!data/channel-templates/*-passes.json"),
     "Public reference forecasts must not be excluded with private pass exports.");
