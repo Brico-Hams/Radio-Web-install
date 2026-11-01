@@ -179,7 +179,33 @@ PTT sobre carga ficticia (01-11-2026, con permiso del operador):
 
 La APK prueba sola 38400 si el (tr)uSDX no responde a 115200, y al revés.
 
-## 6. Certificación de uso
+### (tr)uSDX actualizado a la beta R2.00x (01-11-2026)
+
+Firmware personal de DL2MAN cargado por USB con avrdude (`-c arduino -p m328p
+-b 115200`, Optiboot 7.0, firma 1E 95 0F, escritura verificada, fusibles sin
+tocar). La actualización devuelve los ajustes a fábrica: hay que volver a poner
+8.2 PA Bias max, 8.3 Ref Frequency, 8.6 Rshunt y 8.7 LPF Config (Classic).
+Antes de cada actualización conviene guardar la EEPROM (`-U eeprom:r:copia.hex:i`).
+
+| Prueba | Resultado |
+| --- | --- |
+| CAT a 115200: `ID` = 020, `FA` 7,074 MHz, `MD` 2 | OK |
+| Streaming RX (`UA2;`): unos 8.200 bytes/s, por encima de las 7.825 muestras/s | OK |
+| Streaming TX (carga ficticia): 3 s de tono enviados en 3,0 s, TX visto en la radio, vuelve a RX | OK. El CAT tarda ~1 s en responder tras el streaming; la APK espera ese segundo |
+
+## 6. Bluetooth y modos digitales (pendiente en el móvil)
+
+| # | Prueba | Resultado |
+| --- | --- | --- |
+| B1 | IC-705: emparejar como dispositivo de datos (SET > Bluetooth Set > Pairing Reception) y conectar por Bluetooth en la APK | |
+| B2 | IC-705 por Bluetooth: C3, C4, C6 y C9 | |
+| B3 | Otra radio con adaptador serie Bluetooth (SPP) en su puerto CAT, mismo baudio: C2-C4 | |
+| B4 | FTX-1: la APK explica que la BU-6 es solo para auriculares | |
+| D1 | Digitales: elegir FT8 y banda, Sintonizar → frecuencia y modo DATA/USB en la radio | |
+| D2 | Reloj UTC y cuenta atrás del ciclo coinciden con una app FT8 (FT8CN) | |
+| D3 | "Liberar puerto" y abrir FT8CN/JS8Call con la misma radio: decodifica y transmite | |
+
+## 7. Certificación de uso
 
 Rellena una fila por radio cuando todas sus filas ★ estén en `OK`. Sin firma,
 la radio sigue **sin certificar**.
@@ -195,7 +221,7 @@ la radio sigue **sin certificar**.
 | FTX-1 | | | | | |
 | (tr)uSDX | | | | | |
 
-## 7. Documentación de los fabricantes usada
+## 8. Documentación de los fabricantes usada
 
 El código se ha escrito solo a partir de estos documentos, sin código de
 otros autores:

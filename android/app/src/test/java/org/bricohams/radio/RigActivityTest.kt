@@ -50,6 +50,16 @@ class RigActivityTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+    @Test fun digitalCardListsFt8() {
+        val controller = Robolectric.buildActivity(RigActivity::class.java).setup()
+        try {
+            val activity = controller.get()
+            assertTrue(text(activity).contains(activity.getString(R.string.rig_dig_title)))
+            val spinners = views(activity.window.decorView).filterIsInstance<Spinner>()
+            assertTrue(spinners.any { it.adapter.count == DigitalMode.values().size && it.adapter.getItem(0).toString().startsWith("FT8") })
+        } finally { controller.pause().stop().destroy() }
+    }
+
     @Test fun satelliteCardListsTransponderWithUplink() {
         val point = SatelliteLook(100000, 180.0, 30.0, 1000.0)
         val plan = SatellitePlan(SatellitesTest.tle, SatellitesTest.observer, 145800000,

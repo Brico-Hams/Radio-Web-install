@@ -16,6 +16,9 @@ Die nativen Werkzeuge für Viewer/Tastatur, Neustart, Wartung, DFU, App-Verwaltu
 | [UV Studio](https://armel.github.io/uvstudio/) | Slot-/Sicherungsablauf und LCD/RF-Log-Interoperabilitätsreferenz; festgelegte Revision `e7aa946f6de002559e1aaf3f91765db7fc2ed567`. Der Web-Viewer ist unabhängig implementiert, keine Kopie des Website-Codes | Website Dritter |
 | [egzumer/uv-k5-firmware-custom](https://github.com/egzumer/uv-k5-firmware-custom) | Vorgänger der F4HWN-Firmware und ihres Protokolls | Apache-2.0 |
 | [DualTachyon/uv-k5-firmware](https://github.com/DualTachyon/uv-k5-firmware) | Quansheng-Basisprotokoll | Apache-2.0 |
+| [(tr)uSDX · DL2MAN](https://dl2man.de/) und [uSDX · PE1NNZ](https://github.com/threeme3/usdx) | **Mitautoren der (tr)uSDX-Unterstützung** der APK: Guido (PE1NNZ, Konzept, Schaltung und Code des uSDX) und Manuel (DL2MAN, (tr)uSDX, Sandwich-Platine und Klasse-E-Tiefpass). CAT-Befehle und Audiostreaming nach [„(tr)uSDX Details“](https://dl2man.de/5-trusdx-details/). Ihr Code wird nicht wiederverwendet | Projekt und Firmware ihrer Autoren |
+| Handbücher von Yaesu (FT-817ND/818ND/857D/897D, FTX-1 CAT 2508-C) und Icom (IC-705 CI-V Rev. 6) | Multi-Radio-CAT der APK, nach diesen Dokumenten geschrieben | Herstellerdokumentation |
+| [FT8CN](https://github.com/N0BOY/FT8CN) (BG7YOZ) | Nur untersucht, um zu verstehen, wie es CAT, USB-Seriell und Audio unter Android löst; kein Code und keine Ressourcen übernommen | MIT |
 
 ## Abhängigkeiten
 

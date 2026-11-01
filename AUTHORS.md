@@ -12,6 +12,13 @@ Más información sobre Bricohams: [bricohams.org](https://bricohams.org) ·
 [bricohams.com](https://bricohams.com). Contacto del proyecto:
 [GitHub Issues](https://github.com/Brico-Hams/Radio-Web-install/issues).
 
+## Coautores del soporte (tr)uSDX
+
+- **Guido (PE1NNZ)** — concepto, circuito y código del [uSDX](https://github.com/threeme3/usdx).
+- **Manuel (DL2MAN)** — [(tr)uSDX](https://dl2man.de/), PCB sándwich y LPF clase E.
+
+La APK implementa sus comandos CAT y su streaming de audio según su documentación; no reutiliza su código.
+
 ## Contribuir
 
 Las contribuciones se aceptan bajo la licencia del proyecto (GPL-3.0-or-later). Al enviar un cambio confirmas que tienes derecho a aportarlo. Si contribuyes, añade tu nombre a esta lista.

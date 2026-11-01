@@ -12,6 +12,13 @@ Mehr über Bricohams: [bricohams.org](https://bricohams.org) ·
 [bricohams.com](https://bricohams.com). Projektkontakt:
 [GitHub Issues](https://github.com/Brico-Hams/Radio-Web-install/issues).
 
+## Mitautoren der (tr)uSDX-Unterstützung
+
+- **Guido (PE1NNZ)** — Konzept, Schaltung und Code des [uSDX](https://github.com/threeme3/usdx).
+- **Manuel (DL2MAN)** — [(tr)uSDX](https://dl2man.de/), Sandwich-Platine und Klasse-E-Tiefpass.
+
+Die APK setzt ihre CAT-Befehle und ihr Audiostreaming nach ihrer Dokumentation um; ihr Code wird nicht wiederverwendet.
+
 ## Mitwirken
 
 Beiträge werden unter der Projektlizenz (GPL-3.0-or-later) angenommen. Mit dem Einreichen einer Änderung bestätigen Sie, dass Sie zu diesem Beitrag berechtigt sind. Wer mitwirkt, ergänzt seinen Namen in dieser Liste.

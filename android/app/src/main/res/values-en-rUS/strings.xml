@@ -847,4 +847,25 @@
     <string name="rig_sstv_sent">Image sent with callsign %1$s (%2$.1f s, %3$s).</string>
     <string name="rig_receiving">Recording %1$d seconds of SSTV…</string>
     <string name="rig_tracking_waiting">Waiting for AOS: %1$d s to go.</string>
+    <string name="rig_dig_title">Digital modes</string>
+    <string name="rig_dig_mode_label">Digital mode</string>
+    <string name="rig_dig_band_label">Band and frequency</string>
+    <string name="rig_dig_period_label">Period</string>
+    <string name="rig_dig_tune">Tune</string>
+    <string name="rig_dig_clock">UTC %1$s · next %2$s slot in %3$.1f s (%4$s)</string>
+    <string name="rig_dig_even">even</string>
+    <string name="rig_dig_odd">odd</string>
+    <string name="rig_dig_time_warning">Automatic time is off: FT8 needs the clock within ±1 s.</string>
+    <string name="rig_dig_release">Release port for a digital app</string>
+    <string name="rig_dig_released">Port released: open FT8CN, JS8Call or another digital app and select the same radio.</string>
+    <string name="rig_dig_purpose_ft8">HF standard</string>
+    <string name="rig_dig_purpose_ft4">contests</string>
+    <string name="rig_dig_purpose_js8">FT8-based free-text chat</string>
+    <string name="rig_dig_purpose_wspr">propagation beacon</string>
+    <string name="rig_dig_purpose_q65">VHF/UHF and EME</string>
+    <string name="rig_dig_purpose_jt65">FT8 predecessor</string>
+    <string name="rig_dig_purpose_jt9">FT8 predecessor</string>
+    <string name="rig_dig_purpose_fst4">LF/MF</string>
+    <string name="rig_dig_purpose_fst4w">LF/MF (beacon)</string>
+    <string name="rig_trusdx_credit">(tr)uSDX support co-authored with its designers, Guido PE1NNZ and Manuel DL2MAN (dl2man.de). CAT commands follow their documentation.</string>
 </resources>

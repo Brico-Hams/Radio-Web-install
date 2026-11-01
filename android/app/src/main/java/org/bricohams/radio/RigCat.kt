@@ -9,7 +9,9 @@ enum class RigMode { LSB, USB, CW, CW_R, AM, FM, FM_N, WFM, RTTY, RTTY_R, DATA_L
 
 enum class Vfo { A, B }
 
-enum class RigModel(val label: String, val defaultBaud: Int, val stopBits: Int, val rangeHz: LongRange) {
+enum class RigModel(
+    val label: String, val defaultBaud: Int, val stopBits: Int, val rangeHz: LongRange
+) {
     FT817("Yaesu FT-817 / FT-817ND", 4800, 2, 100_000L..470_000_000L),
     FT818("Yaesu FT-818ND", 4800, 2, 100_000L..470_000_000L),
     FT857("Yaesu FT-857 / FT-857D", 4800, 2, 100_000L..470_000_000L),

@@ -14,8 +14,8 @@ class TruSdxTest {
         assertEquals(RigMode.CW, KenwoodTs480Subset.parseMode("MD3;"))
         assertNull(KenwoodTs480Subset.parseMode("MD9;"))
         assertThrows(IllegalArgumentException::class.java) { KenwoodTs480Subset.setMode(RigMode.DATA_U) }
-        assertEquals("TX0;", KenwoodTs480Subset.ptt(true))
-        assertEquals("RX;", KenwoodTs480Subset.ptt(false))
+        assertEquals(";TX0;", KenwoodTs480Subset.ptt(true))
+        assertEquals(";RX;", KenwoodTs480Subset.ptt(false))
         KenwoodTs480Subset.checkId("ID020;")
         assertThrows(IllegalArgumentException::class.java) { KenwoodTs480Subset.checkId("ID019;") }
     }

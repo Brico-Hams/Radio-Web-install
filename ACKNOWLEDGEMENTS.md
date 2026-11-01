@@ -21,6 +21,9 @@ Las licencias y avisos originales siguen siendo obligatorios.
 | [UV Studio](https://armel.github.io/uvstudio/) | Flujo de slots/copias y referencia de interoperabilidad LCD/RF Log; revisión fijada `e7aa946f6de002559e1aaf3f91765db7fc2ed567`. El visor web es una implementación independiente, no una copia del código del sitio | Sitio de terceros |
 | [egzumer/uv-k5-firmware-custom](https://github.com/egzumer/uv-k5-firmware-custom) | Antecedente del firmware F4HWN y su protocolo | Apache-2.0 |
 | [DualTachyon/uv-k5-firmware](https://github.com/DualTachyon/uv-k5-firmware) | Protocolo base Quansheng | Apache-2.0 |
+| [(tr)uSDX · DL2MAN](https://dl2man.de/) y [uSDX · PE1NNZ](https://github.com/threeme3/usdx) | **Coautores del soporte (tr)uSDX** de la APK: Guido (PE1NNZ, concepto, circuito y código del uSDX) y Manuel (DL2MAN, (tr)uSDX, PCB sándwich y LPF clase E). Comandos CAT y streaming de audio según [“(tr)uSDX Details”](https://dl2man.de/5-trusdx-details/). No se reutiliza su código | Proyecto y firmware de sus autores |
+| Manuales de Yaesu (FT-817ND/818ND/857D/897D, FTX-1 CAT 2508-C) e Icom (IC-705 CI-V rev. 6) | CAT multirradio de la APK, escrito desde estos documentos | Documentación del fabricante |
+| [FT8CN](https://github.com/N0BOY/FT8CN) (BG7YOZ) | Estudiado solo para entender cómo resuelve CAT, USB serie y audio en Android; no se copia código ni recursos | MIT |
 
 ## Dependencias
 

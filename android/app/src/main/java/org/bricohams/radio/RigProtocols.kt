@@ -551,7 +551,8 @@ object KenwoodTs480Subset {
         return mode(reply[2])
     }
     // DL2MAN "(tr)uSDX supported CAT commands": TX0 transmit, RX receive
-    fun ptt(on: Boolean): String = if (on) "TX0;" else "RX;"
+    // The leading ';' ends any CAT audio stream still open ("US...;"), so PTT changes are always parsed as commands.
+    fun ptt(on: Boolean): String = if (on) ";TX0;" else ";RX;"
     // DL2MAN "(tr)uSDX supported CAT commands": ID answers ID020 (the TS-480 it emulates)
     fun readId(): String = "ID;"
     fun checkId(reply: String) = requireUi(reply == ID_REPLY) { UiText(R.string.err_rig_wrong_model, reply) }
@@ -590,7 +591,8 @@ object TruSdxStream {
 /** Single VFO, no split, no memories. */
 class TruSdxRig(
     private val transport: RadioBytes,
-    private val clock: () -> Long = { System.nanoTime() / 1_000_000 }
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val sleep: (Long) -> Unit = Thread::sleep
 ) : Rig {
     private val link = AsciiLink(transport)
     override val model = RigModel.TRUSDX
@@ -651,6 +653,8 @@ class TruSdxRig(
         for (attempt in 1..3) {
             try {
                 transport.write(KenwoodTs480Subset.RELEASE.toByteArray(Charsets.US_ASCII), AUDIO_WRITE_MS)
+                // Measured on a real (tr)uSDX (R2.00x): CAT replies resume about 1 s after the stream ends.
+                sleep(SETTLE_MS)
                 break
             } catch (error: IOException) {
                 if (primary == null) primary = error
@@ -688,6 +692,7 @@ class TruSdxRig(
     }
     private companion object {
         const val MAX_TX_SECONDS = 110
+        const val SETTLE_MS = 1000L
         const val CHUNK = 1152
         const val AUDIO_WRITE_MS = 2000
         const val READ_CHUNK = 256

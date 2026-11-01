@@ -847,4 +847,25 @@
     <string name="rig_sstv_sent">Image envoyée avec l\’indicatif %1$s (%2$.1f s, %3$s).</string>
     <string name="rig_receiving">Enregistrement de %1$d secondes de SSTV…</string>
     <string name="rig_tracking_waiting">En attente de l’AOS : encore %1$d s.</string>
+    <string name="rig_dig_title">Modes numériques</string>
+    <string name="rig_dig_mode_label">Mode numérique</string>
+    <string name="rig_dig_band_label">Bande et fréquence</string>
+    <string name="rig_dig_period_label">Période</string>
+    <string name="rig_dig_tune">Accorder</string>
+    <string name="rig_dig_clock">UTC %1$s · prochain créneau %2$s dans %3$.1f s (%4$s)</string>
+    <string name="rig_dig_even">pair</string>
+    <string name="rig_dig_odd">impair</string>
+    <string name="rig_dig_time_warning">L’heure automatique est désactivée : le FT8 exige une horloge à ±1 s.</string>
+    <string name="rig_dig_release">Libérer le port pour une appli numérique</string>
+    <string name="rig_dig_released">Port libéré : ouvre FT8CN, JS8Call ou une autre appli numérique et choisis la même radio.</string>
+    <string name="rig_dig_purpose_ft8">standard HF</string>
+    <string name="rig_dig_purpose_ft4">concours</string>
+    <string name="rig_dig_purpose_js8">discussion en texte libre basée sur le FT8</string>
+    <string name="rig_dig_purpose_wspr">balise de propagation</string>
+    <string name="rig_dig_purpose_q65">VHF/UHF et EME</string>
+    <string name="rig_dig_purpose_jt65">prédécesseur du FT8</string>
+    <string name="rig_dig_purpose_jt9">prédécesseur du FT8</string>
+    <string name="rig_dig_purpose_fst4">LF/MF</string>
+    <string name="rig_dig_purpose_fst4w">LF/MF (balise)</string>
+    <string name="rig_trusdx_credit">Prise en charge du (tr)uSDX co-écrite avec ses concepteurs, Guido PE1NNZ et Manuel DL2MAN (dl2man.de). Commandes CAT selon leur documentation.</string>
 </resources>
