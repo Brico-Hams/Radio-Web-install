@@ -34,6 +34,21 @@ class SatelliteCatalogTest {
         assertThrows(IllegalArgumentException::class.java) { SatelliteSources.parseTransmitters("{", setOf(1)) }
         assertThrows(IllegalArgumentException::class.java) { SatelliteSources.parseTle("1 broken".toByteArray()) }
     }
+    @Test fun uplinkAndInvertAreParsedAndStored() {
+        val json = """[
+            {"norad_cat_id":25544,"alive":true,"status":"active","downlink_low":145800000,"uplink_low":435200000,"invert":true,"mode":"SSB"},
+            {"norad_cat_id":25544,"alive":true,"status":"active","downlink_low":145810000,"uplink_low":435200005,"mode":"FM"},
+            {"norad_cat_id":25544,"alive":true,"status":"active","downlink_low":145820000,"uplink_low":null,"mode":"FM"},
+            {"norad_cat_id":25544,"alive":true,"status":"active","downlink_low":145830000,"uplink_low":0,"invert":false,"mode":"FM"},
+            {"norad_cat_id":25544,"alive":true,"status":"active","downlink_low":145840000,"mode":"FM"}
+        ]"""
+        val list = SatelliteSources.parseTransmitters(json, setOf(25544))
+        assertEquals(listOf<Long?>(435200000L, null, null, null, null), list.map { it.uplinkHz })
+        assertEquals(listOf(true, false, false, false, false), list.map { it.invert })
+        val store = SatelliteStore(folder.newFolder("sat2"))
+        store.saveCatalog(listOf(fixture), list)
+        assertEquals(list, store.transmitters())
+    }
     @Test fun storeRoundTripsAndOnlyAcceptsHttps() {
         val store = SatelliteStore(folder.newFolder("sat"))
         assertTrue(store.catalog().isEmpty() && store.transmitters().isEmpty())

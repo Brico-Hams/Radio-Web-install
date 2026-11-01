@@ -246,6 +246,7 @@ class MainActivity : LocalizedActivity() {
         }
         section(R.string.home_tools) {
             button(R.string.home_open_cat) { startActivity(Intent(this, CatActivity::class.java)) }
+            button(R.string.home_open_rig_cat) { startActivity(Intent(this, RigActivity::class.java)) }
             button(R.string.home_open_gd77) { startActivity(Intent(this, OpenGd77Activity::class.java)) }
             button(R.string.home_open_channels) { startActivity(Intent(this, ChannelActivity::class.java)) }
             button(R.string.home_open_sstv) { startActivity(Intent(this, SstvActivity::class.java)) }

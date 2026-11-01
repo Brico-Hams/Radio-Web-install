@@ -21,6 +21,8 @@
         android:networkSecurityConfig="@xml/network_security_config">
         <activity android:name=".CatActivity" android:exported="false" android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
+        <activity android:name=".RigActivity" android:exported="false" android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
         <activity android:name=".OpenGd77Activity" android:exported="false" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
         <activity android:name=".ChannelActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".SstvActivity" android:exported="false" />

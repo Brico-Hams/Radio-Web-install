@@ -405,6 +405,29 @@ class SatelliteActivity : LocalizedActivity() {
                 catch (error: ArithmeticException) { report(error) }
                 catch (error: IllegalArgumentException) { report(error) }
             })
+            addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_open_rig_cat), false) {
+                try {
+                    val typed = manual.text.toString().trim()
+                    val downlink = if (typed.isNotEmpty()) typed.toBigDecimal().movePointRight(6).longValueExact()
+                        else group.findViewById<RadioButton>(group.checkedRadioButtonId)?.tag as? Long
+                        ?: throw LocalizedArgumentException(UiText(R.string.err_downlink_choose))
+                    requireUi(downlink % 10 == 0L && CatProtocol.inBand(downlink / 10)) { UiText(R.string.err_downlink_band) }
+                    requireUi(System.currentTimeMillis() < track.plan.pass.los.time) { UiText(R.string.err_pass_ended) }
+                    val array = org.json.JSONArray()
+                    list.forEach { t ->
+                        array.put(org.json.JSONObject().apply {
+                            put("downlinkHz", t.downlinkHz)
+                            t.uplinkHz?.let { put("uplinkHz", it) }
+                            put("mode", t.mode); put("description", t.description); put("invert", t.invert)
+                        })
+                    }
+                    startActivity(Intent(this@SatelliteActivity, RigActivity::class.java)
+                        .putExtra(RigActivity.EXTRA_PLAN, SatellitePlanJson.encode(track.plan.copy(downlinkHz = downlink)))
+                        .putExtra(RigActivity.EXTRA_TRANSMITTERS, array.toString()))
+                } catch (error: NumberFormatException) { report(error) }
+                catch (error: ArithmeticException) { report(error) }
+                catch (error: IllegalArgumentException) { report(error) }
+            })
             addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.satellite_cat_hint) })
             addView(Brand.button(this@SatelliteActivity, getString(R.string.rotor_open), false) {
                 val current = track.plan.downlinkHz
