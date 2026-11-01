@@ -199,11 +199,12 @@ static void BH_SAT_DrawPasses(void)
         else if (pass.aos <= now)
             strcpy(when, "NOW");
         else if (pass.aos - now < 86400U)
-            sprintf(when, "+%02luh%02lum", (unsigned long)((pass.aos - now) / 3600U),
-                (unsigned long)((pass.aos - now) / 60U % 60U));
+            /* The modulo bounds let -Wformat-overflow prove the result fits. */
+            sprintf(when, "+%02uh%02um", (unsigned)((pass.aos - now) / 3600U % 24U),
+                (unsigned)((pass.aos - now) / 60U % 60U));
         else
-            sprintf(when, "+%lud%02luh", (unsigned long)((pass.aos - now) / 86400U),
-                (unsigned long)((pass.aos - now) / 3600U % 24U));
+            sprintf(when, "+%ud%02uh", (unsigned)((uint32_t)(pass.aos - now) / 86400U),
+                (unsigned)((pass.aos - now) / 3600U % 24U));
         const uint8_t row = (uint8_t)(1U + shown * 2U);
         sprintf(line, "%-8s %s", pass.name, when);
         UI_PrintStringSmallNormal(line, 0, 0, row);
