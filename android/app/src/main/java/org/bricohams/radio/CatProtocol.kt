@@ -1,12 +1,24 @@
 package org.bricohams.radio
 
 import java.io.Closeable
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 interface RadioBytes : Closeable {
     fun write(bytes: ByteArray, timeoutMs: Int)
     fun read(length: Int, timeoutMs: Int): ByteArray
+    /** Throws away whatever the radio sent before the next request (stale or late replies); stops at the first timeout. */
+    fun discardPending() {
+        try {
+            repeat(DRAIN_LIMIT) { read(1, 1) }
+        } catch (_: java.io.IOException) {
+            // Nothing left to read.
+        }
+    }
+    companion object {
+        const val DRAIN_LIMIT = 2048
+    }
 }
 
 object QuanshengFrames {
@@ -31,6 +43,11 @@ object QuanshengFrames {
         out.putShort(6 + size, 0xbadc.toShort())
         return bytes
     }
+    /**
+     * Validates magic, length and, when present, the CRC-16/XMODEM of the frame. The stock framing accepts a checksum of
+     * 0xFFFF as "not computed", so such frames are only protected by the magic, length bounds and whatever the caller checks
+     * on the payload (CatProtocol requires exact reply sizes, the sequence number and fixed capability words).
+     */
     fun decode(frame: ByteArray): Pair<Int, ByteArray> {
         requireUi(frame.size >= 12) { UiText(R.string.err_uart_frame_short) }
         val view = ByteBuffer.wrap(frame).order(ByteOrder.LITTLE_ENDIAN)
@@ -66,44 +83,66 @@ class CatProtocol(
     private fun remaining(deadline: Long): Int {
         val left = deadline - clock()
         if (left <= 0) throw LocalizedIOException(UiText(R.string.err_cat_timeout))
-        return left.coerceAtMost(1000).toInt()
+        return left.coerceAtMost(ATTEMPT_MS).toInt()
     }
-    private fun request(type: Int, payload: ByteArray, expected: Int): ByteArray {
-        val deadline = clock() + 1000
-        transport.write(QuanshengFrames.encode(type, payload), remaining(deadline))
+    /**
+     * Sends one request and returns the first reply of the expected type that [accept] likes. Pending input is discarded
+     * first; frames that are corrupted, of another type or not accepted (stale replies) are skipped and the scan
+     * resynchronises on the next magic. A silent attempt is repeated once with the same frame (all requests are idempotent:
+     * same sequence, same frequency, lease renewals), then the last failure is raised.
+     */
+    private fun request(type: Int, payload: ByteArray, expected: Int, accept: (ByteArray) -> Boolean): ByteArray {
+        val frame = QuanshengFrames.encode(type, payload)
+        var failure: IOException? = null
+        repeat(ATTEMPTS) {
+            transport.discardPending()
+            val deadline = clock() + ATTEMPT_MS
+            transport.write(frame, remaining(deadline))
+            try {
+                return await(expected, accept, deadline)
+            } catch (error: IOException) {
+                failure = error
+            }
+        }
+        throw failure ?: LocalizedIOException(UiText(R.string.err_cat_timeout))
+    }
+    private fun await(expected: Int, accept: (ByteArray) -> Boolean, deadline: Long): ByteArray {
         var previous = 0
         while (true) {
             val byte = transport.read(1, remaining(deadline)).single().toInt() and 255
             if (previous != 0xab || byte != 0xcd) { previous = byte; continue }
+            previous = 0
             val length = transport.read(2, remaining(deadline))
-            requireUi(length.size == 2) { UiText(R.string.err_uart_length_truncated) }
             val size = ByteBuffer.wrap(length).order(ByteOrder.LITTLE_ENDIAN).short.toInt() and 65535
-            requireUi(size in 4..512) { UiText(R.string.err_uart_length_bounds) }
+            if (size !in 4..512) continue
             val tail = transport.read(size + 4, remaining(deadline))
-            val (responseType, response) = QuanshengFrames.decode(byteArrayOf(0xab.toByte(), 0xcd.toByte()) + length + tail)
-            if (responseType != expected) { previous = 0; continue }
-            return response
+            val decoded = try {
+                QuanshengFrames.decode(byteArrayOf(0xab.toByte(), 0xcd.toByte()) + length + tail)
+            } catch (_: IllegalArgumentException) {
+                continue
+            }
+            if (decoded.first == expected && accept(decoded.second)) return decoded.second
         }
     }
+    private fun sequenceOf(response: ByteArray) = (response[2].toInt() and 255) or ((response[3].toInt() and 255) shl 8)
     @Synchronized fun identify(): String {
         val timestamp = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
             .putInt(System.currentTimeMillis().toInt()).array()
-        val response = request(0x0514, timestamp, 0x0515)
+        val response = request(0x0514, timestamp, 0x0515) { true }
         requireUi(response.size >= 16) { UiText(R.string.err_cat_identification_incomplete) }
-        val firmware = response.copyOfRange(0, 16).takeWhile { it != 0.toByte() }.toByteArray().toString(Charsets.US_ASCII)
-        val version = Regex("F4HWN.*v(\\d+)", RegexOption.IGNORE_CASE).find(firmware)?.groupValues?.get(1)?.toIntOrNull()
-        requireUi(version != null && version >= 6) { UiText(R.string.err_cat_firmware_unsupported, firmware) }
+        val firmware = response.takeWhile { it in 0x20..0x7e }.toByteArray().toString(Charsets.US_ASCII).trim()
+        requireUi(supportedFirmware(firmware)) { UiText(R.string.err_cat_firmware_unsupported, firmware) }
         return firmware
     }
     @Synchronized private fun exchange(operation: Int, frequency: Long = 0): CatState {
         sequence = (sequence + 1) and 65535
+        val expectedSequence = sequence
         val payload = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
             .put(1).put(operation.toByte()).putShort(sequence.toShort()).putInt(frequency.toInt()).array()
         if (operation == 1) checkUi(allowTune()) { UiText(R.string.err_cat_tune_cancelled) }
-        val response = request(0x7b00, payload, 0x7b01)
-        requireUi(response.size == 16 && response[0].toInt() == 1) { UiText(R.string.err_cat_response_invalid) }
+        val response = request(0x7b00, payload, 0x7b01) { it.size == 16 && sequenceOf(it) == expectedSequence }
+        requireUi(response[0].toInt() == 1) { UiText(R.string.err_cat_response_invalid) }
         val view = ByteBuffer.wrap(response).order(ByteOrder.LITTLE_ENDIAN)
-        requireUi(view.getShort(2).toInt() and 65535 == sequence) { UiText(R.string.err_cat_response_sequence) }
         val status = response[1].toInt() and 255
         requireUi(status == if (operation == 0) 0 else 1) {
             if (status == 5) UiText(R.string.err_cat_enable_sat_rx) else UiText(R.string.err_cat_rejected, status)
@@ -118,16 +157,18 @@ class CatProtocol(
     }
     @Synchronized private fun ptt(operation: Int, accepted: Set<Int>): PttState {
         sequence = (sequence + 1) and 65535
+        val expectedSequence = sequence
         val payload = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
             .put(1).put(operation.toByte()).putShort(sequence.toShort()).putInt(0).array()
-        val response = request(0x7b02, payload, 0x7b03)
-        requireUi(response.size == 16 && response[0].toInt() == 1) { UiText(R.string.err_cat_tx_response_invalid) }
+        val response = request(0x7b02, payload, 0x7b03) { it.size == 16 && sequenceOf(it) == expectedSequence }
+        requireUi(response[0].toInt() == 1) { UiText(R.string.err_cat_tx_response_invalid) }
         val view = ByteBuffer.wrap(response).order(ByteOrder.LITTLE_ENDIAN)
-        requireUi(view.getShort(2).toInt() and 65535 == sequence) { UiText(R.string.err_cat_tx_sequence) }
         requireUi(view.getInt(4) == 8) { UiText(R.string.err_cat_tx_unsupported) }
         val flags = view.getInt(8)
         val denied = (flags shr 8) and 255
-        requireUi(flags and 0xffff00e0.toInt() == 0 && denied in 0..5) { UiText(R.string.err_cat_tx_state_inconsistent) }
+        requireUi(flags and 0xffff00e0.toInt() == 0 && denied in 0..MAX_DENIED_STATE) {
+            UiText(R.string.err_cat_tx_state_inconsistent)
+        }
         val state = PttState(flags and 1 != 0, flags and 2 != 0, flags and 4 != 0, flags and 8 != 0, denied,
             view.getInt(12).toLong() and 0xffffffffL)
         val status = response[1].toInt() and 255
@@ -146,29 +187,76 @@ class CatProtocol(
     @Synchronized fun pttKey(): PttState = ptt(1, setOf(0, 1))
     @Synchronized fun pttRelease(): PttState = ptt(2, setOf(0, 1))
     @Synchronized fun query(): CatState = exchange(0)
-    @Synchronized fun tune(frequency10Hz: Long, permit: () -> Boolean = { true }): CatState {
+    /**
+     * Sets the RX frequency with a single SET. With [confirm] the SET reply is used when it is already applied and
+     * otherwise the status is polled (the radio retunes in its RX loop); without it the queued reply is returned as is,
+     * which is enough for lease renewals.
+     */
+    @Synchronized fun tune(frequency10Hz: Long, permit: () -> Boolean = { true }, confirm: Boolean = true): CatState {
         requireUi(inBand(frequency10Hz)) { UiText(R.string.err_cat_rx_band) }
-        return change(1, frequency10Hz, permit)
+        return change(1, frequency10Hz, permit, confirm)
     }
-    @Synchronized fun stop(): CatState = change(2, 0)
-    private fun change(operation: Int, frequency: Long, permit: () -> Boolean = { true }): CatState {
-        requireUi(exchange(0).active) { UiText(R.string.err_cat_activate) }
+    @Synchronized fun stop(): CatState = change(2, 0, { true }, true)
+    private fun change(operation: Int, frequency: Long, permit: () -> Boolean, confirm: Boolean): CatState {
         checkUi(permit()) { UiText(R.string.err_cat_cancelled_before_set) }
-        exchange(operation, frequency)
-        repeat(10) {
-            sleep(75)
-            val state = exchange(0)
-            requireUi(state.active) { UiText(R.string.err_cat_left_sat_rx) }
+        var state = exchange(operation, frequency)
+        requireUi(state.active) { UiText(R.string.err_cat_activate) }
+        if (!confirm) return state
+        repeat(POLLS + 1) { attempt ->
             if (!state.pending) {
                 requireUi(if (operation == 1) state.remote && state.frequency10Hz == frequency else !state.remote) {
                     UiText(R.string.err_cat_change_unconfirmed)
                 }
                 return state
             }
+            if (attempt < POLLS) {
+                sleep(POLL_MS)
+                state = exchange(0)
+                requireUi(state.active) { UiText(R.string.err_cat_left_sat_rx) }
+            }
         }
         throw LocalizedIOException(UiText(R.string.err_cat_change_pending))
     }
     companion object {
+        private const val ATTEMPT_MS = 500L
+        private const val ATTEMPTS = 2
+        private const val POLL_MS = 40L
+        private const val POLLS = 10
+        /**
+         * VfoState_t of the F4HWN base is NORMAL, BUSY, BAT_LOW, TX_DISABLE, TIMEOUT, ALARM, VOLTAGE_HIGH (0..6); the radio
+         * reports it in an 8-bit field, so any byte is accepted and unknown values are shown as a generic denial.
+         */
+        const val MAX_DENIED_STATE = 255
         fun inBand(frequency10Hz: Long) = frequency10Hz in 13600000..17400000 || frequency10Hz in 40000000..47000000
+        /** BricoHams builds, or any build reporting a version >= 6 (the capability words of the CAT reply are checked later). */
+        fun supportedFirmware(firmware: String): Boolean {
+            val version = Regex("v(\\d+)", RegexOption.IGNORE_CASE).find(firmware)?.groupValues?.get(1)?.toIntOrNull()
+            return firmware.contains("bricohams", ignoreCase = true) || (version != null && version >= 6)
+        }
+    }
+}
+
+/** Keeps a manual tune alive: the radio reverts a SET after its 3000 ms lease, so it is renewed well before that. */
+class CatLease(
+    private val cat: CatProtocol,
+    val frequency10Hz: Long,
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val permit: () -> Boolean = { true }
+) {
+    enum class Result { WAITING, RENEWED, REVERTED, LEFT_SAT_RX }
+    private var renewedAt = clock()
+    /** Call often; it renews at most once per [RENEW_MS] and reports when the radio already dropped the tune. */
+    fun renewIfDue(): Result {
+        if (clock() - renewedAt < RENEW_MS) return Result.WAITING
+        val state = cat.query()
+        if (!state.active) return Result.LEFT_SAT_RX
+        if (!state.remote) return Result.REVERTED
+        cat.tune(frequency10Hz, permit, confirm = false)
+        renewedAt = clock()
+        return Result.RENEWED
+    }
+    companion object {
+        const val LEASE_MS = 3000L
+        const val RENEW_MS = 1200L
     }
 }

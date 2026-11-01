@@ -55,7 +55,7 @@ class SstvActivity : LocalizedActivity() {
             setOnClickListener {
                 startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE); type = "image/png"
-                    putExtra(Intent.EXTRA_TITLE, "bricohams-robot36.png")
+                    putExtra(Intent.EXTRA_TITLE, "bricohams-sstv.png")
                 }, 51)
             }
         }
@@ -86,13 +86,19 @@ class SstvActivity : LocalizedActivity() {
         worker.execute {
             try {
                 if (requestCode == 50) {
-                    val bytes = contentResolver.readDocument(uri, MorseAudio.MAX_WAV_BYTES)
-                    val result = Robot36.decode(MorseAudio.readWav(bytes))
-                    val decoded = Bitmap.createBitmap(result.pixels, Robot36.WIDTH, Robot36.HEIGHT, Bitmap.Config.ARGB_8888)
+                    val bytes = contentResolver.readDocument(uri, Sstv.MAX_WAV_BYTES)
+                    val result = Sstv.decode(MorseAudio.readWav(bytes, Sstv.MAX_SECONDS, Sstv.MAX_WAV_BYTES)) { mode, rows, total ->
+                        runOnUiThread {
+                            if (!isDestroyed) status.text = getString(R.string.sstv_progress, mode.name, rows, total)
+                        }
+                    }
+                    val decoded = Bitmap.createBitmap(result.pixels, result.width, result.height, Bitmap.Config.ARGB_8888)
                     runOnUiThread {
                         if (!isDestroyed) {
                             bitmap = decoded; image.setImageBitmap(decoded)
-                            status.text = getString(R.string.sstv_complete, result.startSeconds, result.warning.resolve(this@SstvActivity))
+                            val warning = result.warning.resolve(this@SstvActivity)
+                            status.text = if (result.complete) getString(R.string.sstv_complete, result.startSeconds, warning)
+                            else getString(R.string.sstv_partial, result.decodedRows, result.height, result.startSeconds, warning)
                         } else decoded.recycle()
                     }
                 } else {
@@ -109,6 +115,8 @@ class SstvActivity : LocalizedActivity() {
                 report(error)
             } catch (error: IllegalStateException) {
                 report(error)
+            } catch (error: OutOfMemoryError) {
+                runOnUiThread { if (!isDestroyed) status.text = getString(R.string.sstv_error, getString(R.string.err_image_memory)) }
             } finally {
                 runOnUiThread {
                     if (!isDestroyed) { open.isEnabled = true; export.isEnabled = bitmap != null }

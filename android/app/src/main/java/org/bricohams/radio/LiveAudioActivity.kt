@@ -36,12 +36,46 @@ class LiveAudioActivity : LocalizedActivity() {
     private lateinit var export: Button
     private lateinit var image: ImageView
     private var capture: LiveAudio? = null
-    private val captureFactory: () -> LiveAudio = { LiveAudio() }
+    private var limitSeconds = LiveAudio.MAX_SECONDS
+    private val captureFactory: () -> LiveAudio = { LiveAudio(limitSeconds) { MicrophoneSource(applicationContext) } }
+    private val probe = Executors.newSingleThreadExecutor()
+    @Volatile private var probing = false
     private var bitmap: Bitmap? = null
     private var busy = false
     private var foreground = false
     private var generation = 0
     private val deadline = Runnable { stopCapture(false) }
+    private val progressTick = object : Runnable {
+        override fun run() {
+            val recording = capture ?: return
+            if (mode.selectedItemPosition == 1 && !probing) {
+                probing = true
+                try {
+                    probe.execute {
+                        try {
+                            val snapshot = recording.snapshot()
+                            val text = snapshot?.let {
+                                try {
+                                    val result = Sstv.decode(it)
+                                    getString(R.string.sstv_progress, result.mode.name, result.decodedRows, result.height)
+                                } catch (error: IllegalArgumentException) {
+                                    null
+                                } catch (error: IOException) {
+                                    null
+                                }
+                            } ?: getString(R.string.live_listening)
+                            runOnUiThread { if (!isDestroyed && foreground && capture === recording) status.text = text }
+                        } finally {
+                            probing = false
+                        }
+                    }
+                } catch (error: java.util.concurrent.RejectedExecutionException) {
+                    probing = false
+                }
+            }
+            handler.postDelayed(this, 4000)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,7 +99,7 @@ class LiveAudioActivity : LocalizedActivity() {
         mode = Spinner(this).apply {
             id = R.id.live_mode
             adapter = ArrayAdapter(this@LiveAudioActivity, android.R.layout.simple_spinner_dropdown_item,
-                listOf("Morse", "Robot36"))
+                listOf("Morse", "SSTV"))
         }
         layout.addView(mode)
         fun field(label: Int, identifier: Int, value: String): EditText {
@@ -86,7 +120,7 @@ class LiveAudioActivity : LocalizedActivity() {
         export = button(R.string.sstv_export) {
             startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE); type = "image/png"
-                putExtra(Intent.EXTRA_TITLE, "bricohams-robot36-microfono.png")
+                putExtra(Intent.EXTRA_TITLE, "bricohams-sstv-microfono.png")
             }, 61)
         }
         status = TextView(this).apply { setText(R.string.live_idle) }
@@ -118,12 +152,15 @@ class LiveAudioActivity : LocalizedActivity() {
             return
         }
         bitmap = null; image.setImageDrawable(null)
+        limitSeconds = if (selected == 0) LiveAudio.MAX_SECONDS else LiveAudio.SSTV_SECONDS
         val recording = captureFactory()
         capture = recording; busy = true
         val token = ++generation
-        status.setText(R.string.live_recording)
+        status.text = getString(R.string.live_recording, limitSeconds)
         controls()
-        handler.postDelayed(deadline, LiveAudio.MAX_SECONDS * 1000L)
+        handler.postDelayed(deadline, limitSeconds * 1000L)
+        handler.removeCallbacks(progressTick)
+        handler.postDelayed(progressTick, 4000)
         worker.execute {
             try {
                 val audio = recording.record()
@@ -137,17 +174,23 @@ class LiveAudioActivity : LocalizedActivity() {
                     val result = MorseAudio.decode(audio, checkNotNull(toneHz), checkNotNull(wpm))
                     show(token) { status.text = getString(R.string.live_morse_result, result.text, result.morse, result.warning.resolve(this@LiveAudioActivity)) }
                 } else {
-                    val result = Robot36.decode(audio)
-                    val decoded = Bitmap.createBitmap(result.pixels, Robot36.WIDTH, Robot36.HEIGHT, Bitmap.Config.ARGB_8888)
+                    val result = Sstv.decode(audio) { sstvMode, rows, total ->
+                        show(token) { status.text = getString(R.string.sstv_progress, sstvMode.name, rows, total) }
+                    }
+                    val decoded = Bitmap.createBitmap(result.pixels, result.width, result.height, Bitmap.Config.ARGB_8888)
                     runOnUiThread {
                         if (token == generation && foreground && !isDestroyed) {
                             bitmap = decoded; image.setImageBitmap(decoded)
-                            status.text = getString(R.string.sstv_complete, result.startSeconds, result.warning.resolve(this@LiveAudioActivity))
+                            val warning = result.warning.resolve(this@LiveAudioActivity)
+                            status.text = if (result.complete) getString(R.string.sstv_complete, result.startSeconds, warning)
+                            else getString(R.string.sstv_partial, result.decodedRows, result.height, result.startSeconds, warning)
                         } else decoded.recycle()
                     }
                 }
             } catch (error: CancellationException) {
                 show(token) { status.setText(R.string.live_cancelled) }
+            } catch (error: OutOfMemoryError) {
+                show(token) { status.text = getString(R.string.live_error, getString(R.string.err_image_memory)) }
             } catch (error: IOException) {
                 failed(token, error)
             } catch (error: IllegalArgumentException) {
@@ -159,7 +202,7 @@ class LiveAudioActivity : LocalizedActivity() {
             } finally {
                 runOnUiThread {
                     if (!isDestroyed) {
-                        handler.removeCallbacks(deadline); capture = null; busy = false; controls()
+                        handler.removeCallbacks(deadline); handler.removeCallbacks(progressTick); capture = null; busy = false; controls()
                     }
                 }
             }
@@ -225,7 +268,7 @@ class LiveAudioActivity : LocalizedActivity() {
         super.onPause()
     }
     override fun onDestroy() {
-        handler.removeCallbacks(deadline); worker.shutdownNow()
+        handler.removeCallbacks(deadline); handler.removeCallbacks(progressTick); worker.shutdownNow(); probe.shutdownNow()
         super.onDestroy()
     }
 }

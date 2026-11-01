@@ -11,8 +11,8 @@ data class MorseAudioResult(val morse: String, val text: String, val warning: Ui
 
 object MorseAudio {
     const val MAX_WAV_BYTES = 8 * 1024 * 1024
-    fun readWav(bytes: ByteArray): PcmAudio {
-        requireUi(bytes.size in 44..MAX_WAV_BYTES) { UiText(R.string.err_wav_size) }
+    fun readWav(bytes: ByteArray, maxSeconds: Int = 60, maxBytes: Int = MAX_WAV_BYTES): PcmAudio {
+        requireUi(bytes.size in 44..maxBytes) { UiText(R.string.err_wav_size) }
         val view = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         fun tag(offset: Int) = String(bytes, offset, 4, Charsets.US_ASCII)
         fun u32(offset: Int) = view.getInt(offset).toLong() and 0xffffffffL
@@ -47,7 +47,7 @@ object MorseAudio {
         }
         val rate = requireNotNullUi(sampleRate) { UiText(R.string.err_wav_no_fmt) }
         val samples = requireNotNullUi(data) { UiText(R.string.err_wav_no_data) }
-        requireUi(samples.size in rate / 10..rate * 60) { UiText(R.string.err_wav_duration) }
+        requireUi(samples.size in rate / 10..rate * maxSeconds) { UiText(R.string.err_wav_duration) }
         return PcmAudio(rate, samples)
     }
 

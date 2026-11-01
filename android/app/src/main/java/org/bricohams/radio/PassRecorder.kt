@@ -62,6 +62,8 @@ internal class PassRecorder(
 object PassAudio {
     private const val WINDOW = 60
     private const val STEP = 23
+    private const val LONG_WINDOW = 260
+    private const val LONG_STEP = 60
     fun header(samples: Int): ByteArray = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
         put("RIFF".toByteArray(Charsets.US_ASCII)); putInt(36 + samples * 2); put("WAVEfmt ".toByteArray(Charsets.US_ASCII))
         putInt(16); putShort(1); putShort(1); putInt(PassRecorder.RATE); putInt(PassRecorder.RATE * 2); putShort(2); putShort(16)
@@ -83,21 +85,32 @@ object PassAudio {
         if (starts.last() != tail) starts.add(tail)
         return starts
     }
+    /** Window starts for the long (PD90/PD120/PD180, up to 190 s) images: 260 s windows every 60 s. */
+    fun longWindows(samples: Int, rate: Int = PassRecorder.RATE): List<Int> {
+        if (samples <= WINDOW * rate + 10 * rate) return emptyList()
+        val tail = maxOf(samples - LONG_WINDOW * rate, 0)
+        val starts = (0..tail step LONG_STEP * rate).toMutableList()
+        if (starts.last() != tail) starts.add(tail)
+        return starts
+    }
     fun decodeSstv(file: File, cancelled: () -> Boolean = { false }): List<SstvImage> {
         val total = samples(file)
         val images = ArrayList<SstvImage>()
         RandomAccessFile(file, "r").use { input ->
-            for (start in windows(total)) {
+            val jobs = windows(total).map { it to WINDOW } + longWindows(total).map { it to LONG_WINDOW }
+            for ((start, seconds) in jobs) {
                 if (cancelled()) throw CancellationException("Decodificacion cancelada.")
-                val length = minOf(WINDOW * PassRecorder.RATE, total - start)
+                val length = minOf(seconds * PassRecorder.RATE, total - start)
                 val bytes = ByteArray(length * 2)
                 input.seek(44L + start * 2L)
                 input.readFully(bytes)
                 val pcm = ShortArray(length)
                 ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(pcm)
-                val image = try { Robot36.decode(PcmAudio(PassRecorder.RATE, pcm)) } catch (error: IllegalArgumentException) { continue }
+                val image = try { Sstv.decode(PcmAudio(PassRecorder.RATE, pcm)) } catch (error: IllegalArgumentException) { continue }
                 val absolute = image.copy(startSeconds = start.toDouble() / PassRecorder.RATE + image.startSeconds)
-                if (images.none { kotlin.math.abs(it.startSeconds - absolute.startSeconds) < 10 }) images.add(absolute)
+                val twin = images.indexOfFirst { kotlin.math.abs(it.startSeconds - absolute.startSeconds) < 10 }
+                // A window cutting the image gives a partial copy: keep the one with more rows.
+                if (twin < 0) images.add(absolute) else if (absolute.decodedRows > images[twin].decodedRows) images[twin] = absolute
             }
         }
         return images

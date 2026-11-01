@@ -67,8 +67,18 @@ class SstvTransmitTest {
         var stopped = false
         var closed = false
         var cutAfterFrames = Long.MAX_VALUE
+        var focus = true
+        var stall = false
+        var lostAfterFrames = Long.MAX_VALUE
+        var abandoned = false
+        var onWrite: (() -> Unit)? = null
+        override fun requestFocus() = focus
+        override fun abandonFocus() { abandoned = true }
+        override fun focusLost() = played >= lostAfterFrames
         override fun start() { started = true }
         override fun write(samples: ShortArray, offset: Int, count: Int): Int {
+            if (stall) return 0
+            onWrite?.invoke()
             now += count * 1000L / rate
             radio.poll()
             if (radio.keyed) keyedFrames += count
@@ -135,6 +145,93 @@ class SstvTransmitTest {
         assertFalse(cancelled.keyed)
         assertEquals(listOf(2, 0), cancelled.operations.takeLast(2))
         assertTrue(cancelSink.played < 8000L * 3)
+    }
+
+    @Test fun refusedAudioFocusNeverKeysThePttAndClosesTheSink() {
+        val radio = Radio()
+        val sink = Sink(radio, 8000).apply { focus = false }
+        assertThrows(IllegalStateException::class.java) { transmitter(radio).send(ShortArray(8000), 8000, sink) { true } }
+        assertTrue(sink.closed && !sink.started)
+        assertFalse(radio.operations.contains(1))
+    }
+
+    @Test fun lostAudioFocusAbortsAndReleasesPtt() {
+        val radio = Radio()
+        val sink = Sink(radio, 8000).apply { lostAfterFrames = 8000L * 2 }
+        assertThrows(IllegalStateException::class.java) { transmitter(radio).send(ShortArray(8000 * 30), 8000, sink) { true } }
+        assertTrue(sink.played < 8000L * 4 && sink.stopped && sink.abandoned && sink.closed && !radio.keyed)
+    }
+
+    @Test fun unexpectedExceptionWhileKeyedStillReleasesPtt() {
+        val radio = Radio()
+        val sink = Sink(radio, 8000)
+        sink.onWrite = { if (sink.played >= 8000L) throw RuntimeException("audio crashed") }
+        assertThrows(RuntimeException::class.java) { transmitter(radio).send(ShortArray(8000 * 30), 8000, sink) { true } }
+        assertFalse(radio.keyed)
+        assertEquals(listOf(2, 0), radio.operations.takeLast(2))
+        assertTrue(sink.stopped && sink.abandoned && sink.closed)
+    }
+
+    @Test fun cancelFromAnotherThreadStopsAudioAndReleasesPttImmediately() {
+        val radio = Radio()
+        val sink = Sink(radio, 8000)
+        val tx = transmitter(radio)
+        sink.onWrite = { if (sink.played >= 8000L) tx.cancel() }
+        assertThrows(IllegalStateException::class.java) { tx.send(ShortArray(8000 * 30), 8000, sink) { true } }
+        assertFalse(radio.keyed)
+        assertEquals(listOf(2, 0), radio.operations.takeLast(2))
+        assertTrue(sink.played < 8000L * 3 && sink.stopped && sink.closed)
+    }
+
+    @Test fun cancelBeforeSendNeverKeysPtt() {
+        val radio = Radio()
+        val sink = Sink(radio, 8000)
+        val tx = transmitter(radio)
+        tx.cancel()
+        assertThrows(IllegalStateException::class.java) { tx.send(ShortArray(8000), 8000, sink) { true } }
+        assertFalse(radio.operations.contains(1))
+        assertTrue(sink.closed && !sink.started)
+    }
+
+    @Test fun failedReleaseIsRetriedUntilTheRadioConfirmsIt() {
+        val radio = Radio()
+        val sink = Sink(radio, 8000)
+        var failures = 1
+        val flaky = object : RadioBytes {
+            override fun write(bytes: ByteArray, timeoutMs: Int) {
+                val (_, request) = QuanshengFrames.decode(bytes)
+                if (request[1].toInt() == 2 && failures-- > 0) throw IOException("usb glitch")
+                radio.write(bytes, timeoutMs)
+            }
+            override fun read(length: Int, timeoutMs: Int) = radio.read(length, timeoutMs)
+            override fun close() = Unit
+        }
+        val tx = CatTransmitter(CatProtocol(flaky, clock = { now }, sleep = { now += it }), clock = { now },
+            sleep = { now += it; radio.poll() })
+        var calls = 0
+        assertThrows(IllegalStateException::class.java) { tx.send(ShortArray(8000 * 30), 8000, sink) { ++calls < 20 } }
+        assertFalse(radio.keyed)
+        assertEquals(1, radio.operations.count { it == 2 })
+        assertEquals(0, failures.coerceAtLeast(0))
+    }
+
+    @Test fun stalledPlaybackTimesOutAndReleasesPtt() {
+        val radio = Radio()
+        val sink = Sink(radio, 8000).apply { stall = true }
+        assertThrows(IOException::class.java) { transmitter(radio).send(ShortArray(8000 * 30), 8000, sink) { true } }
+        assertTrue(sink.stopped && sink.abandoned && sink.closed && !radio.keyed)
+        assertTrue(now < 10_000)
+    }
+
+    @Test fun robot72IsEncodedAndSentWithItsOwnDuration() {
+        val radio = Radio()
+        val rate = 8000
+        val audio = Sstv.encode(IntArray(320 * 240) { 0xff808080.toInt() }, rate, SstvModes.ROBOT72)
+        val sink = Sink(radio, rate)
+        transmitter(radio).send(audio, rate, sink) { true }
+        assertEquals(audio.size.toLong(), sink.played)
+        assertTrue(radio.onAirMs in 73_000..74_500)
+        assertFalse(radio.keyed)
     }
 
     @Test fun callsignIsMandatory() {

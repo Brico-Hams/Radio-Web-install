@@ -56,9 +56,13 @@ class Robot36Test {
             }
         }
     }
-    @Test fun otherVisCodesMissingAudioAndLostSyncAreRejected() {
-        assertThrows(IllegalArgumentException::class.java) { Robot36.decode(signal(vis = 44)) }
-        assertThrows(IllegalArgumentException::class.java) { Robot36.decode(signal(truncate = true)) }
+    @Test fun martinVisIsNowRecognisedButUnknownCodesMissingAudioAndTruncationBehave() {
+        assertEquals(SstvModes.MARTIN_M1, Sstv.detectVis(signal(vis = 44))?.mode)
+        assertThrows(IllegalArgumentException::class.java) { Robot36.decode(signal(vis = 5)) }
+        val partial = Robot36.decode(signal(truncate = true))
+        assertTrue(partial.decodedRows in 100 until 240)
+        assertTrue(partial.lostRows.count { it } > 0)
+        assertFalse(partial.complete)
         assertThrows(IllegalArgumentException::class.java) { Robot36.decode(PcmAudio(8000, ShortArray(8000 * 39))) }
         assertThrows(IllegalArgumentException::class.java) { Robot36.decode(PcmAudio(44100, ShortArray(44100 * 39))) }
         assertThrows(IllegalArgumentException::class.java) { Robot36.decode(PcmAudio(8000, ShortArray(8000))) }
@@ -97,6 +101,7 @@ class Robot36Test {
             }
         }
         assertThrows(IllegalArgumentException::class.java) { Robot36.encode(IntArray(10)) }
-        assertThrows(IllegalArgumentException::class.java) { Robot36.encode(pixels, 44100) }
+        assertEquals(37.31, Robot36.encode(pixels, 44100).size / 44100.0, 0.01)
+        assertThrows(IllegalArgumentException::class.java) { Robot36.encode(pixels, 1000) }
     }
 }

@@ -646,7 +646,7 @@ class SatelliteActivity : LocalizedActivity() {
                     val message = try {
                         val decoded = PassAudio.decodeSstv(file) { isDestroyed }
                         decoded.forEachIndexed { index, image ->
-                            val bitmap = Bitmap.createBitmap(image.pixels, Robot36.WIDTH, Robot36.HEIGHT, Bitmap.Config.ARGB_8888)
+                            val bitmap = Bitmap.createBitmap(image.pixels, image.width, image.height, Bitmap.Config.ARGB_8888)
                             File(file.parentFile, "${file.nameWithoutExtension}-sstv${index + 1}.png").outputStream().use {
                                 check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) { getString(R.string.png_encode_error) }
                             }

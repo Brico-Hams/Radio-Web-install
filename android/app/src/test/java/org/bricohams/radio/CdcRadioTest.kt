@@ -180,14 +180,17 @@ class CdcRadioTest {
             waitForUsb(activity)
             assertTrue(views(activity.window.decorView).filterIsInstance<TextView>().any { it.text.contains("CAT v1 reconocido") })
             activity.findViewById<EditText>(R.id.cat_frequency).setText("436.50000")
-            click(activity, "Sintonizar RX temporal (3 s)")
+            click(activity, "Sintonizar RX (se renueva hasta STOP)")
             waitForUsb(activity)
-            assertTrue(views(activity.window.decorView).filterIsInstance<TextView>().any { it.text.contains("RX=436500000 Hz") })
+            assertTrue(views(activity.window.decorView).filterIsInstance<TextView>().any { it.text.contains("Sintonia activa en 436500000 Hz") })
             val connection = Connection.last
             controller.pause().stop()
             waitForUsb(activity)
             assertTrue(connection.operations.contains(1))
-            assertEquals(listOf(0, 2, 0), connection.operations.takeLast(3))
+            // closeRadio queries the state (op 0) before deciding to Stop; the tune is confirmed by the SET reply
+            // (poll only while pending), so no trailing confirmation query follows Stop any more.
+            assertEquals(listOf(0, 2), connection.operations.takeLast(2))
+            assertTrue(connection.operations.indexOf(1) < connection.operations.lastIndexOf(2))
             assertTrue(connection.closed)
             assertEquals(2, connection.releases)
             controller.start().resume()

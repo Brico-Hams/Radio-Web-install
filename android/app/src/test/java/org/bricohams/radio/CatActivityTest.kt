@@ -35,7 +35,7 @@ class CatActivityTest {
             activity.findViewById<EditText>(R.id.cat_frequency).setText("145.80000")
             controller.recreate()
             assertEquals("145.80000", controller.get().findViewById<EditText>(R.id.cat_frequency).text.toString())
-            click(controller.get(), "Sintonizar RX temporal (3 s)")
+            click(controller.get(), "Sintonizar RX (se renueva hasta STOP)")
             val executor = ReflectionHelpers.getField<ExecutorService>(controller.get(), "worker")
             executor.submit {}.get(5, TimeUnit.SECONDS)
             shadowOf(Looper.getMainLooper()).idle()
@@ -48,7 +48,7 @@ class CatActivityTest {
             val activity = controller.get()
             for (frequency in listOf("", "200", "145.800001", "999999999999999999999", "-1")) {
                 activity.findViewById<EditText>(R.id.cat_frequency).setText(frequency)
-                click(activity, "Sintonizar RX temporal (3 s)")
+                click(activity, "Sintonizar RX (se renueva hasta STOP)")
                 assertTrue(text(activity).contains("Introduce MHz"))
             }
             controller.pause().stop()

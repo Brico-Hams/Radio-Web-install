@@ -19,35 +19,59 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import android.view.WindowInsets
 import java.io.IOException
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
+/**
+ * CAT screen (USB only: there is no Bluetooth CAT transport). All radio I/O runs on [worker] (tracking, leases, commands)
+ * or on [txWorker] (SSTV transmission, so Stop TX never waits behind it); the UI thread only renders. The manifest
+ * declares configChanges for this activity so rotation does not drop the USB connection.
+ */
 class CatActivity : LocalizedActivity() {
     private val worker = Executors.newSingleThreadScheduledExecutor()
+    private val txWorker = Executors.newSingleThreadExecutor()
     private val audioWorker = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var callsign: EditText
     private lateinit var sstvStatus: TextView
     private lateinit var picture: ImageView
+    private lateinit var sstvModeSpinner: Spinner
+    private lateinit var stopTransmit: Button
+    /** Modes that fit the radio's transmit cap; the long ones (Martin M1, Scottie S1, PD120, PD180) are receive-only. */
+    private val transmitModes = SstvModes.ALL.filter { Sstv.durationSeconds(it) * 1000 <= CatTransmitter.MAX_AUDIO_MS }
     private var capture: LiveAudio? = null
     private var passRecorder: PassRecorder? = null
     private val manager by lazy { getSystemService(USB_SERVICE) as UsbManager }
     private lateinit var status: TextView
     private var requested: UsbDevice? = null
-    private var permissionResult = false
-    private var transport: RadioBytes? = null
-    private var protocol: CatProtocol? = null
-    private var busy = false
+    private var awaitingPermission = false
+    private var lastRadio: Pair<Int, Int>? = null
+    private var reattachWatch = false
+    private var pendingAudio: (() -> Unit)? = null
+    @Volatile private var transport: RadioBytes? = null
+    @Volatile private var protocol: CatProtocol? = null
+    @Volatile private var busy = false
     @Volatile private var foreground = false
     @Volatile private var generation = 0
+    @Volatile private var transmitter: CatTransmitter? = null
+    @Volatile private var txFuture: Future<*>? = null
+    @Volatile private var lease: CatLease? = null
+    @Volatile private var leaseFuture: ScheduledFuture<*>? = null
     private val controls = ArrayList<Button>()
     private var selectedPlan: SatellitePlan? = null
     @Volatile private var trackingRequested = false
@@ -60,7 +84,38 @@ class CatActivity : LocalizedActivity() {
             if (intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED && device?.deviceName == requested?.deviceName) {
                 requested = null
                 suspendConnection(getString(R.string.cat_usb_detached))
+                watchReattach()
             }
+        }
+    }
+    private val permissionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != USB_PERMISSION) return
+            @Suppress("DEPRECATION")
+            val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+            if (device == null || device.deviceName != requested?.deviceName) {
+                status.setText(R.string.cat_stale_permission)
+                return
+            }
+            awaitingPermission = false
+            if (manager.hasPermission(device)) connect(device) else status.setText(R.string.cat_permission_denied)
+        }
+    }
+    private val reattachCheck = object : Runnable {
+        override fun run() {
+            if (!reattachWatch || !foreground) return
+            val id = lastRadio
+            val device = if (id == null || busy || protocol != null) null else
+                manager.deviceList.values.firstOrNull {
+                    it.vendorId == id.first && it.productId == id.second && SerialRadio.description(it) != null
+                }
+            if (device == null) {
+                mainHandler.postDelayed(this, 1000)
+                return
+            }
+            reattachWatch = false
+            status.setText(R.string.cat_usb_reattached)
+            requestUsbPermission(device)
         }
     }
 
@@ -109,9 +164,25 @@ class CatActivity : LocalizedActivity() {
             if (scaled == null || scaled.scale() > 0 || scaled < java.math.BigDecimal(13600000) ||
                 scaled > java.math.BigDecimal(47000000) || !CatProtocol.inBand(scaled.toLong())) {
                 status.setText(R.string.cat_invalid_frequency)
-            } else operation { requireNotNull(protocol) { getString(R.string.cat_connect_first) }.tune(scaled.longValueExact()) }
+            } else {
+                val target = scaled.longValueExact()
+                operation {
+                    val cat = requireNotNull(protocol) { getString(R.string.cat_connect_first) }
+                    cancelLease()
+                    val state = cat.tune(target)
+                    startLease(cat, target)
+                    getString(R.string.cat_tune_active, state.frequency10Hz * 10)
+                }
+            }
         }
-        button(R.string.cat_stop) { operation { requireNotNull(protocol) { getString(R.string.cat_connect_first) }.stop() } }
+        button(R.string.cat_stop) {
+            operation {
+                val cat = requireNotNull(protocol) { getString(R.string.cat_connect_first) }
+                cancelLease()
+                cat.stop()
+                getString(R.string.cat_stop_done)
+            }
+        }
         button(R.string.usb_disconnect) { operation { closeRadio(); null } }
         content.addView(TextView(this).apply { setText(R.string.cat_sstv_help) })
         callsign = EditText(this).apply {
@@ -120,7 +191,18 @@ class CatActivity : LocalizedActivity() {
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
         }
         content.addView(callsign)
+        content.addView(TextView(this).apply { setText(R.string.cat_sstv_mode) })
+        sstvModeSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(this@CatActivity, android.R.layout.simple_spinner_dropdown_item, transmitModes.map { it.name })
+        }
+        content.addView(sstvModeSpinner)
         button(R.string.cat_send_robot36) { chooseImage() }
+        stopTransmit = Button(this).apply {
+            setText(R.string.cat_sstv_stop_tx)
+            isEnabled = false
+            setOnClickListener { cancelTransmit() }
+        }
+        content.addView(stopTransmit)
         content.addView(Button(this).apply { setText(R.string.cat_sstv_record); setOnClickListener { startReceive() } })
         content.addView(Button(this).apply { setText(R.string.cat_sstv_stop); setOnClickListener { capture?.stop() } })
         sstvStatus = TextView(this)
@@ -165,46 +247,43 @@ class CatActivity : LocalizedActivity() {
         }
         AlertDialog.Builder(this).setTitle(R.string.usb_select_device)
             .setItems(devices.map { "VID %04X PID %04X - %s - %s".format(it.vendorId, it.productId, SerialRadio.description(it), it.deviceName) }.toTypedArray()) { _, index ->
-                val device = devices[index]
-                requested = device
-                if (manager.hasPermission(device)) connect(device)
-                else {
-                    val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-                        if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
-                    val intent = Intent(this, CatActivity::class.java).apply {
-                        action = "org.bricohams.radio.USB_PERMISSION"
-                        addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    }
-                    try {
-                        manager.requestPermission(device, PendingIntent.getActivity(this, 11, intent, flags))
-                        status.setText(R.string.cat_waiting_permission)
-                    } catch (error: SecurityException) {
-                        status.text = getString(R.string.cat_permission_error, errorText(error))
-                    }
-                }
+                reattachWatch = false
+                requestUsbPermission(devices[index])
             }.show()
     }
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        if (intent.action != "org.bricohams.radio.USB_PERMISSION") return
-        @Suppress("DEPRECATION")
-        val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-        if (device == null || device.deviceName != requested?.deviceName) {
-            status.setText(R.string.cat_stale_permission)
-            return
+    private fun requestUsbPermission(device: UsbDevice) {
+        requested = device
+        if (manager.hasPermission(device)) { connect(device); return }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
+        val intent = Intent(USB_PERMISSION).setPackage(packageName)
+        try {
+            awaitingPermission = true
+            manager.requestPermission(device, PendingIntent.getBroadcast(this, 11, intent, flags))
+            status.setText(R.string.cat_waiting_permission)
+        } catch (error: SecurityException) {
+            awaitingPermission = false
+            status.text = getString(R.string.cat_permission_error, errorText(error))
         }
-        permissionResult = true
-        if (foreground) consumePermission()
     }
+    /** The permission dialog may finish while the screen is stopped; the receiver only lives between start and stop. */
     private fun consumePermission() {
-        if (!permissionResult) return
-        permissionResult = false
-        val device = requested
-        if (device != null && manager.hasPermission(device)) connect(device)
-        else status.setText(R.string.cat_permission_denied)
+        if (!awaitingPermission) return
+        val device = requested ?: return
+        if (manager.hasPermission(device)) {
+            awaitingPermission = false
+            connect(device)
+        }
+    }
+    private fun watchReattach() {
+        reattachWatch = true
+        mainHandler.removeCallbacks(reattachCheck)
+        mainHandler.postDelayed(reattachCheck, 1000)
     }
     private fun connect(device: UsbDevice) {
         val token = generation
+        lastRadio = device.vendorId to device.productId
+        reattachWatch = false
         operation {
             closeRadio()
             val port = SerialRadio.open(manager, device)
@@ -237,54 +316,108 @@ class CatActivity : LocalizedActivity() {
         val call = try { Callsign.normalize(callsign.text.toString()) } catch (error: IllegalArgumentException) {
             sstvStatus.text = errorText(error); return
         }
+        val mode = transmitModes[sstvModeSpinner.selectedItemPosition.coerceIn(0, transmitModes.lastIndex)]
         audioWorker.execute {
             try {
                 val bytes = contentResolver.readDocument(uri, 20 shl 20)
-                val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: throw IOException(getString(R.string.cat_image_unknown))
-                val frame = stamp(source, call)
-                source.recycle()
-                val pixels = IntArray(Robot36.WIDTH * Robot36.HEIGHT)
-                frame.getPixels(pixels, 0, Robot36.WIDTH, 0, 0, Robot36.WIDTH, Robot36.HEIGHT)
-                runOnUiThread { if (!isDestroyed && foreground) { picture.setImageBitmap(frame); confirmTransmit(call, pixels) } }
+                val frame = loadFrame(bytes, call, mode)
+                val pixels = IntArray(mode.width * mode.height)
+                frame.getPixels(pixels, 0, mode.width, 0, 0, mode.width, mode.height)
+                runOnUiThread { if (!isDestroyed && foreground) { picture.setImageBitmap(frame); confirmTransmit(call, mode, pixels) } }
             } catch (error: IOException) {
                 sstv(getString(R.string.sstv_error, errorText(error)))
             } catch (error: SecurityException) {
                 sstv(getString(R.string.sstv_error, errorText(error)))
             } catch (error: IllegalArgumentException) {
                 sstv(getString(R.string.sstv_error, errorText(error)))
+            } catch (error: OutOfMemoryError) {
+                sstv(getString(R.string.sstv_error, getString(R.string.err_image_memory)))
             }
         }
     }
-    /** 320x240 Robot36 frame with the station callsign printed on it: identification is mandatory. */
-    private fun stamp(source: Bitmap, call: String): Bitmap {
-        val frame = Bitmap.createScaledBitmap(source, Robot36.WIDTH, Robot36.HEIGHT, true).copy(Bitmap.Config.ARGB_8888, true)
+    /** Decodes at the smallest power-of-two subsampling that still covers the mode resolution, never the full-size bitmap. */
+    private fun loadFrame(bytes: ByteArray, call: String, mode: SstvMode): Bitmap {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IOException(getString(R.string.cat_image_unknown))
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= mode.width && bounds.outHeight / (sample * 2) >= mode.height) sample *= 2
+        val options = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 }
+        val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: throw IOException(getString(R.string.cat_image_unknown))
+        try {
+            return stamp(source, call, mode)
+        } finally {
+            source.recycle()
+        }
+    }
+    /** Frame of the mode's size with the station callsign printed on it: identification is mandatory. */
+    private fun stamp(source: Bitmap, call: String, mode: SstvMode): Bitmap {
+        val frame = Bitmap.createScaledBitmap(source, mode.width, mode.height, true).copy(Bitmap.Config.ARGB_8888, true)
+        val scale = mode.height / 240f
         val canvas = Canvas(frame)
-        canvas.drawRect(0f, 200f, 320f, 240f, Paint().apply { color = Color.BLACK })
-        canvas.drawText(call, 8f, 232f, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE; textSize = 32f; typeface = Typeface.DEFAULT_BOLD
+        canvas.drawRect(0f, 200f * scale, mode.width.toFloat(), mode.height.toFloat(), Paint().apply { color = Color.BLACK })
+        canvas.drawText(call, 8f * scale, mode.height - 8f * scale, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE; textSize = 32f * scale; typeface = Typeface.DEFAULT_BOLD
         })
         return frame
     }
-    private fun confirmTransmit(call: String, pixels: IntArray) {
+    private fun confirmTransmit(call: String, mode: SstvMode, pixels: IntArray) {
+        val seconds = Sstv.durationSeconds(mode).toInt()
         AlertDialog.Builder(this).setTitle(R.string.cat_transmit_title)
-            .setMessage(getString(R.string.cat_transmit_message, call))
+            .setMessage(getString(R.string.cat_transmit_message, call, mode.name, seconds))
             .setNegativeButton(R.string.action_cancel) { _, _ -> sstvStatus.setText(R.string.sstv_cancelled) }
-            .setPositiveButton(R.string.action_transmit) { _, _ ->
-                val token = generation
-                sstvStatus.setText(R.string.cat_sstv_sending)
-                operation {
-                    val cat = requireNotNull(protocol) { getString(R.string.cat_connect_first) }
-                    val audio = Robot36.encode(pixels, LiveAudio.SAMPLE_RATE)
-                    CatTransmitter(cat).send(audio, LiveAudio.SAMPLE_RATE, AudioTrackSink(LiveAudio.SAMPLE_RATE)) {
-                        foreground && token == generation
-                    }
-                    getString(R.string.cat_robot36_sent, call, audio.size.toDouble() / LiveAudio.SAMPLE_RATE)
+            .setPositiveButton(R.string.action_transmit) { _, _ -> startTransmit(call, mode, pixels) }.show()
+    }
+    /** Runs on [txWorker] so the connection worker stays free; PTT is always released by CatTransmitter.send's finally. */
+    private fun startTransmit(call: String, mode: SstvMode, pixels: IntArray) {
+        if (busy || trackingRequested || transmitting || !foreground) return
+        val cat = protocol
+        if (cat == null) { sstvStatus.setText(R.string.cat_connect_first); return }
+        val token = generation
+        val sender = CatTransmitter(cat)
+        transmitter = sender
+        controls.forEach { it.isEnabled = false }
+        stopTransmit.isEnabled = true
+        sstvStatus.setText(R.string.cat_sstv_sending)
+        txFuture = txWorker.submit {
+            val message = try {
+                val audio = Sstv.encode(pixels, LiveAudio.SAMPLE_RATE, mode)
+                sender.send(audio, LiveAudio.SAMPLE_RATE, AudioTrackSink(LiveAudio.SAMPLE_RATE, applicationContext)) {
+                    foreground && token == generation
                 }
-            }.show()
+                getString(R.string.cat_robot36_sent, call, audio.size.toDouble() / LiveAudio.SAMPLE_RATE, mode.name)
+            } catch (error: IOException) {
+                getString(R.string.sstv_error, errorText(error))
+            } catch (error: IllegalArgumentException) {
+                getString(R.string.sstv_error, errorText(error))
+            } catch (error: IllegalStateException) {
+                getString(R.string.sstv_error, errorText(error))
+            } catch (error: SecurityException) {
+                getString(R.string.sstv_error, errorText(error))
+            } catch (error: UnsupportedOperationException) {
+                getString(R.string.sstv_error, errorText(error))
+            } catch (error: OutOfMemoryError) {
+                getString(R.string.sstv_error, getString(R.string.err_image_memory))
+            }
+            runOnUiThread {
+                if (transmitter === sender) transmitter = null
+                if (!isDestroyed) {
+                    sstvStatus.text = message
+                    stopTransmit.isEnabled = false
+                    if (token == generation) controls.forEach { it.isEnabled = true }
+                }
+            }
+        }
+    }
+    private val transmitting get() = txFuture?.isDone == false
+    private fun cancelTransmit() {
+        transmitter?.cancel()
+        sstvStatus.setText(R.string.cat_sstv_tx_stopping)
     }
     private fun startPassRecording(plan: SatellitePlan) {
         if (capture != null || passRecorder != null || !foreground) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingAudio = { startPassRecording(plan) }
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 71)
             return
         }
@@ -292,7 +425,7 @@ class CatActivity : LocalizedActivity() {
         val stamp = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", java.util.Locale.ROOT)
             .withZone(java.time.ZoneOffset.UTC).format(java.time.Instant.now())
         val file = java.io.File(java.io.File(filesDir, "recordings"), "$stamp-${plan.tle.norad}.wav")
-        val recorder = PassRecorder(file, plan.pass.los.time)
+        val recorder = PassRecorder(file, plan.pass.los.time) { MicrophoneSource(applicationContext) }
         passRecorder = recorder
         sstvStatus.setText(R.string.cat_pass_recording)
         audioWorker.execute {
@@ -314,20 +447,25 @@ class CatActivity : LocalizedActivity() {
     private fun startReceive() {
         if (capture != null || passRecorder != null || !foreground) return
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingAudio = { startReceive() }
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 71)
             return
         }
-        val recording = LiveAudio()
+        val recording = LiveAudio(LiveAudio.SSTV_SECONDS) { MicrophoneSource(applicationContext) }
         capture = recording
-        sstvStatus.setText(R.string.cat_sstv_recording)
+        sstvStatus.text = getString(R.string.cat_sstv_recording, LiveAudio.SSTV_SECONDS)
         audioWorker.execute {
             val message = try {
-                val result = Robot36.decode(recording.record())
-                val decoded = Bitmap.createBitmap(result.pixels, Robot36.WIDTH, Robot36.HEIGHT, Bitmap.Config.ARGB_8888)
+                val result = Sstv.decode(recording.record())
+                val decoded = Bitmap.createBitmap(result.pixels, result.width, result.height, Bitmap.Config.ARGB_8888)
                 runOnUiThread { if (!isDestroyed) picture.setImageBitmap(decoded) }
-                getString(R.string.sstv_complete, result.startSeconds, result.warning.resolve(this@CatActivity))
+                val warning = result.warning.resolve(this@CatActivity)
+                if (result.complete) getString(R.string.sstv_complete, result.startSeconds, warning)
+                else getString(R.string.sstv_partial, result.decodedRows, result.height, result.startSeconds, warning)
             } catch (error: CancellationException) {
                 getString(R.string.live_cancelled)
+            } catch (error: OutOfMemoryError) {
+                getString(R.string.sstv_error, getString(R.string.err_image_memory))
             } catch (error: IOException) {
                 getString(R.string.sstv_error, errorText(error))
             } catch (error: IllegalArgumentException) {
@@ -346,12 +484,16 @@ class CatActivity : LocalizedActivity() {
     @Deprecated("Platform callback")
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 71) sstvStatus.setText(
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) R.string.live_permission_ready
-            else R.string.live_permission_denied)
+        if (requestCode != 71) return
+        val action = pendingAudio
+        pendingAudio = null
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            sstvStatus.setText(R.string.live_permission_ready)
+            if (action != null && foreground) action()
+        } else sstvStatus.setText(R.string.live_permission_denied)
     }
     private fun operation(action: () -> Any?) {
-        if (busy || trackingRequested || !foreground) return
+        if (busy || trackingRequested || transmitting || !foreground) return
         busy = true
         controls.forEach { it.isEnabled = false }
         val token = generation
@@ -382,6 +524,7 @@ class CatActivity : LocalizedActivity() {
         }
     }
     private fun fail(error: Exception): String {
+        cancelLease()
         val port = transport
         protocol = null; transport = null
         return try {
@@ -391,7 +534,38 @@ class CatActivity : LocalizedActivity() {
             getString(R.string.cat_failed_release, errorText(error), errorText(cleanup))
         }
     }
+    private fun cancelLease() {
+        leaseFuture?.cancel(false)
+        leaseFuture = null
+        lease = null
+    }
+    /** Keeps a manual tune alive from the worker thread until Stop, a failure or leaving the screen. */
+    private fun startLease(cat: CatProtocol, frequency10Hz: Long) {
+        val token = generation
+        val current = CatLease(cat, frequency10Hz, permit = { foreground && token == generation })
+        lease = current
+        leaseFuture = worker.scheduleWithFixedDelay({ leaseTick(token, current) }, 300, 300, TimeUnit.MILLISECONDS)
+    }
+    private fun leaseTick(token: Int, current: CatLease) {
+        if (token != generation || lease !== current) return
+        val message: String? = try {
+            when (current.renewIfDue()) {
+                CatLease.Result.WAITING, CatLease.Result.RENEWED -> null
+                CatLease.Result.REVERTED -> { cancelLease(); getString(R.string.cat_lease_reverted) }
+                CatLease.Result.LEFT_SAT_RX -> { cancelLease(); getString(R.string.cat_lease_left_sat) }
+            }
+        } catch (error: Exception) {
+            fail(error)
+        }
+        if (message != null) runOnUiThread { if (token == generation && !isDestroyed) status.text = message }
+    }
     private fun closeRadio() {
+        cancelLease()
+        // A running SSTV transmission must release PTT through the still-open transport before it is closed.
+        transmitter?.cancel()
+        txFuture?.let {
+            try { it.get(6, TimeUnit.SECONDS) } catch (_: Exception) { }
+        }
         val cat = protocol
         val port = transport
         protocol = null; transport = null
@@ -421,21 +595,29 @@ class CatActivity : LocalizedActivity() {
     override fun onStart() {
         super.onStart()
         foreground = true
+        registerUsbReceiver(detachReceiver, UsbManager.ACTION_USB_DEVICE_DETACHED)
+        registerUsbReceiver(permissionReceiver, USB_PERMISSION)
+        consumePermission()
+        if (reattachWatch) watchReattach()
+    }
+    private fun registerUsbReceiver(receiver: BroadcastReceiver, action: String) {
         if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(detachReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED), RECEIVER_NOT_EXPORTED)
+            registerReceiver(receiver, IntentFilter(action), RECEIVER_NOT_EXPORTED)
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(detachReceiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED))
+            registerReceiver(receiver, IntentFilter(action))
         }
-        consumePermission()
     }
     private fun suspendConnection(message: String) {
         trackingRequested = false
         tracker?.cancel()
+        cancelLease()
+        pendingAudio = null
         generation++
         val token = generation
         busy = false
         controls.forEach { it.isEnabled = true }
+        stopTransmit.isEnabled = false
         worker.execute {
             disposeOrbit()
             try { closeRadio() } catch (error: IOException) {
@@ -455,8 +637,9 @@ class CatActivity : LocalizedActivity() {
         orbit = null
     }
     private fun startTracking() {
-        if (busy || trackingRequested || !foreground) return
+        if (busy || trackingRequested || transmitting || !foreground) return
         val plan = selectedPlan ?: return
+        cancelLease()
         val token = generation
         trackingRequested = true
         controls.forEach { it.isEnabled = false }
@@ -512,7 +695,10 @@ class CatActivity : LocalizedActivity() {
     }
     override fun onStop() {
         foreground = false
+        mainHandler.removeCallbacks(reattachCheck)
         unregisterReceiver(detachReceiver)
+        unregisterReceiver(permissionReceiver)
+        transmitter?.cancel()
         capture?.cancel()
         passRecorder?.stop()
         suspendConnection(getString(R.string.cat_suspended))
@@ -520,7 +706,11 @@ class CatActivity : LocalizedActivity() {
     }
     override fun onDestroy() {
         worker.shutdown()
+        txWorker.shutdown()
         audioWorker.shutdownNow()
         super.onDestroy()
+    }
+    private companion object {
+        const val USB_PERMISSION = "org.bricohams.radio.USB_PERMISSION"
     }
 }

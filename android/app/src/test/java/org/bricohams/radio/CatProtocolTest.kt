@@ -20,10 +20,11 @@ class CatProtocolTest {
         var wrongSequence = false
         var wrongCrc = false
         var firmware = "F4HWN v6.1.0"
+        var preface: (() -> ByteArray)? = null
         override fun write(bytes: ByteArray, timeoutMs: Int) {
             val (type, request) = QuanshengFrames.decode(bytes)
             if (type == 0x0514) {
-                QuanshengFrames.encode(0x0515, firmware.toByteArray(Charsets.US_ASCII).copyOf(16)).forEach(buffer::add)
+                QuanshengFrames.encode(0x0515, firmware.toByteArray(Charsets.US_ASCII).copyOf(maxOf(16, firmware.length + 1))).forEach(buffer::add)
                 return
             }
             assertEquals(0x7b00, type)
@@ -43,6 +44,7 @@ class CatProtocolTest {
             val frame = QuanshengFrames.encode(0x7b01, response)
             if (wrongCrc) frame[10] = (frame[10].toInt() xor 1).toByte()
             byteArrayOf(0, 0xab.toByte(), 0).forEach(buffer::add)
+            preface?.invoke()?.forEach(buffer::add)
             frame.forEach(buffer::add)
         }
         override fun read(length: Int, timeoutMs: Int): ByteArray {
@@ -74,13 +76,22 @@ class CatProtocolTest {
         assertFalse(stopped.remote)
         assertFalse(stopped.pending)
         assertEquals(14580000L, stopped.frequency10Hz)
-        assertEquals(listOf(0, 0, 1, 0, 0, 2, 0), radio.operations)
+        assertEquals(listOf(0, 1, 0, 2, 0), radio.operations)
+    }
+    @Test fun trackingStepIsOneSetPlusAtMostOneReadBack() {
+        val radio = Radio()
+        val cat = CatProtocol(radio, sleep = {})
+        cat.tune(43650000)
+        assertEquals(listOf(1, 0), radio.operations)
+        radio.operations.clear()
+        cat.tune(43650000, confirm = false)
+        assertEquals(listOf(1), radio.operations)
     }
     @Test fun malformedAndUnconfirmedRepliesFailExplicitly() {
         val sequence = Radio().apply { wrongSequence = true }
-        assertThrows(IllegalArgumentException::class.java) { CatProtocol(sequence).query() }
+        assertThrows(IOException::class.java) { CatProtocol(sequence).query() }
         val crc = Radio().apply { wrongCrc = true }
-        assertThrows(IllegalArgumentException::class.java) { CatProtocol(crc).query() }
+        assertThrows(IOException::class.java) { CatProtocol(crc).query() }
         val inactive = Radio().apply { active = false }
         assertThrows(IllegalArgumentException::class.java) { CatProtocol(inactive).tune(14580000) }
         val pending = Radio().apply { neverApply = true }
@@ -108,9 +119,88 @@ class CatProtocolTest {
         val radio = Radio()
         val cat = CatProtocol(radio, sleep = {}, allowTune = { false })
         assertThrows(IllegalStateException::class.java) { cat.tune(14580000) }
-        assertEquals(listOf(0), radio.operations)
+        assertTrue(radio.operations.isEmpty())
         cat.stop()
-        assertEquals(listOf(0, 0, 2, 0), radio.operations)
+        assertEquals(listOf(2, 0), radio.operations)
+    }
+    @Test fun identificationAcceptsBricoHamsBuildsAndReadsLongReplies() {
+        val radio = Radio()
+        for (name in listOf("BricoHams v1", "bricohams-sat 0.3", "F4HWN v7.2", "BricoHams custom build with a long name")) {
+            radio.firmware = name
+            assertEquals(name, CatProtocol(radio).identify())
+        }
+        assertTrue(CatProtocol.supportedFirmware("BricoHams"))
+        assertFalse(CatProtocol.supportedFirmware("F4HWN v5.9"))
+    }
+    @Test fun staleAndDesynchronisedRepliesAreSkipped() {
+        val radio = Radio()
+        val cat = CatProtocol(radio)
+        // Stale frame of an old request (wrong sequence) plus garbage already waiting: drained before the request.
+        val stale = QuanshengFrames.encode(0x7b01, ByteArray(16))
+        byteArrayOf(1, 2, 3).forEach(radio.buffer::add)
+        stale.forEach(radio.buffer::add)
+        assertTrue(cat.query().active)
+        // Reply preceded by a frame of another type and one with a corrupted CRC.
+        radio.preface = {
+            QuanshengFrames.encode(0x0515, ByteArray(16)) + QuanshengFrames.encode(0x7b01, ByteArray(16)).also { it[8] = (it[8].toInt() xor 1).toByte() }
+        }
+        assertTrue(cat.query().active)
+        assertEquals(listOf(0, 0), radio.operations)
+    }
+    @Test fun silentRadioIsRetriedOnceThenFails() {
+        var writes = 0
+        var time = 0L
+        val silent = object : RadioBytes {
+            override fun write(bytes: ByteArray, timeoutMs: Int) { writes++ }
+            override fun read(length: Int, timeoutMs: Int): ByteArray { time += 600; throw IOException("timeout") }
+            override fun close() = Unit
+        }
+        assertThrows(IOException::class.java) { CatProtocol(silent, clock = { time }).query() }
+        assertEquals(2, writes)
+    }
+    @Test fun leaseIsRenewedBelowTheFirmwareTimeoutAndReportsRevert() {
+        var now = 0L
+        val radio = Radio()
+        val cat = CatProtocol(radio, clock = { now }, sleep = {})
+        cat.tune(43650000)
+        radio.operations.clear()
+        val lease = CatLease(cat, 43650000, clock = { now })
+        assertEquals(CatLease.Result.WAITING, lease.renewIfDue())
+        now += CatLease.RENEW_MS - 1
+        assertEquals(CatLease.Result.WAITING, lease.renewIfDue())
+        assertTrue(radio.operations.isEmpty())
+        now += 1
+        assertEquals(CatLease.Result.RENEWED, lease.renewIfDue())
+        assertEquals(listOf(0, 1), radio.operations)
+        assertTrue(CatLease.RENEW_MS < CatLease.LEASE_MS)
+        now += CatLease.RENEW_MS
+        radio.remote = false
+        assertEquals(CatLease.Result.REVERTED, lease.renewIfDue())
+        now += CatLease.RENEW_MS
+        radio.active = false
+        assertEquals(CatLease.Result.LEFT_SAT_RX, lease.renewIfDue())
+    }
+    private class PttRadio(var denied: Int = 0, var status: Int = 0) : RadioBytes {
+        val buffer = ArrayDeque<Byte>()
+        override fun write(bytes: ByteArray, timeoutMs: Int) {
+            val (_, request) = QuanshengFrames.decode(bytes)
+            val seq = ByteBuffer.wrap(request).order(ByteOrder.LITTLE_ENDIAN).getShort(2)
+            val flags = 1 or (denied shl 8)
+            val response = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
+                .put(1).put(status.toByte()).putShort(seq).putInt(8).putInt(flags).putInt(0).array()
+            QuanshengFrames.encode(0x7b03, response).forEach(buffer::add)
+        }
+        override fun read(length: Int, timeoutMs: Int): ByteArray {
+            if (buffer.size < length) throw IOException("Mock timeout")
+            return ByteArray(length) { buffer.removeFirst() }
+        }
+        override fun close() = Unit
+    }
+    @Test fun deniedStateAcceptsTheWholeVfoStateRange() {
+        for (state in listOf(0, 1, 2, 3, 4, 5, 6, 255)) {
+            assertEquals(state, CatProtocol(PttRadio(denied = state)).pttQuery().deniedState)
+        }
+        assertEquals(6, CatProtocol(PttRadio(denied = 6, status = 7)).pttQuery().deniedState)
     }
     @Test fun upstreamFfffChecksumAndSequenceWrapAreSupported() {
         val data = byteArrayOf(1, 2, 3)
