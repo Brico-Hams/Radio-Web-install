@@ -46,6 +46,30 @@ Verbinden identifiziert das Gerät und führt automatisch BackupManager aus, bev
 
 Dieser Schutz schafft keinen nicht vorhandenen Firmware-Leser. Es lässt sich nicht behaupten, dass die vollständige Originalfirmware bereits automatisch gesichert wird. Es werden keine willkürlichen MCU-Modi/-Adressen ausprobiert, um diese Funktion vorzutäuschen. Wenn «Original» die bereits ersetzte kommerzielle Werksfirmware meint, hilft nur eine vor der Installation erstellte Kopie; das Auslesen von OpenGD77 stellt diese Bytes nicht wieder her.
 
+## Live-Steuerung und CAT je Modell (2026-11-01)
+
+**OpenGD77 hat kein Abstimm-CAT über USB.** Der Firmware-Quellcode (`usb_com.c`, MK22- und STM32-Zweig) akzeptiert nur Speicherlesungen (`R`), Codeplug-Schreibvorgänge (`W`/`X`) und CPS-Befehle (`C`). Es gibt keinen Befehl, um die Frequenz zu setzen oder zu lesen, Betriebsart oder Kanal zu wechseln oder PTT auszulösen; Web-App und APK **täuschen das nicht vor**. Das Funkgerät berechnet den Satelliten-Doppler selbst im Satellitenmenü aus den mit dem offiziellen CPS geladenen Keps und seiner Uhr.
+
+Was über USB funktioniert, ohne Sicherung und ohne den Flash zu berühren (Web: **Nur lesend / live verbinden**; APK: **OpenGD77 über USB: Bildschirm und Uhr**):
+
+- **Kennung:** Modell, Firmware und Erstellungsdatum (`R` Modus 9).
+- **Live-Bildschirm:** liest den Bildschirm-RAM (`R` Modus 6), ohne in den CPS-Modus zu wechseln; die Web-App kann ihn alle 2 s aktualisieren.
+- **UTC-Uhr:** Befehl `C 6 7`; danach das Satellitenmenü erneut öffnen, um Überflüge und Doppler neu zu berechnen.
+- **Verbindung prüfen:** Befehl `C 254`.
+
+| Funktion | GD-77 (MD-760), DM-1801/DM-1801A (v1), RD-5R (DM-5R Tier 2), MD-9600 (RT-90), MD-UV380/UV390 (RT-3S), MD-380, DM-1701 (RT-84), DM-1701 RGB, MD-2017 | GD-77S | DM-32, UV008 (SERIAL-Familie) |
+| --- | --- | --- | --- |
+| RX/TX-Frequenz, Betriebsart, Kanal | Nicht unterstützt | Nicht unterstützt | Nicht unterstützt |
+| Doppler vom PC oder Handy | Nicht unterstützt (macht das Funkgerät) | Nicht unterstützt (macht das Funkgerät) | Nicht unterstützt |
+| Fern-PTT | Nicht unterstützt | Nicht unterstützt | Nicht unterstützt |
+| Kennung und Status | Ja (Web und APK) | Ja (Web und APK) | Ja (Web und APK) |
+| Live-Bildschirm | Ja (Web und APK) | Nein: kein Bildschirm | Nicht verifiziert: nicht angeboten |
+| UTC-Uhr | Ja (Web und APK) | Ja (Web und APK) | Nicht verifiziert: nicht angeboten |
+| Codeplug (lokale Datei) | Web | Web | Web |
+| Satelliten-Keps laden | Offizielles CPS | Offizielles CPS | Offizielles CPS |
+
+Hinweise: Beim RD-5R ist USB während des Sendens nicht zuverlässig. Bei DM-1701 mit BGR-Panel werden die Farben der Aufnahme anhand der Kennung korrigiert; die Farben wurden nicht an Hardware geprüft. Der MMDVM-Hotspot sendet nur digitales DMR und wird nicht als PTT verwendet. Mit diesen Funktionen wurde kein physisches OpenGD77-Funkgerät getestet.
+
 ## 1. Vor dem Verbinden oder Senden
 
 1. Ermittle Hersteller, vollständiges Modell, Hardware-Revision und installierte Firmware. «UV380», «10W» und «10W PLUS» sind nicht gleichwertig.

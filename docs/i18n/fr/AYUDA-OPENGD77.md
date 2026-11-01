@@ -47,6 +47,30 @@ La connexion identifie l'appareil et lance automatiquement BackupManager avant d
 Cette protection ne crée pas un lecteur de firmware inexistant. Il n'est pas possible d'affirmer que le firmware original complet est déjà sauvegardé automatiquement. Aucun mode/adresse MCU arbitraire n'est testé pour simuler cette fonction.
 Si « original » désigne le firmware commercial d'usine déjà remplacé, seule une copie antérieure à l'installation convient ; la lecture d'OpenGD77 ne récupère pas ces octets.
 
+## Contrôle en direct et CAT par modèle (2026-11-01)
+
+**OpenGD77 n'a pas de CAT d'accord par USB.** Le code source du firmware (`usb_com.c`, branches MK22 et STM32) n'accepte que des lectures mémoire (`R`), des écritures de codeplug (`W`/`X`) et des commandes CPS (`C`). Aucune commande ne règle ni ne lit la fréquence, ne change le mode ou le canal, ni n'active le PTT : l'application web et l'APK **ne le simulent pas**. La radio calcule elle-même le Doppler des satellites dans son menu Satellite, à partir des keps chargés avec le CPS officiel et de son horloge.
+
+Ce qui fonctionne par USB, sans sauvegarde et sans toucher la Flash (web : **Connecter en lecture seule / en direct** ; APK : **OpenGD77 par USB : écran et horloge**) :
+
+- **Identification :** modèle, firmware et date de compilation (`R` mode 9).
+- **Écran en direct :** lecture de la RAM d'écran (`R` mode 6) sans passer en mode CPS ; le web peut la rafraîchir toutes les 2 s.
+- **Horloge UTC :** commande `C 6 7` ; rouvrez ensuite le menu Satellite pour recalculer passages et Doppler.
+- **Vérifier la liaison :** commande `C 254`.
+
+| Fonction | GD-77 (MD-760), DM-1801/DM-1801A (v1), RD-5R (DM-5R Tier 2), MD-9600 (RT-90), MD-UV380/UV390 (RT-3S), MD-380, DM-1701 (RT-84), DM-1701 RGB, MD-2017 | GD-77S | DM-32, UV008 (famille SERIAL) |
+| --- | --- | --- | --- |
+| Fréquence RX/TX, mode, canal | Non pris en charge | Non pris en charge | Non pris en charge |
+| Doppler depuis le PC ou le mobile | Non pris en charge (la radio le fait) | Non pris en charge (la radio le fait) | Non pris en charge |
+| PTT à distance | Non pris en charge | Non pris en charge | Non pris en charge |
+| Identification et état | Oui (web et APK) | Oui (web et APK) | Oui (web et APK) |
+| Écran en direct | Oui (web et APK) | Non : pas d'écran | Non vérifié : non proposé |
+| Horloge UTC | Oui (web et APK) | Oui (web et APK) | Non vérifié : non proposé |
+| Codeplug (fichier local) | Web | Web | Web |
+| Charger les keps des satellites | CPS officiel | CPS officiel | CPS officiel |
+
+Notes : sur le RD-5R, l'USB n'est pas fiable pendant l'émission. Sur les DM-1701 à dalle BGR, les couleurs de la capture sont corrigées d'après l'identifiant ; les couleurs n'ont pas été vérifiées sur le matériel. Le hotspot MMDVM n'émet qu'en DMR numérique et n'est pas utilisé comme PTT. Aucune radio OpenGD77 physique n'a été testée avec ces fonctions.
+
 ## 1. Avant de connecter ou d'émettre
 
 1. Identifier le fabricant, le modèle complet, la révision matérielle et le firmware installé. « UV380 », « 10W » et « 10W PLUS » ne sont pas équivalents.

@@ -75,6 +75,8 @@
       $("radio-connect").disabled = busy || Boolean(connector) || !model.value || !(confirmation.checked || pro.checked) || !(api in navigator) || !root.isSecureContext;
       if ($("qs-connect-readonly")) $("qs-connect-readonly").disabled = $("radio-connect").disabled;
       if ($("qs-connect-channels")) $("qs-connect-channels").disabled = $("radio-connect").disabled;
+      if ($("gd77-connect-live")) $("gd77-connect-live").disabled = $("radio-connect").disabled;
+      document.querySelectorAll("[data-gd77-live]").forEach(button => { button.disabled = busy || !connected; });
       $("radio-disconnect").disabled = busy || catTracking || !connector;
       model.disabled = busy || Boolean(connector);
       confirmation.disabled = busy || Boolean(connector);
@@ -1167,7 +1169,15 @@
         });
       });
     } else {
-      operations.innerHTML = `<h2>Codeplug OpenGD77</h2><p class="muted">Al conectar se inicia automaticamente la copia de calibracion y codeplug estandar de 128 KiB. El firmware MCU original no se puede respaldar de forma integral con el protocolo verificado actual: la copia es parcial y bloquea posteriores operaciones de radio, incluso lecturas adicionales. El archivo de la copia se abre para edicion offline. No incluye canales extendidos 1025+.</p>
+      operations.innerHTML = `<h2>Control en vivo OpenGD77</h2>
+        <button id="gd77-connect-live" class="button secondary" type="button" disabled>Conectar solo lectura / en vivo (sin respaldo ni escritura)</button>
+        <p>OpenGD77 no ofrece CAT de sintonia por USB: el firmware solo expone memoria, pantalla, reloj y ordenes CPS. Por eso no hay frecuencia, Doppler desde el PC, canal ni PTT remotos; la radio calcula el Doppler en su menu Satelite. Estas acciones solo leen RAM de pantalla o ajustan el reloj, nunca la Flash.</p>
+        <div class="operation-buttons"><button id="gd77-screen" data-gd77-live class="button secondary" type="button" disabled>Capturar pantalla</button><button id="gd77-clock" data-gd77-live class="button primary" type="button" disabled>Sincronizar reloj UTC</button><button id="gd77-ping" data-gd77-live class="button secondary" type="button" disabled>Comprobar enlace</button></div>
+        <label class="check"><input id="gd77-screen-auto" type="checkbox"> Refrescar la pantalla cada 2 s mientras este conectada</label>
+        <canvas id="gd77-screen-canvas" class="qs-live-screen" width="128" height="64" role="img" aria-label="Pantalla de la radio OpenGD77" hidden></canvas>
+        <p id="gd77-live-status" role="status">Sin conexion en vivo.</p>
+        <div class="table-scroll"><table><caption>Funciones de radio por USB para el modelo detectado</caption><thead><tr><th>Funcion</th><th>Estado</th><th>Motivo</th></tr></thead><tbody id="gd77-capabilities"><tr><td colspan="3">Conecta para ver el modelo detectado. La matriz completa por modelo esta en la ayuda OpenGD77.</td></tr></tbody></table></div>
+        <h2>Codeplug OpenGD77</h2><p class="muted">Al conectar se inicia automaticamente la copia de calibracion y codeplug estandar de 128 KiB. El firmware MCU original no se puede respaldar de forma integral con el protocolo verificado actual: la copia es parcial y bloquea posteriores operaciones de radio, incluso lecturas adicionales. El archivo de la copia se abre para edicion offline. No incluye canales extendidos 1025+.</p>
         <div class="operation-buttons"><button id="read-codeplug" data-connected class="button secondary" type="button" disabled>Leer codeplug</button><button id="write-codeplug" data-write class="button primary" type="button" disabled>Escribir codeplug</button><button id="save-codeplug" class="button secondary" type="button">Guardar binario 128 KiB</button></div>
         <label for="codeplug-file">Abrir codeplug binario de 128 KiB (no JSON del CPS ni firmware)</label><input id="codeplug-file" type="file" accept=".bin,.g77">
         <div class="table-scroll"><table><thead><tr><th>Canal</th><th>Nombre</th><th>RX MHz</th><th>TX MHz</th><th>Modo</th><th>Editar</th></tr></thead><tbody id="channels-body"></tbody></table></div>
@@ -1181,6 +1191,38 @@
         <label class="check"><input id="channel-rxonly" type="checkbox"> Solo recepcion (TX deshabilitada)</label>
         <button class="button primary" type="submit">Aplicar al archivo local</button></form>
         <p class="card-note">Se preservan los campos no editados. No se crean canales con valores arbitrarios. Las frecuencias se validan como BCD, no como autorizacion legal para transmitir.</p>`;
+      const drawScreen = screen => {
+        const canvas = $("gd77-screen-canvas");
+        canvas.width = screen.width;
+        canvas.height = screen.height;
+        canvas.getContext("2d").putImageData(new ImageData(screen.rgba, screen.width, screen.height), 0, 0);
+        canvas.hidden = false;
+        $("gd77-live-status").textContent = `Pantalla ${connector.info.model} ${screen.width}x${screen.height} leida a las ${new Date().toLocaleTimeString()}.`;
+      };
+      attach("gd77-screen", "Capturar pantalla OpenGD77", async () => drawScreen(await connector.readScreen()));
+      attach("gd77-clock", "Sincronizar reloj OpenGD77", async () => {
+        const seconds = await connector.syncClock();
+        $("gd77-live-status").textContent = `Reloj enviado: ${new Date(seconds * 1000).toISOString()} UTC. Vuelve a abrir el menu Satelite para recalcular pases.`;
+      });
+      attach("gd77-ping", "Comprobar enlace OpenGD77", async () => {
+        await connector.ping();
+        $("gd77-live-status").textContent = `Enlace correcto con ${connector.info.model}, firmware ${connector.info.firmware}.`;
+      });
+      let screenTimer = null;
+      const refresh = async () => {
+        clearTimeout(screenTimer);
+        if (!$("gd77-screen-auto").checked) return;
+        if (!busy && connector?.connected && connector.info) {
+          try {
+            drawScreen(await connector.readScreen());
+          } catch (error) {
+            $("gd77-screen-auto").checked = false;
+            fail(error);
+          }
+        }
+        screenTimer = setTimeout(refresh, 2000);
+      };
+      $("gd77-screen-auto").addEventListener("change", refresh);
       function renderChannels() {
         const channels = R.readChannels(image);
         $("channel-form").hidden = true;
@@ -1371,6 +1413,18 @@
         $("qs-rf-status").textContent = "Nueva conexion: esperando registros de esta radio.";
         $("qs-rf-body").dispatchEvent(new Event("rf-rows-updated"));
       }
+      if (page === "opengd77") {
+        $("gd77-capabilities").replaceChildren(...connector.capabilities().map(item => {
+          const row = document.createElement("tr");
+          for (const value of [item.label, item.supported ? "Soportado" : "No soportado", item.reason || "-"]) {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.append(cell);
+          }
+          return row;
+        }));
+        $("gd77-live-status").textContent = `${info.model} conectado. ${connector.capabilities().filter(item => item.supported).length} funciones disponibles por USB.`;
+      }
       if (!withBackup) {
         $("backup-status").textContent = "Sesion solo lectura / CAT: sin respaldo ni permiso de escritura persistente.";
         log("Conexion solo lectura / CAT. No se ha creado respaldo; escrituras persistentes bloqueadas.");
@@ -1405,6 +1459,7 @@
       autoLivePending = page === "quansheng";
     }
     attach("radio-connect", "Conectar y crear respaldo automatico", () => connectRadio(true));
+    if ($("gd77-connect-live")) attach("gd77-connect-live", "Conectar OpenGD77 solo lectura / en vivo", () => connectRadio(false));
     if ($("qs-connect-readonly")) attach("qs-connect-readonly", "Conectar Quansheng solo lectura / CAT", () => connectRadio(false));
     attach("radio-disconnect", "Desconectar", async () => {
       permit = null;

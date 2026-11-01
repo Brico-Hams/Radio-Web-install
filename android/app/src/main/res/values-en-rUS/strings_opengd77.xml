@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gd77_title">OpenGD77 over USB</string>
+    <string name="gd77_intro">Connect an OpenGD77 radio over USB (OTG). Identification, screen and clock only.</string>
+    <string name="gd77_help">OpenGD77 has no tuning CAT over USB: the firmware accepts no frequency, mode, channel or PTT commands. The radio computes Doppler itself in its Satellite menu from its keps and clock; here you can set that clock to UTC. The Flash is never written.</string>
+    <string name="gd77_screen">Capture screen</string>
+    <string name="gd77_clock">Sync UTC clock</string>
+    <string name="gd77_ping">Check link</string>
+    <string name="gd77_screen_done">Screen captured.</string>
+    <string name="gd77_clock_done">Clock sent: %1$s UTC. Reopen the Satellite menu to recalculate passes.</string>
+    <string name="gd77_ping_done">Link OK.</string>
+    <string name="gd77_screen_description">OpenGD77 radio screen</string>
+    <string name="gd77_no_devices">No USB CDC radio connected. Use an OTG data cable.</string>
+    <string name="gd77_connected">%1$s connected. Firmware %2$s, built %3$s.</string>
+    <string name="gd77_capabilities_title">USB functions on %1$s</string>
+    <string name="gd77_supported">Supported</string>
+    <string name="gd77_unsupported">Not supported</string>
+    <string name="gd77_fn_frequency">Set and read RX/TX frequency</string>
+    <string name="gd77_fn_doppler">Satellite Doppler from the phone</string>
+    <string name="gd77_fn_channel">Mode and channel selection</string>
+    <string name="gd77_fn_ptt">Remote PTT</string>
+    <string name="gd77_fn_identify">Identification and status</string>
+    <string name="gd77_fn_screen">Live screen</string>
+    <string name="gd77_fn_clock">UTC clock for built-in predictions and Doppler</string>
+    <string name="gd77_fn_codeplug">Codeplug</string>
+    <string name="gd77_fn_keps">Upload satellite keps</string>
+    <string name="gd77_reason_no_cat">OpenGD77\'s USB protocol has no tuning, mode, channel or PTT commands.</string>
+    <string name="gd77_reason_doppler">No tuning commands over USB; the radio computes Doppler in its Satellite menu.</string>
+    <string name="gd77_reason_ptt">No PTT command over USB; the MMDVM hotspot only sends digital DMR and is not used as PTT.</string>
+    <string name="gd77_reason_keps">Keps Flash format is not published; use the official OpenGD77 CPS.</string>
+    <string name="gd77_reason_serial">SERIAL family (DM-32, UV008): screen and clock not verified in the source code.</string>
+    <string name="gd77_reason_no_screen">Model has no screen.</string>
+    <string name="gd77_reason_codeplug_web">Available in the Bricohams Radio Workspace web app (local file); not in this APK.</string>
+    <string name="gd77_err_clock_range">Date out of range.</string>
+    <string name="gd77_err_unknown_info">Unknown OpenGD77 identification; no model is assumed.</string>
+    <string name="gd77_err_not_confirmed">The radio did not confirm the command.</string>
+    <string name="gd77_err_bad_reply">Invalid OpenGD77 reply.</string>
+    <string name="gd77_err_not_connected">Connect the OpenGD77 radio first.</string>
+    <string name="home_open_gd77">OpenGD77 over USB: screen and clock</string>
+</resources>

@@ -98,6 +98,30 @@ modalità/indirizzi MCU arbitrari per simulare questa funzione.
 Se per «originale» si intende il firmware commerciale di fabbrica già sostituito, serve solo
 una copia precedente all'installazione; la lettura di OpenGD77 non recupera quei byte.
 
+## Controllo dal vivo e CAT per modello (2026-11-01)
+
+**OpenGD77 non ha un CAT di sintonia via USB.** Il codice sorgente del firmware (`usb_com.c`, rami MK22 e STM32) accetta solo letture di memoria (`R`), scritture del codeplug (`W`/`X`) e comandi CPS (`C`). Non esiste alcun comando per impostare o leggere la frequenza, cambiare modo o canale o attivare il PTT, quindi l'app web e l'APK **non lo simulano**. Il Doppler dei satelliti lo calcola la radio stessa nel menu Satellite, con i keps caricati dal CPS ufficiale e con il suo orologio.
+
+Cosa funziona via USB, senza backup e senza toccare la Flash (web: **Connetti in sola lettura / dal vivo**; APK: **OpenGD77 via USB: schermo e orologio**):
+
+- **Identificazione:** modello, firmware e data di compilazione (`R` modo 9).
+- **Schermo dal vivo:** lettura della RAM dello schermo (`R` modo 6) senza entrare in modalità CPS; la web può aggiornarla ogni 2 s.
+- **Orologio UTC:** comando `C 6 7`; poi riapri il menu Satellite per ricalcolare passaggi e Doppler.
+- **Verifica collegamento:** comando `C 254`.
+
+| Funzione | GD-77 (MD-760), DM-1801/DM-1801A (v1), RD-5R (DM-5R Tier 2), MD-9600 (RT-90), MD-UV380/UV390 (RT-3S), MD-380, DM-1701 (RT-84), DM-1701 RGB, MD-2017 | GD-77S | DM-32, UV008 (famiglia SERIAL) |
+| --- | --- | --- | --- |
+| Frequenza RX/TX, modo, canale | Non supportato | Non supportato | Non supportato |
+| Doppler da PC o telefono | Non supportato (lo fa la radio) | Non supportato (lo fa la radio) | Non supportato |
+| PTT remoto | Non supportato | Non supportato | Non supportato |
+| Identificazione e stato | Sì (web e APK) | Sì (web e APK) | Sì (web e APK) |
+| Schermo dal vivo | Sì (web e APK) | No: senza schermo | Non verificato: non offerto |
+| Orologio UTC | Sì (web e APK) | Sì (web e APK) | Non verificato: non offerto |
+| Codeplug (file locale) | Web | Web | Web |
+| Caricare keps dei satelliti | CPS ufficiale | CPS ufficiale | CPS ufficiale |
+
+Note: sull'RD-5R l'USB non è affidabile durante la trasmissione. Sui DM-1701 con pannello BGR i colori della cattura vengono corretti in base all'identificativo; i colori non sono stati verificati sull'hardware. L'hotspot MMDVM trasmette solo DMR digitale e non viene usato come PTT. Nessuna radio OpenGD77 fisica è stata provata con queste funzioni.
+
 ## 1. Prima di collegare o trasmettere
 
 1. Identifica produttore, modello completo, revisione hardware e firmware installato. «UV380», «10W» e «10W PLUS» non sono equivalenti.

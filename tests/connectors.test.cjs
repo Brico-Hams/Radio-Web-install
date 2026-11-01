@@ -1198,7 +1198,6 @@ for (const family of ["MK22", "STM32", "SERIAL"]) {
     assert(device.requests.every(request => [0x43, 0x52].includes(request[0])));
     const before = device.requests.length;
     await assert.rejects(connector.readCodeplug(permit), /bloqueada/);
-    await assert.rejects(connector.readScreen(permit), /bloqueada/);
     assert.equal(device.requests.length, before, "No se emiten operaciones adicionales sin firmware respaldado.");
     assert(!device.requests.some(request => request[0] === 0x43 && request[1] === 6), "Leer no debe guardar ajustes/VFO ni reiniciar la radio.");
     await assert.rejects(connector.writeCodeplug(record.files[1].bytes, permit), /bloqueada/);
@@ -1398,15 +1397,65 @@ test("Corrupcion o borrado del respaldo posterior revoca permiso antes de modifi
     assert.equal(device.commands.length, 0);
   }
 });
-test("Captura OpenGD77 no emite comandos sin respaldo completo del firmware", async () => {
-  for (const family of ["MK22", "STM32", "SERIAL"]) {
+test("Pantalla OpenGD77 en vivo: lee solo RAM de pantalla, sin modo CPS ni escrituras", async () => {
+  for (const [family, size, block] of [["MK22", 1024, 32], ["STM32", 40960, 512]]) {
     const device = new GD77Device(family);
     const connector = new R.GD77Connector(family, device);
     await connector.connect();
     const before = device.requests.length;
-    await assert.rejects(connector.readScreen(), /bloqueada/);
-    assert.equal(device.requests.length, before);
+    const screen = await connector.readScreen();
+    const sent = device.requests.slice(before);
+    assert(sent.every(request => request[0] === 0x52 && request[1] === 6), "Solo lecturas del buffer de pantalla.");
+    assert.equal(sent.reduce((sum, request) => sum + le(request).getUint16(6, false), 0), size);
+    assert(sent.every(request => le(request).getUint16(6, false) <= block));
+    assert.equal(screen.raw.length, size);
+    assert.equal(screen.rgba.length, screen.width * screen.height * 4);
   }
+  const device = new GD77Device("SERIAL");
+  const connector = new R.GD77Connector("SERIAL", device);
+  await connector.connect();
+  const before = device.requests.length;
+  await assert.rejects(connector.readScreen(), /no soportada/);
+  await assert.rejects(connector.syncClock(), /no soportado/);
+  assert.equal(device.requests.length, before);
+});
+test("Decodificar pantalla OpenGD77 mono por paginas y RGB565 big-endian", () => {
+  const mono = new Uint8Array(1024); mono[128 + 5] = 1 << 2; // x=5, y=10
+  const image = R.gd77DecodeScreen(mono, { width: 128, height: 64, format: "mono" });
+  assert.deepEqual(Array.from(image.subarray((10 * 128 + 5) * 4, (10 * 128 + 5) * 4 + 4)), [0, 0, 0, 255]);
+  assert.deepEqual(Array.from(image.subarray(0, 4)), [255, 255, 255, 255]);
+  const color = new Uint8Array(160 * 128 * 2); color[0] = 0xf8; color[1] = 0x00; // pure red
+  assert.deepEqual(Array.from(R.gd77DecodeScreen(color, { width: 160, height: 128, format: "rgb565" }).subarray(0, 4)), [255, 0, 0, 255]);
+  assert.deepEqual(Array.from(R.gd77DecodeScreen(color, { width: 160, height: 128, format: "bgr565" }).subarray(0, 4)), [0, 0, 255, 255]);
+  assert.throws(() => R.gd77DecodeScreen(color.subarray(1), { width: 160, height: 128, format: "rgb565" }));
+});
+test("Reloj OpenGD77: C 6 7 con segundos UTC little-endian", async () => {
+  const device = new GD77Device("STM32");
+  const connector = new R.GD77Connector("STM32", device);
+  await connector.connect();
+  const before = device.requests.length;
+  assert.equal(await connector.syncClock(new Date(Date.UTC(2026, 10, 1, 12, 0, 0))), 1793534400);
+  const [request] = device.requests.slice(before);
+  assert.deepEqual(Array.from(request), [0x43, 6, 7, 0xc0, 0x29, 0xe7, 0x6a]);
+  await connector.ping();
+  assert.deepEqual(Array.from(device.requests.at(-1)), [0x43, 254]);
+});
+test("Capacidades OpenGD77: sin CAT de frecuencia, Doppler, canal ni PTT en ningun modelo", () => {
+  for (const model of R.gd77Models) {
+    const map = Object.fromEntries(R.gd77Capabilities(model).map(item => [item.key, item]));
+    for (const key of ["frequency", "doppler", "channel", "ptt", "keps"]) {
+      assert.equal(map[key].supported, false, `${model} ${key}`);
+      assert(map[key].reason.length > 10);
+    }
+    assert.equal(map.identify.supported, true);
+    assert.equal(map.codeplug.supported, true);
+  }
+  const screen = model => R.gd77Capabilities(model).find(item => item.key === "screen").supported;
+  assert.equal(screen("GD-77"), true);
+  assert.equal(screen("MD-UV380"), true);
+  assert.equal(screen("GD-77S"), false);
+  assert.equal(screen("DM-32"), false);
+  assert.throws(() => R.gd77Capabilities("UV-K5"), /desconocido/);
 });
 class GD77WritingDevice extends GD77Device {
   constructor(family) {

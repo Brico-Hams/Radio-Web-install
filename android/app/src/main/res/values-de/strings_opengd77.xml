@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="gd77_title">OpenGD77 über USB</string>
+    <string name="gd77_intro">Ein OpenGD77-Funkgerät über USB (OTG) verbinden. Nur Kennung, Bildschirm und Uhr.</string>
+    <string name="gd77_help">OpenGD77 hat kein Abstimm-CAT über USB: Die Firmware nimmt keine Befehle für Frequenz, Betriebsart, Kanal oder PTT an. Das Funkgerät berechnet den Doppler selbst im Satellitenmenü aus Keps und Uhr; hier kannst du diese Uhr auf UTC stellen. Der Flash wird nie beschrieben.</string>
+    <string name="gd77_screen">Bildschirm erfassen</string>
+    <string name="gd77_clock">UTC-Uhr synchronisieren</string>
+    <string name="gd77_ping">Verbindung prüfen</string>
+    <string name="gd77_screen_done">Bildschirm erfasst.</string>
+    <string name="gd77_clock_done">Uhr gesendet: %1$s UTC. Öffne das Satellitenmenü erneut, um die Überflüge neu zu berechnen.</string>
+    <string name="gd77_ping_done">Verbindung in Ordnung.</string>
+    <string name="gd77_screen_description">Bildschirm des OpenGD77-Funkgeräts</string>
+    <string name="gd77_no_devices">Kein USB-CDC-Funkgerät verbunden. Verwende ein OTG-Datenkabel.</string>
+    <string name="gd77_connected">%1$s verbunden. Firmware %2$s, erstellt %3$s.</string>
+    <string name="gd77_capabilities_title">USB-Funktionen am %1$s</string>
+    <string name="gd77_supported">Unterstützt</string>
+    <string name="gd77_unsupported">Nicht unterstützt</string>
+    <string name="gd77_fn_frequency">RX/TX-Frequenz setzen und lesen</string>
+    <string name="gd77_fn_doppler">Satelliten-Doppler vom Handy</string>
+    <string name="gd77_fn_channel">Betriebsart und Kanalwahl</string>
+    <string name="gd77_fn_ptt">Fern-PTT</string>
+    <string name="gd77_fn_identify">Kennung und Status</string>
+    <string name="gd77_fn_screen">Live-Bildschirm</string>
+    <string name="gd77_fn_clock">UTC-Uhr für interne Vorhersagen und Doppler</string>
+    <string name="gd77_fn_codeplug">Codeplug</string>
+    <string name="gd77_fn_keps">Satelliten-Keps laden</string>
+    <string name="gd77_reason_no_cat">Das USB-Protokoll von OpenGD77 hat keine Befehle für Abstimmung, Betriebsart, Kanal oder PTT.</string>
+    <string name="gd77_reason_doppler">Keine Abstimmbefehle über USB; das Funkgerät berechnet den Doppler im Satellitenmenü.</string>
+    <string name="gd77_reason_ptt">Kein PTT-Befehl über USB; der MMDVM-Hotspot sendet nur digitales DMR und wird nicht als PTT verwendet.</string>
+    <string name="gd77_reason_keps">Keps-Flash-Format nicht veröffentlicht; nutze das offizielle OpenGD77-CPS.</string>
+    <string name="gd77_reason_serial">SERIAL-Familie (DM-32, UV008): Bildschirm und Uhr im Quellcode nicht verifiziert.</string>
+    <string name="gd77_reason_no_screen">Modell ohne Bildschirm.</string>
+    <string name="gd77_reason_codeplug_web">In der Web-App Bricohams Radio Workspace verfügbar (lokale Datei); nicht in dieser APK.</string>
+    <string name="gd77_err_clock_range">Datum außerhalb des Bereichs.</string>
+    <string name="gd77_err_unknown_info">Unbekannte OpenGD77-Kennung; es wird kein Modell angenommen.</string>
+    <string name="gd77_err_not_confirmed">Das Funkgerät hat den Befehl nicht bestätigt.</string>
+    <string name="gd77_err_bad_reply">Ungültige OpenGD77-Antwort.</string>
+    <string name="gd77_err_not_connected">Verbinde zuerst das OpenGD77-Funkgerät.</string>
+    <string name="home_open_gd77">OpenGD77 über USB: Bildschirm und Uhr</string>
+</resources>

@@ -96,6 +96,30 @@ that the complete original firmware is backed up automatically. Arbitrary MCU
 modes/addresses are not tested to make the feature appear to work.
 If “original” means factory commercial firmware already replaced,
 only a pre-installation copy is useful; reading OpenGD77 does not recover those bytes.
+## Live control and CAT by model (2026-11-01)
+
+**OpenGD77 has no tuning CAT over USB.** The firmware source (`usb_com.c`, MK22 and STM32 trees) only accepts memory reads (`R`), codeplug writes (`W`/`X`) and CPS commands (`C`). There is no command to set or read the frequency, change mode or channel, or key PTT, so the web app and the APK **do not fake it**. The radio computes satellite Doppler itself in its Satellite menu, from the keps loaded with the official CPS and from its clock.
+
+What does work over USB, with no backup and without touching the Flash (web: **Connect read-only / live**; APK: **OpenGD77 over USB: screen and clock**):
+
+- **Identification:** model, firmware and build date (`R` mode 9).
+- **Live screen:** reads the display RAM (`R` mode 6) without entering CPS mode; the web app can refresh it every 2 s.
+- **UTC clock:** command `C 6 7`; then reopen the Satellite menu to recalculate passes and Doppler.
+- **Check link:** command `C 254`.
+
+| Function | GD-77 (MD-760), DM-1801/DM-1801A (v1), RD-5R (DM-5R Tier 2), MD-9600 (RT-90), MD-UV380/UV390 (RT-3S), MD-380, DM-1701 (RT-84), DM-1701 RGB, MD-2017 | GD-77S | DM-32, UV008 (SERIAL family) |
+| --- | --- | --- | --- |
+| RX/TX frequency, mode, channel | Not supported | Not supported | Not supported |
+| Doppler from PC or phone | Not supported (the radio does it) | Not supported (the radio does it) | Not supported |
+| Remote PTT | Not supported | Not supported | Not supported |
+| Identification and status | Yes (web and APK) | Yes (web and APK) | Yes (web and APK) |
+| Live screen | Yes (web and APK) | No: no screen | Not verified: not offered |
+| UTC clock | Yes (web and APK) | Yes (web and APK) | Not verified: not offered |
+| Codeplug (local file) | Web | Web | Web |
+| Upload satellite keps | Official CPS | Official CPS | Official CPS |
+
+Notes: on the RD-5R, USB is not reliable during TX. On BGR-panel DM-1701 units the capture colours are corrected from the identifier; colours have not been checked on hardware. The MMDVM hotspot only sends digital DMR and is not used as PTT. No physical OpenGD77 radio has been tested with these functions.
+
 ## 1. Before connecting or transmitting
 
 1. Identify the manufacturer, full model, hardware revision, and installed firmware. “UV380,” “10W,” and “10W PLUS” are not equivalent.
