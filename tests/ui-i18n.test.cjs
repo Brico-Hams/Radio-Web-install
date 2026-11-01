@@ -134,15 +134,12 @@ test("Android 0.10.0 packaging and tag release artifacts match versionCode 14", 
   assert.match(workflow, /needs: build/);
   assert.match(workflow, /gh release upload "\$TAG"/);
   for (const name of ["bricohams-android-0.10.0-beta-debug.apk", "bricohams-android-0.10.0-beta-androidTest.apk"]) {
+    assert.ok(workflow.includes(`upload/${name}`));
     assert.ok(script.includes(name));
-    // shortcut: v0.5.7 was pushed without the `workflow` token scope, so android.yml still names the release APKs
-    // 0.9.0-beta; rename them there (and check `upload/${name}` again) on the next push that can edit workflows.
-    assert.ok(workflow.includes(`upload/${name.replace("0.10.0", "0.9.0")}`));
   }
   assert.match(script, /applicationVersion = '0\.10\.0-beta'/);
   assert.match(script, /applicationVersionCode = 14\b/);
-  assert.doesNotMatch(script, /0\.9\.0-beta/);
-  assert.doesNotMatch(workflow + script, /0\.8\.0-beta|0\.7\.1-beta/);
+  assert.doesNotMatch(workflow + script, /0\.9\.0-beta|0\.8\.0-beta|0\.7\.1-beta/);
   for (const suffix of ["", ".en", ".fr", ".de", ".it"]) {
     const readme = read(`README${suffix}.md`);
     assert.match(readme, /0\.10\.0-beta/);
