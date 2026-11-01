@@ -838,7 +838,7 @@
     <string name="rig_tracking_failed">Verfolgung wegen eines Fehlers gestoppt: %1$s</string>
     <string name="rig_tracking_stop_failed">Der Split-Modus konnte nicht ausgeschaltet werden: %1$s</string>
     <string name="rig_section_sstv">SSTV</string>
-    <string name="rig_sstv_help">Geräte mit USB-Audio-Interface oder das Audio des Telefons gehen an den Mikrofon- oder DATA-Eingang. Das (tr)uSDX sendet Audio über sein eigenes USB-Kabel. Gib immer dein Rufzeichen an.</string>
+    <string name="rig_sstv_help">Geräte mit USB-Audio-Interface oder das Audio des Telefons gehen an den Mikrofon- oder DATA-Eingang. Ein (tr)uSDX mit 115200 bps (Firmware 2.00t oder neuer) sendet und empfängt Audio über sein eigenes USB-Kabel; mit 38400 bps ist die Verbindung zu langsam und das Audio des Telefons wird verwendet. Gib immer dein Rufzeichen an.</string>
     <string name="rig_send_image">Bild senden</string>
     <string name="rig_stop_tx">TX stoppen</string>
     <string name="rig_receive">SSTV empfangen</string>

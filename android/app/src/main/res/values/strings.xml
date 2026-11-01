@@ -848,7 +848,7 @@
     <string name="rig_tracking_failed">Seguimiento detenido por un error: %1$s</string>
     <string name="rig_tracking_stop_failed">No se pudo desactivar el modo split: %1$s</string>
     <string name="rig_section_sstv">SSTV</string>
-    <string name="rig_sstv_help">Los equipos con interfaz de audio USB o el audio del móvil entran por el micrófono o la entrada DATA. El (tr)uSDX envía el audio por el propio cable USB. Identifícate siempre con tu indicativo.</string>
+    <string name="rig_sstv_help">Los equipos con interfaz de audio USB o el audio del móvil entran por el micrófono o la entrada DATA. El (tr)uSDX a 115200 baudios (firmware 2.00t o posterior) envía y recibe el audio por el propio cable USB; a 38400 el enlace es demasiado lento y se usa el audio del móvil. Identifícate siempre con tu indicativo.</string>
     <string name="rig_send_image">Enviar imagen</string>
     <string name="rig_stop_tx">Detener TX</string>
     <string name="rig_receive">Recibir SSTV</string>

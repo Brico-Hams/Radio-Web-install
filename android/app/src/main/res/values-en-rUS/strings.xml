@@ -838,7 +838,7 @@
     <string name="rig_tracking_failed">Tracking stopped because of an error: %1$s</string>
     <string name="rig_tracking_stop_failed">Split mode could not be turned off: %1$s</string>
     <string name="rig_section_sstv">SSTV</string>
-    <string name="rig_sstv_help">Radios with a USB audio interface, or the phone\'s audio, feed the microphone or DATA input. The (tr)uSDX sends audio over its own USB cable. Always identify with your callsign.</string>
+    <string name="rig_sstv_help">Radios with a USB audio interface, or the phone's audio, feed the microphone or DATA input. A (tr)uSDX at 115200 bps (firmware 2.00t or later) sends and receives audio over its own USB cable; at 38400 bps the link is too slow and the phone's audio is used. Always identify with your callsign.</string>
     <string name="rig_send_image">Send image</string>
     <string name="rig_stop_tx">Stop TX</string>
     <string name="rig_receive">Receive SSTV</string>

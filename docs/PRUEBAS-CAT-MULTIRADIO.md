@@ -169,8 +169,15 @@ radio real, no la APK en el móvil: las filas C1-C15 siguen pendientes.
 | FTX-1 | CP2105 Enhanced COM (CAT-1), 38400, 1 y 2 bits de parada | `ID` = 0840; `FA`/`FB` leer y escribir; `MD0` leer y escribir; `ST` 1/0; `TX` leer; `MR`/`MT` canales 1-5 (frecuencia, modo FM y etiqueta) | OK, estado original restaurado |
 | (tr)uSDX | CH340, **38400** (esta unidad tiene firmware anterior a 2.00t; a 115200 solo devuelve basura) | `ID` = 020; `FA` leer y escribir; `MD` leer y escribir. Al abrir el puerto envía una trama `IF` espontánea que la APK descarta | OK, estado original restaurado |
 
-Sin probar todavía: PTT/TX y el streaming de audio SSTV del (tr)uSDX. La APK
-prueba sola 38400 si el (tr)uSDX no responde a 115200, y al revés.
+PTT sobre carga ficticia (01-11-2026, con permiso del operador):
+
+| Radio | Comprobado | Resultado |
+| --- | --- | --- |
+| FTX-1 | `TX1;` → `TX;` responde `TX1`; `TX0;` → `TX0` | OK |
+| (tr)uSDX | `TX0;` / `RX;` aceptados; su trama `IF` no indica TX, así que la entrada en TX se confirma solo a la vista de la radio | Pendiente de confirmación visual |
+| (tr)uSDX streaming | 3 s de tono a 1000 Hz con `UA2;TX0;US…;RX;UA0;` a 38400: el envío tardó 9 s (~3840 muestras/s frente a las 11520 necesarias). La radio vuelve a RX y responde después | A 38400 **no sirve** para SSTV; la APK solo usa el streaming a 115200 y si no, el audio del móvil por el jack de micro |
+
+La APK prueba sola 38400 si el (tr)uSDX no responde a 115200, y al revés.
 
 ## 6. Certificación de uso
 

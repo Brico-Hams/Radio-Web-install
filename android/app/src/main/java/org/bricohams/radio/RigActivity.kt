@@ -117,6 +117,10 @@ class RigActivity : LocalizedActivity() {
     private var selectedPlan: SatellitePlan? = null
     private var capture: LiveAudio? = null
     private var identity = ""
+    /** Serial rate of the open link; the (tr)uSDX audio stream needs 115200 bps. */
+    @Volatile private var linkBaud = 0
+    // Measured on a real (tr)uSDX: at 38400 bps the link carries ~3840 samples/s, far below the 11520 Hz TX / 7825 Hz RX stream.
+    private fun audioStream(r: Rig?): TruSdxRig? = (r as? TruSdxRig)?.takeIf { linkBaud >= 115200 }
     // Worker-thread state.
     private var tracker: RigTracker? = null
     private var trackingStarted = false
@@ -599,6 +603,7 @@ class RigActivity : LocalizedActivity() {
         val opened = openRig(model, link, civ)
         rig = opened
         identity = opened.identify()
+        linkBaud = rate
         refresh(opened)
     }
 
@@ -939,9 +944,10 @@ class RigActivity : LocalizedActivity() {
                 attempt({ getString(R.string.sstv_error, errorText(it)) }) {
                     val keep = { !txCancel && foreground && token == generation }
                     val seconds: Double
-                    if (r is TruSdxRig) {
+                    val stream = audioStream(r)
+                    if (stream != null) {
                         val audio = Sstv.encode(pixels, KenwoodTs480Subset.TX_RATE, mode)
-                        r.transmitAudio(audio, keep)
+                        stream.transmitAudio(audio, keep)
                         seconds = audio.size.toDouble() / KenwoodTs480Subset.TX_RATE
                     } else {
                         val audio = Sstv.encode(pixels, LiveAudio.SAMPLE_RATE, mode)
@@ -1014,7 +1020,7 @@ class RigActivity : LocalizedActivity() {
 
     private fun startReceive() {
         if (!idle || !foreground) return
-        val trusdx = rig as? TruSdxRig
+        val trusdx = audioStream(rig)
         var recording: LiveAudio? = null
         if (trusdx == null) {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
