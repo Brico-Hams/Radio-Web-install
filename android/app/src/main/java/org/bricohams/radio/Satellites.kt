@@ -180,6 +180,8 @@ class SatelliteOrbit(
         if (aos != null) passes.add(SatellitePass(aos, maximum, previous, aos.time == start, true))
         return passes
     }
+    /** Range rate in km/s (central difference over one second); positive = receding. */
+    fun rangeRateKmS(time: Long): Double = look(time + 500).rangeKm - look(time - 500).rangeKm
     fun target(plan: SatellitePlan, time: Long): SatelliteTarget {
         requireUi(plan.tle == tle && plan.observer == observer) { UiText(R.string.err_orbit_plan_mismatch) }
         requireUi(plan.pass.los.time > plan.pass.aos.time && plan.pass.los.time - plan.pass.aos.time <= 2 * 3600000 &&
@@ -187,7 +189,7 @@ class SatelliteOrbit(
         requireUi(CatProtocol.inBand(plan.downlinkHz / 10) && plan.downlinkHz % 10 == 0L) { UiText(R.string.err_downlink_band) }
         val position = look(time)
         requireUi(position.elevation >= 0) { UiText(R.string.err_satellite_below_horizon) }
-        val rate = look(time + 500).rangeKm - look(time - 500).rangeKm
+        val rate = rangeRateKmS(time)
         val frequency = (plan.downlinkHz * (1 - rate / 299792.458) / 10).roundToLong()
         requireUi(CatProtocol.inBand(frequency)) { UiText(R.string.err_doppler_band) }
         return SatelliteTarget(frequency, position)

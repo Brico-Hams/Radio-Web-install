@@ -38,6 +38,8 @@ class LocalizedStateException(override val text: UiText, cause: Throwable? = nul
     IllegalStateException(text.toString(), cause), LocalizedError
 class LocalizedIOException(override val text: UiText, cause: Throwable? = null) :
     IOException(text.toString(), cause), LocalizedError
+class LocalizedUnsupportedException(override val text: UiText) :
+    UnsupportedOperationException(text.toString()), LocalizedError
 class LocalizedInterruptedIOException(override val text: UiText) :
     InterruptedIOException(text.toString()), LocalizedError
 class LocalizedCancellationException(override val text: UiText) :

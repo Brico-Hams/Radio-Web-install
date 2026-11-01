@@ -1,0 +1,187 @@
+# Pruebas físicas CAT multirradio (APK Bricohams)
+
+Autores: Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF y Pedro
+Roca, fundadores y miembros directivos de Bricohams.
+Información: <https://bricohams.org> y <https://bricohams.com>.
+
+Checklist para probar con radios reales el CAT de la APK: la pantalla
+**CAT Quansheng** (UV-K5 con firmware Bricohams) y la pantalla **Bricohams CAT
+multirradio** (FT-817/818, FT-857/897, IC-705, FTX-1 y (tr)uSDX). Rellénala
+mientras haces las pruebas. Una radio solo queda **certificada para su uso**
+cuando todas sus filas obligatorias (marcadas con ★) están en `OK` y su fila
+de la tabla final está firmada.
+
+Los tests automáticos de la APK solo prueban los codificadores y
+decodificadores contra los manuales de los fabricantes. Que esos tests pasen
+**no es** una prueba en hardware: aquí solo cuenta lo comprobado con la radio.
+
+## 1. Identificación de la entrega probada
+
+| Campo | Valor |
+| --- | --- |
+| Versión APK (`versionName`) | |
+| Commit (`git rev-parse HEAD`) | |
+| SHA-256 del APK instalado | |
+| Móvil (modelo y versión de Android) | |
+| Cable / adaptador USB-OTG | |
+| Interfaz de audio (si se usa) | |
+| Fecha de inicio | |
+| Operador (indicativo) | |
+
+Valores de cada casilla de resultado: `OK`, `FALLO` (describe qué pasó en
+Observaciones), `N/A` (la radio no tiene la función) o `NO PROBADO`. Nunca
+conviertas un `NO PROBADO` en `OK`.
+
+## 2. Seguridad antes de empezar
+
+- Transmite siempre sobre **carga ficticia** o con la antena adecuada, en una
+  frecuencia libre y con tu indicativo. La APK exige un indicativo válido
+  antes de cualquier prueba de PTT o envío SSTV.
+- Potencia mínima en todas las pruebas de PTT.
+- Ten a mano un segundo receptor o SDR para comprobar las transmisiones.
+
+## 3. Pruebas comunes (repetir con cada radio)
+
+| # | Prueba | Cómo se comprueba |
+| --- | --- | --- |
+| C1 ★ | Detección USB | El puerto aparece en "Elegir dispositivo USB" (FTX-1: puerto 0 = Enhanced COM; IC-705: anota qué puerto responde). |
+| C2 ★ | Conectar e identificar | Se muestra el modelo/ID correcto sin error. |
+| C3 ★ | Leer frecuencia y modo (VFO A) | Coincide con la pantalla de la radio. |
+| C4 ★ | Cambiar frecuencia VFO A | La radio cambia y la APK confirma la relectura. |
+| C5 | Cambiar frecuencia VFO B | VFO B cambia; en IC-705/FTX-1 el VFO A no se mueve; en FT-8x7 se nota un salto breve de VFO. |
+| C6 ★ | Cambiar modo (USB, LSB, CW, FM, AM) | Cada modo se refleja en la radio. |
+| C7 ★ | PTT 3 s (carga ficticia) | La radio pasa a TX y vuelve a RX sola a los 3 s. |
+| C8 | Split ON/OFF | El indicador de split de la radio cambia. |
+| C9 | Leer memorias | Compara 3 canales (frecuencia, modo y nombre) y un canal vacío (no debe aparecer). |
+| C10 | Tocar una memoria | La radio sintoniza esa frecuencia y modo. |
+| C11 ★ | Desconectar el cable en mitad de la sesión | La APK avisa; la radio no queda en TX. |
+| C12 ★ | Salir de la pantalla con PTT o seguimiento activo | PTT liberado y split desactivado. |
+| C13 | Seguimiento de un pase real (Doppler) | RX corregido durante todo el pase; TX (subida) en VFO B con split; audio inteligible en el TCA. Anota satélite y hora. |
+| C14 | SSTV TX | Imagen decodificada en el segundo receptor. Anota el modo. |
+| C15 | SSTV RX | Imagen recibida y decodificada en la APK. |
+
+## 4. Particularidades por radio
+
+### Quansheng UV-K5 con firmware Bricohams (pantalla CAT Quansheng, regresión)
+
+La pantalla original no cambia; comprueba que sigue funcionando igual.
+
+| # | Prueba | Resultado | Firma | Observaciones |
+| --- | --- | --- | --- | --- |
+| Q1 ★ | Conectar, consultar y sintonizar (SAT RX) | | | |
+| Q2 ★ | Seguimiento Doppler en un pase | | | |
+| Q3 | SSTV TX con PTT armado (tecla 9) | | | |
+
+### Yaesu FT-817 / FT-817ND / FT-818ND
+
+Ajustes de la radio: menú CAT RATE igual al baudio de la APK (por defecto 4800);
+el protocolo usa 8 bits, sin paridad y 2 bits de parada. Cable CAT con
+adaptador USB-serie (CH340, CP210x, FTDI o PL2303). El protocolo de 5 bytes no
+tiene orden para leer memorias, así que C9 y C10 son `N/A`. Es una radio
+semidúplex: en satélite se corrige el RX y la subida se reprograma en el VFO B
+como mucho cada 5 s.
+
+| Prueba | C1 | C2 | C3 | C4 | C5 | C6 | C7 | C8 | C11 | C12 | C13 | C14 | C15 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| FT-817/817ND | | | | | | | | | | | | | |
+| FT-818ND | | | | | | | | | | | | | |
+
+Firmware/versión: ______  Firma: ______  Observaciones: ______
+
+### Yaesu FT-857 / FT-857D y FT-897 / FT-897D
+
+Mismo protocolo y ajustes que el FT-817 (menú CAT RATE, 2 bits de parada);
+C9 y C10 son `N/A`.
+
+| Prueba | C1 | C2 | C3 | C4 | C5 | C6 | C7 | C8 | C11 | C12 | C13 | C14 | C15 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| FT-857/857D | | | | | | | | | | | | | |
+| FT-897/897D | | | | | | | | | | | | | |
+
+Firmware/versión: ______  Firma: ______  Observaciones: ______
+
+### Icom IC-705
+
+Ajustes: dirección CI-V A4h (o la que indiques en la APK); prueba con
+"CI-V USB Echo Back" en ON y en OFF y con "CI-V Transceive" en ON (al girar el
+dial, la APK debe ignorar esas tramas). Por USB la radio crea dos puertos
+serie; anota cuál responde al CAT.
+
+| C1 | C2 | C3 | C4 | C5 | C6 | C7 | C8 | C9 | C10 | C11 | C12 | C13 | C14 | C15 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | | | | | | | | | | | | | | |
+
+| # | Prueba específica | Resultado |
+| --- | --- | --- |
+| I1 ★ | Echo Back ON y OFF: ambas funcionan | |
+| I2 | Transceive ON: girar el dial no rompe la sesión | |
+| I3 | Nombre de memoria leído completo (16 caracteres) | |
+
+Firmware: ______  Puerto que responde: ______  Firma: ______
+
+### Yaesu FTX-1
+
+Ajustes: firmware MAIN 1.08 o posterior (sin ella el CAT no funciona); menú
+CAT-1 RATE igual al baudio de la APK (por defecto 38400); puerto USB
+**Enhanced COM (CAT-1)**. VFO A = lado MAIN y VFO B = lado SUB.
+
+| C1 | C2 | C3 | C4 | C5 | C6 | C7 | C8 | C9 | C10 | C11 | C12 | C13 | C14 | C15 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | | | | | | | | | | | | | | |
+
+| # | Prueba específica | Resultado |
+| --- | --- | --- |
+| X1 ★ | ID leído = 0840 | |
+| X2 | Etiqueta (tag) de memoria leída | |
+| X3 | Split ON con TX en SUB durante un pase | |
+
+Firmware MAIN: ______  Firma: ______
+
+### (tr)uSDX
+
+Ajustes: firmware 2.00t o posterior a 115200 baudios (las anteriores, 38400).
+Solo HF de 80 a 10 m: C13 es `N/A`. Un solo VFO y sin memorias: C5, C8, C9 y
+C10 son `N/A`. El audio SSTV va por el mismo cable USB (streaming CAT de
+DL2MAN): no hace falta cable de audio.
+
+| C1 | C2 | C3 | C4 | C6 | C7 | C11 | C12 | C14 | C15 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | | | | | | | | | |
+
+| # | Prueba específica | Resultado |
+| --- | --- | --- |
+| T1 ★ | Al conectar no entra en TX (RTS bajo, DTR alto) | |
+| T2 ★ | ID leído = 020 | |
+| T3 | SSTV TX por streaming CAT decodificado en otro receptor | |
+| T4 | SSTV RX por streaming CAT decodificado en la APK | |
+| T5 ★ | Tras enviar SSTV la radio vuelve a RX y se desactiva el streaming | |
+
+Firmware: ______  Firma: ______
+
+## 5. Certificación de uso
+
+Rellena una fila por radio cuando todas sus filas ★ estén en `OK`. Sin firma,
+la radio sigue **sin certificar**.
+
+| Radio | Firmware | APK (SHA-256) | Fecha | Operador | Resultado (APTO / NO APTO) |
+| --- | --- | --- | --- | --- | --- |
+| Quansheng UV-K5 Bricohams | | | | | |
+| FT-817 / FT-817ND | | | | | |
+| FT-818ND | | | | | |
+| FT-857 / FT-857D | | | | | |
+| FT-897 / FT-897D | | | | | |
+| IC-705 | | | | | |
+| FTX-1 | | | | | |
+| (tr)uSDX | | | | | |
+
+## 6. Documentación de los fabricantes usada
+
+El código se ha escrito solo a partir de estos documentos, sin código de
+otros autores:
+
+- Yaesu, manuales de operación del FT-817ND, FT-818ND, FT-857D y FT-897D,
+  capítulo "CAT Operation" (tabla de opcodes de 5 bytes).
+- Icom, *IC-705 CI-V Reference Guide* (inglés, revisión 6).
+- Yaesu, *FTX-1 Series CAT Operation Reference Manual* (ENG 2508-C).
+- DL2MAN, "5 (tr)uSDX Details", apartado "(tr)uSDX supported CAT commands"
+  (<https://dl2man.de/5-trusdx-details/>), subconjunto del CAT del Kenwood TS-480.

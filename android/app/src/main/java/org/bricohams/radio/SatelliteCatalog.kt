@@ -8,7 +8,8 @@ import java.io.IOException
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 
-data class Transmitter(val norad: Int, val description: String, val downlinkHz: Long, val mode: String)
+data class Transmitter(val norad: Int, val description: String, val downlinkHz: Long, val mode: String,
+    val uplinkHz: Long? = null, val invert: Boolean = false)
 
 object SatelliteSources {
     const val TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle"
@@ -53,7 +54,9 @@ object SatelliteSources {
             if (norad !in norads || !item.optBoolean("alive") || item.optString("status") != "active" ||
                 downlink <= 0 || downlink % 10 != 0L || !CatProtocol.inBand(downlink / 10)) null
             else Transmitter(norad, item.optString("description").take(80).filter { it.code >= 32 },
-                downlink, (if (item.isNull("mode")) "" else item.optString("mode")).take(24).filter { it.code >= 32 }.ifBlank { "?" })
+                downlink, (if (item.isNull("mode")) "" else item.optString("mode")).take(24).filter { it.code >= 32 }.ifBlank { "?" },
+                (if (item.isNull("uplink_low")) null else item.optLong("uplink_low", -1)).takeIf { it != null && it > 0 && it % 10 == 0L },
+                item.optBoolean("invert", false))
         }.distinct().sortedWith(compareBy({ it.norad }, { it.downlinkHz }))
     } catch (error: JSONException) {
         throw IllegalArgumentException("Respuesta SatNOGS no valida: ${error.message}", error)
@@ -73,14 +76,16 @@ class SatelliteStore(private val directory: File) {
         write(tle, catalog.joinToString("") { "${it.name}\n${it.line1}\n${it.line2}\n" })
         write(transmitters, JSONArray().apply {
             list.forEach { put(JSONObject().put("norad", it.norad).put("description", it.description)
-                .put("downlinkHz", it.downlinkHz).put("mode", it.mode)) }
+                .put("downlinkHz", it.downlinkHz).put("mode", it.mode).put("invert", it.invert)
+                .apply { it.uplinkHz?.let { uplink -> put("uplinkHz", uplink) } }) }
         }.toString())
     }
     fun catalog(): List<Tle> = if (tle.isFile) Tle.parseCatalog(tle.readText(Charsets.US_ASCII)) else emptyList()
     fun transmitters(): List<Transmitter> = if (!transmitters.isFile) emptyList() else try {
         val array = JSONArray(transmitters.readText())
         (0 until array.length()).map { array.getJSONObject(it) }.map {
-            Transmitter(it.getInt("norad"), it.getString("description"), it.getLong("downlinkHz"), it.getString("mode"))
+            Transmitter(it.getInt("norad"), it.getString("description"), it.getLong("downlinkHz"), it.getString("mode"),
+                if (it.has("uplinkHz")) it.getLong("uplinkHz") else null, it.optBoolean("invert", false))
         }
     } catch (error: JSONException) {
         throw IllegalArgumentException("Frecuencias guardadas danadas; vuelve a actualizar.", error)

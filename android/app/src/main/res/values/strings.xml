@@ -758,4 +758,17 @@
     <string name="rotor_err_ble_off">Activa el Bluetooth.</string>
     <string name="rotor_err_ble_not_found">No se encontró el rotor PortableSatStation por Bluetooth.</string>
     <string name="rotor_err_ble_bond">Emparejamiento cancelado o PIN incorrecto.</string>
+    <string name="err_rig_unsupported">Esta radio no admite: %1$s</string>
+    <string name="err_rig_range">La frecuencia %1$s MHz está fuera del rango de esta radio.</string>
+    <string name="err_rig_unconfirmed">La radio no confirmó el nuevo ajuste.</string>
+    <string name="err_rig_rejected">La radio rechazó la orden %1$s.</string>
+    <string name="err_rig_reply_invalid">La radio envió una respuesta no válida.</string>
+    <string name="err_rig_wrong_model">La radio conectada no es el modelo elegido (respondió %1$s).</string>
+    <string name="err_rig_below_horizon">El satélite está bajo el horizonte.</string>
+    <string name="err_rig_port">El adaptador no tiene el puerto serie número %1$d.</string>
+    <string name="err_rig_timeout">La radio no respondió a tiempo.</string>
+    <string name="err_rig_mode">La radio no puede usar el modo %1$s.</string>
+    <string name="err_rig_resolution">La frecuencia debe ser múltiplo de %1$d Hz.</string>
+    <string name="err_rig_channel">El canal de memoria %1$d está fuera de rango.</string>
+    <string name="err_rig_audio_length">El audio es demasiado largo (máximo %1$d segundos).</string>
 </resources>

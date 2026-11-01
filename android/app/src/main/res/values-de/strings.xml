@@ -748,4 +748,17 @@
     <string name="rotor_err_ble_off">Bluetooth einschalten.</string>
     <string name="rotor_err_ble_not_found">Rotor PortableSatStation per Bluetooth nicht gefunden.</string>
     <string name="rotor_err_ble_bond">Kopplung abgebrochen oder falsche PIN.</string>
+    <string name="err_rig_unsupported">Dieses Funkgerät unterstützt nicht: %1$s</string>
+    <string name="err_rig_range">Die Frequenz %1$s MHz liegt außerhalb des Bereichs dieses Funkgeräts.</string>
+    <string name="err_rig_unconfirmed">Das Funkgerät hat die neue Einstellung nicht bestätigt.</string>
+    <string name="err_rig_rejected">Das Funkgerät hat den Befehl %1$s abgelehnt.</string>
+    <string name="err_rig_reply_invalid">Das Funkgerät hat eine ungültige Antwort gesendet.</string>
+    <string name="err_rig_wrong_model">Das angeschlossene Funkgerät ist nicht das gewählte Modell (Antwort %1$s).</string>
+    <string name="err_rig_below_horizon">Der Satellit ist unter dem Horizont.</string>
+    <string name="err_rig_port">Der Adapter hat keinen seriellen Port Nummer %1$d.</string>
+    <string name="err_rig_timeout">Das Funkgerät hat nicht rechtzeitig geantwortet.</string>
+    <string name="err_rig_mode">Das Funkgerät kann die Betriebsart %1$s nicht verwenden.</string>
+    <string name="err_rig_resolution">Die Frequenz muss ein Vielfaches von %1$d Hz sein.</string>
+    <string name="err_rig_channel">Speicherkanal %1$d liegt außerhalb des Bereichs.</string>
+    <string name="err_rig_audio_length">Das Audio ist zu lang (höchstens %1$d Sekunden).</string>
 </resources>
