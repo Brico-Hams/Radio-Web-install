@@ -15,7 +15,8 @@ enum class RigModel(val label: String, val defaultBaud: Int, val stopBits: Int, 
     FT857("Yaesu FT-857 / FT-857D", 4800, 2, 100_000L..470_000_000L),
     FT897("Yaesu FT-897 / FT-897D", 4800, 2, 100_000L..470_000_000L),
     IC705("Icom IC-705", 115200, 1, 30_000L..470_000_000L),
-    FTX1("Yaesu FTX-1", 38400, 1, 30_000L..470_000_000L),
+    // CAT-1 factory default is 2 stop bits (CAT Operation Reference Manual 2508-C, p.3); 1 also works when the menu is changed.
+    FTX1("Yaesu FTX-1", 38400, 2, 30_000L..470_000_000L),
     TRUSDX("(tr)uSDX", 115200, 1, 3_000_000L..30_000_000L)
 }
 
@@ -126,12 +127,12 @@ class RigTracker(
     private var lastUplink: Long? = null
     private var lastUplinkAt: Long? = null
 
-    fun start() {
+    fun start(): Step {
         if (uplinkHz != null && rig.supportsSplit) {
             rig.setSplit(true)
             splitOn = true
         }
-        step()
+        return step()
     }
     fun step(): Step {
         val now = clock()

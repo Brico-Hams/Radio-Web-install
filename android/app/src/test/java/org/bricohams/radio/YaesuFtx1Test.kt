@@ -91,4 +91,15 @@ class YaesuFtx1Test {
         assertThrows(IllegalStateException::class.java) { rig.ptt(false) }
         assertThrows(IllegalStateException::class.java) { rig.setSplit(true) }
     }
+    /** Replies captured from a real FTX-1 (MAIN firmware >= 1.08) on 2026-11-01, CAT-1 at 38400 bps. */
+    @Test fun repliesCapturedFromARealRadioParse() {
+        val replies = mapOf("ID;" to "ID0840;", "FA;" to "FA439275000;", "MD0;" to "MD0H;",
+            "MR00001;" to "MR00001029670000+000000410000;", "MT00001;" to "MT00001ED1YBQ      ;",
+            "MR00005;" to "MR00005144925000+000000412000;", "MT00005;" to "MT00005EA1GBH      ;")
+        val rig = Ftx1Rig(ScriptedRadio { ascii(replies[String(it, Charsets.US_ASCII)] ?: "?;") })
+        assertEquals("FTX-1 ID0840", rig.identify())
+        assertEquals(RigStatus(439_275_000, RigMode.DV), rig.status())
+        assertEquals(listOf(RigMemory(1, 29_670_000, RigMode.FM, "ED1YBQ"), RigMemory(5, 144_925_000, RigMode.FM, "EA1GBH")),
+            rig.memories(1..5))
+    }
 }

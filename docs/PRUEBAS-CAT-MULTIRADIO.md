@@ -139,7 +139,7 @@ Firmware MAIN: ______  Firma: ______
 
 ### (tr)uSDX
 
-Ajustes: firmware 2.00t o posterior a 115200 baudios (las anteriores, 38400).
+Ajustes: firmware 2.00t o posterior a 115200 baudios; las anteriores, a 38400 (la APK prueba la otra velocidad si no hay respuesta).
 Solo HF de 80 a 10 m: C13 es `N/A`. Un solo VFO y sin memorias: C5, C8, C9 y
 C10 son `N/A`. El audio SSTV va por el mismo cable USB (streaming CAT de
 DL2MAN): no hace falta cable de audio.
@@ -158,7 +158,21 @@ DL2MAN): no hace falta cable de audio.
 
 Firmware: ______  Firma: ______
 
-## 5. Certificación de uso
+## 5. Verificación previa desde el PC (protocolo, no APK)
+
+El 01-11-2026 se enviaron desde un PC con Windows (pyserial) las mismas cadenas
+que generan los codificadores de la APK. Esto valida el **protocolo** con la
+radio real, no la APK en el móvil: las filas C1-C15 siguen pendientes.
+
+| Radio | Puerto | Comprobado | Resultado |
+| --- | --- | --- | --- |
+| FTX-1 | CP2105 Enhanced COM (CAT-1), 38400, 1 y 2 bits de parada | `ID` = 0840; `FA`/`FB` leer y escribir; `MD0` leer y escribir; `ST` 1/0; `TX` leer; `MR`/`MT` canales 1-5 (frecuencia, modo FM y etiqueta) | OK, estado original restaurado |
+| (tr)uSDX | CH340, **38400** (esta unidad tiene firmware anterior a 2.00t; a 115200 solo devuelve basura) | `ID` = 020; `FA` leer y escribir; `MD` leer y escribir. Al abrir el puerto envía una trama `IF` espontánea que la APK descarta | OK, estado original restaurado |
+
+Sin probar todavía: PTT/TX y el streaming de audio SSTV del (tr)uSDX. La APK
+prueba sola 38400 si el (tr)uSDX no responde a 115200, y al revés.
+
+## 6. Certificación de uso
 
 Rellena una fila por radio cuando todas sus filas ★ estén en `OK`. Sin firma,
 la radio sigue **sin certificar**.
@@ -174,7 +188,7 @@ la radio sigue **sin certificar**.
 | FTX-1 | | | | | |
 | (tr)uSDX | | | | | |
 
-## 6. Documentación de los fabricantes usada
+## 7. Documentación de los fabricantes usada
 
 El código se ha escrito solo a partir de estos documentos, sin código de
 otros autores:

@@ -1,0 +1,1 @@
+Bricohams 0.10.0 Beta: Multi-Radio-CAT für Yaesu FT-817/818, FT-857/897, FTX-1, Icom IC-705 und (tr)uSDX (VFO-A/B-Frequenz, Betriebsart, PTT, Split und Speicher), Doppler-Nachführung für Uplink und Downlink mit Wahl von Überflug und Transponder sowie SSTV über den CAT-Audiostream des (tr)uSDX. Nach den Herstellerhandbüchern geschrieben; Hardwaretests je Funkgerät ausstehend.
