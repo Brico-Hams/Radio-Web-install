@@ -1,6 +1,6 @@
 # RadiCodex by BricoHams
 
-Version 1.0.0 (versionCode 15): Die APK heißt RadiCodex by BricoHams (Kennung `org.bricohams.radicodex`).
+Version 1.0.1 (versionCode 16): Die APK heißt RadiCodex by BricoHams (Kennung `org.bricohams.radicodex`).
 
 Schritt-für-Schritt-Anleitung: [Anleitungen zu RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 
@@ -52,7 +52,7 @@ Die endgültige Migration steht noch aus.
 ## Installation und Daten
 
 Debug-APKs sind mit dem Debug-Schlüssel des Android-Tools signiert. Die
-Release-APK `RadiCodex-1.0.0.apk` ist nur dann mit dem RadiCodex-Release-Schlüssel
+Release-APK `RadiCodex-1.0.1.apk` ist nur dann mit dem RadiCodex-Release-Schlüssel
 signiert, wenn die GitHub-Release sie enthält; überprüfe damit die
 veröffentlichte SHA-256-Prüfsumme. Sie wird nicht über Google Play verteilt.
 Als experimentell gekennzeichnete Funktionen sind weiterhin nicht mit einem

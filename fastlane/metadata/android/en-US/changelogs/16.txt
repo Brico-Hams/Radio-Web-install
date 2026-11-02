@@ -1,0 +1,1 @@
+RadiCodex 1.0.1: live satellite tracking with the phone compass: countdown, Az/El, polar radar with the pass track, compass or north-up mode, pointing aid, and transmitters with Doppler.

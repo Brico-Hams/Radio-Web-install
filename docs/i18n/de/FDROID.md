@@ -31,9 +31,9 @@ gemeinsames UI-Framework.
   Release-Build/Lint und eine **unsignierte Release-APK**, getrennt von
   Debug-APKs. F-Droid baut aus dem Quellcode, nicht aus diesem CI-Artefakt.
 
-Das Rezept behält den Beta-Verlauf (`0.10.0-beta`, `versionCode 14`) und ergänzt
-`1.0.0`, `versionCode 15`. Der vorgeschlagene Tag
-`android-v1.0.0` muss mit dieser Vorbereitung noch veröffentlicht werden.
+Das Rezept behält den Verlauf (`0.10.0-beta`, `versionCode 14`; `1.0.0`,
+`versionCode 15`) und ergänzt `1.0.1`, `versionCode 16`. Der vorgeschlagene Tag
+`android-v1.0.1` muss mit dieser Vorbereitung noch veröffentlicht werden.
 Diese Arbeit hat keinen Aufnahmeantrag gestellt, keine Freigabe erhalten und
 kein eigenes F-Droid-Repository eingerichtet. `fdroid build --server` wurde
 auf diesem Windows-System nicht ausgeführt. Ein Gradle-Build ersetzt keine
@@ -89,8 +89,8 @@ Nur geprüfte Dateien mit `git add` vormerken, `git diff --cached` prüfen, dann
 
 ```powershell
 git commit -m "Prepare independent Android distribution for F-Droid" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
-node scripts\check-android-store.cjs --tag android-v1.0.0
-git tag --list android-v1.0.0
+node scripts\check-android-store.cjs --tag android-v1.0.1
+git tag --list android-v1.0.1
 ```
 
 Existiert der Tag, **anhalten**: nicht löschen oder verschieben. Für eine
@@ -99,10 +99,10 @@ Dann das Beispiel durch `android-v` plus den genauen `versionName` ersetzen.
 
 ```powershell
 git push origin main
-git tag -a android-v1.0.0 -m "RadiCodex by BricoHams 1.0.0"
-git push origin android-v1.0.0
-git rev-parse "android-v1.0.0^{commit}"
-git ls-remote --tags origin "android-v1.0.0*"
+git tag -a android-v1.0.1 -m "RadiCodex by BricoHams 1.0.1"
+git push origin android-v1.0.1
+git rev-parse "android-v1.0.1^{commit}"
+git ls-remote --tags origin "android-v1.0.1*"
 ```
 
 Auf geprüftem `main` ausführen, nicht auf einem anderen lokalen Branch.
@@ -117,7 +117,7 @@ ihrer SHA-256 an; er reicht keinen Antrag bei F-Droid ein.
 
 1. Geprüfte Quellen und Metadaten veröffentlichen. Der Tag muss diese
    Vorbereitung enthalten, keinen älteren Build ohne Metadaten. Tags nie wiederverwenden.
-2. Prüfer mit `--tag android-v1.0.0` oder der tatsächlichen Version nach
+2. Prüfer mit `--tag android-v1.0.1` oder der tatsächlichen Version nach
    Aktualisierung aller Felder und Hinweise ausführen.
 3. Einen **Requests For Packaging**-Antrag oder **fdroiddata**-Vorschlag nach
    dem unten verlinkten Verfahren öffnen. Rezept in `metadata` von fdroiddata kopieren.

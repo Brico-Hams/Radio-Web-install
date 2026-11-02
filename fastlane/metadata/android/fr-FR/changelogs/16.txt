@@ -1,0 +1,1 @@
+RadiCodex 1.0.1 : suivi de satellites en direct avec la boussole du téléphone : compte à rebours, Az/El, radar polaire avec la trace du passage, mode boussole ou nord en haut, aide au pointage et émetteurs avec Doppler.

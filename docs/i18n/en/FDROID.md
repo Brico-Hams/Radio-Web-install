@@ -30,9 +30,9 @@ shared branding and translations do not require a shared UI framework.
   lints release, and keeps an **unsigned release APK** separate from debug APKs.
   F-Droid builds the sources; it does not use this CI artifact.
 
-The recipe keeps the beta history (`0.10.0-beta`, `versionCode 14`) and adds
-`1.0.0`, `versionCode 15`. The proposed tag
-`android-v1.0.0` still needs publishing with this preparation. No inclusion
+The recipe keeps the history (`0.10.0-beta`, `versionCode 14`; `1.0.0`,
+`versionCode 15`) and adds `1.0.1`, `versionCode 16`. The proposed tag
+`android-v1.0.1` still needs publishing with this preparation. No inclusion
 request or approval exists from this work, and no private F-Droid repository
 has been set up. `fdroid build --server` has not been run on this Windows host.
 Gradle compilation is not equivalent to F-Droid infrastructure validation.
@@ -85,8 +85,8 @@ Stage only reviewed files with `git add`, inspect `git diff --cached`, then:
 
 ```powershell
 git commit -m "Prepare independent Android distribution for F-Droid" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
-node scripts\check-android-store.cjs --tag android-v1.0.0
-git tag --list android-v1.0.0
+node scripts\check-android-store.cjs --tag android-v1.0.1
+git tag --list android-v1.0.1
 ```
 
 If that tag exists, **stop**: do not delete or move it. For another version,
@@ -95,10 +95,10 @@ update the version, code, recipe, and notes before replacing the example with
 
 ```powershell
 git push origin main
-git tag -a android-v1.0.0 -m "RadiCodex by BricoHams 1.0.0"
-git push origin android-v1.0.0
-git rev-parse "android-v1.0.0^{commit}"
-git ls-remote --tags origin "android-v1.0.0*"
+git tag -a android-v1.0.1 -m "RadiCodex by BricoHams 1.0.1"
+git push origin android-v1.0.1
+git rev-parse "android-v1.0.1^{commit}"
+git ls-remote --tags origin "android-v1.0.1*"
 ```
 
 Run on reviewed `main`, not another local branch. Record the resolved SHA for
@@ -112,7 +112,7 @@ its SHA-256; it submits nothing to F-Droid.
 
 1. Publish reviewed source and metadata. The Android tag must include this
    preparation, not an earlier build without metadata. Never reuse tags.
-2. Run the checker with `--tag android-v1.0.0`, or the actual version
+2. Run the checker with `--tag android-v1.0.1`, or the actual version
    after updating all version fields and notes.
 3. Open a **Requests For Packaging** issue or a **fdroiddata** proposal using
    the official process below. Copy the candidate into fdroiddata's `metadata`.

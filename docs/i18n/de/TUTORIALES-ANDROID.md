@@ -12,7 +12,7 @@ Schritt-für-Schritt-Anleitung zur einzigen RadiCodex-by-BricoHams-APK (`org.bri
 
 1. Lade die APK herunter und prüfe ihren veröffentlichten SHA-256 (siehe [RadiCodex by BricoHams](ANDROID.md)).
 2. Öffne die Datei im Dateimanager oder im Browser. Android fragt, ob die Installation aus dieser App erlaubt werden soll: Erlaube sie nur für diesen Schritt.
-3. Die APK wird nicht über Google Play verteilt. Debug-APKs nutzen den Debug-Schlüssel; die Release-APK `RadiCodex-1.0.0.apk` ist nur dann mit dem Release-Schlüssel signiert, wenn die Release sie enthält (prüfe ihren SHA-256).
+3. Die APK wird nicht über Google Play verteilt. Debug-APKs nutzen den Debug-Schlüssel; die Release-APK `RadiCodex-1.0.1.apk` ist nur dann mit dem Release-Schlüssel signiert, wenn die Release sie enthält (prüfe ihren SHA-256).
 4. Öffne RadiCodex. Du siehst den Hinweis „Lokale Daten. Daten vor dem Deinstallieren exportieren."
 
 **Erwartetes Ergebnis:** der Startbildschirm mit den Bereichen „Deine Funkstation", „Funk und Empfang", „Deine Daten und Sicherungen" und „Umfang und Datenschutz".

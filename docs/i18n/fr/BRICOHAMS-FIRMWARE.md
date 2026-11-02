@@ -1518,7 +1518,7 @@ et afficher le bitmap sur un ordinateur ne valide ni le contraste, ni l'orientat
 la lisibilité dans la radio. Aucun firmware n'a été flashé.
 ## Phase ultérieure demandée : RadiCodex by BricoHams
 
-L'APK native `1.0.0` comprend un carnet de trafic avec recherche et importation ADIF,
+L'APK native `1.0.1` comprend un carnet de trafic avec recherche et importation ADIF,
 ADIF/JSON, restauration JSON, sessions ARDF avec historique/statistiques et somme des
 segments filtrés, GPS ponctuel, Morse à partir de texte/WAV expérimental et CAT RX
 temporaire via USB CDC ACM et adaptateurs reconnus CH34x/CP210x/FTDI/Prolific.

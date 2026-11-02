@@ -1,0 +1,1 @@
+RadiCodex 1.0.1: seguimiento de satélites en vivo con la brújula del móvil: cuenta atrás, Az/El, radar polar con la traza del paso, modo brújula o norte arriba, ayuda de apuntado y transmisores con Doppler.

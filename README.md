@@ -165,7 +165,7 @@ Ver [construccion, controles, licencias y limites](docs/BRICOHAMS-FIRMWARE.md#nu
 
 ### Android: RadiCodex by BricoHams
 
-La APK nativa 1.0.0 (versionCode 15) incluye libros General/POTA/SOTA y contactos locales editables con busqueda e importacion ADIF con vista previa, exportacion
+La APK nativa 1.0.1 (versionCode 16) incluye libros General/POTA/SOTA y contactos locales editables con busqueda e importacion ADIF con vista previa, exportacion
 ADIF/JSON, sesiones ARDF con historial, estadisticas, segmentos GPS filtrados y observaciones GPS puntuales, y Morse de texto
 y WAV PCM experimental. Incorpora CAT RX temporal por USB CDC ACM y
 adaptadores CH34x/CP210x/FTDI/Prolific reconocidos. Satelites al estilo Look4sat con marca

@@ -1,0 +1,1 @@
+RadiCodex 1.0.1: Live-Satellitenverfolgung mit dem Handy-Kompass: Countdown, Az/El, Polarradar mit Überflugspur, Kompass- oder Nord-oben-Modus, Zielhilfe und Sender mit Doppler.

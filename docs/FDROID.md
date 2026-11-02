@@ -34,8 +34,9 @@ compartir todos los componentes de interfaz.
   de las APK debug. La receta oficial compila el código fuente, no utiliza
   ese artefacto de CI.
 
-La receta conserva el historial beta (`0.10.0-beta` / `versionCode 14`) y añade
-`1.0.0` / `versionCode 15`. La etiqueta propuesta `android-v1.0.0` todavía debe
+La receta conserva el historial (`0.10.0-beta` / `versionCode 14` y
+`1.0.0` / `versionCode 15`) y añade
+`1.0.1` / `versionCode 16`. La etiqueta propuesta `android-v1.0.1` todavía debe
 publicarse con estos cambios. No se ha
 solicitado ni obtenido la inclusión en F-Droid y no se ha creado un repositorio
 F-Droid propio. No se ha ejecutado `fdroid build --server` en este Windows;
@@ -95,8 +96,8 @@ revisados, inspeccionar `git diff --cached` y crear el commit:
 
 ```powershell
 git commit -m "Prepare independent Android distribution for F-Droid" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
-node scripts\check-android-store.cjs --tag android-v1.0.0
-git tag --list android-v1.0.0
+node scripts\check-android-store.cjs --tag android-v1.0.1
+git tag --list android-v1.0.1
 ```
 
 Si la etiqueta ya existe, **detenerse**: no borrarla ni moverla. Para una
@@ -105,10 +106,10 @@ después de actualizar versión, código y metadatos.
 
 ```powershell
 git push origin main
-git tag -a android-v1.0.0 -m "RadiCodex by BricoHams 1.0.0"
-git push origin android-v1.0.0
-git rev-parse "android-v1.0.0^{commit}"
-git ls-remote --tags origin "android-v1.0.0*"
+git tag -a android-v1.0.1 -m "RadiCodex by BricoHams 1.0.1"
+git push origin android-v1.0.1
+git rev-parse "android-v1.0.1^{commit}"
+git ls-remote --tags origin "android-v1.0.1*"
 ```
 
 Ejecutar sobre `main` revisada; no confundirla con otra rama local. Conservar
@@ -124,7 +125,7 @@ envía ninguna solicitud a F-Droid.
 1. Revisar y publicar el código y los metadatos de esta preparación. La
    etiqueta Android debe apuntar a ese código publicado, no a una compilación
    antigua sin los metadatos. No reutilizar ni mover etiquetas ya publicadas.
-2. Ejecutar el comprobador con `--tag android-v1.0.0`. Si se decide
+2. Ejecutar el comprobador con `--tag android-v1.0.1`. Si se decide
    publicar otra versión, actualizar primero versión, código, receta y notas.
 3. Abrir una solicitud en **Requests For Packaging** o una propuesta en
    **fdroiddata**, siguiendo el procedimiento vigente enlazado al final.

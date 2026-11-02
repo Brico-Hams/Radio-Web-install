@@ -32,9 +32,9 @@ n'impose pas de partager le framework d'interface.
   métadonnées, compilation/lint release et conservation d'un **APK release
   non signé** séparé des APK debug. F-Droid compile les sources, pas cet artefact.
 
-La recette conserve l'historique bêta (`0.10.0-beta`, `versionCode 14`) et ajoute
-`1.0.0`, `versionCode 15`. Le tag proposé
-`android-v1.0.0` doit encore être publié avec cette préparation. Ce travail
+La recette conserve l'historique (`0.10.0-beta`, `versionCode 14` ; `1.0.0`,
+`versionCode 15`) et ajoute `1.0.1`, `versionCode 16`. Le tag proposé
+`android-v1.0.1` doit encore être publié avec cette préparation. Ce travail
 n'a pas soumis de demande ni obtenu d'approbation et n'a pas créé de dépôt
 F-Droid privé. `fdroid build --server` n'a pas été exécuté sur ce Windows.
 Compiler avec Gradle ne remplace pas la validation de l'infrastructure F-Droid.
@@ -89,8 +89,8 @@ examiner `git diff --cached`, puis :
 
 ```powershell
 git commit -m "Prepare independent Android distribution for F-Droid" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
-node scripts\check-android-store.cjs --tag android-v1.0.0
-git tag --list android-v1.0.0
+node scripts\check-android-store.cjs --tag android-v1.0.1
+git tag --list android-v1.0.1
 ```
 
 Si ce tag existe, **s'arrêter** : ne pas le supprimer ni le déplacer. Pour une
@@ -99,10 +99,10 @@ l'exemple par `android-v` suivi exactement de `versionName`.
 
 ```powershell
 git push origin main
-git tag -a android-v1.0.0 -m "RadiCodex by BricoHams 1.0.0"
-git push origin android-v1.0.0
-git rev-parse "android-v1.0.0^{commit}"
-git ls-remote --tags origin "android-v1.0.0*"
+git tag -a android-v1.0.1 -m "RadiCodex by BricoHams 1.0.1"
+git push origin android-v1.0.1
+git rev-parse "android-v1.0.1^{commit}"
+git ls-remote --tags origin "android-v1.0.1*"
 ```
 
 Exécuter sur `main` revue, pas une autre branche locale. Conserver le SHA pour
@@ -117,7 +117,7 @@ F-Droid.
 
 1. Publier le code et les métadonnées revus. Le tag doit inclure cette
    préparation, pas un ancien build sans métadonnées. Ne jamais réutiliser un tag.
-2. Exécuter le vérificateur avec `--tag android-v1.0.0`, ou la version
+2. Exécuter le vérificateur avec `--tag android-v1.0.1`, ou la version
    réelle après mise à jour des champs et notes.
 3. Ouvrir une demande **Requests For Packaging** ou une proposition
    **fdroiddata** selon la procédure officielle ci-dessous. Copier la recette
