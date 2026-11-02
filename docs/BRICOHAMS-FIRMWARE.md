@@ -1510,7 +1510,7 @@ previas, sin este bitmap. El logo sigue pendiente de comprobar fisicamente
 en el LCD; compilar y renderizar el bitmap en un ordenador no valida el
 contraste, orientacion o legibilidad en la radio. No se han flasheado.
 
-## Fase posterior solicitada: Bricohams Android
+## Fase posterior solicitada: RadiCodex by BricoHams
 
 La APK nativa `0.10.0-beta` incorpora libro de guardia con busqueda e importacion ADIF, ADIF/JSON,
 restauracion JSON, sesiones ARDF con historial/estadisticas y suma filtrada de segmentos,

@@ -1,4 +1,6 @@
-# Bricohams Android Beta
+# RadiCodex by BricoHams Beta
+
+From the version after 0.10.0-beta onwards the APK is called RadiCodex by BricoHams (package `org.bricohams.radicodex`).
 
 ## APK scope
 

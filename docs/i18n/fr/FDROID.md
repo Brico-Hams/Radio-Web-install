@@ -8,7 +8,7 @@ par F-Droid.**
 
 ## Choix technologique
 
-| Option | Évaluation pour Bricohams |
+| Option | Évaluation pour RadiCodex |
 | --- | --- |
 | Xamarin / Xamarin.Forms | Écarté : Microsoft a arrêté le support le 1er mai 2024. Le dernier SDK Android Xamarin cible l'API 34. |
 | .NET for Android / .NET MAUI | Solution actuelle pour de nouveaux projets C# ou une interface multiplateforme. Migrer cette application impose de porter et retester USB, audio, GPS, stockage et interface. Cela ne simplifie pas automatiquement l'inclusion dans F-Droid. |
@@ -22,7 +22,7 @@ n'impose pas de partager le framework d'interface.
 
 ## Éléments préparés et état actuel
 
-- [Recette candidate](../../../fdroid/metadata/org.bricohams.radio.yml) à
+- [Recette candidate](../../../fdroid/metadata/org.bricohams.radicodex.yml) à
   soumettre à **fdroiddata**, et non un APK debug à déposer dans le catalogue.
 - [Fiche de boutique](../../../fastlane/metadata/android) en espagnol, anglais
   américain, français et allemand, avec marque, limites, confidentialité et notes.
@@ -98,7 +98,7 @@ l'exemple par `android-v` suivi exactement de `versionName`.
 
 ```powershell
 git push origin main
-git tag -a android-v0.10.0-beta -m "Bricohams Android 0.10.0-beta"
+git tag -a android-v0.10.0-beta -m "RadiCodex by BricoHams 0.10.0-beta"
 git push origin android-v0.10.0-beta
 git rev-parse "android-v0.10.0-beta^{commit}"
 git ls-remote --tags origin "android-v0.10.0-beta*"
@@ -123,9 +123,9 @@ aucune demande à F-Droid.
    Le tag de la recette locale est une référence de préparation. F-Droid
    recommande un SHA complet pour le build initial ; ne pas utiliser `main`.
 5. Sous Linux, avec fdroidserver et son environnement de construction, lancer
-   `fdroid lint org.bricohams.radio`,
-   `fdroid checkupdates org.bricohams.radio` et
-   `fdroid build --server org.bricohams.radio:12`. Corriger les vrais problèmes
+   `fdroid lint org.bricohams.radicodex`,
+   `fdroid checkupdates org.bricohams.radicodex` et
+   `fdroid build --server org.bricohams.radicodex:14`. Corriger les vrais problèmes
    du scanner/de compilation sans exclusions générales.
 6. Fournir licences et provenance figurant dans
    [NOTICE.txt](../../../android/app/src/main/assets/NOTICE.txt). Confirmer
@@ -183,13 +183,15 @@ sans export. Désinstaller efface les données locales. Conserver les
 enregistrements/fichiers utiles et vérifier la restauration avant de retirer
 une installation importante. Les versions F-Droid suivantes doivent garder sa clé.
 
-L'identifiant reste `org.bricohams.radio` : aucune duplication, installation
-simultanée de canaux ou modification de base de données n'est introduite.
+L'identifiant devient `org.bricohams.radicodex` (auparavant `org.bricohams.radio`) :
+Android la traite comme une nouvelle app. Exportez vos données depuis la version
+précédente, installez RadiCodex et importez la sauvegarde ; vous pourrez ensuite
+désinstaller l'ancienne.
 
 ## Installation utilisateur et vérifications finales
 
 Uniquement après publication, actualiser les dépôts du client F-Droid et
-chercher **Bricohams**, identifiant `org.bricohams.radio`. Vérifier le lien
+chercher **RadiCodex**, identifiant `org.bricohams.radicodex`. Vérifier le lien
 vers les sources et la version. Ce guide n'annonce pas une fiche déjà publiée.
 Ne pas ajouter de dépôts inconnus ni installer un APK non signé. En cas de
 signature incompatible, exporter d'abord ; ne jamais désinstaller en premier recours.

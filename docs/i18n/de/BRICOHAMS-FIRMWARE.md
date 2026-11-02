@@ -1461,7 +1461,7 @@ ohne dieses Bitmap. Das Logo muss noch physisch auf dem LCD
 geprüft werden; Kompilierung und Darstellung am Computer validieren weder
 Kontrast, Ausrichtung oder Lesbarkeit auf dem Funkgerät. Es wurde nicht geflasht.
 
-## Angeforderte spätere Phase: Bricohams Android
+## Angeforderte spätere Phase: RadiCodex by BricoHams
 
 Die native APK `0.10.0-beta` enthält ein Logbuch mit ADIF-Suche und -Import, ADIF/JSON,
 JSON-Wiederherstellung, ARDF-Sitzungen mit Historie/Statistiken und gefilterter Segment-Summe,

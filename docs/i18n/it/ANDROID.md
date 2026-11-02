@@ -1,4 +1,6 @@
-# Beta Android Bricohams
+# Beta RadiCodex by BricoHams
+
+A partire dalla versione successiva alla 0.10.0-beta l'APK si chiama RadiCodex by BricoHams (identificatore `org.bricohams.radicodex`).
 
 ## Ambito dell'APK
 

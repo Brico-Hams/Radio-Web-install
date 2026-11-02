@@ -85,7 +85,7 @@ Voir [la construction, les commandes, les licences et les limites](docs/i18n/fr/
 
 [Index complet de la documentation et des références par langue](ayuda-referencias.fr.html).
 
-### Android Bricohams bêta
+### Android : RadiCodex by BricoHams
 
 L’APK native 0.10.0-beta comprend des contacts locaux modifiables avec recherche et import ADIF avec aperçu, export ADIF/JSON, sessions ARDF avec historique, statistiques, segments GPS filtrés et observations GPS ponctuelles, ainsi que du Morse à partir de texte et de WAV PCM expérimental. Elle intègre un CAT RX temporaire via USB CDC ACM et des adaptateurs CH34x/CP210x/FTDI/Prolific reconnus. Elle calcule hors ligne des passages SGP4 avec des TLE importés et permet le suivi Doppler RX du passage sélectionné. Elle capture le microphone au premier plan pendant 60 s au maximum pour décoder ensuite du Morse ou Robot36 ; il ne s’agit pas d’un décodage continu. Elle inclut l’édition des canaux F4HWN v6 avec sauvegarde complète vérifiée et relecture, sans envoi à LoTW. Elle décode le SSTV Robot36 expérimental depuis un WAV et exporte un PNG. Elle est compilée pour Android 8.0+ ; les tests sur hôte ne remplacent pas les essais sur téléphone. Consulter [les fonctions, autorisations, la compilation et les limites](docs/i18n/fr/ANDROID.md).
 

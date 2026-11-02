@@ -1,4 +1,4 @@
-Bricohams Android Beta
+RadiCodex by BricoHams (beta)
 
 Project: Radio-Web-install / Bricohams
 License: GPL-3.0-or-later. See LICENSE.txt distributed with this application.

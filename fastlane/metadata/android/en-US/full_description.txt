@@ -1,4 +1,4 @@
-Bricohams is an independent, native Android toolkit for amateur radio, with no account, ads or telemetry. Android 8.0 or later is required. The interface supports Spanish, English (US), French and German, with light and dark themes.
+RadiCodex by BricoHams is an independent, native Android toolkit for amateur radio, with no account, ads or telemetry. Android 8.0 or later is required. The interface supports Spanish, English (US), French and German, with light and dark themes.
 
 Keep local logbooks for General, POTA and SOTA activities; exchange ADIF and JSON backups. Record ARDF observations, obtain a GPS fix with permission, and experiment with Morse audio and SSTV Robot36.
 

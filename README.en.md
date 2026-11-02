@@ -164,7 +164,7 @@ full backup, hardware/firmware checks, hashes, CRC, reread, or Main protection. 
 
 [Complete documentation and reference index by language](ayuda-referencias.en.html).
 
-### Bricohams Beta for Android
+### Android: RadiCodex by BricoHams
 
 The native 0.10.0-beta APK includes editable local contacts with search and ADIF import with preview, ADIF/JSON export, ARDF sessions with history, statistics, filtered GPS segments and point GPS observations, and experimental text and PCM WAV Morse. It includes temporary RX CAT over USB CDC ACM and recognized CH34x/CP210x/FTDI/Prolific adapters. Calculates SGP4 passes offline with imported TLE and supports RX Doppler tracking of the selected pass. Captures microphone audio in the foreground for up to 60 s for subsequent Morse or Robot36 decoding; this is not continuous decoding. Includes F4HWN v6 channel editing with full verified backup and readback; no LoTW upload. Decodes experimental Robot36 SSTV from WAV and exports PNG. Builds for Android 8.0+;
 host tests do not replace tests on a phone.

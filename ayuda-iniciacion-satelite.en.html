@@ -88,7 +88,7 @@
 <h2 id="predecir-pases-y-saber-si-el-satelite-esta-activo">Predicting passes and checking satellite activity</h2>
 <p>Prediction programs use TLEs, which are published and updated continuously. Always use TLEs from the last few days.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Tool</th><th scope="col">Platform</th><th scope="col">Notes</th></tr></thead><tbody>
-<tr><td>Bricohams Android app</td><td>Android</td><td>Custom SGP4 and CAT RX to BH Satélite; see <a href="ayuda-android.en.html">Android</a></td></tr>
+<tr><td>RadiCodex by BricoHams</td><td>Android</td><td>Custom SGP4 and CAT RX to BH Satélite; see <a href="ayuda-android.en.html">Android</a></td></tr>
 <tr><td>Gpredict</td><td>Windows, Linux, and macOS</td><td>Free, with rotor and radio control</td></tr>
 <tr><td>Orbitron</td><td>Windows</td><td>Classic freeware with prediction and Doppler</td></tr>
 <tr><td>ISS Detector</td><td>Android</td><td>Simple; amateur radio satellites require an extension</td></tr>
@@ -146,7 +146,7 @@
 <li><strong>Memories.</strong> Create a memory with RX equal to the nominal downlink and TX equal to the uplink, with its tone. You can also use the 5-memory stepped plan.</li>
 <li><strong>SAT RX.</strong> Select the memory and enter Fox Hunt/SAT mode. The display shows <code>SAT RX</code> and uses the channel&#39;s RX and TX as nominal frequencies.</li>
 <li><strong>Manual Doppler.</strong> Keys 4 and 6 subtract or add 500 m/s of radial velocity, and key 5 returns to zero. At the start of a pass, the satellite is approaching, so use negative velocities to receive higher.</li>
-<li><strong>CAT RX from Android.</strong> Press 8 on the radio to show <code>CAT READY RX</code>. The Bricohams app calculates the pass with SGP4 and sends the corrected RX frequency. Each command expires after 3 s unless renewed. Keys 4, 5, and 6 return control to manual mode.</li>
+<li><strong>CAT RX from Android.</strong> Press 8 on the radio to show <code>CAT READY RX</code>. The RadiCodex app calculates the pass with SGP4 and sends the corrected RX frequency. Each command expires after 3 s unless renewed. Keys 4, 5, and 6 return control to manual mode.</li>
 <li><strong>Transmit.</strong> The uplink uses the channel&#39;s nominal TX: BH Satélite <strong>does not correct Doppler on transmit</strong>. CAT PTT for SSTV requires local arming with key 9, a 1500 ms lease, and a 120 s limit.</li>
 <li><strong>Exit.</strong> EXIT restores the VFO&#39;s RF configuration.</li>
 </ol>
@@ -179,7 +179,7 @@
 </ul>
 <h2 id="sstv-y-aprs-desde-la-iss">SSTV and APRS from the ISS</h2>
 <ul>
-<li><strong>SSTV.</strong> During events announced by ARISS, the ISS transmits images in FM on 145,800 MHz, usually in PD120 or Robot36. A V dipole or Yagi and a decoder are enough. The Bricohams app decodes Robot36 from WAV.</li>
+<li><strong>SSTV.</strong> During events announced by ARISS, the ISS transmits images in FM on 145,800 MHz, usually in PD120 or Robot36. A V dipole or Yagi and a decoder are enough. The RadiCodex app decodes Robot36 from WAV.</li>
 <li><strong>APRS.</strong> The ISS digipeater on 145,825 MHz retransmits packet frames. Sending frames requires a license and a TNC or compatible app.</li>
 <li><strong>Voice listening.</strong> During ARISS school contacts, listen only to the downlink on 145,800 MHz. Do not transmit on the uplink.</li>
 </ul>

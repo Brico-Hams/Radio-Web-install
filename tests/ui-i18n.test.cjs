@@ -133,7 +133,7 @@ test("Android 0.10.0 packaging and tag release artifacts match versionCode 14", 
   assert.match(workflow, /java-version: "17"/);
   assert.match(workflow, /needs: build/);
   assert.match(workflow, /gh release upload "\$TAG"/);
-  for (const name of ["bricohams-android-0.10.0-beta-debug.apk", "bricohams-android-0.10.0-beta-androidTest.apk"]) {
+  for (const name of ["radicodex-0.10.0-beta-debug.apk", "radicodex-0.10.0-beta-androidTest.apk"]) {
     assert.ok(workflow.includes(`upload/${name}`));
     assert.ok(script.includes(name));
   }

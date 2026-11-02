@@ -4,7 +4,7 @@ const path = require("node:path");
 const assert = require("node:assert/strict");
 
 const LOCALES = ["en-US", "es-ES", "fr-FR", "de-DE"];
-const RECIPE = "fdroid/metadata/org.bricohams.radio.yml";
+const RECIPE = "fdroid/metadata/org.bricohams.radicodex.yml";
 
 function validateStore(root, { tag } = {}) {
   const read = file => fs.readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n");
@@ -12,7 +12,7 @@ function validateStore(root, { tag } = {}) {
   const versionName = gradle.match(/^\s*versionName = "([^"]+)"$/m)?.[1];
   const versionCode = Number(gradle.match(/^\s*versionCode = (\d+)$/m)?.[1]);
   assert.ok(versionName && Number.isSafeInteger(versionCode) && versionCode > 0, "Invalid Android version");
-  assert.match(gradle, /applicationId = "org\.bricohams\.radio"/);
+  assert.match(gradle, /applicationId = "org\.bricohams\.radicodex"/);
   const recipe = read(RECIPE);
   const expectedTag = `android-v${versionName}`;
   const tagPattern = recipe.match(/^UpdateCheckMode: Tags (.+)$/m)?.[1];
@@ -41,7 +41,7 @@ function validateStore(root, { tag } = {}) {
       assert.ok(text.length > 0 && [...text].length <= limit, `${locale}/${file}: empty or exceeds ${limit} characters`);
       if (file !== "full_description.txt") assert.ok(!text.includes("\n"), `${locale}/${file}: expected one line`);
     }
-    assert.equal(read(`${base}/title.txt`).trim(), "Bricohams", `${locale}: preserve the Bricohams brand`);
+    assert.equal(read(`${base}/title.txt`).trim(), "RadiCodex by BricoHams", `${locale}: expected the RadiCodex by BricoHams title`);
   }
   return { versionName, versionCode, tag: expectedTag, locales: LOCALES.length };
 }

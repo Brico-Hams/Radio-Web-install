@@ -6,7 +6,7 @@ android {
     namespace = "org.bricohams.radio"
     compileSdk = 35
     defaultConfig {
-        applicationId = "org.bricohams.radio"
+        applicationId = "org.bricohams.radicodex"
         minSdk = 26
         targetSdk = 35
         versionCode = 14

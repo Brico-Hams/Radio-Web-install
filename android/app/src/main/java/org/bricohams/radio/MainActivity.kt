@@ -118,6 +118,7 @@ class MainActivity : LocalizedActivity() {
             adjustViewBounds = true
             contentDescription = "Bricohams"
         }, LinearLayout.LayoutParams(dp(144), dp(54)))
+        header.addView(Brand.heading(this, "RadiCodex by BricoHams"))
         header.addView(Brand.text(this, 13f, Brand.Palette(this).muted).apply {
             setText(R.string.language_label); labelFor = R.id.app_language
         })
@@ -267,7 +268,7 @@ class MainActivity : LocalizedActivity() {
             }
         }
         section(R.string.home_about) {
-            text("Bricohams Android ${packageManager.getPackageInfo(packageName, 0).versionName}")
+            text("RadiCodex by BricoHams ${packageManager.getPackageInfo(packageName, 0).versionName}")
             text(R.string.home_offline)
             text(R.string.home_features)
             text(R.string.home_ardf_note)

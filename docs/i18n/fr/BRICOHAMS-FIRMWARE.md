@@ -1516,7 +1516,7 @@ Les mesures antérieures d'autres dossiers correspondent aux compilations préc�
 sans ce bitmap. Le logo doit encore être vérifié physiquement sur l'écran LCD ; compiler
 et afficher le bitmap sur un ordinateur ne valide ni le contraste, ni l'orientation, ni
 la lisibilité dans la radio. Aucun firmware n'a été flashé.
-## Phase ultérieure demandée : Bricohams Android
+## Phase ultérieure demandée : RadiCodex by BricoHams
 
 L'APK native `0.10.0-beta` comprend un carnet de trafic avec recherche et importation ADIF,
 ADIF/JSON, restauration JSON, sessions ARDF avec historique/statistiques et somme des

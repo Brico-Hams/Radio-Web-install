@@ -12,7 +12,7 @@ class ModelsTest {
     }
     @Test fun adifFieldsAndUtc() {
         val adif = Adif.export(listOf(contact()))
-        assertEquals("Bricohams Beta\n<ADIF_VER:5>3.1.4<PROGRAMID:9>Bricohams<EOH>\n" +
+        assertEquals("RadiCodex by BricoHams\n<ADIF_VER:5>3.1.4<PROGRAMID:9>RadiCodex<EOH>\n" +
             "<CALL:8>EA1ABC/P<QSO_DATE:8>20261025<TIME_ON:6>160001<BAND:2>2m<FREQ:7>145.500" +
             "<MODE:2>FM<RST_SENT:2>59<RST_RCVD:2>57<COMMENT:8>Portable<EOR>\n", adif)
     }

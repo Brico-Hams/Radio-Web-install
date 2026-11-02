@@ -122,7 +122,7 @@ permanence. Utilisez toujours les TLE des derniers jours.
 
 | Outil | Plateforme | Notes |
 | --- | --- | --- |
-| App Android Bricohams | Android | SGP4 natif et CAT RX vers BH Satélite ; voir [Android](ANDROID.md) |
+| RadiCodex by BricoHams | Android | SGP4 natif et CAT RX vers BH Satélite ; voir [Android](ANDROID.md) |
 | Gpredict | Windows, Linux et macOS | Libre, avec contrôle du rotor et de la radio |
 | Orbitron | Windows | Gratuit et classique, avec prévision et Doppler |
 | ISS Detector | Android | Simple ; les satellites radioamateurs nécessitent une extension |
@@ -221,7 +221,7 @@ affiche `SAT RX` et prend RX et TX du canal comme valeurs nominales.
 vitesse radiale, et la touche 5 revient à zéro. Au début du passage, le satellite
 s’approche : utilisez des vitesses négatives pour recevoir plus haut.
 5. **CAT RX depuis Android.** Appuyez sur 8 sur la radio pour afficher
-`CAT READY RX`. L’application Bricohams calcule le passage avec SGP4 et envoie
+`CAT READY RX`. L’application RadiCodex calcule le passage avec SGP4 et envoie
 la fréquence RX corrigée. Chaque commande expire au bout de 3 s si elle n’est pas
 renouvelée. Les touches 4, 5 et 6 rendent la commande au mode manuel.
 6. **Émission.** La montée utilise le TX nominal du canal : BH Satélite **ne
@@ -274,7 +274,7 @@ satellite de l’ARRL exige 100 carrés confirmés.
 
 - **SSTV.** Lors des événements annoncés par ARISS, l’ISS transmet des images
 FM sur 145,800 MHz, généralement en PD120 ou Robot36. Un dipôle en V ou une Yagi
-et un décodeur suffisent. L’application Bricohams décode Robot36 depuis un WAV.
+et un décodeur suffisent. L’application RadiCodex décode Robot36 depuis un WAV.
 - **APRS.** Le digipeater de l’ISS sur 145,825 MHz retransmet des trames packet.
 L’envoi de trames exige une licence et un TNC ou une application compatible.
 - **Écoute vocale.** Pendant les contacts ARISS avec les écoles, écoutez

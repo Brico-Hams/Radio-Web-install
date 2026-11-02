@@ -1,4 +1,4 @@
-# Pruebas físicas CAT multirradio (APK Bricohams)
+# Pruebas físicas CAT multirradio (RadiCodex by BricoHams)
 
 Autores: Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF y Pedro
 Roca, fundadores y miembros directivos de Bricohams.

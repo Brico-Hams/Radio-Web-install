@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="Bricohams Android Beta: Bricohams help by model and version.">
+  <meta name="description" content="RadiCodex by BricoHams Beta: Bricohams help by model and version.">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Bricohams Android Beta | Bricohams Radio Workspace</title>
+  <title>RadiCodex by BricoHams Beta | Bricohams Radio Workspace</title>
   <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
   <script src="appearance.js" defer></script>
@@ -25,7 +25,7 @@
       <nav class="languages" aria-label="Language"><a href="ayuda-android.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-android.en.html" hreflang="en-US" lang="en-US" aria-current="page">English (US)</a> · <a href="ayuda-android.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-android.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-android.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
     <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#alcance-de-la-apk">APK scope</a></li><li><a href="#instalacion-y-datos">Installation and data</a></li><li><a href="#libro-de-guardia">Logbook</a></li><li><a href="#ardf-y-gps">ARDF and GPS</a></li><li><a href="#usb-cdc-y-cat-rx-experimental">Experimental USB CDC and CAT RX</a></li><li><a href="#editor-de-canales-quansheng-por-usb-beta">Quansheng USB channel editor (Beta)</a></li><li><a href="#satelites-sgp4-y-seguimiento-de-pases">SGP4 satellites and pass tracking</a></li><li><a href="#morse-wav-experimental">Experimental Morse WAV</a></li><li><a href="#sstv-robot36-desde-wav">SSTV Robot36 from WAV</a></li><li><a href="#sstv-robot36-por-cat-recepcion-sintonizada-y-envio-con-ptt">SSTV Robot36 over CAT: tuned reception and PTT transmission</a></li><li><a href="#captura-de-microfono-morse-y-robot36">Morse and Robot36 microphone capture</a></li><li><a href="#compilacion">Build</a></li><li><a href="#validacion-realizada-y-pendiente">Validation performed and pending</a></li></ul></nav>
-    <article class="panel"><h1 id="bricohams-android-beta">Bricohams Android Beta</h1>
+    <article class="panel"><h1 id="radicodex-by-bricohams-beta">RadiCodex by BricoHams Beta</h1>
 <h2 id="alcance-de-la-apk">APK scope</h2>
 <p>The main screen offers <strong>System language</strong>, <strong>Español</strong>, <strong>English (US)</strong>, <strong>Français</strong>, and <strong>Deutsch</strong>. The choice is saved locally and applies to every screen, including USB channels, CAT, satellites, and SSTV. Switching languages does not translate callsigns, channel names, or user files; the branding remains Bricohams.</p>
 <p>Opening Satellites automatically updates TLE/frequencies over HTTPS from CelesTrak and SatNOGS if the catalog is missing or at least 24 h old. Settings can disable automatic updates. Your saved location and radio channels are not sent; servers receive the normal HTTPS request, including the IP address. Offline import remains available. This revision preserves the 0.8.0 features and prepares 0.9.0-beta APKs, versionCode 13. Android tests, lint and builds require JDK 17 and SDK 35; they cannot run locally with Java 8. CI must verify the new APK before distribution.</p>
