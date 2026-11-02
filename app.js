@@ -98,6 +98,7 @@ const page = document.body.dataset.page;
 const current = tools[page];
 const helpTemplate = document.getElementById("help-content");
 const anytoneTemplate = document.getElementById("anytone-content");
+const ftx1Template = document.getElementById("ftx1-content");
 const external = 'target="_blank" rel="noopener noreferrer"';
 // Quansheng shows one view at a time (no in-page anchors); the other pages keep scrolling to the step.
 const steps = page === "quansheng"
@@ -133,7 +134,8 @@ function home() {
     <p class="card-note"><a href="ayuda-quansheng.html#puesta-en-marcha-de-0-a-100">Quansheng de 0 a 100 %</a> &middot; <a href="ayuda-atlas-uv-k5-v3.html">Atlas tecnico UV-K5 V3</a> &middot; <a href="ayuda-firmwares.html">Biblioteca de firmware</a></p>
   </section>
   <section class="cards" aria-label="Familias de radio">${Object.entries(tools).map(([key, tool]) => card(key, tool)).join("")}
-    <article class="tool-card anytone"><div class="card-top"><span class="device-icon" aria-hidden="true">AT</span><span class="pill">BETA</span></div><h2>AnyTone Beta</h2><p class="card-description">Preparador web de canales FM/DMR de Espana y AM aerea con capacidades confirmadas. Reutiliza archivos de las otras familias. Sin USB ni RDT nativo.</p><a class="button secondary" href="anytone.html">Entrar al editor AnyTone</a></article></section>
+    <article class="tool-card anytone"><div class="card-top"><span class="device-icon" aria-hidden="true">AT</span><span class="pill">BETA</span></div><h2>AnyTone Beta</h2><p class="card-description">Preparador web de canales FM/DMR de Espana y AM aerea con capacidades confirmadas. Reutiliza archivos de las otras familias. Sin USB ni RDT nativo.</p><a class="button secondary" href="anytone.html">Entrar al editor AnyTone</a></article>
+    <article class="tool-card ftx1"><div class="card-top"><span class="device-icon" aria-hidden="true">FT</span><span class="pill">BETA</span></div><h2>Yaesu FTX-1</h2><p class="card-description">Lee, edita y copia memorias y la configuracion del menu por CAT USB, con copia previa y simulacion antes de escribir.</p><a class="button secondary" href="ftx1.html">Entrar al editor FTX-1</a></article></section>
   <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Parecidas por fuera. Diferentes por dentro.</h2><p>OpenGD77 y F4HWN no son firmware intercambiables. Confirma el modelo, la revision de hardware y el firmware antes de conectar o escribir.</p></div></aside>
   <section class="steps-summary" aria-label="Como empezar"><div><span>01</span><h3>Identifica tu equipo</h3><p>Modelo, revision y firmware.</p></div><div><span>02</span><h3>Copia automatica</h3><p>Persistida y verificada con SHA-256.</p></div><div><span>03</span><h3>Opera con proteccion</h3><p>Sin respaldo suficiente, no se escribe.</p></div></section>`;
 }
@@ -192,21 +194,26 @@ function detail(tool) {
 document.getElementById("app").innerHTML = `
   <aside class="sidebar">
     <a class="brand" href="index.html" aria-label="Bricohams Radio Workspace: inicio"><img class="brand-logo" src="bricohams-logo.png" alt="Bricohams" width="1200" height="446"><span class="brand-product">${BRAND.product.toUpperCase()}</span></a>
-    <p class="nav-label">TU ESTACION</p><nav aria-label="Navegacion principal">${nav("home", "Vista general", "&#9638;")}${nav("opengd77", "OpenGD77", "GD")}${nav("quansheng", "Quansheng", "UV")}${nav("anytone", "AnyTone Beta", "AT")}${nav("ayuda", "Ayuda y soporte", "?")}</nav>
+    <p class="nav-label">TU ESTACION</p><nav aria-label="Navegacion principal">${nav("home", "Vista general", "&#9638;")}${nav("opengd77", "OpenGD77", "GD")}${nav("quansheng", "Quansheng", "UV")}${nav("anytone", "AnyTone Beta", "AT")}${nav("ftx1", "Yaesu FTX-1", "FT")}${nav("ayuda", "Ayuda y soporte", "?")}</nav>
     ${current ? `<p class="nav-label">PASOS</p><nav class="steps" aria-label="Pasos de este espacio">${steps.map(([label, target, tab], index) => page === "quansheng"
       ? `<button type="button" class="step-view" data-view="${target}"><span class="step-num" aria-hidden="true">${index}</span>${label}</button>`
       : `<a href="${target.startsWith("#") ? target : "#radio-operations"}" data-step="${target}"${tab ? ` data-tab="${tab}"` : ""}><span class="step-num" aria-hidden="true">${index}</span>${label}</a>`).join("")}</nav>` : ""}
     <div class="sidebar-bottom"><span class="local-dot"></span> USB / Serial local<p>Sin envio de datos a servidores.<br>Copias antes de escribir.</p></div>
   </aside>
   <div class="workspace"><header class="topbar">
-    <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : anytoneTemplate ? "AnyTone Beta" : helpTemplate ? "Ayuda y soporte" : "Vista general"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
+    <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : anytoneTemplate ? "AnyTone Beta" : ftx1Template ? "Yaesu FTX-1" : helpTemplate ? "Ayuda y soporte" : "Vista general"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
     <div class="topbar-right"><span class="pill">BETA - EN VALIDACION</span><span id="mode-badge" class="mode-badge"></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span>${current ? '<button id="topbar-connect" class="button primary topbar-connect" type="button" disabled><span aria-hidden="true">⌁</span> Conectar</button>' : ""}</div></header>
-  <main id="main">${current ? detail(current) : helpTemplate || anytoneTemplate ? "" : home()}</main>
+  <main id="main">${current ? detail(current) : helpTemplate || anytoneTemplate || ftx1Template ? "" : home()}</main>
   <footer><span>&copy; 2026 ${BRAND.name} ${BRAND.product} <span class="muted">/ GPL-3.0-or-later / Sin garantia</span></span><span><a href="ayuda-referencias.html">Documentacion de referencia</a> &middot; <a href="ayuda.html#inicio">Instalar en local</a> &middot; <a href="ayuda.html">Ayuda y soporte</a> &middot; <a href="${BRAND.repository}" target="_blank" rel="noopener noreferrer">Codigo fuente</a> &middot; No afiliado a OpenGD77, grid.radio, F4HWN ni Quansheng.</span></footer></div>`;
 
 if (anytoneTemplate) {
   document.getElementById("main").append(anytoneTemplate.content.cloneNode(true));
   globalThis.RadioWorkspace.mountAnytoneUI();
+}
+
+if (ftx1Template) {
+  document.getElementById("main").append(ftx1Template.content.cloneNode(true));
+  globalThis.RadioWorkspace.mountFtx1UI();
 }
 
 if (helpTemplate) {

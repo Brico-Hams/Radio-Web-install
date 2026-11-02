@@ -33,6 +33,7 @@
     ["Modelos, alias y revisiones", "Models, aliases, and revisions", "Modèles, alias et révisions", "Modelle, Aliasnamen und Revisionen"],
     ["Baofeng DM-32UV: OpenGD77, RadioFoundry y cómo construir firmware", "Baofeng DM-32UV: OpenGD77, RadioFoundry, and building firmware", "Baofeng DM-32UV : OpenGD77, RadioFoundry et compilation du firmware", "Baofeng DM-32UV: OpenGD77, RadioFoundry und Firmware-Erstellung"],
     ["AnyTone: canales locales, aeropuertos y FM comercial", "AnyTone: local channels, airports, and broadcast FM", "AnyTone : canaux locaux, aéroports et radiodiffusion FM", "AnyTone: lokale Kanäle, Flughäfen und UKW-Rundfunk"],
+    ["Yaesu FTX-1: memorias y configuración por CAT USB", "Yaesu FTX-1: memories and settings over USB CAT", "Yaesu FTX-1 : mémoires et configuration via CAT USB", "Yaesu FTX-1: Speicher und Einstellungen über USB-CAT"],
     ["Karina: expediente técnico, código fuente y especificación", "Karina: technical dossier, source code, and specification", "Karina : dossier technique, code source et spécification", "Karina: technische Dokumentation, Quellcode und Spezifikation"],
     ["Repositorios de la comunidad", "Community repositories", "Dépôts communautaires", "Community-Repositories"],
     ["Ejemplos: firmwares abiertos, canales y scripts", "Examples: open-source firmware, channels, and scripts", "Exemples : firmwares ouverts, canaux et scripts", "Beispiele: offene Firmware, Kanäle und Skripte"],

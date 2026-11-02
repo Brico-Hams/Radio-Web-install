@@ -1122,6 +1122,140 @@ VMA incorrecta|Incorrect VMA|VMA incorrecte|Falsche VMA
 Autorizacion rechazada|Authorization rejected|Autorisation refusée|Autorisierung abgelehnt
 Falta una capacidad del firmware|Missing firmware capability|Capacité du firmware manquante|Firmware-Fähigkeit fehlt
 `.trim().split("\n").map(line => line.split("|")));
+  entries.push(...`
+Leer guia y limites del FTX-1|Read the FTX-1 guide and limitations|Lire le guide et les limites du FTX-1|FTX-1-Anleitung und Einschränkungen lesen
+Memorias y configuracion del Yaesu FTX-1|Memories and configuration of the Yaesu FTX-1|Mémoires et configuration du Yaesu FTX-1|Speicher und Konfiguration des Yaesu FTX-1
+Lee, edita y copia memorias y la configuracion del menu por CAT USB, con copia previa y simulacion antes de escribir.|Reads, edits and copies memories and menu configuration over USB CAT, with a prior backup and a simulation before writing.|Lit, modifie et copie les mémoires et la configuration du menu par CAT USB, avec sauvegarde préalable et simulation avant l’écriture.|Liest, bearbeitet und kopiert Speicher und Menükonfiguration per USB-CAT, mit vorheriger Sicherung und Simulation vor dem Schreiben.
+Entrar al editor FTX-1|Open FTX-1 editor|Ouvrir l’éditeur FTX-1|FTX-1-Editor öffnen
+Lee, edita, copia y escribe las memorias y los ajustes del menu (EX) por CAT sobre el puerto USB. Cada escritura se verifica volviendo a leer la radio.|Read, edit, copy and write the memories and menu (EX) settings over CAT on the USB port. Every write is verified by reading the radio back.|Lisez, modifiez, copiez et écrivez les mémoires et les réglages du menu (EX) par CAT via le port USB. Chaque écriture est vérifiée en relisant la radio.|Speicher und Menüeinstellungen (EX) per CAT über den USB-Anschluss lesen, bearbeiten, kopieren und schreiben. Jeder Schreibvorgang wird durch erneutes Auslesen des Funkgeräts überprüft.
+Antes de conectar|Before connecting|Avant de connecter|Vor dem Verbinden
+La radio crea dos puertos CP210x: Enhanced COM Port (CAT-1, de fabrica 38400) y Standard COM Port (CAT-2, de fabrica 4800). Se requiere el firmware MAIN 1.08 o posterior. Cierra antes cualquier otro programa que use el puerto CAT.|The radio creates two CP210x ports: Enhanced COM Port (CAT-1, factory 38400) and Standard COM Port (CAT-2, factory 4800). MAIN firmware 1.08 or later is required. First close any other program that uses the CAT port.|La radio crée deux ports CP210x : Enhanced COM Port (CAT-1, 38400 par défaut) et Standard COM Port (CAT-2, 4800 par défaut). Le firmware MAIN 1.08 ou ultérieur est requis. Fermez d’abord tout autre programme qui utilise le port CAT.|Das Funkgerät legt zwei CP210x-Ports an: Enhanced COM Port (CAT-1, Werkseinstellung 38400) und Standard COM Port (CAT-2, Werkseinstellung 4800). Die MAIN-Firmware 1.08 oder neuer ist erforderlich. Schließe zuerst jedes andere Programm, das den CAT-Port verwendet.
+Descarga siempre la copia de seguridad antes de escribir. La frecuencia de tono, el codigo DCS y el ancho del desplazamiento de repetidor no forman parte de MR/MW: son ajustes FM globales del menu (RPT SHIFT, TONE FREQ, DCS CODE).|Always download the backup before writing. The tone frequency, the DCS code and the repeater offset width are not part of MR/MW: they are global FM settings in the menu (RPT SHIFT, TONE FREQ, DCS CODE).|Téléchargez toujours la sauvegarde avant d’écrire. La fréquence de tonalité, le code DCS et la largeur du décalage de relais ne font pas partie de MR/MW : ce sont des réglages FM globaux du menu (RPT SHIFT, TONE FREQ, DCS CODE).|Lade vor dem Schreiben immer die Sicherung herunter. Tonfrequenz, DCS-Code und Ablagebreite des Relais gehören nicht zu MR/MW: Es sind globale FM-Einstellungen im Menü (RPT SHIFT, TONE FREQ, DCS CODE).
+1. Conexion|1. Connection|1. Connexion|1. Verbindung
+Velocidad CAT (baudios)|CAT speed (baud)|Vitesse CAT (bauds)|CAT-Geschwindigkeit (Baud)
+La velocidad debe coincidir con CAT-1 RATE o CAT-2 RATE de la radio, segun el puerto elegido.|The speed must match the radio's CAT-1 RATE or CAT-2 RATE, depending on the selected port.|La vitesse doit correspondre à CAT-1 RATE ou CAT-2 RATE de la radio, selon le port choisi.|Die Geschwindigkeit muss je nach gewähltem Port mit CAT-1 RATE oder CAT-2 RATE des Funkgeräts übereinstimmen.
+2. Memorias|2. Memories|2. Mémoires|2. Speicher
+Desde el canal|From channel|Depuis le canal|Ab Kanal
+Hasta el canal|To channel|Jusqu’au canal|Bis Kanal
+Leer memorias|Read memories|Lire les mémoires|Speicher lesen
+Canales de memoria 1-999. Un canal sin programar se muestra vacio y no se puede dejar vacio de nuevo: no hay borrado documentado.|Memory channels 1-999. An unprogrammed channel is shown empty and cannot be made empty again: no erase command is documented.|Canaux mémoire 1-999. Un canal non programmé s’affiche vide et ne peut pas être vidé à nouveau : aucune commande d’effacement n’est documentée.|Speicherkanäle 1-999. Ein nicht programmierter Kanal wird leer angezeigt und kann nicht erneut geleert werden: Ein Löschbefehl ist nicht dokumentiert.
+Tono|Tone|Tonalité|Ton
+Desplazamiento|Shift|Décalage|Ablage
+Clarificador|Clarifier|Clarificateur|Clarifier
+Copiar canal|Copy channel|Copier le canal|Kanal kopieren
+Canal origen|Source channel|Canal source|Quellkanal
+Canal destino|Target channel|Canal cible|Zielkanal
+Copia, CSV y escritura|Backup, CSV and writing|Sauvegarde, CSV et écriture|Sicherung, CSV und Schreiben
+Descargar copia de memorias (JSON)|Download memories backup (JSON)|Télécharger la sauvegarde des mémoires (JSON)|Speichersicherung herunterladen (JSON)
+Restaurar copia JSON|Restore JSON backup|Restaurer une sauvegarde JSON|JSON-Sicherung wiederherstellen
+Exportar CSV|Export CSV|Exporter en CSV|CSV exportieren
+Importar CSV (CHIRP u OpenGD77)|Import CSV (CHIRP or OpenGD77)|Importer un CSV (CHIRP ou OpenGD77)|CSV importieren (CHIRP oder OpenGD77)
+Canal de inicio|Start channel|Canal de départ|Startkanal
+Simular escritura (diferencias)|Simulate writing (differences)|Simuler l’écriture (différences)|Schreiben simulieren (Unterschiede)
+Escribir cambios en la radio|Write changes to the radio|Écrire les modifications dans la radio|Änderungen in das Funkgerät schreiben
+Para escribir: lee las memorias, descarga su copia y simula las diferencias actuales.|To write: read the memories, download their backup and simulate the current differences.|Pour écrire : lisez les mémoires, téléchargez leur sauvegarde et simulez les différences actuelles.|Zum Schreiben: Speicher lesen, deren Sicherung herunterladen und die aktuellen Unterschiede simulieren.
+Campo|Field|Champ|Feld
+3. Configuracion del equipo (menu)|3. Radio configuration (menu)|3. Configuration de l’appareil (menu)|3. Gerätekonfiguration (Menü)
+Grupo del menu|Menu group|Groupe du menu|Menügruppe
+Leer configuracion|Read configuration|Lire la configuration|Konfiguration lesen
+Los elementos de solo lectura (por ejemplo CAT-1 RATE) nunca se escriben: pueden cortar el enlace CAT o son valores de calibracion.|Read-only items (for example CAT-1 RATE) are never written: they can cut the CAT link or are calibration values.|Les éléments en lecture seule (par exemple CAT-1 RATE) ne sont jamais écrits : ils peuvent couper la liaison CAT ou sont des valeurs d’étalonnage.|Schreibgeschützte Elemente (zum Beispiel CAT-1 RATE) werden nie geschrieben: Sie können die CAT-Verbindung trennen oder sind Kalibrierwerte.
+Ajuste|Setting|Réglage|Einstellung
+Valor|Value|Valeur|Wert
+Descargar copia de configuracion (JSON)|Download configuration backup (JSON)|Télécharger la sauvegarde de la configuration (JSON)|Konfigurationssicherung herunterladen (JSON)
+Restaurar copia de configuracion JSON|Restore configuration JSON backup|Restaurer une sauvegarde de configuration JSON|JSON-Konfigurationssicherung wiederherstellen
+Simular escritura de configuracion (diferencias)|Simulate configuration writing (differences)|Simuler l’écriture de la configuration (différences)|Konfiguration schreiben simulieren (Unterschiede)
+Escribir configuracion en la radio|Write configuration to the radio|Écrire la configuration dans la radio|Konfiguration in das Funkgerät schreiben
+Todos los grupos|All groups|Tous les groupes|Alle Gruppen
+No disponible|Not available|Non disponible|Nicht verfügbar
+Sin leer|Not read|Non lu|Nicht gelesen
+Solo lectura|Read only|Lecture seule|Schreibgeschützt
+Direccion del clarificador|Clarifier direction|Direction du clarificateur|Clarifier-Richtung
+Offset del clarificador|Clarifier offset|Décalage du clarificateur|Clarifier-Offset
+Clarificador RX|RX clarifier|Clarificateur RX|RX-Clarifier
+Clarificador TX|TX clarifier|Clarificateur TX|TX-Clarifier
+Canal vacio|Empty channel|Canal vide|Leerer Kanal
+Frecuencia MHz canal {0}|Frequency MHz channel {0}|Fréquence MHz canal {0}|Frequenz MHz Kanal {0}
+Modo canal {0}|Mode channel {0}|Mode canal {0}|Modus Kanal {0}
+Nombre canal {0}|Name channel {0}|Nom canal {0}|Name Kanal {0}
+Tono canal {0}|Tone channel {0}|Tonalité canal {0}|Ton Kanal {0}
+Desplazamiento canal {0}|Shift channel {0}|Décalage canal {0}|Ablage Kanal {0}
+Error: {0}|Error: {0}|Erreur : {0}|Fehler: {0}
+Conectando con el FTX-1...|Connecting to the FTX-1...|Connexion au FTX-1...|Verbindung zum FTX-1 wird hergestellt...
+Conectado al FTX-1.|Connected to the FTX-1.|Connecté au FTX-1.|Mit dem FTX-1 verbunden.
+Desconectado.|Disconnected.|Déconnecté.|Getrennt.
+Conexion perdida: {0}|Connection lost: {0}|Connexion perdue : {0}|Verbindung verloren: {0}
+Ya hay una conexion abierta.|A connection is already open.|Une connexion est déjà ouverte.|Es ist bereits eine Verbindung geöffnet.
+Hay otra operacion en curso.|Another operation is in progress.|Une autre opération est en cours.|Ein anderer Vorgang läuft bereits.
+No hay conexion con la radio.|There is no connection to the radio.|Il n’y a pas de connexion avec la radio.|Es besteht keine Verbindung zum Funkgerät.
+Leyendo memorias...|Reading memories...|Lecture des mémoires...|Speicher werden gelesen...
+Memorias leidas: {0} canales, {1} vacios. Descarga la copia antes de escribir.|Memories read: {0} channels, {1} empty. Download the backup before writing.|Mémoires lues : {0} canaux, {1} vides. Téléchargez la sauvegarde avant d’écrire.|Speicher gelesen: {0} Kanäle, {1} leer. Lade vor dem Schreiben die Sicherung herunter.
+Canal {0} copiado al canal {1}. La radio no se modifica hasta escribir.|Channel {0} copied to channel {1}. The radio is not modified until you write.|Canal {0} copié vers le canal {1}. La radio n’est pas modifiée avant l’écriture.|Kanal {0} wurde in Kanal {1} kopiert. Das Funkgerät wird erst beim Schreiben verändert.
+Descarga solicitada: {0}.|Download requested: {0}.|Téléchargement demandé : {0}.|Download angefordert: {0}.
+Copia cargada en la tabla (la radio no se modifica).|Backup loaded into the table (the radio is not modified).|Sauvegarde chargée dans le tableau (la radio n’est pas modifiée).|Sicherung in die Tabelle geladen (das Funkgerät wird nicht verändert).
+La copia no es de memorias.|The backup is not a memories backup.|La sauvegarde n’est pas une sauvegarde de mémoires.|Die Sicherung ist keine Speichersicherung.
+{0} canales importados, {1} rechazados. La radio no se modifica hasta escribir.|{0} channels imported, {1} rejected. The radio is not modified until you write.|{0} canaux importés, {1} rejetés. La radio n’est pas modifiée avant l’écriture.|{0} Kanäle importiert, {1} abgelehnt. Das Funkgerät wird erst beim Schreiben verändert.
+{0} canales con cambios. Revisa las diferencias antes de escribir.|{0} channels with changes. Review the differences before writing.|{0} canaux modifiés. Vérifiez les différences avant d’écrire.|{0} Kanäle mit Änderungen. Prüfe die Unterschiede vor dem Schreiben.
+Sin diferencias: nada que escribir.|No differences: nothing to write.|Aucune différence : rien à écrire.|Keine Unterschiede: nichts zu schreiben.
+Lee primero las memorias.|Read the memories first.|Lisez d’abord les mémoires.|Lies zuerst den Speicher.
+Descarga primero la copia de las memorias leidas.|First download the backup of the memories that were read.|Téléchargez d’abord la sauvegarde des mémoires lues.|Lade zuerst die Sicherung des gelesenen Speichers herunter.
+Simula primero las diferencias actuales.|First simulate the current differences.|Simulez d’abord les différences actuelles.|Simuliere zuerst die aktuellen Unterschiede.
+Se van a escribir {0} canales en la radio. Cada canal se verifica releyendolo. Continuar?|{0} channels will be written to the radio. Each channel is verified by reading it back. Continue?|{0} canaux vont être écrits dans la radio. Chaque canal est vérifié par relecture. Continuer ?|{0} Kanäle werden in das Funkgerät geschrieben. Jeder Kanal wird durch erneutes Lesen überprüft. Fortfahren?
+Escritura cancelada.|Writing cancelled.|Écriture annulée.|Schreiben abgebrochen.
+Escribiendo {0} de {1}...|Writing {0} of {1}...|Écriture {0} sur {1}...|Schreibe {0} von {1}...
+Escritura verificada: {0} canales. Descarga una copia nueva antes de volver a escribir.|Verified write: {0} channels. Download a new backup before writing again.|Écriture vérifiée : {0} canaux. Téléchargez une nouvelle sauvegarde avant de réécrire.|Schreibvorgang überprüft: {0} Kanäle. Lade vor erneutem Schreiben eine neue Sicherung herunter.
+Leyendo configuracion...|Reading configuration...|Lecture de la configuration...|Konfiguration wird gelesen...
+Configuracion leida: {0} elementos, {1} no disponibles. Descarga la copia antes de escribir.|Configuration read: {0} items, {1} not available. Download the backup before writing.|Configuration lue : {0} éléments, {1} non disponibles. Téléchargez la sauvegarde avant d’écrire.|Konfiguration gelesen: {0} Elemente, {1} nicht verfügbar. Lade vor dem Schreiben die Sicherung herunter.
+La copia no es de configuracion.|The backup is not a configuration backup.|La sauvegarde n’est pas une sauvegarde de configuration.|Die Sicherung ist keine Konfigurationssicherung.
+Copia de configuracion cargada: {0} ajustes (la radio no se modifica).|Configuration backup loaded: {0} settings (the radio is not modified).|Sauvegarde de configuration chargée : {0} réglages (la radio n’est pas modifiée).|Konfigurationssicherung geladen: {0} Einstellungen (das Funkgerät wird nicht verändert).
+{0} ajustes con cambios. Revisa las diferencias antes de escribir.|{0} settings with changes. Review the differences before writing.|{0} réglages modifiés. Vérifiez les différences avant d’écrire.|{0} Einstellungen mit Änderungen. Prüfe die Unterschiede vor dem Schreiben.
+Lee primero la configuracion.|Read the configuration first.|Lisez d’abord la configuration.|Lies zuerst die Konfiguration.
+Descarga primero la copia de la configuracion leida.|First download the backup of the configuration that was read.|Téléchargez d’abord la sauvegarde de la configuration lue.|Lade zuerst die Sicherung der gelesenen Konfiguration herunter.
+Se van a escribir {0} ajustes en la radio. Cada ajuste se verifica releyendolo. Continuar?|{0} settings will be written to the radio. Each setting is verified by reading it back. Continue?|{0} réglages vont être écrits dans la radio. Chaque réglage est vérifié par relecture. Continuer ?|{0} Einstellungen werden in das Funkgerät geschrieben. Jede Einstellung wird durch erneutes Lesen überprüft. Fortfahren?
+Escritura de configuracion verificada: {0} ajustes. Descarga una copia nueva antes de volver a escribir.|Verified configuration write: {0} settings. Download a new backup before writing again.|Écriture de la configuration vérifiée : {0} réglages. Téléchargez une nouvelle sauvegarde avant de réécrire.|Konfiguration überprüft geschrieben: {0} Einstellungen. Lade vor erneutem Schreiben eine neue Sicherung herunter.
+Frecuencia MHz no valida: usa hasta 6 decimales.|Invalid MHz frequency: use up to 6 decimals.|Fréquence MHz invalide : utilisez jusqu’à 6 décimales.|Ungültige MHz-Frequenz: höchstens 6 Dezimalstellen verwenden.
+Canal fuera de rango 1-999.|Channel out of range 1-999.|Canal hors plage 1-999.|Kanal außerhalb des Bereichs 1-999.
+Rango de canales no valido (1-999).|Invalid channel range (1-999).|Plage de canaux invalide (1-999).|Ungültiger Kanalbereich (1-999).
+Memoria no valida.|Invalid memory.|Mémoire invalide.|Ungültiger Speicher.
+Frecuencia fuera de 30000 Hz - 470000000 Hz.|Frequency outside 30000 Hz - 470000000 Hz.|Fréquence hors de 30000 Hz - 470000000 Hz.|Frequenz außerhalb von 30000 Hz - 470000000 Hz.
+Direccion de clarificador no valida.|Invalid clarifier direction.|Direction du clarificateur invalide.|Ungültige Clarifier-Richtung.
+Offset de clarificador fuera de 0-9990 Hz.|Clarifier offset outside 0-9990 Hz.|Décalage du clarificateur hors de 0-9990 Hz.|Clarifier-Offset außerhalb von 0-9990 Hz.
+Estado de clarificador no valido.|Invalid clarifier state.|État du clarificateur invalide.|Ungültiger Clarifier-Zustand.
+Modo no admitido por el FTX-1.|Mode not supported by the FTX-1.|Mode non pris en charge par le FTX-1.|Modus wird vom FTX-1 nicht unterstützt.
+Tipo de canal no valido.|Invalid channel type.|Type de canal invalide.|Ungültiger Kanaltyp.
+Modo de tono no valido.|Invalid tone mode.|Mode de tonalité invalide.|Ungültiger Tonmodus.
+Desplazamiento no valido.|Invalid shift.|Décalage invalide.|Ungültige Ablage.
+Respuesta MR no valida.|Invalid MR response.|Réponse MR invalide.|Ungültige MR-Antwort.
+Respuesta MT no valida.|Invalid MT response.|Réponse MT invalide.|Ungültige MT-Antwort.
+Respuesta MT de otro canal.|MT response from another channel.|Réponse MT d’un autre canal.|MT-Antwort eines anderen Kanals.
+Respuesta MR de otro canal.|MR response from another channel.|Réponse MR d’un autre canal.|MR-Antwort eines anderen Kanals.
+Nombre no valido: maximo 12 caracteres ASCII imprimibles, sin punto y coma.|Invalid name: at most 12 printable ASCII characters, no semicolon.|Nom invalide : 12 caractères ASCII imprimables au maximum, sans point-virgule.|Ungültiger Name: höchstens 12 druckbare ASCII-Zeichen, kein Semikolon.
+Respuesta EX no valida.|Invalid EX response.|Réponse EX invalide.|Ungültige EX-Antwort.
+Valor de menu con longitud incorrecta.|Menu value with incorrect length.|Valeur de menu de longueur incorrecte.|Menüwert mit falscher Länge.
+Valor de menu no valido.|Invalid menu value.|Valeur de menu invalide.|Ungültiger Menüwert.
+Longitud de valor de menu desconocida.|Unknown menu value length.|Longueur de la valeur de menu inconnue.|Länge des Menüwerts unbekannt.
+Texto de menu no valido (ASCII imprimible).|Invalid menu text (printable ASCII).|Texte de menu invalide (ASCII imprimable).|Ungültiger Menütext (druckbares ASCII).
+Valor con signo de menu no valido.|Invalid signed menu value.|Valeur de menu signée invalide.|Ungültiger vorzeichenbehafteter Menüwert.
+Valor numerico de menu no valido.|Invalid numeric menu value.|Valeur numérique de menu invalide.|Ungültiger numerischer Menüwert.
+Valor de menu fuera de las opciones.|Menu value outside the options.|Valeur de menu hors des options.|Menüwert außerhalb der Optionen.
+Elemento de menu de solo lectura: no se escribe.|Read-only menu item: it is not written.|Élément de menu en lecture seule : il n’est pas écrit.|Schreibgeschütztes Menüelement: wird nicht geschrieben.
+Tipo de copia no valido.|Invalid backup type.|Type de sauvegarde invalide.|Ungültiger Sicherungstyp.
+Copia no reconocida: formato, version o tipo incorrectos.|Unrecognized backup: wrong format, version or type.|Sauvegarde non reconnue : format, version ou type incorrect.|Sicherung nicht erkannt: falsches Format, falsche Version oder falscher Typ.
+Copia con datos no validos.|Backup with invalid data.|Sauvegarde contenant des données invalides.|Sicherung mit ungültigen Daten.
+Copia con canales repetidos.|Backup with repeated channels.|Sauvegarde contenant des canaux répétés.|Sicherung mit wiederholten Kanälen.
+Copia con elementos de menu desconocidos.|Backup with unknown menu items.|Sauvegarde contenant des éléments de menu inconnus.|Sicherung mit unbekannten Menüelementen.
+Canal de inicio no valido (1-999).|Invalid start channel (1-999).|Canal de départ invalide (1-999).|Ungültiger Startkanal (1-999).
+El CSV no contiene canales validos.|The CSV contains no valid channels.|Le CSV ne contient aucun canal valide.|Das CSV enthält keine gültigen Kanäle.
+El CSV llegaria mas alla del canal 999.|The CSV would go beyond channel 999.|Le CSV dépasserait le canal 999.|Das CSV würde über Kanal 999 hinausgehen.
+Origen y destino deben ser distintos.|Source and target must be different.|La source et la cible doivent être différentes.|Quelle und Ziel müssen verschieden sein.
+El canal origen esta vacio.|The source channel is empty.|Le canal source est vide.|Der Quellkanal ist leer.
+Comando CAT no valido.|Invalid CAT command.|Commande CAT invalide.|Ungültiger CAT-Befehl.
+La radio no responde.|The radio is not responding.|La radio ne répond pas.|Das Funkgerät antwortet nicht.
+Respuesta de la radio demasiado larga.|Radio response too long.|Réponse de la radio trop longue.|Antwort des Funkgeräts zu lang.
+No es un FTX-1: respuesta ID inesperada ({0}).|Not an FTX-1: unexpected ID response ({0}).|Ce n’est pas un FTX-1 : réponse ID inattendue ({0}).|Kein FTX-1: unerwartete ID-Antwort ({0}).
+El canal {0} esta vacio: no hay borrado documentado, no se puede escribir un canal vacio.|Channel {0} is empty: no erase is documented, an empty channel cannot be written.|Le canal {0} est vide : aucun effacement n’est documenté, un canal vide ne peut pas être écrit.|Kanal {0} ist leer: Ein Löschen ist nicht dokumentiert, ein leerer Kanal kann nicht geschrieben werden.
+Verificacion fallida en el canal {0}: la radio no coincide con lo escrito.|Verification failed on channel {0}: the radio does not match what was written.|Échec de la vérification du canal {0} : la radio ne correspond pas à ce qui a été écrit.|Überprüfung von Kanal {0} fehlgeschlagen: Das Funkgerät stimmt nicht mit dem Geschriebenen überein.
+Verificacion fallida en el menu {0}: la radio no coincide con lo escrito.|Verification failed on menu item {0}: the radio does not match what was written.|Échec de la vérification du menu {0} : la radio ne correspond pas à ce qui a été écrit.|Überprüfung des Menüelements {0} fehlgeschlagen: Das Funkgerät stimmt nicht mit dem Geschriebenen überein.
+`.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;
 })(typeof globalThis === "object" ? globalThis : this);

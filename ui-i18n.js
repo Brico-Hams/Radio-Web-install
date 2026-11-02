@@ -64,7 +64,7 @@
     const url = new URL(href, base);
     if (url.origin !== new URL(base).origin) return href;
     const file = href.split(/[?#]/, 1)[0];
-    if (/\/(?:index|opengd77|quansheng|anytone)\.html$/.test(url.pathname)) {
+    if (/\/(?:index|opengd77|quansheng|anytone|ftx1)\.html$/.test(url.pathname)) {
       url.searchParams.set("lang", language);
       return `${file}${url.search}${url.hash}`;
     }

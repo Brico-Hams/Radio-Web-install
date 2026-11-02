@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Yaesu FTX-1 | Bricohams Radio Workspace</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <script src="radio-core.js" defer></script>
+  <script src="runtime-mode.js" defer></script>
+  <script src="ui-translations.js" defer></script>
+  <script src="ui-i18n.js" defer></script>
+  <script src="planning-core.js" defer></script>
+  <script src="transports.js" defer></script>
+  <script src="ftx1-menu.js" defer></script>
+  <script src="ftx1-core.js" defer></script>
+  <script src="ftx1-ui.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body data-page="ftx1">
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <div id="app"></div>
+  <template id="ftx1-content">
+    <section class="hero"><span class="eyebrow accent">YAESU FTX-1 - BETA</span>
+      <h1>Memorias y configuracion del Yaesu FTX-1</h1>
+      <p>Lee, edita, copia y escribe las memorias y los ajustes del menu (EX) por CAT sobre el puerto USB.
+        Cada escritura se verifica volviendo a leer la radio.</p>
+      <p><a href="ayuda-ftx1.html">Leer guia y limites del FTX-1</a></p>
+    </section>
+    <aside class="notice"><div><h2>Antes de conectar</h2>
+      <p>La radio crea dos puertos CP210x: Enhanced COM Port (CAT-1, de fabrica 38400) y Standard COM Port (CAT-2, de fabrica 4800).
+        Se requiere el firmware MAIN 1.08 o posterior. Cierra antes cualquier otro programa que use el puerto CAT.</p>
+      <p>Descarga siempre la copia de seguridad antes de escribir. La frecuencia de tono, el codigo DCS y el ancho
+        del desplazamiento de repetidor no forman parte de MR/MW: son ajustes FM globales del menu (RPT SHIFT, TONE FREQ, DCS CODE).</p></div></aside>
+    <section class="panel">
+      <h2>1. Conexion</h2>
+      <div class="planning-filters">
+        <label>Velocidad CAT (baudios)
+          <select id="ftx-baud">
+            <option value="4800">4800</option>
+            <option value="9600">9600</option>
+            <option value="19200">19200</option>
+            <option value="38400" selected>38400</option>
+            <option value="115200">115200</option>
+          </select></label>
+        <button id="ftx-connect" class="button primary" type="button">Conectar</button>
+        <button id="ftx-disconnect" class="button secondary" type="button" disabled>Desconectar</button>
+      </div>
+      <p>La velocidad debe coincidir con CAT-1 RATE o CAT-2 RATE de la radio, segun el puerto elegido.</p>
+      <p id="ftx-status" role="status" aria-live="polite">Sin conexion.</p>
+      <progress id="ftx-progress" max="1" value="0" aria-label="Progreso de la operacion"></progress>
+    </section>
+    <section class="panel">
+      <h2>2. Memorias</h2>
+      <div class="planning-filters">
+        <label>Desde el canal <input id="ftx-mem-from" type="number" min="1" max="999" value="1"></label>
+        <label>Hasta el canal <input id="ftx-mem-to" type="number" min="1" max="999" value="99"></label>
+        <button id="ftx-mem-read" class="button primary" type="button" disabled>Leer memorias</button>
+      </div>
+      <p>Canales de memoria 1-999. Un canal sin programar se muestra vacio y no se puede dejar vacio de nuevo: no hay borrado documentado.</p>
+      <div class="table-wrap"><table><thead><tr><th>Canal</th><th>Frecuencia MHz</th><th>Modo</th><th>Nombre</th><th>Tono</th><th>Desplazamiento</th><th>Clarificador</th></tr></thead><tbody id="ftx-mem-rows"></tbody></table></div>
+      <h3>Copiar canal</h3>
+      <div class="planning-filters">
+        <label>Canal origen <input id="ftx-copy-from" type="number" min="1" max="999" value="1"></label>
+        <label>Canal destino <input id="ftx-copy-to" type="number" min="1" max="999" value="2"></label>
+        <button id="ftx-copy" class="button secondary" type="button" disabled>Copiar canal</button>
+      </div>
+      <h3>Copia, CSV y escritura</h3>
+      <div class="planning-filters">
+        <button id="ftx-mem-backup" class="button secondary" type="button" disabled>Descargar copia de memorias (JSON)</button>
+        <label>Restaurar copia JSON <input id="ftx-mem-restore" type="file" accept=".json" disabled></label>
+        <button id="ftx-csv-export" class="button secondary" type="button" disabled>Exportar CSV</button>
+      </div>
+      <div class="planning-filters">
+        <label>Importar CSV (CHIRP u OpenGD77) <input id="ftx-csv-import" type="file" accept=".csv" disabled></label>
+        <label>Canal de inicio <input id="ftx-csv-start" type="number" min="1" max="999" value="1"></label>
+      </div>
+      <div class="planning-filters">
+        <button id="ftx-mem-simulate" class="button secondary" type="button" disabled>Simular escritura (diferencias)</button>
+        <button id="ftx-mem-write" class="button primary" type="button" disabled>Escribir cambios en la radio</button>
+      </div>
+      <p>Para escribir: lee las memorias, descarga su copia y simula las diferencias actuales.</p>
+      <p id="ftx-mem-summary" role="status"></p>
+      <div class="table-wrap"><table><thead><tr><th>Canal</th><th>Campo</th><th>Antes</th><th>Despues</th></tr></thead><tbody id="ftx-mem-diff"></tbody></table></div>
+    </section>
+    <section class="panel">
+      <h2>3. Configuracion del equipo (menu)</h2>
+      <div class="planning-filters">
+        <label>Grupo del menu <select id="ftx-menu-group"></select></label>
+        <button id="ftx-menu-read" class="button primary" type="button" disabled>Leer configuracion</button>
+      </div>
+      <p>Los elementos de solo lectura (por ejemplo CAT-1 RATE) nunca se escriben: pueden cortar el enlace CAT o son valores de calibracion.</p>
+      <div class="table-wrap"><table><thead><tr><th>Ajuste</th><th>Descripcion</th><th>Valor</th></tr></thead><tbody id="ftx-menu-rows"></tbody></table></div>
+      <div class="planning-filters">
+        <button id="ftx-menu-backup" class="button secondary" type="button" disabled>Descargar copia de configuracion (JSON)</button>
+        <label>Restaurar copia de configuracion JSON <input id="ftx-menu-restore" type="file" accept=".json" disabled></label>
+      </div>
+      <div class="planning-filters">
+        <button id="ftx-menu-simulate" class="button secondary" type="button" disabled>Simular escritura de configuracion (diferencias)</button>
+        <button id="ftx-menu-write" class="button primary" type="button" disabled>Escribir configuracion en la radio</button>
+      </div>
+      <p id="ftx-menu-summary" role="status"></p>
+      <div class="table-wrap"><table><thead><tr><th>Ajuste</th><th>Antes</th><th>Despues</th></tr></thead><tbody id="ftx-menu-diff"></tbody></table></div>
+    </section>
+  </template>
+  <noscript>Activa JavaScript para usar el editor web del FTX-1.</noscript>
+</body>
+</html>
