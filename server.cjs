@@ -9,6 +9,7 @@ const BASE_FILES = [
   ...["ES", "GB", "US", "DE", "FR", "HU", "IT"].flatMap(code =>
     [`data/channel-templates/${code}.json`, `data/channel-templates/${code}-passes.json`]),
   "anytone.html", "anytone-core.js", "anytone-ui.js",
+  "ftx1.html", "ftx1-menu.js", "ftx1-core.js", "ftx1-ui.js",
   "precompiled-catalog.js", "quansheng-factory.js", "precompiled/catalog.json", "precompiled/LICENSE.txt",
   "precompiled/APACHE-2.0.txt", "precompiled/NOTICE.txt", "precompiled/BRICOHAMS-NOTICE.txt",
   "precompiled/apps/catalog.json",
@@ -22,7 +23,7 @@ const BASE_FILES = [
   "ayuda-firmwares.html", "ayuda-configuracion.html", "ayuda-quansheng.html",
   "ayuda-opciones-f4hwn.html", "ayuda-presets-f4hwn.html", "ayuda-ardf.html",
   "ayuda-opengd77.html", "ayuda-opengd77-modelos.html", "ayuda-karina.html",
-  "ayuda-anytone.html", "ayuda-referencias.html", "ayuda-arquitectura.html", "ayuda-marca.html",
+  "ayuda-anytone.html", "ayuda-ftx1.html", "ayuda-referencias.html", "ayuda-arquitectura.html", "ayuda-marca.html",
   "ayuda-decisiones.html", "ayuda-despliegue.html",
   "ayuda-bricohams.html", "ayuda-entrega.html", "ayuda-android.html", "ayuda-validacion-v3-android.html", "help-docs.css",
   "ayuda-egzumer.html", "ayuda-pack-dim0s.html", "ayuda-atlas-uv-k5-v3.html",
