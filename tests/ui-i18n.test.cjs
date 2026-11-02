@@ -77,12 +77,12 @@ test("Quansheng channel templates, dragging and read-only workflow are localized
 
 test("all authored static native tool controls have translations or explicit technical names", () => {
   const catalog = new Set(rows.map(row => row[0]));
-  const technical = new Set(["AnyTone Beta", "MHz", "RX", "TX", "CAT RX Bricohams Beta", "Slot", "Bytes", "CRC",
+  const technical = new Set(["AnyTone Beta", "Yaesu FTX-1", "MHz", "RX", "TX", "CAT RX Bricohams Beta", "Slot", "Bytes", "CRC",
     "App", "RX MHz", "TX MHz", "FM", "DMR", "AM", "Color Code", "Time Slot", "RF MHz", "REMER", "RX / TX MHz",
     "ID", "ISS / 25544", "SO-50 / 27607", "AO-91 / 43017", "PO-101 / 43678", "SatNOGS DB (TLE)",
     "CelesTrak (TLE)", "CC/TS/TG"]);
   for (const file of ["app.js", "radio-ui.js", "planning-ui.js", "channel-template-ui.js", "firmware-catalog.js", "custom-firmware-ui.js",
-    "quansheng-tools.js", "quansheng-factory.js", "precompiled-catalog.js", "anytone.html"]) {
+    "quansheng-tools.js", "quansheng-factory.js", "precompiled-catalog.js", "anytone.html", "ftx1.html"]) {
     for (const [, raw] of read(file).matchAll(/<(?:h[1-3]|button|label|summary|option|th)\b[^>]*>([^<>]+)</g)) {
       const label = raw.replace(/\s+/g, " ").trim();
       if (!label || label.includes("${") || /^(?:\d+(?:\.\d+)?(?: kHz)?|\d \/ CFG \d)$/.test(label)) continue;

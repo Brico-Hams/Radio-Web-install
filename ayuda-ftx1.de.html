@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Anleitung Yaesu FTX-1: Speicher und Einstellungen: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Anleitung Yaesu FTX-1: Speicher und Einstellungen | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-ftx1.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-ftx1.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-ftx1.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-ftx1.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-ftx1.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=de"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda-referencias.de.html">Dokumentation und Referenzen</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=de">Quansheng</a> · <a href="opengd77.html?lang=de">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-ftx1.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-ftx1.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-ftx1.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-ftx1.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-ftx1.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#requisitos-y-conexion">Voraussetzungen und Verbindung</a></li><li><a href="#memorias">Speicher</a></li><li><a href="#configuracion-del-equipo-menu">Geräteeinstellungen (Menü)</a></li><li><a href="#copia-simulacion-y-escritura">Sicherung, Simulation und Schreiben</a></li><li><a href="#limites">Grenzen</a></li></ul></nav>
+    <article class="panel"><h1 id="guia-yaesu-ftx-1-memorias-y-configuracion">Anleitung Yaesu FTX-1: Speicher und Einstellungen</h1>
+<p>Der Web-Editor FTX-1 Beta liest, bearbeitet, kopiert und schreibt die Speicher und die Menüeinstellungen des Yaesu FTX-1 im Browser, über den USB-CAT-Port und Web Serial. Er verwendet nur die Befehle aus dem offiziellen Yaesu-Handbuch „CAT Operation Reference Manual“ des FTX-1. Er ersetzt weder ADMS noch die Yaesu-Software und sendet keine Daten an Server.</p>
+<h2 id="requisitos-y-conexion">Voraussetzungen und Verbindung</h2>
+<ul>
+<li>Chrome oder Edge auf <code>localhost</code> oder über HTTPS (Web Serial).</li>
+<li>MAIN-Firmware 1.08 oder neuer: Laut Handbuch funktioniert CAT mit älteren Versionen nicht.</li>
+<li>USB-C-Kabel zum Funkgerät. Windows zeigt zwei Ports „Silicon Labs Dual CP210x“; sowohl der <code>Enhanced COM Port</code> (CAT-1) als auch der <code>Standard COM Port</code> (CAT-2) funktionieren.</li>
+<li>Schließe vor dem Verbinden alle anderen CAT-Programme (WSJT-X, Logbücher, cat-ftx1).</li>
+<li>Geschwindigkeit: <code>CAT-1 RATE</code> oder <code>CAT-2 RATE</code> je nach Port (Werkseinstellung 38400 und 4800 bps). Ein echtes FTX-1 antwortete über CAT-2 mit 4800 bps.</li>
+</ul>
+<p>Beim Verbinden sendet die Seite <code>ID;</code> und verlangt die FTX-1-Antwort <code>ID0840;</code>. Danach sendet sie <code>AI0;</code>, um die automatische Information während der Arbeit abzuschalten.</p>
+<h2 id="memorias">Speicher</h2>
+<p>„Speicher lesen“ fragt die gewählten Kanäle (1-999) mit <code>MR</code> und den Namen mit <code>MT</code> ab. Ein leerer Kanal antwortet <code>?;</code> und wird als frei angezeigt. Bearbeitbar sind:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Feld</th><th scope="col">Befehl</th><th scope="col">Werte</th></tr></thead><tbody>
+<tr><td>Frequenz</td><td><code>MW</code></td><td>0.030000-470.000000 MHz</td></tr>
+<tr><td>Betriebsart</td><td><code>MW</code></td><td>LSB, USB, CW-U, CW-L, FM, FM-N, AM, AM-N, RTTY, DATA, PSK, C4FM</td></tr>
+<tr><td>Ton</td><td><code>MW</code></td><td>OFF, CTCSS ENC/DEC, CTCSS ENC, DCS, PR FREQ, REV TONE</td></tr>
+<tr><td>Ablage</td><td><code>MW</code></td><td>Simplex, + oder -</td></tr>
+<tr><td>Name</td><td><code>MT</code></td><td>Bis zu 12 ASCII-Zeichen</td></tr>
+</tbody></table></div>
+<p>Der Clarifier bleibt wie gelesen erhalten. Subtonfrequenz, DCS-Code und Ablagebreite sind nicht Teil von <code>MR</code>/<code>MW</code>: Es sind globale FM-Menüeinstellungen (<code>TONE FREQ</code>, <code>DCS CODE</code>, <code>RPT SHIFT(144MHz)</code>, <code>RPT SHIFT(430MHz)</code>), die du im Abschnitt Einstellungen ändern kannst. Es gibt keinen dokumentierten Befehl zum Löschen eines Kanals: Ein belegter Kanal kann auf der Webseite nicht geleert werden.</p>
+<p>„Kanal kopieren“ dupliziert einen Kanal an eine andere Position im Editor. „CSV exportieren“ erzeugt eine CSV-Datei mit CHIRP-Spalten; „CSV importieren“ akzeptiert CHIRP- oder OpenGD77-CSV mit FM-Kanälen und legt sie ab dem gewählten Startkanal ab. Die Töne der Quelle gehen beim Import verloren: Prüfe sie vor dem Schreiben.</p>
+<h2 id="configuracion-del-equipo-menu">Geräteeinstellungen (Menü)</h2>
+<p>Die Tabelle wird mit <code>scripts/build-ftx1-menu.py</code> aus Tabelle 3 (MENU Chart) des Handbuchs erzeugt. Jede Einstellung wird mit <code>EX</code> gelesen und mit demselben Befehl geschrieben, unter Einhaltung der Stellenzahl und der dokumentierten Werte. Im Handbuch mit „-“ markierte Punkte werden nicht angeboten. Nur lesbar bleiben Einstellungen, die die CAT-Verbindung trennen können (CAT-Raten, -Timer und -Stoppbits, TUN/LIN-Port), der Referenzabgleich <code>REF FREQ ADJ</code>, das feste APRS-Ziel und der Bluetooth-Status.</p>
+<h2 id="copia-simulacion-y-escritura">Sicherung, Simulation und Schreiben</h2>
+<p>Das Schreiben bleibt gesperrt, bis in derselben Sitzung drei Schritte erledigt sind:</p>
+<ol>
+<li>Vom Funkgerät lesen.</li>
+<li>Die JSON-Sicherung dieses Lesevorgangs herunterladen (<code>bricohams-ftx1-backup</code>).</li>
+<li>„Schreiben simulieren“ drücken und die Differenztabelle prüfen.</li>
+</ol>
+<p>Es werden nur geänderte Kanäle oder Einstellungen gesendet. Jeder Wert wird zurückgelesen und mit dem Gesendeten verglichen; antwortet das Gerät <code>?;</code> oder mit einem anderen Wert, stoppt das Schreiben und nennt Kanal oder Einstellung. Zum Rückgängigmachen lade die JSON-Sicherung mit „JSON-Sicherung wiederherstellen“, simuliere und schreibe erneut.</p>
+<h2 id="limites">Grenzen</h2>
+<ul>
+<li>Nur Speicherkanäle 1-999. PMS, 5 MHz, Notrufkanal und Split-Speicher (<code>MZ</code>) werden nicht bearbeitet.</li>
+<li>Die README von cat-ftx1 weist darauf hin, dass manche echten FTX-1-Antworten vom Handbuch abweichen. Teste zuerst mit einem freien Kanal und behalte immer die Sicherung.</li>
+<li>Im Handbuch mit „-“ markierte Betriebsarten (etwa der Code <code>0</code>, den manche echten Kanäle verwenden) werden gelesen und angezeigt, aber nie geschrieben: Wähle vorher eine andere Betriebsart.</li>
+<li>Das Yaesu-Handbuch wird mit diesem Projekt nicht verteilt.</li>
+</ul></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

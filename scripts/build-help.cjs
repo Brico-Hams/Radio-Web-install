@@ -18,6 +18,7 @@ const pages = Object.freeze({
   "AYUDA-OPENGD77.md": "ayuda-opengd77.html",
   "AYUDA-OPENGD77-MODELOS.md": "ayuda-opengd77-modelos.html",
   "AYUDA-ANYTONE.md": "ayuda-anytone.html",
+  "AYUDA-FTX1.md": "ayuda-ftx1.html",
   "KARINA.md": "ayuda-karina.html",
   "BRICOHAMS-FIRMWARE.md": "ayuda-bricohams.html",
   "ESTADO-ENTREGA.md": "ayuda-entrega.html",
@@ -117,7 +118,7 @@ function renderHelpCenter(original, lang) {
       token = token.replace(/href="([^"]+)"/, (_, href) => {
         const [file, hash] = href.split("#");
         const target = /^ayuda(?:-[\w-]+)?\.html$/.test(file) ? localized(file, lang)
-          : /^(index|quansheng|opengd77|anytone)\.html$/.test(file) ? `${file}?lang=${lang === "en" ? "en-US" : lang}` : file;
+          : /^(index|quansheng|opengd77|anytone|ftx1)\.html$/.test(file) ? `${file}?lang=${lang === "en" ? "en-US" : lang}` : file;
         return `href="${target}${hash === undefined ? "" : `#${hash}`}"`;
       });
     }
@@ -334,7 +335,7 @@ function destination(target, source, lang = "es") {
   if (path.dirname(resolved) === root && resolved.endsWith(".html")) {
     const name = path.basename(resolved);
     const nativeLocale = lang === "en" ? "en-US" : lang;
-    return `${name === "ayuda.html" ? helpCenterFile(lang) : name}${lang !== "it" && /^(index|quansheng|opengd77|anytone)\.html$/.test(name) ? `?lang=${nativeLocale}` : ""}${anchor ? `#${anchor}` : ""}`;
+    return `${name === "ayuda.html" ? helpCenterFile(lang) : name}${lang !== "it" && /^(index|quansheng|opengd77|anytone|ftx1)\.html$/.test(name) ? `?lang=${nativeLocale}` : ""}${anchor ? `#${anchor}` : ""}`;
   }
   const found = canonical(target, path.join(root, "docs", source));
   const original = page && path.join(root, "docs", relative.replace(/^i18n\/[a-z]{2}\//, ""));
