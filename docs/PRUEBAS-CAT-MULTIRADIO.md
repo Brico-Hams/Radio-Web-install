@@ -179,7 +179,48 @@ PTT sobre carga ficticia (01-11-2026, con permiso del operador):
 
 La APK prueba sola 38400 si el (tr)uSDX no responde a 115200, y al revés.
 
-## 6. Certificación de uso
+### (tr)uSDX actualizado a la beta R2.00x (01-11-2026)
+
+Firmware personal de DL2MAN cargado por USB con avrdude (`-c arduino -p m328p
+-b 115200`, Optiboot 7.0, firma 1E 95 0F, escritura verificada, fusibles sin
+tocar). La actualización devuelve los ajustes a fábrica: hay que volver a poner
+8.2 PA Bias max, 8.3 Ref Frequency, 8.6 Rshunt y 8.7 LPF Config (Classic).
+Antes de cada actualización conviene guardar la EEPROM (`-U eeprom:r:copia.hex:i`).
+
+| Prueba | Resultado |
+| --- | --- |
+| CAT a 115200: `ID` = 020, `FA` 7,074 MHz, `MD` 2 | OK |
+| Streaming RX (`UA2;`): unos 8.200 bytes/s, por encima de las 7.825 muestras/s | OK |
+| Streaming TX (carga ficticia): 3 s de tono enviados en 3,0 s, TX visto en la radio, vuelve a RX | OK. El CAT tarda ~1 s en responder tras el streaming; la APK espera ese segundo |
+
+### FTX-1: escritura de memorias (02-11-2026)
+
+Probado desde el PC con las mismas cadenas que genera la APK, por el puerto
+CAT-2 (Standard COM, 4800 baudios):
+
+| Prueba | Resultado |
+| --- | --- |
+| Canales 1-411 ocupados, 412 vacío (`MR` responde `?;`) | OK |
+| `MW`, `MT` y `MZ` en el canal vacío 412: ISS, RX 145,800 FM, TX 437,800 en split; relectura `MR`/`MT`/`MZ` idéntica | OK (el canal 412 queda con ISS de prueba) |
+| `MZ` simplex: la radio responde `0` + frecuencia de RX, y acepta escribirlo así | OK |
+
+Hallazgo: tras una ráfaga larga de lecturas `MR` por el puerto **CAT-1**
+(Enhanced COM, 38400) ese puerto dejó de responder, mientras CAT-2 seguía
+funcionando. Apagar y encender la radio debería recuperarlo; pendiente de
+confirmar.
+
+## 6. Modos digitales y memorias (pendiente en el móvil)
+
+| # | Prueba | Resultado |
+| --- | --- | --- |
+| D1 | Digitales: elegir FT8 y banda, Sintonizar → frecuencia y modo DATA/USB en la radio | |
+| D2 | Reloj UTC y cuenta atrás del ciclo coinciden con una app FT8 (FT8CN) | |
+| D3 | "Liberar puerto" y abrir FT8CN/JS8Call con la misma radio: decodifica y transmite | |
+| M1 | FTX-1: "Nuevo canal" en un canal libre; aparece en la radio con nombre, modo y split | |
+| M2 | FTX-1: editar un canal existente pide confirmación y lo sustituye | |
+| M3 | Pase de satélite → "Guardar transpondedor en memoria": RX bajada, TX subida, nombre del satélite | |
+
+## 7. Certificación de uso
 
 Rellena una fila por radio cuando todas sus filas ★ estén en `OK`. Sin firma,
 la radio sigue **sin certificar**.
@@ -195,7 +236,7 @@ la radio sigue **sin certificar**.
 | FTX-1 | | | | | |
 | (tr)uSDX | | | | | |
 
-## 7. Documentación de los fabricantes usada
+## 8. Documentación de los fabricantes usada
 
 El código se ha escrito solo a partir de estos documentos, sin código de
 otros autores:

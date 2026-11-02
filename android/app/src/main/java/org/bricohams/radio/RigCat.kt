@@ -9,7 +9,9 @@ enum class RigMode { LSB, USB, CW, CW_R, AM, FM, FM_N, WFM, RTTY, RTTY_R, DATA_L
 
 enum class Vfo { A, B }
 
-enum class RigModel(val label: String, val defaultBaud: Int, val stopBits: Int, val rangeHz: LongRange) {
+enum class RigModel(
+    val label: String, val defaultBaud: Int, val stopBits: Int, val rangeHz: LongRange
+) {
     FT817("Yaesu FT-817 / FT-817ND", 4800, 2, 100_000L..470_000_000L),
     FT818("Yaesu FT-818ND", 4800, 2, 100_000L..470_000_000L),
     FT857("Yaesu FT-857 / FT-857D", 4800, 2, 100_000L..470_000_000L),
@@ -20,7 +22,7 @@ enum class RigModel(val label: String, val defaultBaud: Int, val stopBits: Int, 
     TRUSDX("(tr)uSDX", 115200, 1, 3_000_000L..30_000_000L)
 }
 
-data class RigMemory(val channel: Int, val frequencyHz: Long, val mode: RigMode?, val name: String)
+data class RigMemory(val channel: Int, val frequencyHz: Long, val mode: RigMode?, val name: String, val txHz: Long? = null)
 data class RigStatus(val frequencyHz: Long, val mode: RigMode?)
 
 interface Rig {
@@ -30,6 +32,7 @@ interface Rig {
     val silentVfoB: Boolean
     val supportsSplit: Boolean
     val supportsMemories: Boolean
+    val supportsMemoryWrite: Boolean
     /** Short text shown to the user. */
     fun identify(): String
     /** Frequency and mode of the active VFO (VFO A for the satellite downlink). */
@@ -42,7 +45,9 @@ interface Rig {
     fun setSplit(on: Boolean)
     /** Empty channels are skipped. */
     fun memories(channels: IntRange, keepGoing: () -> Boolean = { true }): List<RigMemory>
-}
+        /** Replaces the radio's channel and reads it back; throws LocalizedStateException(err_rig_unconfirmed) on a mismatch. */
+        fun writeMemory(memory: RigMemory)
+    }
 
 fun openRig(model: RigModel, transport: RadioBytes, civAddress: Int = 0xA4): Rig = when (model) {
     RigModel.FT817, RigModel.FT818, RigModel.FT857, RigModel.FT897 -> YaesuFiveByteRig(transport, model)

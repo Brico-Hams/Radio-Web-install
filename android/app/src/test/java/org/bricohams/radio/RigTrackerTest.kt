@@ -12,6 +12,8 @@ class RigTrackerTest {
         override val supportsSplit: Boolean = true
     ) : Rig {
         override val supportsMemories = false
+        override val supportsMemoryWrite = false
+        override fun writeMemory(memory: RigMemory) = unsupported("memory write")
         val calls = ArrayList<String>()
         override fun identify() = "fake"
         override fun status() = RigStatus(0, null)

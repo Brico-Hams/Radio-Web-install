@@ -22,6 +22,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputFilter
 import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
@@ -51,7 +52,7 @@ import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
 /**
- * CAT screen for several radios (Yaesu FT-817/857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX), USB only. All radio I/O runs on
+ * CAT screen for several radios (Yaesu FT-817/857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX), over USB. All radio I/O runs on
  * [worker] (commands, satellite tracking) or [txWorker] (SSTV transmission, so Stop TX never waits behind a command);
  * [audioWorker] receives. The UI thread only renders and the radio is never polled in the background except while a
  * satellite is tracked. The manifest declares configChanges so rotation does not drop the USB connection.
@@ -89,10 +90,19 @@ class RigActivity : LocalizedActivity() {
     private lateinit var address: EditText
     private lateinit var frequency: EditText
     private lateinit var modeSpinner: Spinner
+    private lateinit var chooseButton: Button
+    private lateinit var digMode: Spinner
+    private lateinit var digBand: Spinner
+    private lateinit var digPeriod: Spinner
+    private lateinit var digClock: TextView
+    private lateinit var digWarning: TextView
     private lateinit var setVfoB: Button
     private lateinit var memFrom: EditText
     private lateinit var memTo: EditText
     private lateinit var memoriesButton: Button
+    private lateinit var newMemoryButton: Button
+    private var lastMemories: List<RigMemory> = emptyList()
+    private var satMode = RigMode.USB
     private lateinit var stopMemories: Button
     private lateinit var memStatus: TextView
     private lateinit var memList: LinearLayout
@@ -110,6 +120,10 @@ class RigActivity : LocalizedActivity() {
     private var chosen: UsbDevice? = null
     private var chosenPort = 0
     private var chosenLabel = ""
+    private var digShown = false
+    private var digShownMode: DigitalMode? = null
+    private var digShownModel: RigModel? = null
+    private var digBands: List<Long> = emptyList()
     private var requested: UsbDevice? = null
     private var awaitingPermission = false
     private var pickingImage = false
@@ -149,6 +163,12 @@ class RigActivity : LocalizedActivity() {
                 chosen = null
                 suspendConnection(getString(R.string.cat_usb_detached))
             }
+        }
+    }
+    private val digitalTick = object : Runnable {
+        override fun run() {
+            updateDigital()
+            mainHandler.postDelayed(this, 250)
         }
     }
     private val permissionReceiver = object : BroadcastReceiver() {
@@ -199,6 +219,7 @@ class RigActivity : LocalizedActivity() {
         sstvStatus = live(Brand.text(this, 14f, colors.accent))
         buildRadio(body)
         buildFrequency(body)
+        buildDigital(body)
         buildMemories(body)
         buildSatellite(body)
         buildSstv(body)
@@ -235,8 +256,8 @@ class RigActivity : LocalizedActivity() {
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
     }
 
-    private fun spinner(items: List<String>) = Spinner(this).apply {
-        adapter = object : ArrayAdapter<String>(this@RigActivity, android.R.layout.simple_spinner_dropdown_item, items) {
+    private fun adapterOf(items: List<String>) =
+        object : ArrayAdapter<String>(this@RigActivity, android.R.layout.simple_spinner_dropdown_item, items) {
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
                 super.getView(position, convertView, parent).also { (it as? TextView)?.setTextColor(colors.text) }
             override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View =
@@ -245,6 +266,9 @@ class RigActivity : LocalizedActivity() {
                     it.setBackgroundColor(colors.surfaceHigh)
                 }
         }
+
+    private fun spinner(items: List<String>) = Spinner(this).apply {
+        adapter = adapterOf(items)
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
     }
 
@@ -257,6 +281,11 @@ class RigActivity : LocalizedActivity() {
         address = field(R.string.rig_address_hint, preferences.getString("address", null) ?: "A4",
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS)
         address.visibility = if (saved == RigModel.IC705) View.VISIBLE else View.GONE
+        // (tr)uSDX support is credited to its designers, Guido PE1NNZ and Manuel DL2MAN (see ACKNOWLEDGEMENTS.md).
+        val credit = Brand.text(this, 13f, colors.muted).apply {
+            setText(R.string.rig_trusdx_credit)
+            visibility = if (saved == RigModel.TRUSDX) View.VISIBLE else View.GONE
+        }
         label(card, R.string.rig_model_label)
         modelSpinner = spinner(models.map { it.label }).apply {
             setSelection(saved.ordinal)
@@ -269,14 +298,16 @@ class RigActivity : LocalizedActivity() {
                         baud.setText(model.defaultBaud.toString())
                     }
                     address.visibility = if (model == RigModel.IC705) View.VISIBLE else View.GONE
+                    credit.visibility = if (model == RigModel.TRUSDX) View.VISIBLE else View.GONE
                 }
                 override fun onNothingSelected(parent: AdapterView<*>?) {}
             }
         }
         card.addView(modelSpinner)
+        card.addView(credit)
         card.addView(baud)
         card.addView(address)
-        button(card, R.string.rig_choose_device) { chooseDevice() }
+        chooseButton = button(card, R.string.rig_choose_device) { chooseDevice() }
         button(card, R.string.rig_connect, true) { connectPressed() }
         button(card, R.string.rig_disconnect) { operation(notice) { closeRadio(); getString(R.string.usb_disconnected) } }
     }
@@ -301,12 +332,74 @@ class RigActivity : LocalizedActivity() {
         button(card, R.string.rig_ptt_test) { pttTest() }
     }
 
+    private val digitalModes = DigitalMode.values()
+    private val utcClock = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT).withZone(java.time.ZoneOffset.UTC)
+
+    private fun periodText(ms: Long) = if (ms % 1000 == 0L) "${ms / 1000} s" else String.format(Locale.ROOT, "%.1f s", ms / 1000.0)
+
+    private fun selectedDigital() = digitalModes[digMode.selectedItemPosition.coerceIn(0, digitalModes.lastIndex)]
+
+    private fun buildDigital(body: LinearLayout) = section(body, R.string.rig_dig_title) { card ->
+        label(card, R.string.rig_dig_mode_label)
+        digMode = spinner(digitalModes.map { it.label + " · " + getString(it.purpose) })
+        card.addView(digMode)
+        label(card, R.string.rig_dig_band_label)
+        digBand = spinner(emptyList())
+        card.addView(digBand)
+        label(card, R.string.rig_dig_period_label)
+        digPeriod = spinner(emptyList())
+        card.addView(digPeriod)
+        button(card, R.string.rig_dig_tune, true) {
+            val r = rig ?: run { notice.setText(R.string.rig_connect_first); return@button }
+            val hz = digBands.getOrNull(digBand.selectedItemPosition) ?: return@button
+            operation(notice) { r.setFrequency(Vfo.A, hz); r.setMode(dataMode(r.model)); refresh(r); null }
+        }
+        // Not a live region: it changes every 250 ms and would flood TalkBack.
+        digClock = Brand.text(this, 14f, colors.accent)
+        digWarning = Brand.text(this, 13f, colors.accent).apply { setText(R.string.rig_dig_time_warning) }
+        card.addView(digClock)
+        card.addView(digWarning)
+        button(card, R.string.rig_dig_release) {
+            operation(notice) { closeRadio(); getString(R.string.rig_dig_released) }
+        }
+        updateDigital()
+    }
+
+    /** UI thread, every 250 ms: refreshes the band and period lists when the mode or radio changed, then the UTC clock line. */
+    private fun updateDigital() {
+        val mode = selectedDigital()
+        val model = rig?.model
+        if (!digShown || mode != digShownMode || model != digShownModel) {
+            val modeChanged = !digShown || mode != digShownMode
+            digShown = true; digShownMode = mode; digShownModel = model
+            val kept = digBands.getOrNull(digBand.selectedItemPosition)
+            digBands = if (model != null) DigitalFrequencies.forRig(mode, model) else DigitalFrequencies.table.getValue(mode)
+            digBand.adapter = adapterOf(digBands.map { DigitalFrequencies.bandLabel(it) + " · " + mhzText(it) + " MHz" })
+            digBands.indexOf(kept).takeIf { it >= 0 }?.let { digBand.setSelection(it) }
+            if (modeChanged) {
+                digPeriod.adapter = adapterOf(mode.periodsMs.map(::periodText))
+                digPeriod.setSelection(mode.periodsMs.indexOf(mode.defaultPeriodMs).coerceAtLeast(0))
+            }
+        }
+        val period = mode.periodsMs.getOrElse(digPeriod.selectedItemPosition) { mode.defaultPeriodMs }
+        val now = System.currentTimeMillis()
+        digClock.text = getString(R.string.rig_dig_clock, utcClock.format(Instant.ofEpochMilli(now)), mode.label,
+            DigitalClock.msToNextSlot(now, period) / 1000.0,
+            getString(if (DigitalClock.isEvenSlot(now, period)) R.string.rig_dig_even else R.string.rig_dig_odd))
+        val autoTime = android.provider.Settings.Global.getInt(contentResolver, android.provider.Settings.Global.AUTO_TIME, 1)
+        digWarning.visibility = if (autoTime == 0) View.VISIBLE else View.GONE
+    }
+
     private fun buildMemories(body: LinearLayout) = section(body, R.string.rig_section_memories) { card ->
         memFrom = field(R.string.rig_mem_from_hint, "1", InputType.TYPE_CLASS_NUMBER)
         memTo = field(R.string.rig_mem_to_hint, "20", InputType.TYPE_CLASS_NUMBER)
         card.addView(memFrom)
         card.addView(memTo)
         memoriesButton = button(card, R.string.rig_read_memories, tracked = false) { readMemories() }
+        newMemoryButton = button(card, R.string.rig_mem_new, tracked = false) {
+            val limits = channelLimits(rig?.model ?: RigModel.FTX1)
+            showMemoryEditor(firstFreeChannel(limits), "", RigMode.FM, "", "", memStatus)
+        }
         stopMemories = button(card, R.string.rig_stop, tracked = false) { memoryCancel = true }
         card.addView(memStatus)
         memList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -354,6 +447,7 @@ class RigActivity : LocalizedActivity() {
                 card.addView(down); card.addView(up); card.addView(step)
                 button(card, R.string.rig_start_tracking, true) { startTracking() }
                 button(card, R.string.rig_stop_tracking, tracked = false) { stopTracking() }
+                button(card, R.string.rig_mem_save_sat) { saveTransponder() }
             } catch (error: IllegalArgumentException) {
                 card.addView(Brand.text(this, 14f).apply { text = getString(R.string.rig_plan_error, errorText(error)) })
             }
@@ -391,6 +485,7 @@ class RigActivity : LocalizedActivity() {
         downEdit?.setText(String.format(Locale.ROOT, "%.6f", transmitter.downlinkHz / 1e6))
         upEdit?.setText(transmitter.uplinkHz?.let { String.format(Locale.ROOT, "%.6f", it / 1e6) } ?: "")
         stepEdit?.setText(if (transmitter.mode.contains("FM", ignoreCase = true)) "100" else "20")
+        satMode = if (transmitter.mode.contains("FM", ignoreCase = true)) RigMode.FM else RigMode.USB
     }
 
     private fun buildSstv(body: LinearLayout) = section(body, R.string.rig_section_sstv) { card ->
@@ -415,6 +510,7 @@ class RigActivity : LocalizedActivity() {
         controls.forEach { it.isEnabled = ready }
         val r = rig
         memoriesButton.isEnabled = ready && r?.supportsMemories != false
+        newMemoryButton.isEnabled = ready && r?.supportsMemoryWrite != false
         setVfoB.visibility = if (r != null && !r.supportsVfoB) View.GONE else View.VISIBLE
         stopMemories.isEnabled = busy
         stopTx.isEnabled = txActive
@@ -599,6 +695,11 @@ class RigActivity : LocalizedActivity() {
     /** Worker thread: opens the port, identifies the radio and shows its state. */
     private fun open(device: UsbDevice, model: RigModel, rate: Int, port: Int, civ: Int) {
         val link = SerialRadio.open(manager, device, SerialSettings(rate, model.stopBits, port, dtr = true, rts = false))
+        attach(link, model, rate, civ)
+    }
+
+    /** Worker thread: identifies the radio on an open transport and shows its state. */
+    private fun attach(link: RadioBytes, model: RigModel, rate: Int, civ: Int) {
         transport = link
         val opened = openRig(model, link, civ)
         rig = opened
@@ -722,17 +823,116 @@ class RigActivity : LocalizedActivity() {
         }
     }
 
+    private fun memoryText(memory: RigMemory): String {
+        val text = getString(R.string.rig_memory_row, memory.channel, mhzText(memory.frequencyHz), memory.mode?.name ?: "-", memory.name)
+        return if (memory.txHz == null) text else text + "  TX " + mhzText(memory.txHz)
+    }
+
     private fun showMemories(list: List<RigMemory>) {
+        lastMemories = list
         memList.removeAllViews()
         for (memory in list) {
-            val text = getString(R.string.rig_memory_row, memory.channel, mhzText(memory.frequencyHz), memory.mode?.name ?: "-", memory.name)
+            val text = memoryText(memory)
             memList.addView(Brand.card(this).apply {
                 isClickable = true; isFocusable = true
                 contentDescription = text
                 addView(Brand.text(this@RigActivity, 14f).apply { this.text = text })
-                setOnClickListener { applyMemory(memory) }
+                setOnClickListener { chooseMemoryAction(memory, text) }
             })
         }
+    }
+
+    private fun chooseMemoryAction(memory: RigMemory, text: String) {
+        val writable = rig?.supportsMemoryWrite == true
+        val labels = listOfNotNull(getString(R.string.rig_mem_tune), if (writable) getString(R.string.rig_mem_edit) else null)
+        AlertDialog.Builder(this).setTitle(text).setItems(labels.toTypedArray()) { _, which ->
+            if (which == 0) applyMemory(memory)
+            else showMemoryEditor(memory.channel, mhzText(memory.frequencyHz), memory.mode ?: RigMode.FM, memory.name,
+                memory.txHz?.let(::mhzText) ?: "", memStatus)
+        }.show()
+    }
+
+    private fun firstFreeChannel(limits: IntRange): Int {
+        val used = lastMemories.map { it.channel }.toSet()
+        return limits.firstOrNull { it !in used } ?: limits.first
+    }
+
+    private fun showMemoryEditor(channel: Int, rx: String, mode: RigMode, name: String, tx: String, target: TextView) {
+        val r = rig ?: run { target.setText(R.string.rig_connect_first); return }
+        if (!r.supportsMemoryWrite) { target.setText(R.string.rig_mem_write_unsupported); return }
+        val limits = channelLimits(r.model)
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val padding = Brand.dp(this@RigActivity, 20)
+            setPadding(padding, padding / 2, padding, padding / 2)
+            background = Brand.rounded(this@RigActivity, colors.surface, 20)
+        }
+        val channelEdit = field(R.string.rig_mem_channel_hint, channel.toString(), InputType.TYPE_CLASS_NUMBER)
+        val rxEdit = field(R.string.rig_mem_freq_hint, rx, decimal)
+        val modePicker = spinner(rigModes.map { it.name }).apply { setSelection(rigModes.indexOf(mode).coerceAtLeast(0)) }
+        val nameEdit = field(R.string.rig_mem_name_hint, name, InputType.TYPE_CLASS_TEXT).apply {
+            filters = arrayOf(InputFilter.LengthFilter(12))
+        }
+        val txEdit = field(R.string.rig_mem_tx_hint, tx, decimal)
+        form.addView(channelEdit)
+        form.addView(rxEdit)
+        label(form, R.string.rig_mem_mode_label)
+        form.addView(modePicker)
+        form.addView(nameEdit)
+        form.addView(txEdit)
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.rig_mem_edit_title).setView(ScrollView(this).apply { addView(form) })
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.rig_mem_save, null).create()
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val invalid = getString(R.string.rig_mem_invalid, limits.first, limits.last)
+            val number = channelEdit.text.toString().trim().toIntOrNull()
+            val rxHz = parseMhz(rxEdit.text.toString())
+            val txText = txEdit.text.toString().trim()
+            val txHz = if (txText.isEmpty()) null else parseMhz(txText)
+            val range = r.model.rangeHz
+            when {
+                number == null || number !in limits -> channelEdit.error = invalid
+                rxHz == null || rxHz !in range -> rxEdit.error = invalid
+                txText.isNotEmpty() && (txHz == null || txHz !in range) -> txEdit.error = invalid
+                else -> {
+                    dialog.dismiss()
+                    val picked = rigModes[modePicker.selectedItemPosition.coerceIn(0, rigModes.lastIndex)]
+                    saveMemory(r, RigMemory(number, rxHz, picked, nameEdit.text.toString().trim(), txHz), target)
+                }
+            }
+        }
+    }
+
+    private fun saveMemory(r: Rig, memory: RigMemory, target: TextView) {
+        val write = {
+            operation(target, R.string.rig_mem_writing) {
+                r.writeMemory(memory)
+                val stored = r.memories(memory.channel..memory.channel).firstOrNull()
+                runOnUiThread {
+                    if (!isDestroyed && rig === r) {
+                        showMemories((lastMemories.filter { it.channel != memory.channel } + listOfNotNull(stored)).sortedBy { it.channel })
+                    }
+                }
+                getString(R.string.rig_mem_saved, memory.channel)
+            }
+        }
+        val existing = lastMemories.firstOrNull { it.channel == memory.channel }
+        if (existing == null) write() else AlertDialog.Builder(this).setTitle(R.string.rig_mem_edit_title)
+            .setMessage(getString(R.string.rig_mem_overwrite, memory.channel, memoryText(existing)))
+            .setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.rig_mem_save) { _, _ -> write() }.show()
+    }
+
+    private fun saveTransponder() {
+        val r = rig ?: run { satStatus.setText(R.string.rig_connect_first); return }
+        if (!r.supportsMemoryWrite) { satStatus.setText(R.string.rig_mem_write_unsupported); return }
+        val down = parseMhz(downEdit?.text?.toString().orEmpty())
+        val upText = upEdit?.text?.toString().orEmpty().trim()
+        val up = if (upText.isEmpty()) null else parseMhz(upText)
+        if (down == null || (upText.isNotEmpty() && up == null)) { satStatus.setText(R.string.rig_invalid_sat_frequency); return }
+        val name = selectedPlan?.tle?.name.orEmpty().take(12)
+        showMemoryEditor(firstFreeChannel(channelLimits(r.model)), mhzText(down), satMode, name, up?.let(::mhzText) ?: "", satStatus)
     }
 
     private fun applyMemory(memory: RigMemory) {
@@ -1081,6 +1281,8 @@ class RigActivity : LocalizedActivity() {
         registerUsbReceiver(detachReceiver, UsbManager.ACTION_USB_DEVICE_DETACHED)
         registerUsbReceiver(permissionReceiver, USB_PERMISSION)
         consumePermission()
+        mainHandler.removeCallbacks(digitalTick)
+        mainHandler.post(digitalTick)
     }
 
     private fun registerUsbReceiver(receiver: BroadcastReceiver, action: String) {
@@ -1094,7 +1296,7 @@ class RigActivity : LocalizedActivity() {
 
     override fun onStop() {
         foreground = false
-        unregisterReceiver(detachReceiver)
+        mainHandler.removeCallbacks(digitalTick)
         unregisterReceiver(permissionReceiver)
         // The system image picker stops this screen; nothing is keyed or tracked at that point, so keep the link open.
         if (!pickingImage) suspendConnection(getString(R.string.rig_suspended))
