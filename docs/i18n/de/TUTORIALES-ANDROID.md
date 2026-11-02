@@ -382,20 +382,16 @@ Zu Bändern und einer Einführung in den Empfang siehe [Einführung in den Satel
 
 ## Demonstrationsvideo
 
-Video mit allen Anleitungen: [bricohams-android-demo.mp4](../../media/bricohams-android-demo.mp4).
+Video mit den wichtigsten Bildschirmen (die Anleitungen sind ausführlicher): [bricohams-android-demo.mp4](../../media/bricohams-android-demo.mp4).
 
 Kapitel in der Reihenfolge der Anleitungen:
 
-1. Bevor du anfängst: Installation, Berechtigungen und Sprache.
+1. Start und Sprache.
 2. Logbuch.
 3. ARDF und GPS.
-4. USB-CAT-RX.
-5. Quansheng-Kanaleditor.
-6. OpenGD77.
-7. CAT Multi-Radio und digitale Betriebsarten.
-8. Satelliten.
-9. AZ/EL-Rotor.
-10. Live-Audioempfang.
-11. Morse.
-12. SSTV Robot36.
-13. Häufige Probleme und Sicherheit beim Senden.
+4. Morse.
+5. Satelliten.
+6. CAT Multi-Radio.
+7. Funkgeräte per USB: CAT RX F4HWN, OpenGD77 und Quansheng-Kanaleditor.
+8. Audio und SSTV Robot36.
+9. Digitale Betriebsarten FT8, FT4 und FT2.

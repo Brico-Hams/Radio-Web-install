@@ -382,20 +382,16 @@ Pour les bandes et une initiation à la réception, voir [Initiation à la réce
 
 ## Vidéo de démonstration
 
-Vidéo avec tous les tutoriels : [bricohams-android-demo.mp4](../../media/bricohams-android-demo.mp4).
+Vidéo montrant les écrans principaux (les tutoriels sont plus détaillés) : [bricohams-android-demo.mp4](../../media/bricohams-android-demo.mp4).
 
 Chapitres, dans l'ordre des tutoriels :
 
-1. Avant de commencer : installation, permissions et langue.
+1. Démarrage et langue.
 2. Carnet de trafic.
 3. ARDF et GPS.
-4. CAT RX USB.
-5. Éditeur de canaux Quansheng.
-6. OpenGD77.
-7. CAT multi-radio et modes numériques.
-8. Satellites.
-9. Rotor AZ/EL.
-10. Réception audio en direct.
-11. Morse.
-12. SSTV Robot36.
-13. Problèmes fréquents et sécurité à l'émission.
+4. Morse.
+5. Satellites.
+6. CAT multi-radio.
+7. Radios par USB : CAT RX F4HWN, OpenGD77 et éditeur de canaux Quansheng.
+8. Audio et SSTV Robot36.
+9. Modes numériques FT8, FT4 et FT2.
