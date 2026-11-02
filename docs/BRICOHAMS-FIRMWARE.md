@@ -550,6 +550,15 @@ comando FieldOps de abajo, con Beacon y VOX OFF. Rechaza combinar ambos:
 usan pantallas/teclas diferentes del mismo modo residente. El nombre del
 binario incluye el modulo, evitando confundir las imagenes.
 
+Las nuevas compilaciones del modulo satellite abren SAT RX automaticamente
+una sola vez tras el arranque normal, usando el canal/VFO seleccionado. EXIT
+vuelve a la pantalla normal; para volver a entrar se conserva la asignacion
+de tecla descrita abajo. No se reanuda el escaner/FM/espectro guardado en esta
+imagen. Los modos especiales de arranque y el servicio reducido por bateria
+baja no abren SAT RX automaticamente. CAT RX sigue requiriendo pulsar 8 y
+CAT TX sigue requiriendo el armado local con 9. Este cambio de fuentes no
+actualiza los binarios precompilados: requiere recompilar y validar en radio.
+
 El adaptador `satellite_foxhunt.inc` toma RX y TX nominales del VFO/canal
 seleccionado al entrar en Fox Hunt y muestra `SAT RX`. En esta imagen la
 accion de tecla lateral se llama tambien **SAT RX** (antes «FOX HUNT»):

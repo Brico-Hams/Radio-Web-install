@@ -365,6 +365,7 @@ test("satellite module stores passes in a banked sector and gates 0x7B30 on the 
   const work = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "bh-sat-module-"));
   t.after(() => fs.rmSync(work, { recursive: true, force: true }));
   const sources = {
+    "main.c": '#include "app/app.h"\n    #ifdef ENABLE_FEAT_F4HWN_RESUME_STATE\n    #endif\n    while (true) { APP_Update(); }\n',
     "CMakeLists.txt": "add_library(App INTERFACE)\n",
     "scheduler.c": "#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS\n#endif\n",
     "scheduler.h": "#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS\n#endif\n",
@@ -383,6 +384,13 @@ test("satellite module stores passes in a banked sector and gates 0x7B30 on the 
   const recorded = integrateModule(work, "satellite").map(item => item.file);
   for (const file of ["App/bricohams/passes.c", "App/bricohams/passes.h", "App/app/uart.c"]) assert(recorded.includes(file));
   assert.match(fs.readFileSync(path.join(work, "App/CMakeLists.txt"), "utf8"), /bricohams\/passes\.c/);
+  const main = fs.readFileSync(path.join(work, "App/main.c"), "utf8");
+  assert(recorded.includes("App/main.c"));
+  assert.match(main, /#include "app\/action.h"/);
+  assert.match(main, /if \(BootMode == BOOT_MODE_NORMAL && !gReducedService\)\s+ACTION_FoxHunt\(\);/);
+  assert.match(main, /#elif defined\(ENABLE_FEAT_F4HWN_RESUME_STATE\)/);
+  assert.equal(main.split("ACTION_FoxHunt();").length, 2);
+  assert(main.indexOf("ACTION_FoxHunt();") < main.indexOf("while (true)"));
   const uart = fs.readFileSync(path.join(work, "App/app/uart.c"), "utf8");
   assert.match(uart, /#include "bricohams\/passes.h"/);
   assert(uart.indexOf("case 0x7B30:") < uart.indexOf("case 0x7B00:") && uart.indexOf("case 0x7B00:") < uart.indexOf("case 0x0514:"));

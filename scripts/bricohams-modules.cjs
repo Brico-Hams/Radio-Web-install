@@ -52,6 +52,14 @@ function integrateModule(work, module) {
     `#ifdef ${define}\n#include "bricohams/${module}_foxhunt.inc"\n#endif\n\nvoid APP_RunFoxHunt(void)\n{\n    FOXHUNT_Begin();\n#ifdef ${define}\n    BH_${prefix}_Start();\n#endif`);
   change("app/foxhunt.c", "        FOXHUNT_HandleKeys();", `        #ifdef ${define}\n        BH_${prefix}_Update();\n        #endif\n        FOXHUNT_HandleKeys();`);
   if (module === "satellite") {
+    // Open once after normal boot initialization; EXIT returns to the main loop.
+    // Satellite startup takes precedence over saved scanner/FM/spectrum state.
+    change("main.c", '#include "app/app.h"', '#include "app/app.h"\n#include "app/action.h"');
+    change("main.c", "    #ifdef ENABLE_FEAT_F4HWN_RESUME_STATE",
+      `    #if defined(BRICOHAMS_ENABLE_SATELLITE)
+        if (BootMode == BOOT_MODE_NORMAL && !gReducedService)
+            ACTION_FoxHunt();
+    #elif defined(ENABLE_FEAT_F4HWN_RESUME_STATE)`);
     // The side-key action opens the SAT RX screen, so the menu calls it that too.
     change("ui/menu.c", 'X(ACTION_OPT_FOXHUNT,        "FOX HUNT")', 'X(ACTION_OPT_FOXHUNT,        "SAT RX")');
     change("app/uart.c", '#include "app/uart.h"','#include "app/uart.h"\n#include "bricohams/cat_rx.h"\n#include "bricohams/cat_tx.h"\n#include "bricohams/passes.h"\n#include "scheduler.h"');
