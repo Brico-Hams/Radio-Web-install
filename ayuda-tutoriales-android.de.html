@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Anleitungen zur Bricohams-Android-APK: Bricohams-Hilfe nach Modell und Version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Anleitungen zur Bricohams-Android-APK | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-tutoriales-android.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-tutoriales-android.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-tutoriales-android.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-tutoriales-android.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-tutoriales-android.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Zum Inhalt springen</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=de"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Hilfe"><a href="ayuda-referencias.de.html">Dokumentation und Referenzen</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=de">Quansheng</a> · <a href="opengd77.html?lang=de">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Sprache"><a href="ayuda-tutoriales-android.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-tutoriales-android.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-tutoriales-android.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-tutoriales-android.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-tutoriales-android.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#antes-de-empezar">Bevor du anfängst</a></li><li><a href="#tutoriales">Anleitungen</a></li><li><a href="#problemas-frecuentes">Häufige Probleme</a></li><li><a href="#seguridad-al-transmitir">Sicherheit beim Senden</a></li><li><a href="#video-de-demostracion">Demonstrationsvideo</a></li></ul></nav>
+    <article class="panel"><h1 id="tutoriales-de-la-apk-android-bricohams">Anleitungen zur Bricohams-Android-APK</h1>
+<p>Schritt-für-Schritt-Anleitung zur einzigen Bricohams-APK (<code>org.bricohams.radio</code>, native Kotlin-App, Beta). Jede Anleitung nennt das Ziel, was du brauchst, die Schritte mit den genauen Bildschirmtexten, das erwartete Ergebnis und die üblichen Fehler. Der vollständige technische Umfang und die Einschränkungen stehen in <a href="ayuda-android.de.html">Bricohams Android Beta</a>. Als experimentell gekennzeichnete Funktionen sind nicht mit einem echten Funkgerät validiert: Teste sie zuerst mit einer Kunstantenne oder nur im Empfang.</p>
+<h2 id="antes-de-empezar">Bevor du anfängst</h2>
+<h3 id="instalacion-y-requisitos">Installation und Voraussetzungen</h3>
+<p><strong>Ziel:</strong> die APK installiert und lauffähig haben.</p>
+<p><strong>Du brauchst:</strong> ein Handy mit Android 8.0 (API 26) oder neuer. Die App braucht weder Server noch Konto.</p>
+<ol>
+<li>Lade die APK herunter und prüfe ihren veröffentlichten SHA-256 (siehe <a href="ayuda-android.de.html">Bricohams Android Beta</a>).</li>
+<li>Öffne die Datei im Dateimanager oder im Browser. Android fragt, ob die Installation aus dieser App erlaubt werden soll: Erlaube sie nur für diesen Schritt.</li>
+<li>Die APK ist ein Entwicklungsbuild, mit dem Debug-Schlüssel signiert, und wird nicht über Google Play verteilt.</li>
+<li>Öffne Bricohams. Du siehst den Hinweis „BETA - lokale Daten. Daten vor dem Deinstallieren exportieren.&quot;</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> der Startbildschirm mit den Bereichen „Deine Funkstation&quot;, „Funk und Empfang&quot;, „Deine Daten und Sicherungen&quot; und „Umfang und Datenschutz&quot;.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>Android blockiert die Installation: Die Erlaubnis, aus der App zu installieren, die die APK öffnet, fehlt.</li>
+<li>Das Deinstallieren der App löscht die lokalen Daten (private SQLite): Nutze vorher „Alle Daten als JSON exportieren&quot;.</li>
+</ul>
+<h3 id="permisos-y-para-que-se-piden">Berechtigungen und wofür sie angefordert werden</h3>
+<p>Bricohams sammelt und sendet keine Daten. Das sind die Berechtigungen des Manifests und ihr Zweck:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Berechtigung</th><th scope="col">Wofür sie verwendet wird</th></tr></thead><tbody>
+<tr><td>Standort (genau und ungefähr)</td><td>Eine einmalige GPS-Position im ARDF und „Letzte GPS-Position verwenden&quot; bei Satelliten. Keine Verfolgung im Hintergrund</td></tr>
+<tr><td>Mikrofon</td><td>Nur wenn du „Audioaufnahme starten&quot; drückst oder SSTV in CAT Multi-Radio empfängst. Die Erlaubnis startet keine Aufnahme</td></tr>
+<tr><td>Internet und Netzwerkstatus</td><td>HTTPS-Download von TLEs (CelesTrak) und Frequenzen (SatNOGS) und WLAN-Verbindung zum Rotor (192.168.4.1)</td></tr>
+<tr><td>Bluetooth (Suchen und Verbinden)</td><td>AZ/EL-Rotor über BLE</td></tr>
+<tr><td>USB-Host</td><td>Funkgeräte über OTG-Kabel. Android fragt für jedes Gerät nach und verbindet nie von selbst beim Anstecken</td></tr>
+</tbody></table></div>
+<p>Mikrofon, GPS, USB-Host, BLE und Kompass sind für die Installation nicht erforderlich: Ohne sie sind nur die zugehörigen Funktionen deaktiviert.</p>
+<h3 id="elegir-el-idioma">Sprache wählen</h3>
+<ol>
+<li>Öffne auf dem Startbildschirm „Bricohams-Sprache&quot;.</li>
+<li>Wähle „Systemsprache&quot;, Español, English (US), Français oder Deutsch.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> Die Sprache wird auf dem Handy gespeichert und für alle Bildschirme übernommen. Rufzeichen, Kanalnamen und Benutzerdateien werden nicht übersetzt.</p>
+<h2 id="tutoriales">Anleitungen</h2>
+<h3 id="1-libro-de-guardia-logbook">1. Logbuch</h3>
+<p><strong>Ziel:</strong> Kontakte erfassen, suchen und Daten sicher verschieben.</p>
+<p><strong>Du brauchst:</strong> nur das Handy. Funktioniert offline.</p>
+<p><strong>Einen Kontakt hinzufügen</strong></p>
+<ol>
+<li>Öffne den Reiter „Logbuch&quot;. Für ein POTA- oder SOTA-Logbuch lege unter „Logbücher&quot; eines an: Fülle den Logbuchnamen, „Park- oder Gipfelreferenz (leer bei Allgemein)&quot; (Beispiele EA-0123 und EA4/MD-001) und „Mein Stationsrufzeichen&quot; aus und drücke „Logbuch erstellen&quot;.</li>
+<li>Gib „Rufzeichen&quot; ein (3 bis 20 Zeichen: Buchstaben, Ziffern und /).</li>
+<li>Lass das Feld „UTC ISO&quot; leer, um beim Speichern die aktuelle Zeit zu verwenden, oder gib das Datum ein.</li>
+<li>Fülle „Frequenz MHz&quot;, die Betriebsart, „Rapport gesendet&quot;, „Rapport empfangen&quot; und „Notizen&quot; aus.</li>
+<li>Drücke „Neuen Kontakt speichern&quot;.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> Der Kontakt ist auf dem Handy gespeichert; Rufzeichen und Notizen werden geleert, Frequenz und Betriebsart bleiben erhalten. Gibt es dasselbe Rufzeichen, Band und dieselbe Betriebsart schon, erscheint eine Warnung mit „Nicht speichern&quot; oder „Trotzdem speichern&quot;. Zum Bearbeiten tippst du den Kontakt an und nutzt „Kontaktänderungen speichern&quot;, „Bearbeitung abbrechen&quot; oder „Diesen Kontakt löschen&quot; (mit Bestätigung).</p>
+<p><strong>Suchen</strong></p>
+<ol>
+<li>Tippe in „Dieses Logbuch durchsuchen: Rufzeichen, Notizen, Modus oder Frequenz&quot;.</li>
+<li>Drücke „Kontakte suchen&quot;; um wieder alles zu sehen, „Alle Kontakte anzeigen&quot;.</li>
+</ol>
+<p>Es werden die 50 neuesten Treffer angezeigt; Exporte enthalten das ganze Logbuch.</p>
+<p><strong>ADIF mit Vorschau importieren</strong></p>
+<ol>
+<li>Drücke „ADIF in dieses Logbuch importieren (Vorschau)&quot; und wähle die Datei.</li>
+<li>Prüfe die Vorschau: Sie listet die „Felder NICHT übernommen&quot; und überspringt identische Kontakte. Nichts wird gespeichert, bevor du bestätigst.</li>
+<li>Bestätige, um in einer einzigen Transaktion zu importieren.</li>
+</ol>
+<p>Akzeptiert wird nur ASCII-ADIF bis 16 MiB und 50000 Kontakte. Mache vorher eine JSON-Sicherung.</p>
+<p><strong>JSON-Sicherung und Wiederherstellung</strong></p>
+<ol>
+<li>Sichern: „Alle Daten als JSON exportieren&quot; (Startbildschirm) oder „Vollständiges JSON exportieren (mit Akzenten)&quot; (Logbuch).</li>
+<li>Wiederherstellen: „Bricohams-JSON-Sicherung importieren&quot;, Dialog „Lokale Sicherung importieren&quot;, „JSON wählen&quot;. Es wird nie überschrieben: Bei einem ID-Konflikt wird der gesamte Import abgebrochen.</li>
+</ol>
+<p><strong>Export für LoTW</strong></p>
+<ol>
+<li>Drücke „Dieses Logbuch als ADIF exportieren (ASCII)&quot;.</li>
+<li>Signiere und lade die Datei mit TQSL auf einem Computer hoch: Diese APK lädt nicht zu LoTW hoch.</li>
+</ol>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>Rufzeichen abgelehnt: Es muss Buchstaben, Ziffern und / enthalten.</li>
+<li>POTA- oder SOTA-Referenz im falschen Format (EA-0123, EA4/MD-001).</li>
+<li>ADIF mit UTF-8 oder Steuerzeichen: nicht akzeptiert; behalte das Original.</li>
+</ul>
+<h3 id="2-ardf-y-gps">2. ARDF und GPS</h3>
+<p><strong>Ziel:</strong> Sender-Beobachtungen mit der Handyposition festhalten.</p>
+<p><strong>Du brauchst:</strong> Standortberechtigung und freien Himmel für das GPS (optional: Speichern ohne Koordinaten ist möglich).</p>
+<ol>
+<li>Tippe im Reiter „ARDF&quot; bei „Name der neuen Sitzung&quot; einen Namen ein und drücke „ARDF-Sitzung erstellen&quot; (oder wähle eine Sitzung).</li>
+<li>Gib „Sender (1-10)&quot; und „Beobachtungsnotizen&quot; ein.</li>
+<li>Drücke „GPS-Position einmal abrufen (30 s)&quot; und bestätige den Dialog „Position für ARDF&quot;. Warte auf die Position.</li>
+<li>Drücke „Manuelle Beobachtung speichern&quot;.</li>
+<li>Drücke „Statistik und Beobachtungen der Sitzung&quot; zum Prüfen und „Sitzungen und Kontakte als JSON exportieren&quot; zum Sichern.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> Die Beobachtung wird mit der Handyposition (nicht der des Senders) gespeichert, wenn eine aktuelle Position vorliegt; sonst ohne Koordinaten. Jede Position gilt nur für eine Beobachtung, simulierte Positionen werden verworfen. Die Statistik summiert GPS-Segmente mit Genauigkeit von 50 m oder besser, Alter von höchstens 30 s und Abstand von höchstens 120 s; sie ist keine vollständige Strecke.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>„Keine aktuelle Position nach 30 s&quot;: Suche freien Himmel oder aktiviere das GPS.</li>
+<li>GPS deaktiviert oder keine Berechtigung: Die Beobachtung wird ohne Koordinaten gespeichert.</li>
+</ul>
+<h3 id="3-usb-cat-rx-f4hwn-experimental">3. USB-CAT-RX (F4HWN, experimentell)</h3>
+<p><strong>Ziel:</strong> den Empfang einer Quansheng mit dem Bricohams-SAT-RX-v1-Image (Basis F4HWN v6+) abstimmen.</p>
+<p><strong>Du brauchst:</strong> ein USB-OTG-Datenkabel (CDC ACM oder ein Einzelport-Adapter CH34x, CP210x, FTDI oder Prolific). CAT läuft nur über USB, nicht über Bluetooth.</p>
+<ol>
+<li>Aktiviere am Funkgerät SAT RX und drücke Taste 8 (<code>CAT READY RX</code>).</li>
+<li>Öffne in der App „Experimentelles USB-CAT-RX öffnen&quot; (Bildschirm „USB / CAT-Funkgerät&quot;) und drücke „USB-Gerät wählen&quot;.</li>
+<li>Bestätige die USB-Berechtigung von Android.</li>
+<li>Drücke „CAT RX abfragen&quot;, um den Zustand zu bestätigen.</li>
+<li>Gib „RX-Frequenz MHz (bis zu 5 Dezimalstellen)&quot; ein (10-Hz-Schritte, VHF 136-174 oder UHF 400-470) und drücke „RX abstimmen (wird bis STOP erneuert)&quot;.</li>
+<li>Zum Beenden „STOP: zurück zum nominalen RX&quot; und „USB trennen&quot;.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> Die App erneuert die Abstimmung alle 1,2 s; hört sie damit auf, kehrt das Funkgerät nach 3 s zum nominalen RX zurück. Die Tasten 4, 5 und 6 am Funkgerät führen zurück in den manuellen Modus.</p>
+<p><strong>Doppler für einen Überflug:</strong> Wähle bei Satelliten einen Überflug, verbinde CAT und drücke „Doppler für den gewählten Überflug starten&quot; (nur innerhalb des Überflugfensters); „Verfolgung stoppen und USB trennen&quot; beendet ihn.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>Kein Gerät: Prüfe OTG-Adapter, Kabel und Firmware; ein beliebiges Gerät wird nie verwendet.</li>
+<li>USB-Berechtigung abgelehnt oder abgelaufen: Wähle das Gerät erneut.</li>
+<li>USB getrennt: Wähle das Gerät erneut, bevor du CAT nutzt.</li>
+</ul>
+<h3 id="4-editor-de-canales-quansheng-beta">4. Quansheng-Kanaleditor (Beta)</h3>
+<p><strong>Ziel:</strong> Name, Frequenzen, Subtöne und Leistung vorhandener FM-Kanäle auf F4HWN v6 ändern.</p>
+<p><strong>Du brauchst:</strong> ein USB-OTG-Kabel, Labs-Firmware v6.1 oder neuer (F4HWN v6.0 ist nur lesbar) und 10 bis 20 Minuten für die Sicherung.</p>
+<ol>
+<li>Öffne „Quansheng-Kanäle über USB bearbeiten (Beta)&quot; („Quansheng-Kanäle&quot;) und drücke „1. USB-Gerät wählen und verbinden&quot;.</li>
+<li>Drücke „2. Vollständige Sicherung (Flash 2 MiB, 10-20 min)&quot;. Die Sicherung wird im privaten Speicher der App mit SHA256SUMS gespeichert und geprüft; kopiere sie vom Handy herunter.</li>
+<li>Drücke „3. Kanäle aus dem Funkgerät lesen&quot;.</li>
+<li>Drücke „4. Kanal wählen&quot; und bearbeite Name (1-10 ASCII), RX (MHz), TX (MHz), RX-Ton und TX-Ton (OFF, CTCSS in Hz wie 88.5, oder DCS wie D023N / D023I), Leistung (USER, LOW1-LOW5, MID, HIGH), Schmalband (12,5 kHz) und „TX auf diesem Kanal sperren&quot;.</li>
+<li>Drücke „5. Änderungen auf die lokale Kopie anwenden&quot;.</li>
+<li>Drücke „6. Ins Funkgerät schreiben und zurücklesen&quot; und bestätige den Dialog „Kanäle ins Funkgerät schreiben&quot;.</li>
+<li>Starte das Funkgerät danach neu.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> „Schreiben durch Zurücklesen verifiziert&quot;. Das Schreiben ist nicht gegen Stromausfall gesichert: Trenne das Funkgerät nicht und schalte es nicht aus.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>„Schreiben blockiert&quot;: Die vollständige, geprüfte Sicherung dieser Sitzung fehlt.</li>
+<li>Jeder Fehler, jede Trennung oder das Verlassen des Bildschirms macht die Sitzung ungültig: neu verbinden und die Sicherung wiederholen.</li>
+<li>RX und TX müssen im selben Band liegen (136-174 oder 400-470 MHz).</li>
+<li>Prüfe, dass Frequenzen, Töne und Leistung für dich zulässig sind.</li>
+</ul>
+<h3 id="5-opengd77-por-usb">5. OpenGD77 über USB</h3>
+<p><strong>Ziel:</strong> den Bildschirm eines OpenGD77-Funkgeräts sehen und seine Uhr auf UTC stellen.</p>
+<p><strong>Du brauchst:</strong> ein OpenGD77-Funkgerät und ein OTG-Datenkabel.</p>
+<ol>
+<li>Öffne „OpenGD77 über USB: Bildschirm und Uhr&quot; und drücke „USB-Gerät wählen&quot;; bestätige die Berechtigung.</li>
+<li>Die App zeigt Modell, Firmware und „USB-Funktionen&quot; mit „Unterstützt&quot; oder „Nicht unterstützt&quot;.</li>
+<li>Drücke „Bildschirm erfassen&quot;, um den Bildschirm des Funkgeräts zu sehen.</li>
+<li>Drücke „UTC-Uhr synchronisieren&quot; und öffne das Satellitenmenü des Funkgeräts erneut, um die Überflüge neu zu berechnen.</li>
+<li>Nutze „Verbindung prüfen&quot; zum Testen und „USB trennen&quot; zum Beenden.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> „Bildschirm erfasst.&quot;, „Uhr gesendet&quot; oder „Verbindung in Ordnung.&quot;. OpenGD77 hat kein Abstimm-CAT über USB: keine Frequenz, Betriebsart, Kanal, PTT oder Doppler vom Handy, und der Flash wird nie beschrieben.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>„Kein USB-CDC-Funkgerät verbunden&quot;: Verwende ein OTG-Datenkabel.</li>
+<li>Unbekannte Kennung: Die App nimmt kein Modell an.</li>
+</ul>
+<h3 id="6-cat-multiradio">6. CAT Multi-Radio</h3>
+<p><strong>Ziel:</strong> Frequenz, Betriebsart, Speicher, Satelliten und digitale Betriebsarten eines Funkgeräts über USB steuern.</p>
+<p><strong>Du brauchst:</strong> ein USB-OTG-Kabel oder die Schnittstelle des Funkgeräts. Modelle in der Liste „Gerätemodell&quot;: Yaesu FT-817/FT-817ND, FT-818ND, FT-857/FT-857D, FT-897/FT-897D (4800 Baud), Icom IC-705 (115200, CI-V-Adresse standardmäßig A4), Yaesu FTX-1 (38400, MAIN-Firmware 1.08 oder neuer, Port Enhanced COM CAT-1) und (tr)uSDX (115200 mit Firmware 2.00t oder neuer; 38400 als Rückfall). Die physischen Tests stehen aus: Diese Geräte sind nicht zertifiziert.</p>
+<p><strong>Verbinden und abstimmen</strong></p>
+<ol>
+<li>Öffne „CAT Multi-Radio (FT-817, FT-857, IC-705, FTX-1, (tr)uSDX)&quot; („Bricohams CAT Multi-Radio&quot;).</li>
+<li>Wähle unter „Funkgerät&quot; das „Gerätemodell&quot;, prüfe „Baudrate&quot; (beim IC-705 auch „CI-V-Adresse (hex)&quot;), drücke „USB-Gerät wählen&quot; und „Verbinden&quot;.</li>
+<li>Gib unter „Frequenz und Betriebsart&quot; die „Frequenz (MHz)&quot; ein und drücke „VFO A setzen&quot; oder „VFO B setzen&quot;.</li>
+<li>Wähle „Betriebsart&quot; (LSB, USB, CW, CW_R, AM, FM, FM_N, WFM, RTTY, RTTY_R, DATA_L, DATA_U, DATA_FM, DV) und drücke „Betriebsart setzen&quot;; „Lesen&quot; aktualisiert die Anzeige.</li>
+<li>„PTT-Test 3 s&quot; öffnet den Dialog „PTT-Test&quot;: Er verlangt ein Rufzeichen, sendet 3 s und braucht eine passende Antenne oder Kunstantenne.</li>
+</ol>
+<p><strong>Speicher</strong></p>
+<ol>
+<li>Gib unter „Speicher&quot; „Von Kanal&quot; und „Bis Kanal&quot; an (höchstens 100 pro Lesevorgang; Grenzen IC-705 0..99, FTX-1 1..999, übrige 1..99) und drücke „Speicher lesen&quot;.</li>
+<li>Nur IC-705 und FTX-1 können Speicher lesen. FT-817/857/897 und (tr)uSDX nicht.</li>
+<li>Das Antippen einer Zeile bietet „Abstimmen&quot; (wirkt auf VFO A) und, nur beim FTX-1, „Bearbeiten&quot;.</li>
+<li>Speicher schreiben (nur FTX-1): „Neuer Kanal&quot; oder „Bearbeiten&quot; öffnet „Speicherkanal&quot; mit Kanal, RX-Frequenz (MHz), Betriebsart, „Name (max. 12 Zeichen)&quot; und „Split-TX-Frequenz (MHz, leer = Simplex)&quot;. Drücke „Speichern&quot;; enthält der Kanal schon Daten, musst du das Ersetzen bestätigen.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> „Kanal N gespeichert und geprüft.&quot; nach dem Zurücklesen.</p>
+<p><strong>Satellit und im Speicher ablegen</strong></p>
+<ol>
+<li>Drücke bei einem Überflug in Satelliten „In CAT Multi-Radio öffnen&quot;, oder gib „Downlink (MHz)&quot;, „Uplink (MHz, optional)&quot; und „Doppler-Schritt (Hz)&quot; ein (1 bis 5000, Standard 100).</li>
+<li>Drücke „Verfolgung starten&quot;; „Verfolgung stoppen&quot; beendet sie. Mit Uplink wird Split verwendet; die FT-817-Familie programmiert den Uplink auf VFO B höchstens alle 5 s neu.</li>
+<li>Nur FTX-1: „Transponder im Speicher ablegen&quot; öffnet den Editor mit Downlink, Uplink und Satellitenname (höchstens 12 Zeichen) im ersten freien Kanal.</li>
+</ol>
+<p><strong>Karte „Digitale Betriebsarten&quot;</strong></p>
+<ol>
+<li>Wähle „Digitale Betriebsart&quot;, „Band und Frequenz&quot; und „Periode&quot;.</li>
+<li>Drücke „Abstimmen&quot;: Das setzt VFO A auf die Dial-Frequenz und die Datenbetriebsart (DATA_U bei FT-817/818/857/897 und FTX-1; USB bei IC-705 und (tr)uSDX; beim IC-705 aktiviere DATA ON am Funkgerät).</li>
+<li>Die UTC-Uhrzeile zeigt den nächsten geraden oder ungeraden Slot. Erscheint „Automatische Zeit ist aus: FT8 braucht die Uhr auf ±1 s genau.&quot;, aktiviere die automatische Zeit von Android.</li>
+<li>Für ein externes Modem (FT8CN, JS8Call oder eine andere App) drücke „Port für eine Digital-App freigeben&quot; und wähle in dieser App dasselbe Funkgerät.</li>
+</ol>
+<p>Von der App angebotene Standard-Dial-Frequenzen (MHz; es werden nur die im Bereich des Funkgeräts angezeigt; es sind Frequenzen der Community: prüfe sie lokal):</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Betriebsart</th><th scope="col">Perioden (s)</th><th scope="col">Dial-Frequenzen</th></tr></thead><tbody>
+<tr><td>FT8</td><td>15</td><td>1.840, 3.573, 5.357, 7.074, 10.136, 14.074, 18.100, 21.074, 24.915, 28.074, 50.313, 144.174</td></tr>
+<tr><td>FT4</td><td>7.5</td><td>3.575, 7.0475, 10.140, 14.080, 18.104, 21.140, 24.919, 28.180, 50.318, 144.170</td></tr>
+<tr><td>JS8</td><td>15, 30, 10, 6</td><td>1.842, 3.578, 7.078, 10.130, 14.078, 18.104, 21.078, 24.922, 28.078, 50.318, 144.178</td></tr>
+<tr><td>WSPR</td><td>120</td><td>0.136, 0.4742, 1.8366, 3.5686, 5.2872, 7.0386, 10.1387, 14.0956, 18.1046, 21.0946, 24.9246, 28.1246, 50.293, 144.489</td></tr>
+<tr><td>Q65</td><td>15, 30, 60, 120, 300</td><td>50.275, 144.116</td></tr>
+<tr><td>JT65</td><td>60</td><td>1.838, 3.570, 7.076, 10.138, 14.076, 18.102, 21.076, 24.917, 28.076, 50.310</td></tr>
+<tr><td>JT9</td><td>60</td><td>1.839, 3.572, 7.078, 10.140, 14.078, 18.104, 21.078, 24.919, 28.078</td></tr>
+<tr><td>FST4</td><td>60, 120, 300, 900, 1800</td><td>0.136, 0.4742</td></tr>
+<tr><td>FST4W</td><td>120, 300, 900, 1800</td><td>0.136, 0.4742</td></tr>
+</tbody></table></div>
+<p>Digitale Betriebsarten und Speicher sind als noch nicht auf einem echten Handy validiert aufgeführt.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>„Dieses Gerät erlaubt kein Lesen der Speicher&quot;: Dieses Funkgerät unterstützt das Lesen nicht.</li>
+<li>Frequenz außerhalb des Bereichs des Funkgeräts: Die Meldung nennt den unterstützten Bereich.</li>
+<li>Die Verbindung wird beim Verlassen des Bildschirms oder Abziehen des USB geschlossen: neu verbinden.</li>
+<li>IC-705: Es stellt zwei serielle Ports bereit; wähle den richtigen („Port N&quot;).</li>
+</ul>
+<h3 id="7-satelites">7. Satelliten</h3>
+<p><strong>Ziel:</strong> Überflüge offline berechnen (SGP4), auf Karte und Radar verfolgen und mit Doppler empfangen.</p>
+<p><strong>Du brauchst:</strong> die Beobachterposition und, um den Katalog zu aktualisieren, eine Internetverbindung. Danach funktioniert es offline, solange die TLEs höchstens 7 Tage alt sind.</p>
+<ol>
+<li>Öffne „SGP4-Satelliten und Überflüge öffnen&quot; („Bricohams Satelliten&quot;). Fehlt der Katalog oder ist er 24 h oder älter, aktualisiert er sich selbst (HTTPS mit CelesTrak und SatNOGS; dein Standort wird nicht gesendet). Von Hand geht es mit „TLE und Frequenzen aktualisieren&quot; oder „TLE-Datei importieren&quot; im Reiter „Einstellungen&quot;, wo sich auch die automatische Aktualisierung abschalten lässt.</li>
+<li>Gib in „Einstellungen&quot; Breite, Länge, Höhe (km, WGS84-Ellipsoid) und Mindesthöhe (0-60) ein, oder drücke „Letzte GPS-Position verwenden&quot;, dann „Speichern und Überflüge berechnen&quot;.</li>
+<li>Wähle in „Satelliten&quot; mit „Nach Name oder NORAD suchen&quot;, „Alle&quot;, „Mit RX&quot; oder „Keine&quot;.</li>
+<li>In „Überflüge&quot; siehst du die nächsten 24 h mit dem Countdown zu AOS und LOS. Öffne einen Überflug, um das Polarradar (grün AOS, rot LOS, orange aktuelle Position) und die Liste der Downlinks („Downlink für CAT RX&quot;, „Andere Frequenz (MHz)&quot;) zu sehen.</li>
+<li>In „Karte&quot; erscheinen Satelliten, Footprint und eine Spur von ±45 min, alle 5 s aktualisiert; tippe einen Satelliten an, um ihn zu wählen.</li>
+<li>Zum Empfangen: „CAT verbinden: Doppler, SSTV und Aufnahme&quot; (Quansheng, siehe Anleitung 3) oder „In CAT Multi-Radio öffnen&quot; (Anleitung 6).</li>
+<li>Einen Überflug aufnehmen: Drücke im verbundenen CAT „Ganzen Überflug aufnehmen (WAV bis LOS)&quot; und „Überflugaufnahme stoppen&quot;; das WAV ist 16 kHz mono und endet bei LOS, nach 2 h oder beim Verlassen des Bildschirms.</li>
+<li>SSTV suchen: Öffne in „Einstellungen&quot; „Überflugaufnahmen&quot; und drücke „SSTV&quot; (es durchsucht 60-s-Fenster alle 23 s nach Robot36-Bildern); es gibt auch „Exportieren&quot; und „Löschen&quot; mit Bestätigung.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> Überflüge mit AOS, Maximum und LOS. Doppler über CAT korrigiert nur den Empfang (Quansheng); es gibt keine Uplink-Korrektur bei der Quansheng.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>Keine Überflüge: Der Beobachter wurde in „Einstellungen&quot; nicht gespeichert.</li>
+<li>Abgelaufene TLEs (älter als 7 Tage): Aktualisiere den Katalog.</li>
+<li>Nach einem fehlgeschlagenen Download wartet die automatische Aktualisierung 15 Minuten.</li>
+</ul>
+<p>Zu Bändern und einer Einführung in den Empfang siehe <a href="ayuda-iniciacion-satelite.de.html">Einführung in den Satellitenempfang</a>.</p>
+<h3 id="8-rotor-az-el">8. AZ/EL-Rotor</h3>
+<p><strong>Ziel:</strong> einen Rotor auf den gewählten Überflug ausrichten.</p>
+<p><strong>Du brauchst:</strong> den Bricohams-Rotor über WLAN (192.168.4.1) oder „sicheres Bluetooth&quot; (6-stellige PIN, BLE), das per USB am Rotor gesetzte Token mit 24 bis 128 ASCII-Zeichen und den physischen Not-Aus in Reichweite. Es gibt keinen Test mit einem echten Rotor.</p>
+<ol>
+<li>Drücke im Detail eines Überflugs „AZ/EL-Rotor: diesen Überflug vorbereiten und verfolgen&quot;.</li>
+<li>Wähle WLAN oder Bluetooth, gib Token oder PIN ein und drücke „Verbinden&quot;.</li>
+<li>Drücke „Referenzfahrt (Endschalter suchen)&quot;.</li>
+<li>Drücke „Nord und Waage mit dem Handy kalibrieren&quot;: Mit dem Handy flach auf dem Boom und der Oberseite zu den Elementen nutze „Kompasskurs übernehmen&quot; oder gib den rechtweisenden Azimut der Antenne (0-359,9°) ein, bestätige, dass der Mast waagerecht ist, und drücke „Kalibrieren&quot;.</li>
+<li>Drücke „Zeit und Standort des Handys senden&quot; (die Firmware 0.3.0-prototype unterstützt das; die API-1-Firmware nutzt GNSS-Zeit).</li>
+<li>Drücke „Überflug vorbereiten: TLE laden und auf AOS richten&quot; und lies die Warnung zum Kabelschnitt.</li>
+<li>Drücke „Ab AOS automatisch verfolgen&quot;; „Automatische Verfolgung abbrechen&quot; stoppt sie.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> Der Rotor richtet sich auf AOS aus und folgt dem Überflug bei eingeschaltetem Bildschirm.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>409: Ein anderer Client steuert den Rotor.</li>
+<li>BLE-Verbindung in Bewegung verloren: Der Rotor geht in einen Fehler; nutze „Fehler löschen (neue Referenzfahrt nötig)&quot;.</li>
+<li>Der Rotor stoppt am Kabelanschlag, über 89° oder wenn der Satellit schneller ist als der Motor.</li>
+<li>„Motoren STOPPEN&quot; hält die Bewegung jederzeit an. Details stehen in der Rotor-Anleitung im Repository (docs/ROTOR.md, nur auf Spanisch).</li>
+</ul>
+<h3 id="9-recepcion-de-audio-en-vivo">9. Live-Audioempfang</h3>
+<p><strong>Ziel:</strong> Audio mit dem Mikrofon aufnehmen und danach als Morse oder SSTV dekodieren.</p>
+<p><strong>Du brauchst:</strong> die Mikrofonberechtigung und das Audio des Funkgeräts nahe am Mikrofon.</p>
+<ol>
+<li>Öffne „Morse / Robot36 mit Mikrofon empfangen&quot; („Audioempfang&quot;).</li>
+<li>Wähle Morse oder SSTV. Stelle für Morse den Ton (300 bis 1200 Hz) und die Geschwindigkeit (5 bis 45 WPM) ein.</li>
+<li>Drücke „Audioaufnahme starten&quot;. Fragt Android nach der Berechtigung, erteile sie und drücke erneut: Die Berechtigung startet keine Aufnahme.</li>
+<li>Drücke „Stoppen und dekodieren&quot; (oder „Abbrechen und Audio verwerfen&quot;).</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> Das Audio (Mono-PCM 48 kHz, bis 60 s für Morse oder 200 s für SSTV) bleibt nur im Speicher und wird weder gespeichert noch gesendet. Das Verlassen des Bildschirms bricht die Aufnahme ab. Die Dekodierung ist experimentell.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>SSTV braucht den vollständigen VIS-Header: Beginne vor der Aussendung.</li>
+<li>Keine Mikrofonberechtigung: Die WAV-Importer kannst du weiter nutzen.</li>
+</ul>
+<h3 id="10-morse">10. Morse</h3>
+<p><strong>Ziel:</strong> Morse-Text oder eine WAV-Datei in Text umwandeln.</p>
+<ol>
+<li>Tippe im Reiter „Morse&quot; Punkte und Striche ein (Leerzeichen zwischen Buchstaben, <code>/</code> zwischen Wörtern, <code>?</code> für einen unbekannten Code) und drücke „Morse-Text auswerten&quot;.</li>
+<li>Für eine Datei (experimentell): Stelle „Ton (300-1200 Hz)&quot; und „Geschwindigkeit (5-45 Wörter/Minute)&quot; als ganze Zahlen ein und drücke „Morse-WAV importieren und dekodieren&quot;.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> der dekodierte Text. Die WAV muss Mono-16-Bit-PCM sein, 8 bis 48 kHz, 0,1 bis 60 s und bis 8 MiB. Es ist kein adaptiver Dekoder: Prüfe das Ergebnis.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>Ton oder Geschwindigkeit außerhalb des Bereichs oder keine ganzen Zahlen.</li>
+<li>Stereo-WAV oder ein anderes Format.</li>
+</ul>
+<h3 id="11-sstv-robot36-wav-microfono-y-transmision">11. SSTV Robot36 (WAV, Mikrofon und Senden)</h3>
+<p><strong>Ziel:</strong> SSTV-Bilder dekodieren und optional eines per CAT-PTT senden (experimentell).</p>
+<p><strong>Eine WAV dekodieren</strong></p>
+<ol>
+<li>Drücke „SSTV Robot36 aus WAV öffnen&quot; („SSTV aus Audiodateien&quot;) und „SSTV-WAV dekodieren&quot;.</li>
+<li>Wähle eine Mono-16-Bit-PCM-WAV, 8000-48000 Hz, bis 200 s und 24 MiB, mit vollständigem VIS-Header (Modi Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</li>
+<li>Drücke „PNG-Bild speichern&quot;, bevor du den Bildschirm verlässt oder drehst: Das Bild lebt nur im Speicher.</li>
+</ol>
+<p><strong>Mit dem Mikrofon empfangen:</strong> nutze Anleitung 9 mit SSTV, oder im CAT-RX-Bildschirm „SSTV aufnehmen (CAT stimmt weiter ab)&quot; und „Aufnahme stoppen und dekodieren&quot;.</p>
+<p><strong>Mit CAT TX und PTT senden (experimentell, ohne HF-Validierung)</strong></p>
+<ol>
+<li>Du brauchst eine Lizenz, eine für SSTV zugelassene Frequenz und ein Audiokabel vom Handy zum Mikrofoneingang des Funkgeräts.</li>
+<li>Aktiviere am Funkgerät in SAT RX das PTT mit Taste 9 (<code>CAT TX ARMED</code>).</li>
+<li>Gib im CAT-Bildschirm „Rufzeichen (erforderlich)&quot; ein: Es wird ins Bild gedruckt.</li>
+<li>Wähle die Betriebsart unter „SSTV-Modus (nur solche, die in das Sendelimit von 110 s passen)&quot; (TX: Robot36/72, Martin M2, Scottie S2, PD90).</li>
+<li>Drücke „SSTV über CAT-PTT senden&quot; und bestätige „Senden&quot; im Dialog „SSTV senden&quot;.</li>
+<li>Zum Stoppen „TX abbrechen / stoppen (löst PTT)&quot; oder eine beliebige Taste am Funkgerät.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> Bild gesendet, PTT gelöst und vom Funkgerät bestätigt; die App misst kein HF. CAT Multi-Radio hat außerdem „Bild senden&quot;, „TX stoppen&quot;, „SSTV empfangen&quot; und „Empfang stoppen&quot;.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>Ablehnung wegen TX-Sperre, Band, Akku oder Modulation des Funkgeräts.</li>
+<li>Ohne Aktivierung mit Taste 9 oder ohne Rufzeichen wird nichts gesendet.</li>
+<li>Während der Überflugverfolgung wird nichts gesendet.</li>
+</ul>
+<h2 id="problemas-frecuentes">Häufige Probleme</h2>
+<ul>
+<li>Kein USB-Gerät erscheint: Nutze ein OTG-Datenkabel (nicht nur zum Laden) und prüfe, ob das Funkgerät im richtigen CAT-Modus ist.</li>
+<li>Android erteilt die USB-Berechtigung nicht: Wähle das Gerät erneut; die Berechtigung läuft ab oder gilt pro Gerät.</li>
+<li>Die App kehrt zum nominalen RX zurück: Die Abstimmung wurde nicht rechtzeitig erneuert (3 s ohne Erneuerung).</li>
+<li>Es erscheinen keine Überflüge: Speichere den Beobachter und aktualisiere die TLEs.</li>
+<li>Ich habe nach der Neuinstallation meine Daten verloren: Das Deinstallieren löscht die lokale Datenbank; exportiere vorher das JSON.</li>
+<li>Italienisch erscheint nicht in der App: Die App bietet nur Español, English (US), Français und Deutsch an; die Anleitung gibt es auf Italienisch.</li>
+<li>Allgemeine Konfigurationshilfe: <a href="ayuda-configuracion.de.html">Konfigurationshilfe</a>. OpenGD77: <a href="ayuda-opengd77.de.html">OpenGD77-Hilfe</a>.</li>
+</ul>
+<h2 id="seguridad-al-transmitir">Sicherheit beim Senden</h2>
+<ul>
+<li>Sende nur mit Lizenz, auf einer Frequenz, die du nutzen darfst, mit Kunstantenne oder passender Antenne und bei Tests mit minimaler Leistung.</li>
+<li>Ein Rufzeichen ist für SSTV über CAT und für den PTT-Test erforderlich; es muss Buchstaben, Ziffern und / enthalten.</li>
+<li>PTT-Grenzen: Das Funkgerät schaltet nach 120 s ab und die App begrenzt das Audio auf 110 s; der „PTT-Test 3 s&quot; dauert 3 s; die App erneuert das PTT alle 400 ms und das Funkgerät löst es nach 1,5 s, falls die App ausfällt.</li>
+<li>Jede Taste am Funkgerät bricht die Aussendung ab; während der Überflugverfolgung wird nichts gesendet.</li>
+<li>Sende nicht zu inaktiven Satelliten oder in Segmenten, die nicht deine sind; die Einhaltung der Vorschriften liegt bei dir.</li>
+<li>Die Sendefunktionen sind experimentell und haben keine HF-Validierung.</li>
+</ul>
+<h2 id="video-de-demostracion">Demonstrationsvideo</h2>
+<p>Video mit allen Anleitungen: <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/docs/media/bricohams-android-demo.mp4" target="_blank" rel="noopener noreferrer">bricohams-android-demo.mp4</a>.</p>
+<p>Kapitel in der Reihenfolge der Anleitungen:</p>
+<ol>
+<li>Bevor du anfängst: Installation, Berechtigungen und Sprache.</li>
+<li>Logbuch.</li>
+<li>ARDF und GPS.</li>
+<li>USB-CAT-RX.</li>
+<li>Quansheng-Kanaleditor.</li>
+<li>OpenGD77.</li>
+<li>CAT Multi-Radio und digitale Betriebsarten.</li>
+<li>Satelliten.</li>
+<li>AZ/EL-Rotor.</li>
+<li>Live-Audioempfang.</li>
+<li>Morse.</li>
+<li>SSTV Robot36.</li>
+<li>Häufige Probleme und Sicherheit beim Senden.</li>
+</ol></article>
+    <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>
+  </main>
+</body>
+</html>

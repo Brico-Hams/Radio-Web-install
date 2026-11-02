@@ -1,5 +1,7 @@
 # Bricohams Android Beta
 
+Guia paso a paso: [Tutoriales de la APK Android Bricohams](TUTORIALES-ANDROID.md).
+
 ## Alcance de la APK
 
 La pantalla principal permite elegir **Idioma del sistema**, **Español**, **English (US)**,

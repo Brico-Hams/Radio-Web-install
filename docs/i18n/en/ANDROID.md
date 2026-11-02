@@ -1,5 +1,7 @@
 # Bricohams Android Beta
 
+Step-by-step guide: [Bricohams Android APK tutorials](TUTORIALES-ANDROID.md).
+
 ## APK scope
 
 The main screen offers **System language**, **Español**, **English (US)**, **Français**,

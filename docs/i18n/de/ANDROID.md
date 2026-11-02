@@ -1,5 +1,7 @@
 # Bricohams Android-Beta
 
+Schritt-für-Schritt-Anleitung: [Tutorials zur Bricohams-Android-APK](TUTORIALES-ANDROID.md).
+
 ## Umfang der APK
 
 Die Startseite bietet **Systemsprache**, **Español**, **English (US)**, **Français**

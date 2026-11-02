@@ -600,9 +600,10 @@ class SatelliteActivity : LocalizedActivity() {
             addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_use_gps)) { useGps(fields) })
             addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_save_observer), true) {
                 try {
-                    fun value(key: String) = fields.getValue(key).text.toString().trim()
-                    ObserverPosition(value("latitude").toDouble(), value("longitude").toDouble(), value("height").toDouble()).validated()
-                    val minimum = value("minimum").toDouble()
+                    // Blank or non-numeric input becomes NaN so validation shows the translated message, not "empty String".
+                    fun value(key: String) = fields.getValue(key).text.toString().trim().toDoubleOrNull() ?: Double.NaN
+                    ObserverPosition(value("latitude"), value("longitude"), value("height")).validated()
+                    val minimum = value("minimum")
                     require(minimum.isFinite() && minimum in 0.0..60.0) { getString(R.string.satellite_minimum_invalid) }
                     val editor = preferences.edit()
                     fields.forEach { (key, input) -> editor.putString(key, input.text.toString().trim()) }

@@ -22,6 +22,7 @@ const pages = Object.freeze({
   "BRICOHAMS-FIRMWARE.md": "ayuda-bricohams.html",
   "ESTADO-ENTREGA.md": "ayuda-entrega.html",
   "ANDROID.md": "ayuda-android.html",
+  "TUTORIALES-ANDROID.md": "ayuda-tutoriales-android.html",
   "VALIDACION-INTEGRAL-V3-ANDROID.md": "ayuda-validacion-v3-android.html",
   "ATLAS-UV-K5-V3.md": "ayuda-atlas-uv-k5-v3.html",
   "DM32UV-FIRMWARE.md": "ayuda-dm32uv.html",

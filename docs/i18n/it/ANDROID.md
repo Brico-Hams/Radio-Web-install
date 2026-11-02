@@ -1,5 +1,7 @@
 # Beta Android Bricohams
 
+Guida passo passo: [Tutorial dell'APK Android Bricohams](TUTORIALES-ANDROID.md).
+
 ## Ambito dell'APK
 
 La schermata principale offre **Lingua del sistema**, **Español**, **English (US)**,

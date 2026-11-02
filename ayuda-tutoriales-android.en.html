@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en-US">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Bricohams Android APK Tutorials: Bricohams help by model and version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Bricohams Android APK Tutorials | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-tutoriales-android.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-tutoriales-android.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-tutoriales-android.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-tutoriales-android.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-tutoriales-android.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=en-US"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Help"><a href="ayuda-referencias.en.html">Documentation and references</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=en-US">Quansheng</a> · <a href="opengd77.html?lang=en-US">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Language"><a href="ayuda-tutoriales-android.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-tutoriales-android.en.html" hreflang="en-US" lang="en-US" aria-current="page">English (US)</a> · <a href="ayuda-tutoriales-android.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-tutoriales-android.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-tutoriales-android.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#antes-de-empezar">Before you start</a></li><li><a href="#tutoriales">Tutorials</a></li><li><a href="#problemas-frecuentes">Frequently asked problems</a></li><li><a href="#seguridad-al-transmitir">Safety when transmitting</a></li><li><a href="#video-de-demostracion">Demonstration video</a></li></ul></nav>
+    <article class="panel"><h1 id="tutoriales-de-la-apk-android-bricohams">Bricohams Android APK Tutorials</h1>
+<p>Step-by-step guide to the single Bricohams APK (<code>org.bricohams.radio</code>, native Kotlin app, Beta). Each tutorial gives the goal, what you need, the steps with the exact on-screen texts, the expected result and the usual errors. The full technical scope and limitations are in <a href="ayuda-android.en.html">Bricohams Android Beta</a>. Features marked as experimental have no validation with a real radio: try them first with a dummy load or in receive-only mode.</p>
+<h2 id="antes-de-empezar">Before you start</h2>
+<h3 id="instalacion-y-requisitos">Installation and requirements</h3>
+<p><strong>Goal:</strong> have the APK installed and working.</p>
+<p><strong>You need:</strong> a phone with Android 8.0 (API 26) or later. The app needs no server and no account.</p>
+<ol>
+<li>Download the APK and check its published SHA-256 (see <a href="ayuda-android.en.html">Bricohams Android Beta</a>).</li>
+<li>Open the file from the file manager or the browser. Android will ask you to authorize installing from that app: accept it only for this step.</li>
+<li>The APK is a development build signed with the debug key and is not distributed through Google Play.</li>
+<li>Open Bricohams. You will see the banner &quot;BETA - local data. Export your data before uninstalling.&quot;</li>
+</ol>
+<p><strong>Expected result:</strong> the main screen with the sections &quot;Your radio workspace&quot;, &quot;Radio and reception&quot;, &quot;Your data and backups&quot; and &quot;Scope and privacy&quot;.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>Android blocks the installation: you still need to authorize installing from the app that opens the APK.</li>
+<li>Uninstalling the app deletes the local data (private SQLite): use &quot;Export all data as JSON&quot; first.</li>
+</ul>
+<h3 id="permisos-y-para-que-se-piden">Permissions and why they are requested</h3>
+<p>Bricohams does not collect or send data. These are the manifest permissions and their purpose:</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Permission</th><th scope="col">What it is used for</th></tr></thead><tbody>
+<tr><td>Location (precise and approximate)</td><td>A one-off GPS position in ARDF and &quot;Use last GPS position&quot; in Satellites. There is no background tracking</td></tr>
+<tr><td>Microphone</td><td>Only when you press &quot;Start audio capture&quot; or receive SSTV in CAT multi-radio. Granting it does not start recording</td></tr>
+<tr><td>Internet and network state</td><td>HTTPS download of TLEs (CelesTrak) and frequencies (SatNOGS) and the Wi-Fi link to the rotor (192.168.4.1)</td></tr>
+<tr><td>Bluetooth (scan and connect)</td><td>AZ/EL rotor over BLE</td></tr>
+<tr><td>USB host</td><td>Radios over an OTG cable. Android asks for permission for each device and never connects by itself when you plug it in</td></tr>
+</tbody></table></div>
+<p>Microphone, GPS, USB host, BLE and compass are not required to install the app: without them only the matching features are disabled.</p>
+<h3 id="elegir-el-idioma">Choosing the language</h3>
+<ol>
+<li>On the main screen open &quot;Bricohams language&quot;.</li>
+<li>Choose &quot;System language&quot;, Español, English (US), Français or Deutsch.</li>
+</ol>
+<p><strong>Expected result:</strong> the language is saved on the phone and applied to all screens. Callsigns, channel names and user files are not translated.</p>
+<h2 id="tutoriales">Tutorials</h2>
+<h3 id="1-libro-de-guardia-logbook">1. Logbook</h3>
+<p><strong>Goal:</strong> record contacts, search them and move data safely.</p>
+<p><strong>You need:</strong> only the phone. It works offline.</p>
+<p><strong>Add a contact</strong></p>
+<ol>
+<li>Open the &quot;Logbook&quot; tab. For a POTA or SOTA logbook, create one under &quot;Logbooks&quot;: fill in &quot;Logbook name&quot;, &quot;Park or summit reference (blank for General)&quot; (examples EA-0123 and EA4/MD-001), &quot;My station call&quot; and press &quot;Create logbook&quot;.</li>
+<li>Type &quot;Callsign&quot; (3 to 20 characters: letters, numbers and /).</li>
+<li>Leave &quot;UTC ISO (example 2026-10-25T16:00:00Z)&quot; empty to use the current time when saving, or type the date.</li>
+<li>Fill in &quot;Frequency MHz&quot;, the mode, &quot;Report sent&quot;, &quot;Report received&quot; and &quot;Notes&quot;.</li>
+<li>Press &quot;Save new contact&quot;.</li>
+</ol>
+<p><strong>Expected result:</strong> the contact is saved on the phone; callsign and notes are cleared and frequency and mode are kept. If the same callsign, band and mode already exist, a warning appears with &quot;Do not save&quot; or &quot;Save anyway&quot;. To edit, tap the contact and use &quot;Save contact changes&quot;, &quot;Cancel editing&quot; or &quot;Delete this contact&quot; (asks for confirmation).</p>
+<p><strong>Search</strong></p>
+<ol>
+<li>Type in &quot;Search this logbook: call, notes, mode or frequency&quot;.</li>
+<li>Press &quot;Search contacts&quot;; to see everything again press &quot;Show all contacts&quot;.</li>
+</ol>
+<p>The 50 most recent matches are shown; exports include the whole logbook.</p>
+<p><strong>Import ADIF with preview</strong></p>
+<ol>
+<li>Press &quot;Import ADIF into this logbook (preview)&quot; and choose the file.</li>
+<li>Review the preview: it lists the &quot;Fields NOT kept&quot; and skips identical contacts. Nothing is saved until you accept.</li>
+<li>Accept to import in a single transaction.</li>
+</ol>
+<p>Only ASCII ADIF up to 16 MiB and 50000 contacts is accepted. Make a JSON backup first.</p>
+<p><strong>JSON backup and restore</strong></p>
+<ol>
+<li>To save: &quot;Export all data as JSON&quot; (main screen) or &quot;Export full JSON (with accents)&quot; (logbook).</li>
+<li>To restore: &quot;Import Bricohams JSON backup&quot;, dialog &quot;Import local backup&quot;, &quot;Choose JSON&quot;. It never overwrites: if an ID conflicts, the whole import is cancelled.</li>
+</ol>
+<p><strong>Export for LoTW</strong></p>
+<ol>
+<li>Press &quot;Export this logbook as ADIF (ASCII)&quot;.</li>
+<li>Sign and upload the file with TQSL on a computer: this APK does not upload to LoTW.</li>
+</ol>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>Callsign rejected: it must contain letters, numbers and /.</li>
+<li>POTA or SOTA reference in the wrong format (EA-0123, EA4/MD-001).</li>
+<li>ADIF with UTF-8 or control characters: not accepted; keep the original.</li>
+</ul>
+<h3 id="2-ardf-y-gps">2. ARDF and GPS</h3>
+<p><strong>Goal:</strong> note beacon observations with the phone position.</p>
+<p><strong>You need:</strong> location permission and open sky for the GPS (optional: you can save without coordinates).</p>
+<ol>
+<li>In the &quot;ARDF&quot; tab, type &quot;New session name&quot; and press &quot;Create ARDF session&quot; (or &quot;Select session&quot;).</li>
+<li>Enter &quot;Beacon (1-10)&quot; and &quot;Observation notes&quot;.</li>
+<li>Press &quot;Get GPS position once (30 s)&quot; and accept the &quot;Position for ARDF&quot; dialog. Wait for the position.</li>
+<li>Press &quot;Save manual observation&quot;.</li>
+<li>Press &quot;Session statistics and observations&quot; to review and &quot;Export sessions and contacts as JSON&quot; to save.</li>
+</ol>
+<p><strong>Expected result:</strong> the observation is saved with the phone position (not the beacon position) if there is a recent fix; otherwise it is saved without coordinates. Each position is used for one observation only and simulated ones are discarded. The statistics add GPS segments with accuracy of 50 m or better, age of 30 s or less and separation of 120 s or less; they are not a complete track.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>&quot;No recent position after 30 s&quot;: look for open sky or enable the GPS.</li>
+<li>GPS disabled or no permission: the observation is saved without coordinates.</li>
+</ul>
+<h3 id="3-usb-cat-rx-f4hwn-experimental">3. USB CAT RX (F4HWN, experimental)</h3>
+<p><strong>Goal:</strong> tune the receiver of a Quansheng running the Bricohams SAT RX v1 image (F4HWN v6+ base).</p>
+<p><strong>You need:</strong> USB OTG data cable (CDC ACM or a single-port CH34x, CP210x, FTDI or Prolific adapter). CAT works over USB only, not Bluetooth.</p>
+<ol>
+<li>On the radio enable SAT RX and press key 8 (<code>CAT READY RX</code>).</li>
+<li>In the app open &quot;Open experimental USB CAT RX&quot; (screen &quot;USB / CAT radio&quot;) and press &quot;Choose USB device&quot;.</li>
+<li>Accept the Android USB permission.</li>
+<li>Press &quot;Query CAT RX&quot; to confirm the state.</li>
+<li>Type &quot;RX frequency MHz (up to 5 decimals)&quot; (10 Hz steps, VHF 136-174 or UHF 400-470) and press &quot;Tune RX (renewed until STOP)&quot;.</li>
+<li>To finish, &quot;STOP: return to nominal RX&quot; and &quot;Disconnect USB&quot;.</li>
+</ol>
+<p><strong>Expected result:</strong> the app renews the tune every 1.2 s; if it stops renewing, the radio returns to nominal RX after 3 s. Keys 4, 5 and 6 on the radio return to manual mode.</p>
+<p><strong>Doppler for a pass:</strong> from Satellites pick a pass, connect CAT and press &quot;Start Doppler for the selected pass&quot; (only inside the pass window); &quot;Stop tracking and disconnect USB&quot; ends it.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>No device: check the OTG adapter, the cable and the firmware; an arbitrary device is never used.</li>
+<li>USB permission rejected or expired: choose the device again.</li>
+<li>USB disconnected: choose the device again before using CAT.</li>
+</ul>
+<h3 id="4-editor-de-canales-quansheng-beta">4. Quansheng channel editor (Beta)</h3>
+<p><strong>Goal:</strong> change the name, frequencies, sub-tones and power of existing FM channels on F4HWN v6.</p>
+<p><strong>You need:</strong> USB OTG cable, Labs v6.1 or later firmware (F4HWN v6.0 is read-only) and 10 to 20 minutes for the backup.</p>
+<ol>
+<li>Open &quot;Edit Quansheng channels over USB (Beta)&quot; (&quot;Quansheng channels&quot;) and press &quot;1. Choose USB device and connect&quot;.</li>
+<li>Press &quot;2. Full backup (2 MiB Flash, 10-20 min)&quot;. The backup is saved and verified in the app&#39;s private storage with SHA256SUMS; copy it off the phone.</li>
+<li>Press &quot;3. Read channels from the radio&quot;.</li>
+<li>Press &quot;4. Choose channel&quot; and edit Name (1-10 ASCII), RX (MHz), TX (MHz), RX tone and TX tone (OFF, CTCSS in Hz such as 88.5, or DCS such as D023N / D023I), Power (USER, LOW1-LOW5, MID, HIGH), Narrow band (12.5 kHz) and &quot;Lock TX on this channel&quot;.</li>
+<li>Press &quot;5. Apply changes to the local copy&quot;.</li>
+<li>Press &quot;6. Write to the radio and read back&quot; and confirm the &quot;Write channels to the radio&quot; dialog.</li>
+<li>Restart the radio when it finishes.</li>
+</ol>
+<p><strong>Expected result:</strong> &quot;Write verified by read-back&quot;. The write is not power-fail safe: do not disconnect or switch off the radio.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>&quot;Write blocked&quot;: the complete verified backup for this session is missing.</li>
+<li>Any error, disconnection or leaving the screen invalidates the session: reconnect and repeat the backup.</li>
+<li>RX and TX must be in the same band (136-174 or 400-470 MHz).</li>
+<li>Check that frequencies, tones and power are legal for you.</li>
+</ul>
+<h3 id="5-opengd77-por-usb">5. OpenGD77 over USB</h3>
+<p><strong>Goal:</strong> see the screen of an OpenGD77 radio and set its clock to UTC.</p>
+<p><strong>You need:</strong> an OpenGD77 radio and an OTG data cable.</p>
+<ol>
+<li>Open &quot;OpenGD77 over USB: screen and clock&quot; and press &quot;Choose USB device&quot;; accept the permission.</li>
+<li>The app shows the model, the firmware and &quot;USB functions&quot; with &quot;Supported&quot; or &quot;Not supported&quot;.</li>
+<li>Press &quot;Capture screen&quot; to see the radio screen.</li>
+<li>Press &quot;Sync UTC clock&quot; and reopen the radio&#39;s Satellite menu to recalculate the passes.</li>
+<li>Use &quot;Check link&quot; to test the connection and &quot;Disconnect USB&quot; when you finish.</li>
+</ol>
+<p><strong>Expected result:</strong> &quot;Screen captured.&quot;, &quot;Clock sent&quot; or &quot;Link OK.&quot;. OpenGD77 has no tuning CAT over USB: there is no frequency, mode, channel, PTT or Doppler from the phone, and the Flash is never written.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>&quot;No USB CDC radio connected&quot;: use an OTG data cable.</li>
+<li>Unknown identification: the app does not assume any model.</li>
+</ul>
+<h3 id="6-cat-multiradio">6. CAT multi-radio</h3>
+<p><strong>Goal:</strong> control frequency, mode, memories, satellites and digital modes of a radio over USB.</p>
+<p><strong>You need:</strong> USB OTG cable or the radio&#39;s interface. Models in the &quot;Radio model&quot; list: Yaesu FT-817/FT-817ND, FT-818ND, FT-857/FT-857D, FT-897/FT-897D (4800 baud), Icom IC-705 (115200, CI-V address A4 by default), Yaesu FTX-1 (38400, MAIN firmware 1.08 or later, Enhanced COM CAT-1 port) and (tr)uSDX (115200 with firmware 2.00t or later; 38400 as fallback). Physical tests are pending: these radios are not certified.</p>
+<p><strong>Connect and tune</strong></p>
+<ol>
+<li>Open &quot;CAT multi-radio (FT-817, FT-857, IC-705, FTX-1, (tr)uSDX)&quot; (&quot;Bricohams CAT multi-radio&quot;).</li>
+<li>Under &quot;Radio&quot; choose &quot;Radio model&quot;, check &quot;Baud rate&quot; (on the IC-705 also &quot;CI-V address (hex)&quot;), press &quot;Choose USB device&quot; and &quot;Connect&quot;.</li>
+<li>Under &quot;Frequency and mode&quot; type &quot;Frequency (MHz)&quot; and press &quot;Set VFO A&quot; or &quot;Set VFO B&quot;.</li>
+<li>Choose &quot;Mode&quot; (LSB, USB, CW, CW_R, AM, FM, FM_N, WFM, RTTY, RTTY_R, DATA_L, DATA_U, DATA_FM, DV) and press &quot;Set mode&quot;; &quot;Read&quot; refreshes the reading.</li>
+<li>&quot;PTT test 3 s&quot; opens the &quot;PTT test&quot; dialog: it requires a callsign, transmits for 3 s and needs a suitable antenna or dummy load.</li>
+</ol>
+<p><strong>Memories</strong></p>
+<ol>
+<li>Under &quot;Memories&quot; enter &quot;From channel&quot; and &quot;To channel&quot; (maximum 100 per read; limits IC-705 0..99, FTX-1 1..999, others 1..99) and press &quot;Read memories&quot;.</li>
+<li>Only the IC-705 and FTX-1 can read memories. The FT-817/857/897 and the (tr)uSDX cannot.</li>
+<li>Tapping a row offers &quot;Tune&quot; (applies to VFO A) and, on the FTX-1 only, &quot;Edit&quot;.</li>
+<li>Memory writing (FTX-1 only): &quot;New channel&quot; or &quot;Edit&quot; opens &quot;Memory channel&quot; with Channel, RX frequency (MHz), Mode, &quot;Name (max. 12 characters)&quot; and &quot;Split TX frequency (MHz, empty = simplex)&quot;. Press &quot;Save&quot;; if the channel already has data, you must confirm the replacement.</li>
+</ol>
+<p><strong>Expected result:</strong> &quot;Channel N saved and verified.&quot; after a read-back.</p>
+<p><strong>Satellite and saving to memory</strong></p>
+<ol>
+<li>From a pass in Satellites press &quot;Open in CAT multi-radio&quot;, or type &quot;Downlink (MHz)&quot;, &quot;Uplink (MHz, optional)&quot; and &quot;Doppler step (Hz)&quot; (1 to 5000, default 100).</li>
+<li>Press &quot;Start tracking&quot;; &quot;Stop tracking&quot; ends it. With an uplink, split is used; the FT-817 family reprograms the uplink on VFO B at most every 5 s.</li>
+<li>FTX-1 only: &quot;Save transponder to memory&quot; opens the editor with the downlink, uplink and satellite name (maximum 12 characters) in the first free channel.</li>
+</ol>
+<p><strong>&quot;Digital modes&quot; card</strong></p>
+<ol>
+<li>Choose &quot;Digital mode&quot;, &quot;Band and frequency&quot; and &quot;Period&quot;.</li>
+<li>Press &quot;Tune&quot;: it sets VFO A to the dial frequency and the data mode (DATA_U on the FT-817/818/857/897 and FTX-1; USB on the IC-705 and (tr)uSDX; on the IC-705 enable DATA ON on the radio).</li>
+<li>The UTC clock line shows the next even or odd slot. If &quot;Automatic time is off: FT8 needs the clock within ±1 s.&quot; appears, enable Android automatic time.</li>
+<li>To use an external modem (FT8CN, JS8Call or another app) press &quot;Release port for a digital app&quot; and select the same radio in that app.</li>
+</ol>
+<p>Standard dial frequencies offered by the app (MHz; only those inside the radio&#39;s range are shown; they are community frequencies: verify them locally):</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Mode</th><th scope="col">Periods (s)</th><th scope="col">Dial frequencies</th></tr></thead><tbody>
+<tr><td>FT8</td><td>15</td><td>1.840, 3.573, 5.357, 7.074, 10.136, 14.074, 18.100, 21.074, 24.915, 28.074, 50.313, 144.174</td></tr>
+<tr><td>FT4</td><td>7.5</td><td>3.575, 7.0475, 10.140, 14.080, 18.104, 21.140, 24.919, 28.180, 50.318, 144.170</td></tr>
+<tr><td>JS8</td><td>15, 30, 10, 6</td><td>1.842, 3.578, 7.078, 10.130, 14.078, 18.104, 21.078, 24.922, 28.078, 50.318, 144.178</td></tr>
+<tr><td>WSPR</td><td>120</td><td>0.136, 0.4742, 1.8366, 3.5686, 5.2872, 7.0386, 10.1387, 14.0956, 18.1046, 21.0946, 24.9246, 28.1246, 50.293, 144.489</td></tr>
+<tr><td>Q65</td><td>15, 30, 60, 120, 300</td><td>50.275, 144.116</td></tr>
+<tr><td>JT65</td><td>60</td><td>1.838, 3.570, 7.076, 10.138, 14.076, 18.102, 21.076, 24.917, 28.076, 50.310</td></tr>
+<tr><td>JT9</td><td>60</td><td>1.839, 3.572, 7.078, 10.140, 14.078, 18.104, 21.078, 24.919, 28.078</td></tr>
+<tr><td>FST4</td><td>60, 120, 300, 900, 1800</td><td>0.136, 0.4742</td></tr>
+<tr><td>FST4W</td><td>120, 300, 900, 1800</td><td>0.136, 0.4742</td></tr>
+</tbody></table></div>
+<p>Digital modes and memories are listed as pending validation on a real phone.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>&quot;This radio cannot read memories&quot;: that radio does not support reading.</li>
+<li>Frequency outside the radio&#39;s range: the message states the supported range.</li>
+<li>The connection closes when you leave the screen or unplug the USB: connect again.</li>
+<li>IC-705: it exposes two serial ports; choose the right one (&quot;port N&quot;).</li>
+</ul>
+<h3 id="7-satelites">7. Satellites</h3>
+<p><strong>Goal:</strong> calculate passes offline (SGP4), follow them on the map and radar and receive with Doppler.</p>
+<p><strong>You need:</strong> the observer position and, to update the catalog, an Internet connection. Afterwards it works offline while the TLEs are no older than 7 days.</p>
+<ol>
+<li>Open &quot;Open SGP4 satellites and passes&quot; (&quot;Bricohams Satellites&quot;). If the catalog is missing or 24 h old or more, it updates by itself (HTTPS with CelesTrak and SatNOGS; your location is not sent). To do it by hand use &quot;Update TLE and frequencies&quot; or &quot;Import TLE file&quot; in the &quot;Settings&quot; tab, where automatic updating can also be disabled.</li>
+<li>In &quot;Settings&quot; enter latitude, longitude, height (km, WGS84 ellipsoid) and minimum elevation (0-60), or press &quot;Use last GPS position&quot;, then &quot;Save and calculate passes&quot;.</li>
+<li>In &quot;Satellites&quot; choose with &quot;Search by name or NORAD&quot;, &quot;All&quot;, &quot;With RX&quot; or &quot;None&quot;.</li>
+<li>In &quot;Passes&quot; you will see the next 24 h with the AOS and LOS countdown. Open a pass to see the polar radar (green AOS, red LOS, orange current position) and the list of downlinks (&quot;Downlink for CAT RX&quot;, &quot;Other frequency (MHz)&quot;).</li>
+<li>In &quot;Map&quot; satellites, footprint and a ±45 min track appear, refreshed every 5 s; tap a satellite to select it.</li>
+<li>To receive: &quot;Connect CAT: Doppler, SSTV and recording&quot; (Quansheng, see tutorial 3) or &quot;Open in CAT multi-radio&quot; (tutorial 6).</li>
+<li>To record a pass: on the connected CAT press &quot;Record full pass (WAV until LOS)&quot; and &quot;Stop pass recording&quot;; the WAV is 16 kHz mono and stops at LOS, after 2 h or when you leave the screen.</li>
+<li>To search for SSTV: in &quot;Settings&quot; open &quot;Pass recordings&quot; and press &quot;SSTV&quot; (it scans 60 s windows every 23 s for Robot36 images); there are also &quot;Export&quot; and &quot;Delete&quot; with confirmation.</li>
+</ol>
+<p><strong>Expected result:</strong> passes with AOS, maximum and LOS. Doppler over CAT only corrects reception (Quansheng); there is no uplink correction on the Quansheng.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>No passes: the observer has not been saved in &quot;Settings&quot;.</li>
+<li>Expired TLEs (older than 7 days): update the catalog.</li>
+<li>After a failed download, automatic updating waits 15 minutes.</li>
+</ul>
+<p>For bands and an introduction to reception see <a href="ayuda-iniciacion-satelite.en.html">Introduction to satellite reception</a>.</p>
+<h3 id="8-rotor-az-el">8. AZ/EL rotor</h3>
+<p><strong>Goal:</strong> point a rotor at the selected pass.</p>
+<p><strong>You need:</strong> the Bricohams rotor over Wi-Fi (192.168.4.1) or &quot;secure Bluetooth&quot; (6-digit PIN, BLE), the 24 to 128 ASCII character token set over USB on the rotor, and the physical emergency stop within reach. There is no test with a physical rotor.</p>
+<ol>
+<li>In a pass detail press &quot;AZ/EL rotor: prepare and track this pass&quot;.</li>
+<li>Choose Wi-Fi or Bluetooth, enter the token or the PIN and press &quot;Connect&quot;.</li>
+<li>Press &quot;Homing (find limit switches)&quot;.</li>
+<li>Press &quot;Calibrate north and level with the phone&quot;: with the phone flat on the boom and its top towards the elements, use &quot;Use compass heading&quot; or type &quot;True azimuth of the antenna (0-359.9°)&quot;, tick &quot;I confirm the mast is level&quot; and press &quot;Calibrate&quot;.</li>
+<li>Press &quot;Send phone time and location&quot; (firmware 0.3.0-prototype supports it; the API 1 firmware uses GNSS time).</li>
+<li>Press &quot;Prepare pass: load TLE and point at AOS&quot; and read the cable-cut warning.</li>
+<li>Press &quot;Follow automatically from AOS&quot;; &quot;Cancel automatic tracking&quot; stops it.</li>
+</ol>
+<p><strong>Expected result:</strong> the rotor points at AOS and follows the pass with the screen kept on.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>409: another client controls the rotor.</li>
+<li>BLE link lost while moving: the rotor enters a fault; use &quot;Clear fault (requires new homing)&quot;.</li>
+<li>The rotor stops at the cable stop, above 89° or if the satellite is faster than the motor.</li>
+<li>&quot;STOP motors&quot; halts the movement at any time. Details are in the rotor guide in the repository (docs/ROTOR.md, Spanish only).</li>
+</ul>
+<h3 id="9-recepcion-de-audio-en-vivo">9. Live audio reception</h3>
+<p><strong>Goal:</strong> capture audio with the microphone and decode it afterwards as Morse or SSTV.</p>
+<p><strong>You need:</strong> microphone permission and the radio audio playing near the microphone.</p>
+<ol>
+<li>Open &quot;Receive Morse / Robot36 with microphone&quot; (&quot;Audio reception&quot;).</li>
+<li>Choose Morse or SSTV. For Morse set &quot;Morse tone (300 to 1200 Hz)&quot; and &quot;Morse speed (5 to 45 WPM)&quot;.</li>
+<li>Press &quot;Start audio capture&quot;. If Android asks for permission, grant it and press again: the permission does not start recording.</li>
+<li>Press &quot;Stop and decode&quot; (or &quot;Cancel and discard audio&quot;).</li>
+</ol>
+<p><strong>Expected result:</strong> the audio (mono PCM 48 kHz, up to 60 s for Morse or 200 s for SSTV) stays in memory only and is neither saved nor transmitted. Leaving the screen cancels the capture. Decoding is experimental.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>SSTV needs the complete VIS header: start before the transmission.</li>
+<li>No microphone permission: you can still use the WAV importers.</li>
+</ul>
+<h3 id="10-morse">10. Morse</h3>
+<p><strong>Goal:</strong> turn Morse text or a WAV file into text.</p>
+<ol>
+<li>In the &quot;Morse&quot; tab type dots and dashes (space between letters, <code>/</code> between words, <code>?</code> for an unknown code) and press &quot;Interpret Morse text&quot;.</li>
+<li>For a file (experimental): set &quot;Tone (300-1200 Hz)&quot; and &quot;Speed (5-45 words/minute)&quot; as whole numbers and press &quot;Import and decode Morse WAV&quot;.</li>
+</ol>
+<p><strong>Expected result:</strong> the decoded text. The WAV must be mono 16-bit PCM, 8 to 48 kHz, 0.1 to 60 s and up to 8 MiB. It is not an adaptive decoder: verify the result.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>Tone or speed out of range or not whole numbers.</li>
+<li>Stereo WAV or another format.</li>
+</ul>
+<h3 id="11-sstv-robot36-wav-microfono-y-transmision">11. SSTV Robot36 (WAV, microphone and transmission)</h3>
+<p><strong>Goal:</strong> decode SSTV images and, optionally, transmit one with CAT PTT (experimental).</p>
+<p><strong>Decode a WAV</strong></p>
+<ol>
+<li>Press &quot;Open SSTV Robot36 from WAV&quot; (&quot;SSTV from audio&quot;) and &quot;Decode SSTV WAV&quot;.</li>
+<li>Choose a mono 16-bit PCM WAV, 8000-48000 Hz, up to 200 s and 24 MiB, with a complete VIS header (modes Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</li>
+<li>Press &quot;Save PNG image&quot; before leaving or rotating the screen: the image only lives in memory.</li>
+</ol>
+<p><strong>Receive with the microphone:</strong> use tutorial 9 with SSTV, or on the CAT RX screen &quot;Record SSTV (CAT keeps tuning)&quot; and &quot;Stop recording and decode&quot;.</p>
+<p><strong>Transmit with CAT TX and PTT (experimental, no RF validation)</strong></p>
+<ol>
+<li>You need a license, a frequency authorized for SSTV and an audio cable from the phone to the radio microphone input.</li>
+<li>On the radio, in SAT RX, arm PTT with key 9 (<code>CAT TX ARMED</code>).</li>
+<li>On the CAT screen type &quot;Callsign (required)&quot;: it is printed on the image.</li>
+<li>Choose the mode in &quot;SSTV mode (only those that fit the 110 s transmission limit)&quot; (TX: Robot36/72, Martin M2, Scottie S2, PD90).</li>
+<li>Press &quot;Send SSTV via CAT PTT&quot; and confirm &quot;Transmit&quot; in the &quot;Transmit SSTV&quot; dialog.</li>
+<li>To stop, &quot;Cancel / Stop TX (releases PTT)&quot; or any key on the radio.</li>
+</ol>
+<p><strong>Expected result:</strong> image sent with PTT released and confirmed by the radio; the app does not measure RF. CAT multi-radio also has &quot;Send image&quot;, &quot;Stop TX&quot;, &quot;Receive SSTV&quot; and &quot;Stop receiving&quot;.</p>
+<p><strong>Common errors:</strong></p>
+<ul>
+<li>Rejection because of TX lock, band, battery or modulation on the radio.</li>
+<li>Without arming with key 9 or without a callsign nothing is transmitted.</li>
+<li>Nothing is transmitted during pass tracking.</li>
+</ul>
+<h2 id="problemas-frecuentes">Frequently asked problems</h2>
+<ul>
+<li>No USB device appears: use an OTG data cable (not charge-only) and check that the radio is in the right CAT mode.</li>
+<li>Android does not grant the USB permission: choose the device again; the permission expires or is per device.</li>
+<li>The app goes back to nominal RX: the tune was not renewed in time (3 s without renewal).</li>
+<li>No passes appear: save the observer and update the TLEs.</li>
+<li>I lost my data after reinstalling: uninstalling deletes the local database; export the JSON first.</li>
+<li>Italian does not appear in the app: the app only offers Español, English (US), Français and Deutsch; the guide is available in Italian.</li>
+<li>General configuration help: <a href="ayuda-configuracion.en.html">Configuration help</a>. OpenGD77: <a href="ayuda-opengd77.en.html">OpenGD77 help</a>.</li>
+</ul>
+<h2 id="seguridad-al-transmitir">Safety when transmitting</h2>
+<ul>
+<li>Transmit only with a license, on a frequency you are authorized to use, and with a dummy load or suitable antenna and minimum power during tests.</li>
+<li>A callsign is required for SSTV over CAT and for the PTT test; it must contain letters, numbers and /.</li>
+<li>PTT limits: the radio cuts off at 120 s and the app limits audio to 110 s; the &quot;PTT test 3 s&quot; lasts 3 s; the app renews PTT every 400 ms and the radio releases it after 1.5 s if the app fails.</li>
+<li>Any radio key aborts the transmission; nothing is transmitted during pass tracking.</li>
+<li>Do not transmit towards inactive satellites or in segments that are not yours; compliance with regulations is your responsibility.</li>
+<li>Transmit functions are experimental and have no RF validation.</li>
+</ul>
+<h2 id="video-de-demostracion">Demonstration video</h2>
+<p>Video with all the tutorials: <a href="https://github.com/Brico-Hams/Radio-Web-install/blob/main/docs/media/bricohams-android-demo.mp4" target="_blank" rel="noopener noreferrer">bricohams-android-demo.mp4</a>.</p>
+<p>Chapters, in the order of the tutorials:</p>
+<ol>
+<li>Before you start: installation, permissions and language.</li>
+<li>Logbook.</li>
+<li>ARDF and GPS.</li>
+<li>USB CAT RX.</li>
+<li>Quansheng channel editor.</li>
+<li>OpenGD77.</li>
+<li>CAT multi-radio and digital modes.</li>
+<li>Satellites.</li>
+<li>AZ/EL rotor.</li>
+<li>Live audio reception.</li>
+<li>Morse.</li>
+<li>SSTV Robot36.</li>
+<li>Frequent problems and safety when transmitting.</li>
+</ol></article>
+    <footer><p class="translation-note">Translation of the Spanish original. If there is any discrepancy, the Spanish version prevails.</p><p>Document generated from the versioned Markdown. Check the sources and limits of each guide. <a href="ayuda-firmwares.en.html">Back to the index</a>.</p></footer>
+  </main>
+</body>
+</html>
