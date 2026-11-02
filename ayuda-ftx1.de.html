@@ -31,13 +31,13 @@
 <ul>
 <li>Chrome oder Edge auf <code>localhost</code> oder über HTTPS (Web Serial).</li>
 <li>MAIN-Firmware 1.08 oder neuer: Laut Handbuch funktioniert CAT mit älteren Versionen nicht.</li>
-<li>USB-C-Kabel zum Funkgerät. Windows zeigt zwei Ports „Silicon Labs Dual CP210x“; wähle den <code>Enhanced COM Port</code> (CAT-1).</li>
+<li>USB-C-Kabel zum Funkgerät. Windows zeigt zwei Ports „Silicon Labs Dual CP210x“; sowohl der <code>Enhanced COM Port</code> (CAT-1) als auch der <code>Standard COM Port</code> (CAT-2) funktionieren.</li>
 <li>Schließe vor dem Verbinden alle anderen CAT-Programme (WSJT-X, Logbücher, cat-ftx1).</li>
-<li>Geschwindigkeit: der Wert des Menüs <code>CAT-1 RATE</code> am Gerät. Werkseinstellung 38400 bps.</li>
+<li>Geschwindigkeit: <code>CAT-1 RATE</code> oder <code>CAT-2 RATE</code> je nach Port (Werkseinstellung 38400 und 4800 bps). Ein echtes FTX-1 antwortete über CAT-2 mit 4800 bps.</li>
 </ul>
 <p>Beim Verbinden sendet die Seite <code>ID;</code> und verlangt die FTX-1-Antwort <code>ID0840;</code>. Danach sendet sie <code>AI0;</code>, um die automatische Information während der Arbeit abzuschalten.</p>
 <h2 id="memorias">Speicher</h2>
-<p>„Speicher lesen“ fragt die gewählten Kanäle (1-99) mit <code>MR</code> und den Namen mit <code>MT</code> ab. Ein leerer Kanal antwortet <code>?;</code> und wird als frei angezeigt. Bearbeitbar sind:</p>
+<p>„Speicher lesen“ fragt die gewählten Kanäle (1-999) mit <code>MR</code> und den Namen mit <code>MT</code> ab. Ein leerer Kanal antwortet <code>?;</code> und wird als frei angezeigt. Bearbeitbar sind:</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Feld</th><th scope="col">Befehl</th><th scope="col">Werte</th></tr></thead><tbody>
 <tr><td>Frequenz</td><td><code>MW</code></td><td>0.030000-470.000000 MHz</td></tr>
 <tr><td>Betriebsart</td><td><code>MW</code></td><td>LSB, USB, CW-U, CW-L, FM, FM-N, AM, AM-N, RTTY, DATA, PSK, C4FM</td></tr>
@@ -59,8 +59,9 @@
 <p>Es werden nur geänderte Kanäle oder Einstellungen gesendet. Jeder Wert wird zurückgelesen und mit dem Gesendeten verglichen; antwortet das Gerät <code>?;</code> oder mit einem anderen Wert, stoppt das Schreiben und nennt Kanal oder Einstellung. Zum Rückgängigmachen lade die JSON-Sicherung mit „JSON-Sicherung wiederherstellen“, simuliere und schreibe erneut.</p>
 <h2 id="limites">Grenzen</h2>
 <ul>
-<li>Nur Speicherkanäle 1-99. PMS, 5 MHz, Notrufkanal und Split-Speicher (<code>MZ</code>) werden nicht bearbeitet.</li>
+<li>Nur Speicherkanäle 1-999. PMS, 5 MHz, Notrufkanal und Split-Speicher (<code>MZ</code>) werden nicht bearbeitet.</li>
 <li>Die README von cat-ftx1 weist darauf hin, dass manche echten FTX-1-Antworten vom Handbuch abweichen. Teste zuerst mit einem freien Kanal und behalte immer die Sicherung.</li>
+<li>Im Handbuch mit „-“ markierte Betriebsarten (etwa der Code <code>0</code>, den manche echten Kanäle verwenden) werden gelesen und angezeigt, aber nie geschrieben: Wähle vorher eine andere Betriebsart.</li>
 <li>Das Yaesu-Handbuch wird mit diesem Projekt nicht verteilt.</li>
 </ul></article>
     <footer><p class="translation-note">Übersetzung des spanischen Originals. Bei Abweichungen gilt die spanische Fassung.</p><p>Aus dem versionierten Markdown erzeugtes Dokument. Beachte die Quellen und Grenzen jeder Anleitung. <a href="ayuda-firmwares.de.html">Zurück zum Index</a>.</p></footer>

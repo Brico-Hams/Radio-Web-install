@@ -12,16 +12,17 @@ envia datos a ningun servidor.
 - Firmware MAIN 1.08 o posterior: el manual indica que CAT no funciona con
   versiones anteriores.
 - Cable USB-C a la radio. Windows muestra dos puertos "Silicon Labs Dual CP210x";
-  elige el `Enhanced COM Port` (CAT-1).
+  sirve el `Enhanced COM Port` (CAT-1) o el `Standard COM Port` (CAT-2).
 - Cierra cualquier otro programa CAT (WSJT-X, loggers, cat-ftx1) antes de conectar.
-- Velocidad: la del menu `CAT-1 RATE` de la radio. De fabrica es 38400 bps.
+- Velocidad: la de `CAT-1 RATE` o `CAT-2 RATE` segun el puerto (de fabrica 38400 y
+  4800 bps). Una FTX-1 real respondio por CAT-2 a 4800 bps.
 
 Al conectar, la pagina envia `ID;` y exige la respuesta `ID0840;` del FTX-1.
 Despues envia `AI0;` para desactivar la informacion automatica mientras trabaja.
 
 ## Memorias
 
-"Leer memorias" consulta los canales elegidos (1-99) con `MR` y el nombre con
+"Leer memorias" consulta los canales elegidos (1-999) con `MR` y el nombre con
 `MT`. Un canal vacio responde `?;` y se muestra como libre. Puedes editar:
 
 | Campo | Comando | Valores |
@@ -69,8 +70,10 @@ JSON con "Restaurar copia JSON", simula y escribe de nuevo.
 
 ## Limites
 
-- Solo canales de memoria 1-99. PMS, 5 MHz, canal de emergencia y memorias
+- Solo canales de memoria 1-999. PMS, 5 MHz, canal de emergencia y memorias
   split (`MZ`) no se editan.
 - El README de cat-ftx1 advierte que algunas respuestas reales del FTX-1 difieren
   del manual. Prueba primero con un canal libre y conserva siempre la copia.
+- Los modos marcados "-" en el manual (por ejemplo el codigo `0`, que usa algun
+  canal real) se leen y se muestran, pero no se escriben: elige otro modo antes.
 - El manual de Yaesu no se distribuye con este proyecto.

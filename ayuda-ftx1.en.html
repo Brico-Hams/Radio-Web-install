@@ -31,13 +31,13 @@
 <ul>
 <li>Chrome or Edge on <code>localhost</code> or HTTPS (Web Serial).</li>
 <li>MAIN firmware 1.08 or later: the manual states that CAT does not work with earlier versions.</li>
-<li>USB-C cable to the radio. Windows shows two &quot;Silicon Labs Dual CP210x&quot; ports; choose the <code>Enhanced COM Port</code> (CAT-1).</li>
+<li>USB-C cable to the radio. Windows shows two &quot;Silicon Labs Dual CP210x&quot; ports; either the <code>Enhanced COM Port</code> (CAT-1) or the <code>Standard COM Port</code> (CAT-2) works.</li>
 <li>Close any other CAT program (WSJT-X, loggers, cat-ftx1) before connecting.</li>
-<li>Speed: the radio&#39;s <code>CAT-1 RATE</code> menu value. The factory default is 38400 bps.</li>
+<li>Speed: <code>CAT-1 RATE</code> or <code>CAT-2 RATE</code> depending on the port (factory 38400 and 4800 bps). A real FTX-1 answered on CAT-2 at 4800 bps.</li>
 </ul>
 <p>On connection the page sends <code>ID;</code> and requires the FTX-1 answer <code>ID0840;</code>. It then sends <code>AI0;</code> to turn auto information off while it works.</p>
 <h2 id="memorias">Memories</h2>
-<p>&quot;Read memories&quot; queries the selected channels (1-99) with <code>MR</code> and the name with <code>MT</code>. An empty channel answers <code>?;</code> and is shown as free. You can edit:</p>
+<p>&quot;Read memories&quot; queries the selected channels (1-999) with <code>MR</code> and the name with <code>MT</code>. An empty channel answers <code>?;</code> and is shown as free. You can edit:</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Field</th><th scope="col">Command</th><th scope="col">Values</th></tr></thead><tbody>
 <tr><td>Frequency</td><td><code>MW</code></td><td>0.030000-470.000000 MHz</td></tr>
 <tr><td>Mode</td><td><code>MW</code></td><td>LSB, USB, CW-U, CW-L, FM, FM-N, AM, AM-N, RTTY, DATA, PSK, C4FM</td></tr>
@@ -59,8 +59,9 @@
 <p>Only the changed channels or settings are sent. Each one is read back and compared with what was sent; if the radio answers <code>?;</code> or a different value, the write stops and names the channel or setting. To undo, load the JSON backup with &quot;Restore JSON backup&quot;, simulate and write again.</p>
 <h2 id="limites">Limits</h2>
 <ul>
-<li>Memory channels 1-99 only. PMS, 5 MHz, emergency channel and split memories (<code>MZ</code>) are not edited.</li>
+<li>Memory channels 1-999 only. PMS, 5 MHz, emergency channel and split memories (<code>MZ</code>) are not edited.</li>
 <li>The cat-ftx1 README warns that some real FTX-1 answers differ from the manual. Try a free channel first and always keep the backup.</li>
+<li>Modes marked &quot;-&quot; in the manual (for example code <code>0</code>, used by some real channels) are read and shown but never written: choose another mode first.</li>
 <li>The Yaesu manual is not distributed with this project.</li>
 </ul></article>
     <footer><p class="translation-note">Translation of the Spanish original. If there is any discrepancy, the Spanish version prevails.</p><p>Document generated from the versioned Markdown. Check the sources and limits of each guide. <a href="ayuda-firmwares.en.html">Back to the index</a>.</p></footer>

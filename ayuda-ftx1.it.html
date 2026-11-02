@@ -31,13 +31,13 @@
 <ul>
 <li>Chrome o Edge su <code>localhost</code> o HTTPS (Web Serial).</li>
 <li>Firmware MAIN 1.08 o successivo: il manuale indica che il CAT non funziona con versioni precedenti.</li>
-<li>Cavo USB-C verso la radio. Windows mostra due porte &quot;Silicon Labs Dual CP210x&quot;; scegli la <code>Enhanced COM Port</code> (CAT-1).</li>
+<li>Cavo USB-C verso la radio. Windows mostra due porte &quot;Silicon Labs Dual CP210x&quot;; va bene la <code>Enhanced COM Port</code> (CAT-1) o la <code>Standard COM Port</code> (CAT-2).</li>
 <li>Chiudi qualsiasi altro programma CAT (WSJT-X, logger, cat-ftx1) prima di connetterti.</li>
-<li>Velocità: quella del menu <code>CAT-1 RATE</code> della radio. Di fabbrica 38400 bps.</li>
+<li>Velocità: quella di <code>CAT-1 RATE</code> o <code>CAT-2 RATE</code> secondo la porta (di fabbrica 38400 e 4800 bps). Una FTX-1 reale ha risposto su CAT-2 a 4800 bps.</li>
 </ul>
 <p>Alla connessione la pagina invia <code>ID;</code> ed esige la risposta <code>ID0840;</code> dell&#39;FTX-1. Poi invia <code>AI0;</code> per disattivare l&#39;informazione automatica durante il lavoro.</p>
 <h2 id="memorias">Memorie</h2>
-<p>&quot;Leggi memorie&quot; interroga i canali scelti (1-99) con <code>MR</code> e il nome con <code>MT</code>. Un canale vuoto risponde <code>?;</code> e viene mostrato come libero. Puoi modificare:</p>
+<p>&quot;Leggi memorie&quot; interroga i canali scelti (1-999) con <code>MR</code> e il nome con <code>MT</code>. Un canale vuoto risponde <code>?;</code> e viene mostrato come libero. Puoi modificare:</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Campo</th><th scope="col">Comando</th><th scope="col">Valori</th></tr></thead><tbody>
 <tr><td>Frequenza</td><td><code>MW</code></td><td>0.030000-470.000000 MHz</td></tr>
 <tr><td>Modo</td><td><code>MW</code></td><td>LSB, USB, CW-U, CW-L, FM, FM-N, AM, AM-N, RTTY, DATA, PSK, C4FM</td></tr>
@@ -59,8 +59,9 @@
 <p>Vengono inviati solo i canali o le impostazioni modificati. Ognuno viene riletto e confrontato con quanto inviato; se la radio risponde <code>?;</code> o un valore diverso, la scrittura si ferma e indica il canale o l&#39;impostazione. Per annullare, carica la copia JSON con &quot;Ripristina copia JSON&quot;, simula e scrivi di nuovo.</p>
 <h2 id="limites">Limiti</h2>
 <ul>
-<li>Solo canali di memoria 1-99. PMS, 5 MHz, canale di emergenza e memorie split (<code>MZ</code>) non vengono modificati.</li>
+<li>Solo canali di memoria 1-999. PMS, 5 MHz, canale di emergenza e memorie split (<code>MZ</code>) non vengono modificati.</li>
 <li>Il README di cat-ftx1 avverte che alcune risposte reali dell&#39;FTX-1 differiscono dal manuale. Prova prima con un canale libero e conserva sempre la copia.</li>
+<li>I modi segnati &quot;-&quot; nel manuale (per esempio il codice <code>0</code>, usato da alcuni canali reali) vengono letti e mostrati ma mai scritti: scegli prima un altro modo.</li>
 <li>Il manuale Yaesu non è distribuito con questo progetto.</li>
 </ul></article>
     <footer><p class="translation-note">Traduzione dell&#39;originale spagnolo. In caso di discrepanza prevale la versione spagnola.</p><p>Documento generato dal Markdown versionato. Consulta le fonti e i limiti di ogni guida. <a href="ayuda-firmwares.it.html">Torna all&#39;indice</a>.</p></footer>

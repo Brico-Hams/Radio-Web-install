@@ -109,7 +109,10 @@
         const freq = document.createElement("input");
         freq.type = "text"; freq.inputMode = "decimal"; freq.value = slot.empty ? "" : mhz(m.frequencyHz);
         freq.setAttribute("aria-label", `Frecuencia MHz canal ${slot.channel}`);
-        const mode = selectOf(Object.entries(R.FTX1_MODES), slot.empty ? "4" : m.mode, `Modo canal ${slot.channel}`);
+        // Keep an undocumented mode read from the radio visible; writing it is refused until another mode is chosen.
+        const modes = Object.entries(R.FTX1_MODES);
+        if (!slot.empty && Object.hasOwn(R.FTX1_UNDOCUMENTED_MODES, m.mode)) modes.unshift([m.mode, R.ftx1ModeLabel(m.mode)]);
+        const mode = selectOf(modes, slot.empty ? "4" : m.mode, `Modo canal ${slot.channel}`);
         const name = document.createElement("input");
         name.type = "text"; name.maxLength = 12; name.value = slot.name;
         name.setAttribute("aria-label", `Nombre canal ${slot.channel}`);
@@ -135,7 +138,7 @@
       txClar: "Clarificador TX", empty: "Canal vacio" };
     const show = (field, value) => value === null || value === undefined ? "-"
       : field === "frequencyHz" ? `${mhz(value)} MHz`
-        : field === "mode" ? R.FTX1_MODES[value] : field === "toneMode" ? R.FTX1_TONE_MODES[value]
+        : field === "mode" ? R.ftx1ModeLabel(value) : field === "toneMode" ? R.FTX1_TONE_MODES[value]
           : field === "shift" ? R.FTX1_SHIFTS[value] : String(value);
     function validateEdits() {
       for (const slot of memEdit) {

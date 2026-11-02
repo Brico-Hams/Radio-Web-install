@@ -12,11 +12,12 @@ Yaesu-Software und sendet keine Daten an Server.
 - MAIN-Firmware 1.08 oder neuer: Laut Handbuch funktioniert CAT mit älteren
   Versionen nicht.
 - USB-C-Kabel zum Funkgerät. Windows zeigt zwei Ports „Silicon Labs Dual
-  CP210x“; wähle den `Enhanced COM Port` (CAT-1).
+  CP210x“; sowohl der `Enhanced COM Port` (CAT-1) als auch der `Standard COM Port`
+  (CAT-2) funktionieren.
 - Schließe vor dem Verbinden alle anderen CAT-Programme (WSJT-X, Logbücher,
   cat-ftx1).
-- Geschwindigkeit: der Wert des Menüs `CAT-1 RATE` am Gerät. Werkseinstellung
-  38400 bps.
+- Geschwindigkeit: `CAT-1 RATE` oder `CAT-2 RATE` je nach Port (Werkseinstellung
+  38400 und 4800 bps). Ein echtes FTX-1 antwortete über CAT-2 mit 4800 bps.
 
 Beim Verbinden sendet die Seite `ID;` und verlangt die FTX-1-Antwort `ID0840;`.
 Danach sendet sie `AI0;`, um die automatische Information während der Arbeit
@@ -24,7 +25,7 @@ abzuschalten.
 
 ## Speicher
 
-„Speicher lesen“ fragt die gewählten Kanäle (1-99) mit `MR` und den Namen mit
+„Speicher lesen“ fragt die gewählten Kanäle (1-999) mit `MR` und den Namen mit
 `MT` ab. Ein leerer Kanal antwortet `?;` und wird als frei angezeigt. Bearbeitbar
 sind:
 
@@ -76,9 +77,12 @@ wiederherstellen“, simuliere und schreibe erneut.
 
 ## Grenzen
 
-- Nur Speicherkanäle 1-99. PMS, 5 MHz, Notrufkanal und Split-Speicher (`MZ`)
+- Nur Speicherkanäle 1-999. PMS, 5 MHz, Notrufkanal und Split-Speicher (`MZ`)
   werden nicht bearbeitet.
 - Die README von cat-ftx1 weist darauf hin, dass manche echten FTX-1-Antworten
   vom Handbuch abweichen. Teste zuerst mit einem freien Kanal und behalte immer
   die Sicherung.
+- Im Handbuch mit „-“ markierte Betriebsarten (etwa der Code `0`, den manche
+  echten Kanäle verwenden) werden gelesen und angezeigt, aber nie geschrieben:
+  Wähle vorher eine andere Betriebsart.
 - Das Yaesu-Handbuch wird mit diesem Projekt nicht verteilt.

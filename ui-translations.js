@@ -1255,6 +1255,8 @@ No es un FTX-1: respuesta ID inesperada ({0}).|Not an FTX-1: unexpected ID respo
 El canal {0} esta vacio: no hay borrado documentado, no se puede escribir un canal vacio.|Channel {0} is empty: no erase is documented, an empty channel cannot be written.|Le canal {0} est vide : aucun effacement n’est documenté, un canal vide ne peut pas être écrit.|Kanal {0} ist leer: Ein Löschen ist nicht dokumentiert, ein leerer Kanal kann nicht geschrieben werden.
 Verificacion fallida en el canal {0}: la radio no coincide con lo escrito.|Verification failed on channel {0}: the radio does not match what was written.|Échec de la vérification du canal {0} : la radio ne correspond pas à ce qui a été écrit.|Überprüfung von Kanal {0} fehlgeschlagen: Das Funkgerät stimmt nicht mit dem Geschriebenen überein.
 Verificacion fallida en el menu {0}: la radio no coincide con lo escrito.|Verification failed on menu item {0}: the radio does not match what was written.|Échec de la vérification du menu {0} : la radio ne correspond pas à ce qui a été écrit.|Überprüfung des Menüelements {0} fehlgeschlagen: Das Funkgerät stimmt nicht mit dem Geschriebenen überein.
+- (sin documentar)|- (undocumented)|- (non documenté)|- (nicht dokumentiert)
+Canal {0}: modo sin documentar en el manual; elige un modo antes de escribir.|Channel {0}: mode undocumented in the manual; choose a mode before writing.|Canal {0} : mode non documenté dans le manuel ; choisissez un mode avant d’écrire.|Kanal {0}: Betriebsart im Handbuch nicht dokumentiert; wähle vor dem Schreiben eine Betriebsart.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

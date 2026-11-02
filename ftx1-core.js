@@ -3,7 +3,10 @@
   const R = root.RadioWorkspace;
   const MODES = Object.freeze({ 1: "LSB", 2: "USB", 3: "CW-U", 4: "FM", 5: "AM", 6: "RTTY-L", 7: "CW-L", 8: "DATA-L",
     9: "RTTY-U", A: "DATA-FM", B: "FM-N", C: "DATA-U", D: "AM-N", E: "PSK", F: "DATA-FM-N", H: "C4FM-DN", I: "C4FM-VW" });
-  const TONE_MODES = Object.freeze({ 0: "OFF", 1: "CTCSS ENC/DEC", 2: "CTCSS ENC", 3: "DCS", 4: "PR FREQ", 5: "REV TONE" });
+  // The manual marks these codes "-"; a real FTX-1 answers mode "0" for a memory, so reads keep them but writes refuse them.
+  const UNDOCUMENTED_MODES = Object.freeze({ 0: "- (sin documentar)", G: "- (sin documentar)", J: "- (sin documentar)" });
+  const modeLabel = code => MODES[code] || UNDOCUMENTED_MODES[code] || code;
+  const TONE_MODES =Object.freeze({ 0: "OFF", 1: "CTCSS ENC/DEC", 2: "CTCSS ENC", 3: "DCS", 4: "PR FREQ", 5: "REV TONE" });
   const SHIFTS = Object.freeze({ 0: "Simplex", 1: "Plus shift", 2: "Minus shift" });
   const MIN_CHANNEL = 1;
   const MAX_CHANNEL = 999;
@@ -28,7 +31,7 @@
       "Nombre no valido: maximo 12 caracteres ASCII imprimibles, sin punto y coma.");
     return name.trimEnd();
   }
-  function normalizeMemory(input) {
+  function normalizeMemory(input, forWrite = true) {
     R.assert(input && typeof input === "object", "Memoria no valida.");
     const channel = checkChannel(input.channel);
     R.assert(Number.isInteger(input.frequencyHz) && input.frequencyHz >= MIN_HZ && input.frequencyHz <= MAX_HZ,
@@ -37,7 +40,11 @@
     R.assert(Number.isInteger(input.clarOffsetHz) && input.clarOffsetHz >= 0 && input.clarOffsetHz <= MAX_CLAR,
       "Offset de clarificador fuera de 0-9990 Hz.");
     R.assert(typeof input.rxClar === "boolean" && typeof input.txClar === "boolean", "Estado de clarificador no valido.");
-    R.assert(typeof input.mode === "string" && Object.hasOwn(MODES, input.mode), "Modo no admitido por el FTX-1.");
+    R.assert(typeof input.mode === "string" && (Object.hasOwn(MODES, input.mode) ||
+      !forWrite && Object.hasOwn(UNDOCUMENTED_MODES, input.mode)),
+    forWrite && Object.hasOwn(UNDOCUMENTED_MODES, input.mode)
+      ? `Canal ${input.channel}: modo sin documentar en el manual; elige un modo antes de escribir.`
+      : "Modo no admitido por el FTX-1.");
     const channelType = input.channelType === undefined ? "1" : input.channelType;
     R.assert(typeof channelType === "string" && /^[0-5]$/.test(channelType), "Tipo de canal no valido.");
     R.assert(typeof input.toneMode === "string" && Object.hasOwn(TONE_MODES, input.toneMode), "Modo de tono no valido.");
@@ -52,7 +59,7 @@
     R.assert(match, "Respuesta MR no valida.");
     return normalizeMemory({ channel: Number(match[1]), frequencyHz: Number(match[2]), clarDirection: match[3],
       clarOffsetHz: Number(match[4]), rxClar: match[5] === "1", txClar: match[6] === "1", mode: match[7],
-      channelType: match[8], toneMode: match[9], shift: match[10] });
+      channelType: match[8], toneMode: match[9], shift: match[10] }, false);
   }
   function memoryWriteCommand(memory) {
     const m = normalizeMemory(memory);
@@ -157,7 +164,7 @@
         R.assert(!seen.has(channel), "Copia con canales repetidos.");
         seen.add(channel);
         if (slot.empty) return { channel, empty: true, memory: null, name: "" };
-        const memory = normalizeMemory(slot.memory);
+        const memory = normalizeMemory(slot.memory, false);
         R.assert(memory.channel === channel, "Copia con datos no validos.");
         return { channel, empty: false, memory, name: checkName(slot.name) };
       });
@@ -185,8 +192,8 @@
       const m = slot.memory;
       const tone = m.toneMode === "2" ? "Tone" : m.toneMode === "1" ? "TSQL" : m.toneMode === "3" ? "DTCS" : "";
       rows.push([m.channel, slot.name, (m.frequencyHz / 1e6).toFixed(6), m.shift === "1" ? "+" : m.shift === "2" ? "-" : "",
-        "0.000000", tone, "88.5", "88.5", "023", "NN", chirpMode(MODES[m.mode]), "5.00", "",
-        `Modo FTX-1 ${MODES[m.mode]}; tono CAT ${TONE_MODES[m.toneMode]}. La frecuencia de tono y el ancho del desplazamiento no se leen por CAT.`]);
+        "0.000000", tone, "88.5", "88.5", "023", "NN", chirpMode(modeLabel(m.mode)), "5.00", "",
+        `Modo FTX-1 ${modeLabel(m.mode)}; tono CAT ${TONE_MODES[m.toneMode]}. La frecuencia de tono y el ancho del desplazamiento no se leen por CAT.`]);
     }
     return rows.map(row => row.map(cell).join(",")).join("\r\n") + "\r\n";
   }
@@ -336,7 +343,7 @@
     }
   }
 
-  Object.assign(R, { FTX1_MODES: MODES, FTX1_TONE_MODES: TONE_MODES, FTX1_SHIFTS: SHIFTS, ftx1MenuKey: menuKey,
+  Object.assign(R, { FTX1_MODES: MODES, FTX1_UNDOCUMENTED_MODES: UNDOCUMENTED_MODES, ftx1ModeLabel: modeLabel,FTX1_TONE_MODES: TONE_MODES, FTX1_SHIFTS: SHIFTS, ftx1MenuKey: menuKey,
     parseFtx1Memory: parseMemory, ftx1MemoryWriteCommand: memoryWriteCommand, parseFtx1Tag: parseTag,
     ftx1TagWriteCommand: tagWriteCommand, ftx1MenuReadCommand: menuReadCommand, parseFtx1MenuAnswer: parseMenuAnswer,
     validateFtx1MenuValue: validateMenuValue, ftx1MenuWriteCommand: menuWriteCommand,

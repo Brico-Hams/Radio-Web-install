@@ -78,6 +78,15 @@ test("answers captured read-only from a real FTX-1 (CAT-2, 4800 bps) parse as do
   assert.equal(repeater.toneMode, "2");
   assert.equal(repeater.shift, "2");
   assert.equal(R.parseFtx1Memory("MR00100145725000+000000410002;").channel, 100);
+  assert.equal(R.parseFtx1Memory("MR00015145600000+000000H12002;").mode, "H");
+  // Channel 391 of the real radio uses mode "0" ("-" in the manual): it is read and shown, never written.
+  const undocumented = R.parseFtx1Memory("MR00391431850000+000000010000;");
+  assert.equal(undocumented.mode, "0");
+  assert.equal(R.ftx1ModeLabel("0"), "- (sin documentar)");
+  assert.throws(() => R.ftx1MemoryWriteCommand(undocumented), /Canal 391: modo sin documentar/);
+  assert.match(R.ftx1MemoriesCSV([{ channel: 391, empty: false, memory: undocumented, name: "Hotspot mobi" }]), /DIG/);
+  assert.equal(R.readFtx1Backup(R.ftx1Backup("memories", [{ channel: 391, empty: false, memory: undocumented,
+    name: "Hotspot mobi" }])).data[0].memory.mode, "0");
   assert.equal(R.parseFtx1Tag("MT00001ED1YBQ      ;", 1), "ED1YBQ");
   assert.equal(R.parseFtx1MenuAnswer(item("040101"), "EX040101EA5KAO-FTX;"), "EA5KAO-FTX");
   assert.equal(R.parseFtx1MenuAnswer(item("010101"), "EX010101+00;"), "+00");
@@ -106,7 +115,7 @@ test("MR answer parses and the MW command round trips from the same fields", () 
 
 test("malformed memories and out of range values are rejected", () => {
   for (const bad of ["MR1;", "", mr(field()).slice(0, -2) + ";", mr(field()).replace("+", "*"),
-    mr(field({ mode: "0" })), mr(field({ mode: "G" })), mr(field({ channel: 0 })), mr(field({ channel: 1000 })),
+    mr(field({ channel: 0 })), mr(field({ channel: 1000 })),
     mr(field({ frequencyHz: 29999 })), mr(field({ frequencyHz: 470000001 })), mr(field()).replace(/00(\d);$/, "01$1;")]) {
     assert.throws(() => R.parseFtx1Memory(bad), undefined, bad);
   }
@@ -340,7 +349,7 @@ test("backups round trip and reject anything unknown", async () => {
   assert.throws(() => R.readFtx1Backup({ ...backup, version: 2 }));
   assert.throws(() => R.readFtx1Backup({ ...backup, kind: "other" }));
   const badMode = clone(backup);
-  badMode.data[0].memory.mode = "0";
+  badMode.data[0].memory.mode = "K";
   assert.throws(() => R.readFtx1Backup(badMode));
   const duplicated = clone(backup);
   duplicated.data[1] = clone(duplicated.data[0]);
