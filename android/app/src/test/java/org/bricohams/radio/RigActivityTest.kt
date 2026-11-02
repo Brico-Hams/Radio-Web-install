@@ -33,7 +33,7 @@ class RigActivityTest {
             assertTrue(text(activity).contains(activity.getString(R.string.rig_title)))
             val spinner = views(activity.window.decorView).filterIsInstance<Spinner>().first()
             assertEquals(RigModel.values().size, spinner.adapter.count)
-            assertEquals(7, spinner.adapter.count)
+            assertEquals(9, spinner.adapter.count)
             assertEquals(RigModel.values().map { it.label }, (0 until spinner.adapter.count).map { spinner.adapter.getItem(it).toString() })
         } finally { controller.pause().stop().destroy() }
     }

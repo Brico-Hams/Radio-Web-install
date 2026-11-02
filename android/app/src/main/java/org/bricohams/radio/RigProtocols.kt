@@ -764,3 +764,124 @@ class TruSdxRig(
         const val MAX_SILENT_READS = 20
     }
 }
+
+/** QRP Labs QMX / QMX+ and QDX / QDX-M CAT: TS-480 style text commands ending in ';' (never CR/LF, a CR switches to terminal mode). */
+object QrpLabsCat {
+    private val qmxModes = mapOf(
+        '1' to RigMode.LSB, '2' to RigMode.USB, '3' to RigMode.CW, '5' to RigMode.AM,
+        '7' to RigMode.CW_R, '6' to RigMode.RTTY, '9' to RigMode.RTTY_R
+    )
+
+    // QMX CAT manual 1.04_003, FA/FB set; QDX manual 1.06 §6.8, FA/FB set
+    fun setFrequency(vfo: Vfo, hz: Long): String {
+        requireUi(hz in 0..99_999_999_999L) { UiText(R.string.err_rig_range, mhzText(hz)) }
+        return String.format(Locale.ROOT, if (vfo == Vfo.A) "FA%011d;" else "FB%011d;", hz)
+    }
+    // QMX CAT manual 1.04_003, FA/FB read; QDX manual 1.06 §6.8, FA/FB read
+    fun readFrequency(vfo: Vfo): String = if (vfo == Vfo.A) "FA;" else "FB;"
+    // Both manuals show the FB answer as "FA...;" (probably a typo), so either prefix is accepted
+    fun parseFrequency(reply: String): Long {
+        if (!Regex("F[AB][0-9]{11};").matches(reply)) invalidReply()
+        return reply.substring(2, 13).toLong()
+    }
+    // QMX CAT manual 1.04_003, SP; QDX manual 1.06 §6.8, SP
+    fun setSplit(on: Boolean): String = if (on) "SP1;" else "SP0;"
+    fun readSplit(): String = "SP;"
+    fun parseFlag(reply: String, prefix: String): Boolean {
+        if (!Regex("${Regex.escape(prefix)}[01];").matches(reply)) invalidReply()
+        return reply[prefix.length] == '1'
+    }
+    // QMX CAT manual 1.04_003, TQ; QDX manual 1.06 §6.8, TQ
+    fun ptt(on: Boolean): String = if (on) "TQ1;" else "TQ0;"
+    fun readPtt(): String = "TQ;"
+    // QMX CAT manual 1.04_003, MD (MD8 = SWR tune mode, never sent); QDX manual 1.06 §6.8, MD (only LSB or USB)
+    fun setMode(model: RigModel, mode: RigMode): String {
+        val code = if (model == RigModel.QDX) when (mode) {
+            RigMode.LSB -> '1'
+            RigMode.USB -> '2'
+            else -> null
+        } else qmxModes.entries.firstOrNull { it.value == mode }?.key
+        return "MD${code ?: throw LocalizedArgumentException(UiText(R.string.err_rig_mode, mode.name))};"
+    }
+    fun readMode(): String = "MD;"
+    // QDX manual 1.06 §6.8: MD answers 3 for USB and 1 for LSB
+    fun parseMode(model: RigModel, reply: String): RigMode? {
+        if (!Regex("MD.;").matches(reply)) invalidReply()
+        val code = reply[2]
+        return if (model == RigModel.QDX) when (code) {
+            '3' -> RigMode.USB
+            '1' -> RigMode.LSB
+            else -> null
+        } else qmxModes[code]
+    }
+    // QMX CAT manual 1.04_003, ID; QDX manual 1.06 §6.8, ID (answers ID020, TS-480 emulation)
+    fun readId(): String = "ID;"
+    fun checkId(reply: String) = KenwoodTs480Subset.checkId(reply)
+    // QMX CAT manual 1.04_003, VN (firmware version, e.g. "VN1_00_021QMX;")
+    fun readVersion(): String = "VN;"
+    fun parseVersion(reply: String): String {
+        if (!reply.startsWith("VN") || !reply.endsWith(";")) invalidReply()
+        val text = reply.substring(2, reply.length - 1)
+        if (text.isEmpty() || text.length > 32 || text.any { it !in ' '..'~' }) invalidReply()
+        return text
+    }
+}
+
+/** QMX / QMX+ and QDX / QDX-M over their USB virtual COM port; no memory channels. */
+class QrpLabsRig(transport: RadioBytes, override val model: RigModel) : Rig {
+    private val link = AsciiLink(transport)
+    override val supportsVfoB = true
+    override val silentVfoB = true
+    override val supportsSplit = true
+    override val supportsMemories = false
+    override val supportsMemoryWrite = false
+
+    init {
+        require(model == RigModel.QMX || model == RigModel.QDX)
+    }
+
+    private fun read(vfo: Vfo): Long =
+        QrpLabsCat.parseFrequency(link.request(QrpLabsCat.readFrequency(vfo), if (vfo == Vfo.A) "FA" else "F"))
+    private fun readMode(): RigMode? = QrpLabsCat.parseMode(model, link.request(QrpLabsCat.readMode(), "MD"))
+    private fun readFlag(command: String, prefix: String): Boolean = QrpLabsCat.parseFlag(link.request(command, prefix), prefix)
+
+    override fun identify(): String {
+        val reply = link.request(QrpLabsCat.readId(), "ID")
+        QrpLabsCat.checkId(reply)
+        if (model == RigModel.QDX) return "QRP Labs QDX " + reply.removeSuffix(";")
+        val version = try {
+            QrpLabsCat.parseVersion(link.request(QrpLabsCat.readVersion(), "VN"))
+        } catch (error: LocalizedIOException) {
+            if (!isRejected(error)) throw error
+            return "QRP Labs QMX"
+        }
+        return "QRP Labs QMX $version"
+    }
+    override fun status(): RigStatus = RigStatus(read(Vfo.A), readMode())
+    override fun frequency(vfo: Vfo): Long = read(vfo)
+    override fun setFrequency(vfo: Vfo, hz: Long) {
+        checkRange(model, hz)
+        link.send(QrpLabsCat.setFrequency(vfo, hz))
+        checkUi(read(vfo) == hz) { UiText(R.string.err_rig_unconfirmed) }
+    }
+    override fun setMode(mode: RigMode) {
+        link.send(QrpLabsCat.setMode(model, mode))
+        checkUi(readMode() == mode) { UiText(R.string.err_rig_unconfirmed) }
+    }
+    override fun ptt(on: Boolean) {
+        link.send(QrpLabsCat.ptt(on))
+        try {
+            checkUi(readFlag(QrpLabsCat.readPtt(), "TQ") == on) { UiText(R.string.err_rig_unconfirmed) }
+        } catch (error: Exception) {
+            // never leave the radio transmitting
+            if (!on) runCatching { link.send("RX;") }
+            throw error
+        }
+    }
+    override fun setSplit(on: Boolean) {
+        link.send(QrpLabsCat.setSplit(on))
+        checkUi(readFlag(QrpLabsCat.readSplit(), "SP") == on) { UiText(R.string.err_rig_unconfirmed) }
+    }
+    override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> = unsupported("memories")
+    override fun writeMemory(memory: RigMemory) = unsupported("memory write")
+}

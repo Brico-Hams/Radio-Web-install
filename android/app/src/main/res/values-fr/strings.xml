@@ -765,7 +765,7 @@
     <string name="satellite_open_rig_cat">Ouvrir dans CAT multi-radio</string>
     <string name="rig_title">Bricohams CAT multi-radio</string>
     <string name="rig_disconnected">Aucune radio connectée.</string>
-    <string name="rig_intro">Pilote en USB les Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1 et (tr)uSDX : fréquence, mode, mémoires, suivi de satellites et SSTV.</string>
+    <string name="rig_intro">Pilote en USB les Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX et QRP Labs QMX/QDX : fréquence, mode, mémoires, suivi de satellites et SSTV.</string>
     <string name="rig_section_radio">Radio</string>
     <string name="rig_model_label">Modèle de radio</string>
     <string name="rig_baud_hint">Vitesse (bauds)</string>

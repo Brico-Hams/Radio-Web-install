@@ -765,7 +765,7 @@
     <string name="satellite_open_rig_cat">In CAT Multi-Radio öffnen</string>
     <string name="rig_title">Bricohams CAT Multi-Radio</string>
     <string name="rig_disconnected">Nicht mit einem Funkgerät verbunden.</string>
-    <string name="rig_intro">Steuert Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1 und (tr)uSDX per USB: Frequenz, Betriebsart, Speicher, Satellitenverfolgung und SSTV.</string>
+    <string name="rig_intro">Steuert Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX und QRP Labs QMX/QDX per USB: Frequenz, Betriebsart, Speicher, Satellitenverfolgung und SSTV.</string>
     <string name="rig_section_radio">Funkgerät</string>
     <string name="rig_model_label">Gerätemodell</string>
     <string name="rig_baud_hint">Baudrate</string>

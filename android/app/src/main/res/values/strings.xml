@@ -775,7 +775,7 @@
     <string name="satellite_open_rig_cat">Abrir en CAT multiradio</string>
     <string name="rig_title">Bricohams CAT multiradio</string>
     <string name="rig_disconnected">Sin conexión con la radio.</string>
-    <string name="rig_intro">Controla por USB equipos Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1 y (tr)uSDX: frecuencia, modo, memorias, seguimiento de satélites y SSTV.</string>
+    <string name="rig_intro">Controla por USB equipos Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX y QRP Labs QMX/QDX: frecuencia, modo, memorias, seguimiento de satélites y SSTV.</string>
     <string name="rig_section_radio">Radio</string>
     <string name="rig_model_label">Modelo de radio</string>
     <string name="rig_baud_hint">Velocidad (baudios)</string>
