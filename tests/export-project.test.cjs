@@ -35,12 +35,12 @@ function androidFixture(project, directory) {
   };
   for (const [name, text] of Object.entries(sources)) write(project, name, text);
   write(project, "docs/ANDROID.md", "Android Beta fixture\n");
-  const names = ["bricohams-android-0.7.0-beta-debug.apk", "bricohams-android-0.7.0-beta-androidTest.apk",
+  const names = ["radicodex-0.7.0-beta-debug.apk", "radicodex-0.7.0-beta-androidTest.apk",
     "LICENSE", "NOTICE.txt", "LICENSE-APACHE-2.0.txt", "LICENSE-USB-SERIAL-MIT.txt",
     "LICENSE-SATELLITE-MIT.txt", "LICENSE-RHINO.txt"];
   for (const name of names) write(directory, name, `fixture ${name}`);
   write(directory, "ANDROID.md", "Android Beta fixture\n");
-  const info = { format: "bricohams-android-build", version: 1, applicationId: "org.bricohams.radio",
+  const info = { format: "bricohams-android-build", version: 1, applicationId: "org.bricohams.radicodex",
     applicationVersion: "0.7.0-beta", stability: "beta", signing: "debug",
     hostTests: 69, testFailures: 0, lintErrors: 0, hardwareTested: false, instrumentationTestsExecuted: false,
     sourceHashes: Object.entries(sources).map(([file, text]) => ({ file, sha256: sha(text) })) };
@@ -83,7 +83,7 @@ test("Android exige APK, licencias, pruebas y correspondencia exacta de las fuen
   sums(delivery, entries.filter(name => name !== "LICENSE-RHINO.txt"));
   assert.throws(() => copyAndroid(delivery, project, path.join(directory, "invalid")), /licencias/);
   sums(delivery, entries);
-  write(delivery, "bricohams-android-0.7.0-beta-debug.apk", "tampered");
+  write(delivery, "radicodex-0.7.0-beta-debug.apk", "tampered");
   assert.throws(() => copyAndroid(delivery, project, path.join(directory, "invalid")), /SHA-256 distinto/);
 });
 
@@ -174,7 +174,7 @@ test("el ZIP Beta conserva fuentes, historial y artefactos verificables y no sob
   assert.equal(info.status, "incomplete-beta");
   assert.equal(info.android.applicationVersion, "0.7.0-beta");
   assert.equal(info.android.hardwareTested, false);
-  assert(info.files.some(file => file.file === "android/bricohams-android-0.7.0-beta-debug.apk"));
+  assert(info.files.some(file => file.file === "android/radicodex-0.7.0-beta-debug.apk"));
   for (const file of info.files) {
     const bytes = fs.readFileSync(path.join(exported, ...file.file.split("/")));
     assert.equal(bytes.length, file.bytes);

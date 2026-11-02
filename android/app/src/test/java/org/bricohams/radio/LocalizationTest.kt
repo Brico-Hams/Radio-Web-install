@@ -25,7 +25,7 @@ class LocalizationTest {
     private fun assertLocale(qualifiers: String, export: String, logbook: String) {
         RuntimeEnvironment.setQualifiers(qualifiers)
         val context = RuntimeEnvironment.getApplication()
-        assertEquals("Bricohams Beta", context.getString(R.string.app_name))
+        assertEquals("RadiCodex", context.getString(R.string.app_name))
         assertEquals(export, context.getString(R.string.sstv_export))
         val sstv = Robolectric.buildActivity(SstvActivity::class.java).setup()
         try { assertTrue(buttons(sstv.get()).contains(export)) } finally { sstv.pause().stop().destroy() }
@@ -87,7 +87,7 @@ class LocalizationTest {
     @Test fun legacySatelliteStringsHaveSpanishFallback() {
         RuntimeEnvironment.setQualifiers("es")
         val context = RuntimeEnvironment.getApplication()
-        assertEquals("Bricohams Beta - Satélites SGP4 sin conexión.", context.getString(R.string.satellite_intro))
+        assertEquals("RadiCodex - Satélites SGP4 sin conexión.", context.getString(R.string.satellite_intro))
         assertEquals("Nombre del satélite", context.getString(R.string.satellite_name))
         assertEquals("Línea 1 del TLE (69 caracteres)", context.getString(R.string.satellite_line1))
         assertEquals("Línea 2 del TLE (69 caracteres)", context.getString(R.string.satellite_line2))

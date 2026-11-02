@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="Bricohams Android Beta: Bricohams help by model and version.">
+  <meta name="description" content="RadiCodex by BricoHams: Bricohams help by model and version.">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Bricohams Android Beta | Bricohams Radio Workspace</title>
+  <title>RadiCodex by BricoHams | Bricohams Radio Workspace</title>
   <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
   <script src="appearance.js" defer></script>
@@ -25,8 +25,9 @@
       <nav class="languages" aria-label="Language"><a href="ayuda-android.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-android.en.html" hreflang="en-US" lang="en-US" aria-current="page">English (US)</a> · <a href="ayuda-android.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-android.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-android.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
     <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#alcance-de-la-apk">APK scope</a></li><li><a href="#instalacion-y-datos">Installation and data</a></li><li><a href="#libro-de-guardia">Logbook</a></li><li><a href="#ardf-y-gps">ARDF and GPS</a></li><li><a href="#usb-cdc-y-cat-rx-experimental">Experimental USB CDC and CAT RX</a></li><li><a href="#editor-de-canales-quansheng-por-usb-beta">Quansheng USB channel editor (Beta)</a></li><li><a href="#satelites-sgp4-y-seguimiento-de-pases">SGP4 satellites and pass tracking</a></li><li><a href="#morse-wav-experimental">Experimental Morse WAV</a></li><li><a href="#sstv-robot36-desde-wav">SSTV Robot36 from WAV</a></li><li><a href="#sstv-robot36-por-cat-recepcion-sintonizada-y-envio-con-ptt">SSTV Robot36 over CAT: tuned reception and PTT transmission</a></li><li><a href="#captura-de-microfono-morse-y-robot36">Morse and Robot36 microphone capture</a></li><li><a href="#compilacion">Build</a></li><li><a href="#validacion-realizada-y-pendiente">Validation performed and pending</a></li></ul></nav>
-    <article class="panel"><h1 id="bricohams-android-beta">Bricohams Android Beta</h1>
-<p>Step-by-step guide: <a href="ayuda-tutoriales-android.en.html">Bricohams Android APK tutorials</a>.</p>
+    <article class="panel"><h1 id="radicodex-by-bricohams">RadiCodex by BricoHams</h1>
+<p>Version 1.0.0 (versionCode 15): the APK is called RadiCodex by BricoHams (package <code>org.bricohams.radicodex</code>).</p>
+<p>Step-by-step guide: <a href="ayuda-tutoriales-android.en.html">RadiCodex by BricoHams tutorials</a>.</p>
 <h2 id="alcance-de-la-apk">APK scope</h2>
 <p>The main screen offers <strong>System language</strong>, <strong>Español</strong>, <strong>English (US)</strong>, <strong>Français</strong>, and <strong>Deutsch</strong>. The choice is saved locally and applies to every screen, including USB channels, CAT, satellites, and SSTV. Switching languages does not translate callsigns, channel names, or user files; the branding remains Bricohams.</p>
 <p>Opening Satellites automatically updates TLE/frequencies over HTTPS from CelesTrak and SatNOGS if the catalog is missing or at least 24 h old. Settings can disable automatic updates. Your saved location and radio channels are not sent; servers receive the normal HTTPS request, including the IP address. Offline import remains available. This revision preserves the 0.8.0 features and prepares 0.9.0-beta APKs, versionCode 13. Android tests, lint and builds require JDK 17 and SDK 35; they cannot run locally with Java 8. CI must verify the new APK before distribution.</p>
@@ -52,7 +53,7 @@
 </tbody></table></div>
 <p>The interface uses the original Bricohams PNG and orange accents on a dark background. The icon retains the original brand rather than inventing a variant; lint warns that its launcher silhouette is unconventional. The web palette has not yet been changed: its final migration remains pending.</p>
 <h2 id="instalacion-y-datos">Installation and data</h2>
-<p>The development APK is signed with the Android tool&#39;s debug key, not a Bricohams distribution identity. Verify the published SHA-256 alongside it. It is not a Google Play version or a stable release. Android will ask you to authorize installation from the application that opens the APK. It does not install drivers or modify the radio. Optional CAT RX commands temporarily change the receive tuning, not the radio&#39;s persistent programming.</p>
+<p>Debug APKs are signed with the Android tool&#39;s debug key. The release APK <code>RadiCodex-1.0.0.apk</code> is signed with the RadiCodex release key only if the GitHub release includes it; verify the published SHA-256 alongside it. It is not distributed through Google Play. Features marked as experimental still have no validation with a real radio. Android will ask you to authorize installation from the application that opens the APK. It does not install drivers or modify the radio. Optional CAT RX commands temporarily change the receive tuning, not the radio&#39;s persistent programming.</p>
 <p>Data is stored in the application&#39;s private SQLite database. There is no telemetry, background location service, or personal-data upload. INTERNET permission is used only for the requested HTTPS satellite data downloads. System automatic backup and data transfer are disabled in the manifest/extraction rules. <strong>Export before uninstalling:</strong> uninstalling deletes local data. JSON restoration starts from Home and never deletes existing data.</p>
 <p>Exports use the Android file picker; general storage access is not required. The selected provider may be remote: choosing a cloud service means sharing the content with that provider. JSON contains personal data and locations; check its destination and do not publish it. No LoTW certificate is requested or stored.</p>
 <p>Before migrating SQLite schema 1, the untouched database is copied to <code>bricohams-v1-backup.db</code> in private storage. Migration is transactional: existing contacts enter General, and failure leaves schema 1 unchanged.</p>

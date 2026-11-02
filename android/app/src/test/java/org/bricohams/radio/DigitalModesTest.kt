@@ -41,6 +41,8 @@ class DigitalModesTest {
             .forEach { assertEquals(RigMode.DATA_U, dataMode(it)) }
         assertEquals(RigMode.USB, dataMode(RigModel.IC705))
         assertEquals(RigMode.USB, dataMode(RigModel.TRUSDX))
+        assertEquals(RigMode.USB, dataMode(RigModel.QMX))
+        assertEquals(RigMode.USB, dataMode(RigModel.QDX))
     }
 
     @Test fun everyFrequencyHasABandAndEveryModeHasEntries() {

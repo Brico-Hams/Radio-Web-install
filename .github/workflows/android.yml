@@ -1,4 +1,4 @@
-name: Android Beta
+name: Android
 
 on:
   push:
@@ -28,6 +28,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,6 +53,35 @@ jobs:
           else
             node scripts/check-android-store.cjs
           fi
+      - name: Prepare release signing (only with the keystore secret)
+        id: signing
+        if: github.ref_type == 'tag' && startsWith(github.ref_name, 'android-v')
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RADICODEX_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.RADICODEX_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RADICODEX_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RADICODEX_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Release signing::No keystore secret; the release APK stays unsigned."
+            exit 0
+          fi
+          if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "::error title=Release signing::The keystore secret exists but its password, alias or key password secret is missing."
+            exit 1
+          fi
+          keystore="$RUNNER_TEMP/radicodex-release.jks"
+          (umask 077; printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$keystore")
+          {
+            echo "RADICODEX_KEYSTORE_PATH=$keystore"
+            echo "RADICODEX_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "RADICODEX_KEY_ALIAS=$KEY_ALIAS"
+            echo "RADICODEX_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
       - name: Build APK, lint and run host tests
         shell: bash
         run: bash android/gradlew -p android :app:testDebugUnitTest :app:lintDebug :app:lintRelease :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease --no-daemon 2>&1 | tee android-build.log
@@ -89,20 +120,48 @@ jobs:
           cd android/app/build/outputs/apk
           sha256sum debug/app-debug.apk androidTest/debug/app-debug-androidTest.apk > SHA256SUMS
       - name: Hash unsigned release candidate
+        if: steps.signing.outputs.signed != 'true'
         run: |
           cd android/app/build/outputs/apk/release
           sha256sum app-release-unsigned.apk > SHA256SUMS-release
       - name: Preserve unsigned release candidate separately from debug APKs
+        if: steps.signing.outputs.signed != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: bricohams-android-release-unsigned
+          name: radicodex-release-unsigned
           path: |
             android/app/build/outputs/apk/release/app-release-unsigned.apk
             android/app/build/outputs/apk/release/SHA256SUMS-release
           if-no-files-found: error
+      - name: Verify and hash the signed release APK
+        id: signed-apk
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#android-v}"
+          apksigner="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)"
+          source_apk=android/app/build/outputs/apk/release/app-release.apk
+          "$apksigner" verify --verbose --print-certs "$source_apk"
+          mkdir signed
+          cp "$source_apk" "signed/RadiCodex-$version.apk"
+          (cd signed && sha256sum "RadiCodex-$version.apk" > "RadiCodex-$version.apk.sha256" && cat "RadiCodex-$version.apk.sha256")
+      - name: Preserve the signed release APK
+        if: steps.signing.outputs.signed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: radicodex-release-signed
+          path: signed
+          if-no-files-found: error
+      - name: Delete the release keystore
+        if: always() && steps.signing.outputs.signed == 'true'
+        shell: bash
+        run: rm -f -- "$RADICODEX_KEYSTORE_PATH"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: bricohams-android-0.10.0-beta-debug
+          name: radicodex-1.0.0-debug
           path: |
             android/app/build/outputs/apk/debug/app-debug.apk
             android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
@@ -119,17 +178,17 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: bricohams-android-0.10.0-beta-debug
+          name: radicodex-1.0.0-debug
           path: android-artifact
-      - name: Attach the debug-signed beta APK to the release
+      - name: Attach the debug-signed APKs to the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           mkdir upload
-          cp "$(find android-artifact -path '*apk/debug/app-debug.apk')" upload/bricohams-android-0.10.0-beta-debug.apk
-          cp "$(find android-artifact -path '*apk/androidTest/debug/app-debug-androidTest.apk')" upload/bricohams-android-0.10.0-beta-androidTest.apk
+          cp "$(find android-artifact -path '*apk/debug/app-debug.apk')" upload/radicodex-1.0.0-debug.apk
+          cp "$(find android-artifact -path '*apk/androidTest/debug/app-debug-androidTest.apk')" upload/radicodex-1.0.0-androidTest.apk
           (cd upload && sha256sum -- * > SHA256SUMS-android && cat SHA256SUMS-android)
           for attempt in $(seq 1 40); do
             gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break
@@ -137,3 +196,31 @@ jobs:
             sleep 30
           done
           gh release upload "$TAG" upload/* --clobber -R "$GITHUB_REPOSITORY"
+
+  release-signed:
+    if: startsWith(github.ref, 'refs/tags/android-v') && needs.build.outputs.signed == 'true'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: radicodex-release-signed
+          path: signed
+      - name: Attach the signed APK and its SHA-256 to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#android-v}"
+          prerelease=()
+          case "$version" in *-beta*) prerelease=(--prerelease) ;; esac
+          if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag "${prerelease[@]}" \
+              --title "RadiCodex by BricoHams $version" \
+              --notes "RadiCodex by BricoHams $version for Android. Verify the SHA-256 published next to the APK."
+          fi
+          gh release upload "$TAG" "signed/RadiCodex-$version.apk" "signed/RadiCodex-$version.apk.sha256" --clobber -R "$GITHUB_REPOSITORY"

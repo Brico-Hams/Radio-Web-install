@@ -47,11 +47,11 @@ test("store validation rejects stale versions and unrelated release tags", t => 
   const file = path.join(dir, RECIPE);
   const original = fs.readFileSync(file, "utf8");
   const code = validateStore(dir).versionCode;
-  fs.writeFileSync(file, original.replace(`    versionCode: ${code}`, `    versionCode: ${code + 1}`));
+  fs.writeFileSync(file, original.replace(/^    versionCode: \d+$(?![\s\S]*^    versionCode: )/m, `    versionCode: ${code + 1}`));
   assert.throws(() => validateStore(dir), /versionCode is stale/);
   fs.writeFileSync(file, original.replace(/^UpdateCheckMode: Tags .+$/m, "UpdateCheckMode: Tags .*"));
   assert.throws(() => validateStore(dir), /Web tags must not trigger/);
-  fs.writeFileSync(file, original.replace(/^    commit: .+$/m, "    commit: main"));
+  fs.writeFileSync(file, original.replace(/^    commit: .+$(?![\s\S]*^    commit: )/m, "    commit: main"));
   assert.throws(() => validateStore(dir), /full commit SHA/);
 });
 

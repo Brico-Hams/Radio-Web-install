@@ -121,7 +121,7 @@ werden. Verwende stets TLE der letzten Tage.
 
 | Werkzeug | Plattform | Hinweise |
 | --- | --- | --- |
-| Bricohams-Android-App | Android | Eigenes SGP4 und CAT RX zu BH Satélite; siehe [Android](ANDROID.md) |
+| RadiCodex by BricoHams | Android | Eigenes SGP4 und CAT RX zu BH Satélite; siehe [Android](ANDROID.md) |
 | Gpredict | Windows, Linux und macOS | Frei, mit Rotor- und Funkgerätesteuerung |
 | Orbitron | Windows | Kostenlos und klassisch, mit Vorhersage und Doppler |
 | ISS Detector | Android | Einfach; Amateurfunksatelliten erfordern eine Erweiterung |
@@ -225,7 +225,7 @@ Satelliten. Technische Details, Grenzen und Protokoll:
    null. Zu Beginn des Überflugs nähert sich der Satellit; verwende daher
    negative Geschwindigkeiten, um weiter oben zu empfangen.
 5. **CAT RX über Android.** Drücke 8 am Funkgerät, damit `CAT READY RX` angezeigt
-   wird. Die Bricohams-App berechnet den Überflug mit SGP4 und sendet die
+   wird. Die RadiCodex-App berechnet den Überflug mit SGP4 und sendet die
    korrigierte RX-Frequenz. Jeder Befehl läuft nach 3 s ab, wenn er nicht
    erneuert wird. Mit den Tasten 4, 5 und 6 kehrst du zur manuellen Steuerung zurück.
 6. **Senden.** Für den Uplink wird die nominale TX-Frequenz des Kanals verwendet:
@@ -279,7 +279,7 @@ bietet. OpenGD77 umfasst auf kompatiblen Funkgeräten einen eigenen Satellitenmo
 
 - **SSTV.** Bei von ARISS angekündigten Veranstaltungen sendet die ISS Bilder
   in FM auf 145,800 MHz, üblicherweise in PD120 oder Robot36. Ein V-Dipol oder
-  eine Yagi und ein Decoder genügen. Die Bricohams-App decodiert Robot36 aus WAV.
+  eine Yagi und ein Decoder genügen. Die RadiCodex-App decodiert Robot36 aus WAV.
 - **APRS.** Der ISS-Digipeater auf 145,825 MHz leitet Packet-Frames weiter.
   Zum Senden von Frames brauchst du eine Lizenz und ein TNC oder eine
   kompatible App.

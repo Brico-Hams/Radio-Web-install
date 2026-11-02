@@ -6,7 +6,7 @@ WebSite: https://brico-hams.github.io/Radio-Web-install/
 SourceCode: https://github.com/Brico-Hams/Radio-Web-install
 IssueTracker: https://github.com/Brico-Hams/Radio-Web-install/issues
 
-AutoName: Bricohams
+AutoName: RadiCodex
 
 RepoType: git
 Repo: https://github.com/Brico-Hams/Radio-Web-install.git
@@ -15,6 +15,16 @@ Builds:
   - versionName: 0.10.0-beta
     versionCode: 14
     commit: android-v0.10.0-beta
+    subdir: android
+    gradle:
+      - yes
+    rm:
+      - android/Bricohams-Android
+      - examples/firmware
+      - precompiled
+  - versionName: 1.0.0
+    versionCode: 15
+    commit: android-v1.0.0
     subdir: android
     gradle:
       - yes
@@ -42,5 +52,5 @@ MaintainerNotes: |-
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^android-v[0-9]+[.][0-9]+[.][0-9]+(-beta[0-9]*)?$
 UpdateCheckData: 'android/app/build.gradle.kts|versionCode\s*=\s*(\d+)|.|versionName\s*=\s*"([^"]+)"'
-CurrentVersion: 0.10.0-beta
-CurrentVersionCode: 14
+CurrentVersion: 1.0.0
+CurrentVersionCode: 15

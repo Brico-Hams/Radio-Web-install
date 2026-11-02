@@ -56,5 +56,5 @@ object DigitalClock {
 /** CAT mode for digital work; on the IC-705 the data mode (DATA ON) is selected on the radio, not changed here. */
 fun dataMode(model: RigModel): RigMode = when (model) {
     RigModel.FT817, RigModel.FT818, RigModel.FT857, RigModel.FT897, RigModel.FTX1 -> RigMode.DATA_U
-    RigModel.IC705, RigModel.TRUSDX -> RigMode.USB
+    RigModel.IC705, RigModel.TRUSDX, RigModel.QMX, RigModel.QDX -> RigMode.USB
 }

@@ -117,7 +117,7 @@ Always use TLEs from the last few days.
 
 | Tool | Platform | Notes |
 | --- | --- | --- |
-| Bricohams Android app | Android | Custom SGP4 and CAT RX to BH Satélite; see [Android](ANDROID.md) |
+| RadiCodex by BricoHams | Android | Custom SGP4 and CAT RX to BH Satélite; see [Android](ANDROID.md) |
 | Gpredict | Windows, Linux, and macOS | Free, with rotor and radio control |
 | Orbitron | Windows | Classic freeware with prediction and Doppler |
 | ISS Detector | Android | Simple; amateur radio satellites require an extension |
@@ -215,7 +215,7 @@ profile. Technical details, limits, and protocol:
    and key 5 returns to zero. At the start of a pass, the satellite is
    approaching, so use negative velocities to receive higher.
 5. **CAT RX from Android.** Press 8 on the radio to show `CAT READY RX`. The
-   Bricohams app calculates the pass with SGP4 and sends the corrected RX
+   RadiCodex calculates the pass with SGP4 and sends the corrected RX
    frequency. Each command expires after 3 s unless renewed. Keys 4, 5, and 6
    return control to manual mode.
 6. **Transmit.** The uplink uses the channel's nominal TX: BH Satélite **does
@@ -267,7 +267,7 @@ Common codes and expressions:
 
 - **SSTV.** During events announced by ARISS, the ISS transmits images in FM
   on 145,800 MHz, usually in PD120 or Robot36. A V dipole or Yagi and a
-  decoder are enough. The Bricohams app decodes Robot36 from WAV.
+  decoder are enough. The RadiCodex app decodes Robot36 from WAV.
 - **APRS.** The ISS digipeater on 145,825 MHz retransmits packet frames.
   Sending frames requires a license and a TNC or compatible app.
 - **Voice listening.** During ARISS school contacts, listen only to the

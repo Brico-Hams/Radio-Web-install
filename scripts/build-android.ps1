@@ -21,8 +21,8 @@ try {
     & .\android\gradlew.bat -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
     if ($LASTEXITCODE -ne 0) { throw "La compilacion Android fallo: $LASTEXITCODE" }
     $artifacts = @(
-        @{ Source = 'android\app\build\outputs\apk\debug\app-debug.apk'; Name = 'bricohams-android-0.10.0-beta-debug.apk' },
-        @{ Source = 'android\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'; Name = 'bricohams-android-0.10.0-beta-androidTest.apk' }
+        @{ Source = 'android\app\build\outputs\apk\debug\app-debug.apk';         Name = 'radicodex-1.0.0-debug.apk' },
+                @{ Source = 'android\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'; Name = 'radicodex-1.0.0-androidTest.apk' }
     )
     foreach ($artifact in $artifacts) {
         & $signer verify $artifact.Source
@@ -61,10 +61,10 @@ try {
     $info = [ordered]@{
         format = 'bricohams-android-build'
         version = 1
-        applicationId = 'org.bricohams.radio'
-        applicationVersion = '0.10.0-beta'
-        applicationVersionCode = 14
-        stability = 'beta'
+        applicationId = 'org.bricohams.radicodex'
+        applicationVersion = '1.0.0'
+        applicationVersionCode = 15
+        stability = 'stable'
         signing = 'debug'
         minimumApi = 26
         targetApi = 35
@@ -86,7 +86,7 @@ try {
         "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
     }
     $sums | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS') -Encoding ascii
-    Write-Output "APK Beta generada con $tests pruebas host correctas, $lintErrors errores y $lintWarnings avisos lint."
+    Write-Output "APK generada con $tests pruebas host correctas, $lintErrors errores y $lintWarnings avisos lint."
     Write-Output "Destino: $output. Sin pruebas en telefono ni programacion de radio."
 } finally {
     Pop-Location

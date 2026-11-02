@@ -9,10 +9,10 @@
     <string name="home_tools">Radio y recepción</string>
     <string name="home_data">Tus datos y copias</string>
     <string name="home_about">Alcance y privacidad</string>
-    <string name="language_label">Idioma de Bricohams</string>
+    <string name="language_label">Idioma de RadiCodex</string>
     <string name="language_system">Idioma del sistema</string>
     <string name="language_save_error">No se pudo guardar el idioma. Vuelve a intentarlo.</string>
-    <string name="live_intro">Bricohams - recepcion de audio Beta</string>
+    <string name="live_intro">RadiCodex - recepcion de audio</string>
     <string name="live_limits">Microfono en primer plano, PCM mono 48 kHz, maximo 60 s (Morse) o 200 s (SSTV) en memoria. No se guarda ni transmite el audio. Pulsa detener para decodificar. SSTV (Robot36/72, Martin, Scottie, PD) necesita la cabecera VIS completa: inicia antes de la transmision. Sin PTT ni TX; el progreso en vivo se recalcula cada pocos segundos; prueba primero con audio conocido.</string>
     <string name="live_tone">Tono Morse (300 a 1200 Hz)</string>
     <string name="live_speed">Velocidad Morse (5 a 45 ppm)</string>
@@ -29,9 +29,9 @@
     <string name="live_permission_ready">Permiso concedido. Pulsa iniciar para comenzar una captura nueva.</string>
     <string name="live_permission_denied">Sin permiso de microfono. Puedes seguir usando los importadores WAV sin grabar audio.</string>
     <string name="live_image_lost">La imagen se perdio al recrear la pantalla. Decodifica una captura nueva.</string>
-    <string name="app_name">Bricohams Beta</string>
+    <string name="app_name">RadiCodex</string>
     <string name="cat_intro">USB/CAT experimental, solo Bricohams SAT RX v1. CAT funciona solo por USB (no hay CAT por Bluetooth). Sin prueba fisica Android.</string>
-    <string name="cat_help">Bricohams Beta - USB OTG: CDC ACM y adaptadores reconocidos CH34x, CP210x, FTDI o Prolific de un puerto. En la radio: SAT RX y tecla 8 para CAT RX. Sin canales, EEPROM ni calibracion. La radio revierte la sintonia a los 3 s sin renovar; la app la renueva cada 1,2 s hasta STOP o hasta salir de la pantalla.</string>
+    <string name="cat_help">RadiCodex - USB OTG: CDC ACM y adaptadores reconocidos CH34x, CP210x, FTDI o Prolific de un puerto. En la radio: SAT RX y tecla 8 para CAT RX. Sin canales, EEPROM ni calibracion. La radio revierte la sintonia a los 3 s sin renovar; la app la renueva cada 1,2 s hasta STOP o hasta salir de la pantalla.</string>
     <string name="cat_sstv_record">Grabar SSTV (CAT sigue sintonizando)</string>
     <string name="cat_pass_record">Grabar pase completo (WAV hasta LOS)</string>
     <string name="cat_pass_record_stop">Detener grabacion del pase</string>
@@ -55,7 +55,7 @@
     <string name="cat_stop_tracking">Detener seguimiento y desconectar USB</string>
     <string name="cat_tracking_start">Comprobando pase actual y estado CAT. Solo recepcion temporal, no TX.</string>
     <string name="cat_tracking_status">Doppler RX confirmado %1$d Hz. Azimut %2$.1f, elevacion %3$.1f grados. Calculo SGP4, no medida RF. Parar desconecta USB.</string>
-    <string name="sstv_intro">Bricohams Beta - SSTV desde WAV (Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</string>
+    <string name="sstv_intro">RadiCodex - SSTV desde WAV (Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</string>
     <string name="sstv_limits">Solo WAV PCM mono 16 bits, 8000-48000 Hz, hasta 200 s y 24 MiB. Requiere cabecera VIS completa con paridad de un modo soportado; tolera desvio de tono de +-100 Hz, deriva de reloj y sincronismos perdidos (las lineas perdidas se marcan en negro o se estiman). Una recepcion parcial devuelve las lineas decodificadas. No usa microfono, USB audio ni PTT. Manten esta pantalla abierta y exporta PNG antes de salir o rotar.</string>
     <string name="sstv_open">Decodificar WAV SSTV</string>
     <string name="sstv_export">Guardar imagen PNG</string>
@@ -159,7 +159,7 @@
     <string name="tab_logbook">Guardia</string>
     <string name="tab_ardf">ARDF</string>
     <string name="tab_morse">Morse</string>
-    <string name="main_beta_banner">BETA - datos locales. Exporta tus datos antes de desinstalar.</string>
+    <string name="main_beta_banner">Datos locales. Exporta tus datos antes de desinstalar.</string>
     <string name="main_invalid_data">Datos invalidos.</string>
     <string name="main_invalid_utc">Fecha UTC invalida: %1$s</string>
     <string name="main_database_error">No se pudo guardar o leer la base local: %1$s</string>
@@ -530,7 +530,7 @@
     <string name="err_ardf_session_missing">La sesion ARDF no existe.</string>
     <string name="err_json_too_large">El JSON supera 16 MiB.</string>
     <string name="err_json_invalid">JSON invalido: %1$s</string>
-    <string name="err_backup_format">Formato de copia no admitido; usa JSON exportado por Bricohams Android version 1 o 2.</string>
+    <string name="err_backup_format">Formato de copia no admitido; usa JSON exportado por RadiCodex (o Bricohams Android) version 1 o 2.</string>
     <string name="err_too_many_rows">Demasiados registros en %1$s (maximo 50000).</string>
     <string name="err_row_id">ID invalido o duplicado en %1$s.</string>
     <string name="err_row_fields">Campos inesperados o ausentes en %1$s.</string>
@@ -659,7 +659,7 @@
     <string name="pass_partial">" (cortado por la ventana)"</string>
     <string name="pass_current">Ahora az %1$.1f°, el %2$.1f°, %3$.0f km</string>
     <string name="pass_detail">%1$s\nAOS %2$s az %3$.0f°\nMax %4$s el %5$.1f°\nLOS %6$s az %7$.0f°\nParcial inicio=%8$s fin=%9$s\nObservador %10$.6f, %11$.6f, %12$.3f km; RX %13$d Hz\n%14$s</string>
-    <string name="satellite_intro">Bricohams Beta - Satélites SGP4 sin conexión.</string>
+    <string name="satellite_intro">RadiCodex - Satélites SGP4 sin conexión.</string>
     <string name="satellite_help">Importa TLE actuales desde un archivo o pega sus dos líneas. Posición manual del observador, altura en km. Solo downlink FM VHF/UHF puntual confirmado por ti, sin TX. Predicción de 24 h con TLE de hasta 7 días; no se descargan datos ni se verifica el modo del satélite. Esta pantalla no incluye mapa ni GPS automático.</string>
     <string name="satellite_name">Nombre del satélite</string>
     <string name="satellite_line1">Línea 1 del TLE (69 caracteres)</string>
@@ -775,7 +775,7 @@
     <string name="satellite_open_rig_cat">Abrir en CAT multiradio</string>
     <string name="rig_title">Bricohams CAT multiradio</string>
     <string name="rig_disconnected">Sin conexión con la radio.</string>
-    <string name="rig_intro">Controla por USB equipos Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1 y (tr)uSDX: frecuencia, modo, memorias, seguimiento de satélites y SSTV.</string>
+    <string name="rig_intro">Controla por USB equipos Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX y QRP Labs QMX/QDX: frecuencia, modo, memorias, seguimiento de satélites y SSTV.</string>
     <string name="rig_section_radio">Radio</string>
     <string name="rig_model_label">Modelo de radio</string>
     <string name="rig_baud_hint">Velocidad (baudios)</string>
@@ -897,8 +897,8 @@
     <string name="screen_ftx">Modos digitales FT8 / FT4 / FT2</string>
     <string name="home_open_ftx">Modos digitales FT8 / FT4 / FT2</string>
     <string name="rig_open_ftx">Decodificador y TX propios</string>
-    <string name="ftx_intro">Decodificador y generador propios de Bricohams para FT8, FT4 y FT2, dentro de esta aplicación. Escucha la entrada de audio de Android (micrófono o audio USB) o decodifica un WAV, y genera la señal para que tú pulses PTT o uses VOX.</string>
-    <string name="ftx_about">Implementación propia de Bricohams (código original GPL-3.0-or-later). FT2 es un candidato heredado, validado solo contra un receptor externo.</string>
+    <string name="ftx_intro">Decodificador y generador propios de RadiCodex para FT8, FT4 y FT2, dentro de esta aplicación. Escucha la entrada de audio de Android (micrófono o audio USB) o decodifica un WAV, y genera la señal para que tú pulses PTT o uses VOX.</string>
+    <string name="ftx_about">Implementación propia de RadiCodex by BricoHams (código original GPL-3.0-or-later). FT2 es un candidato heredado, validado solo contra un receptor externo.</string>
     <string name="ftx_mode_title">Modo y turno</string>
     <string name="ftx_mode_candidate">%1$s (candidato)</string>
     <string name="ftx_slot_info">%1$s: turno de %2$s s alineado con UTC.</string>

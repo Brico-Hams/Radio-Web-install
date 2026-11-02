@@ -1,6 +1,6 @@
-# Anleitungen zur Bricohams-Android-APK
+# Anleitungen zu RadiCodex by BricoHams
 
-Schritt-für-Schritt-Anleitung zur einzigen Bricohams-APK (`org.bricohams.radio`, native Kotlin-App, Beta). Jede Anleitung nennt das Ziel, was du brauchst, die Schritte mit den genauen Bildschirmtexten, das erwartete Ergebnis und die üblichen Fehler. Der vollständige technische Umfang und die Einschränkungen stehen in [Bricohams Android Beta](ANDROID.md). Als experimentell gekennzeichnete Funktionen sind nicht mit einem echten Funkgerät validiert: Teste sie zuerst mit einer Kunstantenne oder nur im Empfang.
+Schritt-für-Schritt-Anleitung zur einzigen RadiCodex-by-BricoHams-APK (`org.bricohams.radicodex`, native Kotlin-App). Jede Anleitung nennt das Ziel, was du brauchst, die Schritte mit den genauen Bildschirmtexten, das erwartete Ergebnis und die üblichen Fehler. Der vollständige technische Umfang und die Einschränkungen stehen in [RadiCodex by BricoHams](ANDROID.md). Als experimentell gekennzeichnete Funktionen sind nicht mit einem echten Funkgerät validiert: Teste sie zuerst mit einer Kunstantenne oder nur im Empfang.
 
 ## Bevor du anfängst
 
@@ -10,10 +10,10 @@ Schritt-für-Schritt-Anleitung zur einzigen Bricohams-APK (`org.bricohams.radio`
 
 **Du brauchst:** ein Handy mit Android 8.0 (API 26) oder neuer. Die App braucht weder Server noch Konto.
 
-1. Lade die APK herunter und prüfe ihren veröffentlichten SHA-256 (siehe [Bricohams Android Beta](ANDROID.md)).
+1. Lade die APK herunter und prüfe ihren veröffentlichten SHA-256 (siehe [RadiCodex by BricoHams](ANDROID.md)).
 2. Öffne die Datei im Dateimanager oder im Browser. Android fragt, ob die Installation aus dieser App erlaubt werden soll: Erlaube sie nur für diesen Schritt.
-3. Die APK ist ein Entwicklungsbuild, mit dem Debug-Schlüssel signiert, und wird nicht über Google Play verteilt.
-4. Öffne Bricohams. Du siehst den Hinweis „BETA - lokale Daten. Daten vor dem Deinstallieren exportieren."
+3. Die APK wird nicht über Google Play verteilt. Debug-APKs nutzen den Debug-Schlüssel; die Release-APK `RadiCodex-1.0.0.apk` ist nur dann mit dem Release-Schlüssel signiert, wenn die Release sie enthält (prüfe ihren SHA-256).
+4. Öffne RadiCodex. Du siehst den Hinweis „Lokale Daten. Daten vor dem Deinstallieren exportieren."
 
 **Erwartetes Ergebnis:** der Startbildschirm mit den Bereichen „Deine Funkstation", „Funk und Empfang", „Deine Daten und Sicherungen" und „Umfang und Datenschutz".
 
@@ -24,7 +24,7 @@ Schritt-für-Schritt-Anleitung zur einzigen Bricohams-APK (`org.bricohams.radio`
 
 ### Berechtigungen und wofür sie angefordert werden
 
-Bricohams sammelt und sendet keine Daten. Das sind die Berechtigungen des Manifests und ihr Zweck:
+RadiCodex sammelt und sendet keine Daten. Das sind die Berechtigungen des Manifests und ihr Zweck:
 
 | Berechtigung | Wofür sie verwendet wird |
 | --- | --- |
@@ -38,7 +38,7 @@ Mikrofon, GPS, USB-Host, BLE und Kompass sind für die Installation nicht erford
 
 ### Sprache wählen
 
-1. Öffne auf dem Startbildschirm „Bricohams-Sprache".
+1. Öffne auf dem Startbildschirm „RadiCodex-Sprache".
 2. Wähle „Systemsprache", Español, English (US), Français oder Deutsch.
 
 **Erwartetes Ergebnis:** Die Sprache wird auf dem Handy gespeichert und für alle Bildschirme übernommen. Rufzeichen, Kanalnamen und Benutzerdateien werden nicht übersetzt.
@@ -346,7 +346,7 @@ Zu Bändern und einer Einführung in den Empfang siehe [Einführung in den Satel
 
 ### 12. Eigene digitale Modi
 
-**Ziel:** `FT8`, `FT4` und `FT2` mit dem Bricohams-Decoder empfangen und erzeugen, ohne weitere Apps.
+**Ziel:** `FT8`, `FT4` und `FT2` mit dem RadiCodex-Decoder empfangen und erzeugen, ohne weitere Apps.
 
 1. Tippe auf „Digitale Modi FT8 / FT4 / FT2“ im Hauptbildschirm oder auf „Eigener Decoder und TX“ in der Karte der digitalen Modi im CAT.
 2. Wähle den Modus: `FT8` (Slot von 15 s), `FT4` (7,5 s) oder `FT2` (3,75 s, Kandidat). Du siehst die UTC-Uhr und den Slot.

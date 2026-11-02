@@ -158,9 +158,9 @@ Vedere [compilazione, controlli, licenze e limiti](docs/i18n/it/BRICOHAMS-FIRMWA
 
 [Indice completo della documentazione e dei riferimenti per lingua](ayuda-referencias.it.html).
 
-### Android Bricohams Beta
+### Android: RadiCodex by BricoHams
 
-L’APK nativa 0.10.0-beta include contatti locali modificabili con ricerca e importazione ADIF con anteprima, esportazione
+L’APK nativa 1.0.0 include contatti locali modificabili con ricerca e importazione ADIF con anteprima, esportazione
 ADIF/JSON, sessioni ARDF con cronologia, statistiche, segmenti GPS filtrati e osservazioni GPS puntuali, e Morse da testo
 e WAV PCM sperimentale. Integra CAT RX temporaneo tramite USB CDC ACM e
 adattatori riconosciuti CH34x/CP210x/FTDI/Prolific. Calcola i passaggi SGP4 offline

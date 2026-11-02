@@ -8,7 +8,7 @@ par F-Droid.**
 
 ## Choix technologique
 
-| Option | Évaluation pour Bricohams |
+| Option | Évaluation pour RadiCodex |
 | --- | --- |
 | Xamarin / Xamarin.Forms | Écarté : Microsoft a arrêté le support le 1er mai 2024. Le dernier SDK Android Xamarin cible l'API 34. |
 | .NET for Android / .NET MAUI | Solution actuelle pour de nouveaux projets C# ou une interface multiplateforme. Migrer cette application impose de porter et retester USB, audio, GPS, stockage et interface. Cela ne simplifie pas automatiquement l'inclusion dans F-Droid. |
@@ -22,7 +22,7 @@ n'impose pas de partager le framework d'interface.
 
 ## Éléments préparés et état actuel
 
-- [Recette candidate](../../../fdroid/metadata/org.bricohams.radio.yml) à
+- [Recette candidate](../../../fdroid/metadata/org.bricohams.radicodex.yml) à
   soumettre à **fdroiddata**, et non un APK debug à déposer dans le catalogue.
 - [Fiche de boutique](../../../fastlane/metadata/android) en espagnol, anglais
   américain, français et allemand, avec marque, limites, confidentialité et notes.
@@ -32,8 +32,9 @@ n'impose pas de partager le framework d'interface.
   métadonnées, compilation/lint release et conservation d'un **APK release
   non signé** séparé des APK debug. F-Droid compile les sources, pas cet artefact.
 
-La recette suit `0.10.0-beta`, `versionCode 14`. Le tag proposé
-`android-v0.10.0-beta` doit encore être publié avec cette préparation. Ce travail
+La recette conserve l'historique bêta (`0.10.0-beta`, `versionCode 14`) et ajoute
+`1.0.0`, `versionCode 15`. Le tag proposé
+`android-v1.0.0` doit encore être publié avec cette préparation. Ce travail
 n'a pas soumis de demande ni obtenu d'approbation et n'a pas créé de dépôt
 F-Droid privé. `fdroid build --server` n'a pas été exécuté sur ce Windows.
 Compiler avec Gradle ne remplace pas la validation de l'infrastructure F-Droid.
@@ -88,8 +89,8 @@ examiner `git diff --cached`, puis :
 
 ```powershell
 git commit -m "Prepare independent Android distribution for F-Droid" -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
-node scripts\check-android-store.cjs --tag android-v0.10.0-beta
-git tag --list android-v0.10.0-beta
+node scripts\check-android-store.cjs --tag android-v1.0.0
+git tag --list android-v1.0.0
 ```
 
 Si ce tag existe, **s'arrêter** : ne pas le supprimer ni le déplacer. Pour une
@@ -98,23 +99,25 @@ l'exemple par `android-v` suivi exactement de `versionName`.
 
 ```powershell
 git push origin main
-git tag -a android-v0.10.0-beta -m "Bricohams Android 0.10.0-beta"
-git push origin android-v0.10.0-beta
-git rev-parse "android-v0.10.0-beta^{commit}"
-git ls-remote --tags origin "android-v0.10.0-beta*"
+git tag -a android-v1.0.0 -m "RadiCodex by BricoHams 1.0.0"
+git push origin android-v1.0.0
+git rev-parse "android-v1.0.0^{commit}"
+git ls-remote --tags origin "android-v1.0.0*"
 ```
 
 Exécuter sur `main` revue, pas une autre branche locale. Conserver le SHA pour
-fdroiddata et vérifier le workflow **Android Beta** dans GitHub Actions.
+fdroiddata et vérifier le workflow **Android** dans GitHub Actions.
 Un échec de CI bloque la livraison. Les tags Android conservent les artefacts
-CI ; le workflow actuel ne crée pas de GitHub Release pour eux et ne soumet
-aucune demande à F-Droid.
+CI. Seulement si le secret `RADICODEX_KEYSTORE_BASE64` existe (voir « Signature
+de l'APK de publication »), le workflow crée la GitHub Release et y joint
+`RadiCodex-<version>.apk` avec son SHA-256 ; il ne soumet aucune demande à
+F-Droid.
 
 ## Première inclusion dans le catalogue officiel
 
 1. Publier le code et les métadonnées revus. Le tag doit inclure cette
    préparation, pas un ancien build sans métadonnées. Ne jamais réutiliser un tag.
-2. Exécuter le vérificateur avec `--tag android-v0.10.0-beta`, ou la version
+2. Exécuter le vérificateur avec `--tag android-v1.0.0`, ou la version
    réelle après mise à jour des champs et notes.
 3. Ouvrir une demande **Requests For Packaging** ou une proposition
    **fdroiddata** selon la procédure officielle ci-dessous. Copier la recette
@@ -123,9 +126,9 @@ aucune demande à F-Droid.
    Le tag de la recette locale est une référence de préparation. F-Droid
    recommande un SHA complet pour le build initial ; ne pas utiliser `main`.
 5. Sous Linux, avec fdroidserver et son environnement de construction, lancer
-   `fdroid lint org.bricohams.radio`,
-   `fdroid checkupdates org.bricohams.radio` et
-   `fdroid build --server org.bricohams.radio:12`. Corriger les vrais problèmes
+   `fdroid lint org.bricohams.radicodex`,
+   `fdroid checkupdates org.bricohams.radicodex` et
+   `fdroid build --server org.bricohams.radicodex:15`. Corriger les vrais problèmes
    du scanner/de compilation sans exclusions générales.
 6. Fournir licences et provenance figurant dans
    [NOTICE.txt](../../../android/app/src/main/assets/NOTICE.txt). Confirmer
@@ -169,6 +172,37 @@ F-Droid vérifie et notifie. L'installation sans intervention dépend d'Android,
 des réglages et de l'intégration/des autorisations de l'installateur ; une
 application ordinaire ne peut pas garantir les mises à jour silencieuses.
 
+## Signature de l'APK de publication
+
+L'APK `RadiCodex-<version>.apk` de la GitHub Release n'est signée en CI que si
+le secret `RADICODEX_KEYSTORE_BASE64` existe ; sans secrets, l'APK release reste
+non signée et la compilation F-Droid ne change pas. Le mainteneur crée le
+keystore sur sa machine et personne d'autre ne le voit. Ne jamais le commiter.
+
+```powershell
+keytool -genkeypair -v -keystore radicodex-release.jks -alias radicodex -keyalg RSA -keysize 4096 -validity 10000
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("radicodex-release.jks")) | Set-Clipboard
+```
+
+Sous Linux ou macOS : `base64 -w0 radicodex-release.jks` (sous macOS, `base64 -i radicodex-release.jks`).
+Enregistrez les quatre secrets avec `gh` ; chaque commande demande la valeur
+sans la conserver dans l'historique du shell :
+
+```powershell
+Get-Clipboard | gh secret set RADICODEX_KEYSTORE_BASE64
+gh secret set RADICODEX_KEYSTORE_PASSWORD
+gh secret set RADICODEX_KEY_ALIAS
+gh secret set RADICODEX_KEY_PASSWORD
+```
+
+L'alias est `radicodex`. À chaque tag `android-v*`, le workflow décode le
+keystore dans `$RUNNER_TEMP`, compile, vérifie avec `apksigner`, joint l'APK et
+son SHA-256 à la Release, puis supprime le keystore.
+
+**Avertissement :** conservez une sauvegarde **hors ligne** du keystore et de ses
+mots de passe. S'il est perdu, vous ne pourrez plus publier de mises à jour
+acceptées par Android sur les installations existantes.
+
 ## Signatures et données
 
 Pour la première inclusion, il est proposé que F-Droid compile et signe son
@@ -183,13 +217,15 @@ sans export. Désinstaller efface les données locales. Conserver les
 enregistrements/fichiers utiles et vérifier la restauration avant de retirer
 une installation importante. Les versions F-Droid suivantes doivent garder sa clé.
 
-L'identifiant reste `org.bricohams.radio` : aucune duplication, installation
-simultanée de canaux ou modification de base de données n'est introduite.
+L'identifiant devient `org.bricohams.radicodex` (auparavant `org.bricohams.radio`) :
+Android la traite comme une nouvelle app. Exportez vos données depuis la version
+précédente, installez RadiCodex et importez la sauvegarde ; vous pourrez ensuite
+désinstaller l'ancienne.
 
 ## Installation utilisateur et vérifications finales
 
 Uniquement après publication, actualiser les dépôts du client F-Droid et
-chercher **Bricohams**, identifiant `org.bricohams.radio`. Vérifier le lien
+chercher **RadiCodex**, identifiant `org.bricohams.radicodex`. Vérifier le lien
 vers les sources et la version. Ce guide n'annonce pas une fiche déjà publiée.
 Ne pas ajouter de dépôts inconnus ni installer un APK non signé. En cas de
 signature incompatible, exporter d'abord ; ne jamais désinstaller en premier recours.

@@ -16,12 +16,12 @@ class AppLanguageTest {
         RuntimeEnvironment.setQualifiers("es")
         val context = RuntimeEnvironment.getApplication()
         try {
-            for ((tag, label) in listOf("es" to "Idioma de Bricohams", "en-US" to "Bricohams language",
-                "fr" to "Langue de Bricohams", "de" to "Bricohams-Sprache")) {
+            for ((tag, label) in listOf("es" to "Idioma de RadiCodex", "en-US" to "RadiCodex language",
+                "fr" to "Langue de RadiCodex", "de" to "RadiCodex-Sprache")) {
                 AppLanguage.save(context, tag)
                 assertEquals(tag, AppLanguage.selected(context))
                 assertEquals(label, AppLanguage.localized(context).getString(R.string.language_label))
-                assertEquals("Idioma de Bricohams", context.getString(R.string.language_label))
+                assertEquals("Idioma de RadiCodex", context.getString(R.string.language_label))
             }
             AppLanguage.save(context, "")
             assertSame(context, AppLanguage.localized(context))
@@ -42,7 +42,7 @@ class AppLanguageTest {
             val activity = main.get()
             val selector = activity.findViewById<Spinner>(R.id.app_language)
             assertEquals(3, selector.selectedItemPosition)
-            assertEquals("Langue de Bricohams", activity.getString(R.string.language_label))
+            assertEquals("Langue de RadiCodex", activity.getString(R.string.language_label))
             selector.onItemSelectedListener!!.onItemSelected(selector, null, 2, 2L)
             assertEquals("en-US", AppLanguage.selected(context))
             val sstv = Robolectric.buildActivity(SstvActivity::class.java).setup()

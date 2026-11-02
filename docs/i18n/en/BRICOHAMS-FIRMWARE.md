@@ -1465,9 +1465,9 @@ bitmap. The logo still needs physical verification on the LCD; compiling and
 rendering the bitmap on a computer does not validate contrast, orientation, or
 legibility on the radio. They have not been flashed.
 
-## Later Requested Phase: Bricohams Android
+## Later Requested Phase: RadiCodex by BricoHams
 
-The native `0.10.0-beta` APK includes a logbook with search and ADIF import,
+The native `1.0.0` APK includes a logbook with search and ADIF import,
 ADIF/JSON, JSON restore, ARDF sessions with history/statistics and filtered
 segment totals, one-off GPS, experimental text/WAV Morse,
 and temporary CAT RX over USB CDC ACM and recognized CH34x/CP210x/FTDI/Prolific

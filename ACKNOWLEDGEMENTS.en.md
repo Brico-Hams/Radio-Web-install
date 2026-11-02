@@ -18,6 +18,7 @@ The native viewer/keyboard, restart, maintenance, DFU, app management, and RF fi
 | [DualTachyon/uv-k5-firmware](https://github.com/DualTachyon/uv-k5-firmware) | Base Quansheng protocol | Apache-2.0 |
 | [(tr)uSDX · DL2MAN](https://dl2man.de/) and [uSDX · PE1NNZ](https://github.com/threeme3/usdx) | **Co-authors of the APK's (tr)uSDX support**: Guido (PE1NNZ, uSDX concept, circuit and code) and Manuel (DL2MAN, (tr)uSDX, sandwich PCB and class-E LPF). CAT commands and audio streaming follow [“(tr)uSDX Details”](https://dl2man.de/5-trusdx-details/). None of their code is reused | Project and firmware of their authors |
 | Yaesu manuals (FT-817ND/818ND/857D/897D, FTX-1 CAT 2508-C) and Icom (IC-705 CI-V rev. 6) | The APK's multi-radio CAT, written from these documents | Manufacturer documentation |
+| QRP Labs CAT manuals (QMX firmware 1.04_003, QDX rev 1.06) | The APK's QMX/QMX+ and QDX/QDX-M CAT, written from these documents | Manufacturer documentation |
 | [FT8CN](https://github.com/N0BOY/FT8CN) (BG7YOZ) | Studied only to understand how it handles CAT, USB serial and audio on Android; no code or resources copied | MIT |
 
 ## Dependencies

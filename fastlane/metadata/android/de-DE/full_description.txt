@@ -1,4 +1,4 @@
-Bricohams ist ein unabhängiges, natives Amateurfunk-Werkzeug für Android ohne Konto, Werbung oder Telemetrie. Android 8.0 oder neuer ist erforderlich. Die Oberfläche unterstützt Spanisch, US-Englisch, Französisch und Deutsch sowie ein helles und dunkles Design.
+RadiCodex by BricoHams ist ein unabhängiges, natives Amateurfunk-Werkzeug für Android ohne Konto, Werbung oder Telemetrie. Android 8.0 oder neuer ist erforderlich. Die Oberfläche unterstützt Spanisch, US-Englisch, Französisch und Deutsch sowie ein helles und dunkles Design.
 
 Führen Sie lokale Logbücher für General-, POTA- und SOTA-Aktivitäten und tauschen Sie ADIF-Dateien und JSON-Sicherungen aus. Erfassen Sie ARDF-Beobachtungen, bestimmen Sie nach Freigabe Ihre GPS-Position und erproben Sie Morse-Audio und SSTV Robot36.
 

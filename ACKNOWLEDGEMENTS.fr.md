@@ -18,6 +18,7 @@ Les outils natifs de visualisation/clavier, redémarrage, maintenance, DFU, gest
 | [DualTachyon/uv-k5-firmware](https://github.com/DualTachyon/uv-k5-firmware) | Protocole de base Quansheng | Apache-2.0 |
 | [(tr)uSDX · DL2MAN](https://dl2man.de/) et [uSDX · PE1NNZ](https://github.com/threeme3/usdx) | **Co-auteurs de la prise en charge du (tr)uSDX** dans l’APK : Guido (PE1NNZ, concept, circuit et code de l’uSDX) et Manuel (DL2MAN, (tr)uSDX, PCB sandwich et LPF classe E). Commandes CAT et flux audio selon [« (tr)uSDX Details »](https://dl2man.de/5-trusdx-details/). Aucun de leurs codes n’est réutilisé | Projet et firmware de leurs auteurs |
 | Manuels Yaesu (FT-817ND/818ND/857D/897D, FTX-1 CAT 2508-C) et Icom (IC-705 CI-V rév. 6) | CAT multiradio de l’APK, écrit à partir de ces documents | Documentation du fabricant |
+| Manuels CAT de QRP Labs (QMX firmware 1.04_003, QDX rév. 1.06) | CAT QMX/QMX+ et QDX/QDX-M de l’APK, écrit à partir de ces documents | Documentation du fabricant |
 | [FT8CN](https://github.com/N0BOY/FT8CN) (BG7YOZ) | Étudié uniquement pour comprendre sa gestion du CAT, de l’USB série et de l’audio sous Android ; aucun code ni ressource copié | MIT |
 
 ## Dépendances

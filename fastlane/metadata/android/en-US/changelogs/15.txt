@@ -1,0 +1,1 @@
+RadiCodex by BricoHams 1.0.0: the app is now called RadiCodex. New FT8/FT4/FT2 digital modes screen with its own decoder: UTC-slot RX and next-slot TX for manual PTT or VOX. FTX-1 memory channels, satellite fixes, step-by-step tutorials and a demo video. Written from the manufacturers' manuals; hardware tests are still pending for each radio and some features remain experimental.

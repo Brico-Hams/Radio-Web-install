@@ -123,30 +123,30 @@ test("Android translations preserve resource IDs and redesigned satellite format
   assert.doesNotMatch(satellite, /satellite_predict|satellite_line1/);
 });
 
-test("Android 0.10.0 packaging and tag release artifacts match versionCode 14", () => {
+test("Android 1.0.0 packaging and tag release artifacts match versionCode 15", () => {
   const gradle = read("android/app/build.gradle.kts");
-  assert.match(gradle, /versionCode = 14\b/);
-  assert.match(gradle, /versionName = "0\.10\.0-beta"/);
+  assert.match(gradle, /versionCode = 15\b/);
+  assert.match(gradle, /versionName = "1\.0\.0"/);
   const workflow = read(".github/workflows/android.yml");
   const script = read("scripts/build-android.ps1");
   assert.match(workflow, /tags: \["v\*", "android-v\*"\]/);
   assert.match(workflow, /java-version: "17"/);
   assert.match(workflow, /needs: build/);
   assert.match(workflow, /gh release upload "\$TAG"/);
-  for (const name of ["bricohams-android-0.10.0-beta-debug.apk", "bricohams-android-0.10.0-beta-androidTest.apk"]) {
+  for (const name of ["radicodex-1.0.0-debug.apk", "radicodex-1.0.0-androidTest.apk"]) {
     assert.ok(workflow.includes(`upload/${name}`));
     assert.ok(script.includes(name));
   }
-  assert.match(script, /applicationVersion = '0\.10\.0-beta'/);
-  assert.match(script, /applicationVersionCode = 14\b/);
-  assert.doesNotMatch(workflow + script, /0\.9\.0-beta|0\.8\.0-beta|0\.7\.1-beta/);
+  assert.match(script, /applicationVersion = '1\.0\.0'/);
+  assert.match(script, /applicationVersionCode = 15\b/);
+  assert.doesNotMatch(workflow + script, /0\.10\.0-beta|0\.9\.0-beta|0\.8\.0-beta|0\.7\.1-beta/);
   for (const suffix of ["", ".en", ".fr", ".de", ".it"]) {
     const readme = read(`README${suffix}.md`);
-    assert.match(readme, /0\.10\.0-beta/);
+    assert.match(readme, /1\.0\.0/);
     assert.doesNotMatch(readme, /0\.8\.1-beta|[Vv]ersionCode 10/);
     const directory = suffix ? `docs/i18n/${suffix.slice(1)}` : "docs";
-    assert.match(read(`${directory}/BRICOHAMS-FIRMWARE.md`), /`0\.10\.0-beta`/);
-    assert.match(read(`${directory}/ESTADO-ENTREGA.md`), /AND-01[^\n]+0\.10\.0-beta/);
+    assert.match(read(`${directory}/BRICOHAMS-FIRMWARE.md`), /`1\.0\.0`/);
+    assert.match(read(`${directory}/ESTADO-ENTREGA.md`), /AND-01[^\n]+1\.0\.0/);
   }
 });
 

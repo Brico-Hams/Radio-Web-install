@@ -1,6 +1,6 @@
-# Tutoriales de la APK Android Bricohams
+# Tutoriales de RadiCodex by BricoHams
 
-Guía paso a paso de la APK única de Bricohams (`org.bricohams.radio`, aplicación nativa Kotlin, Beta). Cada tutorial indica el objetivo, qué necesitas, los pasos con los textos exactos de la pantalla, el resultado esperado y los errores habituales. El alcance técnico y las limitaciones completas están en [Android Bricohams Beta](ANDROID.md). Las funciones marcadas como experimentales no tienen validación con radio real: pruébalas primero con una carga ficticia o en recepción.
+Guía paso a paso de la APK única de RadiCodex by BricoHams (`org.bricohams.radicodex`, aplicación nativa Kotlin). Cada tutorial indica el objetivo, qué necesitas, los pasos con los textos exactos de la pantalla, el resultado esperado y los errores habituales. El alcance técnico y las limitaciones completas están en [RadiCodex by BricoHams](ANDROID.md). Las funciones marcadas como experimentales no tienen validación con radio real: pruébalas primero con una carga ficticia o en recepción.
 
 ## Antes de empezar
 
@@ -10,10 +10,10 @@ Guía paso a paso de la APK única de Bricohams (`org.bricohams.radio`, aplicaci
 
 **Necesitas:** un móvil con Android 8.0 (API 26) o superior. La app no necesita servidor ni cuenta.
 
-1. Descarga la APK y comprueba su SHA-256 publicado (ver [Android Bricohams Beta](ANDROID.md)).
+1. Descarga la APK y comprueba su SHA-256 publicado (ver [RadiCodex by BricoHams](ANDROID.md)).
 2. Abre el archivo desde el gestor de archivos o el navegador. Android pedirá autorizar la instalación desde esa aplicación: acéptalo solo para este paso.
-3. La APK es de desarrollo, firmada con la clave debug, y no se distribuye por Google Play.
-4. Abre Bricohams. Verás el aviso "BETA - datos locales. Exporta tus datos antes de desinstalar."
+3. La APK no se distribuye por Google Play. Las APK de depuración usan la clave debug; la APK de publicación `RadiCodex-1.0.0.apk` solo está firmada con la clave de publicación si la release la incluye (comprueba su SHA-256).
+4. Abre RadiCodex. Verás el aviso "Datos locales. Exporta tus datos antes de desinstalar."
 
 **Resultado esperado:** pantalla principal con las secciones "Tu estación de radio", "Radio y recepción", "Tus datos y copias" y "Alcance y privacidad".
 
@@ -24,7 +24,7 @@ Guía paso a paso de la APK única de Bricohams (`org.bricohams.radio`, aplicaci
 
 ### Permisos y para qué se piden
 
-Bricohams no recopila ni envía datos. Estos son los permisos del manifiesto y su motivo:
+RadiCodex no recopila ni envía datos. Estos son los permisos del manifiesto y su motivo:
 
 | Permiso | Para qué se usa |
 | --- | --- |
@@ -38,7 +38,7 @@ El micrófono, el GPS, el USB host, el BLE y la brújula no son obligatorios par
 
 ### Elegir el idioma
 
-1. En la pantalla principal abre "Idioma de Bricohams".
+1. En la pantalla principal abre "Idioma de RadiCodex".
 2. Elige "Idioma del sistema", Español, English (US), Français o Deutsch.
 
 **Resultado esperado:** el idioma se guarda en el móvil y se aplica a todas las pantallas. No se traducen indicativos, nombres de canal ni archivos del usuario.
@@ -346,7 +346,7 @@ Para las bandas y la iniciación a la recepción consulta [Iniciación a la rece
 
 ### 12. Modos digitales propios
 
-**Objetivo:** recibir y generar `FT8`, `FT4` y `FT2` con el decodificador propio de Bricohams, sin otras aplicaciones.
+**Objetivo:** recibir y generar `FT8`, `FT4` y `FT2` con el decodificador propio de RadiCodex, sin otras aplicaciones.
 
 1. Pulsa "Modos digitales FT8 / FT4 / FT2" en la pantalla principal, o "Decodificador y TX propios" en la tarjeta de modos digitales de CAT.
 2. Elige el modo: `FT8` (turno de 15 s), `FT4` (7,5 s) o `FT2` (3,75 s, candidato). Verás el reloj UTC y el turno.

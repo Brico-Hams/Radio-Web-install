@@ -107,7 +107,7 @@ object Adif {
         bands.firstOrNull { frequency in it.second }?.first
     }
     fun export(contacts: List<Contact>, logbook: Logbook? = null): String = buildString {
-        append("Bricohams Beta\n<ADIF_VER:5>3.1.4<PROGRAMID:9>Bricohams<EOH>\n")
+        append("RadiCodex by BricoHams\n<ADIF_VER:5>3.1.4<PROGRAMID:9>RadiCodex<EOH>\n")
         logbook?.validated()
         for (contact in contacts) {
             contact.validated()

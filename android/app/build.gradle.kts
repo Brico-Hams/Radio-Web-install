@@ -6,12 +6,34 @@ android {
     namespace = "org.bricohams.radio"
     compileSdk = 35
     defaultConfig {
-        applicationId = "org.bricohams.radio"
+        applicationId = "org.bricohams.radicodex"
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "0.10.0-beta"
+        versionCode = 15
+        versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    val releaseSigningEnv = listOf(
+        "RADICODEX_KEYSTORE_PATH",
+        "RADICODEX_KEYSTORE_PASSWORD",
+        "RADICODEX_KEY_ALIAS",
+        "RADICODEX_KEY_PASSWORD"
+    ).associateWith { System.getenv(it).orEmpty() }
+    val releaseSigningReady = releaseSigningEnv.values.all { it.isNotEmpty() }
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("release") {
+                storeFile = file(releaseSigningEnv.getValue("RADICODEX_KEYSTORE_PATH"))
+                storePassword = releaseSigningEnv.getValue("RADICODEX_KEYSTORE_PASSWORD")
+                keyAlias = releaseSigningEnv.getValue("RADICODEX_KEY_ALIAS")
+                keyPassword = releaseSigningEnv.getValue("RADICODEX_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

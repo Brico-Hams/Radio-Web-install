@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="description" content="Anleitungen zur Bricohams-Android-APK: Bricohams-Hilfe nach Modell und Version.">
+  <meta name="description" content="Anleitungen zu RadiCodex by BricoHams: Bricohams-Hilfe nach Modell und Version.">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Anleitungen zur Bricohams-Android-APK | Bricohams Radio Workspace</title>
+  <title>Anleitungen zu RadiCodex by BricoHams | Bricohams Radio Workspace</title>
   <link rel="icon" href="bricohams-logo.png" type="image/png">
   <link rel="stylesheet" href="styles.css">
   <script src="appearance.js" defer></script>
@@ -25,17 +25,17 @@
       <nav class="languages" aria-label="Sprache"><a href="ayuda-tutoriales-android.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-tutoriales-android.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-tutoriales-android.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-tutoriales-android.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-tutoriales-android.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
     <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#antes-de-empezar">Bevor du anfängst</a></li><li><a href="#tutoriales">Anleitungen</a></li><li><a href="#problemas-frecuentes">Häufige Probleme</a></li><li><a href="#seguridad-al-transmitir">Sicherheit beim Senden</a></li><li><a href="#video-de-demostracion">Demonstrationsvideo</a></li></ul></nav>
-    <article class="panel"><h1 id="tutoriales-de-la-apk-android-bricohams">Anleitungen zur Bricohams-Android-APK</h1>
-<p>Schritt-für-Schritt-Anleitung zur einzigen Bricohams-APK (<code>org.bricohams.radio</code>, native Kotlin-App, Beta). Jede Anleitung nennt das Ziel, was du brauchst, die Schritte mit den genauen Bildschirmtexten, das erwartete Ergebnis und die üblichen Fehler. Der vollständige technische Umfang und die Einschränkungen stehen in <a href="ayuda-android.de.html">Bricohams Android Beta</a>. Als experimentell gekennzeichnete Funktionen sind nicht mit einem echten Funkgerät validiert: Teste sie zuerst mit einer Kunstantenne oder nur im Empfang.</p>
+    <article class="panel"><h1 id="tutoriales-de-radicodex-by-bricohams">Anleitungen zu RadiCodex by BricoHams</h1>
+<p>Schritt-für-Schritt-Anleitung zur einzigen RadiCodex-by-BricoHams-APK (<code>org.bricohams.radicodex</code>, native Kotlin-App). Jede Anleitung nennt das Ziel, was du brauchst, die Schritte mit den genauen Bildschirmtexten, das erwartete Ergebnis und die üblichen Fehler. Der vollständige technische Umfang und die Einschränkungen stehen in <a href="ayuda-android.de.html">RadiCodex by BricoHams</a>. Als experimentell gekennzeichnete Funktionen sind nicht mit einem echten Funkgerät validiert: Teste sie zuerst mit einer Kunstantenne oder nur im Empfang.</p>
 <h2 id="antes-de-empezar">Bevor du anfängst</h2>
 <h3 id="instalacion-y-requisitos">Installation und Voraussetzungen</h3>
 <p><strong>Ziel:</strong> die APK installiert und lauffähig haben.</p>
 <p><strong>Du brauchst:</strong> ein Handy mit Android 8.0 (API 26) oder neuer. Die App braucht weder Server noch Konto.</p>
 <ol>
-<li>Lade die APK herunter und prüfe ihren veröffentlichten SHA-256 (siehe <a href="ayuda-android.de.html">Bricohams Android Beta</a>).</li>
+<li>Lade die APK herunter und prüfe ihren veröffentlichten SHA-256 (siehe <a href="ayuda-android.de.html">RadiCodex by BricoHams</a>).</li>
 <li>Öffne die Datei im Dateimanager oder im Browser. Android fragt, ob die Installation aus dieser App erlaubt werden soll: Erlaube sie nur für diesen Schritt.</li>
-<li>Die APK ist ein Entwicklungsbuild, mit dem Debug-Schlüssel signiert, und wird nicht über Google Play verteilt.</li>
-<li>Öffne Bricohams. Du siehst den Hinweis „BETA - lokale Daten. Daten vor dem Deinstallieren exportieren.&quot;</li>
+<li>Die APK wird nicht über Google Play verteilt. Debug-APKs nutzen den Debug-Schlüssel; die Release-APK <code>RadiCodex-1.0.0.apk</code> ist nur dann mit dem Release-Schlüssel signiert, wenn die Release sie enthält (prüfe ihren SHA-256).</li>
+<li>Öffne RadiCodex. Du siehst den Hinweis „Lokale Daten. Daten vor dem Deinstallieren exportieren.&quot;</li>
 </ol>
 <p><strong>Erwartetes Ergebnis:</strong> der Startbildschirm mit den Bereichen „Deine Funkstation&quot;, „Funk und Empfang&quot;, „Deine Daten und Sicherungen&quot; und „Umfang und Datenschutz&quot;.</p>
 <p><strong>Häufige Fehler:</strong></p>
@@ -44,7 +44,7 @@
 <li>Das Deinstallieren der App löscht die lokalen Daten (private SQLite): Nutze vorher „Alle Daten als JSON exportieren&quot;.</li>
 </ul>
 <h3 id="permisos-y-para-que-se-piden">Berechtigungen und wofür sie angefordert werden</h3>
-<p>Bricohams sammelt und sendet keine Daten. Das sind die Berechtigungen des Manifests und ihr Zweck:</p>
+<p>RadiCodex sammelt und sendet keine Daten. Das sind die Berechtigungen des Manifests und ihr Zweck:</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Berechtigung</th><th scope="col">Wofür sie verwendet wird</th></tr></thead><tbody>
 <tr><td>Standort (genau und ungefähr)</td><td>Eine einmalige GPS-Position im ARDF und „Letzte GPS-Position verwenden&quot; bei Satelliten. Keine Verfolgung im Hintergrund</td></tr>
 <tr><td>Mikrofon</td><td>Nur wenn du „Audioaufnahme starten&quot; drückst oder SSTV in CAT Multi-Radio empfängst. Die Erlaubnis startet keine Aufnahme</td></tr>
@@ -55,7 +55,7 @@
 <p>Mikrofon, GPS, USB-Host, BLE und Kompass sind für die Installation nicht erforderlich: Ohne sie sind nur die zugehörigen Funktionen deaktiviert.</p>
 <h3 id="elegir-el-idioma">Sprache wählen</h3>
 <ol>
-<li>Öffne auf dem Startbildschirm „Bricohams-Sprache&quot;.</li>
+<li>Öffne auf dem Startbildschirm „RadiCodex-Sprache&quot;.</li>
 <li>Wähle „Systemsprache&quot;, Español, English (US), Français oder Deutsch.</li>
 </ol>
 <p><strong>Erwartetes Ergebnis:</strong> Die Sprache wird auf dem Handy gespeichert und für alle Bildschirme übernommen. Rufzeichen, Kanalnamen und Benutzerdateien werden nicht übersetzt.</p>
@@ -316,6 +316,21 @@
 <li>Ablehnung wegen TX-Sperre, Band, Akku oder Modulation des Funkgeräts.</li>
 <li>Ohne Aktivierung mit Taste 9 oder ohne Rufzeichen wird nichts gesendet.</li>
 <li>Während der Überflugverfolgung wird nichts gesendet.</li>
+</ul>
+<h3 id="12-modos-digitales-propios">12. Eigene digitale Modi</h3>
+<p><strong>Ziel:</strong> <code>FT8</code>, <code>FT4</code> und <code>FT2</code> mit dem RadiCodex-Decoder empfangen und erzeugen, ohne weitere Apps.</p>
+<ol>
+<li>Tippe auf „Digitale Modi FT8 / FT4 / FT2“ im Hauptbildschirm oder auf „Eigener Decoder und TX“ in der Karte der digitalen Modi im CAT.</li>
+<li>Wähle den Modus: <code>FT8</code> (Slot von 15 s), <code>FT4</code> (7,5 s) oder <code>FT2</code> (3,75 s, Kandidat). Du siehst die UTC-Uhr und den Slot.</li>
+<li>Zum Empfangen tippe auf „Hören“ (Mikrofon oder USB-Audioeingang von Android) oder „WAV dekodieren“. Der Empfang von <code>FT4</code> und <code>FT2</code> ist noch nicht verfügbar.</li>
+<li>Zum Senden gib dein Rufzeichen und eine Nachricht mit diesem Rufzeichen ein und tippe auf „WAV speichern“ oder „Im nächsten Slot senden“. Die App schaltet kein PTT: Nutze das PTT des Bedieners oder VOX. „TX stoppen“ beendet sofort.</li>
+</ol>
+<p><strong>Erwartetes Ergebnis:</strong> Die Liste zeigt UTC, SNR, DT, Hz und Nachricht; die Aussendung läuft einmal, 0,5 s nach Slot-Beginn.</p>
+<p><strong>Häufige Fehler:</strong></p>
+<ul>
+<li>Ungültige Nachricht, kein Rufzeichen oder Ton außerhalb von 100-5000 Hz.</li>
+<li>Ohne Mikrofonberechtigung ist kein Empfang möglich.</li>
+<li><code>FT2</code> ist ein Legacy-Kandidat, nur gegen einen externen Empfänger validiert.</li>
 </ul>
 <h2 id="problemas-frecuentes">Häufige Probleme</h2>
 <ul>

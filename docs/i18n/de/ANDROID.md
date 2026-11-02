@@ -1,6 +1,8 @@
-# Bricohams Android-Beta
+# RadiCodex by BricoHams
 
-Schritt-für-Schritt-Anleitung: [Tutorials zur Bricohams-Android-APK](TUTORIALES-ANDROID.md).
+Version 1.0.0 (versionCode 15): Die APK heißt RadiCodex by BricoHams (Kennung `org.bricohams.radicodex`).
+
+Schritt-für-Schritt-Anleitung: [Anleitungen zu RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 
 ## Umfang der APK
 
@@ -49,10 +51,12 @@ Die endgültige Migration steht noch aus.
 
 ## Installation und Daten
 
-Die Entwicklungs-APK ist mit dem Debug-Schlüssel des Android-Tools signiert,
-nicht mit einer Bricohams-Vertriebsidentität. Überprüfe damit die veröffentlichte
-SHA-256-Prüfsumme. Es handelt sich weder um eine Google-Play-Version noch um
-eine stabile Veröffentlichung. Android fragt nach der Berechtigung, die
+Debug-APKs sind mit dem Debug-Schlüssel des Android-Tools signiert. Die
+Release-APK `RadiCodex-1.0.0.apk` ist nur dann mit dem RadiCodex-Release-Schlüssel
+signiert, wenn die GitHub-Release sie enthält; überprüfe damit die
+veröffentlichte SHA-256-Prüfsumme. Sie wird nicht über Google Play verteilt.
+Als experimentell gekennzeichnete Funktionen sind weiterhin nicht mit einem
+echten Funkgerät validiert. Android fragt nach der Berechtigung, die
 Installation über die App zuzulassen, mit der du die APK öffnest. Es werden
 keine Treiber installiert und keine Änderungen am Funkgerät vorgenommen.
 Optionale CAT-RX-Befehle ändern vorübergehend die Empfangsfrequenz, nicht die

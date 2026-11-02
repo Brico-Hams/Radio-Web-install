@@ -91,7 +91,7 @@
 <h2 id="predecir-pases-y-saber-si-el-satelite-esta-activo">Überflüge vorhersagen und Satellitenaktivität prüfen</h2>
 <p>Vorhersageprogramme verwenden TLE, die laufend veröffentlicht und aktualisiert werden. Verwende stets TLE der letzten Tage.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Werkzeug</th><th scope="col">Plattform</th><th scope="col">Hinweise</th></tr></thead><tbody>
-<tr><td>Bricohams-Android-App</td><td>Android</td><td>Eigenes SGP4 und CAT RX zu BH Satélite; siehe <a href="ayuda-android.de.html">Android</a></td></tr>
+<tr><td>RadiCodex by BricoHams</td><td>Android</td><td>Eigenes SGP4 und CAT RX zu BH Satélite; siehe <a href="ayuda-android.de.html">Android</a></td></tr>
 <tr><td>Gpredict</td><td>Windows, Linux und macOS</td><td>Frei, mit Rotor- und Funkgerätesteuerung</td></tr>
 <tr><td>Orbitron</td><td>Windows</td><td>Kostenlos und klassisch, mit Vorhersage und Doppler</td></tr>
 <tr><td>ISS Detector</td><td>Android</td><td>Einfach; Amateurfunksatelliten erfordern eine Erweiterung</td></tr>
@@ -149,7 +149,7 @@
 <li><strong>Speicher.</strong> Erstelle einen Speicher mit RX gleich dem nominalen Downlink und TX gleich dem Uplink, einschließlich Ton. Du kannst auch den Plan mit fünf gestaffelten Speichern verwenden.</li>
 <li><strong>SAT RX.</strong> Wähle den Speicher und rufe den Fox-Hunt-/SAT-Modus auf. Auf dem Bildschirm erscheint <code>SAT RX</code>; RX und TX des Kanals werden als Nennwerte übernommen.</li>
 <li><strong>Manueller Doppler.</strong> Mit den Tasten 4 und 6 ziehst du 500 m/s Radialgeschwindigkeit ab oder addierst sie, mit Taste 5 setzt du sie auf null. Zu Beginn des Überflugs nähert sich der Satellit; verwende daher negative Geschwindigkeiten, um weiter oben zu empfangen.</li>
-<li><strong>CAT RX über Android.</strong> Drücke 8 am Funkgerät, damit <code>CAT READY RX</code> angezeigt wird. Die Bricohams-App berechnet den Überflug mit SGP4 und sendet die korrigierte RX-Frequenz. Jeder Befehl läuft nach 3 s ab, wenn er nicht erneuert wird. Mit den Tasten 4, 5 und 6 kehrst du zur manuellen Steuerung zurück.</li>
+<li><strong>CAT RX über Android.</strong> Drücke 8 am Funkgerät, damit <code>CAT READY RX</code> angezeigt wird. Die RadiCodex-App berechnet den Überflug mit SGP4 und sendet die korrigierte RX-Frequenz. Jeder Befehl läuft nach 3 s ab, wenn er nicht erneuert wird. Mit den Tasten 4, 5 und 6 kehrst du zur manuellen Steuerung zurück.</li>
 <li><strong>Senden.</strong> Für den Uplink wird die nominale TX-Frequenz des Kanals verwendet: BH Satélite <strong>korrigiert den Doppler beim Senden nicht</strong>. Für SSTV erfordert CAT PTT eine lokale Freigabe mit Taste 9, ein Lease von 1500 ms und ein Limit von 120 s.</li>
 <li><strong>Beenden.</strong> EXIT stellt die RF-Konfiguration des VFO wieder her.</li>
 </ol>
@@ -179,7 +179,7 @@
 </ul>
 <h2 id="sstv-y-aprs-desde-la-iss">SSTV und APRS von der ISS</h2>
 <ul>
-<li><strong>SSTV.</strong> Bei von ARISS angekündigten Veranstaltungen sendet die ISS Bilder in FM auf 145,800 MHz, üblicherweise in PD120 oder Robot36. Ein V-Dipol oder eine Yagi und ein Decoder genügen. Die Bricohams-App decodiert Robot36 aus WAV.</li>
+<li><strong>SSTV.</strong> Bei von ARISS angekündigten Veranstaltungen sendet die ISS Bilder in FM auf 145,800 MHz, üblicherweise in PD120 oder Robot36. Ein V-Dipol oder eine Yagi und ein Decoder genügen. Die RadiCodex-App decodiert Robot36 aus WAV.</li>
 <li><strong>APRS.</strong> Der ISS-Digipeater auf 145,825 MHz leitet Packet-Frames weiter. Zum Senden von Frames brauchst du eine Lizenz und ein TNC oder eine kompatible App.</li>
 <li><strong>Sprachfunkempfang.</strong> Während ARISS-Schulkontakten hörst du nur den Downlink auf 145,800 MHz. Sende nicht auf dem Uplink.</li>
 </ul>

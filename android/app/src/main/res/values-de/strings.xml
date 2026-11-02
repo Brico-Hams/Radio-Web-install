@@ -9,10 +9,10 @@
     <string name="home_tools">Funk und Empfang</string>
     <string name="home_data">Deine Daten und Sicherungen</string>
     <string name="home_about">Umfang und Datenschutz</string>
-    <string name="language_label">Bricohams-Sprache</string>
+    <string name="language_label">RadiCodex-Sprache</string>
     <string name="language_system">Systemsprache</string>
     <string name="language_save_error">Die Sprache konnte nicht gespeichert werden. Bitte erneut versuchen.</string>
-    <string name="live_intro">Bricohams - Audioempfang Beta</string>
+    <string name="live_intro">RadiCodex - Audioempfang</string>
     <string name="live_limits">Mikrofon im Vordergrund, PCM mono 48 kHz, maximal 60 s (Morse) oder 200 s (SSTV) im Speicher. Audio wird weder gespeichert noch übertragen. Zum Dekodieren auf Stopp tippen. SSTV (Robot36/72, Martin, Scottie, PD) braucht den vollständigen VIS-Header: vor der Aussendung starten. Kein PTT und kein TX; der Live-Fortschritt wird alle paar Sekunden neu berechnet; zuerst mit bekanntem Audio testen.</string>
     <string name="live_tone">Morse-Ton (300 bis 1200 Hz)</string>
     <string name="live_speed">Morse-Geschwindigkeit (5 bis 45 WpM)</string>
@@ -29,9 +29,9 @@
     <string name="live_permission_ready">Berechtigung erteilt. Auf Starten tippen, um eine neue Aufnahme zu beginnen.</string>
     <string name="live_permission_denied">Keine Mikrofonberechtigung. Die WAV-Importe können weiterhin ohne Aufnahme genutzt werden.</string>
     <string name="live_image_lost">Das Bild ging beim Neuaufbau des Bildschirms verloren. Eine neue Aufnahme dekodieren.</string>
-    <string name="app_name">Bricohams Beta</string>
+    <string name="app_name">RadiCodex</string>
     <string name="cat_intro">Experimentelles USB/CAT, nur Bricohams SAT RX v1. CAT funktioniert nur über USB (kein Bluetooth-CAT). Nicht physisch auf Android getestet.</string>
-    <string name="cat_help">Bricohams Beta - USB OTG: CDC ACM und erkannte Einzelport-Adapter CH34x, CP210x, FTDI oder Prolific. Am Funkgerät: SAT RX und Taste 8 für CAT RX. Keine Kanäle, kein EEPROM, keine Kalibrierung. Das Funkgerät verwirft die Abstimmung nach 3 s ohne Erneuerung; die App erneuert sie alle 1,2 s bis STOP oder bis du den Bildschirm verlässt.</string>
+    <string name="cat_help">RadiCodex - USB OTG: CDC ACM und erkannte Einzelport-Adapter CH34x, CP210x, FTDI oder Prolific. Am Funkgerät: SAT RX und Taste 8 für CAT RX. Keine Kanäle, kein EEPROM, keine Kalibrierung. Das Funkgerät verwirft die Abstimmung nach 3 s ohne Erneuerung; die App erneuert sie alle 1,2 s bis STOP oder bis du den Bildschirm verlässt.</string>
     <string name="cat_sstv_record">SSTV aufnehmen (CAT stimmt weiter ab)</string>
     <string name="cat_sstv_stop">Aufnahme stoppen und dekodieren</string>
     <string name="cat_sstv_sending">SSTV wird über CAT-PTT gesendet...</string>
@@ -50,7 +50,7 @@
     <string name="cat_stop_tracking">Verfolgung stoppen und USB trennen</string>
     <string name="cat_tracking_start">Aktueller Überflug und CAT-Status werden geprüft. Nur vorübergehender Empfang, kein TX.</string>
     <string name="cat_tracking_status">Doppler RX bestätigt %1$d Hz. Azimut %2$.1f, Elevation %3$.1f Grad. SGP4-Berechnung, keine HF-Messung. Stoppen trennt USB.</string>
-    <string name="sstv_intro">Bricohams Beta - SSTV aus WAV (Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</string>
+    <string name="sstv_intro">RadiCodex - SSTV aus WAV (Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</string>
     <string name="sstv_limits">Nur WAV PCM mono 16 Bit, 8000-48000 Hz, bis 200 s und 24 MiB. Erfordert einen vollständigen VIS-Header mit Parität eines unterstützten Modus; toleriert +-100 Hz Tonversatz, Taktdrift und verpasste Syncs (verlorene Zeilen werden schwarz oder geschätzt dargestellt). Bei Teilempfang werden die dekodierten Zeilen geliefert. Nutzt weder Mikrofon, USB-Audio noch PTT. Diesen Bildschirm geöffnet lassen und das PNG vor dem Verlassen oder Drehen exportieren.</string>
     <string name="sstv_open">SSTV-WAV dekodieren</string>
     <string name="sstv_export">PNG-Bild speichern</string>
@@ -60,7 +60,7 @@
     <string name="sstv_complete">Bild vollständig, Datenbeginn bei %1$.3f s. %2$s</string>
     <string name="sstv_saved">PNG gespeichert; Datei am gewählten Ziel prüfen.</string>
     <string name="sstv_error">SSTV nicht abgeschlossen: %1$s. Falls exportiert wurde, die Teildatei verwerfen.</string>
-    <string name="satellite_intro">Bricohams Beta - SGP4-Satelliten ohne Netz.</string>
+    <string name="satellite_intro">RadiCodex - SGP4-Satelliten ohne Netz.</string>
     <string name="satellite_help">Aktuelle TLE aus einer Datei importieren oder ihre zwei Zeilen einfügen. Manuelle Beobachterposition, Höhe in km. Nur einzelner, von dir bestätigter VHF/UHF-FM-Downlink, kein TX. 24-h-Vorhersage mit TLE bis 7 Tage alt; es werden keine Daten heruntergeladen und der Satellitenmodus wird nicht geprüft. Keine Karte und kein automatisches GPS auf diesem Bildschirm.</string>
     <string name="satellite_name">Satellitenname</string>
     <string name="satellite_line1">TLE Zeile 1 (69 Zeichen)</string>
@@ -95,7 +95,7 @@
     <string name="tab_logbook">Logbuch</string>
     <string name="tab_ardf">ARDF</string>
     <string name="tab_morse">Morse</string>
-    <string name="main_beta_banner">BETA - lokale Daten. Daten vor dem Deinstallieren exportieren.</string>
+    <string name="main_beta_banner">Lokale Daten. Daten vor dem Deinstallieren exportieren.</string>
     <string name="main_invalid_data">Ungültige Daten.</string>
     <string name="main_invalid_utc">Ungültiges UTC-Datum: %1$s</string>
     <string name="main_database_error">Lokale Datenbank konnte nicht gespeichert oder gelesen werden: %1$s</string>
@@ -460,7 +460,7 @@
     <string name="err_ardf_session_missing">Die ARDF-Sitzung existiert nicht.</string>
     <string name="err_json_too_large">Das JSON überschreitet 16 MiB.</string>
     <string name="err_json_invalid">Ungültiges JSON: %1$s</string>
-    <string name="err_backup_format">Nicht unterstütztes Sicherungsformat; von Bricohams Android Version 1 oder 2 exportiertes JSON verwenden.</string>
+    <string name="err_backup_format">Nicht unterstütztes Sicherungsformat; von RadiCodex (oder Bricohams Android) Version 1 oder 2 exportiertes JSON verwenden.</string>
     <string name="err_too_many_rows">Zu viele Datensätze in %1$s (maximal 50000).</string>
     <string name="err_row_id">Ungültige oder doppelte ID in %1$s.</string>
     <string name="err_row_fields">Unerwartete oder fehlende Felder in %1$s.</string>
@@ -765,7 +765,7 @@
     <string name="satellite_open_rig_cat">In CAT Multi-Radio öffnen</string>
     <string name="rig_title">Bricohams CAT Multi-Radio</string>
     <string name="rig_disconnected">Nicht mit einem Funkgerät verbunden.</string>
-    <string name="rig_intro">Steuert Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1 und (tr)uSDX per USB: Frequenz, Betriebsart, Speicher, Satellitenverfolgung und SSTV.</string>
+    <string name="rig_intro">Steuert Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX und QRP Labs QMX/QDX per USB: Frequenz, Betriebsart, Speicher, Satellitenverfolgung und SSTV.</string>
     <string name="rig_section_radio">Funkgerät</string>
     <string name="rig_model_label">Gerätemodell</string>
     <string name="rig_baud_hint">Baudrate</string>
@@ -887,8 +887,8 @@
     <string name="screen_ftx">Digitale Modi FT8 / FT4 / FT2</string>
     <string name="home_open_ftx">Digitale Modi FT8 / FT4 / FT2</string>
     <string name="rig_open_ftx">Eigener Decoder und TX</string>
-    <string name="ftx_intro">Bricohams eigener Decoder und Generator für FT8, FT4 und FT2 direkt in dieser App. Sie hört den Android-Audioeingang (Mikrofon oder USB-Audio) ab oder dekodiert eine WAV-Datei und erzeugt das Signal; PTT oder VOX bedienst du selbst.</string>
-    <string name="ftx_about">Eigene Bricohams-Implementierung (Originalcode unter GPL-3.0-or-later). FT2 ist ein Legacy-Kandidat, nur gegen einen externen Empfänger validiert.</string>
+    <string name="ftx_intro">RadiCodex eigener Decoder und Generator für FT8, FT4 und FT2 direkt in dieser App. Sie hört den Android-Audioeingang (Mikrofon oder USB-Audio) ab oder dekodiert eine WAV-Datei und erzeugt das Signal; PTT oder VOX bedienst du selbst.</string>
+    <string name="ftx_about">Eigene RadiCodex-by-BricoHams-Implementierung (Originalcode unter GPL-3.0-or-later). FT2 ist ein Legacy-Kandidat, nur gegen einen externen Empfänger validiert.</string>
     <string name="ftx_mode_title">Modus und Zeitslot</string>
     <string name="ftx_mode_candidate">%1$s (Kandidat)</string>
     <string name="ftx_slot_info">%1$s: Zeitslot von %2$s s, an UTC ausgerichtet.</string>

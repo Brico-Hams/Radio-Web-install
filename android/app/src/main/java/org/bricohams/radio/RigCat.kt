@@ -19,7 +19,10 @@ enum class RigModel(
     IC705("Icom IC-705", 115200, 1, 30_000L..470_000_000L),
     // CAT-1 factory default is 2 stop bits (CAT Operation Reference Manual 2508-C, p.3); 1 also works when the menu is changed.
     FTX1("Yaesu FTX-1", 38400, 2, 30_000L..470_000_000L),
-    TRUSDX("(tr)uSDX", 115200, 1, 3_000_000L..30_000_000L)
+    TRUSDX("(tr)uSDX", 115200, 1, 3_000_000L..30_000_000L),
+    // USB virtual COM port, the baud rate is ignored by the radio (QDX manual 1.06, WSJT-X setup).
+    QMX("QRP Labs QMX / QMX+", 9600, 1, 1_800_000L..54_000_000L),
+    QDX("QRP Labs QDX / QDX-M", 9600, 1, 3_500_000L..30_000_000L)
 }
 
 data class RigMemory(val channel: Int, val frequencyHz: Long, val mode: RigMode?, val name: String, val txHz: Long? = null)
@@ -54,6 +57,7 @@ fun openRig(model: RigModel, transport: RadioBytes, civAddress: Int = 0xA4): Rig
     RigModel.IC705 -> IcomCivRig(transport, civAddress)
     RigModel.FTX1 -> Ftx1Rig(transport)
     RigModel.TRUSDX -> TruSdxRig(transport)
+    RigModel.QMX, RigModel.QDX -> QrpLabsRig(transport, model)
 }
 
 internal fun mhzText(hz: Long): String = String.format(Locale.ROOT, "%.6f", hz / 1e6)

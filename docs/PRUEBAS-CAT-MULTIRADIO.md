@@ -1,4 +1,4 @@
-# Pruebas físicas CAT multirradio (APK Bricohams)
+# Pruebas físicas CAT multirradio (RadiCodex by BricoHams)
 
 Autores: Anatol Emilio Lopez Maitchovcow EA5KAO, Diego Roca EA5JEF y Pedro
 Roca, fundadores y miembros directivos de Bricohams.
@@ -6,7 +6,8 @@ Información: <https://bricohams.org> y <https://bricohams.com>.
 
 Checklist para probar con radios reales el CAT de la APK: la pantalla
 **CAT Quansheng** (UV-K5 con firmware Bricohams) y la pantalla **Bricohams CAT
-multirradio** (FT-817/818, FT-857/897, IC-705, FTX-1 y (tr)uSDX). Rellénala
+multirradio** (FT-817/818, FT-857/897, IC-705, FTX-1, (tr)uSDX y QRP Labs
+QMX/QDX). Rellénala
 mientras haces las pruebas. Una radio solo queda **certificada para su uso**
 cuando todas sus filas obligatorias (marcadas con ★) están en `OK` y su fila
 de la tabla final está firmada.
@@ -158,6 +159,29 @@ DL2MAN): no hace falta cable de audio.
 
 Firmware: ______  Firma: ______
 
+### QRP Labs QMX / QMX+ y QDX / QDX-M
+
+Puerto COM virtual por USB: la velocidad no importa. El QMX ofrece hasta tres
+puertos serie; anota en C1 cuál responde. Solo HF: C13 es `N/A`. Sin memorias:
+C9 y C10 son `N/A`. El QDX solo tiene USB y LSB; en C6, CW, FM y AM deben dar
+error sin cambiar la radio. El QMX no tiene FM. Para SSTV, el audio va por la
+tarjeta de sonido USB de la radio, si Android la elige; si no, por el audio del
+móvil.
+
+| C1 | C2 | C3 | C4 | C5 | C6 | C7 | C8 | C11 | C12 | C14 | C15 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | | | | | | | | | | | |
+
+| # | Prueba específica | Resultado |
+| --- | --- | --- |
+| Q1 ★ | Al conectar no entra en TX y no aparece el modo terminal (la APK nunca envía retorno de carro) | |
+| Q2 ★ | QMX: el ID muestra la versión de firmware (`VN`). QDX: ID 020 | |
+| Q3 ★ | PTT: la APK confirma TX y RX leyendo `TQ` | |
+| Q4 | QDX: elegir USB deja la radio en USB (el QDX responde con el código 3, y la APK lo interpreta como USB) | |
+| Q5 | Digitales: FT8 → frecuencia y USB en la radio | |
+
+Modelo y firmware: ______  Firma: ______
+
 ## 5. Verificación previa desde el PC (protocolo, no APK)
 
 El 01-11-2026 se enviaron desde un PC con Windows (pyserial) las mismas cadenas
@@ -235,6 +259,8 @@ la radio sigue **sin certificar**.
 | IC-705 | | | | | |
 | FTX-1 | | | | | |
 | (tr)uSDX | | | | | |
+| QRP Labs QMX / QMX+ | | | | | |
+| QRP Labs QDX / QDX-M | | | | | |
 
 ## 8. Documentación de los fabricantes usada
 
@@ -247,3 +273,7 @@ otros autores:
 - Yaesu, *FTX-1 Series CAT Operation Reference Manual* (ENG 2508-C).
 - DL2MAN, "5 (tr)uSDX Details", apartado "(tr)uSDX supported CAT commands"
   (<https://dl2man.de/5-trusdx-details/>), subconjunto del CAT del Kenwood TS-480.
+- QRP Labs, *QMX CAT programming manual, firmware 1.04_003*
+  (<https://qrp-labs.com/images/qmx/manuals/cat_1_04_003.pdf>).
+- QRP Labs, *QDX assembly, operation manual Rev 1.06*, apartado 6.8 "CAT
+  command test" (<https://www.qrp-labs.com/images/qdx/manual_1_06.pdf>).

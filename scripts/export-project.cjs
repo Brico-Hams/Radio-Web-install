@@ -122,14 +122,14 @@ function copyAndroid(directory, projectSnapshot, destination) {
   if (!entries.includes("build-info.json")) throw new Error("Android: falta build-info.json verificado.");
   const info = JSON.parse(fs.readFileSync(path.join(directory, "build-info.json"), "utf8"));
   if (info.format !== "bricohams-android-build" || info.version !== 1 ||
-      info.applicationId !== "org.bricohams.radio" || !/^\d+\.\d+\.\d+-beta$/.test(info.applicationVersion) ||
-      info.stability !== "beta" || info.signing !== "debug" ||
+      info.applicationId !== "org.bricohams.radicodex" ||       !/^\d+\.\d+\.\d+(-beta)?$/.test(info.applicationVersion) ||
+            !["beta", "stable"].includes(info.stability) || info.signing !== "debug" ||
       !Number.isInteger(info.hostTests) || info.hostTests <= 0 || info.testFailures !== 0 || info.lintErrors !== 0) {
     throw new Error("Android: manifiesto Beta o validacion de compilacion no admitidos.");
   }
   const required = [
-    `bricohams-android-${info.applicationVersion}-debug.apk`,
-    `bricohams-android-${info.applicationVersion}-androidTest.apk`,
+    `radicodex-${info.applicationVersion}-debug.apk`,
+    `radicodex-${info.applicationVersion}-androidTest.apk`,
     "build-info.json", "ANDROID.md", "LICENSE", "NOTICE.txt", "LICENSE-APACHE-2.0.txt",
     "LICENSE-USB-SERIAL-MIT.txt", "LICENSE-SATELLITE-MIT.txt", "LICENSE-RHINO.txt"
   ];

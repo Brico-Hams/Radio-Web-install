@@ -1,6 +1,8 @@
-# Beta Android Bricohams
+# RadiCodex by BricoHams
 
-Guida passo passo: [Tutorial dell'APK Android Bricohams](TUTORIALES-ANDROID.md).
+Versione 1.0.0 (versionCode 15): l'APK si chiama RadiCodex by BricoHams (identificatore `org.bricohams.radicodex`).
+
+Guida passo passo: [Tutorial di RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 
 ## Ambito dell'APK
 
@@ -48,9 +50,11 @@ non è ancora stata modificata: la migrazione definitiva è ancora in sospeso.
 
 ## Installazione e dati
 
-L'APK di sviluppo è firmato con la chiave debug degli strumenti Android,
-non con un'identità di distribuzione Bricohams. Verifica lo SHA-256 pubblicato
-insieme all'APK. Non è una versione di Google Play né una release stabile.
+Le APK di debug sono firmate con la chiave debug degli strumenti Android.
+L'APK di rilascio `RadiCodex-1.0.0.apk` è firmata con la chiave di rilascio di
+RadiCodex solo se la release GitHub la include; verifica lo SHA-256 pubblicato
+insieme all'APK. Non viene distribuita tramite Google Play. Le funzioni indicate
+come sperimentali non sono ancora validate con una radio reale.
 Android chiederà di autorizzare l'installazione dall'applicazione che apre l'APK.
 Non installa driver né modifica la radio.
 Gli eventuali comandi CAT RX modificano temporaneamente la sintonia di ricezione,
