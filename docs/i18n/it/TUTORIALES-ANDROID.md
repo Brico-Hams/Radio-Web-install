@@ -260,6 +260,16 @@ I modi digitali e le memorie risultano in attesa di validazione su un telefono r
 
 Per le bande e un'introduzione alla ricezione vedi [Introduzione alla ricezione dei satelliti](INICIACION-SATELITE.md).
 
+#### Tracciamento dal vivo con bussola
+
+Aprendo un passaggio (o toccando la scheda del conto alla rovescia del prossimo) compare "Live tracking": conto alla rovescia verso AOS o LOS, nome, Az ed El attuali, altitudine e distanza, aggiornati ogni secondo finché la schermata è visibile.
+
+1. Il radar polare mostra l'intera traccia (AOS verde, LOS rosso), la posizione attuale come punto e anelli di elevazione a 0°, 30°, 60° e 90°.
+2. Con "Compass" il radar ruota in modo che la parte alta dello schermo sia dove punta il telefono (direzione in gradi accanto al segno fisso in alto); con "North up" resta fisso con il nord in alto. Senza bussola c'è solo "North up".
+3. Tieni il telefono in piano con la parte superiore verso l'antenna: "Point here" indica di quanti gradi girare a sinistra o a destra e a quale elevazione salire.
+4. Se compare l'avviso di bussola imprecisa, muovi il telefono a forma di otto e tienilo lontano dai metalli.
+5. Sotto sono elencati i trasmettitori (modo, downlink, uplink, modulazione e invertito) con il Doppler dal vivo.
+
 ### 8. Rotore AZ/EL
 
 **Obiettivo:** puntare un rotore sul passaggio selezionato.

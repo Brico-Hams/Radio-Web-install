@@ -260,6 +260,16 @@ Digital modes and memories are listed as pending validation on a real phone.
 
 For bands and an introduction to reception see [Introduction to satellite reception](INICIACION-SATELITE.md).
 
+#### Live tracking with compass
+
+Opening a pass (or tapping the next-pass countdown card) shows "Live tracking": countdown to AOS or LOS, name, current Az and El, altitude and range, refreshed every second while the screen is visible.
+
+1. The polar radar shows the whole track (green AOS, red LOS), the current position as a dot and elevation rings at 0°, 30°, 60° and 90°.
+2. With "Compass" the radar rotates so the top of the screen is where the phone points (heading in degrees next to the fixed top marker); with "North up" it stays fixed with north at the top. A phone without a compass only offers "North up".
+3. Hold the phone flat with its top towards the antenna: "Point here" tells you how many degrees to turn left or right and which elevation to raise to.
+4. If the inaccurate-compass hint appears, move the phone in a figure eight and keep it away from metal.
+5. Below, the transmitters (mode, downlink, uplink, modulation and inverted) are listed with live Doppler.
+
 ### 8. AZ/EL rotor
 
 **Goal:** point a rotor at the selected pass.

@@ -94,7 +94,9 @@ class SatelliteActivityTest {
             assertTrue(text(activity), text(activity).contains("AOS ") && text(activity).contains("FM"))
             cards.first().performClick()
             idle(activity)
-            val radar = all(activity).filterIsInstance<PassRadarView>().single()
+            val radar = all(activity).filterIsInstance<LivePassView>().single()
+            assertTrue(text(activity), text(activity).contains("Seguimiento en vivo") && text(activity).contains("Az ") && text(activity).contains("El "))
+            assertTrue(radar.contentDescription.toString().startsWith("Radar polar del pase."))
             assertEquals(60, radar.track.size)
             assertTrue(text(activity).contains("437.8000 MHz  FM  Repeater"))
             click(activity, "Conectar CAT: Doppler, SSTV y grabacion")
@@ -120,6 +122,41 @@ class SatelliteActivityTest {
             assertTrue(text(activity), text(activity).contains("25544 - ISS (ZARYA)\nLat "))
         } finally {
             allowDownload.countDown()
+            controller.pause().stop().destroy()
+        }
+    }
+
+    @Test
+    fun openingAPassShowsLiveViewWithAzElAndStopsUpdatingOnPause() {
+        observer()
+        val tle = freshTle()
+        SatelliteActivity.fetch = { url, _ ->
+            if (url == SatelliteSources.TLE_URL) "${tle.name}\n${tle.line1}\n${tle.line2}\n".toByteArray()
+            else """[{"norad_cat_id":25544,"alive":true,"status":"active","downlink_low":145800000,"uplink_low":145900000,"mode":"FM","description":"Voice"}]""".toByteArray()
+        }
+        val controller = Robolectric.buildActivity(SatelliteActivity::class.java).setup()
+        try {
+            val activity = controller.get()
+            idle(activity)
+            all(activity).first { it.isClickable && it.contentDescription?.startsWith("ISS (ZARYA) (25544)") == true }.performClick()
+            idle(activity)
+            val radar = all(activity).filterIsInstance<LivePassView>().single()
+            assertEquals(60, radar.track.size)
+            val shown = text(activity)
+            assertTrue(shown, shown.contains("Seguimiento en vivo") && Regex("Az [\\d.—]+").containsMatchIn(shown))
+            assertTrue(shown, shown.contains("Voice · FM") && shown.contains("Invertido: no"))
+            // Robolectric has no compass: the view falls back to north up with a message.
+            assertTrue(shown, shown.contains("no tiene brújula"))
+            val looper = shadowOf(Looper.getMainLooper())
+            looper.idleFor(java.time.Duration.ofSeconds(3))
+            val running = activity.liveTicks
+            controller.pause()
+            looper.idleFor(java.time.Duration.ofSeconds(5))
+            assertEquals(running, activity.liveTicks)
+            controller.resume()
+            looper.idleFor(java.time.Duration.ofSeconds(3))
+            assertTrue(activity.liveTicks > running)
+        } finally {
             controller.pause().stop().destroy()
         }
     }

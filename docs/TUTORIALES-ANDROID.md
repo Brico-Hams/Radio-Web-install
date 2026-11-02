@@ -260,6 +260,16 @@ Los modos digitales y las memorias figuran como pendientes de validar en un móv
 
 Para las bandas y la iniciación a la recepción consulta [Iniciación a la recepción de satélites](INICIACION-SATELITE.md).
 
+#### Seguimiento en vivo con brújula
+
+Al abrir un pase (o tocar la tarjeta de cuenta atrás del siguiente) aparece "Seguimiento en vivo": cuenta atrás a AOS o a LOS, nombre, Az y El actuales, altitud y distancia, actualizados cada segundo mientras la pantalla está visible.
+
+1. El radar polar muestra la trayectoria completa (AOS verde, LOS rojo), la posición actual como punto y anillos de elevación de 0°, 30°, 60° y 90°.
+2. Con "Brújula" el radar gira para que la parte superior sea hacia donde apunta el móvil (rumbo en grados junto a la marca fija superior); con "Norte arriba" queda fijo con el norte arriba. Sin brújula en el móvil solo hay "Norte arriba".
+3. Sujeta el móvil plano con su parte superior hacia la antena: "Apunta aquí" indica cuántos grados girar a la izquierda o la derecha y hasta qué elevación subir.
+4. Si aparece el aviso de brújula imprecisa, mueve el móvil en forma de ocho y aléjalo de metales.
+5. Debajo se listan los transmisores (modo, bajada, subida, modulación e invertido) con el Doppler en vivo.
+
 ### 8. Rotor AZ/EL
 
 **Objetivo:** apuntar un rotor al pase seleccionado.

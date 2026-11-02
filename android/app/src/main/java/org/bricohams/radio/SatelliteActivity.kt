@@ -9,6 +9,7 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.hardware.SensorManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.Build
@@ -72,8 +73,23 @@ class SatelliteActivity : LocalizedActivity() {
     private val cards = ArrayList<Card>()
     private var dirty = true
     private var opened: PassTrack? = null
-    private var detailStats: TextView? = null
-    private var radar: PassRadarView? = null
+    private var liveRadar: LivePassView? = null
+    private var liveCountdown: TextView? = null
+    private var liveValues: TextView? = null
+    private var liveRange: TextView? = null
+    private var liveHeadingNote: TextView? = null
+    private var livePoint: TextView? = null
+    private var liveModes: LinearLayout? = null
+    private val liveTransmitters = ArrayList<Pair<Transmitter, TextView>>()
+    private var compass: RotorCompass? = null
+    private var compassAvailable = false
+    private var heading: Double? = null
+    private var phoneElevation: Double? = null
+    private var compassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+    private var updating = false
+    /** Counts live-view refreshes; host tests use it to prove updates stop in onPause. */
+    @Volatile internal var liveTicks = 0
+        private set
     private lateinit var map: WorldMapView
     private lateinit var mapInfo: TextView
     private var mapSelected: Int? = null
@@ -194,6 +210,7 @@ class SatelliteActivity : LocalizedActivity() {
             Page.SATELLITES to R.string.satellite_tab_satellites, Page.SETTINGS to R.string.satellite_tab_settings)) {
             navigation.addView(Brand.chip(this, getString(label), key == target || (target == Page.DETAIL && key == Page.PASSES)) { show(key) })
         }
+        syncCompass()
         tick()
     }
 
@@ -346,6 +363,9 @@ class SatelliteActivity : LocalizedActivity() {
 
     private fun openPass(track: PassTrack) {
         opened = track
+        liveTransmitters.clear()
+        heading = null; phoneElevation = null
+        compassAvailable = RotorCompass.supported(this)
         val tle = track.plan.tle
         page(Page.DETAIL) {
             addView(Brand.row(this@SatelliteActivity,
@@ -355,13 +375,37 @@ class SatelliteActivity : LocalizedActivity() {
                     setPadding(Brand.dp(this@SatelliteActivity, 10), 0, 0, 0)
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 3f)
                 }))
-            val view = PassRadarView(this@SatelliteActivity).apply {
+            addView(Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply {
+                setText(R.string.live_title); setPadding(0, Brand.dp(this@SatelliteActivity, 8), 0, 0)
+            })
+            liveCountdown = Brand.text(this@SatelliteActivity, 34f, colors.accent, bold = true).also { addView(it) }
+            liveValues = Brand.text(this@SatelliteActivity, 22f, bold = true).also { addView(it) }
+            liveRange = Brand.text(this@SatelliteActivity, 15f, colors.muted).also { addView(it) }
+            val view = LivePassView(this@SatelliteActivity).apply {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+                cardinals = getString(R.string.live_cardinals).split(',').toTypedArray()
                 this.track = opened?.track.orEmpty()
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    .apply { topMargin = Brand.dp(this@SatelliteActivity, 8); bottomMargin = Brand.dp(this@SatelliteActivity, 8) }
             }
-            radar = view
+            liveRadar = view
             addView(view)
-            detailStats = Brand.text(this@SatelliteActivity, 15f).also { addView(it) }
+            liveModes = Brand.row(this@SatelliteActivity).also { addView(it) }
+            buildModeChips()
+            liveHeadingNote = Brand.text(this@SatelliteActivity, 13f, colors.muted).also { addView(it) }
+            livePoint = Brand.text(this@SatelliteActivity, 18f, colors.accent, true).apply {
+                setPadding(0, Brand.dp(this@SatelliteActivity, 8), 0, Brand.dp(this@SatelliteActivity, 8))
+            }.also { addView(it) }
+            addView(Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply {
+                setText(R.string.live_transmitters)
+            })
+            val modeList = transmitters[tle.norad].orEmpty()
+            if (modeList.isEmpty()) addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.satellite_no_downlinks) })
+            for (transmitter in modeList) {
+                val row = Brand.text(this@SatelliteActivity, 14f).apply { setPadding(0, Brand.dp(this@SatelliteActivity, 6), 0, Brand.dp(this@SatelliteActivity, 6)) }
+                liveTransmitters.add(Pair(transmitter, row))
+                addView(row)
+            }
             addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { text = SatellitePasses.detail(track, 0, this@SatelliteActivity).substringBeforeLast('\n') })
             addView(Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply {
                 setText(R.string.satellite_downlinks); setPadding(0, Brand.dp(this@SatelliteActivity, 12), 0, 0)
@@ -447,7 +491,7 @@ class SatelliteActivity : LocalizedActivity() {
                     runOnUiThread {
                         if (!isDestroyed && token == generation) {
                             passes = passes.map { if (it == track) sampled else it }
-                            if (opened == track) { opened = sampled; radar?.track = sampled.track; tick() }
+                            if (opened == track) { opened = sampled; liveRadar?.track = sampled.track; tick() }
                         }
                     }
                 } catch (error: IllegalArgumentException) { report(error) }
@@ -783,29 +827,122 @@ class SatelliteActivity : LocalizedActivity() {
             card.countdown.setTextColor(if (now >= pass.aos.time) colors.positive else colors.text)
             card.progress.progress = (((now - pass.aos.time).toDouble() / (pass.los.time - pass.aos.time)).coerceIn(0.0, 1.0) * 1000).toInt()
         }
-        val track = opened
-        if (page == Page.DETAIL && track != null) {
-            radar?.now = now
-            val position = SatellitePasses.at(track.track, now)
-            detailStats?.text = if (position == null) SatellitePasses.countdown(track.plan.pass, now, this) else {
-                val rate = SatellitePasses.at(track.track, now + 500)?.let { later ->
-                    SatellitePasses.at(track.track, now - 500)?.let { later.rangeKm - it.rangeKm }
-                } ?: 0.0
-                getString(R.string.satellite_live, position.azimuth, position.elevation, position.rangeKm,
-                    track.plan.downlinkHz * (1 - rate / 299792.458) / 1e6)
-            }
-            radar?.contentDescription = getString(R.string.satellite_radar_description, detailStats?.text)
-        }
+        if (page == Page.DETAIL && opened != null) renderLive(now)
         if (page == Page.MAP && ++ticks % 5 == 0) refreshMap()
+    }
+
+    private fun buildModeChips() {
+        val row = liveModes ?: return
+        row.removeAllViews()
+        if (!compassAvailable) { row.visibility = View.GONE; return }
+        row.visibility = View.VISIBLE
+        val compassOn = preferences.getBoolean("live-compass", true)
+        fun choose(value: Boolean) {
+            preferences.edit().putBoolean("live-compass", value).apply()
+            buildModeChips(); renderLive(System.currentTimeMillis())
+        }
+        row.addView(Brand.chip(this, getString(R.string.live_mode_north), !compassOn) { choose(false) })
+        row.addView(Brand.chip(this, getString(R.string.live_mode_compass), compassOn) { choose(true) })
+    }
+
+    private fun compassMode() = compassAvailable && preferences.getBoolean("live-compass", true)
+
+    /** The compass only runs while the live view is visible and the activity is resumed. */
+    private fun syncCompass() {
+        val wanted = updating && page == Page.DETAIL && opened != null && compassAvailable
+        if (wanted && compass == null) {
+            compass = RotorCompass(this) { reading ->
+                heading = heading?.let { PassGeometry.smooth(it, reading.trueAzimuth, 0.3) } ?: reading.trueAzimuth
+                phoneElevation = -reading.pitch
+                compassAccuracy = reading.accuracy
+                renderLive(System.currentTimeMillis())
+            }.also { it.start(opened?.plan?.observer ?: observer()) }
+        } else if (!wanted) {
+            compass?.stop()
+            compass = null
+            heading = null; phoneElevation = null
+        }
+    }
+
+    private fun renderLive(now: Long) {
+        val track = opened ?: return
+        liveTicks++
+        val pass = track.plan.pass
+        val position = SatellitePasses.at(track.track, now)
+        val rising = now < pass.aos.time
+        val left = (((if (rising) pass.aos.time else pass.los.time) - now) / 1000).coerceAtLeast(0)
+        liveCountdown?.apply {
+            text = if (now >= pass.los.time) getString(R.string.pass_finished)
+                else getString(if (rising) R.string.satellite_countdown_aos else R.string.satellite_countdown_los, left / 3600, left / 60 % 60, left % 60)
+            setTextColor(if (!rising && now < pass.los.time) colors.positive else colors.accent)
+        }
+        val values = if (position == null) getString(R.string.live_azel_none) else getString(R.string.live_azel, position.azimuth, position.elevation)
+        liveValues?.text = getString(R.string.live_name_values, track.plan.tle.name, values)
+        liveRange?.text = if (position == null) getString(R.string.live_aos_hint, pass.aos.azimuth)
+            else getString(R.string.live_alt_range, PassGeometry.altitudeKm(position, track.plan.observer.heightKm), position.rangeKm)
+        val mode = compassMode()
+        val phoneHeading = if (mode) heading else null
+        liveRadar?.let {
+            it.now = now
+            it.headingUp = phoneHeading ?: 0.0
+            it.headingLabel = phoneHeading?.let { value -> getString(R.string.live_heading, value) }.orEmpty()
+        }
+        liveHeadingNote?.text = when {
+            !compassAvailable -> getString(R.string.live_compass_missing)
+            !mode -> ""
+            heading == null -> getString(R.string.live_compass_waiting)
+            compassAccuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW -> getString(R.string.live_compass_calibrate)
+            else -> ""
+        }
+        liveHeadingNote?.visibility = if (liveHeadingNote?.text.isNullOrEmpty()) View.GONE else View.VISIBLE
+        val target = position ?: pass.aos.takeIf { rising }
+        val aim = when {
+            target == null -> ""
+            phoneHeading == null -> getString(R.string.live_point_abs, target.azimuth, target.elevation)
+            else -> {
+                val pointing = PassGeometry.pointing(phoneHeading, target, phoneElevation)
+                val turn = pointing.turn ?: 0.0
+                val horizontal = when {
+                    turnDegrees(turn) == 0 -> getString(R.string.live_point_ok)
+                    turn < 0 -> getString(R.string.live_point_left, turnDegrees(turn))
+                    else -> getString(R.string.live_point_right, turnDegrees(turn))
+                }
+                val raise = pointing.raise
+                val vertical = when {
+                    raise == null -> getString(R.string.live_el_target, pointing.targetElevation)
+                    raise >= 0.5 -> getString(R.string.live_el_raise, turnDegrees(raise), pointing.targetElevation)
+                    raise <= -0.5 -> getString(R.string.live_el_lower, turnDegrees(raise), pointing.targetElevation)
+                    else -> getString(R.string.live_el_ok, pointing.targetElevation)
+                }
+                getString(R.string.live_point, horizontal, vertical)
+            }
+        }
+        livePoint?.text = aim
+        livePoint?.visibility = if (aim.isEmpty()) View.GONE else View.VISIBLE
+        liveRadar?.contentDescription = getString(R.string.satellite_radar_description, listOf(values, aim).filter { it.isNotEmpty() }.joinToString(". "))
+        val rate = if (position == null) null else PassGeometry.rangeRateKmS(track.track, now)
+        val nominal = if (rate == null) " " + getString(R.string.live_tx_nominal) else ""
+        for ((transmitter, row) in liveTransmitters) {
+            val down = transmitter.downlinkHz.let { if (rate == null) it.toDouble() else PassGeometry.dopplerHz(it, rate) }
+            val up = transmitter.uplinkHz?.let {
+                getString(R.string.live_tx_up, (if (rate == null) it.toDouble() else PassGeometry.dopplerHz(it, rate, true)) / 1e6)
+            } ?: getString(R.string.live_tx_no_up)
+            row.text = getString(R.string.live_tx_row, transmitter.description, transmitter.mode, down / 1e6, up,
+                getString(if (transmitter.invert) R.string.live_tx_inverted_yes else R.string.live_tx_inverted_no)) + nominal
+        }
     }
 
     override fun onResume() {
         super.onResume()
         updateCatalogIfNeeded()
+        updating = true
+        syncCompass()
         handler.post(ticker)
     }
     override fun onPause() {
+        updating = false
         handler.removeCallbacks(ticker)
+        syncCompass()
         super.onPause()
     }
     private fun report(error: Exception) {

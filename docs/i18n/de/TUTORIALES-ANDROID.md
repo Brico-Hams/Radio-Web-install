@@ -260,6 +260,16 @@ Digitale Betriebsarten und Speicher sind als noch nicht auf einem echten Handy v
 
 Zu Bändern und einer Einführung in den Empfang siehe [Einführung in den Satellitenempfang](INICIACION-SATELITE.md).
 
+#### Live-Verfolgung mit Kompass
+
+Beim Öffnen eines Überflugs (oder Antippen der Countdown-Karte des nächsten) erscheint „Live-Verfolgung“: Countdown bis AOS oder LOS, Name, aktuelle Az und El, Höhe und Entfernung, jede Sekunde aktualisiert, solange der Bildschirm sichtbar ist.
+
+1. Das Polarradar zeigt die gesamte Bahn (grün AOS, rot LOS), die aktuelle Position als Punkt und Elevationsringe bei 0°, 30°, 60° und 90°.
+2. Mit „Kompass“ dreht sich das Radar so, dass oben auf dem Bildschirm liegt, wohin das Handy zeigt (Kurs in Grad neben der festen Marke oben); mit „Nord oben“ bleibt es fest mit Nord oben. Ohne Kompass gibt es nur „Nord oben“.
+3. Halte das Handy flach mit der Oberseite zur Antenne: „Hierhin zeigen“ sagt, um wie viele Grad du nach links oder rechts drehen und auf welche Elevation du anheben musst.
+4. Erscheint der Hinweis auf einen ungenauen Kompass, bewege das Handy in Achterform und halte es von Metall fern.
+5. Darunter stehen die Sender (Modus, Downlink, Uplink, Modulation und invertiert) mit Live-Doppler.
+
 ### 8. AZ/EL-Rotor
 
 **Ziel:** einen Rotor auf den gewählten Überflug ausrichten.

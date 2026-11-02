@@ -260,6 +260,16 @@ Les modes numériques et les mémoires sont indiqués comme en attente de valida
 
 Pour les bandes et une initiation à la réception, voir [Initiation à la réception des satellites](INICIACION-SATELITE.md).
 
+#### Suivi en direct avec boussole
+
+L'ouverture d'un passage (ou un appui sur la carte du compte à rebours du suivant) affiche « Suivi en direct » : compte à rebours vers l'AOS ou le LOS, nom, Az et El actuels, altitude et distance, rafraîchis chaque seconde tant que l'écran est visible.
+
+1. Le radar polaire montre toute la trajectoire (AOS vert, LOS rouge), la position actuelle sous forme de point et des anneaux d'élévation à 0°, 30°, 60° et 90°.
+2. Avec « Boussole », le radar tourne pour que le haut de l'écran soit la direction visée par le téléphone (cap en degrés près du repère fixe en haut) ; avec « Nord en haut », il reste fixe, le nord en haut. Sans boussole, seul « Nord en haut » est proposé.
+3. Tenez le téléphone à plat, son haut vers l'antenne : « Visez ici » indique de combien de degrés tourner à gauche ou à droite et jusqu'à quelle élévation monter.
+4. Si l'avis de boussole imprécise apparaît, bougez le téléphone en huit et éloignez-le des métaux.
+5. Dessous, les émetteurs (mode, descente, montée, modulation et inversé) sont listés avec le Doppler en direct.
+
 ### 8. Rotor AZ/EL
 
 **Objectif :** pointer un rotor sur le passage sélectionné.
