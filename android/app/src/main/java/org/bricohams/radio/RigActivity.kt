@@ -62,7 +62,7 @@ class RigActivity : LocalizedActivity() {
         const val EXTRA_PLAN = "rig-plan"
         const val EXTRA_TRANSMITTERS = "rig-transmitters"
         private const val USB_PERMISSION = "org.bricohams.radio.RIG_USB_PERMISSION"
-        private const val PREFERENCES = "rig-cat"
+        internal const val PREFERENCES = "rig-cat"
         private const val PICK_IMAGE = 72
         private const val AUDIO_PERMISSION = 73
         private const val MAX_TX_MS = 110_000L
@@ -362,6 +362,7 @@ class RigActivity : LocalizedActivity() {
         button(card, R.string.rig_dig_release) {
             operation(notice) { closeRadio(); getString(R.string.rig_dig_released) }
         }
+        button(card, R.string.rig_open_ftx, tracked = false) { startActivity(Intent(this, FtxActivity::class.java)) }
         updateDigital()
     }
 

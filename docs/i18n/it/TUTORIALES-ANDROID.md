@@ -344,6 +344,23 @@ Per le bande e un'introduzione alla ricezione vedi [Introduzione alla ricezione 
 - Senza armamento con il tasto 9 o senza nominativo non si trasmette.
 - Non si trasmette durante l'inseguimento di un passaggio.
 
+### 12. Modi digitali propri
+
+**Obiettivo:** ricevere e generare `FT8`, `FT4` e `FT2` con il decodificatore Bricohams, senza altre app.
+
+1. Premi "Modi digitali FT8 / FT4 / FT2" nella schermata principale, oppure "Decodificatore e TX propri" nella scheda dei modi digitali del CAT.
+2. Scegli il modo: `FT8` (turno di 15 s), `FT4` (7,5 s) o `FT2` (3,75 s, candidato). Vedrai l'orologio UTC e il turno.
+3. Per ricevere premi "Ascolta" (microfono o ingresso audio USB di Android) o "Decodifica WAV". La ricezione di `FT4` e `FT2` non è ancora disponibile.
+4. Per trasmettere inserisci il tuo nominativo e un messaggio che lo contenga, poi premi "Salva WAV" o "Trasmetti nel prossimo turno". L'app non attiva il PTT: usa il PTT dell'operatore o il VOX. "Ferma TX" interrompe subito.
+
+**Risultato atteso:** l'elenco mostra UTC, SNR, DT, Hz e messaggio; la trasmissione suona una volta, 0,5 s dopo l'inizio del turno.
+
+**Errori comuni:**
+
+- Messaggio non valido, senza nominativo o con tono fuori da 100-5000 Hz.
+- Senza permesso del microfono non si può ascoltare.
+- `FT2` è un candidato legacy, validato solo con un ricevitore esterno.
+
 ## Problemi frequenti
 
 - Non compare alcun dispositivo USB: usa un cavo OTG dati (non solo di ricarica) e controlla che la radio sia nel modo CAT giusto.

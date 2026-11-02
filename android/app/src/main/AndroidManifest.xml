@@ -27,6 +27,7 @@
         <activity android:name=".ChannelActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".SstvActivity" android:exported="false" />
         <activity android:name=".LiveAudioActivity" android:exported="false" />
+        <activity android:name=".FtxActivity" android:exported="false" />
         <activity android:name=".SatelliteActivity" android:exported="false" />
         <activity android:name=".RotorActivity" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="true">

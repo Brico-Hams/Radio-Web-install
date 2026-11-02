@@ -344,6 +344,23 @@ Zu Bändern und einer Einführung in den Empfang siehe [Einführung in den Satel
 - Ohne Aktivierung mit Taste 9 oder ohne Rufzeichen wird nichts gesendet.
 - Während der Überflugverfolgung wird nichts gesendet.
 
+### 12. Eigene digitale Modi
+
+**Ziel:** `FT8`, `FT4` und `FT2` mit dem Bricohams-Decoder empfangen und erzeugen, ohne weitere Apps.
+
+1. Tippe auf „Digitale Modi FT8 / FT4 / FT2“ im Hauptbildschirm oder auf „Eigener Decoder und TX“ in der Karte der digitalen Modi im CAT.
+2. Wähle den Modus: `FT8` (Slot von 15 s), `FT4` (7,5 s) oder `FT2` (3,75 s, Kandidat). Du siehst die UTC-Uhr und den Slot.
+3. Zum Empfangen tippe auf „Hören“ (Mikrofon oder USB-Audioeingang von Android) oder „WAV dekodieren“. Der Empfang von `FT4` und `FT2` ist noch nicht verfügbar.
+4. Zum Senden gib dein Rufzeichen und eine Nachricht mit diesem Rufzeichen ein und tippe auf „WAV speichern“ oder „Im nächsten Slot senden“. Die App schaltet kein PTT: Nutze das PTT des Bedieners oder VOX. „TX stoppen“ beendet sofort.
+
+**Erwartetes Ergebnis:** Die Liste zeigt UTC, SNR, DT, Hz und Nachricht; die Aussendung läuft einmal, 0,5 s nach Slot-Beginn.
+
+**Häufige Fehler:**
+
+- Ungültige Nachricht, kein Rufzeichen oder Ton außerhalb von 100-5000 Hz.
+- Ohne Mikrofonberechtigung ist kein Empfang möglich.
+- `FT2` ist ein Legacy-Kandidat, nur gegen einen externen Empfänger validiert.
+
 ## Häufige Probleme
 
 - Kein USB-Gerät erscheint: Nutze ein OTG-Datenkabel (nicht nur zum Laden) und prüfe, ob das Funkgerät im richtigen CAT-Modus ist.

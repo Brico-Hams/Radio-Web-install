@@ -250,6 +250,7 @@ class MainActivity : LocalizedActivity() {
             button(R.string.home_open_gd77) { startActivity(Intent(this, OpenGd77Activity::class.java)) }
             button(R.string.home_open_channels) { startActivity(Intent(this, ChannelActivity::class.java)) }
             button(R.string.home_open_sstv) { startActivity(Intent(this, SstvActivity::class.java)) }
+            button(R.string.home_open_ftx) { startActivity(Intent(this, FtxActivity::class.java)) }
             button(R.string.home_open_live) { startActivity(Intent(this, LiveAudioActivity::class.java)) }
             button(R.string.home_open_satellites) { startActivity(Intent(this, SatelliteActivity::class.java)) }
         }

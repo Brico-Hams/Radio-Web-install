@@ -344,6 +344,23 @@ For bands and an introduction to reception see [Introduction to satellite recept
 - Without arming with key 9 or without a callsign nothing is transmitted.
 - Nothing is transmitted during pass tracking.
 
+### 12. Own digital modes
+
+**Goal:** receive and generate `FT8`, `FT4` and `FT2` with the Bricohams decoder, with no other apps.
+
+1. Press "Digital modes FT8 / FT4 / FT2" on the main screen, or "Built-in decoder and TX" in the CAT digital modes card.
+2. Choose the mode: `FT8` (15 s slot), `FT4` (7.5 s) or `FT2` (3.75 s, candidate). You will see the UTC clock and the slot.
+3. To receive press "Listen" (microphone or Android USB audio input) or "Decode WAV". `FT4` and `FT2` receive is not available yet.
+4. To transmit enter your callsign and a message containing it, then press "Save WAV" or "Transmit in the next slot". The app does not key PTT: use the operator's PTT or VOX. "Stop TX" stops at once.
+
+**Expected result:** the list shows UTC, SNR, DT, Hz and message; the transmission plays once, 0.5 s after the slot starts.
+
+**Common errors:**
+
+- Invalid message, no callsign, or tone outside 100-5000 Hz.
+- Without microphone permission it cannot listen.
+- `FT2` is a legacy candidate, validated against one external receiver only.
+
 ## Frequently asked problems
 
 - No USB device appears: use an OTG data cable (not charge-only) and check that the radio is in the right CAT mode.

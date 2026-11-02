@@ -46,6 +46,7 @@ open class LocalizedActivity : Activity() {
             is ChannelActivity -> R.string.screen_channels
             is SstvActivity -> R.string.screen_sstv
             is LiveAudioActivity -> R.string.screen_live
+            is FtxActivity -> R.string.screen_ftx
             else -> null
         }
         if (title == null) {

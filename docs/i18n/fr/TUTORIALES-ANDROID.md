@@ -344,6 +344,23 @@ Pour les bandes et une initiation à la réception, voir [Initiation à la réce
 - Sans armement par la touche 9 ou sans indicatif, rien n'est émis.
 - Rien n'est émis pendant le suivi d'un passage.
 
+### 12. Modes numériques intégrés
+
+**Objectif :** recevoir et générer `FT8`, `FT4` et `FT2` avec le décodeur Bricohams, sans autre application.
+
+1. Appuyez sur « Modes numériques FT8 / FT4 / FT2 » sur l'écran principal, ou sur « Décodeur et TX intégrés » dans la carte des modes numériques du CAT.
+2. Choisissez le mode : `FT8` (créneau de 15 s), `FT4` (7,5 s) ou `FT2` (3,75 s, candidat). Vous verrez l'horloge UTC et le créneau.
+3. Pour recevoir, appuyez sur « Écouter » (micro ou entrée audio USB d'Android) ou « Décoder un WAV ». La réception `FT4` et `FT2` n'est pas encore disponible.
+4. Pour émettre, saisissez votre indicatif et un message qui le contient, puis appuyez sur « Enregistrer le WAV » ou « Émettre au prochain créneau ». L'application n'actionne pas le PTT : utilisez le PTT de l'opérateur ou le VOX. « Arrêter TX » coupe aussitôt.
+
+**Résultat attendu :** la liste affiche UTC, SNR, DT, Hz et message ; l'émission est jouée une fois, 0,5 s après le début du créneau.
+
+**Erreurs courantes :**
+
+- Message non valide, sans indicatif, ou ton hors de 100-5000 Hz.
+- Sans autorisation du micro, l'écoute est impossible.
+- `FT2` est un candidat historique, validé uniquement face à un récepteur externe.
+
 ## Problèmes fréquents
 
 - Aucun appareil USB n'apparaît : utilisez un câble OTG de données (pas seulement de charge) et vérifiez que la radio est dans le bon mode CAT.
