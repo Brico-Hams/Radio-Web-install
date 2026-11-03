@@ -226,7 +226,8 @@ class MainActivity : LocalizedActivity() {
             button.setTextColor(if (active) colors.onAccent else colors.text)
             button.background = android.graphics.drawable.RippleDrawable(
                 android.content.res.ColorStateList.valueOf(colors.ripple),
-                Brand.rounded(this, if (active) colors.accent else colors.surfaceHigh, 16), null)
+                // Brand manual: the active tab is a brand-orange fill with graphite text (colors.accent is the link/text tone).
+                Brand.rounded(this, if (active) Brand.ORANGE else colors.surfaceHigh, 16), null)
         }
         content.background = if (tab == TAB_HOME) null else Brand.rounded(this, colors.surface, 20)
         val padding = if (tab == TAB_HOME) 0 else dp(16)

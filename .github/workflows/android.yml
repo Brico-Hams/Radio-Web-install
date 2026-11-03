@@ -84,7 +84,7 @@ jobs:
           echo "signed=true" >> "$GITHUB_OUTPUT"
       - name: Build APK, lint and run host tests
         shell: bash
-        run: bash android/gradlew -p android :app:testDebugUnitTest :app:lintDebug :app:lintRelease :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease --no-daemon 2>&1 | tee android-build.log
+        run: bash android/gradlew -p android :app:testGithubDebugUnitTest :app:testFdroidDebugUnitTest :app:lintGithubDebug :app:lintGithubRelease :app:lintFdroidRelease :app:assembleGithubDebug :app:assembleGithubDebugAndroidTest :app:assembleGithubRelease :app:assembleFdroidRelease --no-daemon 2>&1 | tee android-build.log
       - name: Report build failure
         if: failure()
         shell: bash
