@@ -239,9 +239,9 @@
       "edition": "BH Satellite",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.6",
-      "size": 117080,
-      "sha256": "655a5e69c0d4050f39dd04565a8e5c36d4a9c4792e4c8624c677fac9751cfa3b",
+      "distributionVersion": "v0.5.7",
+      "size": 118136,
+      "sha256": "724b11ee47c5d069bf9d55b65f55c6b237c42a976650987c73c363e61060087b",
       "path": "precompiled/bricohams-satellite.bin",
       "targets": [
         "UV-K1",
@@ -361,18 +361,18 @@
         },
         "sourceDateEpoch": 1791342406,
         "toolchain": {
-          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
           "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 117080,
+        "imageBytes": 118136,
         "memory": {
           "ramUsedBytes": 12416,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 3968,
-          "imageBytes": 117080,
+          "imageBytes": 118136,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 3752
+          "slotFreeBytes": 2696
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -391,31 +391,31 @@
           },
           {
             "file": "App/bricohams/satellite_foxhunt.inc",
-            "sha256": "f663292d3e70e87d6679035b73c237be5aa26b170816665baf3906902afa12ac"
+            "sha256": "fdbff7f8b83152d1515a2d1879676987cbb9d7475f170b3f20b317807afdd8ab"
           },
           {
             "file": "App/bricohams/cat_rx.c",
-            "sha256": "2a89f591013fafe3c4a3e09ee407a455f3760dc108a023f234a2e232c92ee54a"
+            "sha256": "2e69065903400ba15dfe4222f9cdc3c9c2842c9af8e9569b178e7334be534def"
           },
           {
             "file": "App/bricohams/cat_rx.h",
-            "sha256": "dd23ef17629f69e1cfa03d5f1347f3e2ba2b604d64ef993f471f5632c6eabbe3"
+            "sha256": "97cebf3a66166673c1a085a4fc4c6f04d0dc5e3bc9e96cde49da001c04b67440"
           },
           {
             "file": "App/bricohams/cat_tx.c",
-            "sha256": "950c657e772ab86491f68fe0433a17a9a5283f09c4cb30ad18c858dd24fc4290"
+            "sha256": "1479fb2b9d64a4c522bbea1f0f633c02ff2a541305fd13609cc055f9fb8b8e4e"
           },
           {
             "file": "App/bricohams/cat_tx.h",
-            "sha256": "6b65a5a1a7a4d148adab4f159198d13ada7fa4d6cdd4d2a1f9e6c0e8b49e2b48"
+            "sha256": "0fd7a393646603bf40bfbe716eb90f03413f9361926baba7fa26e3c668722f44"
           },
           {
             "file": "App/bricohams/passes.c",
-            "sha256": "20ca47a5327d71128d18705014885163ec87b441fca67e877ffd9fc504a8c837"
+            "sha256": "cde7150350b202489c228ca62a03d016fd5dfc1903c7f2942af4056b4ef17e83"
           },
           {
             "file": "App/bricohams/passes.h",
-            "sha256": "c0e472be56bf8b7bcf26fdb357cc07ae8e8aae31196ae5e591a6ec386796c3d6"
+            "sha256": "63a53ba4d10a7425ab043f41b713c6faa89a40191e1c6f5f4ce71e205038d953"
           },
           {
             "file": "App/CMakeLists.txt",
@@ -434,12 +434,20 @@
             "sha256": "a18a68123bc602187b11591efe0f1dc76a05d72b5bdd0873df4078d7754c23bb"
           },
           {
+            "file": "App/main.c",
+            "sha256": "4f93f2523144ae4974a92a1b3d088dfa0b8c64021ee997d8f58bdf0ec1c4fbf2"
+          },
+          {
             "file": "App/ui/menu.c",
             "sha256": "04f9b2327cab009ebf7ad05d311872d213139a2bf609bfd177c1330ff8291c0f"
           },
           {
             "file": "App/app/uart.c",
             "sha256": "1eefc8af78adf69f5281227db60dc5a40f7d5508a6ae98ffe60e815def255937"
+          },
+          {
+            "file": "App/app/app.c",
+            "sha256": "60e66e8a7d0f29b7224832652c1b5c1c8997ff2ccfe0ca64f3dac0c11afbf36c"
           }
         ],
         "brandingSources": [
