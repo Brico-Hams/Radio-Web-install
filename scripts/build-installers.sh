@@ -32,6 +32,7 @@ app_files=(
   firmware-service.cjs data-service.cjs f4hwn-options.js custom-firmware-ui.js
   precompiled-catalog.js quansheng-factory.js quansheng-live.js quansheng-tools.js
   channel-templates.js channel-template-ui.js channel-template-worker.js
+  ota.html ota.css ota.js firmware-signature.js
 )
 
 stage_app() {
@@ -45,6 +46,8 @@ stage_app() {
   cp "$root"/docs/atlas/*.jpg "$root"/docs/atlas/*.svg "$destination/docs/atlas/"
   mkdir -p "$destination/precompiled/apps"
   cp "$root"/precompiled/*.bin "$root"/precompiled/*.json "$root"/precompiled/*.txt "$destination/precompiled/"
+  # Signatures travel with the images: the installer refuses unsigned firmware.
+  cp "$root"/precompiled/*.sig "$root"/precompiled/SHA256SUMS "$destination/precompiled/"
   cp "$root"/precompiled/apps/*.app "$root"/precompiled/apps/*.json "$destination/precompiled/apps/"
   mkdir -p "$destination/precompiled/chirp"
   cp "$root"/precompiled/chirp/*.py "$root"/precompiled/chirp/*.json "$root"/precompiled/chirp/*.txt "$destination/precompiled/chirp/"

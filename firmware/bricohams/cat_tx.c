@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "cat_tx.h"
+#include "cat_rx.h"
 #include <string.h>
 
 bh_cat_tx bh_cat_transmitter;
@@ -10,11 +11,40 @@ static void write32(uint8_t *bytes, uint32_t value)
         bytes[i] = (uint8_t)(value >> (i * 8U));
 }
 
+/* TX needs an explicit local consent: key 9 in SAT RX, or the persistent "CAT remoto" setting. */
+static bool permitted(const bh_cat_tx *state)
+{
+    return state->armed || bh_cat_remote_enabled;
+}
+
+static bool in_holdoff(const bh_cat_tx *state, uint32_t now)
+{
+    return state->holdoff && (uint32_t)(now - state->holdoff_at) < BH_CAT_TX_HOLDOFF_MS;
+}
+
 void bh_cat_tx_arm(bh_cat_tx *state, bool armed)
 {
     /* Arming or disarming never leaves a key request behind; the adapter unkeys on the next poll. */
     state->armed = armed;
     state->requested = false;
+    state->limit = false;
+    state->holdoff = false;
+    state->denied_state = 0;
+}
+
+void bh_cat_tx_abort(bh_cat_tx *state, uint32_t now)
+{
+    bh_cat_tx_arm(state, false);
+    state->holdoff = true;
+    state->holdoff_at = now;
+}
+
+void bh_cat_tx_user_key(bh_cat_tx *state, uint32_t now)
+{
+    if (state->keyed || state->requested) {
+        bh_cat_tx_abort(state, now);
+        return;
+    }
     state->limit = false;
     state->denied_state = 0;
 }
@@ -39,7 +69,8 @@ void bh_cat_tx_request(bh_cat_tx *state, const uint8_t *request, uint16_t length
             state->requested = false;
             status = state->keyed ? BH_CAT_TX_QUEUED : BH_CAT_TX_OK;
         } else if (request[1] == 1) {
-            if (!state->armed) status = state->limit ? BH_CAT_TX_LIMIT : BH_CAT_TX_NOT_ARMED;
+            if (state->limit) status = BH_CAT_TX_LIMIT;
+            else if (!permitted(state) || in_holdoff(state, now)) status = BH_CAT_TX_NOT_ARMED;
             else if (state->denied_state != 0) status = BH_CAT_TX_DENIED;
             else {
                 state->requested = true;
@@ -51,9 +82,11 @@ void bh_cat_tx_request(bh_cat_tx *state, const uint8_t *request, uint16_t length
         }
     }
     reply[1] = status;
-    write32(&reply[4], 8U); /* PTT with lease only: no frequency, power or EEPROM changes. */
+    write32(&reply[4], BH_CAT_TX_CAPS_V1 | BH_CAT_TX_CAP_ANY_SCREEN); /* PTT with lease only: no frequency, power or EEPROM changes. */
     write32(&reply[8], (state->armed ? 1U : 0U) | (state->keyed ? 2U : 0U) |
         (state->requested && !state->keyed ? 4U : 0U) | (state->limit ? 8U : 0U) |
+        (bh_cat_remote_enabled ? BH_CAT_TX_FLAG_ENABLED : 0U) |
+        (in_holdoff(state, now) ? BH_CAT_TX_FLAG_HOLDOFF : 0U) |
         ((uint32_t)state->denied_state << 8));
     write32(&reply[12], state->keyed ? now - state->keyed_at : 0U);
 }
@@ -67,7 +100,7 @@ int bh_cat_tx_poll(bh_cat_tx *state, uint32_t now)
             state->limit = true;
             return BH_CAT_TX_UNKEY;
         }
-        if (!state->armed || !state->requested ||
+        if (!permitted(state) || !state->requested ||
             (uint32_t)(now - state->last_renew) >= BH_CAT_TX_LEASE_MS) {
             state->requested = false;
             return BH_CAT_TX_UNKEY;
@@ -76,7 +109,8 @@ int bh_cat_tx_poll(bh_cat_tx *state, uint32_t now)
     }
     if (state->requested && (uint32_t)(now - state->last_renew) >= BH_CAT_TX_LEASE_MS)
         state->requested = false;
-    return state->armed && state->requested && state->denied_state == 0 ? BH_CAT_TX_KEY : BH_CAT_TX_NONE;
+    return permitted(state) && state->requested && !state->limit && state->denied_state == 0 ?
+        BH_CAT_TX_KEY : BH_CAT_TX_NONE;
 }
 
 void bh_cat_tx_keyed(bh_cat_tx *state, uint8_t denied_state, uint32_t now)

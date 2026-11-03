@@ -20,6 +20,7 @@ import org.bricohams.digital.ft4.Ft4Decoder
 import org.bricohams.digital.ft4.Ft4Encoder
 import org.bricohams.digital.ft8.Ft8Decoder
 import org.bricohams.digital.ft8.Ft8Encoder
+import org.bricohams.digital.ftx.ApContext
 import org.bricohams.digital.ftx.FtxFrames
 import org.bricohams.digital.ftx.Pack77
 
@@ -31,6 +32,9 @@ enum class FtxMode(val label: String, val slotMs: Long, val candidate: Boolean, 
 
     val slotSamples: Int get() = (slotMs * FtxCodecs.RATE / 1000).toInt()
     val slotSecondsText: String get() = BigDecimal(slotMs).divide(BigDecimal(1000)).stripTrailingZeros().toPlainString()
+
+    /** Start of the frame inside the slot: 0.5 s for FT8 / FT4, a short configurable lead for FT2's 3.75 s slot. */
+    val leadMs: Long get() = if (this == FT2) FtxCodecs.ft2LeadMs else FtxCodecs.LEAD_MS
 }
 
 fun interface FtxDecoder {
@@ -76,6 +80,13 @@ class FtxCodecs(ldpc: () -> Ldpc174) {
     companion object {
         const val RATE = 12_000
         const val LEAD_MS = 500L
+        const val FT2_LEAD_MIN_MS = 50L
+        const val FT2_LEAD_MAX_MS = 400L
+        const val FT2_LEAD_DEFAULT_MS = 150L
+
+        /** FT2 frame start inside its slot (settable, clamped to 50..400 ms); the receiver's DT reference is 150 ms. */
+        @Volatile var ft2LeadMs: Long = FT2_LEAD_DEFAULT_MS
+            set(value) { field = value.coerceIn(FT2_LEAD_MIN_MS, FT2_LEAD_MAX_MS) }
         private const val MIN_HZ = 100.0
         private const val MAX_HZ = 4500.0
         private const val RESAMPLE_GAIN = 0.8f
@@ -140,25 +151,25 @@ class FtxCodecs(ldpc: () -> Ldpc174) {
         FtxMode.FT2 -> LegacyFt2CandidateEncoder(tables).encode(message, tone0Hz)
     }
 
-    /** A whole slot with the frame starting 0.5 s in, as a transmission would. */
+    /** A whole slot with the frame starting after the mode's lead, as a transmission would. */
     fun slotAudio(mode: FtxMode, message: String, tone0Hz: Double): PcmAudio {
         val frame = frame(mode, message, tone0Hz)
-        val lead = (LEAD_MS * RATE / 1000).toInt()
+        val lead = (mode.leadMs * RATE / 1000).toInt()
         requireUi(lead + frame.samples.size <= mode.slotSamples) { UiText(R.string.err_ftx_tx_length) }
         val samples = FloatArray(mode.slotSamples)
         frame.samples.copyInto(samples, lead)
         return PcmAudio(RATE, samples)
     }
 
-    /** Decodes exactly one slot of 12000 Hz audio. */
-    fun decodeSlot(mode: FtxMode, samples: FloatArray, startUtcMs: Long, budget: WorkBudget): List<DecodedMessage> {
+    /** Decodes exactly one slot of 12000 Hz audio; [ap] enables the a-priori passes. */
+    fun decodeSlot(mode: FtxMode, samples: FloatArray, startUtcMs: Long, budget: WorkBudget, ap: ApContext? = null): List<DecodedMessage> {
         val decoder = decoder(mode) ?: throw CodecException(CodecException.Reason.UNSUPPORTED_PROFILE, "no decoder")
-        val request = DecodeRequest(startUtcMs, MIN_HZ, MAX_HZ, 40, 40, budget)
+        val request = DecodeRequest(startUtcMs, MIN_HZ, MAX_HZ, 40, 40, budget, ap)
         return decoder.decode(PcmAudio(RATE, samples), request).sortedBy { it.audioHz }
     }
 
     /** Decodes a recording of any rate: resamples to 12000 Hz and decodes consecutive slot-sized windows. */
-    fun decodeAudio(mode: FtxMode, audio: PcmAudio, budget: () -> WorkBudget): List<DecodedMessage> {
+    fun decodeAudio(mode: FtxMode, audio: PcmAudio, ap: ApContext? = null, budget: () -> WorkBudget): List<DecodedMessage> {
         var pcm = audio
         if (audio.sampleRate != RATE) {
             val scaled = PcmAudio(audio.sampleRate, FloatArray(audio.samples.size) { audio.samples[it] * RESAMPLE_GAIN })
@@ -170,7 +181,7 @@ class FtxCodecs(ldpc: () -> Ldpc174) {
         do {
             val window = FloatArray(slot)
             pcm.samples.copyInto(window, 0, start, min(pcm.samples.size, start + slot))
-            found += decodeSlot(mode, window, 0L, budget())
+            found += decodeSlot(mode, window, 0L, budget(), ap)
             start += slot
         } while (pcm.samples.size - start >= slot / 2)
         return found

@@ -117,7 +117,8 @@ class MainActivity : LocalizedActivity() {
             setImageResource(org.bricohams.radio.R.drawable.bricohams_logo)
             adjustViewBounds = true
             contentDescription = "Bricohams"
-        }, LinearLayout.LayoutParams(dp(144), dp(54)))
+            Brand.logoPlate(this)
+        }, LinearLayout.LayoutParams(dp(156), dp(66)))
         header.addView(Brand.heading(this, "RadiCodex by BricoHams"))
         header.addView(Brand.text(this, 13f, Brand.Palette(this).muted).apply {
             setText(R.string.language_label); labelFor = R.id.app_language
@@ -147,7 +148,12 @@ class MainActivity : LocalizedActivity() {
                     tab = name
                     render()
                 }
-            }.also { navigation[name] = it }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
+            }.also {
+                navigation[name] = it
+                // One line per label: smaller text, tight padding, no min width; ellipsize as a last resort.
+                it.setSingleLine(true); it.ellipsize = android.text.TextUtils.TruncateAt.END
+                it.textSize = 13f; it.minWidth = 0; it.setPadding(dp(4), dp(12), dp(4), dp(12))
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
                 val gap = dp(3); setMargins(gap, dp(8), gap, 0)
             })
         }
@@ -167,6 +173,9 @@ class MainActivity : LocalizedActivity() {
         layout.addView(nav)
         setContentView(layout)
         render()
+        VersionTracker.check(VersionTracker.store(this), VersionTracker.running(this), VersionTracker.upgradedInPlace(this))
+            ?.let { ReleaseNotices.showWhatsNew(this, it) }
+        if (savedInstanceState == null) OtaAutoCheck.run(this) { message(getString(R.string.ota_available_banner, it.versionName)) }
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
@@ -217,7 +226,8 @@ class MainActivity : LocalizedActivity() {
             button.setTextColor(if (active) colors.onAccent else colors.text)
             button.background = android.graphics.drawable.RippleDrawable(
                 android.content.res.ColorStateList.valueOf(colors.ripple),
-                Brand.rounded(this, if (active) colors.accent else colors.surfaceHigh, 16), null)
+                // Brand manual: the active tab is a brand-orange fill with graphite text (colors.accent is the link/text tone).
+                Brand.rounded(this, if (active) Brand.ORANGE else colors.surfaceHigh, 16), null)
         }
         content.background = if (tab == TAB_HOME) null else Brand.rounded(this, colors.surface, 20)
         val padding = if (tab == TAB_HOME) 0 else dp(16)
@@ -248,6 +258,7 @@ class MainActivity : LocalizedActivity() {
         section(R.string.home_tools) {
             button(R.string.home_open_cat) { startActivity(Intent(this, CatActivity::class.java)) }
             button(R.string.home_open_rig_cat) { startActivity(Intent(this, RigActivity::class.java)) }
+            button(R.string.home_open_diagnostics) { startActivity(Intent(this, DiagnosticsActivity::class.java)) }
             button(R.string.home_open_gd77) { startActivity(Intent(this, OpenGd77Activity::class.java)) }
             button(R.string.home_open_channels) { startActivity(Intent(this, ChannelActivity::class.java)) }
             button(R.string.home_open_sstv) { startActivity(Intent(this, SstvActivity::class.java)) }
@@ -269,11 +280,12 @@ class MainActivity : LocalizedActivity() {
             }
         }
         section(R.string.home_about) {
-            text("RadiCodex by BricoHams ${packageManager.getPackageInfo(packageName, 0).versionName}")
+            text(getString(R.string.home_version_line, VersionTracker.running(this).name, VersionTracker.running(this).code))
             text(R.string.home_offline)
             text(R.string.home_features)
             text(R.string.home_ardf_note)
             text(R.string.home_privacy)
+            if (OtaConfig.enabled) button(R.string.home_open_updates) { startActivity(Intent(this, OtaActivity::class.java)) }
         }
     }
     private fun spinner(identifier: Int, values: List<String>, selected: String) = Spinner(this).apply {

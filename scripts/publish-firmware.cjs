@@ -37,7 +37,8 @@ async function publishApps() {
 }
 const builds = [
   ["bricohams-ardf", "ardf", "BH ARDF", "5e2aec16b7a8d6c6d1880fdcb82e66fada4e29c5a5fdafe3397e585e629ef661"],
-  ["bricohams-satellite", "satellite", "BH Satellite", "655a5e69c0d4050f39dd04565a8e5c36d4a9c4792e4c8624c677fac9751cfa3b"],
+  // v0.5.7: CAT remoto outside SAT RX (bench-verified on a UV-K5 V3 on 2026-11-03).
+  ["bricohams-satellite", "satellite", "BH Satellite", "724b11ee47c5d069bf9d55b65f55c6b237c42a976650987c73c363e61060087b", "catremoto-20261103", "v0.5.7"],
   ["bricohams-spectrum", "spectrum", "BH Spectrum", "3164be3c7cd49725897bc680d7f379a9f861ce4addb9c2b9ca460cc37bfb7ee4"],
   ["bricohams-labs", "labs", "BH Labs", "938a7cd80b489c9c1746b710c7ae4533526674b13e5f97083f6bea850721140a"],
   ["bricohams-fusion", "fusion", "BH Fusion", "e053c1d3671a33bb2361d91ec5555404763bd69e4f0d2548549e6b2a68d86356"],
@@ -49,8 +50,8 @@ const builds = [
 async function publish() {
   const entries = [];
   const files = [];
-  for (const [id, folder, edition, expected] of builds) {
-    const directory = path.join(root, "firmware-builds", "backup-read-20261031", folder, "artifacts");
+  for (const [id, folder, edition, expected, batch = "backup-read-20261031", distribution = "v0.5.6"] of builds) {
+    const directory = path.join(root, "firmware-builds", batch, folder, "artifacts");
     const artifacts = await Promise.all((await fs.readdir(directory)).map(async name =>
       ({ name, bytes: new Uint8Array(await fs.readFile(path.join(directory, name))) })));
     const checked = await R.verifyCustomBuild(artifacts);
@@ -64,7 +65,7 @@ async function publish() {
     files.push([name, checked.firmware.bytes]);
     entries.push({
       id, name, edition, publisher: "Bricohams", version: "v6.1.0",
-      distributionVersion: "v0.5.6",
+      distributionVersion: distribution,
       size: checked.firmware.bytes.length, sha256: expected, path: `precompiled/${name}`,
       targets: ["UV-K1", "UV-K5-V3"], stability: "beta", hardwareBootTested: false,
       license: "GPL-3.0-or-later AND Apache-2.0",

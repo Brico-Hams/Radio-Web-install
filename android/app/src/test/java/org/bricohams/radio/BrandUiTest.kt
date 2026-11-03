@@ -47,7 +47,27 @@ class BrandUiTest {
                 assertTrue("$mode supporting text", contrast(colors.muted, background) >= 4.5)
                 assertTrue("$mode action", contrast(colors.accent, background) >= 4.5)
             }
-            assertTrue("$mode selected action", contrast(colors.onAccent, colors.accent) >= 4.5)
+            assertTrue("$mode selected action", contrast(colors.onAccent, colors.orange) >= 4.5)
+            assertEquals("$mode on-accent is graphite", Color.parseColor("#23272B"), colors.onAccent)
+            assertEquals("$mode brand orange", Color.parseColor("#F26B1D"), colors.orange)
+        }
+    }
+
+    @Test fun manualTokensAreExactAndOldPalettesAreGone() {
+        val expected = mapOf(
+            "notnight" to listOf("#FFFFFF", "#F6F7F8", "#23272B", "#59636B", "#DCE1E5", "#AA410B", "#F26B1D"),
+            "night" to listOf("#111518", "#1C2329", "#F6F8FA", "#BAC4CC", "#38434C", "#FFA06A", "#FFC18F"))
+        for ((mode, hex) in expected) {
+            RuntimeEnvironment.setQualifiers("es-w320dp-h640dp-$mode")
+            val c = Brand.Palette(RuntimeEnvironment.getApplication())
+            val actual = listOf(c.background, c.surface, c.text, c.muted, c.outline, c.accent,
+                if (mode == "night") c.focus else c.orange)
+            assertEquals(mode, hex.map { Color.parseColor(it) }, actual)
+        }
+        val dir = java.io.File("src/main")
+        val old = Regex("(?i)#(f7941d|f26b21|a64b00|0b1418|0e1420|111d22|172131|89b9ff|205da8|ff6b00|0a2540)\\b")
+        dir.walkTopDown().filter { it.isFile && it.extension in setOf("kt", "xml") }.forEach {
+            assertFalse("Old palette in ${it.path}", old.containsMatchIn(it.readText()))
         }
     }
 

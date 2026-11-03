@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="whatsnew_title">What\'s new in version %1$s</string>
+    <string name="whatsnew_generic">RadiCodex has been updated to version %1$s.</string>
+    <string name="whatsnew_previous">Previous version: %1$s</string>
+    <string name="whatsnew_close">Got it</string>
+    <string name="home_version_line">RadiCodex by BricoHams %1$s (code %2$d)</string>
+    <string name="home_open_updates">Updates</string>
+    <string name="firmware_changed_title">Firmware changed</string>
+    <string name="firmware_changed">The radio %1$s changed firmware: before %2$s, now %3$s. Re-validate this radio\'s tests and settings.</string>
+
+    <string name="ota_title">Updates</string>
+    <string name="ota_current">Installed version: %1$s (code %2$d)</string>
+    <string name="ota_check">Check for updates</string>
+    <string name="ota_checking">Checking for updates…</string>
+    <string name="ota_up_to_date">You already have the latest version.</string>
+    <string name="ota_available">A new version is available: %1$s (code %2$d, %3$s).</string>
+    <string name="ota_available_banner">Update available: %1$s. Open Home › Updates.</string>
+    <string name="ota_notes_title">What\'s new:</string>
+    <string name="ota_download">Download and install</string>
+    <string name="ota_downloading">Downloading… %1$d %%</string>
+    <string name="ota_verifying">Verifying size, SHA-256 and signature…</string>
+    <string name="ota_ready">Verification passed. Android will ask you to confirm the installation.</string>
+    <string name="ota_auto">Check for updates automatically (at most once a day)</string>
+    <string name="ota_metered">Also allow on mobile data or metered networks</string>
+    <string name="ota_privacy">Only the version file is downloaded from GitHub (HTTPS). No identifier or personal data is sent. Nothing is installed without your confirmation and without passing every check.</string>
+    <string name="ota_unknown_sources">Android needs you to allow RadiCodex to install apps. Enable it on the screen that opens, then tap \"Download and install\" again.</string>
+    <string name="ota_install_ok">Update installed.</string>
+    <string name="ota_install_failed">Installation failed: %1$s</string>
+    <string name="ota_install_cancelled">Installation cancelled.</string>
+
+    <string name="ota_err_not_configured">The update channel is not configured in this build.</string>
+    <string name="ota_err_manifest_too_large">The version file is too large. Nothing is installed.</string>
+    <string name="ota_err_manifest_invalid">The version file is not valid (%1$s). Nothing is installed.</string>
+    <string name="ota_err_bad_signature">The version file signature is not valid. Nothing is installed.</string>
+    <string name="ota_err_wrong_package">The update is for another app (%1$s). Nothing is installed.</string>
+    <string name="ota_err_not_newer">The offered version (%1$s) is not newer than the installed one. Nothing is installed.</string>
+    <string name="ota_err_min_sdk">The update needs Android API %1$s or later.</string>
+    <string name="ota_err_insecure_url">The download address is not HTTPS (%1$s). Nothing is installed.</string>
+    <string name="ota_err_size_invalid">The announced APK size is not acceptable (%1$s bytes). Nothing is installed.</string>
+    <string name="ota_err_size_mismatch">The downloaded APK size does not match the announced one (%1$s). It was discarded.</string>
+    <string name="ota_err_hash_mismatch">The APK SHA-256 does not match the announced one. It was discarded.</string>
+    <string name="ota_err_signer_mismatch">The APK is not signed with the same certificate as the installed app. It was discarded.</string>
+    <string name="ota_err_apk_unreadable">The downloaded APK cannot be read. It was discarded.</string>
+    <string name="ota_err_apk_version">The version inside the APK (%1$s) does not match the announced one. It was discarded.</string>
+    <string name="ota_err_no_space">Not enough free space to download the update.</string>
+    <string name="ota_err_http">The update server answered with an error (%1$s).</string>
+    <string name="ota_err_metered">Metered network: connect to Wi-Fi or enable the option to allow them.</string>
+    <string name="ota_err_offline">No Internet connection.</string>
+    <string name="ota_err_install_blocked">Android does not allow RadiCodex to install apps yet.</string>
+</resources>

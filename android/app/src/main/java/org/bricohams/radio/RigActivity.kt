@@ -118,6 +118,7 @@ class RigActivity : LocalizedActivity() {
     private var stepEdit: EditText? = null
     private var lastModel = RigModel.FT817
     private var chosen: UsbDevice? = null
+    private var reconnectTo: Pair<Int, Int>? = null
     private var chosenPort = 0
     private var chosenLabel = ""
     private var digShown = false
@@ -160,9 +161,25 @@ class RigActivity : LocalizedActivity() {
             @Suppress("DEPRECATION")
             val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
             if (intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED && device?.deviceName == chosen?.deviceName) {
+                reconnectTo = device?.let { it.vendorId to it.productId }
                 chosen = null
                 suspendConnection(getString(R.string.cat_usb_detached))
             }
+        }
+    }
+    /** Auto-reconnect: the same adapter plugged back in (cable wobble, radio power cycle) reopens the link by itself. */
+    private val attachReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            @Suppress("DEPRECATION")
+            val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE) ?: return
+            val wanted = reconnectTo
+            if (intent.action != UsbManager.ACTION_USB_DEVICE_ATTACHED || wanted == null || !foreground || !idle) return
+            if (device.vendorId != wanted.first || device.productId != wanted.second ||
+                SerialRadio.description(device) == null) return
+            reconnectTo = null
+            chosen = device
+            notice.setText(R.string.rig_usb_reattached)
+            requestUsbPermission(device)
         }
     }
     private val digitalTick = object : Runnable {
@@ -678,24 +695,32 @@ class RigActivity : LocalizedActivity() {
             try {
                 open(device, model, rate, port, civ)
             } catch (error: Exception) {
-                // (tr)uSDX firmware 2.00t+ runs at 115200 bps, older units at 38400 (DL2MAN details page): a wrong rate gives
-                // silence or garbage, so try the other one.
-                val other = if (rate == 115200) 38400 else 115200
                 val id = (error as? LocalizedError)?.text?.id
-                if (model != RigModel.TRUSDX || id !in setOf(R.string.err_rig_timeout, R.string.err_rig_reply_invalid,
-                        R.string.err_rig_wrong_model)) throw error
-                closeRadio()
-                open(device, model, other, port, civ)
-                preferences.edit().putInt("baud", other).apply()
-                runOnUiThread { baud.setText(other.toString()) }
+                val silent = id in setOf(R.string.err_rig_timeout, R.string.err_rig_reply_invalid, R.string.err_rig_wrong_model)
+                when {
+                    // Measured: the (tr)uSDX works at 115200; 38400 is only a fallback probe for older firmware.
+                    model == RigModel.TRUSDX && silent -> {
+                        val other = if (rate == 115200) 38400 else 115200
+                        closeRadio()
+                        open(device, model, other, port, civ)
+                        preferences.edit().putInt("baud", other).apply()
+                        runOnUiThread { baud.setText(other.toString()) }
+                    }
+                    // Not needed by the QMX (answers with DTR low); harmless fallback for CDC radios that need DTR high.
+                    (model == RigModel.QMX || model == RigModel.QDX) && silent -> {
+                        closeRadio()
+                        open(device, model, rate, port, civ, dtr = true)
+                    }
+                    else -> throw error
+                }
             }
             getString(R.string.rig_connected, model.label)
         }
     }
 
     /** Worker thread: opens the port, identifies the radio and shows its state. */
-    private fun open(device: UsbDevice, model: RigModel, rate: Int, port: Int, civ: Int) {
-        val link = SerialRadio.open(manager, device, SerialSettings(rate, model.stopBits, port, dtr = true, rts = false))
+    private fun open(device: UsbDevice, model: RigModel, rate: Int, port: Int, civ: Int, dtr: Boolean = false) {
+        val link = SerialRadio.open(manager, device, rigSerialSettings(model, rate, port, SerialRadio.enhancedPort(device), dtr))
         attach(link, model, rate, civ)
     }
 
@@ -1280,6 +1305,7 @@ class RigActivity : LocalizedActivity() {
         super.onStart()
         foreground = true
         registerUsbReceiver(detachReceiver, UsbManager.ACTION_USB_DEVICE_DETACHED)
+        registerUsbReceiver(attachReceiver, UsbManager.ACTION_USB_DEVICE_ATTACHED)
         registerUsbReceiver(permissionReceiver, USB_PERMISSION)
         consumePermission()
         mainHandler.removeCallbacks(digitalTick)
@@ -1299,6 +1325,8 @@ class RigActivity : LocalizedActivity() {
         foreground = false
         mainHandler.removeCallbacks(digitalTick)
         unregisterReceiver(permissionReceiver)
+        unregisterReceiver(detachReceiver)
+        unregisterReceiver(attachReceiver)
         // The system image picker stops this screen; nothing is keyed or tracked at that point, so keep the link open.
         if (!pickingImage) suspendConnection(getString(R.string.rig_suspended))
         super.onStop()

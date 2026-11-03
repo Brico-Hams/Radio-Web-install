@@ -54,7 +54,7 @@ function integrateModule(work, module) {
   if (module === "satellite") {
     // Open once after normal boot initialization; EXIT returns to the main loop.
     // Satellite startup takes precedence over saved scanner/FM/spectrum state.
-    change("main.c", '#include "app/app.h"', '#include "app/app.h"\n#include "app/action.h"');
+    change("main.c", '#include "app/app.h"', '#include "app/app.h"\n#include "app/action.h"\n#include "app/foxhunt.h"');
     change("main.c", "    #ifdef ENABLE_FEAT_F4HWN_RESUME_STATE",
       `    #if defined(BRICOHAMS_ENABLE_SATELLITE)
         if (BootMode == BOOT_MODE_NORMAL && !gReducedService)
@@ -110,6 +110,8 @@ function integrateModule(work, module) {
         case 0x0514:`);
     change("app/foxhunt.c", "    FOXHUNT_End();\n}\n\nvoid APP_RunBeacon",
       "    BH_SAT_Stop();\n    FOXHUNT_End();\n}\n\nvoid APP_RunBeacon");
+    change("app/app.c", "void APP_TimeSlice10ms(void)\n{\n    gNextTimeslice = false;",
+      "bool BH_CAT_Service(bool mainScreen, bool localTx);\n\nvoid APP_TimeSlice10ms(void)\n{\n    gNextTimeslice = false;\n    if (BH_CAT_Service(gScreenToDisplay == DISPLAY_MAIN, gCurrentFunction == FUNCTION_TRANSMIT))\n        gUpdateDisplay = true;");
   }
   if (ardf) {
     change("app/uart.c", '#include "app/uart.h"', '#include "app/uart.h"\n#include "bricohams/ardf.h"');

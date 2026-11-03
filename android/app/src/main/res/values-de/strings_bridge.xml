@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- SAT CAT: not armed is a recoverable state -->
+    <string name="err_cat_not_armed">Das Funkgerät ist nicht in SAT RX mit aktiviertem CAT. 1) Am Funkgerät SAT RX Bricohams öffnen. 2) Taste 8 drücken, um CAT zu aktivieren. Die App fragt weiter ab und stimmt von selbst ab, sobald das Funkgerät bereit ist.</string>
+    <string name="cat_sat_steps_title">CAT am Funkgerät aktivieren (3 Schritte)</string>
+    <string name="cat_sat_steps">1. Funkgerät per USB-OTG verbinden und Gerät wählen tippen.\n2. Am Funkgerät SAT RX Bricohams öffnen.\n3. Taste 8 drücken (CAT aktiviert) und von hier aus abstimmen.</string>
+    <string name="cat_lease_recovered">Das Funkgerät ist wieder in SAT RX mit CAT: die Abstimmung wurde erneut angewendet.</string>
+    <string name="rig_usb_reattached">USB wieder verbunden: Funkgerät wird erneut geöffnet.</string>
+
+    <!-- Phone location (SAT module) -->
+    <string name="satellite_gps_asking">Standortberechtigung erteilen (genau oder ungefähr).</string>
+    <string name="satellite_gps_off">Der Telefonstandort ist ausgeschaltet. In den Einstellungen aktivieren und erneut auf Telefonposition abrufen tippen oder Koordinaten manuell eingeben.</string>
+    <string name="satellite_gps_searching">Position wird gesucht (GPS, Netzwerk und Fused). Noch %1$d s. Bildschirm eingeschaltet lassen, am besten im Freien; ein GPS-Kaltstart kann Minuten dauern.</string>
+    <string name="satellite_gps_refining">Position empfangen: Genauigkeit wird noch %1$d s verfeinert…</string>
+    <string name="satellite_gps_sats">Sichtbare Satelliten %1$d, verwendet %2$d</string>
+    <string name="satellite_gps_cancel">Suche abbrechen</string>
+    <string name="satellite_gps_network_hint">Kein Netzwerkstandort. Google-Standortgenauigkeit und WLAN-Suche in den Standorteinstellungen aktivieren, um schnell eine Position zu erhalten.</string>
+    <string name="satellite_gps_open_settings">Standorteinstellungen öffnen</string>
+    <string name="satellite_gps_use_saved">Zuletzt gespeicherte Position verwenden (%1$s)</string>
+    <string name="satellite_gps_timeout">Keine Position rechtzeitig empfangen. Ins Freie gehen, Standorteinstellungen prüfen oder Koordinaten manuell eingeben.</string>
+    <string name="satellite_gps_fix_detail">Quelle %1$s, Genauigkeit %2$s, Alter %3$d s. Prüfen und speichern.</string>
+    <string name="satellite_gps_approximate">Ungefähre Berechtigung: Genauigkeit von mehreren km (genügt für Überflüge, besser mit genauem Standort).</string>
+
+    <!-- Diagnostics / bridge -->
+    <string name="home_open_diagnostics">Bridge / USB-Diagnose</string>
+    <string name="diag_title">Bridge / Diagnose</string>
+    <string name="diag_intro">Funkgeräte per USB-OTG verbinden. Der Test liest nur, stimmt im Empfang ab und stellt die Frequenz wieder her: Er sendet nicht und schreibt keinen Speicher.</string>
+    <string name="diag_refresh">USB-Geräte suchen</string>
+    <string name="diag_no_devices">Keine USB-Seriell-Adapter. Funkgerät per OTG verbinden und Suchen tippen.</string>
+    <string name="diag_kind_unknown">Nicht erkannt</string>
+    <string name="diag_device_line">%1$s · Treiber %2$s · %3$d Port(s)</string>
+    <string name="diag_test_one">Testen</string>
+    <string name="diag_run_all">Alles testen (alle Funkgeräte und Module)</string>
+    <string name="diag_running">%1$s wird getestet…</string>
+    <string name="diag_done">Test beendet. Bericht bei Bedarf teilen.</string>
+    <string name="diag_share">Bericht teilen</string>
+    <string name="diag_skipped">übersprungen (vorheriger Schritt fehlgeschlagen)</string>
+    <string name="diag_step_open">USB öffnen</string>
+    <string name="diag_step_identify">Identifizieren (ID)</string>
+    <string name="diag_step_read">Frequenz lesen</string>
+    <string name="diag_step_set">Testfrequenz setzen</string>
+    <string name="diag_step_readback">Frequenz erneut lesen</string>
+    <string name="diag_step_restore">Ursprüngliche Frequenz wiederherstellen</string>
+    <string name="diag_step_hello">Firmware-Hello</string>
+    <string name="diag_step_tune">CAT-RX-Abstimmung</string>
+    <string name="diag_step_lease">Abstimmung erneuern (Lease)</string>
+    <string name="diag_step_release">Abstimmung freigeben (STOP)</string>
+    <string name="err_diag_lease">Die Erneuerung der Abstimmung lieferte %1$s statt RENEWED.</string>
+    <string name="err_diag_ptt_keyed">Das Funkgerät meldet PTT aktiv während des Tests. Der Test sendet nicht: Funkgerät prüfen.</string>
+    <string name="err_sat_invalid">Ungültige Antwort von %1$s oder von einer anderen Übertragung.</string>
+    <string name="err_sat_rejected">Das Funkgerät hat %1$s abgelehnt (Status %2$d).</string>
+    <string name="diag_run_modules">Alles testen (Quansheng-Module, nur Lesen)</string>
+    <string name="diag_step_module">Ein Modul testen</string>
+    <string name="diag_save_report">Bericht speichern</string>
+    <string name="diag_report_saved">Bericht gespeichert in %1$s</string>
+    <string name="diag_report_save_error">Bericht konnte nicht gespeichert werden: %1$s</string>
+    <string name="diag_not_armed">ausstehend: Das Funkgerät ist nicht in SAT RX mit aktiviertem CAT (Taste 8)</string>
+    <string name="diag_legacy_no_flash">ausstehend: Firmware v6.0 ohne physischen Flash-Leser</string>
+    <string name="diag_ardf_no_session">keine ARDF-Sitzung am Funkgerät gestartet (ausstehend)</string>
+    <string name="diag_mod_link">Verbindung und Hello</string>
+    <string name="diag_mod_channels">Kanäle lesen</string>
+    <string name="diag_mod_flash">Kalibrierung und Flash-Leser</string>
+    <string name="diag_mod_slots">Multiboot-Slots</string>
+    <string name="diag_mod_presets">Spektrum-Presets</string>
+    <string name="diag_mod_ardf">ARDF-Statistiken</string>
+    <string name="diag_mod_passes">SAT-Überflugtabelle</string>
+    <string name="diag_mod_cat_tune">CAT-RX-Abstimmung (stellt sich selbst wieder her)</string>
+    <string name="diag_step_cat_hello">CAT-Hello</string>
+    <string name="diag_step_cat_status">CAT-RX-Status</string>
+    <string name="diag_step_ptt_status">PTT-Status (nur Abfrage)</string>
+    <string name="diag_step_channels">Kanäle lesen</string>
+    <string name="diag_step_calibration">Kalibrierung lesen</string>
+    <string name="diag_step_flash_probe">Flash-Sonde (Lesen + CRC)</string>
+    <string name="diag_step_slots">Slots abfragen</string>
+    <string name="diag_step_presets">Presets exportieren</string>
+    <string name="diag_step_ardf">ARDF-Statistiken lesen</string>
+    <string name="diag_step_passes">Überflüge lesen (Funkgeräte-Uhr unverändert)</string>
+    <string name="diag_run_all_hint">Alles testen führt jedes Modul nacheinander aus; sie lassen sich auch einzeln starten. Keines sendet.</string>
+    <string name="diag_bridge_title">TCP-Bridge (optional)</string>
+    <string name="diag_bridge_warning">ACHTUNG: Die Bridge leitet ohne Authentifizierung alles, was über das lokale Netzwerk ankommt, an das CAT des gewählten Funkgeräts weiter. Nur in einem vertrauenswürdigen Netzwerk aktivieren und danach ausschalten. Sie bleibt nur bei geöffnetem Bildschirm aktiv.</string>
+    <string name="diag_bridge_start">Bridge starten</string>
+    <string name="diag_bridge_stop">Bridge stoppen</string>
+    <string name="diag_bridge_off">Bridge aus.</string>
+    <string name="diag_bridge_on">Bridge aktiv. Vom PC mit %1$s Port %2$d verbinden (rohes TCP).</string>
+    <string name="diag_bridge_client">Client verbunden: %1$s</string>
+    <string name="diag_bridge_error">Bridge konnte nicht gestartet werden: %1$s</string>
+
+    <!-- PRO mode -->
+    <string name="pro_mode_label">PRO-Modus (ohne Pflicht-Backup)</string>
+    <string name="pro_mode_title">PRO-Modus aktivieren</string>
+    <string name="pro_mode_warning">Im PRO-Modus kann ohne vorheriges vollständiges Backup geschrieben werden. Ein fehlgeschlagener oder abgebrochener Schreibvorgang kann das Funkgerät unbrauchbar machen, ohne Kopie zur Wiederherstellung. Nur für erfahrene Nutzer. Wird beim Verlassen dieses Bildschirms deaktiviert.</string>
+    <string name="pro_mode_accept">Ich verstehe das Risiko</string>
+    <string name="pro_no_backup_warning">PRO-MODUS: Für diese Sitzung gibt es kein Backup. Bei einem Fehler lässt sich das Funkgerät nicht wiederherstellen.</string>
+</resources>

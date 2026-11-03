@@ -33,6 +33,7 @@
     <item name="rotor_token" type="id" />
     <item name="rotor_true_azimuth" type="id" />
     <item name="ftx_call" type="id" />
+    <item name="ftx_dx_call" type="id" />
     <item name="ftx_message" type="id" />
     <item name="ftx_tone" type="id" />
 </resources>

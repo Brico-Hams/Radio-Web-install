@@ -38,20 +38,34 @@ Il logo originale non cambia. Gli stati conservano sempre un testo esplicito.
 
 | Token | Chiaro | Scuro | Uso |
 | --- | --- | --- | --- |
-| `--brand` | `#23272b` | `#23272b` | BricoHams |
-| `--accent` | `#f26b1d` | `#f26b1d` | BricoHams |
-| `--bg` | `#ffffff` | `#111518` | Sfondo |
-| `--panel` | `#f6f7f8` | `#1c2329` | Schede e pannelli |
-| `--line` | `#dce1e5` | `#38434c` | Bordi decorativi |
-| `--text` | `#23272b` | `#f6f8fa` | Testo principale |
-| `--muted` | `#59636b` | `#bac4cc` | Testo secondario |
-| `--link` (`--mint`, `--blue`) | `#aa410b` | `#ffa06a` | Link e focus |
-| `--focus` | `#f26b1d` | `#ffc18f` | WCAG |
+| `--bg` | `#FFFFFF` | `#111518` | Sfondo |
+| `--surface` | `#F6F7F8` | `#1C2329` | Schede e pannelli |
+| `--text` | `#23272B` | `#F6F8FA` | Testo principale |
+| `--text-muted` | `#59636B` | `#BAC4CC` | Testo secondario |
+| `--border` | `#DCE1E5` | `#38434C` | Bordi |
+| `--link` | `#AA410B` | `#FFA06A` | Link |
+| `--focus` | `#F26B1D` | `#FFC18F` | Anello di focus |
+| `--brand-orange` | `#F26B1D` | `#F26B1D` | Arancione Bricohams |
+| `--on-accent` | `#23272B` | `#23272B` | Testo sull'arancione |
 
-Pulsanti primari: testo `#23272b` su `--accent: #f26b1d`. I test verificano
-un contrasto minimo del testo di 4,5:1 nelle due palette. Controlli principali
-di 44 px, focus visibile, tabelle con scorrimento interno, navigazione mobile
-orizzontale e animazioni solo senza richiesta di riduzione del movimento.
+Fonte di riferimento: il manuale ufficiale dei colori `BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf`, non incluso nel repository. Il grafite del marchio è `--brand-ink`. Il tema viene applicato con `data-theme` sull'elemento radice e `localStorage`.
+
+Pulsanti primari: testo `--on-accent` su `--brand-orange: #F26B1D` in entrambi i temi, mai bianco su arancione. L'arancione non si usa come testo piccolo su sfondo chiaro. Focus visibile con `outline: 3px solid var(--focus)`. Controlli principali di 44 px, tabelle con scorrimento interno, navigazione mobile orizzontale e animazioni solo senza richiesta di riduzione del movimento.
+
+Contrasto WCAG 2.1 calcolato (minimo 4,5:1 per il testo e 3:1 per l'anello di focus):
+
+| Coppia | Chiaro | Scuro |
+| --- | --- | --- |
+| `--text` / `--bg` | 15,0 | 17,2 |
+| `--text` / `--surface` | 14,0 | 14,9 |
+| `--text-muted` / `--bg` | 6,1 | 10,3 |
+| `--text-muted` / `--surface` | 5,7 | 9,0 |
+| `--link` / `--bg` | 6,0 | 9,2 |
+| `--link` / `--surface` | 5,6 | 7,9 |
+| `--on-accent` / `--brand-orange` | 4,9 | 4,9 |
+| `--focus` / `--bg` | 3,05 | 11,6 |
+
+Logo: solo il PNG originale, mai filtrato o invertito; in modalità scura è posato su una discreta placca bianca (`--plate`). Gli stati di errore e avviso conservano un testo esplicito e rispettano AA in entrambi i temi.
 
 ## Struttura
 
@@ -61,7 +75,7 @@ orizzontale e animazioni solo senza richiesta di riduzione del movimento.
 
 ## Tipografia
 
-Font di sistema (`system-ui`, Segoe UI, Roboto…), senza font web esterni, per rispettare la CSP e non caricare risorse di terzi.
+`Inter` per l'interfaccia e `Montserrat` 700–800 per i titoli grandi, con ripiego sui font di sistema (`system-ui`, Segoe UI, Roboto…). Non vengono caricati font web esterni, per rispettare la CSP e funzionare offline.
 
 ## Tono
 

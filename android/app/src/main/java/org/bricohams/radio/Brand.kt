@@ -14,14 +14,25 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.view.ViewGroup
 
-/** Shared native components. Fixed colours remain available to the orbital graphics. */
+/** Column that stops growing past [maxWidthDp] so forms stay readable on DeX / tablets; centre it in a FrameLayout parent. */
+class MaxWidthLinearLayout(context: Context, private val maxWidthDp: Int = 720) : LinearLayout(context) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val max = (maxWidthDp * resources.displayMetrics.density).toInt()
+        val width = View.MeasureSpec.getSize(widthMeasureSpec)
+        val spec = if (width > max) View.MeasureSpec.makeMeasureSpec(max, View.MeasureSpec.EXACTLY) else widthMeasureSpec
+        super.onMeasure(spec, heightMeasureSpec)
+    }
+}
+
+/** Shared native components. Fixed colours (BricoHams manual v1.1, dark tokens) remain available to the orbital graphics. */
 object Brand {
-    val ORANGE = Color.rgb(247, 148, 29)
-    val BACKGROUND = Color.rgb(14, 20, 32)
-    val SURFACE = Color.rgb(23, 33, 49)
-    val SURFACE_HIGH = Color.rgb(32, 44, 63)
-    val TEXT = Color.rgb(237, 242, 251)
-    val MUTED = Color.rgb(175, 189, 209)
+    val ORANGE = Color.rgb(242, 107, 29)
+    val BACKGROUND = Color.rgb(17, 21, 24)
+    val SURFACE = Color.rgb(28, 35, 41)
+    val SURFACE_HIGH = Color.rgb(56, 67, 76)
+    val TEXT = Color.rgb(246, 248, 250)
+    val MUTED = Color.rgb(186, 196, 204)
+    val ORBIT_LIGHT = Color.rgb(255, 193, 143)
     val GREEN = Color.rgb(76, 175, 80)
 
     class Palette(context: Context) {
@@ -31,10 +42,22 @@ object Brand {
         val text = context.getColor(R.color.brand_text)
         val muted = context.getColor(R.color.brand_muted)
         val accent = context.getColor(R.color.brand_accent)
+        val orange = context.getColor(R.color.brand_orange)
         val onAccent = context.getColor(R.color.brand_on_accent)
         val outline = context.getColor(R.color.brand_outline)
+        val focus = context.getColor(R.color.brand_focus)
         val ripple = context.getColor(R.color.brand_ripple)
         val positive = context.getColor(R.color.brand_positive)
+    }
+
+    /** Original logo PNG, untinted; in dark mode it sits on a discreet white rounded plate. */
+    fun logoPlate(view: android.widget.ImageView) {
+        val context = view.context
+        val pad = dp(context, 6)
+        view.setPadding(pad, pad, pad, pad)
+        val night = (context.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        view.background = if (night) rounded(context, Color.WHITE, 12) else null
     }
 
     fun dp(context: Context, value: Int) = (value * context.resources.displayMetrics.density).toInt()
@@ -67,7 +90,7 @@ object Brand {
         setTextColor(ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
             intArrayOf(colors.muted, if (primary) colors.onAccent else colors.accent)))
         background = RippleDrawable(ColorStateList.valueOf(colors.ripple),
-            rounded(context, if (primary) colors.accent else colors.surfaceHigh, 16), null)
+            rounded(context, if (primary) colors.orange else colors.surfaceHigh, 16), null)
         stateListAnimator = null
         setOnClickListener { action() }
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
@@ -82,7 +105,7 @@ object Brand {
         setPadding(dp(context, 8), dp(context, 10), dp(context, 8), dp(context, 10))
         setTextColor(if (active) colors.onAccent else colors.text)
         background = RippleDrawable(ColorStateList.valueOf(colors.ripple),
-            rounded(context, if (active) colors.accent else colors.surfaceHigh, 16), null)
+            rounded(context, if (active) colors.orange else colors.surfaceHigh, 16), null)
         isSelected = active
         isClickable = true; isFocusable = true
         setOnClickListener { action() }

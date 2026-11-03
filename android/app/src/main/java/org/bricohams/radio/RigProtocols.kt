@@ -504,16 +504,21 @@ class Ftx1Rig(transport: RadioBytes) : Rig {
         YaesuFtx1.checkId(reply)
         return "FTX-1 " + reply.removeSuffix(";")
     }
+    override fun firmwareVersion(): String? = try {
+        link.request(YaesuFtx1.readId(), "ID").also { YaesuFtx1.checkId(it) }.removeSuffix(";")
+    } catch (error: LocalizedIOException) { null }
     override fun status(): RigStatus =
         RigStatus(read(Vfo.A), YaesuFtx1.parseMode(link.request(YaesuFtx1.readMode(), "MD")))
     override fun frequency(vfo: Vfo): Long = read(vfo)
     override fun setFrequency(vfo: Vfo, hz: Long) {
         checkRange(model, hz)
-        link.send(YaesuFtx1.setFrequency(vfo, hz))
-        checkUi(read(vfo) == hz) { UiText(R.string.err_rig_unconfirmed) }
+        link.transaction {
+            link.send(YaesuFtx1.setFrequency(vfo, hz))
+            link.confirm(hz) { read(vfo) }
+        }
     }
     // Set commands have no answer (manual p.4), so each one is confirmed with its read command.
-    private fun confirm(set: String, read: String, accepted: (String) -> Boolean) {
+    private fun confirm(set: String, read: String, accepted: (String) -> Boolean) = link.transaction {
         link.send(set)
         checkUi(accepted(link.request(read, read.dropLast(1)))) { UiText(R.string.err_rig_unconfirmed) }
     }
@@ -565,8 +570,8 @@ class Ftx1Rig(transport: RadioBytes) : Rig {
 
 /**
  * (tr)uSDX CAT: a subset of the Kenwood TS-480 commands, from DL2MAN "5 (tr)uSDX Details", section "(tr)uSDX supported
- * CAT commands" (https://dl2man.de/5-trusdx-details/). 115200 bps (firmware 2.00t+; older 38400), 8N1, DTR high,
- * RTS low on RX (RTS high keys the radio).
+ * CAT commands" (https://dl2man.de/5-trusdx-details/).  115200 bps 8N1 (measured; 38400 returns garbage); no ID; support (answers "?;"); DTR and
+ * RTS stay low (RTS high keys the radio and a DTR/RTS toggle resets it).
  */
 object KenwoodTs480Subset {
     const val ID_REPLY = "ID020;"
@@ -668,10 +673,11 @@ class TruSdxRig(
     private fun onlyA(vfo: Vfo) {
         if (vfo == Vfo.B) unsupported("VFO B")
     }
+    // The (tr)uSDX answers "?;" to ID;, so it is identified by a valid 11-digit FA; reply. It needs ~1.5 s after the port opens.
     override fun identify(): String {
-        val reply = link.request(KenwoodTs480Subset.readId(), "ID")
-        KenwoodTs480Subset.checkId(reply)
-        return "(tr)uSDX " + reply.removeSuffix(";")
+        sleep(OPEN_DELAY_MS)
+        val hz = read()
+        return "(tr)uSDX " + mhzText(hz) + " MHz"
     }
     override fun status(): RigStatus =
         RigStatus(read(), KenwoodTs480Subset.parseMode(link.request(KenwoodTs480Subset.readMode(), "MD")))
@@ -682,8 +688,10 @@ class TruSdxRig(
     override fun setFrequency(vfo: Vfo, hz: Long) {
         onlyA(vfo)
         checkRange(model, hz)
-        link.send(KenwoodTs480Subset.setFrequency(hz))
-        checkUi(read() == hz) { UiText(R.string.err_rig_unconfirmed) }
+        link.transaction {
+            link.send(KenwoodTs480Subset.setFrequency(hz))
+            link.confirm(hz) { read() }
+        }
     }
     override fun setMode(mode: RigMode) {
         link.send(KenwoodTs480Subset.setMode(mode))
@@ -758,6 +766,7 @@ class TruSdxRig(
     private companion object {
         const val MAX_TX_SECONDS = 110
         const val SETTLE_MS = 1000L
+        const val OPEN_DELAY_MS = 1500L
         const val CHUNK = 1152
         const val AUDIO_WRITE_MS = 2000
         const val READ_CHUNK = 256
@@ -846,9 +855,14 @@ class QrpLabsRig(transport: RadioBytes, override val model: RigModel) : Rig {
     private fun readFlag(command: String, prefix: String): Boolean = QrpLabsCat.parseFlag(link.request(command, prefix), prefix)
 
     override fun identify(): String {
-        val reply = link.request(QrpLabsCat.readId(), "ID")
-        QrpLabsCat.checkId(reply)
-        if (model == RigModel.QDX) return "QRP Labs QDX " + reply.removeSuffix(";")
+        // ID; is not required: a radio that stays silent or rejects it is still accepted when it answers FA;.
+        val reply = try {
+            link.request(QrpLabsCat.readId(), "ID").also { QrpLabsCat.checkId(it) }
+        } catch (error: LocalizedIOException) {
+            read(Vfo.A)
+            null
+        }
+        if (model == RigModel.QDX) return "QRP Labs QDX" + (reply?.let { " " + it.removeSuffix(";") } ?: "")
         val version = try {
             QrpLabsCat.parseVersion(link.request(QrpLabsCat.readVersion(), "VN"))
         } catch (error: LocalizedIOException) {
@@ -858,11 +872,16 @@ class QrpLabsRig(transport: RadioBytes, override val model: RigModel) : Rig {
         return "QRP Labs QMX $version"
     }
     override fun status(): RigStatus = RigStatus(read(Vfo.A), readMode())
+    override fun firmwareVersion(): String? = if (model != RigModel.QMX) null else try {
+        QrpLabsCat.parseVersion(link.request(QrpLabsCat.readVersion(), "VN"))
+    } catch (error: LocalizedIOException) { null }
     override fun frequency(vfo: Vfo): Long = read(vfo)
     override fun setFrequency(vfo: Vfo, hz: Long) {
         checkRange(model, hz)
-        link.send(QrpLabsCat.setFrequency(vfo, hz))
-        checkUi(read(vfo) == hz) { UiText(R.string.err_rig_unconfirmed) }
+        link.transaction {
+            link.send(QrpLabsCat.setFrequency(vfo, hz))
+            link.confirm(hz) { read(vfo) }
+        }
     }
     override fun setMode(mode: RigMode) {
         link.send(QrpLabsCat.setMode(model, mode))

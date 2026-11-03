@@ -71,15 +71,14 @@ class WorldMapView(context: Context) : View(context) {
     private val footprints = Path()
     private val selectedFootprint = Path()
     private val trackPath = Path()
-    private val sea = Paint().apply { color = Color.rgb(16, 22, 30) }
-    private val ground = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(78, 66, 52) }
+    private val sea = Paint().apply { color = Brand.BACKGROUND }
+    private val ground = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Brand.SURFACE_HIGH }
     private val grid = Paint().apply { color = Color.argb(40, 255, 255, 255); strokeWidth = density }
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 1.2f * density; color = Color.argb(150, 255, 214, 140)
+        style = Paint.Style.STROKE; strokeWidth = 1.2f * density; color = Brand.ORBIT_LIGHT; alpha = 150
     }
     private val active = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 2.2f * density; color = Color.rgb(255, 152, 0)
-    }
+        style = Paint.Style.STROKE; strokeWidth = 2.2f * density;         color = Brand.ORANGE    }
     private val track = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeWidth = 1.6f * density; color = Color.rgb(220, 60, 50)
     }
@@ -130,7 +129,7 @@ class WorldMapView(context: Context) : View(context) {
         for (satellite in satellites) {
             val (x, y) = WorldMap.project(satellite.point.longitude, satellite.point.latitude, width.toFloat(), height.toFloat())
             val chosen = satellite.norad == selected
-            dot.color = if (chosen) Color.rgb(255, 152, 0) else Color.rgb(255, 214, 140)
+            dot.color = if (chosen) Brand.ORANGE else Brand.ORBIT_LIGHT
             canvas.drawCircle(x, y, (if (chosen) 5 else 3) * density, dot)
             if (chosen || satellites.size <= 12) canvas.drawText(satellite.name, x + 6 * density, y - 4 * density, label)
         }

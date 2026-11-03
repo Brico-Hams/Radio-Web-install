@@ -13,10 +13,12 @@ import org.bricohams.digital.WorkBudget;
 import org.bricohams.digital.dsp.Fft;
 import org.bricohams.digital.fec.Crc14;
 import org.bricohams.digital.fec.Ldpc174;
+import org.bricohams.digital.fec.Osd174;
 
 /**
  * Mode-independent receive engine for the 174-bit FTx family: spectrogram sync search, baseband correlation
- * refinement, soft symbols, LDPC, CRC, unpacking and iterative subtraction. All timing comes from an {@link FtxRxProfile}.
+ * refinement, soft symbols, LDPC (belief propagation, then ordered-statistics and a-priori fallbacks), CRC,
+ * unpacking and iterative subtraction. All timing comes from an {@link FtxRxProfile}.
  * Instances are not thread-safe.
  */
 public final class FtxReceiver {
@@ -24,17 +26,30 @@ public final class FtxReceiver {
     private static final int BB_SYM = FtxRxProfile.BB_SYM;
     // Candidate sync score threshold as a multiple of the median score over the search area.
     private static final double SYNC_THRESHOLD = 1.5;
+    // Adaptive threshold: median plus this many robust sigmas of the log score, kept within these multiples.
+    private static final double ADAPTIVE_SIGMAS = 2.5;
+    private static final double ADAPTIVE_MIN = 1.12;
     private static final double MARGIN_HZ = 300;
     private static final int TIME_RANGE = 24;
     private static final int COARSE_TIME_STEP = 4;
     private static final double DUPLICATE_HZ = 20;
-    private static final int MAX_PASSES = 3;
+    // Candidates whose 16 sync symbols match fewer expected tones than this are not worth a decode attempt.
+    private static final int MIN_SYNC_MATCHES = 5;
+    // OSD (order 2) is only tried when at least this many sync tones matched: it is the costly fallback.
+    private static final int OSD_SYNC_MATCHES = 6;
+    // A word chosen by OSD may disagree with at most this many hard decisions (plain / a-priori decodes).
+    private static final int OSD_MAX_ERRORS = 28;
+    private static final int AP_MAX_ERRORS = 26;
+    private static final double AP_MAG_FACTOR = 1.1;
+    private static final int[] SOFT_GROUPS = {1, 2, 3};
 
     private final FtxRxProfile profile;
     private final Ldpc174 ldpc;
+    private final Osd174 osd;
     private final GfskSynth synth;
     private final byte[] xor = new byte[77];
     private int unsupportedCount;
+    private boolean baseline;
     private long spectrogramNanos;
     private long syncNanos;
     private long refineLdpcNanos;
@@ -45,8 +60,18 @@ public final class FtxReceiver {
         if (ldpc == null) throw new IllegalArgumentException("LDPC tables required");
         this.profile = profile;
         this.ldpc = ldpc;
+        this.osd = new Osd174(ldpc);
         this.synth = new GfskSynth(profile.samplesPerSymbol, profile.bt, profile.toneSpacingHz, SAMPLE_RATE, profile.ramp);
         for (int i = 0; i < 77; i++) xor[i] = (byte) (FtxFrames.FT4_XOR.charAt(i) - '0');
+    }
+
+    /**
+     * Baseline mode keeps only the plain chain (fixed sync threshold, single-symbol metrics, belief propagation
+     * only, three passes); used to measure what the fallbacks add.
+     */
+    public FtxReceiver baseline(boolean on) {
+        this.baseline = on;
+        return this;
     }
 
     /** Count of CRC-valid frames dropped by Unpack77 in the last decode call. */
@@ -90,6 +115,8 @@ public final class FtxReceiver {
         int[] tones;
         /** Start of the whole waveform (including lead intervals). */
         int start;
+        /** "a1".."a3" when decoded with a-priori bits, otherwise null. */
+        String ap;
     }
 
     private static final class Candidate {
@@ -118,6 +145,12 @@ public final class FtxReceiver {
         boolean later;
         final DecodeRequest request;
         final WorkBudget budget;
+        final boolean enhanced = profile.enhanced && !baseline;
+        final boolean fallbacks = !baseline;
+        final int passes = baseline ? 3 : p.maxPasses;
+        final double[] corrRe = new double[p.symbols * p.tones];
+        final double[] corrIm = new double[p.symbols * p.tones];
+        boolean unsupported;
         final double[] window = new double[sps];
         final double[][] cosT;
         final double[][] sinT;
@@ -185,7 +218,7 @@ public final class FtxReceiver {
                 final float[] original = x;
                 float[] residual = null;
                 int before = 0;
-                for (int pass = 2; pass <= MAX_PASSES; pass++) {
+                for (int pass = 2; pass <= passes; pass++) {
                     int fromIndex = before;
                     before = hits.size();
                     if (fromIndex == before && pass > 2) break;
@@ -213,7 +246,7 @@ public final class FtxReceiver {
             List<DecodedMessage> out = new ArrayList<DecodedMessage>(hits.size());
             for (Hit h : hits) {
                 out.add(new DecodedMessage(p.mode, p.profileId, h.text, request.frameStartUtcMillis,
-                        h.hz, h.dt, h.snr));
+                        h.hz, h.dt, h.snr, h.ap));
             }
             return Collections.unmodifiableList(out);
         }
@@ -434,6 +467,16 @@ public final class FtxReceiver {
             double median = sorted[valid / 2];
             if (!(median > 0)) return picked;
             double limit = SYNC_THRESHOLD * median;
+            if (enhanced) {
+                // Robust spread of the log score around the noise-floor median sets the threshold, within bounds.
+                double logMedian = Math.log(median);
+                double[] dev = new double[valid];
+                for (int i = 0; i < valid; i++) dev[i] = Math.abs(Math.log(Math.max(sorted[i], 1e-30)) - logMedian);
+                Arrays.sort(dev);
+                double sigma = 1.4826 * dev[valid / 2];
+                double adaptive = Math.exp(logMedian + ADAPTIVE_SIGMAS * sigma);
+                limit = Math.max(ADAPTIVE_MIN * median, Math.min(SYNC_THRESHOLD * median, adaptive));
+            }
             int above = 0;
             for (float v : score) if (v >= limit) above++;
             long[] keys = new long[above];
@@ -583,6 +626,7 @@ public final class FtxReceiver {
                 refinedF += p.hzStep * parabolic(lo, bestE, hi);
             }
             bestF = refinedF;
+            if (enhanced) bestF = fineFrequency(bestF, bestS);
             int bestT = (int) Math.round((first + fineS) * decim);
             int start = (first + bestS) * decim;
             buildTables(bestF);
@@ -590,36 +634,282 @@ public final class FtxReceiver {
                 if (Math.abs(q[0] - bestF) <= p.dupRefinedHz && Math.abs(q[1] - bestT) <= hop) return null;
             }
             processed.add(new double[] {bestF, bestT});
-            for (int attempt = 0; attempt < 2; attempt++) {
-                if (!softBits(bestS, start, attempt == 1)) return null;
-                byte[] word;
+            if (enhanced && syncMatches(bestS) < MIN_SYNC_MATCHES) return null;
+            return decodeBits(c, bestF, bestT, bestS, start);
+        }
+
+        /** Number of the sync symbols whose expected tone is the strongest of all tones (tables must be built). */
+        int syncMatches(int s) {
+            int matched = 0;
+            for (int blk = 0; blk < p.syncStart.length; blk++) {
+                int[] seq = p.syncTones[blk];
+                for (int i = 0; i < seq.length; i++) {
+                    int at = s + BB_SYM * (p.syncStart[blk] + i);
+                    double expected = toneEnergy(seq[i], at);
+                    boolean strongest = true;
+                    for (int t = 0; t < p.tones && strongest; t++) {
+                        if (t != seq[i] && toneEnergy(t, at) >= expected) strongest = false;
+                    }
+                    if (strongest) matched++;
+                }
+            }
+            return matched;
+        }
+
+        /** Frequency refinement on a quarter-step grid around f, keeping the best sync energy. */
+        double fineFrequency(double f, int s) {
+            double step = p.hzStep / 4;
+            double bestFreq = f;
+            double bestEnergy = syncAt(f, s);
+            for (int i = -2; i <= 2; i++) {
+                if (i == 0) continue;
+                double e = syncAt(f + step * i, s);
+                if (e > bestEnergy) {
+                    bestEnergy = e;
+                    bestFreq = f + step * i;
+                }
+            }
+            return bestFreq;
+        }
+
+        /**
+         * Soft-decision chain for one refined candidate: belief propagation on each soft-metric set, then the
+         * ordered-statistics fallback, then the a-priori hypotheses. Tables for bestF must be built.
+         */
+        Hit decodeBits(Candidate c, double bestF, int bestT, int bestS, int start) throws CodecException {
+            unsupported = false;
+            int matches = fallbacks ? syncMatches(bestS) : 0;
+            List<double[]> failed = new ArrayList<double[]>();
+            int sets = (enhanced ? SOFT_GROUPS.length : 0) + 2;
+            for (int set = 0; set < sets; set++) {
+                boolean ok;
+                if (set < sets - 2) ok = softBitsCoherent(bestS, start, SOFT_GROUPS[set]);
+                else ok = softBits(bestS, start, set == sets - 1);
+                if (!ok) continue;
+                // The log-domain legacy set is only a second chance for the plain chain.
+                byte[] word = null;
                 try {
                     word = ldpc.decode(llr, request.maxIterations, budget);
                 } catch (CodecException e) {
-                    if (e.reason == CodecException.Reason.INVALID_AUDIO) continue;
-                    throw e;
+                    if (e.reason != CodecException.Reason.INVALID_AUDIO) throw e;
                 }
-                byte[] payload = Arrays.copyOf(word, 77);
-                int crc = 0;
-                for (int i = 77; i < 91; i++) crc = (crc << 1) | word[i];
-                if (Crc14.compute(payload) != crc) continue;
-                if (p.scrambled) for (int i = 0; i < 77; i++) payload[i] ^= xor[i];
-                String text = Unpack77.unpack(payload);
-                if (text == null) {
-                    unsupportedCount++;
-                    return null;
+                if (word != null) {
+                    Hit hit = finishWord(word, null, c, bestF, bestT, bestS);
+                    if (hit != null || unsupported) return hit;
                 }
-                Hit hit = new Hit();
-                hit.text = text;
-                hit.hz = bestF;
-                hit.start = bestT - leadSamples;
-                hit.dt = (double) hit.start / SAMPLE_RATE - 0.5;
-                hit.score = c.score;
-                hit.tones = p.coreTones(word);
-                hit.snr = snr(hit.tones, bestS);
-                return hit;
+                if (failed.size() < 3) failed.add(llr.clone());
+            }
+            if (!fallbacks || failed.isEmpty()) return null;
+
+            if (matches >= OSD_SYNC_MATCHES || !enhanced) {
+                int tries = Math.min(failed.size(), enhanced ? 2 : 1);
+                for (int i = 0; i < tries; i++) {
+                    Osd174.Result r = osd.decode(failed.get(i), 2, OSD_MAX_ERRORS, Double.POSITIVE_INFINITY, budget);
+                    if (r == null) continue;
+                    Hit hit = finishWord(r.word, null, c, bestF, bestT, bestS);
+                    if (hit != null || unsupported) return hit;
+                }
+            }
+            ApContext ap = request.ap;
+            if (ap == null || (enhanced && matches < OSD_SYNC_MATCHES)) return null;
+            double[] base = failed.get(0);
+            double top = 0;
+            for (double v : base) top = Math.max(top, Math.abs(v));
+            double apMag = AP_MAG_FACTOR * top;
+            for (ApContext.Pattern pattern : ap.patterns()) {
+                double[] forced = base.clone();
+                for (int i = 0; i < 77; i++) {
+                    if (!pattern.known[i]) continue;
+                    int bit = pattern.value[i] ^ (p.scrambled ? xor[i] : 0);
+                    forced[i] = bit == 0 ? apMag : -apMag;
+                }
+                byte[] word = null;
+                try {
+                    word = ldpc.decode(forced, request.maxIterations, budget);
+                } catch (CodecException e) {
+                    if (e.reason != CodecException.Reason.INVALID_AUDIO) throw e;
+                }
+                if (word != null) {
+                    Hit hit = finishWord(word, pattern, c, bestF, bestT, bestS);
+                    if (hit != null || unsupported) return hit;
+                }
+                Osd174.Result r = osd.decode(forced, 1, AP_MAX_ERRORS, apMag * 0.999, budget);
+                if (r != null) {
+                    Hit hit = finishWord(r.word, pattern, c, bestF, bestT, bestS);
+                    if (hit != null || unsupported) return hit;
+                }
             }
             return null;
+        }
+
+        /**
+         * CRC check, descrambling and unpacking of a 174-bit word. Null when the CRC fails, when an a-priori
+         * hypothesis is not confirmed by the word, or when the message is outside the supported subset (then
+         * the unsupported flag is set).
+         */
+        Hit finishWord(byte[] word, ApContext.Pattern pattern, Candidate c, double bestF, int bestT, int bestS) {
+            byte[] payload = Arrays.copyOf(word, 77);
+            int crc = 0;
+            for (int i = 77; i < 91; i++) crc = (crc << 1) | word[i];
+            if (Crc14.compute(payload) != crc) return null;
+            if (p.scrambled) for (int i = 0; i < 77; i++) payload[i] ^= xor[i];
+            if (pattern != null) {
+                for (int i = 0; i < 77; i++) if (pattern.known[i] && payload[i] != pattern.value[i]) return null;
+            }
+            String text = Unpack77.unpack(payload);
+            if (text == null) {
+                unsupportedCount++;
+                unsupported = true;
+                return null;
+            }
+            Hit hit = new Hit();
+            hit.text = text;
+            hit.hz = bestF;
+            hit.start = bestT - leadSamples;
+            hit.dt = (double) hit.start / SAMPLE_RATE - p.nominalStartSeconds;
+            hit.score = c.score;
+            hit.tones = p.coreTones(word);
+            hit.snr = snr(hit.tones, bestS);
+            hit.ap = pattern == null ? null : pattern.tag;
+            return hit;
+        }
+
+        /** Complex correlation of a tone over one baseband symbol, scaled like toneEnergy (energy = re^2 + im^2). */
+        void toneCorr(int tone, int at, double[] out) {
+            double[] ct = cosT[tone];
+            double[] st = sinT[tone];
+            double re = 0;
+            double im = 0;
+            for (int n = 0; n < BB_SYM; n++) {
+                double yr = bbRe[at + n];
+                double yi = bbIm[at + n];
+                re += yr * ct[n] + yi * st[n];
+                im += yi * ct[n] - yr * st[n];
+            }
+            out[0] = decim * re;
+            out[1] = decim * im;
+        }
+
+        /**
+         * Bit LLRs from log-sum-exp metrics over groups of up to `group` adjacent data symbols. The symbols of a
+         * group are combined coherently: with h = 1 the carrier phase advances by the same amount in every
+         * symbol, which the sync symbols measure, so the hypothesis metric is ln I0 of the rotated complex sum.
+         * Group size 1 is the plain non-coherent log-sum-exp demapper.
+         */
+        boolean softBitsCoherent(int s, int start, int group) {
+            double[] tmp = new double[2];
+            for (int sym = 0; sym < symbols; sym++) {
+                for (int t = 0; t < p.tones; t++) {
+                    toneCorr(t, s + sym * BB_SYM, tmp);
+                    corrRe[sym * p.tones + t] = tmp[0];
+                    corrIm[sym * p.tones + t] = tmp[1];
+                }
+            }
+            // Per-symbol phase advance from consecutive known sync symbols.
+            double accRe = 0;
+            double accIm = 0;
+            double syncEnergy = 0;
+            int syncCount = 0;
+            for (int blk = 0; blk < p.syncStart.length; blk++) {
+                int[] seq = p.syncTones[blk];
+                for (int i = 0; i < seq.length; i++) {
+                    int a = (p.syncStart[blk] + i) * p.tones + seq[i];
+                    syncEnergy += corrRe[a] * corrRe[a] + corrIm[a] * corrIm[a];
+                    syncCount++;
+                    if (i + 1 < seq.length) {
+                        int b = (p.syncStart[blk] + i + 1) * p.tones + seq[i + 1];
+                        accRe += corrRe[b] * corrRe[a] + corrIm[b] * corrIm[a];
+                        accIm += corrIm[b] * corrRe[a] - corrRe[b] * corrIm[a];
+                    }
+                }
+            }
+            double rho = Math.atan2(accIm, accRe);
+            // Noise energy per correlation: the median of the data-symbol energies is dominated by the three
+            // tones that were not sent (exponential law, a quarter contaminated by signal).
+            double[] energies = new double[dataSyms * p.tones];
+            int n = 0;
+            for (int k = 0; k < dataSyms; k++) {
+                for (int t = 0; t < p.tones; t++) {
+                    int a = p.dataPos[k] * p.tones + t;
+                    energies[n++] = corrRe[a] * corrRe[a] + corrIm[a] * corrIm[a];
+                }
+            }
+            Arrays.sort(energies);
+            double noise = energies[n / 2] / 1.1;
+            if (!(noise > 0) || Double.isInfinite(noise)) return false;
+            double signalEnergy = Math.max(syncEnergy / syncCount - noise, 0.1 * noise);
+            double scale = 2 * Math.sqrt(signalEnergy) / noise;
+            double[] rotRe = new double[group];
+            double[] rotIm = new double[group];
+            for (int i = 0; i < group; i++) {
+                rotRe[i] = Math.cos(-rho * i);
+                rotIm[i] = Math.sin(-rho * i);
+            }
+            int hyp = 1;
+            for (int i = 0; i < group; i++) hyp *= p.tones;
+            double[] metric = new double[hyp];
+            int k = 0;
+            while (k < dataSyms) {
+                int g = 1;
+                while (g < group && k + g < dataSyms && p.dataPos[k + g] == p.dataPos[k + g - 1] + 1) g++;
+                int count = 1;
+                for (int i = 0; i < g; i++) count *= p.tones;
+                for (int h = 0; h < count; h++) {
+                    double re = 0;
+                    double im = 0;
+                    int rest = h;
+                    for (int i = g - 1; i >= 0; i--) {
+                        int t = rest % p.tones;
+                        rest /= p.tones;
+                        int a = p.dataPos[k + i] * p.tones + t;
+                        re += corrRe[a] * rotRe[i] - corrIm[a] * rotIm[i];
+                        im += corrRe[a] * rotIm[i] + corrIm[a] * rotRe[i];
+                    }
+                    metric[h] = lnI0(scale * Math.sqrt(re * re + im * im));
+                }
+                for (int i = 0; i < g; i++) {
+                    for (int b = 0; b < bps; b++) {
+                        double max0 = Double.NEGATIVE_INFINITY;
+                        double max1 = Double.NEGATIVE_INFINITY;
+                        for (int h = 0; h < count; h++) {
+                            int t = (h / pow(p.tones, g - 1 - i)) % p.tones;
+                            if (((p.toneToValue[t] >> (bps - 1 - b)) & 1) == 0) max0 = Math.max(max0, metric[h]);
+                            else max1 = Math.max(max1, metric[h]);
+                        }
+                        double sum0 = 0;
+                        double sum1 = 0;
+                        for (int h = 0; h < count; h++) {
+                            int t = (h / pow(p.tones, g - 1 - i)) % p.tones;
+                            if (((p.toneToValue[t] >> (bps - 1 - b)) & 1) == 0) sum0 += Math.exp(metric[h] - max0);
+                            else sum1 += Math.exp(metric[h] - max1);
+                        }
+                        llr[bps * (k + i) + b] = max0 + Math.log(sum0) - max1 - Math.log(sum1);
+                    }
+                }
+                k += g;
+            }
+            return normalizeLlr(start);
+        }
+
+        int pow(int base, int exponent) {
+            int r = 1;
+            for (int i = 0; i < exponent; i++) r *= base;
+            return r;
+        }
+
+        /** ln I0(x) from the Abramowitz-Stegun polynomial approximations (9.8.1 and 9.8.2). */
+        double lnI0(double x) {
+            x = Math.abs(x);
+            if (x < 3.75) {
+                double t = x / 3.75;
+                t *= t;
+                return Math.log(1 + t * (3.5156229 + t * (3.0899424 + t * (1.2067492
+                        + t * (0.2659732 + t * (0.0360768 + t * 0.0045813))))));
+            }
+            double u = 3.75 / x;
+            double poly = 0.39894228 + u * (0.01328592 + u * (0.00225319 + u * (-0.00157565
+                    + u * (0.00916281 + u * (-0.02057706 + u * (0.02635537 + u * (-0.01647633 + u * 0.00392377)))))));
+            return x - 0.5 * Math.log(x) + Math.log(poly);
         }
 
         /** Vertex offset in [-0.5, 0.5] of the parabola through three equally spaced samples. */
@@ -655,6 +945,11 @@ public final class FtxReceiver {
                     llr[bps * k + b] = best0 - best1;
                 }
             }
+            return normalizeLlr(start);
+        }
+
+        /** Scales the llr field to unit-spread soft values; false when the soft symbols carry no information. */
+        boolean normalizeLlr(int start) {
             boolean[] inside = new boolean[dataSyms];
             int insideSyms = 0;
             for (int k = 0; k < dataSyms; k++) {

@@ -19,7 +19,8 @@ class QuanshengMemory(
     /** F4HWN v6.0 has no physical Flash reader: channels can be read but never written. */
     var legacyReadOnly = true; private set
     private var timestamp = 0
-
+    /** Session value the firmware expects in the extended commands (pass table); 0 until [identify] has run. */
+    val sessionTimestamp get() = timestamp
     private fun le(size: Int) = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN)
     private fun view(bytes: ByteArray) = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
     private fun remaining(deadline: Long): Int {
@@ -31,7 +32,11 @@ class QuanshengMemory(
     @Synchronized fun exchange(type: Int, payload: ByteArray, expected: Int = type + 1, timeoutMs: Long = 4000): ByteArray {
         checkUi(allowExchange()) { UiText(R.string.err_usb_session_cancelled) }
         val deadline = clock() + timeoutMs
-        transport.write(QuanshengFrames.encode(type, payload), remaining(deadline))
+        transport.discardPending()
+        val frame = QuanshengFrames.encode(type, payload)
+        transport.write(frame, remaining(deadline))
+        // F4HWN USB CDC can hold an exact 64-byte packet until the next byte (the web transport pads the same way).
+        if (frame.size % 64 == 0) transport.write(byteArrayOf(0), remaining(deadline))
         var previous = 0
         while (true) {
             checkUi(allowExchange()) { UiText(R.string.err_usb_session_cancelled) }
@@ -107,6 +112,18 @@ class QuanshengMemory(
         return data.copyOfRange(7, data.size)
     }
 
+    /** CRC32 the radio computes over a Flash range (read-only); the web backup uses it to probe the reader before the full read. */
+    fun flashRangeCrc(address: Int, length: Int): Long {
+        checkIdentified()
+        requireUi(address >= 0 && length in 1..4096 && address <= FLASH_SIZE - length) { UiText(R.string.err_flash_read_range) }
+        val response = exchange(0x073e, le(12).putInt(address).putInt(length).putInt(timestamp).array(), 0x073f, 30000)
+        requireUi(response.size == 13 && view(response).getInt(0) == address && view(response).getInt(4) == length &&
+            response[12].toInt() == 0) {
+            UiText(R.string.err_flash_sector_verify, Integer.toHexString(address))
+        }
+        return view(response).getInt(8).toLong() and 0xffffffffL
+    }
+
     fun verifyFlash(flash: ByteArray): Long {
         checkIdentified()
         requireUi(flash.size == FLASH_SIZE) { UiText(R.string.err_flash_full_required) }
@@ -130,8 +147,11 @@ class QuanshengMemory(
         val calibration = readCalibration { progress(UiText(R.string.backup_stage_calibration), it) }
         requireUi(!legacyReadOnly) { UiText(R.string.err_v60_no_backup) }
         val flash = ByteArray(FLASH_SIZE)
+        // Probe the Flash reader and the CRC command on the first block before spending minutes on the full read.
+        val probe = readFlashBlock(0, 128)
+        requireUi(flashRangeCrc(0, 128) == crc32(probe)) { UiText(R.string.err_flash_crc, "0") }
         for (address in 0 until FLASH_SIZE step 128) {
-            readFlashBlock(address, 128).copyInto(flash, address)
+            (if (address == 0) probe else readFlashBlock(address, 128)).copyInto(flash, address)
             progress(UiText(R.string.backup_stage_flash), (address + 128).toDouble() / FLASH_SIZE)
         }
         progress(UiText(R.string.backup_stage_crc), 1.0)

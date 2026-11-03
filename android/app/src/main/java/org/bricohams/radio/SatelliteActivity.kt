@@ -22,6 +22,7 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
+import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -133,7 +134,8 @@ class SatelliteActivity : LocalizedActivity() {
             ImageView(this).apply {
                 setImageResource(R.drawable.bricohams_logo)
                 contentDescription = getString(R.string.app_name)
-                layoutParams = LinearLayout.LayoutParams(Brand.dp(this@SatelliteActivity, 40), Brand.dp(this@SatelliteActivity, 40))
+                Brand.logoPlate(this)
+                layoutParams = LinearLayout.LayoutParams(Brand.dp(this@SatelliteActivity, 52), Brand.dp(this@SatelliteActivity, 52))
             },
             LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -642,6 +644,18 @@ class SatelliteActivity : LocalizedActivity() {
             field("height", R.id.satellite_height, R.string.satellite_height, "0")
             field("minimum", R.id.satellite_minimum, R.string.satellite_minimum, "10")
             addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_use_gps)) { useGps(fields) })
+            gpsCancel = Brand.button(this@SatelliteActivity, getString(R.string.satellite_gps_cancel)) { phoneLocation?.finishNow() }
+                .apply { visibility = View.GONE }
+            addView(gpsCancel)
+            gpsSettings = Brand.button(this@SatelliteActivity, getString(R.string.satellite_gps_open_settings)) {
+                runCatching { startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+            }.apply { visibility = View.GONE }
+            addView(gpsSettings)
+            val saved = PhoneLocation.loadLast(this@SatelliteActivity)
+            if (saved != null) {
+                val age = android.text.format.DateUtils.getRelativeTimeSpanString(saved.timeMs, System.currentTimeMillis(), android.text.format.DateUtils.MINUTE_IN_MILLIS)
+                addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_gps_use_saved, age)) { applyFix(fields, saved, saved = true) })
+            }
             addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_save_observer), true) {
                 try {
                     // Blank or non-numeric input becomes NaN so validation shows the translated message, not "empty String".
@@ -761,22 +775,19 @@ class SatelliteActivity : LocalizedActivity() {
         status.setText(R.string.satellite_downloading)
         audioWorker.execute {
             try {
-                val tle = SatelliteSources.parseTle(fetch(SatelliteSources.TLE_URL, 256 * 1024))
-                var warning = ""
-                val list = try {
-                    SatelliteSources.parseTransmitters(fetch(SatelliteSources.TRANSMITTERS_URL, 16 * 1024 * 1024).toString(Charsets.UTF_8),
-                        tle.map { it.norad }.toSet())
-                } catch (error: IOException) {
-                    warning = errorText(error); store.transmitters()
-                } catch (error: IllegalArgumentException) {
-                    warning = errorText(error); store.transmitters()
-                }
-                store.saveCatalog(tle, list)
+                val result = SatelliteSources.download(fetch)
+                val list = if (result.warning.isEmpty()) result.transmitters else store.transmitters()
+                store.saveCatalog(result.tle, list)
+                preferences.edit().putString("tle-source", result.source.name).apply()
+                val sourceText = if (result.source == SatelliteSources.TleSource.CELESTRAK)
+                    getString(R.string.satellite_tle_source, result.source.label)
+                else getString(R.string.satellite_tle_source_fallback, result.source.label)
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     loadCatalog()
                     if (page != Page.DETAIL) show(page)
-                    status.text = getString(R.string.satellite_downloaded, catalog.size, transmitters.values.sumOf { it.size }, warning)
+                    status.text = getString(R.string.satellite_downloaded, catalog.size, transmitters.values.sumOf { it.size },
+                        listOf(sourceText, result.warning).filter { it.isNotBlank() }.joinToString(" "))
                 }
             } catch (error: IOException) { report(error) }
             catch (error: IllegalArgumentException) { report(error) }
@@ -785,26 +796,69 @@ class SatelliteActivity : LocalizedActivity() {
         }
     }
 
-    @SuppressLint("MissingPermission")
+    private var gpsFields: Map<String, EditText>? = null
+    private var phoneLocation: PhoneLocation? = null
+    private var gpsCancel: Button? = null
+    private var gpsSettings: Button? = null
+
+    /** Requests FINE+COARSE together (Android 12+ lets the user pick approximate only, which is enough for passes). */
     private fun useGps(fields: Map<String, EditText>) {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 62)
+        gpsFields = fields
+        if (!PhoneLocation.hasPermission(this)) {
+            status.setText(R.string.satellite_gps_asking)
+            requestPermissions(PhoneLocation.PERMISSIONS, 62)
             return
         }
-        val manager = getSystemService(LOCATION_SERVICE) as LocationManager
-        val fix: Location? = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-            .filter { manager.isProviderEnabled(it) }.mapNotNull { manager.getLastKnownLocation(it) }.maxByOrNull { it.time }
-        if (fix == null) { status.setText(R.string.satellite_gps_none); return }
+        if (!PhoneLocation.servicesEnabled(this)) {
+            status.setText(R.string.satellite_gps_off)
+            runCatching { startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+            return
+        }
+        status.text = getString(R.string.satellite_gps_searching, (PhoneLocation.TIMEOUT_MS / 1000).toInt())
+        gpsCancel?.visibility = View.VISIBLE
+        val search = PhoneLocation(this, { progress -> if (!isDestroyed) showProgress(progress) }) { fix, live ->
+            if (!isDestroyed) showFix(fix, live)
+        }
+        phoneLocation = search
+        search.start()
+    }
+
+    private fun showProgress(progress: SearchProgress) {
+        val seconds = ((progress.remainingMs + 999) / 1000).toInt()
+        val lines = ArrayList<String>()
+        lines += getString(if (progress.haveFix) R.string.satellite_gps_refining else R.string.satellite_gps_searching, seconds)
+        if (progress.visibleSatellites != null) lines += getString(R.string.satellite_gps_sats, progress.visibleSatellites, progress.usedSatellites ?: 0)
+        if (progress.networkHint) lines += getString(R.string.satellite_gps_network_hint)
+        status.text = lines.joinToString("\n")
+        gpsSettings?.visibility = if (progress.networkHint) View.VISIBLE else View.GONE
+    }
+
+    private fun showFix(fix: PositionFix?, live: Boolean) {
+        gpsCancel?.visibility = View.GONE
+        val fields = gpsFields
+        if (fix == null || fields == null) {
+            status.setText(if (live) R.string.satellite_gps_timeout else R.string.satellite_gps_none)
+            return
+        }
+        applyFix(fields, fix, saved = false)
+    }
+
+    private fun applyFix(fields: Map<String, EditText>, fix: PositionFix, saved: Boolean) {
+        if (!saved && fix.ageMs(System.currentTimeMillis()) <= LocationSelector.FRESH_MS) PhoneLocation.saveLast(this, fix)
         fields.getValue("latitude").setText(String.format(Locale.ROOT, "%.5f", fix.latitude))
         fields.getValue("longitude").setText(String.format(Locale.ROOT, "%.5f", fix.longitude))
-        if (fix.hasAltitude()) fields.getValue("height").setText(String.format(Locale.ROOT, "%.3f", fix.altitude / 1000))
-        status.text = getString(R.string.satellite_gps_fix, (System.currentTimeMillis() - fix.time) / 60000, fix.accuracy)
+        fix.altitudeM?.let { fields.getValue("height").setText(String.format(Locale.ROOT, "%.3f", it / 1000)) }
+        val ageS = fix.ageMs(System.currentTimeMillis()) / 1000
+        val accuracy = fix.accuracyM?.let { String.format(Locale.ROOT, "%.0f m", it) } ?: "?"
+        val note = if (PhoneLocation.precise(this)) "" else " " + getString(R.string.satellite_gps_approximate)
+        status.text = getString(R.string.satellite_gps_fix_detail, fix.source, accuracy, ageS) + note
     }
     @Deprecated("Platform callback")
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 62) status.setText(if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED)
-            R.string.satellite_gps_retry else R.string.satellite_gps_denied)
+        if (requestCode != 62) return
+        if (grantResults.any { it == PackageManager.PERMISSION_GRANTED }) gpsFields?.let { useGps(it) }
+        else status.setText(R.string.satellite_gps_denied)
     }
 
     private fun tick() {
@@ -940,6 +994,8 @@ class SatelliteActivity : LocalizedActivity() {
         handler.post(ticker)
     }
     override fun onPause() {
+        phoneLocation?.stop()
+        gpsCancel?.visibility = View.GONE
         updating = false
         handler.removeCallbacks(ticker)
         syncCompass()

@@ -49,6 +49,9 @@ class CdcRadio private constructor(
         if (!dataReleased || !controlReleased) throw LocalizedIOException(UiText(R.string.err_usb_release_failed))
     }
     companion object {
+        /** SET_CONTROL_LINE_STATE values: bit 0 DTR, bit 1 RTS. Rigs get 0 (RTS/DTR can key or reset them). */
+        const val DTR_RTS = 3
+        const val LINES_LOW = 0
         fun compatible(device: UsbDevice): Boolean = interfaces(device) != null
         private fun interfaces(device: UsbDevice): Pair<UsbInterface, UsbInterface>? {
             val all = (0 until device.interfaceCount).map(device::getInterface)
@@ -58,7 +61,7 @@ class CdcRadio private constructor(
             if (controls.size != 1 || data.size != 1) return null
             return controls.single() to data.single()
         }
-        fun open(manager: UsbManager, device: UsbDevice): CdcRadio {
+        fun open(manager: UsbManager, device: UsbDevice, controlLines: Int = DTR_RTS): CdcRadio {
             requireUi(manager.hasPermission(device)) { UiText(R.string.err_usb_permission_missing) }
             val (control, data) = requireNotNullUi(interfaces(device)) { UiText(R.string.err_usb_cdc_only) }
             val endpoints = (0 until data.endpointCount).map(data::getEndpoint)
@@ -72,7 +75,7 @@ class CdcRadio private constructor(
                 }
                 val lineCoding = byteArrayOf(0x00, 0x96.toByte(), 0, 0, 0, 0, 8) // 38400, 8N1
                 if (connection.controlTransfer(0x21, 0x20, 0, control.id, lineCoding, 7, 1000) != 7 ||
-                    connection.controlTransfer(0x21, 0x22, 3, control.id, null, 0, 1000) < 0) {
+                    connection.controlTransfer(0x21, 0x22, controlLines, control.id, null, 0, 1000) < 0) {
                     throw LocalizedIOException(UiText(R.string.err_usb_cdc_config_rejected))
                 }
                 return CdcRadio(connection, control, data, input, output)

@@ -17,6 +17,7 @@
   R.verifyBackup = async (connector, permit) => {
     R.assertBackup(connector, permit);
     const receipt = permits.get(permit);
+    if (receipt.skipped) return;
     try {
       const saved = await receipt.store.get(receipt.recordId);
       R.assert(saved && saved.status === "complete" && saved.files.length === receipt.hashes.length, "La copia persistente ya no esta completa.");
@@ -30,6 +31,16 @@
       revoked.add(connector);
       throw new Error(`Escritura bloqueada al verificar el respaldo: ${error.message}`, { cause: error });
     }
+  };
+  // PRO mode only: explicit, per-session authority to write without a stored backup. It is bound to the
+  // connector session like a normal permit, so a reconnect or a lost link revokes it.
+  R.issueUncheckedPermit = (connector, acknowledgement) => {
+    R.assert(acknowledgement === "ESCRIBIR SIN COPIA", "Debes aceptar expresamente escribir sin copia de seguridad.");
+    R.assert(connector.connected && !connector.transport.error, "Conecta la radio antes de omitir la copia.");
+    R.assert(connector.family === "quansheng", "Omitir la copia solo se admite en Quansheng; OpenGD77 mantiene su respaldo.");
+    const permit = Object.freeze({});
+    permits.set(permit, { connector, session: connector.session, skipped: true, hashes: [] });
+    return permit;
   };
   // Separate, single-use authority: never grants channel, app, erase or CFG access.
   R.assertSlotReplacement = (connector, permit) => {

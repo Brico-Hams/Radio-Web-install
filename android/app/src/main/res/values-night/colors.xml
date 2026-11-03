@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="brand_background">#0E1420</color>
-    <color name="brand_surface">#172131</color>
-    <color name="brand_surface_high">#202C3F</color>
-    <color name="brand_text">#EDF2FB</color>
-    <color name="brand_muted">#AFBDD1</color>
-    <color name="brand_accent">#FFB456</color>
-    <color name="brand_on_accent">#321800</color>
-    <color name="brand_outline">#334157</color>
-    <color name="brand_ripple">#33FFB456</color>
+    <!-- BricoHams colour manual v1.1, dark theme. -->
+    <color name="brand_ink">#23272B</color>
+    <color name="brand_orange">#F26B1D</color>
+    <color name="brand_background">#111518</color>
+    <color name="brand_surface">#1C2329</color>
+    <color name="brand_surface_high">#38434C</color>
+    <color name="brand_text">#F6F8FA</color>
+    <color name="brand_muted">#BAC4CC</color>
+    <color name="brand_accent">#FFA06A</color>
+    <color name="brand_on_accent">#23272B</color>
+    <color name="brand_outline">#38434C</color>
+    <color name="brand_focus">#FFC18F</color>
+    <color name="brand_ripple">#33F26B1D</color>
     <color name="brand_positive">#8EDCA6</color>
 </resources>

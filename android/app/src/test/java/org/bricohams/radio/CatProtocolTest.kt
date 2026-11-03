@@ -180,6 +180,64 @@ class CatProtocolTest {
         radio.active = false
         assertEquals(CatLease.Result.LEFT_SAT_RX, lease.renewIfDue())
     }
+    @Test fun leaseKeepsPollingWhenNotArmedAndRetunesOnceArmedAgain() {
+        var now = 0L
+        val radio = Radio()
+        val cat = CatProtocol(radio, clock = { now }, sleep = {})
+        cat.tune(43650000)
+        val lease = CatLease(cat, 43650000, clock = { now })
+        radio.active = false
+        now += CatLease.RENEW_MS
+        assertEquals(CatLease.Result.LEFT_SAT_RX, lease.renewIfDue())
+        now += CatLease.RENEW_MS
+        assertEquals(CatLease.Result.STILL_NOT_ARMED, lease.renewIfDue())
+        radio.active = true
+        radio.operations.clear()
+        now += CatLease.RENEW_MS
+        assertEquals(CatLease.Result.RECOVERED, lease.renewIfDue())
+        assertEquals(listOf(0, 1), radio.operations)
+        assertTrue(radio.remote)
+    }
+    @Test fun notArmedIsARecoverableExceptionNotALinkFailure() {
+        val radio = Radio().apply { active = false }
+        val cat = CatProtocol(radio, sleep = {})
+        assertFalse(cat.query().active)
+        val error = assertThrows(CatNotArmedException::class.java) { cat.tune(43650000) }
+        assertTrue(error is IllegalArgumentException)
+        // The same session keeps working after the radio is armed.
+        radio.active = true
+        assertEquals(43650000L, cat.tune(43650000).frequency10Hz)
+    }
+    @Test fun statusFiveFromTheFirmwareMeansNotArmed() {
+        val reply = ArrayDeque<Byte>()
+        val radio = object : RadioBytes {
+            override fun write(bytes: ByteArray, timeoutMs: Int) {
+                val request = QuanshengFrames.decode(bytes).second
+                val response = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
+                    .put(1).put(5).put(request[2]).put(request[3]).putInt(7).putInt(0).putInt(0).array()
+                QuanshengFrames.encode(0x7b01, response).forEach(reply::add)
+            }
+            override fun read(length: Int, timeoutMs: Int): ByteArray {
+                if (reply.size < length) throw IOException("Mock timeout")
+                return ByteArray(length) { reply.removeFirst() }
+            }
+            override fun close() = Unit
+        }
+        assertThrows(CatNotArmedException::class.java) { CatProtocol(radio, sleep = {}).query() }
+    }
+    @Test fun leaseToleratesTransientSilenceThenRaises() {
+        var time = 1000L
+        val silent = object : RadioBytes {
+            override fun write(bytes: ByteArray, timeoutMs: Int) = Unit
+            override fun read(length: Int, timeoutMs: Int): ByteArray { time += 600; throw IOException("timeout") }
+            override fun close() = Unit
+        }
+        val lease = CatLease(CatProtocol(silent, clock = { time }, sleep = {}), 43650000, clock = { time })
+        time += CatLease.RENEW_MS
+        assertEquals(CatLease.Result.RETRY, lease.renewIfDue())
+        assertEquals(CatLease.Result.RETRY, lease.renewIfDue())
+        assertThrows(IOException::class.java) { lease.renewIfDue() }
+    }
     private class PttRadio(var denied: Int = 0, var status: Int = 0) : RadioBytes {
         val buffer = ArrayDeque<Byte>()
         override fun write(bytes: ByteArray, timeoutMs: Int) {

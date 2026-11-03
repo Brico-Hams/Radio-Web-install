@@ -49,6 +49,95 @@ class SatelliteCatalogTest {
         store.saveCatalog(listOf(fixture), list)
         assertEquals(list, store.transmitters())
     }
+    @Test fun satnogsJsonKeepsOnlyListedSatellitesAndSkipsBadChecksums() {
+        val bad = fixture.line1.dropLast(1) + ((fixture.line1.last() - '0' + 1) % 10)
+        val json = """[
+            {"tle0":"0 ISS (ZARYA)","tle1":"${fixture.line1}","tle2":"${fixture.line2}","norad_cat_id":25544},
+            {"tle0":"0 BAD","tle1":"$bad","tle2":"${fixture.line2}","norad_cat_id":25544},
+            {"tle0":"0 OTHER","tle1":"${fixture.line1}","tle2":"${fixture.line2}","norad_cat_id":99999}
+        ]"""
+        val list = SatelliteSources.parseSatnogsTle(json, setOf(25544))
+        assertEquals(listOf("ISS (ZARYA)"), list.map { it.name })
+        assertTrue(SatelliteSources.parseSatnogsTle(json, setOf(1)).isEmpty())
+        assertThrows(IllegalArgumentException::class.java) { SatelliteSources.parseSatnogsTle("{", setOf(1)) }
+    }
+    @Test fun nasabareThreeLineFormatIsParsed() {
+        val text = "ISS\n${fixture.line1}\n${fixture.line2}\n"
+        assertEquals(fixture.line2, SatelliteSources.parseNasabare(text.toByteArray()).single().line2)
+    }
+    private fun fresh(): Tle {
+        val now = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        val epoch = "%02d%03d.00000000".format(java.util.Locale.ROOT, now.get(java.util.Calendar.YEAR) % 100, now.get(java.util.Calendar.DAY_OF_YEAR))
+        val base = fixture.line1.substring(0, 18) + epoch + fixture.line1.substring(32, 68)
+        return Tle("ISS", base + base.sumOf { if (it in '0'..'9') it - '0' else if (it == '-') 1 else 0 } % 10, fixture.line2)
+    }
+    private val transmitterJson = """[{"norad_cat_id":25544,"alive":true,"status":"active","downlink_low":145800000,"mode":"FM","description":"V"}]"""
+    @Test fun fallbackOrderIsCelestrakThenSatnogsThenAmsat() {
+        val tle = fresh()
+        val satnogs = """[{"tle0":"0 ISS","tle1":"${tle.line1}","tle2":"${tle.line2}","norad_cat_id":25544}]"""
+        val nasa = "ISS\n${tle.line1}\n${tle.line2}\n"
+        val requests = ArrayList<String>()
+        fun fetcher(failing: Set<String>): (String, Int) -> ByteArray = { url, _ ->
+            requests.add(url)
+            if (url in failing) throw java.io.IOException("timeout")
+            when (url) {
+                SatelliteSources.TLE_URL, SatelliteSources.AMSAT_TLE_URL -> nasa.toByteArray()
+                SatelliteSources.SATNOGS_TLE_URL -> satnogs.toByteArray()
+                SatelliteSources.SATELLITES_URL -> """[{"norad_cat_id":25544,"status":"alive"}]""".toByteArray()
+                else -> transmitterJson.toByteArray()
+            }
+        }
+        var result = SatelliteSources.download(fetcher(emptySet()))
+        assertEquals(SatelliteSources.TleSource.CELESTRAK, result.source)
+        assertEquals(listOf(SatelliteSources.TLE_URL, SatelliteSources.TRANSMITTERS_URL), requests)
+        requests.clear()
+        result = SatelliteSources.download(fetcher(setOf(SatelliteSources.TLE_URL)))
+        assertEquals(SatelliteSources.TleSource.SATNOGS, result.source)
+        assertEquals(1, result.transmitters.size)
+        assertEquals(listOf(SatelliteSources.TLE_URL, SatelliteSources.TRANSMITTERS_URL, SatelliteSources.SATELLITES_URL,
+            SatelliteSources.SATNOGS_TLE_URL), requests)
+        requests.clear()
+        result = SatelliteSources.download(fetcher(setOf(SatelliteSources.TLE_URL, SatelliteSources.SATNOGS_TLE_URL)))
+        assertEquals(SatelliteSources.TleSource.AMSAT, result.source)
+        assertEquals(
+            listOf(SatelliteSources.TLE_URL, SatelliteSources.TRANSMITTERS_URL, SatelliteSources.SATELLITES_URL,
+                SatelliteSources.SATNOGS_TLE_URL, SatelliteSources.AMSAT_TLE_URL, SatelliteSources.TRANSMITTERS_URL), requests)
+    }
+    @Test fun satnogsFallbackDropsDeadSatellitesAndKeepsActiveAmateur() {
+        val tle = fresh()
+        fun entry(norad: Int) = """{"tle0":"0 S$norad","tle1":"${tle.line1}","tle2":"${tle.line2}","norad_cat_id":$norad}"""
+        val tleJson = "[" + listOf(25544, 900, 901).joinToString(",") { entry(it) } + "]"
+        val transmitters = """[
+            {"norad_cat_id":25544,"alive":true,"status":"active","service":"Amateur","downlink_low":145800000,"mode":"FM"},
+            {"norad_cat_id":900,"alive":true,"status":"active","service":"Amateur","downlink_low":137000000,"mode":"FM"},
+            {"norad_cat_id":901,"alive":false,"status":"active","service":"Amateur","downlink_low":145900000,"mode":"FM"},
+            {"norad_cat_id":902,"alive":true,"status":"active","service":"Earth Exploration","downlink_low":137100000,"mode":"FM"}
+        ]"""
+        val satellites = """[{"norad_cat_id":25544,"status":"alive"},{"norad_cat_id":900,"status":"re-entered"},
+            {"norad_cat_id":901,"status":"alive"},{"norad_cat_id":902,"status":"alive"}]"""
+        val result = SatelliteSources.download({ url, _ ->
+            when (url) {
+                SatelliteSources.TLE_URL -> throw java.io.IOException("down")
+                SatelliteSources.TRANSMITTERS_URL -> transmitters.toByteArray()
+                SatelliteSources.SATELLITES_URL -> satellites.toByteArray()
+                else -> tleJson.toByteArray()
+            }
+        })
+        assertEquals(SatelliteSources.TleSource.SATNOGS, result.source)
+        assertEquals(listOf(25544), result.tle.map { it.norad })
+        assertEquals(setOf(25544, 900), SatelliteSources.usefulNorads(transmitters.replace("\"alive\":false", "\"alive\":true").replace("901", "900")))
+        assertEquals(setOf(25544, 900), SatelliteSources.usefulNorads(transmitters))
+    }
+    @Test fun staleEpochsFallThroughAndTotalFailureThrows() {
+        val stale = "ISS\n${fixture.line1}\n${fixture.line2}\n"
+        val error = assertThrows(java.io.IOException::class.java) {
+            SatelliteSources.download({ url, _ ->
+                if (url == SatelliteSources.TRANSMITTERS_URL) transmitterJson.toByteArray() else stale.toByteArray()
+            })
+        }
+        assertTrue(error.message, error.message!!.contains("CelesTrak") && error.message!!.contains("AMSAT"))
+        assertThrows(java.io.IOException::class.java) { SatelliteSources.download({ _, _ -> throw java.io.IOException("x") }) }
+    }
     @Test fun storeRoundTripsAndOnlyAcceptsHttps() {
         val store = SatelliteStore(folder.newFolder("sat"))
         assertTrue(store.catalog().isEmpty() && store.transmitters().isEmpty())

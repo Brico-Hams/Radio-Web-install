@@ -59,8 +59,9 @@ test("release CI checks store metadata and builds a separate unsigned release AP
   const workflow = fs.readFileSync(path.join(root, ".github/workflows/android.yml"), "utf8");
   assert.ok(workflow.includes('"android-v*"'));
   assert.ok(workflow.includes("node scripts/check-android-store.cjs"));
-  assert.ok(workflow.includes(":app:assembleRelease"));
-  assert.ok(workflow.includes(":app:lintRelease"));
-  assert.ok(workflow.includes("app-release-unsigned.apk"));
+  // Both distribution flavors are linted and built for release (github: OTA, fdroid: no self-updater).
+  for (const task of [":app:assembleGithubRelease", ":app:assembleFdroidRelease", ":app:lintGithubRelease", ":app:lintFdroidRelease",
+    ":app:testGithubDebugUnitTest", ":app:testFdroidDebugUnitTest"]) assert.ok(workflow.includes(task), task);
+  assert.ok(workflow.includes("app-github-release-unsigned.apk"));
   assert.ok(workflow.includes("startsWith(github.ref, 'refs/tags/v')"));
 });

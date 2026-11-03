@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="whatsnew_title">Nouveautés de la version %1$s</string>
+    <string name="whatsnew_generic">RadiCodex a été mis à jour vers la version %1$s.</string>
+    <string name="whatsnew_previous">Version précédente : %1$s</string>
+    <string name="whatsnew_close">Compris</string>
+    <string name="home_version_line">RadiCodex by BricoHams %1$s (code %2$d)</string>
+    <string name="home_open_updates">Mises à jour</string>
+    <string name="firmware_changed_title">Firmware modifié</string>
+    <string name="firmware_changed">La radio %1$s a changé de firmware : avant %2$s, maintenant %3$s. Revalidez les tests et les réglages de cette radio.</string>
+
+    <string name="ota_title">Mises à jour</string>
+    <string name="ota_current">Version installée : %1$s (code %2$d)</string>
+    <string name="ota_check">Rechercher des mises à jour</string>
+    <string name="ota_checking">Recherche de mises à jour…</string>
+    <string name="ota_up_to_date">Vous avez déjà la dernière version.</string>
+    <string name="ota_available">Une nouvelle version est disponible : %1$s (code %2$d, %3$s).</string>
+    <string name="ota_available_banner">Mise à jour disponible : %1$s. Ouvrez Accueil › Mises à jour.</string>
+    <string name="ota_notes_title">Nouveautés :</string>
+    <string name="ota_download">Télécharger et installer</string>
+    <string name="ota_downloading">Téléchargement… %1$d %%</string>
+    <string name="ota_verifying">Vérification de la taille, du SHA-256 et de la signature…</string>
+    <string name="ota_ready">Vérification réussie. Android vous demandera de confirmer l\'installation.</string>
+    <string name="ota_auto">Rechercher automatiquement les mises à jour (au plus une fois par jour)</string>
+    <string name="ota_metered">Autoriser aussi avec les données mobiles ou les réseaux limités</string>
+    <string name="ota_privacy">Seul le fichier des versions est téléchargé depuis GitHub (HTTPS). Aucun identifiant ni donnée personnelle n\'est envoyé. Rien n\'est installé sans votre confirmation ni sans réussir toutes les vérifications.</string>
+    <string name="ota_unknown_sources">Android exige que vous autorisiez RadiCodex à installer des applications. Activez-le sur l\'écran qui s\'ouvre, puis appuyez de nouveau sur « Télécharger et installer ».</string>
+    <string name="ota_install_ok">Mise à jour installée.</string>
+    <string name="ota_install_failed">Échec de l\'installation : %1$s</string>
+    <string name="ota_install_cancelled">Installation annulée.</string>
+
+    <string name="ota_err_not_configured">Le canal de mises à jour n\'est pas configuré dans cette version.</string>
+    <string name="ota_err_manifest_too_large">Le fichier des versions est trop volumineux. Rien n\'est installé.</string>
+    <string name="ota_err_manifest_invalid">Le fichier des versions n\'est pas valide (%1$s). Rien n\'est installé.</string>
+    <string name="ota_err_bad_signature">La signature du fichier des versions n\'est pas valide. Rien n\'est installé.</string>
+    <string name="ota_err_wrong_package">La mise à jour concerne une autre application (%1$s). Rien n\'est installé.</string>
+    <string name="ota_err_not_newer">La version proposée (%1$s) n\'est pas plus récente que celle installée. Rien n\'est installé.</string>
+    <string name="ota_err_min_sdk">La mise à jour nécessite Android API %1$s ou supérieur.</string>
+    <string name="ota_err_insecure_url">L\'adresse de téléchargement n\'est pas en HTTPS (%1$s). Rien n\'est installé.</string>
+    <string name="ota_err_size_invalid">La taille annoncée de l\'APK n\'est pas acceptable (%1$s octets). Rien n\'est installé.</string>
+    <string name="ota_err_size_mismatch">La taille de l\'APK téléchargé ne correspond pas à celle annoncée (%1$s). Il a été écarté.</string>
+    <string name="ota_err_hash_mismatch">Le SHA-256 de l\'APK ne correspond pas à celui annoncé. Il a été écarté.</string>
+    <string name="ota_err_signer_mismatch">L\'APK n\'est pas signé avec le même certificat que l\'application installée. Il a été écarté.</string>
+    <string name="ota_err_apk_unreadable">L\'APK téléchargé est illisible. Il a été écarté.</string>
+    <string name="ota_err_apk_version">La version contenue dans l\'APK (%1$s) ne correspond pas à celle annoncée. Il a été écarté.</string>
+    <string name="ota_err_no_space">Pas assez d\'espace libre pour télécharger la mise à jour.</string>
+    <string name="ota_err_http">Le serveur de mises à jour a répondu par une erreur (%1$s).</string>
+    <string name="ota_err_metered">Réseau limité : connectez-vous en Wi-Fi ou activez l\'option qui les autorise.</string>
+    <string name="ota_err_offline">Pas de connexion Internet.</string>
+    <string name="ota_err_install_blocked">Android n\'autorise pas encore RadiCodex à installer des applications.</string>
+</resources>

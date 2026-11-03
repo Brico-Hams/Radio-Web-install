@@ -115,6 +115,16 @@ int main(void)
     CHECK(BH_PASS_Request(frame, length, true, 0, reply) && reply[1] == BH_PASS_STATUS_OP);
     CHECK(BH_PASS_Request(NULL, 0, true, 0, reply) && reply[1] == BH_PASS_STATUS_LENGTH);
 
+    /* A read never moves the clock, and a pre-2020 host time is ignored. */
+    uint16_t pure = request(frame, BH_PASS_OP_READ, 1800000000U, 0, 1);
+    CHECK(BH_PASS_Request(frame, pure, true, 65000, reply) > BH_PASS_REPLY_HEADER && reply[1] == BH_PASS_STATUS_OK);
+    CHECK(bh_pass_clock(65000) == 1761955260U);
+    pure = request(frame, BH_PASS_OP_INFO, 1000U, 0, 0);
+    CHECK(BH_PASS_Request(frame, pure, true, 65000, reply) && reply[1] == BH_PASS_STATUS_OK);
+    CHECK(bh_pass_clock(65000) == 1761955260U);
+    pure = request(frame, BH_PASS_OP_INFO, 1761955300U, 0, 0);
+    CHECK(BH_PASS_Request(frame, pure, true, 70000, reply) && bh_pass_clock(70000) == 1761955300U);
+
     /* A corrupted header hides the table instead of showing garbage. */
     bh_test_flash[BH_PASS_FLASH_ADDR + 6] ^= 1;
     CHECK(bh_pass_count() == 0);

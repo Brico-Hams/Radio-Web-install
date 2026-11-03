@@ -20,6 +20,14 @@ const tools = {
     subtitle: "Codeplug y canales",
     tag: "DMR + FM",
     icon: "GD",
+    short: "Edita canales FM y DMR de tu radio OpenGD77.",
+    // [target, label, one-sentence help, optional planning tab]; targets are selectors for pages that scroll.
+    actions: [
+      [".backups-panel", "Copia de seguridad", "Guarda una copia de tu radio y revisa las anteriores."],
+      ["#radio-operations", "Canales", "Lee, edita y guarda los canales de la radio."],
+      ["#planning-panel", "Repetidores y contactos", "Busca repetidores y prepara contactos.", "repeaters"],
+      ["#planning-panel", "Satélite", "Calcula pases y prepara las memorias del satélite.", "sat"]
+    ],
     description: "Lee el codeplug y la calibracion de radios compatibles. Edita canales FM y DMR localmente; las escrituras quedan bloqueadas sin respaldo completo del firmware.",
     url: "https://grid.radio/opengd77/",
     action: "Abrir OpenGD77 CPS",
@@ -56,6 +64,14 @@ const tools = {
     subtitle: "Multiboot y Multiconfig",
     tag: "F4HWN",
     icon: "UV",
+    short: "Instala firmware, guarda copias, edita canales y sigue satélites.",
+    // [view, label, one-sentence help]; targets are Quansheng views.
+    actions: [
+      ["conexion", "Copia de seguridad", "Guarda una copia de tu radio y revisa las anteriores."],
+      ["firmware", "Instalar firmware", "Pon un firmware F4HWN oficial o propio en la radio."],
+      ["canales", "Canales", "Lee, edita y envía los canales de tu radio."],
+      ["satelites", "CAT / Satélite", "Sintoniza la radio siguiendo un satélite."]
+    ],
     description: "Consulta y verifica slots de UV-K1 y UV-K5 V3 compatibles. Modifica slots y bancos solo tras respaldar la calibracion, la Flash externa y Main.",
     url: "#qs-native-menu",
     action: "Abrir herramientas Bricohams",
@@ -119,9 +135,8 @@ const nav = (key, label, mark) => `<a href="${key === "home" ? "index" : key}.ht
 function card(key, tool) {
   return `<article class="tool-card ${key}">
     <div class="card-top"><span class="device-icon" aria-hidden="true">${tool.icon}</span><span class="pill">${tool.tag}</span></div>
-    <p class="eyebrow">${tool.subtitle}</p><h2>${tool.name}</h2>
-    <p class="card-description">${tool.description}</p>
-    <ul class="feature-list">${tool.features.map(item => `<li>${item}</li>`).join("")}</ul>
+    <h2>${tool.name}</h2>
+    <p class="card-description">${tool.short}</p>
     <a class="button ${key === "opengd77" ? "primary" : "secondary"}" href="${key}.html">Entrar al espacio <span aria-hidden="true">&rarr;</span></a>
     <p class="card-note">${key === "opengd77" ? "Radios compatibles con OpenGD77" : "Solo UV-K1 / UV-K5 V3 compatibles"}</p>
   </article>`;
@@ -129,39 +144,46 @@ function card(key, tool) {
 
 function home() {
   return `<section class="hero"><span class="eyebrow accent">RADIOAFICIÓN · HAZLO TÚ MISMO</span>
-    <h1>Tus radios.<br><span>Un punto de partida.</span></h1>
-    <p>Elige tu familia y conecta desde este navegador.<br class="desktop"> Copias automaticas antes de escribir, sin mezclar compatibilidades.</p><a class="button secondary help-link" href="ayuda.html">Primeros pasos, controladores y preguntas frecuentes</a>
-    <p class="card-note"><a href="ayuda-quansheng.html#puesta-en-marcha-de-0-a-100">Quansheng de 0 a 100 %</a> &middot; <a href="ayuda-atlas-uv-k5-v3.html">Atlas tecnico UV-K5 V3</a> &middot; <a href="ayuda-firmwares.html">Biblioteca de firmware</a></p>
+    <h1>Conecta tu radio.<br><span>Sin complicaciones.</span></h1>
+    <p>Pulsa el botón, elige tu familia y la web reconoce tu radio. Antes de escribir nada se guarda una copia.</p>
+    <a id="home-connect" class="button primary big" href="#families">Conectar radio</a>
+    <p class="card-note"><a href="ayuda.html">Primeros pasos y ayuda</a> &middot; <a href="ayuda-quansheng.html#puesta-en-marcha-de-0-a-100">Quansheng de 0 a 100 %</a> &middot; <a href="ayuda-atlas-uv-k5-v3.html">Atlas tecnico UV-K5 V3</a> &middot; <a href="ayuda-firmwares.html">Biblioteca de firmware</a></p>
   </section>
-  <section class="cards" aria-label="Familias de radio">${Object.entries(tools).map(([key, tool]) => card(key, tool)).join("")}
-    <article class="tool-card anytone"><div class="card-top"><span class="device-icon" aria-hidden="true">AT</span><span class="pill">BETA</span></div><h2>AnyTone Beta</h2><p class="card-description">Preparador web de canales FM/DMR de Espana y AM aerea con capacidades confirmadas. Reutiliza archivos de las otras familias. Sin USB ni RDT nativo.</p><a class="button secondary" href="anytone.html">Entrar al editor AnyTone</a></article>
-    <article class="tool-card ftx1"><div class="card-top"><span class="device-icon" aria-hidden="true">FT</span><span class="pill">BETA</span></div><h2>Yaesu FTX-1</h2><p class="card-description">Lee, edita y copia memorias y la configuracion del menu por CAT USB, con copia previa y simulacion antes de escribir.</p><a class="button secondary" href="ftx1.html">Entrar al editor FTX-1</a></article></section>
+  <section id="families" class="cards" aria-label="Familias de radio" tabindex="-1">${Object.entries(tools).map(([key, tool]) => card(key, tool)).join("")}
+    <article class="tool-card anytone"><div class="card-top"><span class="device-icon" aria-hidden="true">AT</span><span class="pill">BETA</span></div><h2>AnyTone Beta</h2><p class="card-description">Prepara canales FM/DMR y AM aérea. Sin USB.</p><a class="button secondary" href="anytone.html">Entrar al editor AnyTone</a></article>
+    <article class="tool-card ftx1"><div class="card-top"><span class="device-icon" aria-hidden="true">FT</span><span class="pill">BETA</span></div><h2>Yaesu FTX-1</h2><p class="card-description">Lee, edita y copia memorias y menú por CAT USB.</p><a class="button secondary" href="ftx1.html">Entrar al editor FTX-1</a></article></section>
   <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Parecidas por fuera. Diferentes por dentro.</h2><p>OpenGD77 y F4HWN no son firmware intercambiables. Confirma el modelo, la revision de hardware y el firmware antes de conectar o escribir.</p></div></aside>
-  <section class="steps-summary" aria-label="Como empezar"><div><span>01</span><h3>Identifica tu equipo</h3><p>Modelo, revision y firmware.</p></div><div><span>02</span><h3>Copia automatica</h3><p>Persistida y verificada con SHA-256.</p></div><div><span>03</span><h3>Opera con proteccion</h3><p>Sin respaldo suficiente, no se escribe.</p></div></section>`;
+  <section class="steps-summary" aria-label="Como empezar"><div><span>01</span><h3>Conecta</h3><p>Elige tu familia y pulsa Conectar radio.</p></div><div><span>02</span><h3>Reconocemos tu radio</h3><p>Verás su nombre y su firmware.</p></div><div><span>03</span><h3>Elige una acción</h3><p>Sin copia verificada, no se escribe.</p></div></section>`;
 }
 
 function detail(tool) {
   return `<a class="back" href="index.html">&larr; Todos los espacios</a>
-    <section class="detail-hero"><p class="eyebrow accent">RADIOAFICIÓN · HAZLO TÚ MISMO <span class="pill">${tool.tag}</span></p><h1>${tool.name}<span>${tool.subtitle}</span></h1><p>${tool.description}</p></section>
+    <section class="detail-hero"><p class="eyebrow accent">RADIOAFICIÓN · HAZLO TÚ MISMO <span class="pill">${tool.tag}</span></p><h1>${tool.name}<span>${tool.subtitle}</span></h1><p>${tool.description}</p><button id="advanced-toggle" class="button secondary" type="button" aria-pressed="false">Mostrar opciones avanzadas</button></section>
     <div class="detail-grid">
-      <section id="connection" class="panel connection"><div class="section-heading"><span class="step-badge">01</span><h2>Prepara tu equipo</h2></div>
-        <p class="muted">Conexion real desde este navegador. Al conectar se inicia una copia automatica local. Ninguna escritura se habilita antes de verificar el respaldo requerido.</p>
-        <label for="model">Modelo / familia de hardware</label>
+      <section id="connection" class="panel connection"><div class="section-heading"><span class="step-badge">01</span><h2>Conecta tu radio</h2></div>
+        <p class="muted">Elige el modelo y pulsa Conectar radio. Antes de escribir se guarda una copia.</p>
+        <label for="model">Tu radio</label>
         <select id="model"><option value="">Selecciona tu equipo</option>${tool.models.map(([id, name]) => `<option value="${id}">${name}</option>`).join("")}</select>
         <p id="model-help" class="model-help" role="status">Selecciona un modelo para consultar su conexion.</p>
-        <div class="firmware-note"><strong>Firmware necesario</strong><p>${tool.firmware}</p></div>
         <label class="check"><input id="confirmed" type="checkbox"><span>He comprobado el modelo y el firmware. Autorizo leer la radio y guardar automaticamente copias locales.</span></label>
-        <label class="check"><input id="pro-mode" type="checkbox"><span><strong>Modo PRO (esta sesion)</strong>: autorizo la lectura y las acciones que pulse sin confirmaciones adicionales. Debo seleccionar el modelo correcto. No desactiva respaldos, CRC, permisos USB ni la proteccion de Main.</span></label>
-        <button id="radio-connect" class="button primary" type="button" disabled>Conectar y respaldar</button>
+        <button id="radio-connect" class="button primary big" type="button" disabled>Conectar radio</button>
+        <p id="radio-detected" class="radio-detected" role="status">Radio detectada: ninguna.</p>
         <button id="radio-disconnect" class="button secondary" type="button" disabled>Desconectar</button>
         <p id="radio-status" class="model-help" role="status">Sin conexion.</p>
         <label for="radio-progress">Progreso de la operacion</label>
         <progress id="radio-progress" max="1" value="0"></progress>
         <p id="backup-status" class="card-note" role="status">Escrituras bloqueadas: sin copia verificada.</p>
-        <hr>
-        <button id="launch" class="button primary" type="button" disabled>${tool.action} <span aria-hidden="true">&nearr;</span></button>
-        <p class="card-note">Alternativa externa. Desconecta aqui antes de abrir otra herramienta; esta no hereda la proteccion de nuestras copias.</p>
-        <p id="launch-status" role="status" class="muted"></p>
+        <p id="quick-hint" class="card-note">Al conectar, aquí verás las acciones para tu radio.</p>
+        <div id="quick-actions-panel" hidden><h3>¿Qué quieres hacer?</h3>
+          <ul class="quick-actions">${tool.actions.map(([target, label, help, tab]) => `<li><button type="button" class="quick-action" data-go="${target}"${tab ? ` data-tab="${tab}"` : ""}><strong>${label}</strong><span>${help}</span></button></li>`).join("")}</ul></div>
+        <details id="advanced" class="qs-advanced"><summary>Avanzado</summary>
+          <div class="firmware-note"><strong>Firmware necesario</strong><p>${tool.firmware}</p></div>
+          <label class="check"><input id="pro-mode" type="checkbox"><span><strong>Modo PRO (esta sesion)</strong>: autorizo la lectura y las acciones que pulse sin confirmaciones adicionales. Debo seleccionar el modelo correcto. No desactiva CRC, permisos USB ni la proteccion de Main; el respaldo solo se puede omitir con la casilla expresa de abajo.</span></label>
+          <label class="check"><input id="pro-skip-backup" type="checkbox" disabled><span><strong>PRO: omitir copia de seguridad</strong> (solo Quansheng). Escribir sin copia puede dejar la radio inservible si algo falla.</span></label>
+          <button id="launch" class="button primary" type="button" disabled>${tool.action} <span aria-hidden="true">&nearr;</span></button>
+          <p class="card-note">Alternativa externa. Desconecta aqui antes de abrir otra herramienta; esta no hereda la proteccion de nuestras copias.</p>
+          <p id="launch-status" role="status" class="muted"></p>
+        </details>
       </section>
       <section class="panel guide"><div class="section-heading"><span class="step-badge">02</span><h2>Guias de las referencias</h2></div>
         <div class="guide-tabs" role="group" aria-label="Seleccionar guia">${tool.guides.map(([title], index) => `<button type="button" class="guide-tab" data-guide="${index}" aria-pressed="${index === 0}">${title}</button>`).join("")}</div>
@@ -169,7 +191,7 @@ function detail(tool) {
         ${page === "quansheng" ? '<div class="bank-map" aria-label="Asociacion predeterminada de slots y bancos"><span>M &rarr; CFG M</span><span>1 &rarr; CFG 1</span><span>2 &rarr; CFG 2</span><span>3 &rarr; CFG 3</span><span>4 &rarr; CFG 4</span></div><p class="card-note">Esquema de referencia; no representa el estado de una radio conectada.</p>' : ""}
       </section>
     </div>
-    ${page === "opengd77" ? `<section class="panel" id="cps-web-capabilities"><h2>OpenGD77 CPS: disponibilidad real en web</h2>
+    ${page === "opengd77" ? `<section class="panel" id="cps-web-capabilities" data-advanced-only><h2>OpenGD77 CPS: disponibilidad real en web</h2>
       <p>Esta web funciona en HTTPS sin instalar el servidor Node. No equivale al CPS completo. Chrome/Edge de escritorio y permiso USB/Serial son necesarios para acceder a una radio; algunos sistemas necesitan un controlador. Abrir el CPS externo no comparte nuestras protecciones.</p>
       <div class="table-scroll"><table><thead><tr><th>Funcion</th><th>Estado en esta web</th></tr></thead><tbody>
         <tr><td>Abrir, guardar y editar codeplug estandar 128 KiB</td><td>Disponible en navegador: canales FM/DMR, borrado y referencias de zonas/listas</td></tr>
@@ -318,6 +340,25 @@ if (current) {
     target.focus({ preventScroll: true });
   }));
   if (page === "quansheng") setupViews();
+  document.querySelectorAll("[data-go]").forEach(button => button.addEventListener("click", () => {
+    const target = button.dataset.go;
+    if (page === "quansheng") { showView(target); return; }
+    if (button.dataset.tab) document.querySelector(`[data-plan-tab="${button.dataset.tab}"]`)?.click();
+    const node = document.querySelector(target);
+    if (!node) return;
+    node.tabIndex = -1;
+    node.scrollIntoView({ block: "start" });
+    node.focus({ preventScroll: true });
+  }));
+  // Advanced sections (slots, apps, ARDF, spectrum, factory, raw tools) stay hidden until requested or PRO is on.
+  const advancedToggle = document.getElementById("advanced-toggle");
+  const setAdvanced = on => {
+    document.body.toggleAttribute("data-advanced", on);
+    advancedToggle.setAttribute("aria-pressed", String(on));
+    advancedToggle.textContent = on ? "Ocultar opciones avanzadas" : "Mostrar opciones avanzadas";
+  };
+  advancedToggle.addEventListener("click", () => setAdvanced(!document.body.hasAttribute("data-advanced")));
+  pro.addEventListener("change", () => { if (pro.checked) setAdvanced(true); });
 }
 
 // Shows only the blocks of one view; everything else in <main> stays in the DOM but is not displayed.
@@ -350,11 +391,13 @@ function setupViews() {
       group = document.createElement("div");
       group.className = "ops-group";
       group.dataset.group = groups.find(([pattern]) => pattern.test(node.textContent.trim()))?.[1] ?? "otros";
+      if (["ardf", "espectro", "slots", "apps"].includes(group.dataset.group)) group.dataset.advancedOnly = "";
       operations.insertBefore(group, node);
     }
     group.append(node);
   }
   document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => showView(button.dataset.view)));
+  document.querySelectorAll("#qs-factory-native, #precompiled-apps-panel").forEach(panel => panel.setAttribute("data-advanced-only", ""));
   const viewFor = target => {
     if (target.closest("#plan-sat, #plan-sat-map")) return "satelites";
     if (target === operations) return "canales";

@@ -57,6 +57,8 @@ test("los instalables incluyen el catalogo y todos los recursos web permitidos",
     }
     if (/^precompiled\/[^/]+\.(bin|json|txt)$/.test(file)) {
       assert(build.includes('"$root"/precompiled/*.bin "$root"/precompiled/*.json "$root"/precompiled/*.txt'));
+    } else if (/^precompiled\/([^/]+\.sig|SHA256SUMS)$/.test(file)) {
+      assert(build.includes('"$root"/precompiled/*.sig "$root"/precompiled/SHA256SUMS'));
     } else if (/^precompiled\/apps\/[^/]+\.(app|json)$/.test(file)) {
       assert(build.includes('"$root"/precompiled/apps/*.app "$root"/precompiled/apps/*.json'));
     } else if (/^precompiled\/chirp\/[^/]+\.(py|json|txt)$/.test(file)) {

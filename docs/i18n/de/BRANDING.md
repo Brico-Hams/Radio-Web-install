@@ -39,20 +39,34 @@ Das Originallogo bleibt unverändert. Zustände behalten immer ausdrücklichen T
 
 | Token | Hell | Dunkel | Verwendung |
 | --- | --- | --- | --- |
-| `--brand` | `#23272b` | `#23272b` | BricoHams |
-| `--accent` | `#f26b1d` | `#f26b1d` | BricoHams |
-| `--bg` | `#ffffff` | `#111518` | Hintergrund |
-| `--panel` | `#f6f7f8` | `#1c2329` | Karten und Bereiche |
-| `--line` | `#dce1e5` | `#38434c` | Dekorative Ränder |
-| `--text` | `#23272b` | `#f6f8fa` | Haupttext |
-| `--muted` | `#59636b` | `#bac4cc` | Sekundärtext |
-| `--link` (`--mint`, `--blue`) | `#aa410b` | `#ffa06a` | Links und Fokus |
-| `--focus` | `#f26b1d` | `#ffc18f` | WCAG |
+| `--bg` | `#FFFFFF` | `#111518` | Hintergrund |
+| `--surface` | `#F6F7F8` | `#1C2329` | Karten und Bereiche |
+| `--text` | `#23272B` | `#F6F8FA` | Haupttext |
+| `--text-muted` | `#59636B` | `#BAC4CC` | Sekundärtext |
+| `--border` | `#DCE1E5` | `#38434C` | Ränder |
+| `--link` | `#AA410B` | `#FFA06A` | Links |
+| `--focus` | `#F26B1D` | `#FFC18F` | Fokusring |
+| `--brand-orange` | `#F26B1D` | `#F26B1D` | Bricohams-Orange |
+| `--on-accent` | `#23272B` | `#23272B` | Text auf Orange |
 
-Primäre Schaltflächen: Text `#23272b` auf `--accent: #f26b1d`. Tests prüfen
-mindestens 4,5:1 Textkontrast in beiden Paletten. Hauptbedienelemente mit 44 px,
-sichtbarer Fokus, intern scrollende Tabellen, horizontale mobile Navigation
-und Animationen nur ohne angeforderte Bewegungsreduktion.
+Maßgebliche Quelle: das offizielle Farbhandbuch `BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf`, das nicht im Repository enthalten ist. Das Markengrafit ist `--brand-ink`. Das Thema wird mit `data-theme` am Wurzelelement und `localStorage` angewendet.
+
+Primäre Schaltflächen: Text `--on-accent` auf `--brand-orange: #F26B1D` in beiden Themes, nie Weiß auf Orange. Orange wird nicht als kleiner Text auf hellem Hintergrund verwendet. Sichtbarer Fokus mit `outline: 3px solid var(--focus)`. Hauptbedienelemente mit 44 px, intern scrollende Tabellen, horizontale mobile Navigation und Animationen nur ohne angeforderte Bewegungsreduktion.
+
+Berechneter WCAG-2.1-Kontrast (mindestens 4,5:1 für Text und 3:1 für den Fokusring):
+
+| Paar | Hell | Dunkel |
+| --- | --- | --- |
+| `--text` / `--bg` | 15,0 | 17,2 |
+| `--text` / `--surface` | 14,0 | 14,9 |
+| `--text-muted` / `--bg` | 6,1 | 10,3 |
+| `--text-muted` / `--surface` | 5,7 | 9,0 |
+| `--link` / `--bg` | 6,0 | 9,2 |
+| `--link` / `--surface` | 5,6 | 7,9 |
+| `--on-accent` / `--brand-orange` | 4,9 | 4,9 |
+| `--focus` / `--bg` | 3,05 | 11,6 |
+
+Logo: nur das Original-PNG, nie gefiltert oder invertiert; im dunklen Modus liegt es auf einer dezenten weißen Platte (`--plate`). Fehler- und Warnzustände behalten ausdrücklichen Text und erfüllen AA in beiden Themes.
 
 ## Aufbau
 
@@ -62,7 +76,7 @@ und Animationen nur ohne angeforderte Bewegungsreduktion.
 
 ## Typografie
 
-Systemschrift (`system-ui`, Segoe UI, Roboto…), keine externen Webfonts, um die CSP einzuhalten und keine Ressourcen Dritter zu laden.
+`Inter` für die Oberfläche und `Montserrat` 700–800 für große Überschriften, mit Rückfall auf Systemschriften (`system-ui`, Segoe UI, Roboto…). Es werden keine externen Webfonts geladen, um die CSP einzuhalten und offline zu funktionieren.
 
 ## Sprache
 

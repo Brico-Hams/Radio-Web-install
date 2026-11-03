@@ -31,6 +31,11 @@
     R.inspectQuanshengSlotImage(bytes);
     return bytes;
   }
+  // Detached Ed25519 check (firmware-signature.js): throws, refusing the image, when a configured signature does not verify.
+  async function verifyPrecompiledSignature(entry, bytes) {
+    R.assert(R.FirmwareSignature, "Falta el modulo de verificacion de firmas: firmware rechazado.");
+    return R.FirmwareSignature.verifyPrecompiled(entry, bytes);
+  }
   async function mountPrecompiledCatalog({ model, action, useImage, download, log }) {
     const panel = document.createElement("section");
     panel.id = "precompiled-panel";
@@ -54,6 +59,7 @@
     $("precompiled-entry").disabled = false;
     const selected = () => entries.find(entry => entry.id === $("precompiled-entry").value);
     let loading = false;
+    let signatureLabel = "";
     const state = () => {
       const entry = selected();
       $("precompiled-entry").disabled = loading;
@@ -61,27 +67,30 @@
       $("precompiled-use").disabled = loading || !entry?.targets.includes(model.value) || !$("precompiled-confirm").checked;
       $("precompiled-save").disabled = loading || !entry || !$("precompiled-confirm").checked;
       $("precompiled-info").textContent = entry ?
-        `${entry.size} bytes · SHA-256 ${entry.sha256} · No validado mediante arranque en esta unidad.` : "Selecciona imagen.";
+        `${entry.size} bytes · SHA-256 ${entry.sha256} · No validado mediante arranque en esta unidad.${signatureLabel ? ` · ${signatureLabel}` : ""}` : "Selecciona imagen.";
     };
-    model.addEventListener("change", () => { $("precompiled-confirm").checked = false; state(); });
-    $("precompiled-entry").addEventListener("change", () => { $("precompiled-confirm").checked = false; state(); });
+    model.addEventListener("change", () => { $("precompiled-confirm").checked = false; signatureLabel = ""; state(); });
+    $("precompiled-entry").addEventListener("change", () => { $("precompiled-confirm").checked = false; signatureLabel = ""; state(); });
     $("precompiled-confirm").addEventListener("change", state);
     const load = prepare => action("Verificar firmware precompilado", async () => {
       const entry = selected();
       R.assert(entry && $("precompiled-confirm").checked, "Confirma primero modelo e imagen.");
       if (prepare) R.assert(entry.targets.includes(model.value), "Modelo incompatible con el catalogo precompilado.");
       loading = true;
+      signatureLabel = "";
       state();
       try {
         const response = await fetch(entry.path, { cache: "no-store", signal: AbortSignal.timeout(60000) });
         R.assert(response.ok, `Firmware precompilado: HTTP ${response.status}.`);
         const bytes = await verifyPrecompiledImage(entry, new Uint8Array(await response.arrayBuffer()));
+        const signature = await verifyPrecompiledSignature(entry, bytes);
+        signatureLabel = signature.label;
         if (prepare) useImage(bytes, entry.edition);
         else {
           download(entry.name, bytes);
           download(`${entry.id}.manifest.json`, JSON.stringify(entry, null, 2), "application/json");
         }
-        log(`${entry.edition}: ${entry.sha256}; ${prepare ? "preparado" : "descarga solicitada"}, sin escritura.`);
+        log(`${entry.edition}: ${entry.sha256}; ${signature.label}; ${prepare ? "preparado" : "descarga solicitada"}, sin escritura.`);
       } finally { loading = false; state(); }
     });
     $("precompiled-use").addEventListener("click", () => load(true));
@@ -170,7 +179,7 @@
     $("precompiled-app-save").addEventListener("click", () => load(false));
     state();
   }
-  Object.assign(R, { validatePrecompiledCatalog, verifyPrecompiledImage, mountPrecompiledCatalog,
+  Object.assign(R, { validatePrecompiledCatalog, verifyPrecompiledImage, verifyPrecompiledSignature, mountPrecompiledCatalog,
     validateAppCatalog, verifyPrecompiledApp, mountPrecompiledApps });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

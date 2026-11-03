@@ -38,22 +38,34 @@ El logotipo original no cambia. Los estados siempre conservan texto explícito.
 
 | Token | Claro | Oscuro | Uso |
 | --- | --- | --- | --- |
-| `--brand` | `#23272b` | `#23272b` | Grafito de marca y texto de botones |
-| `--accent` | `#f26b1d` | `#f26b1d` | Naranja de marca (botones) |
-| `--bg` | `#ffffff` | `#111518` | Fondo |
-| `--panel` | `#f6f7f8` | `#1c2329` | Superficies, tarjetas y paneles |
-| `--line` | `#dce1e5` | `#38434c` | Bordes decorativos |
-| `--text` | `#23272b` | `#f6f8fa` | Texto principal |
-| `--muted` | `#59636b` | `#bac4cc` | Texto secundario |
-| `--link` (`--mint`, `--blue`) | `#aa410b` | `#ffa06a` | Enlaces y texto de acento |
-| `--focus` | `#f26b1d` | `#ffc18f` | Anillo de foco |
+| `--bg` | `#FFFFFF` | `#111518` | Fondo |
+| `--surface` | `#F6F7F8` | `#1C2329` | Tarjetas y paneles |
+| `--text` | `#23272B` | `#F6F8FA` | Texto principal |
+| `--text-muted` | `#59636B` | `#BAC4CC` | Texto secundario |
+| `--border` | `#DCE1E5` | `#38434C` | Bordes |
+| `--link` | `#AA410B` | `#FFA06A` | Enlaces |
+| `--focus` | `#F26B1D` | `#FFC18F` | Anillo de foco |
+| `--brand-orange` | `#F26B1D` | `#F26B1D` | Naranja Bricohams |
+| `--on-accent` | `#23272B` | `#23272B` | Texto sobre naranja |
 
-Paleta sRGB oficial de BricoHams. Los colores semánticos (aviso, error) y el
-logotipo no cambian. Botones primarios: texto grafito `#23272b` sobre
-`--accent: #f26b1d`. Las pruebas
-comprueban contraste mínimo 4,5:1 para texto en ambas paletas. Controles
-principales de 44 px, foco visible, tablas con desplazamiento interno,
-navegación móvil horizontal y animación solo sin reducción de movimiento.
+Fuente de verdad: el manual oficial de colores `BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf`, que no se incluye en el repositorio. El grafito de marca es `--brand-ink`. El tema se aplica con `data-theme` en el elemento raíz y `localStorage`.
+
+Botones primarios: texto `--on-accent` sobre `--brand-orange: #F26B1D` en ambos temas, nunca blanco sobre naranja. El naranja no se usa como texto pequeño sobre fondo claro. Foco visible con `outline: 3px solid var(--focus)`. Controles principales de 44 px, tablas con desplazamiento interno, navegación móvil horizontal y animación solo sin reducción de movimiento.
+
+Contraste WCAG 2.1 calculado (mínimo 4,5:1 para texto y 3:1 para el anillo de foco):
+
+| Par | Claro | Oscuro |
+| --- | --- | --- |
+| `--text` / `--bg` | 15,0 | 17,2 |
+| `--text` / `--surface` | 14,0 | 14,9 |
+| `--text-muted` / `--bg` | 6,1 | 10,3 |
+| `--text-muted` / `--surface` | 5,7 | 9,0 |
+| `--link` / `--bg` | 6,0 | 9,2 |
+| `--link` / `--surface` | 5,6 | 7,9 |
+| `--on-accent` / `--brand-orange` | 4,9 | 4,9 |
+| `--focus` / `--bg` | 3,05 | 11,6 |
+
+Logotipo: solo el PNG original, sin filtros ni inversión; en modo oscuro se coloca sobre una placa blanca discreta (`--plate`). Los estados de error y aviso conservan texto explícito y cumplen AA en ambos temas.
 
 ## Estructura
 
@@ -63,7 +75,7 @@ navegación móvil horizontal y animación solo sin reducción de movimiento.
 
 ## Tipografía
 
-Fuente del sistema (`system-ui`, Segoe UI, Roboto…), sin fuentes web externas, para respetar la CSP y no cargar recursos de terceros.
+`Inter` para la interfaz y `Montserrat` 700–800 para los titulares grandes, con respaldo en fuentes del sistema (`system-ui`, Segoe UI, Roboto…). No se cargan fuentes web externas, para respetar la CSP y funcionar sin conexión.
 
 ## Voz
 
