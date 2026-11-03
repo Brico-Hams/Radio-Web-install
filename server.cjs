@@ -1,16 +1,23 @@
 const http = require("node:http");
+const fsSync = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { FirmwareService, TARGETS } = require("./firmware-service.cjs");
 const { DataService } = require("./data-service.cjs");
 const BASE_FILES = [
+  // OTA page + manifest and firmware signatures exist only after the release pipeline has produced them (docs/RELEASE.md).
+  "ota.html", "ota.css", "ota.js",
+  ...["radicodex-update.json", "precompiled/SHA256SUMS", "precompiled/SHA256SUMS.sig",
+    ...["bricohams-ardf", "bricohams-satellite", "bricohams-spectrum", "bricohams-labs", "bricohams-fusion",
+      "f4hwn-fusion", "f4hwn-fieldops", "f4hwn-transfer", "f4hwn-labs"].map(id => `precompiled/${id}.bin.sig`)]
+    .filter(file => fsSync.existsSync(path.join(__dirname, file))),
   "channel-templates.js", "channel-template-ui.js", "channel-template-worker.js",
   "data/channel-templates/satellites.json",
   ...["ES", "GB", "US", "DE", "FR", "HU", "IT"].flatMap(code =>
     [`data/channel-templates/${code}.json`, `data/channel-templates/${code}-passes.json`]),
   "anytone.html", "anytone-core.js", "anytone-ui.js",
   "ftx1.html", "ftx1-menu.js", "ftx1-core.js", "ftx1-ui.js",
-  "precompiled-catalog.js", "quansheng-factory.js", "precompiled/catalog.json", "precompiled/LICENSE.txt",
+  "precompiled-catalog.js", "firmware-signature.js", "quansheng-factory.js", "precompiled/catalog.json", "precompiled/LICENSE.txt",
   "precompiled/APACHE-2.0.txt", "precompiled/NOTICE.txt", "precompiled/BRICOHAMS-NOTICE.txt",
   "precompiled/apps/catalog.json",
   ...["f4hwn.chirp.v6.1.0.py", "manifest.json", "NOTICE.txt", "COPYING.txt"].map(name => `precompiled/chirp/${name}`),

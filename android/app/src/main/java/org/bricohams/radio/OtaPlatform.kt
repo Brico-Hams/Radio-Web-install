@@ -120,7 +120,13 @@ class OtaUpdater(
 ) {
     /** Returns the offer, or null when the installed version is already the newest. */
     fun check(url: String = OtaConfig.MANIFEST_URL): OtaOffer? {
-        val manifest = OtaManifestParser.parse(transport.get(url, OtaConfig.MAX_MANIFEST_BYTES), publicKey, packageName)
+        val bytes = try {
+            transport.get(url, OtaConfig.MAX_MANIFEST_BYTES)
+        } catch (error: IOException) {
+            if (url != OtaConfig.MANIFEST_URL) throw error
+            transport.get(OtaConfig.FALLBACK_MANIFEST_URL, OtaConfig.MAX_MANIFEST_BYTES)
+        }
+        val manifest = OtaManifestParser.parse(bytes, publicKey, packageName)
         if (!OtaPolicy.isNewer(installedCode, manifest.versionCode)) return null
         OtaPolicy.requireApplicable(manifest, installedCode, deviceSdk)
         return OtaOffer(manifest)
@@ -177,8 +183,10 @@ object OtaPlatform {
 
     fun installedCode(context: Context): Long = codeOf(packageInfo(context, 0))
 
-    fun updater(context: Context, transport: OtaTransport = HttpsTransport()) =
-        OtaUpdater(transport, OtaConfig.publicKey, context.packageName, installedCode(context), Build.VERSION.SDK_INT)
+    fun updater(context: Context, transport: OtaTransport = HttpsTransport()): OtaUpdater {
+        if (!OtaConfig.enabled) throw OtaException(OtaFailure.NOT_CONFIGURED)
+        return OtaUpdater(transport, OtaConfig.publicKey, context.packageName, installedCode(context), Build.VERSION.SDK_INT)
+    }
 
     /** Unmetered (Wi-Fi / Ethernet) unless the user opted in to metered networks; throws the reason otherwise. */
     fun requireNetwork(context: Context) {

@@ -29,27 +29,52 @@ a color en web o Android. Construcción y límites en la
 
 ## Paleta
 
-Rediseño del 28-10-2026: naranja Bricohams, superficies neutras y tarjetas
-con jerarquía clara. La web y los instaladores comparten el mismo diseño.
-El selector Apariencia permite Sistema, Claro y Oscuro; se guarda localmente,
-sin cuenta, y sigue los cambios del sistema cuando está en Sistema. La ayuda
-usa la misma preferencia. Android adapta sus controles nativos al sistema.
-El logotipo original no cambia. Los estados siempre conservan texto explícito.
+Manual oficial de colores BricoHams v1.1 (03-11-2026), PDF
+`BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf`
+(no se incluye en el repositorio). Sustituye a todas las paletas anteriores
+(`#f7941d`, `#F26B21`, `#a64b00`, `#0b1418`, `#0e1420`, `#111d22`, `#172131`,
+`#89b9ff`, `#205da8`, `#0A2540` y `#FF6B00`), que no deben volver a usarse.
+
+El selector Apariencia permite Sistema, Claro y Oscuro; se guarda en
+`localStorage` y se aplica como `data-theme` en `<html>` antes de pintar.
+Android sigue el modo del sistema (`res/values/colors.xml` y
+`res/values-night/colors.xml`). Los estados siempre conservan texto explícito.
+
+Ambos temas: `--brand-ink` `#23272B` (grafito), `--brand-orange` `#F26B1D`
+(CTA y detalles) y `--on-accent` `#23272B` (texto sobre naranja).
 
 | Token | Claro | Oscuro | Uso |
 | --- | --- | --- | --- |
-| `--bg` | `#f3f5f9` | `#0e1420` | Fondo |
-| `--panel` | `#ffffff` | `#172131` | Tarjetas y paneles |
-| `--line` | `#dce2eb` | `#334157` | Bordes decorativos |
-| `--text` | `#19263b` | `#edf2fb` | Texto principal |
-| `--muted` | `#526179` | `#afbdd1` | Texto secundario |
-| `--mint` | `#a64b00` | `#ffb456` | Texto de acento |
-| `--blue` | `#205da8` | `#9dc5ff` | Enlaces y foco |
+| `--bg` | `#FFFFFF` | `#111518` | Fondo |
+| `--surface` | `#F6F7F8` | `#1C2329` | Tarjetas y paneles |
+| `--border` | `#DCE1E5` | `#38434C` | Bordes |
+| `--text` | `#23272B` | `#F6F8FA` | Texto principal |
+| `--text-muted` | `#59636B` | `#BAC4CC` | Texto secundario |
+| `--link` | `#AA410B` | `#FFA06A` | Enlaces y texto de acento |
+| `--focus` | `#F26B1D` | `#FFC18F` | Contorno `:focus-visible` de 3 px |
 
-Botones primarios: texto `#241407` sobre `--accent: #f7941d`. Las pruebas
-comprueban contraste mínimo 4,5:1 para texto en ambas paletas. Controles
-principales de 44 px, foco visible, tablas con desplazamiento interno,
-navegación móvil horizontal y animación solo sin reducción de movimiento.
+Reglas (WCAG 2.2 AA):
+
+- Botón primario: fondo naranja `#F26B1D` con texto grafito `#23272B` en ambos temas. Nunca texto blanco sobre naranja (3,05:1).
+- El naranja `#F26B1D` no se usa como texto pequeño sobre blanco; en claro se usa `#AA410B`.
+- Logotipo: solo el PNG original, sin filtros ni inversión; en oscuro, sobre una placa blanca discreta con esquinas redondeadas.
+- Tipografía: Inter para la interfaz y Montserrat 700-800 para titulares grandes, con la pila de fuentes del sistema como respaldo y sin cargar fuentes remotas.
+- Estados (éxito/aviso/error): colores funcionales con contraste AA en ambos temas; nunca sustituyen al naranja de los CTA.
+- Solo impresión: Pantone 426 C (grafito) y 165 C (naranja; 158 C alternativa). No son colores de pantalla.
+- Firmware LCD monocromo: logotipo de arranque y cadena «Bricohams», sin colores.
+
+| Par | Claro | Oscuro |
+| --- | --- | --- |
+| Texto / fondo | 14,6:1 | 17,0:1 |
+| Texto secundario / fondo | 5,9:1 | 10,4:1 |
+| Enlace / fondo | 6,5:1 | 8,5:1 |
+| Grafito sobre naranja (botón) | 4,9:1 | 4,9:1 |
+| Naranja / fondo (no textual) | 3,05:1 | 6,03:1 |
+| Blanco sobre naranja (prohibido) | 3,05:1 | 3,05:1 |
+
+Las cifras son aproximadas (calculadas con la fórmula WCAG); las pruebas
+automáticas de cada plataforma comprueban el mínimo de 4,5:1 para texto.
+
 
 ## Estructura
 
@@ -59,7 +84,7 @@ navegación móvil horizontal y animación solo sin reducción de movimiento.
 
 ## Tipografía
 
-Fuente del sistema (`system-ui`, Segoe UI, Roboto…), sin fuentes web externas, para respetar la CSP y no cargar recursos de terceros.
+Inter para la interfaz y Montserrat 700-800 para titulares grandes, siempre con la pila de fuentes del sistema (`system-ui`, Segoe UI, Roboto…) como respaldo. No se cargan fuentes web externas, para respetar la CSP y el uso sin conexión; solo se usan si están instaladas o empaquetadas localmente.
 
 ## Voz
 

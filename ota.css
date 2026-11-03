@@ -1,0 +1,96 @@
+/* BricoHams colour manual v1.1 tokens (same values as the Android app). */
+:root {
+  --ink: #23272b;
+  --orange: #f26b1d;
+  --background: #ffffff;
+  --surface: #f6f7f8;
+  --outline: #dce1e5;
+  --text: #23272b;
+  --muted: #59636b;
+  --accent: #aa410b;
+  --positive: #1b5e34;
+  --negative: #a4231a;
+  --focus: #f26b1d;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #111518;
+    --surface: #1c2329;
+    --outline: #38434c;
+    --text: #f6f8fa;
+    --muted: #bac4cc;
+    --accent: #ffa06a;
+    --positive: #8edca6;
+    --negative: #ff9b8f;
+    --focus: #ffc18f;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--ink);
+  border-bottom: 4px solid var(--orange);
+}
+.logo { height: 45px; width: auto; }
+.langs { display: flex; gap: 0.25rem; }
+.langs button {
+  font: inherit;
+  padding: 0.25rem 0.6rem;
+  color: #f6f8fa;
+  background: transparent;
+  border: 1px solid #5b6770;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.langs button[aria-pressed="true"] { background: var(--orange); border-color: var(--orange); color: var(--ink); }
+main { max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+h1, h2 { line-height: 1.2; }
+h1 { border-left: 6px solid var(--orange); padding-left: 0.6rem; }
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.4rem 1rem;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+}
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+code { font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }
+pre {
+  white-space: pre-wrap;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  font: inherit;
+}
+a { color: var(--accent); }
+.button {
+  display: inline-block;
+  padding: 0.6rem 1.1rem;
+  color: var(--ink);
+  background: var(--orange);
+  border-radius: 6px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.button[aria-disabled="true"] { opacity: 0.5; pointer-events: none; }
+a:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.ok { color: var(--positive); font-weight: 600; }
+.bad { color: var(--negative); font-weight: 600; }
+.info { margin-top: 2rem; }
+@media (forced-colors: active) {
+  .button { border: 2px solid ButtonText; }
+}

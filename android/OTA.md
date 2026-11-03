@@ -2,9 +2,15 @@
 
 ## Canal elegido
 
-Un **asset de GitHub Release** del repositorio `Brico-Hams/Radio-Web-install`:
+Principal: **GitHub Pages** (`ota.html` muestra la version, notas en 4 idiomas, SHA-256 y estado de firma):
+
+`https://brico-hams.github.io/Radio-Web-install/radicodex-update.json`
+
+Respaldo (la app lo usa si el principal falla por red): **asset de GitHub Release**:
 
 `https://github.com/Brico-Hams/Radio-Web-install/releases/latest/download/radicodex-update.json`
+
+Solo el sabor `github` incluye el actualizador; el sabor `fdroid` lo elimina junto con `REQUEST_INSTALL_PACKAGES`. Ver `docs/RELEASE.md`.
 
 Requisito: la release de Android debe ser la marcada como **Latest** y llevar adjuntos el APK y `radicodex-update.json`. El manifiesto está firmado con Ed25519; la clave pública está embebida en la app (`OtaConfig.PUBLIC_KEY_HEX`, en `Ota.kt`). Mientras esté vacía, el canal queda desactivado y la app dice que no está configurado.
 
@@ -25,7 +31,7 @@ node scripts/ota-manifest.cjs keygen --private D:\secretos\radicodex-ota.pem
 2. Compila y firma con el keystore de producción: `gradlew assembleRelease`.
 3. Genera el manifiesto (clave por fichero o por variable de entorno con el PEM):
    ```
-   node scripts/ota-manifest.cjs build --apk android\app\build\outputs\apk\release\app-release.apk --key-file D:\secretos\radicodex-ota.pem --out radicodex-update.json
+   node scripts/ota-manifest.cjs build --apk android\app\build\outputs\apk\github\release\app-github-release.apk --key-file D:\secretos\radicodex-ota.pem --out radicodex-update.json
    ```
    `versionCode`, `versionName` y `minSdk` se leen de `build.gradle.kts` (se pueden forzar con `--version-code`, `--version-name`, `--min-sdk`). `--url` fija la URL del APK; por defecto, `releases/download/android-v<versionName>/<nombre>.apk`. Las notas se toman de los assets `changelog-<código>.<idioma>.md` o de `--notes es=fichero.md`.
    Alternativa: `$env:RADICODEX_OTA_PRIVATE_KEY = Get-Content -Raw ...pem`.

@@ -14,13 +14,19 @@ import java.util.TreeMap
  * (the "latest" release), signed with an Ed25519 release key whose public half is embedded below. See android/OTA.md.
  */
 object OtaConfig {
-    const val MANIFEST_URL = "https://github.com/Brico-Hams/Radio-Web-install/releases/latest/download/radicodex-update.json"
+    /** Primary channel: static GitHub Pages site (ota.html); radicodex-update.json is published there by the release pipeline. */
+    const val MANIFEST_URL = "https://brico-hams.github.io/Radio-Web-install/radicodex-update.json"
+    /** Fallback when Pages is unreachable or has no manifest: the GitHub Release asset of the latest release. Same signed file. */
+    const val FALLBACK_MANIFEST_URL = "https://github.com/Brico-Hams/Radio-Web-install/releases/latest/download/radicodex-update.json"
     /** Raw 32-byte Ed25519 release public key as 64 hex digits (`node scripts/ota-manifest.cjs keygen`). Empty = channel disabled. */
     const val PUBLIC_KEY_HEX = "00980a6d0cc6b02e69b24d5d9caf5424bf7a0a4748247f3782f0b91a0134e68d"
     const val CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
     const val MAX_MANIFEST_BYTES = 64 * 1024
     const val MAX_APK_BYTES = 150L * 1024 * 1024
     const val SCHEMA = 1L
+
+    /** False in the fdroid flavor: no update check, no download and no installer session are ever started. */
+    val enabled: Boolean get() = BuildConfig.OTA_ENABLED
 
     val publicKey: ByteArray? get() = if (PUBLIC_KEY_HEX.length == 64) Hex.decode(PUBLIC_KEY_HEX) else null
 }

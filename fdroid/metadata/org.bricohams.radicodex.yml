@@ -43,6 +43,25 @@ Builds:
       - examples/firmware
       - precompiled
 
+  # Next release (flavored build, no OTA updater, no REQUEST_INSTALL_PACKAGES):
+  # - versionName: <next>
+  #   versionCode: <next>
+  #   commit: android-v<next>
+  #   subdir: android
+  #   gradle:
+  #     - fdroid
+  #   rm:
+  #     - android/Bricohams-Android
+  #     - examples/firmware
+  #     - precompiled
+
+# TODO: AllowedAPKSigningKeys is required for reproducible builds with the
+# developer signature. Get the SHA-256 of the release certificate with
+#   apksigner verify --print-certs app-github-release.apk
+#   keytool -list -v -keystore <keystore.jks> -alias <alias>
+# (scripts/sign-release.ps1 prints it) and use it lowercase, without colons:
+# AllowedAPKSigningKeys: <certificate-sha256>
+
 MaintainerNotes: |-
     Submission candidate, not an accepted F-Droid listing. Publish the Android
     tag before submission and resolve the initial commit to its full SHA in

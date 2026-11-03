@@ -18,11 +18,11 @@ if (-not (Test-Path -LiteralPath $signer)) { throw 'Faltan Android Build Tools 3
 
 Push-Location $root
 try {
-    & .\android\gradlew.bat -p android :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon
+    & .\android\gradlew.bat -p android :app:testGithubDebugUnitTest :app:lintGithubDebug :app:assembleGithubDebug :app:assembleGithubDebugAndroidTest --no-daemon
     if ($LASTEXITCODE -ne 0) { throw "La compilacion Android fallo: $LASTEXITCODE" }
     $artifacts = @(
-        @{ Source = 'android\app\build\outputs\apk\debug\app-debug.apk';         Name = 'radicodex-1.0.1-debug.apk' },
-                @{ Source = 'android\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'; Name = 'radicodex-1.0.1-androidTest.apk' }
+        @{ Source = 'android\app\build\outputs\apk\github\debug\app-github-debug.apk';         Name = 'radicodex-1.0.1-debug.apk' },
+                @{ Source = 'android\app\build\outputs\apk\androidTest\github\debug\app-github-debug-androidTest.apk'; Name = 'radicodex-1.0.1-androidTest.apk' }
     )
     foreach ($artifact in $artifacts) {
         & $signer verify $artifact.Source
@@ -30,13 +30,13 @@ try {
     }
     $tests = 0
     $failures = 0
-    foreach ($report in Get-ChildItem -LiteralPath 'android\app\build\test-results\testDebugUnitTest' -Filter 'TEST-*.xml') {
+    foreach ($report in Get-ChildItem -LiteralPath 'android\app\build\test-results\testGithubDebugUnitTest' -Filter 'TEST-*.xml') {
         [xml]$xml = Get-Content -LiteralPath $report.FullName -Raw
         $tests += [int]$xml.testsuite.tests
         $failures += [int]$xml.testsuite.failures + [int]$xml.testsuite.errors
     }
     if ($tests -eq 0 -or $failures -ne 0) { throw "Pruebas host no verificadas: $tests pruebas, $failures fallos." }
-    [xml]$lint = Get-Content -LiteralPath 'android\app\build\reports\lint-results-debug.xml' -Raw
+    [xml]$lint = Get-Content -LiteralPath 'android\app\build\reports\lint-results-githubDebug.xml' -Raw
     $lintErrors = @($lint.issues.issue | Where-Object { $_.severity -in @('Error', 'Fatal') }).Count
     $lintWarnings = @($lint.issues.issue | Where-Object { $_.severity -eq 'Warning' }).Count
     if ($lintErrors -ne 0) { throw "Lint contiene $lintErrors errores." }

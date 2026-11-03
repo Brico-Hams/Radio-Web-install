@@ -284,7 +284,7 @@ class MainActivity : LocalizedActivity() {
             text(R.string.home_features)
             text(R.string.home_ardf_note)
             text(R.string.home_privacy)
-            button(R.string.home_open_updates) { startActivity(Intent(this, OtaActivity::class.java)) }
+            if (OtaConfig.enabled) button(R.string.home_open_updates) { startActivity(Intent(this, OtaActivity::class.java)) }
         }
     }
     private fun spinner(identifier: Int, values: List<String>, selected: String) = Spinner(this).apply {

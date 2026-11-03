@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>RadiCodex: actualizaciones OTA · BricoHams</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="ota.css">
+  <script src="ota.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <img class="logo" src="bricohams-logo.png" alt="BricoHams" width="120" height="45">
+    <nav class="langs" aria-label="Idioma / Language">
+      <button type="button" data-lang="es">ES</button>
+      <button type="button" data-lang="en">EN</button>
+      <button type="button" data-lang="fr">FR</button>
+      <button type="button" data-lang="de">DE</button>
+    </nav>
+  </header>
+  <main id="main">
+    <h1 data-i18n="title">RadiCodex: última versión</h1>
+    <p id="status" role="status">Cargando el manifiesto firmado…</p>
+    <section id="release" hidden>
+      <dl class="facts">
+        <dt data-i18n="version">Versión</dt><dd id="version"></dd>
+        <dt data-i18n="sha">SHA-256 del APK</dt><dd><code id="sha256"></code></dd>
+        <dt data-i18n="size">Tamaño</dt><dd id="size"></dd>
+        <dt data-i18n="signature">Firma del manifiesto</dt><dd id="signature"></dd>
+      </dl>
+      <p><a id="download" class="button" rel="noopener noreferrer" data-i18n="download">Descargar APK</a></p>
+      <h2 data-i18n="notes">Novedades</h2>
+      <pre id="notes"></pre>
+    </section>
+    <section class="info">
+      <h2 data-i18n="howto">Cómo se verifica</h2>
+      <p data-i18n="howtoText">La app comprueba la firma Ed25519 del manifiesto, el SHA-256 y que el APK esté firmado con el mismo certificado que la instalada. Esta página repite la comprobación de la firma en tu navegador.</p>
+      <p><a href="radicodex-update.json" data-i18n="manifest">Manifiesto firmado (radicodex-update.json)</a></p>
+    </section>
+  </main>
+</body>
+</html>

@@ -30,27 +30,51 @@ oder Android. Erstellung und Grenzen im
 
 ## Farbpalette
 
-Neugestaltung vom 28.10.2026: Bricohams-Orange, neutrale Flächen und klar
-gegliederte Karten. Website und Installationspakete verwenden dasselbe Design.
-Darstellung bietet System, Hell und Dunkel; die Auswahl wird lokal ohne Konto
-gespeichert und folgt im Systemmodus den Systemeinstellungen. Die Hilfe nutzt
-dieselbe Auswahl. Android passt seine nativen Bedienelemente an das System an.
-Das Originallogo bleibt unverändert. Zustände behalten immer ausdrücklichen Text.
+Offizielles BricoHams-Farbhandbuch v1.1 (03.11.2026), PDF
+`BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf`
+(nicht im Repository enthalten). Es ersetzt alle früheren Paletten
+(`#f7941d`, `#F26B21`, `#a64b00`, `#0b1418`, `#0e1420`, `#111d22`, `#172131`,
+`#89b9ff`, `#205da8`, `#0A2540` und `#FF6B00`), die nicht wieder verwendet werden dürfen.
+
+Die Auswahl Darstellung bietet System, Hell und Dunkel; sie wird in
+`localStorage` gespeichert und vor dem Rendern als `data-theme` auf `<html>` gesetzt.
+Android folgt dem Systemmodus (`res/values/colors.xml` und
+`res/values-night/colors.xml`). Zustände behalten immer ausdrücklichen Text.
+
+Beide Themes: `--brand-ink` `#23272B` (Graphit), `--brand-orange` `#F26B1D`
+(CTA und Details) und `--on-accent` `#23272B` (Text auf Orange).
 
 | Token | Hell | Dunkel | Verwendung |
 | --- | --- | --- | --- |
-| `--bg` | `#f3f5f9` | `#0e1420` | Hintergrund |
-| `--panel` | `#ffffff` | `#172131` | Karten und Bereiche |
-| `--line` | `#dce2eb` | `#334157` | Dekorative Ränder |
-| `--text` | `#19263b` | `#edf2fb` | Haupttext |
-| `--muted` | `#526179` | `#afbdd1` | Sekundärtext |
-| `--mint` | `#a64b00` | `#ffb456` | Akzenttext |
-| `--blue` | `#205da8` | `#9dc5ff` | Links und Fokus |
+| `--bg` | `#FFFFFF` | `#111518` | Hintergrund |
+| `--surface` | `#F6F7F8` | `#1C2329` | Karten und Bereiche |
+| `--border` | `#DCE1E5` | `#38434C` | Ränder |
+| `--text` | `#23272B` | `#F6F8FA` | Haupttext |
+| `--text-muted` | `#59636B` | `#BAC4CC` | Sekundärtext |
+| `--link` | `#AA410B` | `#FFA06A` | Links und Akzenttext |
+| `--focus` | `#F26B1D` | `#FFC18F` | 3-px-Kontur `:focus-visible` |
 
-Primäre Schaltflächen: Text `#241407` auf `--accent: #f7941d`. Tests prüfen
-mindestens 4,5:1 Textkontrast in beiden Paletten. Hauptbedienelemente mit 44 px,
-sichtbarer Fokus, intern scrollende Tabellen, horizontale mobile Navigation
-und Animationen nur ohne angeforderte Bewegungsreduktion.
+Regeln (WCAG 2.2 AA):
+
+- Primäre Schaltfläche: orangefarbener Hintergrund `#F26B1D` mit graphitfarbenem Text `#23272B` in beiden Themes. Nie weißer Text auf Orange (3,05:1).
+- Das Orange `#F26B1D` wird nicht als kleiner Text auf Weiß verwendet; im hellen Theme gilt `#AA410B`.
+- Logo: nur das Original-PNG, ohne Filter oder Invertierung; im dunklen Theme auf einer dezenten weißen Platte mit abgerundeten Ecken.
+- Typografie: Inter für die Oberfläche und Montserrat 700-800 für große Überschriften, mit dem Systemschrift-Stack als Rückfall und ohne Nachladen externer Schriften.
+- Zustände (Erfolg/Warnung/Fehler): funktionale Farben mit AA-Kontrast in beiden Themes; sie ersetzen nie das Orange der CTA.
+- Nur Druck: Pantone 426 C (Graphit) und 165 C (Orange; 158 C als Alternative). Es sind keine Bildschirmfarben.
+- Firmware mit monochromem LCD: Startlogo und Zeichenkette „Bricohams“, ohne Farben.
+
+| Paar | Hell | Dunkel |
+| --- | --- | --- |
+| Text / Hintergrund | 14,6:1 | 17,0:1 |
+| Sekundärtext / Hintergrund | 5,9:1 | 10,4:1 |
+| Link / Hintergrund | 6,5:1 | 8,5:1 |
+| Graphit auf Orange (Schaltfläche) | 4,9:1 | 4,9:1 |
+| Orange / Hintergrund (nicht textlich) | 3,05:1 | 6,03:1 |
+| Weiß auf Orange (verboten) | 3,05:1 | 3,05:1 |
+
+Die Werte sind Näherungen (nach der WCAG-Formel berechnet); die automatischen
+Tests jeder Plattform prüfen das Minimum von 4,5:1 für Text.
 
 ## Aufbau
 

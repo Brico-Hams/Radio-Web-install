@@ -13,6 +13,24 @@ android {
         versionName = "1.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    buildFeatures { buildConfig = true }
+    // fdroid: store build without the OTA self-updater; github: signed APK with the OTA channel (android/OTA.md).
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("fdroid") {
+            dimension = "distribution"
+            buildConfigField("boolean", "OTA_ENABLED", "false")
+        }
+        create("github") {
+            dimension = "distribution"
+            buildConfigField("boolean", "OTA_ENABLED", "true")
+        }
+    }
+    // Reproducible builds: no Google dependency blob in the APK and no VCS info (both vary with the build checkout).
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
     val releaseSigningEnv = listOf(
         "RADICODEX_KEYSTORE_PATH",
         "RADICODEX_KEYSTORE_PASSWORD",
@@ -32,6 +50,7 @@ android {
     }
     buildTypes {
         getByName("release") {
+            vcsInfo.include = false
             if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
         }
     }

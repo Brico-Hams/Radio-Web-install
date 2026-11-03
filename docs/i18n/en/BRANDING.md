@@ -29,27 +29,51 @@ color PNG on the web or Android. Build details and limitations are in the
 
 ## Palette
 
-Redesigned on 2026-10-28: Bricohams orange, neutral surfaces, and clearly
-structured cards. The website and installers share the same design.
-Appearance offers System, Light, and Dark; the preference is stored locally,
-without an account, and follows system changes when set to System. Help uses
-the same preference. Android adapts its native controls to the system.
-The original logo is unchanged. States always retain explicit text.
+Official BricoHams color manual v1.1 (2026-11-03), PDF
+`BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf`
+(not included in the repository). It replaces all previous palettes
+(`#f7941d`, `#F26B21`, `#a64b00`, `#0b1418`, `#0e1420`, `#111d22`, `#172131`,
+`#89b9ff`, `#205da8`, `#0A2540`, and `#FF6B00`), which must not be used again.
+
+The Appearance selector offers System, Light, and Dark; it is stored in
+`localStorage` and applied as `data-theme` on `<html>` before painting.
+Android follows the system mode (`res/values/colors.xml` and
+`res/values-night/colors.xml`). States always retain explicit text.
+
+Both themes: `--brand-ink` `#23272B` (graphite), `--brand-orange` `#F26B1D`
+(CTAs and details), and `--on-accent` `#23272B` (text on orange).
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `--bg` | `#f3f5f9` | `#0e1420` | Background |
-| `--panel` | `#ffffff` | `#172131` | Cards and panels |
-| `--line` | `#dce2eb` | `#334157` | Decorative borders |
-| `--text` | `#19263b` | `#edf2fb` | Primary text |
-| `--muted` | `#526179` | `#afbdd1` | Secondary text |
-| `--mint` | `#a64b00` | `#ffb456` | Accent text |
-| `--blue` | `#205da8` | `#9dc5ff` | Links and focus |
+| `--bg` | `#FFFFFF` | `#111518` | Background |
+| `--surface` | `#F6F7F8` | `#1C2329` | Cards and panels |
+| `--border` | `#DCE1E5` | `#38434C` | Borders |
+| `--text` | `#23272B` | `#F6F8FA` | Primary text |
+| `--text-muted` | `#59636B` | `#BAC4CC` | Secondary text |
+| `--link` | `#AA410B` | `#FFA06A` | Links and accent text |
+| `--focus` | `#F26B1D` | `#FFC18F` | 3 px `:focus-visible` outline |
 
-Primary buttons: `#241407` text on `--accent: #f7941d`. Tests check a
-minimum 4.5:1 text contrast in both palettes. Main controls are 44 px,
-with visible focus, internally scrolling tables, horizontal mobile navigation,
-and animations only when reduced motion is not requested.
+Rules (WCAG 2.2 AA):
+
+- Primary button: orange `#F26B1D` background with graphite `#23272B` text in both themes. Never white text on orange (3.05:1).
+- Orange `#F26B1D` is not used as small text on white; in light mode `#AA410B` is used.
+- Logo: only the original PNG, without filters or inversion; in dark mode, on a discreet white plate with rounded corners.
+- Typography: Inter for the interface and Montserrat 700-800 for large headings, with the system font stack as fallback and no remote fonts loaded.
+- States (success/warning/error): functional colors with AA contrast in both themes; they never replace the CTA orange.
+- Print only: Pantone 426 C (graphite) and 165 C (orange; 158 C alternative). They are not screen colors.
+- Monochrome LCD firmware: boot logo and “Bricohams” string, without colors.
+
+| Pair | Light | Dark |
+| --- | --- | --- |
+| Text / background | 14.6:1 | 17.0:1 |
+| Secondary text / background | 5.9:1 | 10.4:1 |
+| Link / background | 6.5:1 | 8.5:1 |
+| Graphite on orange (button) | 4.9:1 | 4.9:1 |
+| Orange / background (non-text) | 3.05:1 | 6.03:1 |
+| White on orange (prohibited) | 3.05:1 | 3.05:1 |
+
+The figures are approximate (computed with the WCAG formula); each platform's
+automated tests check the 4.5:1 minimum for text.
 
 ## Structure
 

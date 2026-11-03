@@ -61,6 +61,6 @@ test("release CI checks store metadata and builds a separate unsigned release AP
   assert.ok(workflow.includes("node scripts/check-android-store.cjs"));
   assert.ok(workflow.includes(":app:assembleRelease"));
   assert.ok(workflow.includes(":app:lintRelease"));
-  assert.ok(workflow.includes("app-release-unsigned.apk"));
+  assert.ok(workflow.includes("app-github-release-unsigned.apk"));
   assert.ok(workflow.includes("startsWith(github.ref, 'refs/tags/v')"));
 });

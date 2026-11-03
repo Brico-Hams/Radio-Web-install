@@ -46,7 +46,7 @@ object ReleaseNotices {
 object OtaAutoCheck {
     fun run(activity: Activity, transport: OtaTransport = HttpsTransport(), onOffer: (OtaManifest) -> Unit) {
         val context = activity.applicationContext
-        if (OtaConfig.publicKey == null || !OtaPlatform.autoCheckEnabled(context)) return
+        if (!OtaConfig.enabled || OtaConfig.publicKey == null || !OtaPlatform.autoCheckEnabled(context)) return
         if (!OtaPolicy.checkDue(OtaPlatform.lastCheck(context), System.currentTimeMillis())) return
         // Not marked as checked when the network is unsuitable: the next launch on Wi-Fi tries again.
         try { OtaPlatform.requireNetwork(context) } catch (_: OtaException) { return }
