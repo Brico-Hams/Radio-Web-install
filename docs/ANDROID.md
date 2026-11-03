@@ -1,6 +1,6 @@
 # RadiCodex by BricoHams
 
-Versión 1.0.1 (versionCode 16): la APK se llama RadiCodex by BricoHams (identificador `org.bricohams.radicodex`).
+Versión 1.1.0 (versionCode 17): la APK se llama RadiCodex by BricoHams (identificador `org.bricohams.radicodex`).
 
 Guia paso a paso: [Tutoriales de RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 
@@ -55,7 +55,7 @@ la paleta de la web: su migracion final sigue pendiente.
 ## Instalacion y datos
 
 Las APK de depuracion estan firmadas con la clave debug de la herramienta Android.
-La APK de publicacion `RadiCodex-1.0.1.apk` solo se firma con la clave de
+La APK de publicacion `RadiCodex-1.1.0.apk` solo se firma con la clave de
 publicacion de RadiCodex si la release de GitHub la incluye; verifica el SHA-256
 publicado con ella. No se distribuye por Google Play. Las funciones marcadas como
 experimentales siguen sin validacion con radio real.
@@ -603,6 +603,58 @@ La vista previa de imagen no sobrevive a rotacion. No existe servicio,
 grabacion en segundo plano, PTT, TX ni decodificacion continua en streaming:
 primero se captura, despues se decodifica. Un resultado sintetico correcto
 no valida recepcion RF real ni la ruta de microfono de un telefono.
+
+## Guía por módulo y radios CAT (1.1.0)
+
+Resumen de cada módulo de RadiCodex 1.1.0: para qué sirve, los pasos básicos y la tabla de radios con CAT por USB OTG. **Nunca transmitas sin antena o carga artificial**: ningún paso de esta guía lo exige y las pruebas de diagnóstico solo reciben.
+
+### Radios y CAT por OTG
+
+| Radio | Identificador USB | Baudios | Cómo activar el CAT |
+| --- | --- | --- | --- |
+| Quansheng UV-K5 con BH Satellite | `0x36B7` | `38400` | Firmware v0.5.7: en SAT RX pulsa F+8 (CAT remoto); actúa sobre el VFO y vuelve a tu frecuencia. Firmware antiguo: SAT RX y tecla 8. |
+| Yaesu FTX-1 | `0x10C4:0xEA70` | `38400` | Puerto Enhanced COM (CAT-1) con el mismo CAT-1 RATE en la radio; firmware MAIN 1.08 o posterior. |
+| (tr)uSDX | `0x1A86:0x7523` | `115200` | Firmware 2.00t o posterior; con uno anterior la app prueba `38400`. |
+| QRP Labs QMX+ | `0x0483:0xA34C` | `38400` | Puerto COM virtual USB; la velocidad no influye. Sin antena: no transmitas con ella. |
+
+Las demás radios del menú CAT multirradio (FT-817/818, FT-857/897, IC-705, QDX) se describen en los tutoriales. Una radio que no responde no se fuerza: revisa cable, puerto y baudios.
+
+### Módulos: finalidad y pasos
+
+| Módulo | Para qué sirve | Pasos |
+| --- | --- | --- |
+| Libro de guardia | Registrar contactos General, POTA y SOTA con ADIF y JSON. | Crea el libro, añade contactos, busca, importa ADIF con vista previa o exporta. |
+| ARDF | Sesiones de radiogoniometría con GPS. | Inicia la sesión, anota observaciones y revisa estadísticas e historial. |
+| Morse | Texto a Morse y audio WAV experimental. | Escribe puntos y rayas o importa un WAV y revisa el resultado. |
+| SSTV | Imágenes Robot36 desde WAV, micrófono o CAT. | Elige el modo, recibe o importa y guarda el PNG; para TX usa tu indicativo y carga artificial. |
+| CAT Quansheng | Sintonía de recepción remota de la UV-K5. | Conecta por OTG, elige el dispositivo, activa el CAT en la radio (tabla), sintoniza y pulsa STOP al terminar. |
+| CAT multirradio | Control de FTX-1, (tr)uSDX, QMX+ y otras radios. | Elige modelo y baudios, conecta, lee o cambia frecuencia y modo; PTT solo con carga artificial confirmada y nunca con la QMX+. |
+| Modos digitales | FT8, FT4 y FT2 con decodificador propio (OSD y decodificación a priori). | Elige modo y banda, escucha audio USB o un WAV y revisa las decodificaciones. |
+| Receptor en vivo | Morse y Robot36 con el micrófono. | Concede el permiso, captura hasta 60 s y decodifica. |
+| Satélites | Pases SGP4, Doppler RX y mapa. | Actualiza los TLE, fija tu posición, elige un pase y sigue el Doppler. |
+| Editor de canales Quansheng | Leer y editar canales de la UV-K5. | Haz el respaldo completo, edita, escribe y comprueba la relectura. |
+| OpenGD77 | Pantalla y reloj UTC de una radio OpenGD77. | Conecta, elige el dispositivo y usa Pantalla, Reloj o Ping. |
+| Diagnóstico y Puente | Probar radios y módulos sin transmitir. | Pulsa Buscar y después Probar o Probar todo. |
+| Actualizaciones | Actualizar la app (solo compilación GitHub). | Busca, revisa y confirma la instalación. |
+
+Los TLE se descargan de CelesTrak y, si falla, de SatNOGS y después de AMSAT; también puedes importarlos sin conexión.
+
+### Diagnóstico y Puente
+
+Desde Inicio abre Puente / Diagnóstico USB. Detecta las radios conectadas por OTG (Quansheng, FTX-1, (tr)uSDX y QMX+) y comprueba abrir USB, identificar, leer la frecuencia, fijar una frecuencia de prueba en recepción, releerla y restaurar la original. No transmite ni escribe memorias.
+
+- Pulsa Buscar dispositivos USB y después Probar en una radio, o **Probar todo** para todas las radios y módulos.
+- En la Quansheng la prueba de módulos lee enlace, canales, calibración, slots, presets, ARDF y pases; la radio debe estar en SAT RX con CAT habilitado.
+- Comparte o guarda el informe al terminar.
+- El puente TCP es opcional: reenvía el CAT de la radio elegida al PC por la red local sin autenticación. Actívalo solo en una red de confianza y apágalo al terminar; solo funciona con la pantalla abierta.
+
+### Ubicación GPS
+
+En Satélites, Obtener posición del teléfono pide el permiso de ubicación, precisa o aproximada. Busca hasta 180 s con GPS, red y fusionado, muestra los satélites visibles y usados y afina la precisión antes de que revises y guardes. Con permiso aproximado la precisión es de varios km, suficiente para pases. Si no llega posición, sal al exterior, comprueba la ubicación del teléfono, usa la última posición guardada o escribe las coordenadas. La posición se queda en el teléfono.
+
+### Actualizaciones (OTA)
+
+Solo en la compilación de GitHub; la de F-Droid no incluye el actualizador. Inicio y Actualizaciones busca versiones nuevas a mano o cada día, por defecto en redes sin tarifa. Antes de abrir el instalador de Android se verifican firma del manifiesto, SHA-256, tamaño, paquete y certificado; Android siempre pide tu confirmación y no hay instalaciones silenciosas. Tras actualizar, la app muestra las novedades y avisa también cuando cambia el firmware de una radio conectada.
 
 ## Compilacion
 

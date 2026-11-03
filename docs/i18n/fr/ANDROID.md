@@ -1,6 +1,6 @@
 # RadiCodex by BricoHams
 
-Version 1.0.1 (versionCode 16) : l'APK s'appelle RadiCodex by BricoHams (identifiant `org.bricohams.radicodex`).
+Version 1.1.0 (versionCode 17) : l'APK s'appelle RadiCodex by BricoHams (identifiant `org.bricohams.radicodex`).
 
 Guide pas à pas : [Tutoriels de RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 
@@ -51,7 +51,7 @@ pas encore été modifiée : sa migration finale reste à faire.
 ## Installation et données
 
 Les APK de débogage sont signées avec la clé debug de l’outil Android. L’APK de
-publication `RadiCodex-1.0.1.apk` n’est signée avec la clé de publication de
+publication `RadiCodex-1.1.0.apk` n’est signée avec la clé de publication de
 RadiCodex que si la release GitHub l’inclut ; vérifiez le SHA-256 publié avec
 elle. Elle n’est pas distribuée par Google Play. Les fonctions marquées comme
 expérimentales n’ont toujours pas été validées avec une vraie radio.
@@ -494,6 +494,58 @@ et supprime le résultat en attente. **La capture ne reprend pas** au retour. L�
 ne survit pas à la rotation. Il n’existe ni service, ni enregistrement en arrière-plan, ni PTT,
 ni TX, ni décodage continu en flux : la capture précède le décodage. Un résultat synthétique correct
 ne valide ni la réception RF réelle ni le chemin du microphone d’un téléphone.
+
+## Guide par module et radios CAT (1.1.0)
+
+Résumé de chaque module de RadiCodex 1.1.0 : utilité, étapes de base et tableau des radios avec CAT par USB OTG. **Ne transmettez jamais sans antenne ou charge fictive** : aucune étape de ce guide ne l'exige et les tests de diagnostic ne font que recevoir.
+
+### Radios et CAT par OTG
+
+| Radio | Identifiant USB | Bauds | Comment activer le CAT |
+| --- | --- | --- | --- |
+| Quansheng UV-K5 avec BH Satellite | `0x36B7` | `38400` | Firmware v0.5.7 : en SAT RX appuyez sur F+8 (CAT distant) ; il agit sur le VFO et revient à votre fréquence. Ancien firmware : SAT RX et touche 8. |
+| Yaesu FTX-1 | `0x10C4:0xEA70` | `38400` | Port Enhanced COM (CAT-1) avec le même CAT-1 RATE sur la radio ; firmware MAIN 1.08 ou ultérieur. |
+| (tr)uSDX | `0x1A86:0x7523` | `115200` | Firmware 2.00t ou ultérieur ; avec un plus ancien l'app essaie `38400`. |
+| QRP Labs QMX+ | `0x0483:0xA34C` | `38400` | Port COM USB virtuel ; la vitesse n'a pas d'importance. Sans antenne : ne transmettez pas avec elle. |
+
+Les autres radios du menu CAT multi-radio (FT-817/818, FT-857/897, IC-705, QDX) sont décrites dans les tutoriels. Une radio qui ne répond pas n'est pas forcée : vérifiez le câble, le port et les bauds.
+
+### Modules : utilité et étapes
+
+| Module | Utilité | Étapes |
+| --- | --- | --- |
+| Journal de trafic | Consigner les contacts General, POTA et SOTA avec ADIF et JSON. | Créez le journal, ajoutez des contacts, cherchez, importez l'ADIF avec aperçu ou exportez. |
+| ARDF | Sessions de radiogoniométrie avec GPS. | Démarrez la session, notez les observations et consultez statistiques et historique. |
+| Morse | Texte vers Morse et audio WAV expérimental. | Saisissez points et traits ou importez un WAV et vérifiez le résultat. |
+| SSTV | Images Robot36 depuis WAV, micro ou CAT. | Choisissez le mode, recevez ou importez et enregistrez le PNG ; pour l'émission utilisez votre indicatif et une charge fictive. |
+| CAT Quansheng | Accord distant en réception de l'UV-K5. | Connectez par OTG, choisissez l'appareil, activez le CAT sur la radio (tableau), accordez et appuyez sur STOP à la fin. |
+| CAT multi-radio | Contrôle des FTX-1, (tr)uSDX, QMX+ et autres radios. | Choisissez modèle et bauds, connectez, lisez ou changez fréquence et mode ; PTT seulement avec charge fictive confirmée et jamais avec la QMX+. |
+| Modes numériques | FT8, FT4 et FT2 avec décodeur propre (OSD et décodage a priori). | Choisissez mode et bande, écoutez l'audio USB ou un WAV et vérifiez les décodages. |
+| Récepteur en direct | Morse et Robot36 avec le micro. | Accordez la permission, capturez jusqu'à 60 s et décodez. |
+| Satellites | Passages SGP4, Doppler RX et carte. | Mettez à jour les TLE, fixez votre position, choisissez un passage et suivez le Doppler. |
+| Éditeur de canaux Quansheng | Lire et modifier les canaux de l'UV-K5. | Faites la sauvegarde complète, modifiez, écrivez et vérifiez la relecture. |
+| OpenGD77 | Écran et horloge UTC d'une radio OpenGD77. | Connectez, choisissez l'appareil et utilisez Écran, Horloge ou Ping. |
+| Diagnostic et Pont | Tester radios et modules sans émettre. | Appuyez sur Chercher puis Tester ou Tout tester. |
+| Mises à jour | Mettre l'app à jour (build GitHub uniquement). | Cherchez, examinez et confirmez l'installation. |
+
+Les TLE sont téléchargés depuis CelesTrak puis, en cas d'échec, depuis SatNOGS puis AMSAT ; vous pouvez aussi les importer hors ligne.
+
+### Diagnostic et Pont
+
+Depuis l'accueil ouvrez Pont USB / Diagnostic. Il détecte les radios branchées en OTG (Quansheng, FTX-1, (tr)uSDX et QMX+) et vérifie l'ouverture USB, l'identification, la lecture de fréquence, le réglage d'une fréquence de test en réception, sa relecture et la restauration de l'originale. Il n'émet pas et n'écrit pas les mémoires.
+
+- Appuyez sur Chercher les appareils USB puis Tester sur une radio, ou **Tout tester** pour toutes les radios et tous les modules.
+- Sur la Quansheng le test des modules lit lien, canaux, calibration, slots, presets, ARDF et passages ; la radio doit être en SAT RX avec le CAT activé.
+- Partagez ou enregistrez le rapport à la fin.
+- Le pont TCP est optionnel : il relaie le CAT de la radio choisie vers un PC par le réseau local sans authentification. Activez-le seulement sur un réseau de confiance et coupez-le ensuite ; il ne fonctionne que écran ouvert.
+
+### Position GPS
+
+Dans Satellites, Obtenir la position du téléphone demande la permission de localisation, précise ou approximative. Il cherche jusqu'à 180 s avec GPS, réseau et fusionné, affiche les satellites vus et utilisés et affine la précision avant que vous vérifiiez et enregistriez. Avec la permission approximative la précision est de plusieurs km, suffisante pour les passages. Si aucune position n'arrive, sortez, vérifiez la localisation du téléphone, utilisez la dernière position enregistrée ou saisissez les coordonnées. La position reste sur le téléphone.
+
+### Mises à jour (OTA)
+
+Build GitHub uniquement ; le build F-Droid n'a pas de mise à jour intégrée. Accueil et Mises à jour cherche les nouvelles versions à la main ou chaque jour, par défaut sur les réseaux non facturés. Avant l'installateur Android on vérifie signature du manifeste, SHA-256, taille, paquet et certificat ; Android demande toujours votre confirmation et il n'y a pas d'installation silencieuse. Après la mise à jour l'app affiche les nouveautés et prévient aussi quand le firmware d'une radio connectée change.
 
 ## Compilation
 

@@ -1513,7 +1513,7 @@ legibility on the radio. They have not been flashed.
 
 ## Later Requested Phase: RadiCodex by BricoHams
 
-The native `1.0.1` APK includes a logbook with search and ADIF import,
+The native `1.1.0` APK includes a logbook with search and ADIF import,
 ADIF/JSON, JSON restore, ARDF sessions with history/statistics and filtered
 segment totals, one-off GPS, experimental text/WAV Morse,
 and temporary CAT RX over USB CDC ACM and recognized CH34x/CP210x/FTDI/Prolific
