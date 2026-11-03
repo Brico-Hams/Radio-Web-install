@@ -14,6 +14,16 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.view.ViewGroup
 
+/** Column that stops growing past [maxWidthDp] so forms stay readable on DeX / tablets; centre it in a FrameLayout parent. */
+class MaxWidthLinearLayout(context: Context, private val maxWidthDp: Int = 720) : LinearLayout(context) {
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val max = (maxWidthDp * resources.displayMetrics.density).toInt()
+        val width = View.MeasureSpec.getSize(widthMeasureSpec)
+        val spec = if (width > max) View.MeasureSpec.makeMeasureSpec(max, View.MeasureSpec.EXACTLY) else widthMeasureSpec
+        super.onMeasure(spec, heightMeasureSpec)
+    }
+}
+
 /** Shared native components. Fixed colours remain available to the orbital graphics. */
 object Brand {
     val ORANGE = Color.rgb(247, 148, 29)

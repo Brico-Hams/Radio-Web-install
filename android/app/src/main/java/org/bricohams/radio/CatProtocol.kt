@@ -69,6 +69,13 @@ object QuanshengFrames {
 
 data class CatState(val active: Boolean, val remote: Boolean, val pending: Boolean, val frequency10Hz: Long)
 
+/**
+ * The radio is not in SAT RX with CAT enabled (key 8). It is a recoverable state, not a link failure: the user can arm the
+ * radio and the host keeps polling. Kept an IllegalArgumentException like the validation errors it replaces.
+ */
+class CatNotArmedException(override val text: UiText = UiText(R.string.err_cat_not_armed)) :
+    IllegalArgumentException(text.toString()), LocalizedError
+
 /** CAT TX v1 (0x7B02): PTT leased by the host, armed only on the radio (SAT RX, key 9). */
 data class PttState(val armed: Boolean, val keyed: Boolean, val pending: Boolean, val limit: Boolean,
     val deniedState: Int, val keyedMs: Long)
@@ -85,20 +92,26 @@ class CatProtocol(
         if (left <= 0) throw LocalizedIOException(UiText(R.string.err_cat_timeout))
         return left.coerceAtMost(ATTEMPT_MS).toInt()
     }
+    private fun packetPadding(frame: ByteArray) {
+        // F4HWN USB CDC can hold an exact 64-byte packet until the next byte (the web transport pads the same way).
+        if (frame.size % 64 == 0) transport.write(byteArrayOf(0), WRITE_MS)
+    }
     /**
      * Sends one request and returns the first reply of the expected type that [accept] likes. Pending input is discarded
      * first; frames that are corrupted, of another type or not accepted (stale replies) are skipped and the scan
      * resynchronises on the next magic. A silent attempt is repeated once with the same frame (all requests are idempotent:
      * same sequence, same frequency, lease renewals), then the last failure is raised.
      */
-    private fun request(type: Int, payload: ByteArray, expected: Int, accept: (ByteArray) -> Boolean): ByteArray {
+    private fun request(type: Int, payload: ByteArray, expected: Int, attemptMs: Long = ATTEMPT_MS,
+        accept: (ByteArray) -> Boolean): ByteArray {
         val frame = QuanshengFrames.encode(type, payload)
         var failure: IOException? = null
         repeat(ATTEMPTS) {
             transport.discardPending()
-            val deadline = clock() + ATTEMPT_MS
+            val deadline = clock() + attemptMs
             transport.write(frame, remaining(deadline))
             try {
+                packetPadding(frame)
                 return await(expected, accept, deadline)
             } catch (error: IOException) {
                 failure = error
@@ -128,7 +141,7 @@ class CatProtocol(
     @Synchronized fun identify(): String {
         val timestamp = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
             .putInt(System.currentTimeMillis().toInt()).array()
-        val response = request(0x0514, timestamp, 0x0515) { true }
+        val response = request(0x0514, timestamp, 0x0515, IDENTIFY_MS) { true }
         requireUi(response.size >= 16) { UiText(R.string.err_cat_identification_incomplete) }
         val firmware = response.takeWhile { it in 0x20..0x7e }.toByteArray().toString(Charsets.US_ASCII).trim()
         requireUi(supportedFirmware(firmware)) { UiText(R.string.err_cat_firmware_unsupported, firmware) }
@@ -144,9 +157,8 @@ class CatProtocol(
         requireUi(response[0].toInt() == 1) { UiText(R.string.err_cat_response_invalid) }
         val view = ByteBuffer.wrap(response).order(ByteOrder.LITTLE_ENDIAN)
         val status = response[1].toInt() and 255
-        requireUi(status == if (operation == 0) 0 else 1) {
-            if (status == 5) UiText(R.string.err_cat_enable_sat_rx) else UiText(R.string.err_cat_rejected, status)
-        }
+        if (status == 5) throw CatNotArmedException()
+        requireUi(status == if (operation == 0) 0 else 1) { UiText(R.string.err_cat_rejected, status) }
         requireUi(view.getInt(4) == 7) { UiText(R.string.err_cat_capabilities) }
         val applied = view.getInt(8).toLong() and 0xffffffffL
         val flags = view.getInt(12)
@@ -200,7 +212,7 @@ class CatProtocol(
     private fun change(operation: Int, frequency: Long, permit: () -> Boolean, confirm: Boolean): CatState {
         checkUi(permit()) { UiText(R.string.err_cat_cancelled_before_set) }
         var state = exchange(operation, frequency)
-        requireUi(state.active) { UiText(R.string.err_cat_activate) }
+        if (!state.active) throw CatNotArmedException()
         if (!confirm) return state
         repeat(POLLS + 1) { attempt ->
             if (!state.pending) {
@@ -218,9 +230,12 @@ class CatProtocol(
         throw LocalizedIOException(UiText(R.string.err_cat_change_pending))
     }
     companion object {
-        private const val ATTEMPT_MS = 500L
+        // Same budget as the web connector: 1000 ms per CAT exchange, 4000 ms for the hello.
+        private const val ATTEMPT_MS = 1000L
+        private const val IDENTIFY_MS = 4000L
+        private const val WRITE_MS = 500
         private const val ATTEMPTS = 2
-        private const val POLL_MS = 40L
+        private const val POLL_MS = 75L
         private const val POLLS = 10
         /**
          * VfoState_t of the F4HWN base is NORMAL, BUSY, BAT_LOW, TX_DISABLE, TIMEOUT, ALARM, VOLTAGE_HIGH (0..6); the radio
@@ -243,20 +258,42 @@ class CatLease(
     private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
     private val permit: () -> Boolean = { true }
 ) {
-    enum class Result { WAITING, RENEWED, REVERTED, LEFT_SAT_RX }
+    enum class Result { WAITING, RENEWED, REVERTED, LEFT_SAT_RX, STILL_NOT_ARMED, RECOVERED, RETRY }
     private var renewedAt = clock()
-    /** Call often; it renews at most once per [RENEW_MS] and reports when the radio already dropped the tune. */
+    private var armed = true
+    private var failures = 0
+    /**
+     * Call often; it renews at most once per [RENEW_MS]. Leaving SAT RX (CAT not armed) is recoverable: the lease keeps
+     * polling and re-applies the tune once the radio is armed again. A silent radio is retried before the error is raised.
+     */
     fun renewIfDue(): Result {
         if (clock() - renewedAt < RENEW_MS) return Result.WAITING
-        val state = cat.query()
-        if (!state.active) return Result.LEFT_SAT_RX
-        if (!state.remote) return Result.REVERTED
-        cat.tune(frequency10Hz, permit, confirm = false)
-        renewedAt = clock()
-        return Result.RENEWED
+        return try {
+            val state = cat.query()
+            renewedAt = clock()
+            failures = 0
+            when {
+                !state.active -> notArmed()
+                !armed -> { armed = true; cat.tune(frequency10Hz, permit, confirm = false); Result.RECOVERED }
+                !state.remote -> Result.REVERTED
+                else -> { cat.tune(frequency10Hz, permit, confirm = false); Result.RENEWED }
+            }
+        } catch (_: CatNotArmedException) {
+            renewedAt = clock()
+            notArmed()
+        } catch (error: java.io.IOException) {
+            if (++failures > MAX_TRANSIENT_FAILURES) throw error
+            Result.RETRY
+        }
+    }
+    private fun notArmed(): Result {
+        if (!armed) return Result.STILL_NOT_ARMED
+        armed = false
+        return Result.LEFT_SAT_RX
     }
     companion object {
         const val LEASE_MS = 3000L
-        const val RENEW_MS = 1200L
+        const val RENEW_MS = 1000L
+        const val MAX_TRANSIENT_FAILURES = 2
     }
 }

@@ -56,12 +56,26 @@ class SerialRadio private constructor(private val port: UsbSerialPort) : RadioBy
                 else -> null
             }
         }
+        /** Control lines for a CDC ACM device: untouched settings keep the historic DTR+RTS asserted, explicit ones win. */
+        internal fun cdcLines(settings: SerialSettings): Int =
+            if (settings.dtr == null && settings.rts == null) CdcRadio.DTR_RTS
+            else (if (settings.dtr == true) 1 else 0) or (if (settings.rts == true) 2 else 0)
+        /**
+         * Quansheng link lines: USB-C CDC gets DTR only (the firmware uses it for synchronous sends; RTS is never asserted),
+         * a CH340 programming jack gets both lines low.
+         */
+        fun quanshengSettings(cdc: Boolean) = SerialSettings(38400, 1, 0, dtr = cdc, rts = false)
+        fun quanshengSettings(device: UsbDevice) = quanshengSettings(CdcRadio.compatible(device))
+        /** CP2105 / FTX-1: interface 0 is the Enhanced COM port that carries CAT-1 (the Standard port is interface 1). */
+        const val CP210X_VENDOR = 0x10C4
+        fun enhancedPort(device: UsbDevice): Int? =
+            if (device.vendorId == CP210X_VENDOR && portCount(device) > 1) 0 else null
         fun description(device: UsbDevice): String? = if (CdcRadio.compatible(device)) "CDC ACM" else
             driver(device)?.javaClass?.simpleName?.removeSuffix("SerialDriver")
         fun portCount(device: UsbDevice): Int = if (CdcRadio.compatible(device)) 1 else driver(device)?.ports?.size ?: 0
         fun open(manager: UsbManager, device: UsbDevice, settings: SerialSettings = SerialSettings()): RadioBytes {
             requireUi(manager.hasPermission(device)) { UiText(R.string.err_usb_permission_missing) }
-            if (CdcRadio.compatible(device)) return CdcRadio.open(manager, device)
+            if (CdcRadio.compatible(device)) return CdcRadio.open(manager, device, cdcLines(settings))
             val driver = requireNotNullUi(driver(device)) { UiText(R.string.err_serial_adapter_unknown) }
             requireUi(settings.portIndex in driver.ports.indices) { UiText(R.string.err_rig_port, settings.portIndex) }
             val connection = manager.openDevice(device) ?: throw LocalizedIOException(UiText(R.string.err_serial_open_failed))

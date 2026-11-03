@@ -17,9 +17,10 @@ enum class RigModel(
     FT857("Yaesu FT-857 / FT-857D", 4800, 2, 100_000L..470_000_000L),
     FT897("Yaesu FT-897 / FT-897D", 4800, 2, 100_000L..470_000_000L),
     IC705("Icom IC-705", 115200, 1, 30_000L..470_000_000L),
-    // CAT-1 factory default is 2 stop bits (CAT Operation Reference Manual 2508-C, p.3); 1 also works when the menu is changed.
-    FTX1("Yaesu FTX-1", 38400, 2, 30_000L..470_000_000L),
-    TRUSDX("(tr)uSDX", 115200, 1, 3_000_000L..30_000_000L),
+    // CAT-1 default is 38400 8N1 on the units in the field (manual 2508-C lists 2 stop bits; the radio accepts 1 from the host).
+    FTX1("Yaesu FTX-1", 38400, 1, 30_000L..470_000_000L),
+    // 38400 in the field; firmware 2.00t+ may run at 115200, RigActivity retries the other rate when there is no answer.
+    TRUSDX("(tr)uSDX", 38400, 1, 3_000_000L..30_000_000L),
     // USB virtual COM port, the baud rate is ignored by the radio (QDX manual 1.06, WSJT-X setup).
     QMX("QRP Labs QMX / QMX+", 9600, 1, 1_800_000L..54_000_000L),
     QDX("QRP Labs QDX / QDX-M", 9600, 1, 3_500_000L..30_000_000L)
@@ -60,6 +61,14 @@ fun openRig(model: RigModel, transport: RadioBytes, civAddress: Int = 0xA4): Rig
     RigModel.QMX, RigModel.QDX -> QrpLabsRig(transport, model)
 }
 
+/**
+ * Serial parameters for a rig: DTR and RTS are driven low exactly once at open and never toggled afterwards (a toggle resets the
+ * (tr)uSDX and RTS can key the radio). The FTX-1 always uses the CP2105 Enhanced port, whatever port the list offered.
+ */
+internal fun rigSerialSettings(model: RigModel, baud: Int, requestedPort: Int, enhancedPort: Int? = null): SerialSettings =
+    SerialSettings(baud, model.stopBits, if (model == RigModel.FTX1 && enhancedPort != null) enhancedPort else requestedPort,
+        dtr = false, rts = false)
+
 internal fun mhzText(hz: Long): String = String.format(Locale.ROOT, "%.6f", hz / 1e6)
 
 internal fun checkRange(model: RigModel, hz: Long) =
@@ -72,23 +81,48 @@ internal fun isRejected(error: LocalizedIOException) = error.text.id == R.string
 
 internal fun invalidReply(): Nothing = throw LocalizedArgumentException(UiText(R.string.err_rig_reply_invalid))
 
-/** Text CAT (Yaesu FTX-1, Kenwood-style subsets): commands end in ';', a reply "?;" is a rejection. */
-internal class AsciiLink(private val transport: RadioBytes, private val clock: () -> Long = { System.nanoTime() / 1_000_000 }) {
-    fun send(command: String) {
+/**
+ * Text CAT (Yaesu FTX-1, Kenwood-style subsets): commands end in ';', a reply "?;" is a rejection. Every exchange is
+ * serialised (one command in flight, a minimum gap between commands) so threads sharing a rig cannot interleave a SET with
+ * somebody else's read; use [transaction] to keep a SET and its read-back together.
+ */
+internal class AsciiLink(
+    private val transport: RadioBytes,
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val sleep: (Long) -> Unit = Thread::sleep
+) {
+    private var lastIo = Long.MIN_VALUE / 2
+    @Synchronized fun <T> transaction(block: () -> T): T = block()
+    @Synchronized fun send(command: String) {
+        pace()
         transport.discardPending()
         transport.write(command.toByteArray(Charsets.US_ASCII), WRITE_MS)
+        lastIo = clock()
     }
-    fun request(command: String, prefix: String): String {
-        repeat(ATTEMPTS) {
+    @Synchronized fun request(command: String, prefix: String): String {
+        repeat(ATTEMPTS) { attempt ->
+            if (attempt > 0) sleep(RETRY_GAP_MS)
             send(command)
             val deadline = clock() + ATTEMPT_MS
             while (true) {
                 val reply = readReply(deadline) ?: break
                 if (reply == "?;") throw LocalizedIOException(UiText(R.string.err_rig_rejected, command))
-                if (reply.startsWith(prefix)) return reply
+                if (reply.startsWith(prefix)) { lastIo = clock(); return reply }
             }
         }
         throw LocalizedIOException(UiText(R.string.err_rig_timeout))
+    }
+    /** Reads back after a SET; radios may need a moment to apply it, so a stale value is polled again before failing. */
+    @Synchronized fun confirm(expected: Long, read: () -> Long) {
+        repeat(CONFIRM_TRIES) { attempt ->
+            if (attempt > 0) sleep(CONFIRM_GAP_MS)
+            if (read() == expected) return
+        }
+        throw LocalizedStateException(UiText(R.string.err_rig_unconfirmed))
+    }
+    private fun pace() {
+        val wait = lastIo + MIN_GAP_MS - clock()
+        if (wait > 0) sleep(wait)
     }
     private fun readReply(deadline: Long): String? {
         val text = StringBuilder()
@@ -107,9 +141,13 @@ internal class AsciiLink(private val transport: RadioBytes, private val clock: (
     }
     companion object {
         const val WRITE_MS = 500
-        const val ATTEMPT_MS = 500L
-        const val ATTEMPTS = 2
+        const val ATTEMPT_MS = 800L
+        const val ATTEMPTS = 3
         const val MAX_REPLY = 64
+        const val MIN_GAP_MS = 20L
+        const val RETRY_GAP_MS = 60L
+        const val CONFIRM_TRIES = 3
+        const val CONFIRM_GAP_MS = 60L
     }
 }
 

@@ -509,11 +509,13 @@ class Ftx1Rig(transport: RadioBytes) : Rig {
     override fun frequency(vfo: Vfo): Long = read(vfo)
     override fun setFrequency(vfo: Vfo, hz: Long) {
         checkRange(model, hz)
-        link.send(YaesuFtx1.setFrequency(vfo, hz))
-        checkUi(read(vfo) == hz) { UiText(R.string.err_rig_unconfirmed) }
+        link.transaction {
+            link.send(YaesuFtx1.setFrequency(vfo, hz))
+            link.confirm(hz) { read(vfo) }
+        }
     }
     // Set commands have no answer (manual p.4), so each one is confirmed with its read command.
-    private fun confirm(set: String, read: String, accepted: (String) -> Boolean) {
+    private fun confirm(set: String, read: String, accepted: (String) -> Boolean) = link.transaction {
         link.send(set)
         checkUi(accepted(link.request(read, read.dropLast(1)))) { UiText(R.string.err_rig_unconfirmed) }
     }
@@ -565,8 +567,8 @@ class Ftx1Rig(transport: RadioBytes) : Rig {
 
 /**
  * (tr)uSDX CAT: a subset of the Kenwood TS-480 commands, from DL2MAN "5 (tr)uSDX Details", section "(tr)uSDX supported
- * CAT commands" (https://dl2man.de/5-trusdx-details/). 115200 bps (firmware 2.00t+; older 38400), 8N1, DTR high,
- * RTS low on RX (RTS high keys the radio).
+ * CAT commands" (https://dl2man.de/5-trusdx-details/). 38400 bps in the field (firmware 2.00t+ may use 115200), 8N1; DTR and
+ * RTS stay low (RTS high keys the radio and a DTR/RTS toggle resets it).
  */
 object KenwoodTs480Subset {
     const val ID_REPLY = "ID020;"
@@ -682,8 +684,10 @@ class TruSdxRig(
     override fun setFrequency(vfo: Vfo, hz: Long) {
         onlyA(vfo)
         checkRange(model, hz)
-        link.send(KenwoodTs480Subset.setFrequency(hz))
-        checkUi(read() == hz) { UiText(R.string.err_rig_unconfirmed) }
+        link.transaction {
+            link.send(KenwoodTs480Subset.setFrequency(hz))
+            link.confirm(hz) { read() }
+        }
     }
     override fun setMode(mode: RigMode) {
         link.send(KenwoodTs480Subset.setMode(mode))
@@ -861,8 +865,10 @@ class QrpLabsRig(transport: RadioBytes, override val model: RigModel) : Rig {
     override fun frequency(vfo: Vfo): Long = read(vfo)
     override fun setFrequency(vfo: Vfo, hz: Long) {
         checkRange(model, hz)
-        link.send(QrpLabsCat.setFrequency(vfo, hz))
-        checkUi(read(vfo) == hz) { UiText(R.string.err_rig_unconfirmed) }
+        link.transaction {
+            link.send(QrpLabsCat.setFrequency(vfo, hz))
+            link.confirm(hz) { read(vfo) }
+        }
     }
     override fun setMode(mode: RigMode) {
         link.send(QrpLabsCat.setMode(model, mode))

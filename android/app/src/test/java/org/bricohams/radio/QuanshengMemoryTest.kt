@@ -94,7 +94,7 @@ class QuanshengMemoryTest {
         assertEquals(listOf("calibration.bin", "external-flash.bin", "base-firmware.bin"), files.keys.toList())
         assertArrayEquals(radio.calibration, files["calibration.bin"])
         assertArrayEquals(radio.flash, files["external-flash.bin"])
-        assertEquals((0 until QuanshengMemory.FLASH_SIZE step 4096).map { it to 4096 }, radio.crcRequests)
+        assertEquals(listOf(0 to 128) + (0 until QuanshengMemory.FLASH_SIZE step 4096).map { it to 4096 }, radio.crcRequests)
         assertEquals(4096, files.getValue("base-firmware.bin").size)
         val backups = QuanshengBackups(folder.root)
         val receipt = backups.save(memory.firmware, files, now = 1)
@@ -232,7 +232,45 @@ class QuanshengMemoryTest {
             memory.backup { stage, _ -> if (stage.id == R.string.backup_stage_flash) active = false }
         }
         assertEquals(listOf(0 to 128), radio.flashRequests)
-        assertTrue(radio.crcRequests.isEmpty())
+        assertEquals(listOf(0 to 128), radio.crcRequests) // only the reader probe
         assertTrue(radio.writes.isEmpty())
+    }
+
+    @Test fun backupProbeFailsFastWhenTheFlashCrcDisagreesBeforeTheFullRead() {
+        val radio = Radio().apply { crcOffset = 1 }
+        assertThrows(IllegalArgumentException::class.java) { QuanshengMemory(radio).backup() }
+        assertEquals(listOf(0 to 128), radio.flashRequests)
+    }
+
+    @Test fun flashRangeCrcMatchesLocalCrcAndRejectsBadRanges() {
+        val radio = Radio()
+        val memory = QuanshengMemory(radio)
+        assertThrows(IllegalArgumentException::class.java) { memory.flashRangeCrc(0, 128) }
+        memory.identify()
+        assertEquals(QuanshengMemory.crc32(radio.flash.copyOfRange(0x21000, 0x21000 + 128)), memory.flashRangeCrc(0x21000, 128))
+        for ((address, length) in listOf(-1 to 1, 0 to 0, 0 to 4097, QuanshengMemory.FLASH_SIZE to 1)) {
+            assertThrows(IllegalArgumentException::class.java) { memory.flashRangeCrc(address, length) }
+        }
+        assertTrue(radio.writes.isEmpty())
+    }
+
+    /** Records raw writes so the 64-byte packet padding can be observed. */
+    private class PaddingRadio : RadioBytes {
+        val writes = ArrayList<ByteArray>()
+        override fun write(bytes: ByteArray, timeoutMs: Int) { writes.add(bytes) }
+        override fun read(length: Int, timeoutMs: Int): ByteArray = throw IOException("Mock timeout")
+        override fun close() = Unit
+    }
+
+    @Test fun exactSixtyFourBytePacketsArePaddedLikeTheWebTransport() {
+        val radio = PaddingRadio()
+        val memory = QuanshengMemory(radio)
+        // payload 51 -> encoded frame of exactly 64 bytes
+        assertThrows(IOException::class.java) { memory.exchange(0x0514, ByteArray(51)) }
+        assertEquals(64, radio.writes[0].size)
+        assertArrayEquals(byteArrayOf(0), radio.writes[1])
+        radio.writes.clear()
+        assertThrows(IOException::class.java) { memory.exchange(0x0514, ByteArray(4)) }
+        assertEquals(1, radio.writes.size)
     }
 }

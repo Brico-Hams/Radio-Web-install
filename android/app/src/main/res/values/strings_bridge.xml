@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <!-- SAT CAT: not armed is a recoverable state -->
+    <string name="err_cat_not_armed">La radio no está en SAT RX con CAT habilitado. 1) En la radio abre SAT RX Bricohams. 2) Pulsa la tecla 8 para habilitar CAT. La app sigue consultando y sintoniza sola en cuanto la radio esté lista.</string>
+    <string name="cat_sat_steps_title">Activar CAT en la radio (3 pasos)</string>
+    <string name="cat_sat_steps">1. Conecta la radio por USB OTG y pulsa Elegir dispositivo.\n2. En la radio abre SAT RX Bricohams.\n3. Pulsa la tecla 8 (CAT habilitado) y sintoniza desde aquí.</string>
+    <string name="cat_lease_recovered">La radio volvió a SAT RX con CAT: la sintonía se aplicó de nuevo.</string>
+    <string name="rig_usb_reattached">USB reconectado: abriendo la radio de nuevo.</string>
+
+    <!-- Phone location (SAT module) -->
+    <string name="satellite_gps_asking">Concede el permiso de ubicación (precisa o aproximada).</string>
+    <string name="satellite_gps_off">La ubicación del teléfono está desactivada. Actívala en Ajustes y vuelve a pulsar Usar GPS, o escribe las coordenadas a mano.</string>
+    <string name="satellite_gps_searching">Buscando posición (GPS, red y fusionado, hasta 25 s)… Mantén la pantalla abierta, mejor al aire libre.</string>
+    <string name="satellite_gps_timeout">No llegó ninguna posición a tiempo. Sal al exterior, comprueba la ubicación del teléfono o escribe las coordenadas a mano.</string>
+    <string name="satellite_gps_fix_detail">Fuente %1$s, precisión %2$s, antigüedad %3$d s. Revisa y guarda.</string>
+    <string name="satellite_gps_approximate">Permiso aproximado: precisión de varios km (suficiente para pases, mejora con ubicación precisa).</string>
+
+    <!-- Diagnostics / bridge -->
+    <string name="home_open_diagnostics">Puente / Diagnóstico USB</string>
+    <string name="diag_title">Puente / Diagnóstico</string>
+    <string name="diag_intro">Conecta las radios por USB OTG. La prueba solo lee y sintoniza en recepción y restaura la frecuencia: no transmite ni escribe memoria.</string>
+    <string name="diag_refresh">Buscar dispositivos USB</string>
+    <string name="diag_no_devices">No hay adaptadores USB serie. Conecta la radio por OTG y pulsa Buscar.</string>
+    <string name="diag_kind_unknown">No reconocido</string>
+    <string name="diag_device_line">%1$s · driver %2$s · %3$d puerto(s)</string>
+    <string name="diag_test_one">Probar</string>
+    <string name="diag_run_all">Probar todo (todas las radios y módulos)</string>
+    <string name="diag_running">Probando %1$s…</string>
+    <string name="diag_done">Prueba terminada. Comparte el informe si quieres.</string>
+    <string name="diag_share">Compartir informe</string>
+    <string name="diag_skipped">omitido (falló el paso anterior)</string>
+    <string name="diag_step_open">Abrir USB</string>
+    <string name="diag_step_identify">Identificar (ID)</string>
+    <string name="diag_step_read">Leer frecuencia</string>
+    <string name="diag_step_set">Fijar frecuencia de prueba</string>
+    <string name="diag_step_readback">Releer frecuencia</string>
+    <string name="diag_step_restore">Restaurar frecuencia original</string>
+    <string name="diag_step_hello">Hello del firmware</string>
+    <string name="diag_step_tune">Sintonía CAT RX</string>
+    <string name="diag_step_lease">Renovar sintonía (lease)</string>
+    <string name="diag_step_release">Liberar sintonía (STOP)</string>
+    <string name="err_diag_lease">La renovación de la sintonía devolvió %1$s en lugar de RENEWED.</string>
+    <string name="err_diag_ptt_keyed">La radio indica PTT activo durante la prueba. La prueba no transmite: revisa la radio.</string>
+    <string name="err_sat_invalid">Respuesta de %1$s inválida o de otra transferencia.</string>
+    <string name="err_sat_rejected">La radio rechazó %1$s (estado %2$d).</string>
+    <string name="diag_run_modules">Probar todo (módulos Quansheng, solo lectura)</string>
+    <string name="diag_step_module">Probar un módulo</string>
+    <string name="diag_save_report">Guardar informe</string>
+    <string name="diag_report_saved">Informe guardado en %1$s</string>
+    <string name="diag_report_save_error">No se pudo guardar el informe: %1$s</string>
+    <string name="diag_not_armed">pendiente: la radio no está en SAT RX con CAT habilitado (tecla 8)</string>
+    <string name="diag_legacy_no_flash">pendiente: firmware v6.0 sin lector de Flash física</string>
+    <string name="diag_ardf_no_session">sin sesión ARDF iniciada en la radio (pendiente)</string>
+    <string name="diag_mod_link">Enlace y hello</string>
+    <string name="diag_mod_channels">Lectura de canales</string>
+    <string name="diag_mod_flash">Calibración y lector de Flash</string>
+    <string name="diag_mod_slots">Slots multiboot</string>
+    <string name="diag_mod_presets">Presets de espectro</string>
+    <string name="diag_mod_ardf">Estadísticas ARDF</string>
+    <string name="diag_mod_passes">Tabla de pases SAT</string>
+    <string name="diag_mod_cat_tune">Sintonía CAT RX (restaura sola)</string>
+    <string name="diag_step_cat_hello">Hello CAT</string>
+    <string name="diag_step_cat_status">Estado CAT RX</string>
+    <string name="diag_step_ptt_status">Estado PTT (solo consulta)</string>
+    <string name="diag_step_channels">Leer canales</string>
+    <string name="diag_step_calibration">Leer calibración</string>
+    <string name="diag_step_flash_probe">Sonda de Flash (lectura + CRC)</string>
+    <string name="diag_step_slots">Consultar slots</string>
+    <string name="diag_step_presets">Exportar presets</string>
+    <string name="diag_step_ardf">Leer estadísticas ARDF</string>
+    <string name="diag_step_passes">Leer pases (reloj de la radio intacto)</string>
+    <string name="diag_run_all_hint">Probar todo ejecuta cada módulo uno tras otro; también puedes lanzarlos de uno en uno. Ninguno transmite.</string>
+    <string name="diag_bridge_title">Puente TCP (opcional)</string>
+    <string name="diag_bridge_warning">ATENCIÓN: el puente reenvía sin autenticación todo lo que llegue por la red local al CAT de la radio elegida. Actívalo solo en una red de confianza y apágalo al terminar. Permanece activo solo con esta pantalla abierta.</string>
+    <string name="diag_bridge_start">Iniciar puente</string>
+    <string name="diag_bridge_stop">Detener puente</string>
+    <string name="diag_bridge_off">Puente apagado.</string>
+    <string name="diag_bridge_on">Puente activo. Conecta desde el PC a %1$s puerto %2$d (TCP en bruto).</string>
+    <string name="diag_bridge_client">Cliente conectado: %1$s</string>
+    <string name="diag_bridge_error">No se pudo iniciar el puente: %1$s</string>
+
+    <!-- PRO mode -->
+    <string name="pro_mode_label">Modo PRO (sin respaldo obligatorio)</string>
+    <string name="pro_mode_title">Activar modo PRO</string>
+    <string name="pro_mode_warning">En modo PRO se puede escribir sin respaldo completo previo. Una escritura fallida o cortada puede dejar la radio inservible y sin copia para recuperarla. Solo para usuarios con experiencia. Se desactiva al salir de esta pantalla.</string>
+    <string name="pro_mode_accept">Entiendo el riesgo</string>
+    <string name="pro_no_backup_warning">MODO PRO: no hay respaldo de esta sesión. Si algo falla no podrás recuperar la radio.</string>
+</resources>

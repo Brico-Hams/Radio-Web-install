@@ -121,7 +121,7 @@ class CatActivity : LocalizedActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val content = LinearLayout(this).apply {
+        val content = MaxWidthLinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val padding = (16 * resources.displayMetrics.density).toInt()
             setPadding(padding, padding, padding, padding)
@@ -142,9 +142,11 @@ class CatActivity : LocalizedActivity() {
             textSize = 17f
         }
         content.addView(status)
-        content.addView(TextView(this).apply {
-            setText(R.string.cat_help)
+        content.addView(Brand.card(this).apply {
+            addView(Brand.text(this@CatActivity, 16f, bold = true).apply { setText(R.string.cat_sat_steps_title) })
+            addView(Brand.text(this@CatActivity, 15f).apply { setText(R.string.cat_sat_steps) })
         })
+        content.addView(TextView(this).apply { setText(R.string.cat_help) })
         fun button(label: Int, action: () -> Unit) {
             val button = Button(this).apply { setText(label); setOnClickListener { action() } }
             controls.add(button); content.addView(button)
@@ -235,7 +237,10 @@ class CatActivity : LocalizedActivity() {
                 status.text = getString(R.string.cat_plan_error, errorText(error))
             }
         }
-        setContentView(ScrollView(this).apply { addView(content) })
+        setContentView(ScrollView(this).apply {
+            addView(content, android.widget.FrameLayout.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER_HORIZONTAL))
+        })
     }
 
     private fun chooseDevice() {
@@ -286,7 +291,7 @@ class CatActivity : LocalizedActivity() {
         reattachWatch = false
         operation {
             closeRadio()
-            val port = SerialRadio.open(manager, device)
+            val port = SerialRadio.open(manager, device, SerialRadio.quanshengSettings(device))
             transport = port
             val cat = CatProtocol(port, allowTune = { foreground && token == generation })
             protocol = cat
@@ -505,6 +510,9 @@ class CatActivity : LocalizedActivity() {
                 message = if (state == null) getString(R.string.usb_disconnected) else if (state !is CatState) state.toString() else
                     getString(R.string.cat_state, state.active.toString(), state.remote.toString(), state.pending.toString(),
                         state.frequency10Hz * 10)
+            } catch (error: CatNotArmedException) {
+                // Recoverable: the link is fine, the radio only needs SAT RX + key 8. Keep the connection open.
+                message = errorText(error)
             } catch (error: IOException) {
                 message = fail(error)
             } catch (error: IllegalArgumentException) {
@@ -550,9 +558,11 @@ class CatActivity : LocalizedActivity() {
         if (token != generation || lease !== current) return
         val message: String? = try {
             when (current.renewIfDue()) {
-                CatLease.Result.WAITING, CatLease.Result.RENEWED -> null
+                CatLease.Result.WAITING, CatLease.Result.RENEWED, CatLease.Result.RETRY,
+                CatLease.Result.STILL_NOT_ARMED -> null
                 CatLease.Result.REVERTED -> { cancelLease(); getString(R.string.cat_lease_reverted) }
-                CatLease.Result.LEFT_SAT_RX -> { cancelLease(); getString(R.string.cat_lease_left_sat) }
+                CatLease.Result.LEFT_SAT_RX -> getString(R.string.cat_lease_left_sat)
+                CatLease.Result.RECOVERED -> getString(R.string.cat_lease_recovered)
             }
         } catch (error: Exception) {
             fail(error)

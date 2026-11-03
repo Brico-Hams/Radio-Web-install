@@ -48,6 +48,8 @@ class ChannelActivity : LocalizedActivity() {
     private var transport: RadioBytes? = null
     private var memory: QuanshengMemory? = null
     private var receipt: QuanshengBackups.Receipt? = null
+    // PRO mode: session-only (this screen instance), off by default; waives the mandatory backup like Bricohams-Studio.
+    @Volatile private var pro = false
     private var original: ByteArray? = null
     private var working: ByteArray? = null
     private var selected: Int? = null
@@ -111,7 +113,23 @@ class ChannelActivity : LocalizedActivity() {
         button(R.string.channel_apply) { applyEdit() }
         button(R.string.channel_write) { confirmWrite() }
         button(R.string.usb_disconnect) { endSession(getString(R.string.usb_disconnected)) }
-        setContentView(ScrollView(this).apply { addView(content) })
+        content.addView(CheckBox(this).apply {
+            setText(R.string.pro_mode_label)
+            setOnCheckedChangeListener { box, checked ->
+                if (!checked) { pro = false; return@setOnCheckedChangeListener }
+                if (pro) return@setOnCheckedChangeListener
+                // Keep the box unchecked until the warning is accepted.
+                box.isChecked = false
+                AlertDialog.Builder(this@ChannelActivity).setTitle(R.string.pro_mode_title)
+                    .setMessage(R.string.pro_mode_warning)
+                    .setNegativeButton(R.string.action_cancel, null)
+                    .setPositiveButton(R.string.pro_mode_accept) { _, _ -> pro = true; box.isChecked = true }.show()
+            }
+        })
+        setContentView(ScrollView(this).apply {
+            addView(content, android.widget.FrameLayout.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER_HORIZONTAL))
+        })
     }
 
     private fun show(message: String) { status.text = message }
@@ -163,7 +181,7 @@ class ChannelActivity : LocalizedActivity() {
         val token = generation
         operation(R.string.channel_op_connecting) {
             closeTransport()
-            val port = SerialRadio.open(manager, device)
+            val port = SerialRadio.open(manager, device, SerialRadio.quanshengSettings(device))
             transport = port
             val radio = QuanshengMemory(port, allowExchange = { foreground && token == generation })
             memory = radio
@@ -235,23 +253,28 @@ class ChannelActivity : LocalizedActivity() {
         val image = working
         val base = original
         if (image == null || base == null) { show(R.string.channel_read_before_write); return }
-        if (receipt == null) { show(R.string.channel_backup_required); return }
+        if (!WritePolicy.mayWrite(pro, receipt != null)) { show(R.string.channel_backup_required); return }
         val blocks = QuanshengMemory.plan(image, base).size
         if (blocks == 0) { show(R.string.channel_no_changes); return }
+        val message = getString(R.string.channel_write_message, blocks) +
+            if (pro && receipt == null) "\n\n" + getString(R.string.pro_no_backup_warning) else ""
         AlertDialog.Builder(this).setTitle(R.string.channel_write_title)
-            .setMessage(getString(R.string.channel_write_message, blocks))
+            .setMessage(message)
             .setNegativeButton(R.string.action_cancel, null)
             .setPositiveButton(R.string.action_write) { _, _ -> write(image, base) }.show()
     }
 
     private fun write(image: ByteArray, base: ByteArray) = operation(R.string.channel_op_write) {
         val radio = requireNotNull(memory) { getString(R.string.channel_connect_first) }
-        val saved = requireNotNull(receipt) { getString(R.string.channel_backup_required) }
-        try {
-            QuanshengBackups(File(filesDir, "backups")).verify(saved)
-        } catch (error: IllegalArgumentException) {
-            receipt = null
-            throw IllegalStateException(getString(R.string.channel_write_blocked, errorText(error)), error)
+        val saved = receipt
+        if (!WritePolicy.mayWrite(pro, saved != null)) throw IllegalStateException(getString(R.string.channel_backup_required))
+        if (saved != null && WritePolicy.mustVerifyBackup(pro, true)) {
+            try {
+                QuanshengBackups(File(filesDir, "backups")).verify(saved)
+            } catch (error: IllegalArgumentException) {
+                receipt = null
+                throw IllegalStateException(getString(R.string.channel_write_blocked, errorText(error)), error)
+            }
         }
         val blocks = radio.writeConfiguration(image, base) { progress(getString(R.string.channel_writing_progress, (it * 100).toInt())) }
         original = image.copyOf()

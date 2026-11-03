@@ -785,26 +785,48 @@ class SatelliteActivity : LocalizedActivity() {
         }
     }
 
-    @SuppressLint("MissingPermission")
+    private var gpsFields: Map<String, EditText>? = null
+    private var phoneLocation: PhoneLocation? = null
+
+    /** Requests FINE+COARSE together (Android 12+ lets the user pick approximate only, which is enough for passes). */
     private fun useGps(fields: Map<String, EditText>) {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 62)
+        gpsFields = fields
+        if (!PhoneLocation.hasPermission(this)) {
+            status.setText(R.string.satellite_gps_asking)
+            requestPermissions(PhoneLocation.PERMISSIONS, 62)
             return
         }
-        val manager = getSystemService(LOCATION_SERVICE) as LocationManager
-        val fix: Location? = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
-            .filter { manager.isProviderEnabled(it) }.mapNotNull { manager.getLastKnownLocation(it) }.maxByOrNull { it.time }
-        if (fix == null) { status.setText(R.string.satellite_gps_none); return }
+        if (!PhoneLocation.servicesEnabled(this)) {
+            status.setText(R.string.satellite_gps_off)
+            runCatching { startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+            return
+        }
+        status.setText(R.string.satellite_gps_searching)
+        val search = PhoneLocation(this) { fix, live -> if (!isDestroyed) showFix(fix, live) }
+        phoneLocation = search
+        search.start()
+    }
+
+    private fun showFix(fix: PositionFix?, live: Boolean) {
+        val fields = gpsFields
+        if (fix == null || fields == null) {
+            status.setText(if (live) R.string.satellite_gps_timeout else R.string.satellite_gps_none)
+            return
+        }
         fields.getValue("latitude").setText(String.format(Locale.ROOT, "%.5f", fix.latitude))
         fields.getValue("longitude").setText(String.format(Locale.ROOT, "%.5f", fix.longitude))
-        if (fix.hasAltitude()) fields.getValue("height").setText(String.format(Locale.ROOT, "%.3f", fix.altitude / 1000))
-        status.text = getString(R.string.satellite_gps_fix, (System.currentTimeMillis() - fix.time) / 60000, fix.accuracy)
+        fix.altitudeM?.let { fields.getValue("height").setText(String.format(Locale.ROOT, "%.3f", it / 1000)) }
+        val ageS = fix.ageMs(System.currentTimeMillis()) / 1000
+        val accuracy = fix.accuracyM?.let { String.format(Locale.ROOT, "%.0f m", it) } ?: "?"
+        val note = if (PhoneLocation.precise(this)) "" else " " + getString(R.string.satellite_gps_approximate)
+        status.text = getString(R.string.satellite_gps_fix_detail, fix.source, accuracy, ageS) + note
     }
     @Deprecated("Platform callback")
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 62) status.setText(if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED)
-            R.string.satellite_gps_retry else R.string.satellite_gps_denied)
+        if (requestCode != 62) return
+        if (grantResults.any { it == PackageManager.PERMISSION_GRANTED }) gpsFields?.let { useGps(it) }
+        else status.setText(R.string.satellite_gps_denied)
     }
 
     private fun tick() {
@@ -940,6 +962,7 @@ class SatelliteActivity : LocalizedActivity() {
         handler.post(ticker)
     }
     override fun onPause() {
+        phoneLocation?.stop()
         updating = false
         handler.removeCallbacks(ticker)
         syncCompass()
