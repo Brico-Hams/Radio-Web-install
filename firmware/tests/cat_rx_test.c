@@ -74,6 +74,32 @@ int main(void)
     const uint32_t invalid[] = {0, 13599999, 17400001, 39999999, 47000001, UINT32_MAX};
     for (unsigned i = 0; i < sizeof(valid) / sizeof(valid[0]); ++i) CHECK(bh_cat_frequency_valid(valid[i]));
     for (unsigned i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) CHECK(!bh_cat_frequency_valid(invalid[i]));
+    /* Lease renewal with the same frequency refreshes the lease but must not queue a retune. */
+    bh_cat_rx lease = {0};
+    CHECK(bh_cat_start(&lease, 43500000));
+    request[1] = 1;
+    for (unsigned i = 0; i < 4; ++i) request[4 + i] = (uint8_t)(target >> (i * 8U));
+    bh_cat_request(&lease, request, sizeof(request), 100, reply);
+    CHECK(reply[1] == 1 && lease.pending && lease.remote);
+    bh_cat_applied(&lease);
+    bh_cat_request(&lease, request, sizeof(request), 1100, reply);
+    CHECK(reply[1] == 1 && !lease.pending && lease.remote && lease.last_command == 1100);
+    CHECK(!bh_cat_expire(&lease, 4000) && bh_cat_expire(&lease, 4100));
+    bh_cat_applied(&lease);
+    /* Stop while already local is a harmless no-op and keeps the local tuning. */
+    bh_cat_local(&lease, 43500200);
+    request[1] = 2; memset(&request[4], 0, 4);
+    bh_cat_request(&lease, request, sizeof(request), 5000, reply);
+    CHECK(reply[1] == 1 && !lease.pending && lease.applied == 43500200);
+    /* Not armed answers a status that still reports the idle flags, for host polling. */
+    bh_cat_stop(&lease);
+    request[1] = 0;
+    bh_cat_request(&lease, request, sizeof(request), 6000, reply);
+    CHECK(reply[1] == 0 && reply[12] == 0);
+    request[1] = 1;
+    for (unsigned i = 0; i < 4; ++i) request[4 + i] = (uint8_t)(target >> (i * 8U));
+    bh_cat_request(&lease, request, sizeof(request), 6001, reply);
+    CHECK(reply[1] == 5 && !lease.pending);
     puts("CAT RX protocol checks passed; no hardware validation");
     return EXIT_SUCCESS;
 }

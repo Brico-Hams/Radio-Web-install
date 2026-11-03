@@ -277,3 +277,12 @@ footer { background: var(--panel); padding: 24px 32px; font-size: 11px; line-hei
   .button, .pill, .panel, .step-num, .sidebar nav a[aria-current] { border: 1px solid CanvasText; }
   .hero::after { display: none; }
 }
+body:not([data-advanced]) [data-advanced-only] { display: none !important; }
+.button.big { font-size: 1.25rem; min-height: 60px; padding: 16px 28px; }
+.radio-detected { font-weight: 700; margin: 10px 0; border-left: 4px solid var(--accent); padding-left: 10px; }
+.quick-actions { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.quick-action { width: 100%; min-height: 64px; text-align: left; padding: 12px 14px; border: 2px solid #1f2a3a; border-left: 6px solid #f7941d; border-radius: 10px; background: transparent; color: inherit; font: inherit; cursor: pointer; display: grid; gap: 4px; }
+.quick-action span { font-size: .92rem; opacity: .85; }
+.quick-action:hover { background: rgb(247 148 29 / 12%); }
+.quick-action:focus-visible { outline: 3px solid #f7941d; outline-offset: 2px; }
+@media (forced-colors: active) { .quick-action { border-color: CanvasText; } }

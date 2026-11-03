@@ -192,7 +192,9 @@
     ["Multiboot requiere F4HWN v6.0.0 o posterior con soporte Multiboot. No es compatible con cualquier UV-K5.", "Multiboot requires F4HWN v6.0.0 or later with Multiboot support. Not every UV-K5 is compatible.", "Multiboot nécessite F4HWN v6.0.0 ou ultérieur avec prise en charge Multiboot. Tous les UV-K5 ne sont pas compatibles.", "Multiboot erfordert F4HWN ab v6.0.0 mit Multiboot-Unterstützung. Nicht jedes UV-K5 ist kompatibel."],
     ["He comprobado el modelo y el firmware. Autorizo leer la radio y guardar automaticamente copias locales.", "I have checked the model and firmware. I authorize reading the radio and automatically saving local backups.", "J’ai vérifié le modèle et le firmware. J’autorise la lecture de la radio et l’enregistrement automatique de sauvegardes locales.", "Ich habe Modell und Firmware geprüft. Ich erlaube das Auslesen des Geräts und das automatische Speichern lokaler Sicherungen."],
     ["Modo PRO (esta sesion)", "PRO mode (this session)", "Mode PRO (cette session)", "PRO-Modus (diese Sitzung)"],
-    [": autorizo la lectura y las acciones que pulse sin confirmaciones adicionales. Debo seleccionar el modelo correcto. No desactiva respaldos, CRC, permisos USB ni la proteccion de Main.", ": I authorize reading and the actions I click without additional confirmations. I must select the correct model. This does not disable backups, CRC, USB permissions or Main protection.", " : j’autorise la lecture et les actions sélectionnées sans confirmation supplémentaire. Je dois choisir le bon modèle. Les sauvegardes, CRC, permissions USB et la protection de Main restent actifs.", ": Ich erlaube Lesezugriffe und angeklickte Aktionen ohne zusätzliche Bestätigung. Ich muss das richtige Modell wählen. Sicherungen, CRC, USB-Berechtigungen und Main-Schutz bleiben aktiv."],
+    [": autorizo la lectura y las acciones que pulse sin confirmaciones adicionales. Debo seleccionar el modelo correcto. No desactiva CRC, permisos USB ni la proteccion de Main; el respaldo solo se puede omitir con la casilla expresa de abajo.", ": I authorize reading and the actions I click without additional confirmations. I must select the correct model. This does not disable CRC, USB permissions or Main protection; the backup can only be skipped with the explicit checkbox below.", " : j’autorise la lecture et les actions sélectionnées sans confirmation supplémentaire. Je dois choisir le bon modèle. Les CRC, permissions USB et la protection de Main restent actifs ; la sauvegarde ne peut être ignorée que via la case explicite ci-dessous.", ": Ich erlaube Lesezugriffe und angeklickte Aktionen ohne zusätzliche Bestätigung. Ich muss das richtige Modell wählen. CRC, USB-Berechtigungen und Main-Schutz bleiben aktiv; die Sicherung lässt sich nur mit dem ausdrücklichen Kontrollkästchen unten überspringen."],
+    ["PRO: omitir copia de seguridad", "PRO: skip backup", "PRO : ignorer la sauvegarde", "PRO: Sicherung überspringen"],
+    [" (solo Quansheng). Escribir sin copia puede dejar la radio inservible si algo falla.", " (Quansheng only). Writing without a backup may brick the radio if anything fails.", " (Quansheng uniquement). Écrire sans sauvegarde peut rendre la radio inutilisable en cas d’échec.", " (nur Quansheng). Schreiben ohne Sicherung kann das Gerät unbrauchbar machen, falls etwas fehlschlägt."],
     ["Conectar y respaldar", "Connect and back up", "Connecter et sauvegarder", "Verbinden und sichern"],
     ["Desconectar", "Disconnect", "Déconnecter", "Trennen"],
     ["Progreso de la operacion", "Operation progress", "Progression de l’opération", "Fortschritt des Vorgangs"],
@@ -1257,6 +1259,62 @@ Verificacion fallida en el canal {0}: la radio no coincide con lo escrito.|Verif
 Verificacion fallida en el menu {0}: la radio no coincide con lo escrito.|Verification failed on menu item {0}: the radio does not match what was written.|Échec de la vérification du menu {0} : la radio ne correspond pas à ce qui a été écrit.|Überprüfung des Menüelements {0} fehlgeschlagen: Das Funkgerät stimmt nicht mit dem Geschriebenen überein.
 - (sin documentar)|- (undocumented)|- (non documenté)|- (nicht dokumentiert)
 Canal {0}: modo sin documentar en el manual; elige un modo antes de escribir.|Channel {0}: mode undocumented in the manual; choose a mode before writing.|Canal {0} : mode non documenté dans le manuel ; choisissez un mode avant d’écrire.|Kanal {0}: Betriebsart im Handbuch nicht dokumentiert; wähle vor dem Schreiben eine Betriebsart.
+`.trim().split("\n").map(line => line.split("|")));
+  // Simplified installer flow: connect button, detected radio, quick actions, advanced section, CAT RX guide.
+  entries.push(...`
+Conectar radio|Connect radio|Connecter la radio|Funkgerät verbinden
+Conecta tu radio.|Connect your radio.|Connectez votre radio.|Verbinde dein Funkgerät.
+Sin complicaciones.|No hassle.|Sans complications.|Ohne Aufwand.
+Pulsa el botón, elige tu familia y la web reconoce tu radio. Antes de escribir nada se guarda una copia.|Press the button, pick your family and the web recognises your radio. A backup is saved before anything is written.|Appuyez sur le bouton, choisissez votre famille et le site reconnaît votre radio. Une copie est enregistrée avant toute écriture.|Drücke die Taste, wähle deine Familie und die Webseite erkennt dein Funkgerät. Vor jedem Schreiben wird eine Sicherung angelegt.
+Primeros pasos y ayuda|Getting started and help|Premiers pas et aide|Erste Schritte und Hilfe
+Edita canales FM y DMR de tu radio OpenGD77.|Edit FM and DMR channels on your OpenGD77 radio.|Modifiez les canaux FM et DMR de votre radio OpenGD77.|Bearbeite FM- und DMR-Kanäle deines OpenGD77-Funkgeräts.
+Instala firmware, guarda copias, edita canales y sigue satélites.|Install firmware, save backups, edit channels and follow satellites.|Installez un firmware, sauvegardez, modifiez les canaux et suivez les satellites.|Firmware installieren, Sicherungen anlegen, Kanäle bearbeiten und Satelliten verfolgen.
+Prepara canales FM/DMR y AM aérea. Sin USB.|Prepare FM/DMR and aviation AM channels. No USB.|Préparez des canaux FM/DMR et AM aviation. Sans USB.|Bereite FM/DMR- und Flug-AM-Kanäle vor. Ohne USB.
+Lee, edita y copia memorias y menú por CAT USB.|Read, edit and copy memories and menu over USB CAT.|Lisez, modifiez et copiez mémoires et menu par CAT USB.|Speicher und Menü per USB-CAT lesen, bearbeiten und kopieren.
+Conecta|Connect|Connecter|Verbinden
+Elige tu familia y pulsa Conectar radio.|Pick your family and press Connect radio.|Choisissez votre famille et appuyez sur Connecter la radio.|Wähle deine Familie und drücke Funkgerät verbinden.
+Reconocemos tu radio|We recognise your radio|Nous reconnaissons votre radio|Wir erkennen dein Funkgerät
+Verás su nombre y su firmware.|You will see its name and firmware.|Vous verrez son nom et son firmware.|Du siehst Name und Firmware.
+Elige una acción|Pick an action|Choisissez une action|Wähle eine Aktion
+Sin copia verificada, no se escribe.|Nothing is written without a verified backup.|Sans copie vérifiée, rien n’est écrit.|Ohne geprüfte Sicherung wird nichts geschrieben.
+Conecta tu radio|Connect your radio|Connectez votre radio|Verbinde dein Funkgerät
+Elige el modelo y pulsa Conectar radio. Antes de escribir se guarda una copia.|Choose the model and press Connect radio. A backup is saved before writing.|Choisissez le modèle et appuyez sur Connecter la radio. Une copie est enregistrée avant l’écriture.|Wähle das Modell und drücke Funkgerät verbinden. Vor dem Schreiben wird eine Sicherung angelegt.
+Tu radio|Your radio|Votre radio|Dein Funkgerät
+Radio detectada: ninguna.|Detected radio: none.|Radio détectée : aucune.|Erkanntes Funkgerät: keines.
+Radio detectada: {0} · firmware {1}|Detected radio: {0} · firmware {1}|Radio détectée : {0} · firmware {1}|Erkanntes Funkgerät: {0} · Firmware {1}
+Al conectar, aquí verás las acciones para tu radio.|After connecting, the actions for your radio appear here.|Après la connexion, les actions pour votre radio apparaissent ici.|Nach dem Verbinden erscheinen hier die Aktionen für dein Funkgerät.
+¿Qué quieres hacer?|What do you want to do?|Que voulez-vous faire ?|Was möchtest du tun?
+Avanzado|Advanced|Avancé|Erweitert
+Copia de seguridad|Backup|Sauvegarde|Sicherung
+Guarda una copia de tu radio y revisa las anteriores.|Save a copy of your radio and review earlier ones.|Enregistrez une copie de votre radio et consultez les précédentes.|Speichere eine Kopie deines Funkgeräts und sieh frühere an.
+Pon un firmware F4HWN oficial o propio en la radio.|Put an official or your own F4HWN firmware on the radio.|Installez un firmware F4HWN officiel ou le vôtre sur la radio.|Spiele eine offizielle oder eigene F4HWN-Firmware auf das Funkgerät.
+Lee, edita y envía los canales de tu radio.|Read, edit and send your radio channels.|Lisez, modifiez et envoyez les canaux de votre radio.|Lies, bearbeite und sende die Kanäle deines Funkgeräts.
+CAT / Satélite|CAT / Satellite|CAT / Satellite|CAT / Satellit
+Sintoniza la radio siguiendo un satélite.|Tune the radio while following a satellite.|Accordez la radio en suivant un satellite.|Stimme das Funkgerät beim Verfolgen eines Satelliten ab.
+Lee, edita y guarda los canales de la radio.|Read, edit and save the radio channels.|Lisez, modifiez et enregistrez les canaux de la radio.|Lies, bearbeite und speichere die Kanäle des Funkgeräts.
+Repetidores y contactos|Repeaters and contacts|Relais et contacts|Relais und Kontakte
+Busca repetidores y prepara contactos.|Find repeaters and prepare contacts.|Trouvez des relais et préparez des contacts.|Finde Relais und bereite Kontakte vor.
+Satélite|Satellite|Satellite|Satellit
+Calcula pases y prepara las memorias del satélite.|Compute passes and prepare satellite memories.|Calculez les passages et préparez les mémoires du satellite.|Berechne Überflüge und bereite die Satellitenspeicher vor.
+Mostrar opciones avanzadas|Show advanced options|Afficher les options avancées|Erweiterte Optionen anzeigen
+Ocultar opciones avanzadas|Hide advanced options|Masquer les options avancées|Erweiterte Optionen ausblenden
+Comprobar CAT|Check CAT|Vérifier CAT|CAT prüfen
+Sintonizar RX y mantener|Tune RX and hold|Accorder RX et maintenir|RX abstimmen und halten
+Consultar CAT RX|Query CAT RX|Interroger CAT RX|CAT RX abfragen
+Sintonizar CAT RX|Tune CAT RX|Accorder CAT RX|CAT RX abstimmen
+Restaurar RX nominal CAT|Restore nominal CAT RX|Restaurer RX nominal CAT|Nominalen CAT-RX wiederherstellen
+Guia para habilitar CAT RX|Guide to enable CAT RX|Guide pour activer CAT RX|Anleitung zum Aktivieren von CAT RX
+Abre SAT RX.|Open SAT RX.|Ouvrez SAT RX.|Öffne SAT RX.
+El firmware Satelites lo abre al encender; si saliste con EXIT, pulsa la tecla lateral asignada a SAT RX (Menu, Acciones).|The Satellites firmware opens it at power-on; if you left with EXIT, press the side key assigned to SAT RX (Menu, Actions).|Le firmware Satellites l’ouvre à l’allumage ; si vous avez quitté avec EXIT, appuyez sur la touche latérale assignée à SAT RX (Menu, Actions).|Die Satelliten-Firmware öffnet es beim Einschalten; wenn du mit EXIT verlassen hast, drücke die seitliche Taste für SAT RX (Menü, Aktionen).
+Pulsa 8.|Press 8.|Appuyez sur 8.|Drücke 8.
+La radio debe mostrar CAT READY RX.|The radio must show CAT READY RX.|La radio doit afficher CAT READY RX.|Das Funkgerät muss CAT READY RX anzeigen.
+Sintoniza aqui.|Tune here.|Accordez ici.|Hier abstimmen.
+La pagina renueva el permiso cada 1 s y confirma la frecuencia leida de la radio.|The page renews the permission every 1 s and confirms the frequency read from the radio.|La page renouvelle l’autorisation chaque seconde et confirme la fréquence lue sur la radio.|Die Seite erneuert die Erlaubnis jede Sekunde und bestätigt die vom Funkgerät gelesene Frequenz.
+Estado CAT: sin comprobar.|CAT status: not checked.|État CAT : non vérifié.|CAT-Status: nicht geprüft.
+Estado CAT: ARMADO (CAT READY RX). Ya puedes sintonizar.|CAT status: ARMED (CAT READY RX). You can tune now.|État CAT : ARMÉ (CAT READY RX). Vous pouvez accorder.|CAT-Status: ARMIERT (CAT READY RX). Du kannst jetzt abstimmen.
+Estado CAT: NO armado. Sigue los pasos 1 y 2 en la radio; la pagina espera y no hace falta reconectar.|CAT status: NOT armed. Follow steps 1 and 2 on the radio; the page waits and no reconnect is needed.|État CAT : NON armé. Suivez les étapes 1 et 2 sur la radio ; la page attend, inutile de se reconnecter.|CAT-Status: NICHT armiert. Folge den Schritten 1 und 2 am Funkgerät; die Seite wartet, ein erneutes Verbinden ist nicht nötig.
+Esperando a que armes CAT con 8 en SAT RX (se comprueba cada 0,5 s)...|Waiting for you to arm CAT with 8 in SAT RX (checked every 0.5 s)...|En attente que vous armiez CAT avec 8 dans SAT RX (vérifié toutes les 0,5 s)...|Warte, bis du CAT mit 8 in SAT RX armierst (Prüfung alle 0,5 s)...
+La radio dejo de estar armada (¿pulsaste 8, EXIT o una tecla?). Vuelve a SAT RX y pulsa 8: se reanuda solo.|The radio is no longer armed (did you press 8, EXIT or a key?). Go back to SAT RX and press 8: it resumes by itself.|La radio n’est plus armée (avez-vous appuyé sur 8, EXIT ou une touche ?). Retournez dans SAT RX et appuyez sur 8 : cela reprend tout seul.|Das Funkgerät ist nicht mehr armiert (8, EXIT oder eine Taste gedrückt?). Gehe zurück zu SAT RX und drücke 8: Es setzt sich selbst fort.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

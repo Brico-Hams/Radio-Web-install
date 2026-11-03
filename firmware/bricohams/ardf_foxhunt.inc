@@ -90,6 +90,9 @@ static bool BH_ARDF_Key(KEY_Code_t key)
     } else if (key == KEY_9 && bhArdfSynced && !bhArdfError) {
         uint8_t index = 0;
         bool available = false;
+        BH_ARDF_Update(); /* refresh the current fox before loading its stored gain */
+        if (bhArdfError)
+            return true;
         bhArdfError = bh_ardf_load_gain(&bhArdf, 0, bhArdfView.fox, &index, &available) != BH_ARDF_OK;
         if (!bhArdfError && available && index != attStep) {
             attStep = index;

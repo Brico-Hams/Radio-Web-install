@@ -631,12 +631,16 @@ Ein weiteres SET vor der Anwendung ersetzt das vorherige, statt eine
 unbegrenzte Warteschlange anzulegen. STOP fordert die nominale RX-Frequenz an und beendet das Lease, ohne
 weitere Befehle zu verhindern, solange es physisch aktiviert bleibt.
 
-Der Web-Connector stellt `getCatStatus`, `setCatReceive(frequency10Hz)` und
-`stopCatReceive`. Er validiert Sequenz/Version/Capabilities, unterscheidet den
-den ausstehenden vom angewandten Status und prüft das Ergebnis über begrenzte Abfragen.
-Er wiederholt SET-Befehle nicht und verlängert Leases nicht automatisch. Ein Fehler macht die
-Verbindung gemäß dem bestehenden Ablauf ungültig und erfordert eine erneute Verbindung. Dies sind keine Funktionen zur
-dauerhaften Programmierung und sie erlauben kein Schreiben ohne Sicherung.
+Der Web-Connector stellt `getCatStatus`, `setCatReceive(frequency10Hz)`,
+`stopCatReceive`, `waitCatArmed` und `holdCatReceive`. Er serialisiert Anfragen,
+validiert Sequenz/Version/Capabilities, wiederholt verlorene Antworten, bestätigt
+die Abstimmung, indem er die vom Funkgerät zurückgegebene Frequenz liest, und
+erneuert das Lease jede Sekunde, solange er die Abstimmung hält. „Nicht
+aktiviert“ (Status 5) ist kein Fehler: Die Seite zeigt die Anleitung (SAT RX
+öffnen, 8 drücken) und wartet, ohne sich neu zu verbinden. Nur ein verlorener
+Port oder eine inkohärente Antwort macht die Verbindung ungültig. Dies sind
+keine Funktionen zur dauerhaften Programmierung und sie erlauben kein Schreiben
+ohne Sicherung.
 
 #### CAT TX Bricohams v1 (PTT mit Lease)
 

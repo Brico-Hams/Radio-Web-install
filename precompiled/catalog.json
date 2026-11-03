@@ -511,7 +511,7 @@
           "viewKey": "0",
           "persistentWrites": true,
           "calibrationUntouched": true,
-          "hardwareValidated": true
+          "hardwareValidated": false
         },
         "stability": "beta",
         "validation": "Structural checks only; physical validation pending"

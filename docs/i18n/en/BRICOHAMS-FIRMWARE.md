@@ -635,11 +635,13 @@ application replaces the earlier one; it does not create an unbounded queue.
 STOP requests nominal RX and ends the lease without disabling the possibility
 of another command while locally enabled.
 
-The web connector exposes `getCatStatus`, `setCatReceive(frequency10Hz)`, and
-`stopCatReceive`. It validates sequence/version/capabilities, distinguishes
-pending from applied state, and checks the result using bounded queries.
-It does not retry SET or renew automatically. A failure invalidates the
-connection through the existing flow and requires reconnecting. These are not
+The web connector exposes `getCatStatus`, `setCatReceive(frequency10Hz)`,
+`stopCatReceive`, `waitCatArmed`, and `holdCatReceive`. It serializes requests,
+validates sequence/version/capabilities, retries lost replies, confirms tuning
+by reading back the frequency echoed by the radio, and renews the lease every
+1 s while holding the tuning. "Not armed" (status 5) is not a failure: the page
+shows the guide (open SAT RX, press 8) and waits without reconnecting. Only a
+lost port or an incoherent reply invalidates the connection. These are not
 persistent programming functions and do not authorize writes without a backup.
 
 #### CAT TX Bricohams v1 (PTT by Lease)

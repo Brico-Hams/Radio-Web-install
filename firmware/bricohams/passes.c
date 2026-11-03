@@ -151,7 +151,8 @@ uint16_t BH_PASS_Request(const uint8_t *request, uint16_t length, bool authentic
         else if (op == BH_PASS_OP_COMMIT && count > BH_PASS_MAX)
             status = BH_PASS_STATUS_RANGE;
         else {
-            if (host_time != 0) {
+            /* A read must stay pure, and a pre-2020 host time is a broken PC clock: keep the previous clock. */
+            if (host_time >= BH_PASS_MIN_HOST_UNIX && op != BH_PASS_OP_READ) {
                 bh_clock_unix = host_time;
                 bh_clock_ms = now_ms;
             }

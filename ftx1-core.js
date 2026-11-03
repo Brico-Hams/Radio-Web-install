@@ -243,25 +243,39 @@
     command(text, expectAnswer = true) {
       const run = async () => {
         R.assert(/^[\x20-\x7e]+;$/.test(text), "Comando CAT no valido.");
-        if (!this.transport.pending) this.transport.clear();
-        await this.transport.write(new TextEncoder().encode(text));
-        if (!expectAnswer) return "";
-        let answer = "";
-        while (answer.length < 128) {
-          let byte;
-          try { [byte] = await this.transport.readExact(1, 2000, false); }
-          catch (error) {
-            if (error.code === "READ_TIMEOUT") throw new Error("La radio no responde.");
-            throw error;
+        // Reads are retried after a lost reply (the stale buffer is flushed first); writes are never repeated.
+        for (let attempt = 0; attempt < (expectAnswer ? 3 : 1); attempt++) {
+          if (!this.transport.pending) this.transport.clear();
+          await this.transport.write(new TextEncoder().encode(text));
+          if (!expectAnswer) return "";
+          let answer = "";
+          for (;;) {
+            let byte;
+            try { [byte] = await this.transport.readExact(1, 1000, false); }
+            catch (error) {
+              if (error.code === "READ_TIMEOUT") break;
+              throw error;
+            }
+            answer += String.fromCharCode(byte);
+            if (byte === 0x3b) return answer;
+            if (answer.length >= 128) throw new Error("Respuesta de la radio demasiado larga.");
           }
-          answer += String.fromCharCode(byte);
-          if (byte === 0x3b) return answer;
         }
-        throw new Error("Respuesta de la radio demasiado larga.");
+        throw new Error("La radio no responde.");
       };
       const result = this.queue.then(run);
       this.queue = result.catch(() => {});
       return result;
+    }
+    // FA/FB carry 9 digits in Hz on the FTX-1 (FA439300000;).
+    async readFrequency(vfo = "A") {
+      const reply = await this.command(`F${vfo};`);
+      return R.parseRigFrequency(R.RIG_PROFILES.ftx1, reply, vfo);
+    }
+    async setFrequency(vfo, hz) {
+      await this.command(R.rigFrequencyCommand(R.RIG_PROFILES.ftx1, vfo, hz), false);
+      R.assert(await this.readFrequency(vfo) === hz, "La radio no confirma la frecuencia solicitada.");
+      return hz;
     }
     async connect() {
       const id = await this.command("ID;");

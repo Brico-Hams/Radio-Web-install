@@ -313,7 +313,48 @@ test("CAT RX rechaza frecuencias invalidas antes de enviar y no acepta estado pe
   device.catActive = true;
   device.catStuck = true;
   await assert.rejects(connector.setCatReceive(14580000), /sigue pendiente/);
-  assert.equal(connector.connected, false);
+  assert.equal(connector.connected, true);
+  await connector.disconnect();
+});
+test("CAT RX: sin armar es recuperable, se espera hasta armar y no obliga a reconectar", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  await assert.rejects(connector.setCatReceive(14580000), error => error.code === "CAT_NOT_ARMED" && /Entra primero/.test(error.message) && !/Desconecta/.test(error.message));
+  assert.equal(connector.connected, true);
+  let waits = 0;
+  const armed = await connector.waitCatArmed({ intervalMs: 5, onWaiting: () => { if (++waits === 3) device.catActive = true; } });
+  assert.equal(armed.active, true);
+  assert.ok(waits >= 3);
+  const state = await connector.setCatReceive(14580000);
+  assert.equal(state.appliedFrequency10Hz, 14580000);
+  await connector.disconnect();
+});
+test("CAT RX: una respuesta perdida se reintenta y no invalida la conexion", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  device.catActive = true;
+  const original = device.write.bind(device);
+  let dropped = 0;
+  device.write = async frame => { if (dropped++ < 1) return; return original(frame); };
+  const state = await connector.getCatStatus();
+  assert.equal(state.active, true);
+  assert.equal(connector.connected, true);
+  await connector.disconnect();
+});
+test("CAT RX: las peticiones concurrentes se serializan y el lease se renueva con confirmacion", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  device.catActive = true;
+  const results = await Promise.all([connector.getCatStatus(), connector.setCatReceive(14580000), connector.getCatStatus()]);
+  assert.equal(results[1].appliedFrequency10Hz, 14580000);
+  const seen = [];
+  const hold = connector.holdCatReceive(14590000, { intervalMs: 10, onState: event => seen.push(event) });
+  while (seen.filter(event => event.armed && event.state.appliedFrequency10Hz === 14590000).length < 2) await new Promise(resolve => setTimeout(resolve, 5));
+  hold.stop();
+  assert.equal(connector.connected, true);
   await connector.disconnect();
 });
 test("CAT STOP es idempotente si el operador ya salio de SAT RX", async () => {
@@ -1829,6 +1870,24 @@ test("pases SAT se graban por tramas de 4, se confirman y se releen con la sesio
   await connector.clearSatellitePasses();
   assert.equal(device.passCount, 0);
   assert.deepEqual((await connector.readSatellitePasses()).passes, []);
+  await connector.disconnect();
+});
+test("pases SAT: las lecturas no mueven el reloj de la radio y la sincronizacion es explicita", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  await connector.writeSatellitePasses(weekPasses(Date.now(), 2));
+  device.commands = [];
+  await connector.readSatellitePasses();
+  const reads = device.commands.filter(command => command.type === 0x7b30);
+  assert(reads.length >= 2 && reads.every(command => le(command.data).getUint32(6, true) === 0));
+  assert(reads.some(command => command.data[1] === 0) && reads.some(command => command.data[1] === 4));
+  device.commands = [];
+  const synced = await connector.syncSatelliteClock();
+  const [sync] = device.commands.filter(command => command.type === 0x7b30);
+  assert.equal(sync.data[1], 0);
+  assert(Math.abs(le(sync.data).getUint32(6, true) - Date.now() / 1000) < 5);
+  assert(Math.abs(Date.parse(synced.radioClock) - Date.now()) < 5000);
   await connector.disconnect();
 });
 test("pases SAT rechazan datos invalidos antes de enviar y no dan por buena una escritura perdida", async () => {

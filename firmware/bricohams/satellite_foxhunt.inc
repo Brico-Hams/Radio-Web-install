@@ -146,7 +146,8 @@ static bool BH_SAT_Key(KEY_Code_t key)
             bh_cat_stop(&bh_cat_receiver);
             bhSatRate = 0;
             BH_SAT_Apply();
-        } else if (!bhSatError) {
+        } else if (bh_cat_frequency_valid(bhSatDownlink)) {
+            /* RX-only CAT does not need a valid uplink: an invalid TX VFO must not silently block arming. */
             bhSatRate = 0;
             BH_SAT_Apply();
             if (!bh_cat_start(&bh_cat_receiver, bhSatDownlink))

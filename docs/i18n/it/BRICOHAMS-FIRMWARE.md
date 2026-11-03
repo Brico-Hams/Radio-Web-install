@@ -645,12 +645,16 @@ Un SET successivo prima dell'applicazione sostituisce il precedente, non crea un
 illimitata. STOP richiede RX nominale e termina il lease, senza disabilitare
 la possibilità di un altro comando mentre rimane abilitato fisicamente.
 
-Il connettore web espone `getCatStatus`, `setCatReceive(frequency10Hz)` e
-`stopCatReceive`. Convalida sequenza/versione/capacità, distingue lo stato
-in attesa da quello applicato e verifica il risultato con query limitate.
-Non ritenta SET né rinnova automaticamente. Un errore invalida la
-connessione secondo il flusso esistente e richiede la riconnessione. Non sono funzioni
-di programmazione persistente e non autorizzano scritture senza backup.
+Il connettore web espone `getCatStatus`, `setCatReceive(frequency10Hz)`,
+`stopCatReceive`, `waitCatArmed` e `holdCatReceive`. Serializza le richieste,
+convalida sequenza/versione/capacità, ritenta le risposte perse, conferma la
+sintonia leggendo la frequenza restituita dalla radio e rinnova il lease ogni
+1 s mentre mantiene la sintonia. «Non abilitato» (stato 5) non è un errore: la
+pagina mostra la guida (aprire SAT RX, premere 8) e attende senza riconnettersi.
+Solo una porta persa o una risposta incoerente invalidano la connessione. Non
+sono funzioni di programmazione persistente e non autorizzano scritture senza
+backup.
+
 #### CAT TX Bricohams v1 (PTT con lease)
 
 Aggiunto il 2026-10-26 per inviare SSTV dall'app Android. È una PTT remota

@@ -84,11 +84,18 @@ void bh_cat_request(bh_cat_rx *state, const uint8_t *request, uint16_t length,
         else if (request[1] == 1 && !bh_cat_frequency_valid(frequency)) status = 6;
         else if (request[1] != 0 && !state->active) status = 5;
         else if (request[1] != 0) {
-            state->remote = request[1] == 1;
-            state->last_command = now;
-            state->target = state->remote ? frequency : state->nominal;
-            state->pending = true;
-            status = 1; /* Queued, not yet applied by the RX loop. */
+            const bool remote = request[1] == 1;
+            const uint32_t target = remote ? frequency : state->nominal;
+            if (remote || state->remote) {
+                /* Same target while already applied is a pure lease renewal: no retune. */
+                if (state->remote != remote || state->target != target)
+                    state->pending = true;
+                state->remote = remote;
+                state->target = target;
+                if (remote)
+                    state->last_command = now;
+            }
+            status = 1; /* Queued or renewed; the RX loop applies it. */
         }
     }
     reply[1] = status;

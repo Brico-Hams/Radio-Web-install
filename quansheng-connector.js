@@ -1,6 +1,7 @@
 (function (root) {
   "use strict";
   const R = root.RadioWorkspace;
+  const CAT_NOT_ARMED_TEXT = "Entra primero en SAT RX en la radio y pulsa 8 (debe verse CAT READY RX)";
   const KEY = Uint8Array.of(0x16, 0x6c, 0x14, 0xe6, 0x2e, 0x91, 0x0d, 0x40, 0x21, 0x35, 0xd5, 0x40, 0x13, 0x03, 0xe9, 0x80);
   function crc16(data) {
     let crc = 0;
@@ -211,6 +212,10 @@
         return this.info;
       });
     }
+    async disconnect() {
+      this.stopCatHold();
+      return super.disconnect();
+    }
     async exchange(type, data, expected = type + 1, timeout = 4000, recoverableTimeout = false) {
       await this.transport.write(packet(type, data));
       return this.receiveResponse(expected, timeout, recoverableTimeout);
@@ -246,19 +251,78 @@
       this.info = { family: this.family, model: this.model, firmware, hardwareConfirmed: false,
         legacyReadOnly: Number(match[1]) === 6 && Number(match[2] || 0) === 0 };
     }
-    async catExchange(operation, frequency10Hz = 0) {
+    catError(code, message) {
+      const error = new Error(message);
+      error.code = code;
+      error.catRecoverable = true; // The link is intact; the operator can fix it and retry without reconnecting.
+      return error;
+    }
+    // CAT requests are serialized and never mark the link as lost for recoverable conditions
+    // (radio not armed, lost reply, pending/unconfirmed tuning).
+    catRun(label, action) {
+      const job = (this.catQueue || Promise.resolve()).then(() => this.runCat(label, action));
+      this.catQueue = job.catch(() => {});
+      return job;
+    }
+    async runCat(label, action) {
+      R.assert(this.connected && !this.transport.error, "Radio no conectada. Vuelve a conectar.");
+      R.assert(!this.busy, "Hay otra operacion en curso.");
+      this.busy = true;
+      try {
+        return await action();
+      } catch (error) {
+        if (error.catRecoverable && !this.transport.error) {
+          const wrapped = new Error(`${label}: ${error.message}`, { cause: error });
+          wrapped.code = error.code;
+          wrapped.catRecoverable = true;
+          throw wrapped;
+        }
+        this.connected = false;
+        throw new Error(`${label}: ${error.message}. Desconecta y vuelve a conectar antes de continuar.`, { cause: error });
+      } finally {
+        this.busy = false;
+      }
+    }
+    async catExchange(operation, frequency10Hz = 0, retries = 2) {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await this.catExchangeOnce(operation, frequency10Hz);
+        } catch (error) {
+          // Only lost/garbled replies are retried: CAT SET is idempotent for the same target.
+          if (error.code !== "CAT_TIMEOUT" || attempt >= retries || this.transport.error) throw error;
+        }
+      }
+    }
+    async catExchangeOnce(operation, frequency10Hz = 0) {
+      // Drop stale bytes so a late reply or a half frame cannot desynchronize the 0xABCD framing.
+      if (!this.transport.pending) this.transport.clear();
       const sequence = this.catSequence = (this.catSequence + 1) & 0xffff;
       const request = new Uint8Array(8);
       request[0] = 1;
       request[1] = operation;
       R.view(request).setUint16(2, sequence, true);
       R.view(request).setUint32(4, frequency10Hz, true);
-      const response = await this.exchange(0x7b00, request, 0x7b01, 1000);
-      R.assert(response.length === 16 && response[0] === 1 &&
-        R.view(response).getUint16(2, true) === sequence, "Respuesta CAT Bricohams invalida o fuera de secuencia.");
+      await this.transport.write(packet(0x7b00, request));
+      const deadline = Date.now() + 1000;
+      let response = null;
+      let stale = false;
+      while (!response) {
+        let candidate;
+        try {
+          candidate = await this.receiveResponse(0x7b01, Math.max(1, deadline - Date.now()), true);
+        } catch (error) {
+          if (this.transport.error) throw error;
+          if (stale) throw new Error("Respuesta CAT Bricohams invalida o fuera de secuencia.");
+          throw this.catError("CAT_TIMEOUT", "La radio no responde a CAT (sin respuesta en 1 s).");
+        }
+        if (candidate.length === 16 && R.view(candidate).getUint16(2, true) !== sequence) { stale = true; continue; }
+        R.assert(candidate.length === 16 && candidate[0] === 1, "Respuesta CAT Bricohams invalida o fuera de secuencia.");
+        response = candidate;
+      }
       const statuses = ["OK", "En cola", "Longitud/campos invalidos", "Version no admitida",
-        "Operacion no admitida", "Entra primero en SAT RX y habilita CAT con 8", "Frecuencia fuera de banda RX"];
+        "Operacion no admitida", CAT_NOT_ARMED_TEXT, "Frecuencia fuera de banda RX"];
       const status = response[1];
+      if (status === 5) throw this.catError("CAT_NOT_ARMED", CAT_NOT_ARMED_TEXT + ".");
       R.assert(status === (operation === 0 ? 0 : 1),
         `CAT rechazado: ${statuses[status] || `estado desconocido ${status}`}.`);
       const capabilities = R.view(response).getUint32(4, true);
@@ -273,32 +337,80 @@
         pending: Boolean(flags & 4), appliedFrequency10Hz, leaseMilliseconds: 3000 };
     }
     getCatStatus() {
-      return this.run("Consultar CAT RX Bricohams Beta", () => this.catExchange(0));
+      return this.catRun("Consultar CAT RX Bricohams Beta", () => this.catExchange(0));
     }
     setCatReceive(frequency10Hz) {
       R.assert(Number.isInteger(frequency10Hz) &&
         ((frequency10Hz >= 13600000 && frequency10Hz <= 17400000) ||
         (frequency10Hz >= 40000000 && frequency10Hz <= 47000000)), "Frecuencia CAT RX fuera de banda o resolucion de 10 Hz.");
-      return this.run("Sintonizar CAT RX Bricohams Beta", () => this.catChange(1, frequency10Hz));
+      return this.catRun("Sintonizar CAT RX Bricohams Beta", () => this.catChange(1, frequency10Hz));
     }
     stopCatReceive() {
-      return this.run("Detener CAT RX Bricohams Beta", () => this.catChange(2, 0));
+      return this.catRun("Detener CAT RX Bricohams Beta", () => this.catChange(2, 0));
     }
     async catChange(operation, frequency10Hz) {
       const initial = await this.catExchange(0);
       if (operation === 2 && !initial.active) return initial;
-      R.assert(initial.active, "Entra primero en SAT RX del firmware Bricohams compatible y habilita CAT con 8.");
+      if (!initial.active) throw this.catError("CAT_NOT_ARMED", CAT_NOT_ARMED_TEXT + ".");
       await this.catExchange(operation, frequency10Hz);
-      for (let attempt = 0; attempt < 10; attempt++) {
+      for (let attempt = 0; attempt < 12; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 75));
         const state = await this.catExchange(0);
-        R.assert(state.active, "Se ha salido de SAT RX durante el cambio CAT.");
+        if (!state.active) throw this.catError("CAT_NOT_ARMED", "Se ha salido de SAT RX durante el cambio CAT. " + CAT_NOT_ARMED_TEXT + ".");
         if (state.pending) continue;
-        R.assert(operation === 1 ? state.remote && state.appliedFrequency10Hz === frequency10Hz : !state.remote,
-          "El receptor no confirma el cambio CAT solicitado.");
+        // The echoed frequency is the only confirmation: a queued SET is not a tuned receiver.
+        if (!(operation === 1 ? state.remote && state.appliedFrequency10Hz === frequency10Hz : !state.remote))
+          throw this.catError("CAT_UNCONFIRMED", "El receptor no confirma el cambio CAT solicitado; se reintentara.");
         return state;
       }
-      throw new Error("El cambio CAT sigue pendiente; no se considera aplicado.");
+      throw this.catError("CAT_PENDING", "El cambio CAT sigue pendiente; no se considera aplicado.");
+    }
+    // Polls until the operator arms CAT with 8 in SAT RX. Never disconnects: "not armed" is a normal state.
+    async waitCatArmed({ timeoutMs = 120000, intervalMs = 500, onWaiting = () => {}, shouldStop = () => false } = {}) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        try {
+          const state = await this.getCatStatus();
+          if (state.active) return state;
+        } catch (error) {
+          if (!error.catRecoverable) throw error;
+        }
+        if (shouldStop()) throw this.catError("CAT_CANCELLED", "Espera CAT cancelada.");
+        if (Date.now() >= deadline) throw this.catError("CAT_NOT_ARMED", CAT_NOT_ARMED_TEXT + ".");
+        onWaiting();
+        await new Promise(resolve => setTimeout(resolve, intervalMs));
+      }
+    }
+    // Keeps tuning alive by renewing the 3 s lease about every second. Transient failures are retried on the
+    // next tick; "not armed" keeps polling until armed; only a lost link or a protocol violation stops it.
+    holdCatReceive(frequency10Hz, { intervalMs = 1000, onState = () => {} } = {}) {
+      R.assert(Number.isInteger(frequency10Hz), "Frecuencia CAT no valida.");
+      this.stopCatHold();
+      const hold = { frequency10Hz, stopped: false, timer: null };
+      const tick = async () => {
+        if (hold.stopped) return;
+        try {
+          const state = await this.setCatReceive(hold.frequency10Hz);
+          if (!hold.stopped) onState({ armed: true, state });
+        } catch (error) {
+          if (!error.catRecoverable) {
+            hold.stopped = true;
+            onState({ fatal: true, error });
+            return;
+          }
+          if (!hold.stopped) onState({ armed: error.code !== "CAT_NOT_ARMED", waiting: error.code === "CAT_NOT_ARMED", error });
+        }
+        if (!hold.stopped) hold.timer = setTimeout(tick, intervalMs);
+      };
+      hold.update = value => { hold.frequency10Hz = value; };
+      hold.stop = () => { hold.stopped = true; clearTimeout(hold.timer); };
+      this.catHold = hold;
+      hold.timer = setTimeout(tick, 0);
+      return hold;
+    }
+    stopCatHold() {
+      if (this.catHold) this.catHold.stop();
+      this.catHold = null;
     }
     async spectrumPresetExchange(operation, token, chunk = new Uint8Array()) {
       const request = new Uint8Array(6 + chunk.length);
@@ -387,13 +499,14 @@
         return inspectSpectrumPresets(checked);
       });
     }
-    async passTableExchange(operation, index = 0, count = 0, entries = new Uint8Array()) {
+    // Only mutating operations carry the UTC clock: a read/info with a non-zero time would move the radio's pass clock.
+    async passTableExchange(operation, index = 0, count = 0, entries = new Uint8Array(), syncClock = operation >= 1 && operation <= 3) {
       const request = new Uint8Array(12 + entries.length);
       const view = R.view(request);
       request[0] = 1;
       request[1] = operation;
       view.setUint32(2, this.timestamp, true);
-      view.setUint32(6, Math.floor(Date.now() / 1000), true); // keeps the radio's pass clock in UTC
+      view.setUint32(6, syncClock ? Math.floor(Date.now() / 1000) : 0, true);
       request[10] = index;
       request[11] = count;
       request.set(entries, 12);
@@ -418,6 +531,14 @@
     }
     readSatellitePasses() {
       return this.run("Leer pases SAT de la radio", () => this.readSatellitePassesRaw());
+    }
+    // Explicit clock sync (info operation with the host UTC time); plain reads never touch the clock.
+    syncSatelliteClock() {
+      return this.run("Sincronizar reloj SAT", async () => {
+        const { clock } = await this.passTableExchange(0, 0, 0, new Uint8Array(), true);
+        R.assert(clock > 0, "La radio no confirma el reloj de pases.");
+        return { radioClock: new Date(clock * 1000).toISOString() };
+      });
     }
     clearSatellitePasses() {
       return this.run("Borrar pases SAT de la radio", () => this.passTableExchange(1));
