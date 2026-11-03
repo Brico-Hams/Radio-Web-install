@@ -115,7 +115,7 @@ class DiagnosticsActivity : LocalizedActivity() {
 
         content.addView(Brand.heading(this, getString(R.string.diag_bridge_title)))
         content.addView(Brand.card(this).apply {
-            addView(Brand.text(this@DiagnosticsActivity, 15f, Color.parseColor("#FFB020")).apply {
+            addView(Brand.text(this@DiagnosticsActivity, 15f, Brand.Palette(this@DiagnosticsActivity).accent).apply {
                 setText(R.string.diag_bridge_warning)
             })
         })

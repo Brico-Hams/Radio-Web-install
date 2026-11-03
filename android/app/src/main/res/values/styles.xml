@@ -4,12 +4,13 @@
     <style name="PlatformTheme" parent="android:style/Theme.Material.Light.NoActionBar" />
     <style name="AppTheme.Base" parent="PlatformTheme">
         <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorPrimary">@color/brand_orange</item>
         <item name="android:colorAccent">@color/brand_accent</item>
         <item name="android:colorControlHighlight">@color/brand_ripple</item>
         <item name="android:colorBackground">@color/brand_background</item>
         <item name="android:windowBackground">@color/brand_background</item>
         <item name="android:statusBarColor">@color/brand_background</item>
-        <item name="android:navigationBarColor">#0E1420</item>
+        <item name="android:navigationBarColor">@color/brand_background</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:textColorPrimary">@color/brand_text</item>

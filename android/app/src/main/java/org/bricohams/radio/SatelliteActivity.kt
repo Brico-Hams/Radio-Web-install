@@ -134,7 +134,8 @@ class SatelliteActivity : LocalizedActivity() {
             ImageView(this).apply {
                 setImageResource(R.drawable.bricohams_logo)
                 contentDescription = getString(R.string.app_name)
-                layoutParams = LinearLayout.LayoutParams(Brand.dp(this@SatelliteActivity, 40), Brand.dp(this@SatelliteActivity, 40))
+                Brand.logoPlate(this)
+                layoutParams = LinearLayout.LayoutParams(Brand.dp(this@SatelliteActivity, 52), Brand.dp(this@SatelliteActivity, 52))
             },
             LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL

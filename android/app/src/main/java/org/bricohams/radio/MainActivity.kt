@@ -117,7 +117,8 @@ class MainActivity : LocalizedActivity() {
             setImageResource(org.bricohams.radio.R.drawable.bricohams_logo)
             adjustViewBounds = true
             contentDescription = "Bricohams"
-        }, LinearLayout.LayoutParams(dp(144), dp(54)))
+            Brand.logoPlate(this)
+        }, LinearLayout.LayoutParams(dp(156), dp(66)))
         header.addView(Brand.heading(this, "RadiCodex by BricoHams"))
         header.addView(Brand.text(this, 13f, Brand.Palette(this).muted).apply {
             setText(R.string.language_label); labelFor = R.id.app_language

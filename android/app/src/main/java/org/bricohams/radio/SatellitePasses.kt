@@ -133,6 +133,6 @@ class PassRadarView(context: Context) : View(context) {
             mark(canvas, track.first(), Color.rgb(46, 160, 67), 5f)
             mark(canvas, track.last(), Color.rgb(207, 34, 46), 5f)
         }
-        SatellitePasses.at(track, now)?.let { mark(canvas, it, Color.rgb(230, 160, 0), 8f) }
+        SatellitePasses.at(track, now)?.let { mark(canvas, it, Brand.ORANGE, 8f) }
     }
 }
