@@ -219,7 +219,7 @@
       status("Conectando con el FTX-1...");
       const port = new R.SerialTransport();
       try {
-        await port.open(Number($("baud").value), [{ usbVendorId: 0x10c4 }]);
+        await port.open(Number($("baud").value), [{ usbVendorId: 0x10c4 }], { lowControlLines: true });
         const session = new R.Ftx1Cat(port);
         await session.connect();
         port.onDisconnect = error => {

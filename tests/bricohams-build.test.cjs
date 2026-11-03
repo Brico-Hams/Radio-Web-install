@@ -370,6 +370,7 @@ test("satellite module stores passes in a banked sector and gates 0x7B30 on the 
     "scheduler.c": "#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS\n#endif\n",
     "scheduler.h": "#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS\n#endif\n",
     "ui/menu.c": 'X(ACTION_OPT_FOXHUNT,        "FOX HUNT")\n',
+    "app/app.c": "void APP_TimeSlice10ms(void)\n{\n    gNextTimeslice = false;\n",
     "app/uart.c": '#include "app/uart.h"\nstatic uint32_t mb_port_timestamp(uint32_t Port);\n        case 0x0514:\n',
     "app/foxhunt.c": ['#include "app/foxhunt.h"', "    FOXHUNT_DrawFreqBR(gRxVfo->pRX->Frequency);",
       '    GUI_DisplaySmallestInverse("FOX HUNT", 2, 0, true, true, 34);',
@@ -389,6 +390,8 @@ test("satellite module stores passes in a banked sector and gates 0x7B30 on the 
   assert.match(main, /#include "app\/action.h"/);
   assert.match(main, /if \(BootMode == BOOT_MODE_NORMAL && !gReducedService\)\s+ACTION_FoxHunt\(\);/);
   assert.match(main, /#elif defined\(ENABLE_FEAT_F4HWN_RESUME_STATE\)/);
+  assert(recorded.includes("App/app/app.c"));
+  assert.match(fs.readFileSync(path.join(work, "App/app/app.c"), "utf8"), /BH_CAT_Service\(gScreenToDisplay == DISPLAY_MAIN, gCurrentFunction == FUNCTION_TRANSMIT\)/);
   assert.equal(main.split("ACTION_FoxHunt();").length, 2);
   assert(main.indexOf("ACTION_FoxHunt();") < main.indexOf("while (true)"));
   const uart = fs.readFileSync(path.join(work, "App/app/uart.c"), "utf8");

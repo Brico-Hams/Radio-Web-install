@@ -631,12 +631,16 @@ Ein weiteres SET vor der Anwendung ersetzt das vorherige, statt eine
 unbegrenzte Warteschlange anzulegen. STOP fordert die nominale RX-Frequenz an und beendet das Lease, ohne
 weitere Befehle zu verhindern, solange es physisch aktiviert bleibt.
 
-Der Web-Connector stellt `getCatStatus`, `setCatReceive(frequency10Hz)` und
-`stopCatReceive`. Er validiert Sequenz/Version/Capabilities, unterscheidet den
-den ausstehenden vom angewandten Status und prüft das Ergebnis über begrenzte Abfragen.
-Er wiederholt SET-Befehle nicht und verlängert Leases nicht automatisch. Ein Fehler macht die
-Verbindung gemäß dem bestehenden Ablauf ungültig und erfordert eine erneute Verbindung. Dies sind keine Funktionen zur
-dauerhaften Programmierung und sie erlauben kein Schreiben ohne Sicherung.
+Der Web-Connector stellt `getCatStatus`, `setCatReceive(frequency10Hz)`,
+`stopCatReceive`, `waitCatArmed` und `holdCatReceive`. Er serialisiert Anfragen,
+validiert Sequenz/Version/Capabilities, wiederholt verlorene Antworten, bestätigt
+die Abstimmung, indem er die vom Funkgerät zurückgegebene Frequenz liest, und
+erneuert das Lease jede Sekunde, solange er die Abstimmung hält. „Nicht
+aktiviert“ (Status 5) ist kein Fehler: Die Seite zeigt die Anleitung (SAT RX
+öffnen, 8 drücken) und wartet, ohne sich neu zu verbinden. Nur ein verlorener
+Port oder eine inkohärente Antwort macht die Verbindung ungültig. Dies sind
+keine Funktionen zur dauerhaften Programmierung und sie erlauben kein Schreiben
+ohne Sicherung.
 
 #### CAT TX Bricohams v1 (PTT mit Lease)
 
@@ -700,6 +704,52 @@ JavaScript-Tests simulieren Transport, ausstehende Antworten,
 falsche Sequenzen und Fehler; sie ersetzen keinen CAT-Test per USB/Funkgerät.
 Das Manifest enthält `catRx` und Hashes des angewandten Codes. Es wurde nicht
 geflasht und die physische Funktion nicht zertifiziert.
+
+#### Fern-CAT: CAT RX und CAT TX außerhalb von SAT RX
+
+Behobenes Feldproblem: CAT RX wurde nur in SAT RX nach Drücken von 8 akzeptiert
+(Status `active=false` auf jedem anderen Bildschirm) und CAT TX nur nach dem
+Scharfschalten mit 9; daher funktionierte CAT weder im normalen VFO noch mit FT8/FT2.
+
+**Aktivierung.**
+1. Drücke in SAT RX bei entsperrter Tastatur **F+8**: Das schaltet die dauerhafte
+   Einstellung **CAT remoto** (Fern-CAT, Standard AUS) um. Sie liegt im
+   BricoHams-Konfigurationsbank (Flash, 4 Bytes im Pass-Sektor; nie eine Frequenz)
+   und bleibt nach dem Ausschalten erhalten. Das Löschen der Pässe behält sie bei.
+2. Bei eingeschaltetem Fern-CAT schaltet SAT RX CAT RX selbst scharf; nach EXIT zum
+   normalen VFO zeigt der Bildschirm die Anzeige **CAT**.
+3. Zum Deaktivieren erneut F+8 drücken. Die Tasten 8 und 9 in SAT RX funktionieren
+   wie bisher (Modus ohne dauerhafte Einstellung).
+
+Der Menüeintrag „CAT remoto“ wird nicht in das F4HWN-Menü gepatcht (für den
+Menü-Quelltext gibt es keinen festgelegten, geprüften Anker); F+8 ist der
+Aktivierungsweg. Bei alter Firmware (ohne Capability-Bit) gilt weiterhin SAT RX + 8.
+
+**Verhalten bei eingeschaltetem Fern-CAT.**
+- CAT RX v1 (0x7B00) stimmt VFO A auf 136-174 / 400-470 MHz in 10-Hz-Schritten im
+  Hauptbildschirm ab. Nur BK4819-Register: kein EEPROM-/Flash-Schreiben, keine
+  Kanal-/Speicheränderung.
+- Der 3-s-Lease wird vom Host erneuert; dieselbe Frequenz erneuert nur, ohne
+  Neuabstimmung. Bei Ablauf oder Operation 2 wird die VFO-Frequenz des Benutzers
+  wiederhergestellt.
+- Jede Taste, die eigene PTT oder das Verlassen des Hauptbildschirms beenden die
+  Fernsteuerung und sperren den Host 5 s (Flag `holdoff`).
+- CAT TX v1 (0x7B02) erlaubt Fern-PTT in digitalen Modi (FT8/FT2) ohne Taste 9: Das
+  Funkgerät sendet nie ohne ausdrückliche Host-Anforderung mit gültigem Lease
+  (1,5 s), maximal 120 s; Band-, TX-Sperre- und Batterieprüfungen gelten weiter;
+  jede Taste bricht das Senden ab. Es sendet auf dem TX-VFO des Funkgeräts (für
+  Simplex vorher einstellen) mit Audio am Mikrofonkabel.
+
+**Format.** Die Frames 0x7B00..0x7B03 und Statuscodes bleiben unverändert. Neues
+Capability-Bit: In 0x7B01 steigen die Capabilities von 7 auf 15 (Bit 3 =
+„funktioniert außerhalb von SAT RX“); in 0x7B03 von 8 auf 24 (Bit 4). Neue Flags in
+0x7B01: Bit 3 (8) Fern-CAT AN, Bit 4 (16) Hold-off; in 0x7B03: Bit 4 (16) Fern-CAT
+AN, Bit 5 (32) Hold-off. Der Hello-String bleibt `F4HWN v6.1.0`. Der Host
+behandelt ein fehlendes Bit als alte Firmware und zeigt die Anleitung SAT RX + 8;
+mit Bit zeigt er, wie „CAT remoto“ aktiviert wird, und fragt weiter ab, ohne neu
+zu verbinden.
+
+Nicht am echten Funkgerät ausgeführt: Hardwareprüfung erforderlich (siehe Testliste).
 
 #### Web-Passverfolgung über CAT RX implementiert
 

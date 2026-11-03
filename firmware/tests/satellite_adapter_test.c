@@ -25,7 +25,22 @@ static char line2[32], line6[32], rows[7][32];
 #define BK4819_REG_30 0x30
 static void BK4819_SetFrequency(uint32_t f) { tuned_frequency = f; tunes++; }
 static void BK4819_PickRXFilterPathBasedOnFrequency(uint32_t f) { filter_frequency = f; }
-static uint16_t BK4819_ReadRegister(uint8_t reg) { (void)reg; return 0x1234; }
+static uint16_t BK4819_ReadRegister(uint8_t reg)
+{
+    /* REG_38/39 hold the tuned frequency (10 Hz units), as the real BK4819 does. */
+    if (reg == 0x38) return (uint16_t)(tuned_frequency & 0xFFFFU);
+    if (reg == 0x39) return (uint16_t)(tuned_frequency >> 16);
+    return 0x1234;
+}
+#define BK4819_REG_38 0x38
+#define BK4819_REG_39 0x39
+static bool gWasFKeyPressed;
+static char indicator[16], blit_indicator[16];
+static void GUI_DisplaySmallestInverse(const char *text, unsigned x, unsigned y, bool a, bool b, unsigned endX)
+{
+    (void)x; (void)y; (void)a; (void)b; (void)endX;
+    snprintf(indicator, sizeof(indicator), "%s", text);
+}
 static void BK4819_WriteRegister(uint8_t reg, uint16_t value) { (void)reg; (void)value; writes++; }
 static void SYSTEM_DelayMs(unsigned delay) { delays += delay; }
 static void FOXHUNT_RebaseMeasurements(void) { rebases++; }
@@ -66,7 +81,7 @@ static void RADIO_SetupRegisters(bool full) { (void)full; restores++; }
 static KEY_Code_t KEYBOARD_GetKey(void) { return pressed; }
 static void BACKLIGHT_Update(void) {}
 static bool tx_led;
-static void FOXHUNT_BlitScreen(void) { strcpy(tx_line2, line2); strcpy(tx_line6, line6); tx_led = red_led; }
+static void FOXHUNT_BlitScreen(void) { strcpy(tx_line2, line2); strcpy(tx_line6, line6); tx_led = red_led; strcpy(blit_indicator, indicator); }
 /* Scripted host for the modal TX loop: each service is one 10 ms pass; renew the lease until renew_until. */
 static void UART_ServiceCommands(void)
 {
@@ -81,7 +96,16 @@ static void UART_ServiceCommands(void)
 }
 #include "bricohams/satellite_foxhunt.inc"
 extern uint8_t bh_test_flash[0x10000];
+extern unsigned bh_test_flash_writes;
+extern unsigned bh_test_flash_erases;
 
+/* Host side of CAT RX: op 1 tunes (frequency in 10 Hz), op 2 stops. */
+static void cat_lease(uint8_t op, uint32_t frequency, uint32_t at_tick, uint8_t reply[BH_CAT_REPLY_SIZE])
+{
+    uint8_t request[BH_CAT_REQUEST_SIZE] = {1, op, 0, 0, 0, 0, 0, 0};
+    for (unsigned i = 0; i < 4; ++i) request[4 + i] = (uint8_t)(frequency >> (8U * i));
+    bh_cat_request(&bh_cat_receiver, request, sizeof(request), at_tick * 10U, reply);
+}
 #define CHECK(expression) do { if (!(expression)) { \
     fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #expression); return EXIT_FAILURE; \
 } } while (0)
@@ -249,6 +273,153 @@ int main(void)
     BH_SAT_Key(KEY_9);
     BH_SAT_Stop();
     CHECK(!bh_cat_transmitter.armed && keyups == 3);
+
+    /* "CAT remoto" via F+8 in SAT RX: persists, auto-arms RX, and F+8 again disarms RX and TX. */
+    memset(bh_test_flash, 0xff, sizeof(bh_test_flash));
+    bh_cat_remote_enabled = false;
+    BH_SAT_Start();
+    CHECK(!bh_cat_receiver.active);
+    gWasFKeyPressed = true;
+    CHECK(BH_SAT_Key(KEY_8) && bh_cat_remote_enabled && bh_cat_receiver.active && !bh_cat_receiver.remote);
+    CHECK(bh_test_flash[0xF008] == 0xCA && bh_test_flash[0xF009] == 1);
+    CHECK(BH_SAT_Key(KEY_8) && !bh_cat_remote_enabled && !bh_cat_receiver.active && bh_test_flash[0xF009] == 0);
+    gWasFKeyPressed = false;
+    bh_cat_remote_set(true);
+    BH_SAT_Start(); /* Already consented: SAT RX arms itself, no key 8 needed. */
+    CHECK(bh_cat_receiver.active && !bh_cat_receiver.remote);
+    BH_SAT_Stop();
+
+    /* Bench regression: leave SAT RX with CAT remoto ON, then tune/release from the normal VFO screen. */
+    {
+        const uint32_t downlink = 43032500, user_vfo = 40000000, other = 14580000;
+        const uint32_t saved_rx = rx.Frequency;
+        rx.Frequency = downlink;
+        bh_cat_remote_set(true);
+        BH_SAT_Start();
+        CHECK(bh_cat_receiver.active && bh_cat_receiver.nominal == downlink);
+        rx.Frequency = user_vfo; /* The VFO the user has once back on the main screen. */
+        pressed = KEY_INVALID;
+        tick = 60000;
+        BH_CAT_Service(true, false);
+        CHECK(bh_cat_receiver.nominal == user_vfo && bh_cat_receiver.applied == user_vfo);
+        cat_lease(0, 0, tick, reply);
+        CHECK(reply[8] == (user_vfo & 0xFFU) && reply[9] == ((user_vfo >> 8) & 0xFFU) &&
+            reply[10] == ((user_vfo >> 16) & 0xFFU) && reply[12] == (1U | 8U));
+        cat_lease(1, other, tick, reply);
+        BH_CAT_Service(true, false);
+        CHECK(tuned_frequency == other && bh_cat_receiver.remote && rx.Frequency == user_vfo);
+        const unsigned restores_before = restores;
+        cat_lease(2, 0, tick, reply);
+        CHECK(reply[1] == 1 && (reply[12] & 4));
+        BH_CAT_Service(true, false);
+        CHECK(!bh_cat_receiver.remote && !bh_cat_receiver.pending && bh_cat_receiver.applied == user_vfo);
+        CHECK(tuned_frequency == user_vfo && rx.Frequency == user_vfo && restores == restores_before + 1);
+        CHECK(tuned_frequency != downlink);
+        bh_cat_stop(&bh_cat_receiver);
+        rx.Frequency = saved_rx;
+    }
+
+    const unsigned erases_before = bh_test_flash_erases, writes_before = bh_test_flash_writes;
+    memset(&bh_cat_receiver, 0, sizeof(bh_cat_receiver));
+    bh_cat_tx_arm(&bh_cat_transmitter, false);
+    pressed = KEY_INVALID;
+    tick = 40000;
+    CHECK(!BH_CAT_Service(true, false));
+    CHECK(bh_cat_receiver.active && !bh_cat_receiver.remote && bh_cat_receiver.nominal == rx.Frequency);
+    CHECK(strcmp(blit_indicator, "CAT") == 0);
+    cat_lease(1, remote, tick, reply);
+    CHECK(reply[1] == 1 && reply[4] == 15 && (reply[12] & 8));
+    CHECK(!BH_CAT_Service(true, false) && tuned_frequency == remote && bh_cat_receiver.applied == remote);
+    CHECK(rx.Frequency == 43500000 && tx.Frequency == 14500000);
+    /* Upstream RX/TX setup retunes behind our back: the remote frequency is re-asserted. */
+    tuned_frequency = rx.Frequency;
+    tick += 10;
+    BH_CAT_Service(true, false);
+    CHECK(tuned_frequency == remote);
+    /* Same-frequency renewal: no retune. */
+    const unsigned renew_tunes = tunes;
+    cat_lease(1, remote, tick, reply);
+    BH_CAT_Service(true, false);
+    CHECK(tunes == renew_tunes && bh_cat_receiver.remote);
+    /* Lease expiry restores the user's VFO frequency. */
+    tick += 299;
+    BH_CAT_Service(true, false);
+    CHECK(tuned_frequency == remote);
+    tick += 1;
+    BH_CAT_Service(true, false);
+    CHECK(tuned_frequency == rx.Frequency && !bh_cat_receiver.remote && rx.Frequency == 43500000);
+    /* Op 2 restores. */
+    cat_lease(1, remote, tick, reply);
+    BH_CAT_Service(true, false);
+    CHECK(tuned_frequency == remote);
+    cat_lease(2, 0, tick, reply);
+    BH_CAT_Service(true, false);
+    CHECK(tuned_frequency == rx.Frequency && !bh_cat_receiver.remote);
+    /* A key press cancels remote control and blocks the host for the hold-off. */
+    cat_lease(1, remote, tick, reply);
+    BH_CAT_Service(true, false);
+    CHECK(tuned_frequency == remote);
+    pressed = KEY_3; tick++;
+    BH_CAT_Service(true, false);
+    CHECK(tuned_frequency == rx.Frequency && !bh_cat_receiver.active);
+    pressed = KEY_INVALID; tick++;
+    BH_CAT_Service(true, false);
+    cat_lease(1, remote, tick, reply);
+    CHECK(reply[1] == 5 && (reply[12] & 16));
+    tick += 498;
+    BH_CAT_Service(true, false);
+    CHECK(!bh_cat_receiver.active);
+    tick += 1;
+    BH_CAT_Service(true, false);
+    CHECK(bh_cat_receiver.active);
+    /* The user's own PTT cancels without touching the radio's TX frequency. */
+    cat_lease(1, remote, tick, reply);
+    BH_CAT_Service(true, false);
+    CHECK(tuned_frequency == remote);
+    const unsigned ptt_tunes = tunes;
+    BH_CAT_Service(true, true);
+    CHECK(!bh_cat_receiver.remote && tunes == ptt_tunes);
+    tick += 500;
+    BH_CAT_Service(true, false);
+    /* Leaving the main screen cancels as well. */
+    cat_lease(1, remote, tick, reply);
+    BH_CAT_Service(true, false);
+    BH_CAT_Service(false, false);
+    CHECK(tuned_frequency == rx.Frequency && !bh_cat_receiver.active);
+    tick += 500;
+    BH_CAT_Service(true, false);
+
+    /* CAT TX outside SAT RX: no key request, no TX; with a lease and the flag, one slot. */
+    const unsigned tx_before = keyups;
+    tick = 50000;
+    BH_CAT_Service(true, false);
+    CHECK(keyups == tx_before);
+    bh_cat_tx_request(&bh_cat_transmitter, ptt, sizeof(ptt), tick * 10U, ptt_reply);
+    CHECK(ptt_reply[1] == BH_CAT_TX_QUEUED);
+    BH_CAT_Service(true, true); /* The user's own PTT in progress: the host does not key. */
+    CHECK(keyups == tx_before);
+    renew_until = (tick + 100U) * 10U;
+    BH_CAT_Service(true, false);
+    CHECK(keyups == tx_before + 1 && !on_air && !bh_cat_transmitter.keyed && !bhCatOutside);
+    CHECK(strcmp(blit_indicator, "CAT TX") == 0);
+    /* A key on the radio aborts CAT TX and refuses the host for the hold-off. */
+    services = 0; press_after = 20; renew_until = UINT32_MAX;
+    bh_cat_tx_request(&bh_cat_transmitter, ptt, sizeof(ptt), tick * 10U, ptt_reply);
+    BH_CAT_Service(true, false);
+    CHECK(keyups == tx_before + 2 && !on_air && services == 20 && bh_cat_transmitter.holdoff);
+    pressed = KEY_INVALID; press_after = 0; renew_until = 0;
+    bh_cat_tx_request(&bh_cat_transmitter, ptt, sizeof(ptt), tick * 10U, ptt_reply);
+    CHECK(ptt_reply[1] == BH_CAT_TX_NOT_ARMED);
+    /* Switching "CAT remoto" off refuses TX and restores RX. */
+    bh_cat_tx_arm(&bh_cat_transmitter, false);
+    bh_cat_remote_enabled = false;
+    bh_cat_tx_request(&bh_cat_transmitter, ptt, sizeof(ptt), tick * 10U, ptt_reply);
+    CHECK(ptt_reply[1] == BH_CAT_TX_NOT_ARMED);
+    BH_CAT_Service(true, false);
+    CHECK(keyups == tx_before + 2 && !bh_cat_receiver.active && strcmp(blit_indicator, "CAT TX") == 0);
+    /* Neither remote tuning nor TX ever erased or wrote flash. */
+    CHECK(bh_test_flash_erases == erases_before && bh_test_flash_writes == writes_before);
+    bh_cat_remote_enabled = false;
 
     /* Pass list: KEY_0 toggles it, arrows scroll, SAT controls are swallowed. */
     memset(bh_test_flash, 0xff, sizeof(bh_test_flash));

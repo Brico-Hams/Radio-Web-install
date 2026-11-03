@@ -29,9 +29,9 @@ test("appearance defaults to the system and tolerates invalid or unavailable sto
 });
 
 test("modern palettes preserve AA text contrast, orange branding and distinct warnings", () => {
-  const css = read("styles.css").split("/* Shared design system")[1];
-  const tokens = selector => Object.fromEntries([...css.match(selector)[1].matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/g)]
-    .map(([, name, value]) => [name, value]));
+  const css = read("styles.css");
+  const tokens = selector => Object.fromEntries([...css.match(selector)[1].matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/gi)]
+    .map(([, name, value]) => [name, value.toLowerCase()]));
   const luminance = hex => {
     const components = hex.slice(1).match(/../g).map(value => {
       const channel = parseInt(value, 16) / 255;
@@ -43,19 +43,33 @@ test("modern palettes preserve AA text contrast, orange branding and distinct wa
     const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
     return (values[0] + .05) / (values[1] + .05);
   };
-  const light = tokens(/:root \{([\s\S]*?)\}/);
-  const dark = { ...light, ...tokens(/:root\[data-theme="dark"\] \{([\s\S]*?)\}/) };
+  const light = tokens(/^:root\{([^}]*)\}/m);
+  const dark = { ...light, ...tokens(/:root\[data-theme="dark"\]\{([^}]*)\}/) };
+  const systemDark = tokens(/@media\(prefers-color-scheme:dark\)\{:root:not\(\[data-theme="light"\]\)\{([^}]*)\}\}/);
+  assert.deepEqual(systemDark, tokens(/:root\[data-theme="dark"\]\{([^}]*)\}/));
+  assert.deepEqual(
+    { ink: light["brand-ink"], orange: light["brand-orange"], onAccent: light["on-accent"], bg: light.bg, surface: light.surface,
+      text: light.text, muted: light["text-muted"], border: light.border, link: light.link, focus: light.focus },
+    { ink: "#23272b", orange: "#f26b1d", onAccent: "#23272b", bg: "#ffffff", surface: "#f6f7f8",
+      text: "#23272b", muted: "#59636b", border: "#dce1e5", link: "#aa410b", focus: "#f26b1d" });
+  assert.deepEqual(
+    { bg: dark.bg, surface: dark.surface, text: dark.text, muted: dark["text-muted"], border: dark.border, link: dark.link, focus: dark.focus },
+    { bg: "#111518", surface: "#1c2329", text: "#f6f8fa", muted: "#bac4cc", border: "#38434c", link: "#ffa06a", focus: "#ffc18f" });
   for (const [mode, palette] of [["light", light], ["dark", dark]]) {
-    for (const text of ["text", "muted", "mint", "blue"]) {
-      for (const surface of ["bg", "panel", "surface-soft"]) {
+    for (const text of ["text", "text-muted", "link"]) {
+      for (const surface of ["bg", "surface"]) {
         assert(contrast(palette[text], palette[surface]) >= 4.5, `${mode}: ${text} on ${surface}`);
       }
     }
     assert(contrast(palette["warning-text"], palette["warning-bg"]) >= 4.5, `${mode}: warning`);
-    assert(contrast(palette.error, palette.panel) >= 4.5, `${mode}: error`);
+    assert(contrast(palette.error, palette.surface) >= 4.5, `${mode}: error`);
+    assert(contrast(palette["on-accent"], palette["brand-orange"]) >= 4.5, `${mode}: primary button`);
   }
-  assert(contrast("#241407", light.accent) >= 4.5);
-  assert.equal(light.accent, "#f7941d");
+  assert(/\.button\.primary,\s*\.skip \{ color: var\(--on-accent\); background: var\(--brand-orange\)/.test(css));
+  assert(css.includes("outline:3px solid var(--focus)"));
+  for (const old of ["#f7941d", "#f26b21", "#a64b00", "#0b1418", "#0e1420", "#111d22", "#172131", "#89b9ff", "#205da8", "#ff6b00", "#0a2540"]) {
+    assert(!css.toLowerCase().includes(old), `old palette value ${old} in styles.css`);
+  }
   assert(css.includes("prefers-reduced-motion: no-preference"));
   assert(css.includes("forced-colors: active"));
 });

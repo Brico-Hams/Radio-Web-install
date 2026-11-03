@@ -322,7 +322,7 @@ test("la auditoria conserva limites fisicos, snapshots distintos y presupuesto R
   }
   assert(read("docs/DEPLOYMENT.md").includes("no por ruta"));
   assert(read("docs/DECISIONS.md").includes("no la URL"));
-  assert(read("docs/BRANDING.md").includes("`--brand-orange` `#F26B1D`"));
+  assert(read("docs/BRANDING.md").includes("--brand-orange: #F26B1D"));
 });
 
 test("la revision de entrega mantiene cada peticion y distingue objetivos de capacidades", () => {
