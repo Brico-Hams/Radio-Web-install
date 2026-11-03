@@ -36,9 +36,9 @@ static uint16_t BK4819_ReadRegister(uint8_t reg)
 #define BK4819_REG_39 0x39
 static bool gWasFKeyPressed;
 static char indicator[16], blit_indicator[16];
-static void GUI_DisplaySmallestInverse(const char *text, unsigned x, unsigned y, bool a, bool b)
+static void GUI_DisplaySmallestInverse(const char *text, unsigned x, unsigned y, bool a, bool b, unsigned endX)
 {
-    (void)x; (void)y; (void)a; (void)b;
+    (void)x; (void)y; (void)a; (void)b; (void)endX;
     snprintf(indicator, sizeof(indicator), "%s", text);
 }
 static void BK4819_WriteRegister(uint8_t reg, uint16_t value) { (void)reg; (void)value; writes++; }
@@ -289,7 +289,36 @@ int main(void)
     CHECK(bh_cat_receiver.active && !bh_cat_receiver.remote);
     BH_SAT_Stop();
 
-    /* CAT outside SAT RX (normal VFO screen / digital modes). */
+    /* Bench regression: leave SAT RX with CAT remoto ON, then tune/release from the normal VFO screen. */
+    {
+        const uint32_t downlink = 43032500, user_vfo = 40000000, other = 14580000;
+        const uint32_t saved_rx = rx.Frequency;
+        rx.Frequency = downlink;
+        bh_cat_remote_set(true);
+        BH_SAT_Start();
+        CHECK(bh_cat_receiver.active && bh_cat_receiver.nominal == downlink);
+        rx.Frequency = user_vfo; /* The VFO the user has once back on the main screen. */
+        pressed = KEY_INVALID;
+        tick = 60000;
+        BH_CAT_Service(true, false);
+        CHECK(bh_cat_receiver.nominal == user_vfo && bh_cat_receiver.applied == user_vfo);
+        cat_lease(0, 0, tick, reply);
+        CHECK(reply[8] == (user_vfo & 0xFFU) && reply[9] == ((user_vfo >> 8) & 0xFFU) &&
+            reply[10] == ((user_vfo >> 16) & 0xFFU) && reply[12] == (1U | 8U));
+        cat_lease(1, other, tick, reply);
+        BH_CAT_Service(true, false);
+        CHECK(tuned_frequency == other && bh_cat_receiver.remote && rx.Frequency == user_vfo);
+        const unsigned restores_before = restores;
+        cat_lease(2, 0, tick, reply);
+        CHECK(reply[1] == 1 && (reply[12] & 4));
+        BH_CAT_Service(true, false);
+        CHECK(!bh_cat_receiver.remote && !bh_cat_receiver.pending && bh_cat_receiver.applied == user_vfo);
+        CHECK(tuned_frequency == user_vfo && rx.Frequency == user_vfo && restores == restores_before + 1);
+        CHECK(tuned_frequency != downlink);
+        bh_cat_stop(&bh_cat_receiver);
+        rx.Frequency = saved_rx;
+    }
+
     const unsigned erases_before = bh_test_flash_erases, writes_before = bh_test_flash_writes;
     memset(&bh_cat_receiver, 0, sizeof(bh_cat_receiver));
     bh_cat_tx_arm(&bh_cat_transmitter, false);

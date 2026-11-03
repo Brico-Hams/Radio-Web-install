@@ -168,6 +168,28 @@ int main(void)
     bh_cat_request(&g, request, sizeof(request), 13030, reply);
     CHECK(reply[1] == 5 && !(reply[12] & 8));
     CHECK(bh_test_flash_erases == 0); /* The tuned frequency never reaches flash. */
+    /* Screen change: a stale SAT-downlink nominal is rebased to the VFO; idle status reports the VFO. */
+    bh_cat_rx s = {0};
+    CHECK(bh_cat_start(&s, 43032500));
+    bh_cat_rebase(&s, 14580000);
+    CHECK(s.nominal == 14580000 && s.applied == 14580000 && s.target == 14580000 && !s.pending);
+    request[1] = 0; memset(&request[4], 0, 4);
+    bh_cat_request(&s, request, sizeof(request), 0, reply);
+    CHECK(reply[8] == 0x20 && reply[9] == 0x79 && reply[10] == 0xDE && reply[11] == 0x00); /* 14580000 = 0x00DE7920 */
+    CHECK(bh_cat_start(&s, 43032500) && !bh_cat_global_tick(&s, true, false, true, 40000000, 0, &tune));
+    CHECK(s.nominal == 40000000 && s.applied == 40000000);
+    /* Remote then release returns to the rebased VFO, not the old downlink. */
+    bh_cat_start(&s, 43032500);
+    bh_cat_rebase(&s, 14500000);
+    request[1] = 1;
+    for (unsigned i = 0; i < 4; ++i) request[4 + i] = (uint8_t)(14580000U >> (i * 8U));
+    bh_cat_request(&s, request, sizeof(request), 10, reply);
+    bh_cat_rebase(&s, 43032500); /* A remote lease keeps its target but rebases the nominal. */
+    CHECK(s.remote && s.target == 14580000 && s.nominal == 43032500);
+    bh_cat_rebase(&s, 14500000);
+    request[1] = 2; memset(&request[4], 0, 4);
+    bh_cat_request(&s, request, sizeof(request), 20, reply);
+    CHECK(bh_cat_global_tick(&s, true, false, true, 14500000, 30, &tune) && tune == 14500000 && s.applied == 14500000);
     puts("CAT RX protocol checks passed; no hardware validation");
     return EXIT_SUCCESS;
 }

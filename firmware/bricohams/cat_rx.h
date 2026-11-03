@@ -39,6 +39,9 @@ extern bool bh_cat_remote_enabled;
 bool bh_cat_frequency_valid(uint32_t frequency);
 bool bh_cat_start(bh_cat_rx *state, uint32_t nominal);
 void bh_cat_stop(bh_cat_rx *state);
+/* The nominal becomes the real VFO frequency (e.g. after leaving SAT RX, so the SAT downlink never
+ * leaks into the VFO). An idle receiver also reports it as applied; a remote lease is left running. */
+void bh_cat_rebase(bh_cat_rx *state, uint32_t vfo);
 void bh_cat_local(bh_cat_rx *state, uint32_t applied);
 bool bh_cat_expire(bh_cat_rx *state, uint32_t now);
 void bh_cat_applied(bh_cat_rx *state);

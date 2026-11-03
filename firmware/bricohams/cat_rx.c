@@ -42,6 +42,18 @@ void bh_cat_stop(bh_cat_rx *state)
     memset(state, 0, sizeof(*state));
 }
 
+void bh_cat_rebase(bh_cat_rx *state, uint32_t vfo)
+{
+    if (!state->active || !bh_cat_frequency_valid(vfo))
+        return;
+    state->nominal = vfo;
+    if (!state->remote) {
+        state->target = vfo;
+        state->applied = vfo;
+        state->pending = false;
+    }
+}
+
 void bh_cat_local(bh_cat_rx *state, uint32_t applied)
 {
     if (!state->active)
@@ -172,7 +184,9 @@ bool bh_cat_global_tick(bh_cat_rx *state, bool enabled, bool cancel, bool idle_o
     if (!idle_ok)
         return false;
     if (bh_cat_frequency_valid(vfo)) {
-        if (!state->active || (!state->remote && !state->pending && state->nominal != vfo))
+        /* Idle: nominal and the reported applied frequency both track the real VFO. */
+        if (!state->active || (!state->remote && !state->pending &&
+            (state->nominal != vfo || state->applied != vfo)))
             bh_cat_start(state, vfo);
     } else if (state->active && !state->remote) {
         bh_cat_stop(state);

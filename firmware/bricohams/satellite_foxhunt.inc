@@ -18,6 +18,7 @@ static uint8_t bhSatPassUpcoming;
 static void BH_SAT_Draw(void);
 
 static bool bhCatOutside; /* Modal CAT TX started from the main screen instead of SAT RX. */
+static bool bhCatWasMain = true; /* Cleared while SAT RX runs, so the first main-screen tick rebases. */
 
 /* Hardware-only retune: never touches the VFO structures, channels, EEPROM or flash. */
 static void BH_CAT_Retune(uint32_t frequency)
@@ -50,6 +51,7 @@ static void BH_SAT_Apply(void)
 static void BH_SAT_Start(void)
 {
     bh_cat_stop(&bh_cat_receiver);
+    bhCatWasMain = false;
     bh_cat_tx_arm(&bh_cat_transmitter, false);
     bhSatCatTimeout = false;
     bhSatPassView = false;
@@ -174,10 +176,20 @@ bool BH_CAT_Service(bool mainScreen, bool localTx)
         bh_cat_tx_user_key(&bh_cat_transmitter, now);
     /* The user's own PTT or leaving the main screen also ends remote control. */
     const bool cancel = keyEdge || localTx || !mainScreen;
-    const uint32_t vfo = gRxVfo->pRX->Frequency;
+    /* The main VFO the user operates; gRxVfo can point at the other VFO (dual watch) or a SAT value. */
+    const uint32_t vfo = gTxVfo->pRX->Frequency;
+    if (mainScreen && !bhCatWasMain)
+        bh_cat_rebase(&bh_cat_receiver, vfo); /* Back from SAT RX: nominal is the VFO, not the downlink. */
+    bhCatWasMain = mainScreen;
     const bool retune = bh_cat_global_tick(&bh_cat_receiver, true, cancel, mainScreen && !localTx, vfo, now, &tune);
-    if (retune && !localTx)
+    if (retune && !localTx) {
+        if (!bh_cat_receiver.remote) {
+            /* Release/expiry/key: put exactly the saved VFO frequency back (RAM only) and redo RX setup. */
+            gTxVfo->pRX->Frequency = tune;
+            RADIO_SetupRegisters(true);
+        }
         BH_CAT_Retune(tune);
+    }
     /* Upstream RX/TX setup may retune behind our back: re-assert the remote frequency. */
     if (bh_cat_receiver.active && bh_cat_receiver.remote && !bh_cat_receiver.pending &&
         mainScreen && !localTx && (uint32_t)(now - lastCheck) >= 100U) {
