@@ -8,17 +8,23 @@ import java.net.SocketException
 import java.util.Locale
 
 /** Radios the app knows how to talk to, recognised from the USB ids alone (nothing is opened or sent). */
-enum class RadioKind(val label: String, val model: RigModel?) {
+enum class RadioKind(val label: String, val model: RigModel?, val probeable: Boolean = true) {
     QUANSHENG("Quansheng UV-K5 (BricoHams Satellite)", null),
     FTX1("Yaesu FTX-1", RigModel.FTX1),
     TRUSDX("(tr)uSDX", RigModel.TRUSDX),
     QMX("QRP Labs QMX / QMX+", RigModel.QMX),
-    UNKNOWN("?", null)
+    /** Yaesu HRI interface (Windows: "YAESU HRI USB I/F"); it does not speak Kenwood CAT, so it is listed but never probed. */
+    YAESU_HRI("Yaesu HRI USB I/F", null, probeable = false),
+    UNKNOWN("?", null, probeable = false)
 }
 
 object RadioIdentifier {
     const val QUANSHENG_VID = 0x36B7
-    const val QRP_LABS_VID = 0x26AA
+    // Measured on a QMX+: STMicroelectronics VID shared by many devices, so the PID must match too.
+    const val QMX_VID = 0x0483
+    const val QMX_PID = 0xA34C
+    const val YAESU_HRI_VID = 0x26AA
+    const val YAESU_HRI_PID = 0x0030
     const val SILABS_VID = 0x10C4
     const val CP2105_PID = 0xEA70
     const val CH340_VID = 0x1A86
@@ -26,7 +32,8 @@ object RadioIdentifier {
 
     fun identify(vendorId: Int, productId: Int): RadioKind = when {
         vendorId == QUANSHENG_VID -> RadioKind.QUANSHENG
-        vendorId == QRP_LABS_VID -> RadioKind.QMX
+        vendorId == QMX_VID && productId == QMX_PID -> RadioKind.QMX
+        vendorId == YAESU_HRI_VID && productId == YAESU_HRI_PID -> RadioKind.YAESU_HRI
         vendorId == SILABS_VID && productId == CP2105_PID -> RadioKind.FTX1
         vendorId == CH340_VID && productId == CH340_PID -> RadioKind.TRUSDX
         else -> RadioKind.UNKNOWN

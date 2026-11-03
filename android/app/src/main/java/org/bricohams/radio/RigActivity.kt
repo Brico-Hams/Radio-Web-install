@@ -706,7 +706,7 @@ class RigActivity : LocalizedActivity() {
                         preferences.edit().putInt("baud", other).apply()
                         runOnUiThread { baud.setText(other.toString()) }
                     }
-                    // Some CDC radios only transmit while DTR is asserted: retry once with DTR high.
+                    // Not needed by the QMX (answers with DTR low); harmless fallback for CDC radios that need DTR high.
                     (model == RigModel.QMX || model == RigModel.QDX) && silent -> {
                         closeRadio()
                         open(device, model, rate, port, civ, dtr = true)

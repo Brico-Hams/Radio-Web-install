@@ -149,10 +149,11 @@ class DiagnosticsActivity : LocalizedActivity() {
                 val ids = String.format(java.util.Locale.ROOT, "%04X:%04X", info.vendorId, info.productId)
                 addView(Brand.text(this@DiagnosticsActivity, 16f, bold = true).apply { text = "${info.name} ($ids)" })
                 val kind = if (info.kind == RadioKind.UNKNOWN) getString(R.string.diag_kind_unknown) else info.kind.label
+                    .let { if (info.kind == RadioKind.YAESU_HRI) "$it (no CAT)" else it }
                 addView(Brand.text(this@DiagnosticsActivity, 14f).apply {
                     text = getString(R.string.diag_device_line, kind, info.driver ?: "-", info.ports)
                 })
-                if (info.kind != RadioKind.UNKNOWN) {
+                if (info.kind.probeable) {
                     addView(Brand.row(this@DiagnosticsActivity,
                         Brand.button(this@DiagnosticsActivity, getString(R.string.diag_test_one)) { runOne(device) },
                         Brand.button(this@DiagnosticsActivity, getString(R.string.diag_bridge_start)) { startBridge(device) }))
@@ -163,7 +164,7 @@ class DiagnosticsActivity : LocalizedActivity() {
 
     private fun runAll() {
         if (running) return
-        val targets = entries.filter { it.second.kind != RadioKind.UNKNOWN }.map { it.first }
+        val targets = entries.filter { it.second.kind.probeable }.map { it.first }
         if (targets.isEmpty()) { status.setText(R.string.diag_no_devices); return }
         begin(targets)
     }

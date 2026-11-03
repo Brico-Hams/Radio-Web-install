@@ -233,7 +233,12 @@ class RigReliabilityTest {
         assertEquals(RadioKind.QUANSHENG, RadioIdentifier.identify(0x36B7, 0x0001))
         assertEquals(RadioKind.FTX1, RadioIdentifier.identify(0x10C4, 0xEA70))
         assertEquals(RadioKind.TRUSDX, RadioIdentifier.identify(0x1A86, 0x7523))
-        assertEquals(RadioKind.QMX, RadioIdentifier.identify(0x26AA, 0x0001))
+        assertEquals(RadioKind.QMX, RadioIdentifier.identify(0x0483, 0xA34C))
+        assertEquals(RadioKind.UNKNOWN, RadioIdentifier.identify(0x0483, 0x5740))
+        assertEquals(RadioKind.YAESU_HRI, RadioIdentifier.identify(0x26AA, 0x0030))
+        assertFalse(RadioKind.YAESU_HRI.probeable)
+        assertNull(RadioKind.YAESU_HRI.model)
+        assertEquals(38400, RigModel.QMX.defaultBaud)
         assertEquals(RadioKind.UNKNOWN, RadioIdentifier.identify(0x0403, 0x6001))
     }
 
