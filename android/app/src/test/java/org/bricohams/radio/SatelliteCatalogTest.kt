@@ -83,6 +83,7 @@ class SatelliteCatalogTest {
             when (url) {
                 SatelliteSources.TLE_URL, SatelliteSources.AMSAT_TLE_URL -> nasa.toByteArray()
                 SatelliteSources.SATNOGS_TLE_URL -> satnogs.toByteArray()
+                SatelliteSources.SATELLITES_URL -> """[{"norad_cat_id":25544,"status":"alive"}]""".toByteArray()
                 else -> transmitterJson.toByteArray()
             }
         }
@@ -93,13 +94,39 @@ class SatelliteCatalogTest {
         result = SatelliteSources.download(fetcher(setOf(SatelliteSources.TLE_URL)))
         assertEquals(SatelliteSources.TleSource.SATNOGS, result.source)
         assertEquals(1, result.transmitters.size)
-        assertEquals(listOf(SatelliteSources.TLE_URL, SatelliteSources.TRANSMITTERS_URL, SatelliteSources.SATNOGS_TLE_URL), requests)
+        assertEquals(listOf(SatelliteSources.TLE_URL, SatelliteSources.TRANSMITTERS_URL, SatelliteSources.SATELLITES_URL,
+            SatelliteSources.SATNOGS_TLE_URL), requests)
         requests.clear()
         result = SatelliteSources.download(fetcher(setOf(SatelliteSources.TLE_URL, SatelliteSources.SATNOGS_TLE_URL)))
         assertEquals(SatelliteSources.TleSource.AMSAT, result.source)
         assertEquals(
-            listOf(SatelliteSources.TLE_URL, SatelliteSources.TRANSMITTERS_URL, SatelliteSources.SATNOGS_TLE_URL,
-                SatelliteSources.AMSAT_TLE_URL, SatelliteSources.TRANSMITTERS_URL), requests)
+            listOf(SatelliteSources.TLE_URL, SatelliteSources.TRANSMITTERS_URL, SatelliteSources.SATELLITES_URL,
+                SatelliteSources.SATNOGS_TLE_URL, SatelliteSources.AMSAT_TLE_URL, SatelliteSources.TRANSMITTERS_URL), requests)
+    }
+    @Test fun satnogsFallbackDropsDeadSatellitesAndKeepsActiveAmateur() {
+        val tle = fresh()
+        fun entry(norad: Int) = """{"tle0":"0 S$norad","tle1":"${tle.line1}","tle2":"${tle.line2}","norad_cat_id":$norad}"""
+        val tleJson = "[" + listOf(25544, 900, 901).joinToString(",") { entry(it) } + "]"
+        val transmitters = """[
+            {"norad_cat_id":25544,"alive":true,"status":"active","service":"Amateur","downlink_low":145800000,"mode":"FM"},
+            {"norad_cat_id":900,"alive":true,"status":"active","service":"Amateur","downlink_low":137000000,"mode":"FM"},
+            {"norad_cat_id":901,"alive":false,"status":"active","service":"Amateur","downlink_low":145900000,"mode":"FM"},
+            {"norad_cat_id":902,"alive":true,"status":"active","service":"Earth Exploration","downlink_low":137100000,"mode":"FM"}
+        ]"""
+        val satellites = """[{"norad_cat_id":25544,"status":"alive"},{"norad_cat_id":900,"status":"re-entered"},
+            {"norad_cat_id":901,"status":"alive"},{"norad_cat_id":902,"status":"alive"}]"""
+        val result = SatelliteSources.download({ url, _ ->
+            when (url) {
+                SatelliteSources.TLE_URL -> throw java.io.IOException("down")
+                SatelliteSources.TRANSMITTERS_URL -> transmitters.toByteArray()
+                SatelliteSources.SATELLITES_URL -> satellites.toByteArray()
+                else -> tleJson.toByteArray()
+            }
+        })
+        assertEquals(SatelliteSources.TleSource.SATNOGS, result.source)
+        assertEquals(listOf(25544), result.tle.map { it.norad })
+        assertEquals(setOf(25544, 900), SatelliteSources.usefulNorads(transmitters.replace("\"alive\":false", "\"alive\":true").replace("901", "900")))
+        assertEquals(setOf(25544, 900), SatelliteSources.usefulNorads(transmitters))
     }
     @Test fun staleEpochsFallThroughAndTotalFailureThrows() {
         val stale = "ISS\n${fixture.line1}\n${fixture.line2}\n"

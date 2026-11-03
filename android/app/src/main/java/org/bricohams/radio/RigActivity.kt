@@ -695,24 +695,32 @@ class RigActivity : LocalizedActivity() {
             try {
                 open(device, model, rate, port, civ)
             } catch (error: Exception) {
-                // (tr)uSDX firmware 2.00t+ runs at 115200 bps, older units at 38400 (DL2MAN details page): a wrong rate gives
-                // silence or garbage, so try the other one.
-                val other = if (rate == 115200) 38400 else 115200
                 val id = (error as? LocalizedError)?.text?.id
-                if (model != RigModel.TRUSDX || id !in setOf(R.string.err_rig_timeout, R.string.err_rig_reply_invalid,
-                        R.string.err_rig_wrong_model)) throw error
-                closeRadio()
-                open(device, model, other, port, civ)
-                preferences.edit().putInt("baud", other).apply()
-                runOnUiThread { baud.setText(other.toString()) }
+                val silent = id in setOf(R.string.err_rig_timeout, R.string.err_rig_reply_invalid, R.string.err_rig_wrong_model)
+                when {
+                    // Measured: the (tr)uSDX works at 115200; 38400 is only a fallback probe for older firmware.
+                    model == RigModel.TRUSDX && silent -> {
+                        val other = if (rate == 115200) 38400 else 115200
+                        closeRadio()
+                        open(device, model, other, port, civ)
+                        preferences.edit().putInt("baud", other).apply()
+                        runOnUiThread { baud.setText(other.toString()) }
+                    }
+                    // Some CDC radios only transmit while DTR is asserted: retry once with DTR high.
+                    (model == RigModel.QMX || model == RigModel.QDX) && silent -> {
+                        closeRadio()
+                        open(device, model, rate, port, civ, dtr = true)
+                    }
+                    else -> throw error
+                }
             }
             getString(R.string.rig_connected, model.label)
         }
     }
 
     /** Worker thread: opens the port, identifies the radio and shows its state. */
-    private fun open(device: UsbDevice, model: RigModel, rate: Int, port: Int, civ: Int) {
-        val link = SerialRadio.open(manager, device, rigSerialSettings(model, rate, port, SerialRadio.enhancedPort(device)))
+    private fun open(device: UsbDevice, model: RigModel, rate: Int, port: Int, civ: Int, dtr: Boolean = false) {
+        val link = SerialRadio.open(manager, device, rigSerialSettings(model, rate, port, SerialRadio.enhancedPort(device), dtr))
         attach(link, model, rate, civ)
     }
 

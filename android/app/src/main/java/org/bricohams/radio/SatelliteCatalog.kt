@@ -14,6 +14,7 @@ data class Transmitter(val norad: Int, val description: String, val downlinkHz: 
 object SatelliteSources {
     const val TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle"
     const val TRANSMITTERS_URL = "https://db.satnogs.org/api/transmitters/?format=json"
+    const val SATELLITES_URL = "https://db.satnogs.org/api/satellites/?format=json"
     const val SATNOGS_TLE_URL = "https://db.satnogs.org/api/tle/?format=json"
     const val AMSAT_TLE_URL = "https://www.amsat.org/tle/current/nasabare.txt"
     const val SOURCE_TIMEOUT_MS = 10000
@@ -65,11 +66,32 @@ object SatelliteSources {
         return best.values.sortedBy { it.norad }.take(MAX_SATELLITES)
     }
 
+    /** SatNOGS DB /api/satellites: NORAD ids whose status is "alive" (re-entered/dead/future are dropped). */
+    fun parseAliveSatellites(text: String): Set<Int> = try {
+        val array = JSONArray(text)
+        (0 until array.length()).map { array.getJSONObject(it) }
+            .filter { it.optString("status") == "alive" }
+            .map { it.optInt("norad_cat_id", -1) }.filter { it > 0 }.toSet()
+    } catch (error: JSONException) {
+        throw IllegalArgumentException("Respuesta SatNOGS no valida: ${error.message}", error)
+    }
+
+    /** Satellites with an active, alive transmitter; those with service "Amateur" win when any exist. */
+    fun usefulNorads(transmittersJson: String): Set<Int> = try {
+        val array = JSONArray(transmittersJson)
+        val active = (0 until array.length()).map { array.getJSONObject(it) }
+            .filter { it.optBoolean("alive") && it.optString("status") == "active" && it.optInt("norad_cat_id", -1) > 0 }
+        val amateur = active.filter { it.optString("service").equals("Amateur", ignoreCase = true) }
+        (amateur.ifEmpty { active }).map { it.getInt("norad_cat_id") }.toSet()
+    } catch (error: JSONException) {
+        throw IllegalArgumentException("Respuesta SatNOGS no valida: ${error.message}", error)
+    }
+
     /** AMSAT nasabare.txt: plain three-line sets (name, line 1, line 2). */
     fun parseNasabare(bytes: ByteArray): List<Tle> = parseTle(bytes).take(MAX_SATELLITES)
 
     /**
-     * CelesTrak first; when it fails, SatNOGS DB (restricted to satellites with transmitters), then AMSAT.
+     * CelesTrak first; when it fails, SatNOGS DB (restricted to alive satellites with active amateur transmitters), then AMSAT.
      * Sources run sequentially on the calling thread; throws only if every source fails.
      */
     fun download(fetch: (String, Int) -> ByteArray, now: Long = System.currentTimeMillis()): Downloaded {
@@ -88,10 +110,9 @@ object SatelliteSources {
 
         try {
             val raw = fetch(TRANSMITTERS_URL, 16 * 1024 * 1024).toString(Charsets.UTF_8)
-            val withTransmitters = JSONArray(raw).let { array ->
-                (0 until array.length()).map { array.getJSONObject(it).optInt("norad_cat_id", -1) }.filter { it > 0 }.toSet()
-            }
-            val tle = freshOrFail(parseSatnogsTle(fetch(SATNOGS_TLE_URL, 8 * 1024 * 1024).toString(Charsets.UTF_8), withTransmitters),
+            val alive = parseAliveSatellites(fetch(SATELLITES_URL, 16 * 1024 * 1024).toString(Charsets.UTF_8))
+            val useful = usefulNorads(raw).intersect(alive)
+            val tle = freshOrFail(parseSatnogsTle(fetch(SATNOGS_TLE_URL, 8 * 1024 * 1024).toString(Charsets.UTF_8), useful),
                 now, TleSource.SATNOGS)
             return Downloaded(tle, parseTransmitters(raw, tle.map { it.norad }.toSet()), TleSource.SATNOGS, "")
         } catch (error: IOException) { failures.add("SatNOGS: ${error.message}") }

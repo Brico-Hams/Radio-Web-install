@@ -98,7 +98,7 @@ class RigReliabilityTest {
             assertEquals(false, settings.rts)
         }
         assertEquals(38400, RigModel.FTX1.defaultBaud)
-        assertEquals(38400, RigModel.TRUSDX.defaultBaud)
+        assertEquals(115200, RigModel.TRUSDX.defaultBaud)
         assertEquals(1, RigModel.FTX1.stopBits)
     }
 
@@ -168,8 +168,8 @@ class RigReliabilityTest {
     }
 
     @Test fun trusdxAndQmxSelfTestsUseElevenDigitFrequencies() {
-        val sdx = AsciiRadio(11, "ID020;", 7_074_000)
-        assertTrue(runner.runRig(TruSdxRig(sdx)).passed)
+        val sdx = AsciiRadio(11, "?", 7_074_000)
+        assertTrue(runner.runRig(TruSdxRig(sdx, sleep = {})).passed)
         assertTrue(sdx.writes.contains("FA00007100000;"))
         assertEquals(7_074_000L, sdx.frequency)
         val qmx = AsciiRadio(11, "ID020;", 14_074_000)

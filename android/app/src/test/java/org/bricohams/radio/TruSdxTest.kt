@@ -65,18 +65,22 @@ class TruSdxTest {
         assertEquals(4096, audio.samples[0].toInt())
         assertEquals("UA0;", String(transport.writes.last(), Charsets.US_ASCII))
     }
-    /** A real (tr)uSDX (38400 bps firmware) sends an IF frame right after the port opens; identify must still succeed. */
-    @Test fun unsolicitedIfAfterOpeningIsSkipped() {
+    /** A real (tr)uSDX answers "?;" to ID; and may send an unsolicited IF frame after opening; identify uses FA; only. */
+    @Test fun identifiesWithFaAndNotId() {
         var first = true
-        val rig = TruSdxRig(ScriptedRadio { request ->
+        val transport = ScriptedRadio { request ->
             when (String(request, Charsets.US_ASCII)) {
-                "ID;" -> if (first) { first = false; ascii("IF0000702300000000+000000000010000000;") } else ascii("ID020;")
-                "FA;" -> ascii("FA00007023000;")
+                "ID;" -> ascii("?;")
+                "FA;" -> if (first) { first = false; ascii("IF0000702300000000+000000000010000000;") } else ascii("FA00007074000;")
                 "MD;" -> ascii("MD1;")
                 else -> ByteArray(0)
             }
-        })
-        assertEquals("(tr)uSDX ID020", rig.identify())
-        assertEquals(RigStatus(7_023_000, RigMode.LSB), rig.status())
+        }
+        val delays = mutableListOf<Long>()
+        val rig = TruSdxRig(transport, sleep = { delays.add(it) })
+        assertEquals("(tr)uSDX 7.074000 MHz", rig.identify())
+        assertEquals(listOf(1500L), delays)
+        assertFalse(transport.writes.any { String(it, Charsets.US_ASCII) == "ID;" })
+        assertEquals(RigStatus(7_074_000, RigMode.LSB), rig.status())
     }
 }

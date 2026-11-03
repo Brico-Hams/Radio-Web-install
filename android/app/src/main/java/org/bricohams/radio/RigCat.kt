@@ -19,8 +19,8 @@ enum class RigModel(
     IC705("Icom IC-705", 115200, 1, 30_000L..470_000_000L),
     // CAT-1 default is 38400 8N1 on the units in the field (manual 2508-C lists 2 stop bits; the radio accepts 1 from the host).
     FTX1("Yaesu FTX-1", 38400, 1, 30_000L..470_000_000L),
-    // 38400 in the field; firmware 2.00t+ may run at 115200, RigActivity retries the other rate when there is no answer.
-    TRUSDX("(tr)uSDX", 38400, 1, 3_000_000L..30_000_000L),
+    // Measured on a real unit: 115200 8N1 works, 38400 returns garbage; RigActivity retries 38400 as a fallback probe only.
+    TRUSDX("(tr)uSDX", 115200, 1, 3_000_000L..30_000_000L),
     // USB virtual COM port, the baud rate is ignored by the radio (QDX manual 1.06, WSJT-X setup).
     QMX("QRP Labs QMX / QMX+", 9600, 1, 1_800_000L..54_000_000L),
     QDX("QRP Labs QDX / QDX-M", 9600, 1, 3_500_000L..30_000_000L)
@@ -65,9 +65,9 @@ fun openRig(model: RigModel, transport: RadioBytes, civAddress: Int = 0xA4): Rig
  * Serial parameters for a rig: DTR and RTS are driven low exactly once at open and never toggled afterwards (a toggle resets the
  * (tr)uSDX and RTS can key the radio). The FTX-1 always uses the CP2105 Enhanced port, whatever port the list offered.
  */
-internal fun rigSerialSettings(model: RigModel, baud: Int, requestedPort: Int, enhancedPort: Int? = null): SerialSettings =
+internal fun rigSerialSettings(model: RigModel, baud: Int, requestedPort: Int, enhancedPort: Int? = null, dtr: Boolean = false): SerialSettings =
     SerialSettings(baud, model.stopBits, if (model == RigModel.FTX1 && enhancedPort != null) enhancedPort else requestedPort,
-        dtr = false, rts = false)
+        dtr = dtr, rts = false)
 
 internal fun mhzText(hz: Long): String = String.format(Locale.ROOT, "%.6f", hz / 1e6)
 

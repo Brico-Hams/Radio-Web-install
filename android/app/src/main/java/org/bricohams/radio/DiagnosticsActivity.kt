@@ -224,9 +224,9 @@ class DiagnosticsActivity : LocalizedActivity() {
         val found: List<DiagResult> = try {
             if (info.kind == RadioKind.QUANSHENG) attemptQuansheng(runner, device) else {
                 val first = attempt(runner, device, info.kind, null)
-                // (tr)uSDX firmware 2.00t+ may run at 115200: retry the other rate before reporting a failure.
+                // (tr)uSDX runs at 115200 (measured); 38400 is only a fallback probe for older firmware.
                 val best = if (info.kind == RadioKind.TRUSDX && !first.passed) {
-                    val second = attempt(runner, device, info.kind, 115200)
+                    val second = attempt(runner, device, info.kind, 38400)
                     if (second.passed) second else first
                 } else first
                 // CH340 1A86:7523 is shared by the (tr)uSDX and the Quansheng programming cable: try the radio hello too.

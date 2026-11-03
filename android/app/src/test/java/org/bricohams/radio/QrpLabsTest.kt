@@ -84,6 +84,8 @@ class QrpLabsTest {
         val qdx = ScriptedRadio { if (String(it, Charsets.US_ASCII) == "ID;") ascii("ID020;") else ByteArray(0) }
         assertEquals("QRP Labs QDX ID020", QrpLabsRig(qdx, RigModel.QDX).identify())
         assertEquals(listOf("ID;"), sent(qdx))
+        val silent = ScriptedRadio { if (String(it, Charsets.US_ASCII) == "FA;") ascii("FA00014074000;") else ByteArray(0) }
+        assertEquals("QRP Labs QDX", QrpLabsRig(silent, RigModel.QDX).identify())
     }
     @Test fun noMemories() {
         assertThrows(UnsupportedOperationException::class.java) { QrpLabsRig(ScriptedRadio(), RigModel.QDX).memories(1..2) }

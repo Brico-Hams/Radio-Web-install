@@ -567,7 +567,7 @@ class Ftx1Rig(transport: RadioBytes) : Rig {
 
 /**
  * (tr)uSDX CAT: a subset of the Kenwood TS-480 commands, from DL2MAN "5 (tr)uSDX Details", section "(tr)uSDX supported
- * CAT commands" (https://dl2man.de/5-trusdx-details/). 38400 bps in the field (firmware 2.00t+ may use 115200), 8N1; DTR and
+ * CAT commands" (https://dl2man.de/5-trusdx-details/).  115200 bps 8N1 (measured; 38400 returns garbage); no ID; support (answers "?;"); DTR and
  * RTS stay low (RTS high keys the radio and a DTR/RTS toggle resets it).
  */
 object KenwoodTs480Subset {
@@ -670,10 +670,11 @@ class TruSdxRig(
     private fun onlyA(vfo: Vfo) {
         if (vfo == Vfo.B) unsupported("VFO B")
     }
+    // The (tr)uSDX answers "?;" to ID;, so it is identified by a valid 11-digit FA; reply. It needs ~1.5 s after the port opens.
     override fun identify(): String {
-        val reply = link.request(KenwoodTs480Subset.readId(), "ID")
-        KenwoodTs480Subset.checkId(reply)
-        return "(tr)uSDX " + reply.removeSuffix(";")
+        sleep(OPEN_DELAY_MS)
+        val hz = read()
+        return "(tr)uSDX " + mhzText(hz) + " MHz"
     }
     override fun status(): RigStatus =
         RigStatus(read(), KenwoodTs480Subset.parseMode(link.request(KenwoodTs480Subset.readMode(), "MD")))
@@ -762,6 +763,7 @@ class TruSdxRig(
     private companion object {
         const val MAX_TX_SECONDS = 110
         const val SETTLE_MS = 1000L
+        const val OPEN_DELAY_MS = 1500L
         const val CHUNK = 1152
         const val AUDIO_WRITE_MS = 2000
         const val READ_CHUNK = 256
@@ -850,9 +852,14 @@ class QrpLabsRig(transport: RadioBytes, override val model: RigModel) : Rig {
     private fun readFlag(command: String, prefix: String): Boolean = QrpLabsCat.parseFlag(link.request(command, prefix), prefix)
 
     override fun identify(): String {
-        val reply = link.request(QrpLabsCat.readId(), "ID")
-        QrpLabsCat.checkId(reply)
-        if (model == RigModel.QDX) return "QRP Labs QDX " + reply.removeSuffix(";")
+        // ID; is not required: a radio that stays silent or rejects it is still accepted when it answers FA;.
+        val reply = try {
+            link.request(QrpLabsCat.readId(), "ID").also { QrpLabsCat.checkId(it) }
+        } catch (error: LocalizedIOException) {
+            read(Vfo.A)
+            null
+        }
+        if (model == RigModel.QDX) return "QRP Labs QDX" + (reply?.let { " " + it.removeSuffix(";") } ?: "")
         val version = try {
             QrpLabsCat.parseVersion(link.request(QrpLabsCat.readVersion(), "VN"))
         } catch (error: LocalizedIOException) {
