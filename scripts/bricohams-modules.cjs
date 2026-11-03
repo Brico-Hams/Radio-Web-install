@@ -54,7 +54,7 @@ function integrateModule(work, module) {
   if (module === "satellite") {
     // Open once after normal boot initialization; EXIT returns to the main loop.
     // Satellite startup takes precedence over saved scanner/FM/spectrum state.
-    change("main.c", '#include "app/app.h"', '#include "app/app.h"\n#include "app/action.h"');
+    change("main.c", '#include "app/app.h"', '#include "app/app.h"\n#include "app/action.h"\n#include "app/foxhunt.h"');
     change("main.c", "    #ifdef ENABLE_FEAT_F4HWN_RESUME_STATE",
       `    #if defined(BRICOHAMS_ENABLE_SATELLITE)
         if (BootMode == BOOT_MODE_NORMAL && !gReducedService)

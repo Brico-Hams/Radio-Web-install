@@ -1,8 +1,11 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "cat_rx.h"
+#include "driver/py25q16.h"
 #include <string.h>
 
 bh_cat_rx bh_cat_receiver;
+bool bh_cat_remote_enabled;
+static bool remote_loaded;
 
 static uint32_t read32(const uint8_t *bytes)
 {
@@ -99,8 +102,85 @@ void bh_cat_request(bh_cat_rx *state, const uint8_t *request, uint16_t length,
         }
     }
     reply[1] = status;
-    write32(&reply[4], 7U); /* RX set, query, stop/lease; no TX or EEPROM. */
+    write32(&reply[4], BH_CAT_CAPS_V1 | BH_CAT_CAP_ANY_SCREEN); /* RX set, query, stop/lease; no TX or EEPROM. */
     write32(&reply[8], state->applied);
     write32(&reply[12], (state->active ? 1U : 0U) |
-        (state->remote ? 2U : 0U) | (state->pending ? 4U : 0U));
+        (state->remote ? 2U : 0U) | (state->pending ? 4U : 0U) |
+        (bh_cat_remote_enabled ? BH_CAT_FLAG_ENABLED : 0U) | (state->holdoff ? BH_CAT_FLAG_HOLDOFF : 0U));
+}
+
+void bh_cat_remote_store(bool enabled)
+{
+    const uint8_t flag = enabled ? 1U : 0U;
+    const uint8_t raw[BH_CAT_CONFIG_BYTES] = {0xCAU, flag, (uint8_t)~flag, 0U};
+    PY25Q16_WriteBuffer(BH_CAT_CONFIG_ADDR, raw, sizeof(raw), false);
+}
+
+static bool config_enabled(void)
+{
+    uint8_t raw[BH_CAT_CONFIG_BYTES];
+    PY25Q16_ReadBuffer(BH_CAT_CONFIG_ADDR, raw, sizeof(raw));
+    return raw[0] == 0xCAU && raw[1] == 1U && raw[2] == (uint8_t)~raw[1] && raw[3] == 0U;
+}
+
+void bh_cat_remote_init(void)
+{
+    if (remote_loaded)
+        return;
+    remote_loaded = true;
+    bh_cat_remote_enabled = config_enabled();
+}
+
+bool bh_cat_remote_set(bool enabled)
+{
+    remote_loaded = true;
+    bh_cat_remote_enabled = enabled;
+    if (config_enabled() == enabled)
+        return true; /* Only a user toggle that changes the flag touches flash. */
+    bh_cat_remote_store(enabled);
+    return config_enabled() == enabled;
+}
+
+bool bh_cat_user_cancel(bh_cat_rx *state, uint32_t now, uint32_t *tune)
+{
+    if (!state->active || (!state->remote && !state->pending))
+        return false;
+    *tune = state->nominal;
+    bh_cat_stop(state);
+    state->holdoff = true;
+    state->holdoff_at = now;
+    return true;
+}
+
+bool bh_cat_global_tick(bh_cat_rx *state, bool enabled, bool cancel, bool idle_ok,
+    uint32_t vfo, uint32_t now, uint32_t *tune)
+{
+    if (!enabled) {
+        const bool retune = state->active && state->remote;
+        if (retune)
+            *tune = state->nominal;
+        bh_cat_stop(state);
+        return retune;
+    }
+    if (cancel && bh_cat_user_cancel(state, now, tune))
+        return true;
+    if (state->holdoff) {
+        if ((uint32_t)(now - state->holdoff_at) < BH_CAT_HOLDOFF_MS)
+            return false;
+        state->holdoff = false;
+    }
+    if (!idle_ok)
+        return false;
+    if (bh_cat_frequency_valid(vfo)) {
+        if (!state->active || (!state->remote && !state->pending && state->nominal != vfo))
+            bh_cat_start(state, vfo);
+    } else if (state->active && !state->remote) {
+        bh_cat_stop(state);
+    }
+    bh_cat_expire(state, now);
+    if (!state->active || !state->pending)
+        return false;
+    *tune = state->target;
+    bh_cat_applied(state);
+    return true;
 }

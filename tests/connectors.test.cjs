@@ -150,7 +150,7 @@ class QuanshengDevice extends R.BufferedTransport {
       result = new Uint8Array(16);
       result[0] = 1;
       result.set(data.subarray(2, 4), 2);
-      le(result).setUint32(4, 7, true);
+      le(result).setUint32(4, this.catNewFirmware ? 15 : 7, true);
       if (this.catPending && operation === 0 && !this.catStuck) {
         this.catApplied = this.catTarget;
         this.catPending = false;
@@ -164,13 +164,32 @@ class QuanshengDevice extends R.BufferedTransport {
         }
       }
       le(result).setUint32(8, this.catActive ? this.catApplied || 43500000 : 0, true);
-      le(result).setUint32(12, (this.catActive ? 1 : 0) | (this.catRemote ? 2 : 0) | (this.catPending ? 4 : 0), true);
+      le(result).setUint32(12, (this.catActive ? 1 : 0) | (this.catRemote ? 2 : 0) | (this.catPending ? 4 : 0) |
+        (this.catNewFirmware && this.catRemoteEnabled ? 8 : 0) | (this.catNewFirmware && this.catHoldoff ? 16 : 0), true);
       if (this.catWrongSequence) result[2] ^= 1;
       if (this.catBadVersion) result[0] = 2;
       if (this.catBadFlags) le(result).setUint32(12, 8, true);
       if (this.catBadFrequency) le(result).setUint32(8, 1, true);
-      if (this.catBadCapabilities) le(result).setUint32(4, 15, true);
+      if (this.catBadCapabilities) le(result).setUint32(4, 31, true);
       if (this.catRejected) result[1] = 6;
+    } else if (type === 0x7b02) {
+      assert.equal(data.length, 8);
+      assert.equal(data[0], 1);
+      const operation = data[1];
+      result = new Uint8Array(16);
+      result[0] = 1;
+      result.set(data.subarray(2, 4), 2);
+      const permitted = this.txArmed || (this.catNewFirmware && this.catRemoteEnabled);
+      if (operation === 1) {
+        result[1] = this.txLimit ? 8 : this.catHoldoff || !permitted ? 5 : this.txDenied ? 7 : this.txKeyed ? 0 : 1;
+        if (result[1] <= 1) this.txKeyed = true;
+      } else if (operation === 2) {
+        this.txKeyed = false;
+      } else if (this.txDenied) result[1] = 7;
+      le(result).setUint32(4, this.catNewFirmware ? 24 : 8, true);
+      le(result).setUint32(8, (this.txArmed ? 1 : 0) | (this.txKeyed ? 2 : 0) | (this.txLimit ? 8 : 0) |
+        (this.catNewFirmware && this.catRemoteEnabled ? 16 : 0) | (this.catNewFirmware && this.catHoldoff ? 32 : 0) |
+        (this.txDenied ? 3 << 8 : 0), true);
     } else if (type === 0x051b) {
       const offset = le(data).getUint16(0, true);
       const length = data[2];
@@ -328,6 +347,92 @@ test("CAT RX: sin armar es recuperable, se espera hasta armar y no obliga a reco
   assert.ok(waits >= 3);
   const state = await connector.setCatReceive(14580000);
   assert.equal(state.appliedFrequency10Hz, 14580000);
+  await connector.disconnect();
+});
+test("CAT RX firmware nuevo (capacidad 'fuera de SAT RX'): indica activar CAT remoto, espera y sintoniza", async () => {
+  const device = new QuanshengDevice();
+  device.catNewFirmware = true;
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const status = await connector.getCatStatus();
+  assert.equal(status.active, false);
+  assert.equal(status.outsideSat, true);
+  assert.equal(status.remoteEnabled, false);
+  await assert.rejects(connector.setCatReceive(14580000), error => error.code === "CAT_NOT_ARMED" &&
+    /CAT remoto/.test(error.message) && /F\+8/.test(error.message) && !/pulsa 8 /.test(error.message) &&
+    error.catInfo.outsideSat && !error.catInfo.holdoff && !/Desconecta/.test(error.message));
+  assert.equal(connector.connected, true);
+  device.catHoldoff = true;
+  await assert.rejects(connector.setCatReceive(14580000), error => /espera unos segundos/.test(error.message) && error.catInfo.holdoff);
+  device.catHoldoff = false;
+  let waits = 0;
+  const hints = [];
+  const armed = await connector.waitCatArmed({ intervalMs: 5, onWaiting: hint => {
+    hints.push(hint);
+    if (++waits === 3) { device.catRemoteEnabled = true; device.catActive = true; }
+  } });
+  assert.equal(armed.active, true);
+  assert.equal(armed.remoteEnabled, true);
+  assert(hints.length >= 3 && hints.every(hint => hint.outsideSat));
+  const state = await connector.setCatReceive(14580000);
+  assert.equal(state.appliedFrequency10Hz, 14580000);
+  assert.equal(state.remote, true);
+  await connector.disconnect();
+});
+test("CAT RX firmware antiguo (sin capacidad) conserva la guia SAT RX + 8", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const status = await connector.getCatStatus();
+  assert.equal(status.outsideSat, false);
+  await assert.rejects(connector.setCatReceive(14580000), error => error.code === "CAT_NOT_ARMED" &&
+    /Entra primero en SAT RX/.test(error.message) && !error.catInfo);
+  await connector.disconnect();
+});
+test("CAT TX: PTT con lease, no armado indica CAT remoto, limite y denegacion", async () => {
+  const device = new QuanshengDevice();
+  device.catNewFirmware = true;
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  assert.equal((await connector.getCatTxStatus()).outsideSat, true);
+  await assert.rejects(connector.setCatTransmit(true), error => error.code === "CAT_TX_NOT_ARMED" &&
+    /CAT remoto/.test(error.message) && error.catRecoverable);
+  assert.equal(device.txKeyed, undefined);
+  assert.equal(connector.connected, true);
+  device.catRemoteEnabled = true;
+  const keyed = await connector.setCatTransmit(true);
+  assert.equal(keyed.keyed, true);
+  assert.equal(keyed.leaseMilliseconds, 1500);
+  assert.equal((await connector.setCatTransmit(false)).keyed, false);
+  const seen = [];
+  const hold = connector.holdCatTransmit({ intervalMs: 5, onState: event => seen.push(event) });
+  while (seen.filter(event => event.keyed).length < 3) await new Promise(resolve => setTimeout(resolve, 5));
+  hold.stop();
+  await connector.catQueue;
+  assert.equal(device.txKeyed, false); // stop() always sends unkey.
+  device.txLimit = true;
+  await assert.rejects(connector.setCatTransmit(true), error => error.code === "CAT_TX_LIMIT");
+  device.txLimit = false;
+  device.txDenied = true;
+  await assert.rejects(connector.setCatTransmit(true), error => error.code === "CAT_TX_DENIED");
+  device.txDenied = false;
+  // The hold ends by itself on the 120 s cap (shortened here) and unkeys.
+  const events = [];
+  connector.holdCatTransmit({ intervalMs: 5, maxMs: 30, onState: event => events.push(event) });
+  while (!events.some(event => event.limit)) await new Promise(resolve => setTimeout(resolve, 5));
+  await connector.catQueue;
+  assert.equal(device.txKeyed, false);
+  await connector.disconnect();
+});
+test("CAT TX firmware antiguo: pide SAT RX + 9 y nunca marca fuera de SAT RX", async () => {
+  const device = new QuanshengDevice();
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  await assert.rejects(connector.setCatTransmit(true), error => error.code === "CAT_TX_NOT_ARMED" && /tecla 9/.test(error.message));
+  device.txArmed = true;
+  const state = await connector.setCatTransmit(true);
+  assert.equal(state.outsideSat, false);
+  assert.equal(state.keyed, true);
   await connector.disconnect();
 });
 test("CAT RX: una respuesta perdida se reintenta y no invalida la conexion", async () => {

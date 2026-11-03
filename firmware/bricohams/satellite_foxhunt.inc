@@ -17,13 +17,21 @@ static uint8_t bhSatPassUpcoming;
 
 static void BH_SAT_Draw(void);
 
-static void BH_SAT_Tune(uint32_t frequency)
+static bool bhCatOutside; /* Modal CAT TX started from the main screen instead of SAT RX. */
+
+/* Hardware-only retune: never touches the VFO structures, channels, EEPROM or flash. */
+static void BH_CAT_Retune(uint32_t frequency)
 {
     BK4819_SetFrequency(frequency);
     BK4819_PickRXFilterPathBasedOnFrequency(frequency);
     const uint16_t receive = BK4819_ReadRegister(BK4819_REG_30);
     BK4819_WriteRegister(BK4819_REG_30, 0);
     BK4819_WriteRegister(BK4819_REG_30, receive);
+}
+
+static void BH_SAT_Tune(uint32_t frequency)
+{
+    BH_CAT_Retune(frequency);
     SYSTEM_DelayMs(20);
     FOXHUNT_RebaseMeasurements();
 }
@@ -50,9 +58,18 @@ static void BH_SAT_Start(void)
     bhSatRate = 0;
     memset(&bhSatFrequencies, 0, sizeof(bhSatFrequencies));
     BH_SAT_Apply();
+    bh_cat_remote_init();
+    /* "CAT remoto" already consented: no need to find the SAT RX screen and press 8. */
+    if (bh_cat_remote_enabled && !bhSatError && bh_cat_frequency_valid(bhSatDownlink))
+        bh_cat_start(&bh_cat_receiver, bhSatDownlink);
 }
 
 /* Modal CAT PTT: the hunt loop's RX metering and Geiger blips must not run while keyed. */
+static void BH_CAT_DrawIndicator(const char *text)
+{
+    GUI_DisplaySmallestInverse(text, 2, 0, true, true, (uint8_t)(2 + strlen(text) * 4));
+}
+
 static void BH_SAT_Transmit(void)
 {
     const VfoState_t state = FOXHUNT_TxState();
@@ -65,7 +82,10 @@ static void BH_SAT_Transmit(void)
     RADIO_SetTxParameters();
     BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
     BK4819_ExitTxMute(); /* Mic input, fed by the host's audio cable, goes on air. */
-    BH_SAT_Draw();
+    if (bhCatOutside)
+        BH_CAT_DrawIndicator("CAT TX");
+    else
+        BH_SAT_Draw();
     FOXHUNT_BlitScreen();
     KEY_Code_t held = KEYBOARD_GetKey();
     while (bh_cat_tx_poll(&bh_cat_transmitter, SCHEDULER_GetTick10ms() * 10U) == BH_CAT_TX_NONE) {
@@ -74,7 +94,7 @@ static void BH_SAT_Transmit(void)
 #endif
         const KEY_Code_t key = KEYBOARD_GetKey();
         if (key != KEY_INVALID && key != held)
-            bh_cat_tx_arm(&bh_cat_transmitter, false); /* Any key on the radio aborts and disarms. */
+            bh_cat_tx_abort(&bh_cat_transmitter, SCHEDULER_GetTick10ms() * 10U); /* Any key aborts and disarms. */
         held = key;
         SYSTEM_DelayMs(10);
         BACKLIGHT_Update();
@@ -85,8 +105,12 @@ static void BH_SAT_Transmit(void)
     RADIO_SetupRegisters(true);
     bh_cat_tx_unkeyed(&bh_cat_transmitter);
     kbd.current = KEYBOARD_GetKey(); /* The abort key is not a new hunt key press. */
-    if (!bhSatError)
+    if (bhCatOutside) {
+        if (bh_cat_receiver.active && bh_cat_receiver.remote)
+            BH_CAT_Retune(bh_cat_receiver.applied);
+    } else if (!bhSatError) {
         BH_SAT_Tune(bhSatFrequencies.receive_10hz);
+    }
 }
 
 static void BH_SAT_Update(void)
@@ -121,6 +145,69 @@ static void BH_SAT_Stop(void)
     bh_cat_tx_arm(&bh_cat_transmitter, false);
 }
 
+/* CAT outside SAT RX (normal VFO screen, digital modes). Called every 10 ms from APP_TimeSlice10ms,
+ * i.e. in main-loop context: it only retunes BK4819 registers and never blocks. Returns true when the
+ * "CAT" indicator needs the screen to be redrawn. */
+bool BH_CAT_Service(bool mainScreen, bool localTx);
+bool BH_CAT_Service(bool mainScreen, bool localTx)
+{
+    static KEY_Code_t held = KEY_INVALID;
+    static uint32_t lastCheck;
+    static uint32_t lastDraw;
+    static bool shown;
+    const uint32_t now = SCHEDULER_GetTick10ms() * 10U;
+    uint32_t tune = 0;
+    bh_cat_remote_init();
+    if (!bh_cat_remote_enabled) {
+        if (bh_cat_global_tick(&bh_cat_receiver, false, false, false, 0, now, &tune))
+            BH_CAT_Retune(tune);
+        if (bh_cat_transmitter.requested && !bh_cat_transmitter.keyed)
+            bh_cat_transmitter.requested = false;
+        const bool redraw = shown;
+        shown = false;
+        return redraw;
+    }
+    const KEY_Code_t key = KEYBOARD_GetKey();
+    const bool keyEdge = key != KEY_INVALID && key != held;
+    held = key;
+    if (keyEdge)
+        bh_cat_tx_user_key(&bh_cat_transmitter, now);
+    /* The user's own PTT or leaving the main screen also ends remote control. */
+    const bool cancel = keyEdge || localTx || !mainScreen;
+    const uint32_t vfo = gRxVfo->pRX->Frequency;
+    const bool retune = bh_cat_global_tick(&bh_cat_receiver, true, cancel, mainScreen && !localTx, vfo, now, &tune);
+    if (retune && !localTx)
+        BH_CAT_Retune(tune);
+    /* Upstream RX/TX setup may retune behind our back: re-assert the remote frequency. */
+    if (bh_cat_receiver.active && bh_cat_receiver.remote && !bh_cat_receiver.pending &&
+        mainScreen && !localTx && (uint32_t)(now - lastCheck) >= 100U) {
+        lastCheck = now;
+        const uint32_t current = BK4819_ReadRegister(BK4819_REG_38) |
+            ((uint32_t)BK4819_ReadRegister(BK4819_REG_39) << 16);
+        if (current != bh_cat_receiver.applied)
+            BH_CAT_Retune(bh_cat_receiver.applied);
+    }
+    if (mainScreen && !localTx && bh_cat_tx_poll(&bh_cat_transmitter, now) == BH_CAT_TX_KEY) {
+        bhCatOutside = true;
+        BH_SAT_Transmit();
+        bhCatOutside = false;
+        held = KEYBOARD_GetKey();
+        return true;
+    }
+    const bool visible = mainScreen && !localTx;
+    if (visible != shown || (visible && (uint32_t)(now - lastDraw) >= 500U)) {
+        shown = visible;
+        lastDraw = now;
+        if (visible) {
+            BH_CAT_DrawIndicator("CAT");
+            FOXHUNT_BlitScreen();
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 static bool BH_SAT_Key(KEY_Code_t key)
 {
     if (key == KEY_0) {
@@ -139,6 +226,23 @@ static bool BH_SAT_Key(KEY_Code_t key)
     if (key == KEY_9) {
         /* Local confirmation: only the keypad arms CAT PTT, never the host. */
         bh_cat_tx_arm(&bh_cat_transmitter, !bh_cat_transmitter.armed && !bhSatError);
+        return true;
+    }
+    if (key == KEY_8 && gWasFKeyPressed) {
+        /* F+8 toggles the persistent "CAT remoto" consent (RX and TX outside SAT RX). */
+        const bool enable = !bh_cat_remote_enabled;
+        if (!bh_cat_remote_set(enable))
+            bh_cat_remote_enabled = false; /* Not verified in flash: stay off. */
+        bhSatCatTimeout = false;
+        if (bh_cat_remote_enabled) {
+            if (!bh_cat_receiver.active && !bhSatError && bh_cat_frequency_valid(bhSatDownlink))
+                bh_cat_start(&bh_cat_receiver, bhSatDownlink);
+        } else {
+            bh_cat_stop(&bh_cat_receiver);
+            bh_cat_tx_arm(&bh_cat_transmitter, false);
+            bhSatRate = 0;
+            BH_SAT_Apply();
+        }
         return true;
     }
     if (key == KEY_8) {

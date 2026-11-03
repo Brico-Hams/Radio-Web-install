@@ -139,6 +139,7 @@
         return;
       }
       if (!/CAT RX/.test(label)) connector?.stopCatHold?.();
+      if (!/CAT TX/.test(label)) connector?.stopCatTransmit?.();
       busy = true;
       state();
       delete status.dataset.error;
@@ -388,12 +389,12 @@
       operations.innerHTML = `<h2>CAT RX Bricohams Beta</h2>
         <button id="qs-connect-readonly" class="button secondary" type="button">Conectar solo lectura / CAT (sin escritura persistente)</button>
         <p>Selecciona y confirma el modelo arriba. Esta conexion permite leer canales y usar CAT sin esperar una copia Flash completa; no habilita ninguna escritura persistente. Para escribir, desconecta y usa Conectar y crear respaldo automatico.</p>
-        <p>Solo para la imagen Bricohams Satelites con CAT v1: entra en SAT RX y pulsa 8 en la radio para habilitarlo. No compatible con F4HWN original, ARDF o Espectro. No transmite ni guarda VFO/canales/calibracion. No requiere respaldo para esta sintonia temporal; las escrituras persistentes conservan sus protecciones.</p>
-        <p>Al sintonizar, la pagina renueva el permiso de 3 s cada 1 s y confirma la frecuencia leida de la radio. Si se pierde la pagina o el cable, la radio vuelve sola a la frecuencia nominal al caducar. El seguimiento continuo de un pase visible se inicia desde SAT / pases. Las teclas 4/5/6, 8 o el bloqueo del teclado cancelan CAT; salir restaura el VFO.</p>
+        <p>Solo para la imagen Bricohams Satelites con CAT v1. En firmware nuevo activa <strong>CAT remoto</strong> en la radio (en SAT RX: <strong>F+8</strong>; queda guardado) y funciona tambien en la pantalla VFO normal y con FT8/FT2 desde esta pagina o el telefono/PC; en firmware antiguo entra en SAT RX y pulsa 8. No compatible con F4HWN original, ARDF o Espectro. Sin CAT remoto (o la tecla 9 en SAT RX) la radio no transmite por CAT. No guarda VFO/canales/calibracion en memoria. No requiere respaldo para esta sintonia temporal; las escrituras persistentes conservan sus protecciones.</p>
+        <p>Al sintonizar, la pagina renueva el permiso de 3 s cada 1 s y confirma la frecuencia leida de la radio. Si se pierde la pagina o el cable, la radio vuelve sola a la frecuencia nominal al caducar. El seguimiento continuo de un pase visible se inicia desde SAT / pases. Cualquier tecla de la radio, el PTT propio o el bloqueo del teclado cancelan CAT (espera unos segundos antes de reanudar); salir restaura el VFO.</p>
         <label class="check"><input id="cat-firmware-confirmed" type="checkbox"> Imagen Bricohams Satelites con CAT v1 (se marca sola cuando la radio responde; no F4HWN original).</label>
         <ol id="cat-rx-guide" class="cat-guide" aria-label="Guia para habilitar CAT RX">
-          <li id="cat-guide-1"><strong>Abre SAT RX.</strong> El firmware Satelites lo abre al encender; si saliste con EXIT, pulsa la tecla lateral asignada a SAT RX (Menu, Acciones).</li>
-          <li id="cat-guide-2"><strong>Pulsa 8.</strong> La radio debe mostrar <code>CAT READY RX</code>.</li>
+          <li id="cat-guide-1"><strong>Activa CAT remoto.</strong> En SAT RX (el firmware Satelites lo abre al encender; si saliste con EXIT usa la tecla lateral asignada) pulsa <code>F+8</code>: debe verse el indicador <code>CAT</code>. Con firmware antiguo (sin esa opcion) pulsa solo <code>8</code> en SAT RX.</li>
+          <li id="cat-guide-2"><strong>Vuelve a la pantalla VFO</strong> (EXIT) si vas a usar FT8/FT2 o el VFO normal; el indicador <code>CAT</code> sigue visible. Una tecla pulsada en la radio cancela el control remoto unos segundos.</li>
           <li id="cat-guide-3"><strong>Sintoniza aqui.</strong> La pagina renueva el permiso cada 1 s y confirma la frecuencia leida de la radio.</li>
         </ol>
         <p id="cat-arm-state" class="card-note" role="status">Estado CAT: sin comprobar.</p>
@@ -401,6 +402,9 @@
         <input id="cat-rx-frequency" type="number" min="136" max="470" step="0.00001" value="145.80000">
         <div class="operation-buttons"><button id="cat-rx-query" data-connected class="button secondary" type="button" disabled>Comprobar CAT</button><button id="cat-rx-set" data-connected class="button primary" type="button" disabled>Sintonizar RX y mantener</button><button id="cat-rx-stop" data-connected class="button secondary" type="button" disabled>Volver a RX nominal</button></div>
         <p id="cat-rx-status" role="status">CAT no consultado. La confirmacion es software, no una medida de frecuencia RF.</p>
+        <p>PTT remoto (CAT TX) para FT8/FT2 y modos digitales: requiere CAT remoto activo; transmite en el VFO de TX de la radio (ajustalo antes para simplex), audio por el cable de microfono. Permiso de 1,5 s renovado cada 0,5 s, maximo 120 s por transmision; cualquier tecla de la radio lo corta.</p>
+        <div class="operation-buttons"><button id="cat-tx-start" data-connected class="button primary" type="button" disabled>Transmitir (PTT CAT)</button><button id="cat-tx-stop" data-connected class="button secondary" type="button" disabled>Soltar PTT</button></div>
+        <p id="cat-tx-status" role="status">PTT CAT sin usar.</p>
         <h2>Estadisticas ARDF Bricohams Beta</h2>
         <p>Solo imagen ARDF con estadisticas v1. La tecla 8 guarda una observacion manual y el indice de atenuacion para la baliza del turno sincronizado. No detecta ni localiza balizas. Los datos se reinician al entrar de nuevo o cambiar numero/duracion; quedan consultables al salir mientras no reinicies la radio.</p>
         <div class="operation-buttons"><button id="ardf-stats-read" data-connected class="button secondary" type="button" disabled>Consultar y descargar estadisticas ARDF</button></div>
@@ -436,17 +440,20 @@
         <p>Se copia y verifica el destino antes de borrar el origen. No se intercambian huecos ocupados: usa un hueco vacio intermedio. Una interrupcion puede dejar dos copias; consulta los huecos antes de reintentar.</p>
         <div class="operation-buttons"><button id="app-move" data-write class="button secondary" type="button" disabled>Mover app al hueco vacio</button><button id="apps-delete-all" data-write class="button secondary" type="button" disabled>Borrar todas las apps</button></div>`;
       const slot = () => Number($("slot-number").value);
-      const showArm = armed => {
+      const showArm = (armed, info = null) => {
+        const hint = info && info.outsideSat ? "Activa CAT remoto en la radio (en SAT RX: F+8; debe verse el indicador CAT)" +
+          (info.holdoff ? ". Pulsaste una tecla: la radio espera unos segundos" : "") : "Entra en SAT RX y pulsa 8 (firmware antiguo)";
         $("cat-arm-state").textContent = armed === null ? "Estado CAT: sin comprobar." : armed ?
-          "Estado CAT: ARMADO (CAT READY RX). Ya puedes sintonizar." :
-          "Estado CAT: NO armado. Sigue los pasos 1 y 2 en la radio; la pagina espera y no hace falta reconectar.";
+          "Estado CAT: ACTIVO (indicador CAT / CAT READY RX). Ya puedes sintonizar." :
+          `Estado CAT: NO activo. ${hint}; la pagina espera y no hace falta reconectar.`;
         for (const id of ["cat-guide-1", "cat-guide-2"]) $(id).style.fontWeight = armed === false ? "700" : "";
         if (armed) $("cat-firmware-confirmed").checked = true;
       };
       const showCat = result => {
-        showArm(Boolean(result.active));
+        showArm(Boolean(result.active), result);
         $("cat-rx-status").textContent = result.active ?
           `Ultima respuesta CAT v${result.version}: RX ${(result.appliedFrequency10Hz / 100000).toFixed(5)} MHz leido de la radio; ${result.pending ? "pendiente" : result.remote ? "remoto (permiso renovado cada 1 s mientras esta pagina lo mantiene)" : "habilitado localmente"}. Confirmacion software, sin medida RF.` :
+          result.outsideSat ? "CAT v1 disponible pero CAT remoto esta desactivado. En SAT RX pulsa F+8 en la radio." :
           "CAT v1 disponible pero deshabilitado. Entra en SAT RX y pulsa 8 en la radio.";
       };
       let catCancel = false;
@@ -454,8 +461,10 @@
         if (event.fatal) {
           $("cat-rx-status").textContent = `ERROR: ${event.error.message}. Se detuvo la renovacion; reconecta si el puerto se perdio.`;
         } else if (event.waiting) {
-          showArm(false);
-          $("cat-rx-status").textContent = "La radio dejo de estar armada (¿pulsaste 8, EXIT o una tecla?). Vuelve a SAT RX y pulsa 8: se reanuda solo.";
+          showArm(false, event.error.catInfo);
+          $("cat-rx-status").textContent = event.error.catInfo?.outsideSat ?
+            "La radio dejo de aceptar CAT (¿pulsaste una tecla o desactivaste CAT remoto?). Reactivalo con F+8 en SAT RX: se reanuda solo." :
+            "La radio dejo de estar armada (¿pulsaste 8, EXIT o una tecla?). Vuelve a SAT RX y pulsa 8: se reanuda solo.";
         } else if (event.armed && event.state) showCat(event.state);
         else $("cat-rx-status").textContent = `Reintentando: ${event.error.message}`;
       };
@@ -465,7 +474,7 @@
         $("cat-rx-status").textContent = "Esperando respuesta CAT...";
         try { showCat(await operation()); }
         catch (error) {
-          if (error.code === "CAT_NOT_ARMED") showArm(false);
+          if (error.code === "CAT_NOT_ARMED") showArm(false, error.catInfo);
           $("cat-rx-status").textContent = `ERROR: ${error.message}. Sin confirmacion de sintonia; si habia control remoto, el firmware vuelve a nominal al caducar el permiso de 3 s.`;
           throw error;
         }
@@ -479,9 +488,11 @@
         try { result = await connector.setCatReceive(frequency10Hz); }
         catch (error) {
           if (error.code !== "CAT_NOT_ARMED") throw error;
-          showArm(false);
-          $("cat-rx-status").textContent = "Esperando a que armes CAT con 8 en SAT RX (se comprueba cada 0,5 s)...";
-          await connector.waitCatArmed({ shouldStop: () => catCancel });
+          showArm(false, error.catInfo);
+          $("cat-rx-status").textContent = error.catInfo?.outsideSat ?
+            "Esperando a que actives CAT remoto en la radio (F+8 en SAT RX; se comprueba cada 0,5 s)..." :
+            "Esperando a que armes CAT con 8 en SAT RX (se comprueba cada 0,5 s)...";
+          await connector.waitCatArmed({ shouldStop: () => catCancel, onWaiting: hint => hint && showArm(false, hint) });
           result = await connector.setCatReceive(frequency10Hz);
         }
         connector.holdCatReceive(frequency10Hz, { onState: showHold });
@@ -491,6 +502,27 @@
         catCancel = true; // Also ends a pending "wait until armed" poll.
         return catAction("Restaurar RX nominal CAT", () => connector.stopCatReceive());
       });
+      const showTx = event => {
+        const text = $("cat-tx-status");
+        if (event.fatal) text.textContent = `ERROR: ${event.error.message}. PTT CAT detenido.`;
+        else if (event.limit) text.textContent = "Limite de 120 s: PTT soltado.";
+        else if (event.ended && event.error) text.textContent = `PTT CAT terminado: ${event.error.message}`;
+        else if (event.state) text.textContent = event.keyed ? "TRANSMITIENDO por CAT (permiso renovado cada 0,5 s)." : "PTT CAT solicitado; esperando a la radio...";
+      };
+      $("cat-tx-start").addEventListener("click", () => action("Transmitir CAT TX", async () => {
+        $("cat-tx-status").textContent = "Solicitando PTT CAT...";
+        try { showTx({ state: await connector.setCatTransmit(true) }); }
+        catch (error) {
+          $("cat-tx-status").textContent = `ERROR: ${error.message}`;
+          throw error;
+        }
+        connector.holdCatTransmit({ onState: showTx });
+      }));
+      $("cat-tx-stop").addEventListener("click", () => action("Soltar PTT CAT TX", async () => {
+        connector.stopCatTransmit();
+        await connector.setCatTransmit(false);
+        $("cat-tx-status").textContent = "PTT soltado.";
+      }));
       $("ardf-stats-read").addEventListener("click", () => action("Consultar estadisticas ARDF", async () => {
         $("ardf-stats-status").textContent = "Consultando instantanea ARDF...";
         try {

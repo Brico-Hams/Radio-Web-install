@@ -749,6 +749,54 @@ simulent le transport, les réponses en attente, une séquence incorrecte et des
 ils ne remplacent pas un test CAT USB/radio. Le manifeste comprend `catRx` et les
 hashes du code appliqué. Le fonctionnement physique n'a pas été flashé ni certifié.
 
+#### CAT à distance : CAT RX et CAT TX hors de SAT RX
+
+Problème de terrain corrigé : le CAT RX n'était accepté que dans SAT RX après
+appui sur 8 (état `active=false` sur tout autre écran) et le CAT TX qu'après
+armement avec 9 ; le CAT ne fonctionnait donc ni sur le VFO normal ni avec FT8/FT2.
+
+**Comment l'activer.**
+1. Dans SAT RX, appuyez sur **F+8** clavier déverrouillé : cela bascule le réglage
+   persistant **CAT remoto** (CAT à distance, OFF par défaut). Il est enregistré
+   dans la banque de configuration BricoHams (flash, 4 octets dans le secteur des
+   passages ; jamais une fréquence) et survit à l'extinction. Effacer les passages
+   le conserve.
+2. Avec le CAT à distance sur ON, SAT RX arme le CAT RX tout seul et, après EXIT
+   vers le VFO normal, l'écran affiche l'indicateur **CAT**.
+3. Pour le désactiver, appuyez de nouveau sur F+8. Les touches 8 et 9 de SAT RX
+   fonctionnent comme avant (mode sans réglage persistant).
+
+L'entrée de menu « CAT remoto » n'est pas insérée dans le menu F4HWN (le source
+du menu n'a pas d'ancre fixée et vérifiée) ; F+8 est la voie d'activation. Avec un
+ancien firmware (sans bit de capacité), SAT RX + 8 reste valable.
+
+**Comportement avec le CAT à distance sur ON.**
+- Le CAT RX v1 (0x7B00) accorde le VFO A sur 136-174 / 400-470 MHz par pas de
+  10 Hz sur l'écran principal. Registres BK4819 uniquement : aucune écriture
+  EEPROM/flash et aucun changement de canal/mémoire.
+- Le bail de 3 s est renouvelé par l'hôte ; la même fréquence ne fait que le
+  renouveler, sans réaccord. À l'expiration ou avec l'opération 2, la fréquence du
+  VFO de l'utilisateur est restaurée.
+- Toute touche, le PTT propre ou la sortie de l'écran principal annulent la
+  commande à distance et bloquent l'hôte 5 s (drapeau `holdoff`).
+- Le CAT TX v1 (0x7B02) autorise un PTT distant en modes numériques (FT8/FT2) sans
+  la touche 9 : la radio n'émet jamais sans demande explicite de l'hôte avec un
+  bail valide (1,5 s), 120 s maximum ; les contrôles de bande, de verrouillage TX
+  et de batterie s'appliquent toujours ; toute touche interrompt l'émission. Elle
+  émet sur le VFO TX de la radio (à régler avant pour le simplex), audio sur le
+  câble de microphone.
+
+**Format.** Les trames 0x7B00..0x7B03 et les codes d'état ne changent pas. Nouveau
+bit de capacité : dans 0x7B01 les capacités passent de 7 à 15 (bit 3 =
+« fonctionne hors SAT RX ») ; dans 0x7B03 de 8 à 24 (bit 4). Nouveaux drapeaux dans
+0x7B01 : bit 3 (8) CAT à distance ON, bit 4 (16) hold-off ; dans 0x7B03 : bit 4
+(16) CAT à distance ON, bit 5 (32) hold-off. La chaîne d'accueil reste
+`F4HWN v6.1.0`. L'hôte traite l'absence du bit comme un ancien firmware et affiche
+le guide SAT RX + 8 ; avec le bit, il indique comment activer « CAT remoto » et
+continue d'interroger sans reconnexion.
+
+Non exécuté sur une vraie radio : vérification matérielle requise (voir la liste des tests).
+
 #### Suivi de passage web implémenté sur CAT RX
 
 Dans **SAT / passages**, mettre à jour les TLE/fréquences, indiquer une position avec

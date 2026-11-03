@@ -720,6 +720,50 @@ responses, incorrect sequence, and errors; they do not replace a CAT USB/radio t
 The manifest includes `catRx` and hashes of the applied code. It has not been
 flashed or physically certified.
 
+#### Remote CAT: CAT RX and CAT TX outside SAT RX
+
+Field problem fixed: CAT RX used to be accepted only inside SAT RX after pressing
+8 (status `active=false` on any other screen) and CAT TX only after arming with 9,
+so CAT did not work on the normal VFO or with FT8/FT2.
+
+**How to enable it.**
+1. In SAT RX, press **F+8** with the keyboard unlocked: it toggles the persistent
+   **Remote CAT** setting (default OFF). It is stored in the BricoHams
+   configuration bank (flash, 4 bytes in the pass sector; never a frequency) and
+   survives power-off. Clearing the passes keeps it.
+2. With Remote CAT ON, SAT RX arms CAT RX by itself and, after leaving with EXIT to
+   the normal VFO, the screen shows the **CAT** indicator.
+3. To disable it, press F+8 again. Keys 8 and 9 in SAT RX still work as before
+   (mode without the persistent setting).
+
+The "Remote CAT" menu entry is not patched into the F4HWN menu (the menu source
+has no pinned, verified anchor); F+8 is the enabling path. With old firmware
+(without the capability bit), SAT RX + 8 still applies.
+
+**Behavior with Remote CAT ON.**
+- CAT RX v1 (0x7B00) tunes VFO A to 136-174 / 400-470 MHz in 10 Hz steps on the
+  main screen. BK4819 registers only: no EEPROM/flash writes and no channel/memory
+  changes.
+- The 3 s lease is renewed by the host; the same frequency only renews, without
+  retuning. On expiry or operation 2 the user's VFO frequency is restored.
+- Any key, the user's own PTT, or leaving the main screen cancels remote control
+  and locks the host out for 5 s (`holdoff` flag).
+- CAT TX v1 (0x7B02) allows remote PTT in digital modes (FT8/FT2) without key 9:
+  the radio never transmits without an explicit host request with a valid lease
+  (1.5 s), 120 s maximum, and band, TX-lock and battery checks still apply; any
+  key aborts the transmission. It transmits on the radio's TX VFO (set it first
+  for simplex) with audio on the microphone cable.
+
+**Format.** The 0x7B00..0x7B03 frames and status codes do not change. New
+capability bit: in 0x7B01 the capabilities go from 7 to 15 (bit 3 = "works outside
+SAT RX"); in 0x7B03 from 8 to 24 (bit 4). New flags in 0x7B01: bit 3 (8) Remote CAT
+ON, bit 4 (16) hold-off; in 0x7B03: bit 4 (16) Remote CAT ON, bit 5 (32) hold-off.
+The hello string stays `F4HWN v6.1.0`. The host treats a missing bit as old
+firmware and shows the SAT RX + 8 guide; with the bit it shows how to enable
+"Remote CAT" and keeps polling without reconnecting.
+
+Not run on a real radio: hardware verification is required (see the test list).
+
 #### Web Pass Tracking Implemented over CAT RX
 
 In **SAT / passes**, update TLE/frequencies, enter a location with consent,

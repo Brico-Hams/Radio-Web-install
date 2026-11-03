@@ -2,6 +2,9 @@
   "use strict";
   const R = root.RadioWorkspace;
   const CAT_NOT_ARMED_TEXT = "Entra primero en SAT RX en la radio y pulsa 8 (debe verse CAT READY RX)";
+  const CAT_REMOTE_TEXT = "Activa «CAT remoto» en la radio (en SAT RX pulsa F+8; debe verse el indicador CAT en pantalla)";
+  const CAT_TX_REMOTE_TEXT = "Activa «CAT remoto» en la radio (en SAT RX pulsa F+8) para permitir PTT por CAT";
+  const CAT_HOLDOFF_TEXT = ". Se pulso una tecla en la radio: espera unos segundos";
   const KEY = Uint8Array.of(0x16, 0x6c, 0x14, 0xe6, 0x2e, 0x91, 0x0d, 0x40, 0x21, 0x35, 0xd5, 0x40, 0x13, 0x03, 0xe9, 0x80);
   function crc16(data) {
     let crc = 0;
@@ -214,6 +217,7 @@
     }
     async disconnect() {
       this.stopCatHold();
+      this.stopCatTransmit();
       return super.disconnect();
     }
     async exchange(type, data, expected = type + 1, timeout = 4000, recoverableTimeout = false) {
@@ -293,7 +297,7 @@
         }
       }
     }
-    async catExchangeOnce(operation, frequency10Hz = 0) {
+    async catFrame(requestId, replyId, operation, value = 0) {
       // Drop stale bytes so a late reply or a half frame cannot desynchronize the 0xABCD framing.
       if (!this.transport.pending) this.transport.clear();
       const sequence = this.catSequence = (this.catSequence + 1) & 0xffff;
@@ -301,15 +305,15 @@
       request[0] = 1;
       request[1] = operation;
       R.view(request).setUint16(2, sequence, true);
-      R.view(request).setUint32(4, frequency10Hz, true);
-      await this.transport.write(packet(0x7b00, request));
+      R.view(request).setUint32(4, value, true);
+      await this.transport.write(packet(requestId, request));
       const deadline = Date.now() + 1000;
       let response = null;
       let stale = false;
       while (!response) {
         let candidate;
         try {
-          candidate = await this.receiveResponse(0x7b01, Math.max(1, deadline - Date.now()), true);
+          candidate = await this.receiveResponse(replyId, Math.max(1, deadline - Date.now()), true);
         } catch (error) {
           if (this.transport.error) throw error;
           if (stale) throw new Error("Respuesta CAT Bricohams invalida o fuera de secuencia.");
@@ -319,22 +323,37 @@
         R.assert(candidate.length === 16 && candidate[0] === 1, "Respuesta CAT Bricohams invalida o fuera de secuencia.");
         response = candidate;
       }
+      return response;
+    }
+    // Firmware with capability bit 3 (RX) works on the normal VFO screen once "CAT remoto" is ON;
+    // older firmware only accepts CAT after the user presses 8 in SAT RX.
+    catNotArmedError(info) {
+      if (!info || !info.outsideSat) return this.catError("CAT_NOT_ARMED", CAT_NOT_ARMED_TEXT + ".");
+      const error = this.catError("CAT_NOT_ARMED", CAT_REMOTE_TEXT + (info.holdoff ? CAT_HOLDOFF_TEXT : "") + ".");
+      error.catInfo = info;
+      return error;
+    }
+    async catExchangeOnce(operation, frequency10Hz = 0) {
+      const response = await this.catFrame(0x7b00, 0x7b01, operation, frequency10Hz);
       const statuses = ["OK", "En cola", "Longitud/campos invalidos", "Version no admitida",
         "Operacion no admitida", CAT_NOT_ARMED_TEXT, "Frecuencia fuera de banda RX"];
       const status = response[1];
-      if (status === 5) throw this.catError("CAT_NOT_ARMED", CAT_NOT_ARMED_TEXT + ".");
+      const capabilities = R.view(response).getUint32(4, true);
+      const flags = R.view(response).getUint32(12, true);
+      const outsideSat = capabilities === 15;
+      const info = { outsideSat, remoteEnabled: outsideSat && Boolean(flags & 8), holdoff: outsideSat && Boolean(flags & 16) };
+      if (status === 5) throw this.catNotArmedError(info);
       R.assert(status === (operation === 0 ? 0 : 1),
         `CAT rechazado: ${statuses[status] || `estado desconocido ${status}`}.`);
-      const capabilities = R.view(response).getUint32(4, true);
       const appliedFrequency10Hz = R.view(response).getUint32(8, true);
-      const flags = R.view(response).getUint32(12, true);
-      R.assert(capabilities === 7 && flags <= 7, "Capacidades/estado CAT v1 no reconocidos.");
+      R.assert((capabilities === 7 && flags <= 7) || (capabilities === 15 && flags <= 31),
+        "Capacidades/estado CAT v1 no reconocidos.");
       const active = Boolean(flags & 1);
       R.assert(active ? ((appliedFrequency10Hz >= 13600000 && appliedFrequency10Hz <= 17400000) ||
         (appliedFrequency10Hz >= 40000000 && appliedFrequency10Hz <= 47000000)) :
-        appliedFrequency10Hz === 0 && flags === 0, "Frecuencia/estado CAT incoherentes.");
+        appliedFrequency10Hz === 0 && (flags & 7) === 0, "Frecuencia/estado CAT incoherentes.");
       return { version: 1, capabilities, active, remote: Boolean(flags & 2),
-        pending: Boolean(flags & 4), appliedFrequency10Hz, leaseMilliseconds: 3000 };
+        pending: Boolean(flags & 4), appliedFrequency10Hz, leaseMilliseconds: 3000, ...info };
     }
     getCatStatus() {
       return this.catRun("Consultar CAT RX Bricohams Beta", () => this.catExchange(0));
@@ -351,12 +370,12 @@
     async catChange(operation, frequency10Hz) {
       const initial = await this.catExchange(0);
       if (operation === 2 && !initial.active) return initial;
-      if (!initial.active) throw this.catError("CAT_NOT_ARMED", CAT_NOT_ARMED_TEXT + ".");
+      if (!initial.active) throw this.catNotArmedError(initial);
       await this.catExchange(operation, frequency10Hz);
       for (let attempt = 0; attempt < 12; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 75));
         const state = await this.catExchange(0);
-        if (!state.active) throw this.catError("CAT_NOT_ARMED", "Se ha salido de SAT RX durante el cambio CAT. " + CAT_NOT_ARMED_TEXT + ".");
+        if (!state.active) throw this.catNotArmedError(state);
         if (state.pending) continue;
         // The echoed frequency is the only confirmation: a queued SET is not a tuned receiver.
         if (!(operation === 1 ? state.remote && state.appliedFrequency10Hz === frequency10Hz : !state.remote))
@@ -365,19 +384,100 @@
       }
       throw this.catError("CAT_PENDING", "El cambio CAT sigue pendiente; no se considera aplicado.");
     }
-    // Polls until the operator arms CAT with 8 in SAT RX. Never disconnects: "not armed" is a normal state.
+    // CAT TX v1 (0x7B02 -> 0x7B03): remote PTT with a 1.5 s lease, 120 s maximum, radio-side gates.
+    async catTxExchange(operation) {
+      const response = await this.catFrame(0x7b02, 0x7b03, operation);
+      const status = response[1];
+      const capabilities = R.view(response).getUint32(4, true);
+      const flags = R.view(response).getUint32(8, true);
+      const outsideSat = capabilities === 24;
+      R.assert(capabilities === 8 || capabilities === 24, "Capacidades CAT TX no reconocidas.");
+      const state = { status, outsideSat, armed: Boolean(flags & 1), keyed: Boolean(flags & 2), queued: Boolean(flags & 4),
+        limit: Boolean(flags & 8), remoteEnabled: outsideSat && Boolean(flags & 16), holdoff: outsideSat && Boolean(flags & 32),
+        deniedState: (flags >>> 8) & 0xff, keyedMilliseconds: R.view(response).getUint32(12, true), leaseMilliseconds: 1500 };
+      if (status === 5) {
+        const error = this.catError("CAT_TX_NOT_ARMED", outsideSat ? CAT_TX_REMOTE_TEXT + (state.holdoff ? CAT_HOLDOFF_TEXT : "") + "." :
+          "Arma la transmision CAT en la radio: SAT RX y tecla 9.");
+        error.catInfo = state;
+        throw error;
+      }
+      if (status === 7) throw this.catError("CAT_TX_DENIED", "La radio rechaza transmitir (bloqueo TX, banda o bateria). Pulsa una tecla y reintenta.");
+      if (status === 8) throw this.catError("CAT_TX_LIMIT", "Limite de 120 s de transmision alcanzado; la radio se desarma.");
+      R.assert(status === 0 || status === 1, `CAT TX rechazado: estado ${status}.`);
+      return state;
+    }
+    async catTxRun(label, operation) {
+      return this.catRun(label, async () => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await this.catTxExchange(operation);
+          } catch (error) {
+            // A lost reply is safe to retry: key-down with lease and unkey are idempotent.
+            if (error.code !== "CAT_TIMEOUT" || attempt >= 2 || this.transport.error) throw error;
+          }
+        }
+      });
+    }
+    getCatTxStatus() {
+      return this.catTxRun("Consultar CAT TX Bricohams", 0);
+    }
+    setCatTransmit(on) {
+      return this.catTxRun(on ? "Transmitir CAT Bricohams" : "Soltar PTT CAT Bricohams", on ? 1 : 2);
+    }
+    // Renews the PTT lease every 500 ms for at most maxMs (120 s radio cap); stop() always sends unkey.
+    holdCatTransmit({ intervalMs = 500, maxMs = 120000, onState = () => {} } = {}) {
+      this.stopCatTransmit();
+      const hold = { stopped: false, timer: null, startedAt: Date.now() };
+      const tick = async () => {
+        if (hold.stopped) return;
+        try {
+          const state = await this.setCatTransmit(true);
+          if (!hold.stopped) onState({ keyed: state.keyed, state });
+        } catch (error) {
+          if (!error.catRecoverable || error.code === "CAT_TX_DENIED" || error.code === "CAT_TX_LIMIT" || error.code === "CAT_TX_NOT_ARMED") {
+            hold.stopped = true;
+            onState({ fatal: !error.catRecoverable, ended: true, error });
+            return;
+          }
+        }
+        if (!hold.stopped && Date.now() - hold.startedAt >= maxMs) {
+          hold.stop();
+          onState({ ended: true, limit: true });
+          return;
+        }
+        if (!hold.stopped) hold.timer = setTimeout(tick, intervalMs);
+      };
+      hold.stop = () => {
+        const wasRunning = !hold.stopped;
+        hold.stopped = true;
+        clearTimeout(hold.timer);
+        if (wasRunning && this.connected) this.setCatTransmit(false).catch(() => {});
+      };
+      this.catTxHold = hold;
+      hold.timer = setTimeout(tick, 0);
+      return hold;
+    }
+    stopCatTransmit() {
+      if (this.catTxHold) this.catTxHold.stop();
+      this.catTxHold = null;
+    }
+    // Polls until the operator enables CAT (menu "CAT remoto", or 8 in SAT RX on old firmware). Never disconnects:
+    // "not armed" is a normal state and onWaiting receives the hint (info.outsideSat/holdoff).
     async waitCatArmed({ timeoutMs = 120000, intervalMs = 500, onWaiting = () => {}, shouldStop = () => false } = {}) {
       const deadline = Date.now() + timeoutMs;
+      let hint = null;
       for (;;) {
         try {
           const state = await this.getCatStatus();
           if (state.active) return state;
+          hint = state;
         } catch (error) {
           if (!error.catRecoverable) throw error;
+          hint = error.catInfo || hint;
         }
         if (shouldStop()) throw this.catError("CAT_CANCELLED", "Espera CAT cancelada.");
-        if (Date.now() >= deadline) throw this.catError("CAT_NOT_ARMED", CAT_NOT_ARMED_TEXT + ".");
-        onWaiting();
+        if (Date.now() >= deadline) throw this.catNotArmedError(hint && hint.outsideSat ? hint : null);
+        onWaiting(hint);
         await new Promise(resolve => setTimeout(resolve, intervalMs));
       }
     }

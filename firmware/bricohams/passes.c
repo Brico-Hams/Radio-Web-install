@@ -158,6 +158,8 @@ uint16_t BH_PASS_Request(const uint8_t *request, uint16_t length, bool authentic
             }
             if (op == BH_PASS_OP_CLEAR) {
                 PY25Q16_SectorErase(BH_PASS_FLASH_ADDR);
+                if (bh_cat_remote_enabled) /* The consent shares this sector. */
+                    bh_cat_remote_store(true);
             } else if (op == BH_PASS_OP_WRITE) {
                 status = write_entries(index, count, &request[BH_PASS_REQUEST_HEADER]);
             } else if (op == BH_PASS_OP_COMMIT) {
