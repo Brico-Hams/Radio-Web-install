@@ -39,6 +39,8 @@ interface Rig {
     val supportsMemoryWrite: Boolean
     /** Short text shown to the user. */
     fun identify(): String
+    /** Stable firmware / model identification when the radio can report it (QMX: VN;, FTX-1: ID;); null when it cannot. */
+    fun firmwareVersion(): String? = null
     /** Frequency and mode of the active VFO (VFO A for the satellite downlink). */
     fun status(): RigStatus
     fun frequency(vfo: Vfo): Long

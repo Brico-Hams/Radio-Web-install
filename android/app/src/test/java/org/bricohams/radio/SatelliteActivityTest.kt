@@ -190,7 +190,7 @@ class SatelliteActivityTest {
             val pixels = IntArray(600 * 300)
             bitmap.getPixels(pixels, 0, 600, 0, 0, 600, 300)
             assertTrue("Continents must be drawn", pixels.count { it == Brand.SURFACE_HIGH } > 1000)
-            assertTrue("Selected satellite and footprint must be drawn", pixels.count { it == Color.rgb(255, 152, 0) } > 10)
+            assertTrue("Selected satellite and footprint must be drawn", pixels.count { it == Brand.ORANGE } > 10)
             bitmap.recycle()
             controller.pause().resume()
             idle(activity)

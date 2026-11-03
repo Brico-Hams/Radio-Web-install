@@ -173,6 +173,9 @@ class MainActivity : LocalizedActivity() {
         layout.addView(nav)
         setContentView(layout)
         render()
+        VersionTracker.check(VersionTracker.store(this), VersionTracker.running(this), VersionTracker.upgradedInPlace(this))
+            ?.let { ReleaseNotices.showWhatsNew(this, it) }
+        if (savedInstanceState == null) OtaAutoCheck.run(this) { message(getString(R.string.ota_available_banner, it.versionName)) }
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
@@ -276,11 +279,12 @@ class MainActivity : LocalizedActivity() {
             }
         }
         section(R.string.home_about) {
-            text("RadiCodex by BricoHams ${packageManager.getPackageInfo(packageName, 0).versionName}")
+            text(getString(R.string.home_version_line, VersionTracker.running(this).name, VersionTracker.running(this).code))
             text(R.string.home_offline)
             text(R.string.home_features)
             text(R.string.home_ardf_note)
             text(R.string.home_privacy)
+            button(R.string.home_open_updates) { startActivity(Intent(this, OtaActivity::class.java)) }
         }
     }
     private fun spinner(identifier: Int, values: List<String>, selected: String) = Spinner(this).apply {

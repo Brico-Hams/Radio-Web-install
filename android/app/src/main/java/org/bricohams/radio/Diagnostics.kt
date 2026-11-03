@@ -251,12 +251,17 @@ data class UsbEntry(val name: String, val vendorId: Int, val productId: Int, val
 object DiagnosticsReport {
     private fun hex(value: Int) = String.format(Locale.ROOT, "%04X", value)
 
-    fun build(appVersion: String, device: String, whenText: String, devices: List<UsbEntry>, results: List<DiagResult>): String =
+    fun build(appVersion: String, device: String, whenText: String, devices: List<UsbEntry>, results: List<DiagResult>,
+        firmware: List<String> = emptyList()): String =
         buildString {
             appendLine("RadiCodex by BricoHams - Puente / Diagnostico")
             appendLine("App: $appVersion")
             appendLine("Telefono: $device")
             appendLine("Fecha: $whenText")
+            if (firmware.isNotEmpty()) {
+                appendLine("Firmware de las radios:")
+                for (line in firmware) appendLine("- $line")
+            }
             appendLine()
             appendLine("Dispositivos USB serie: ${devices.size}")
             for (entry in devices) {

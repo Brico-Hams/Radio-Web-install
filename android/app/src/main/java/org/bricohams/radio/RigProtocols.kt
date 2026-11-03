@@ -504,6 +504,9 @@ class Ftx1Rig(transport: RadioBytes) : Rig {
         YaesuFtx1.checkId(reply)
         return "FTX-1 " + reply.removeSuffix(";")
     }
+    override fun firmwareVersion(): String? = try {
+        link.request(YaesuFtx1.readId(), "ID").also { YaesuFtx1.checkId(it) }.removeSuffix(";")
+    } catch (error: LocalizedIOException) { null }
     override fun status(): RigStatus =
         RigStatus(read(Vfo.A), YaesuFtx1.parseMode(link.request(YaesuFtx1.readMode(), "MD")))
     override fun frequency(vfo: Vfo): Long = read(vfo)
@@ -869,6 +872,9 @@ class QrpLabsRig(transport: RadioBytes, override val model: RigModel) : Rig {
         return "QRP Labs QMX $version"
     }
     override fun status(): RigStatus = RigStatus(read(Vfo.A), readMode())
+    override fun firmwareVersion(): String? = if (model != RigModel.QMX) null else try {
+        QrpLabsCat.parseVersion(link.request(QrpLabsCat.readVersion(), "VN"))
+    } catch (error: LocalizedIOException) { null }
     override fun frequency(vfo: Vfo): Long = read(vfo)
     override fun setFrequency(vfo: Vfo, hz: Long) {
         checkRange(model, hz)

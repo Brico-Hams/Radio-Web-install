@@ -46,6 +46,7 @@ class DiagnosticsActivity : LocalizedActivity() {
     private lateinit var bridgeStatus: TextView
     private var entries: List<Pair<UsbDevice, UsbEntry>> = emptyList()
     private val results = ArrayList<DiagResult>()
+    private val firmwareLines = java.util.concurrent.CopyOnWriteArrayList<String>()
     private val queue = ArrayDeque<UsbDevice>()
     private var awaiting: UsbDevice? = null
     private var onGranted: ((UsbDevice) -> Unit)? = null
@@ -251,10 +252,32 @@ class DiagnosticsActivity : LocalizedActivity() {
     private fun attemptQuansheng(runner: DiagnosticsRunner, device: UsbDevice): List<DiagResult> {
         val link = openFor(device, RadioKind.QUANSHENG, null)
         try {
-            return runner.runQuanshengAll(QuanshengMemory(link), CatProtocol(link))
+            val memory = QuanshengMemory(link)
+            val results = runner.runQuanshengAll(memory, CatProtocol(link))
+            noteQuansheng(device, memory)
+            return results
         } finally {
             try { link.close() } catch (_: java.io.IOException) { }
         }
+    }
+
+    /** Hello string and (when readable, read-only) the slot-header CRC are tracked separately so a failed slot read never looks like a change. */
+    private fun noteQuansheng(device: UsbDevice, memory: QuanshengMemory) {
+        if (memory.firmware.isEmpty()) return
+        noteFirmware(device, RadioKind.QUANSHENG.label, memory.firmware)
+        val slots = try { QuanshengReadOnly(memory).slots() } catch (_: Exception) { null }
+        FirmwareTracker.slotsFingerprint(slots)?.let { noteFirmware(device, RadioKind.QUANSHENG.label + " (slots)", it) }
+    }
+
+    /** Remembers the firmware per radio (USB ids + serial); a different value than last time is announced and added to the report. */
+    private fun noteFirmware(device: UsbDevice, label: String, firmware: String?) {
+        if (firmware.isNullOrBlank()) return
+        val serial = try { device.serialNumber } catch (_: SecurityException) { null }
+        val key = FirmwareTracker.radioKey(device.vendorId, device.productId, serial) + "|" + label
+        firmwareLines.add("$label: $firmware")
+        val change = FirmwareTracker.record(PrefsStore(this, "firmware-control"), key, label, firmware) ?: return
+        firmwareLines.add("CAMBIO DE FIRMWARE en ${change.radio}: antes ${change.before}, ahora ${change.now}. Revalidar pruebas y ajustes.")
+        mainHandler.post { if (!isDestroyed) ReleaseNotices.showFirmwareChanges(this, listOf(change)) }
     }
 
     private fun quanshengCandidate(): UsbDevice? = entries.firstOrNull {
@@ -278,7 +301,10 @@ class DiagnosticsActivity : LocalizedActivity() {
         val result = try {
             val link = openFor(device, RadioKind.QUANSHENG, null)
             try {
-                runner.runQuanshengModule(module, QuanshengMemory(link), CatProtocol(link))
+                val memory = QuanshengMemory(link)
+                val outcome = runner.runQuanshengModule(module, memory, CatProtocol(link))
+                noteQuansheng(device, memory)
+                outcome
             } finally {
                 try { link.close() } catch (_: java.io.IOException) { }
             }
@@ -311,7 +337,16 @@ class DiagnosticsActivity : LocalizedActivity() {
         val link = openFor(device, kind, baud)
         try {
             return if (kind == RadioKind.QUANSHENG) runner.runQuansheng(CatProtocol(link))
-            else runner.runRig(openRig(requireNotNull(kind.model), link), kind.label)
+            else {
+                val rig = openRig(requireNotNull(kind.model), link)
+                val result = runner.runRig(rig, kind.label)
+                // Only when identification worked: asking a silent radio again would just repeat the failure.
+                if (result.steps.firstOrNull()?.ok == true) {
+                    val version = try { rig.firmwareVersion() } catch (_: Exception) { null }
+                    noteFirmware(device, kind.label, version)
+                }
+                result
+            }
         } finally {
             try { link.close() } catch (_: java.io.IOException) { }
         }
@@ -319,11 +354,10 @@ class DiagnosticsActivity : LocalizedActivity() {
 
     private fun renderResults() {
         resultsBox.text = DiagnosticsReport.build(versionName(), "${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})",
-            DateFormat.getDateTimeInstance().format(Date()), entries.map { it.second }, results)
+            DateFormat.getDateTimeInstance().format(Date()), entries.map { it.second }, results, firmwareLines.distinct())
     }
 
-    private fun versionName(): String =
-        runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "?"
+    private fun versionName(): String = runCatching { VersionTracker.running(this).let { "${it.name} (codigo ${it.code})" } }.getOrNull() ?: "?"
 
     private fun share() {
         renderResults()
