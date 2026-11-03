@@ -122,14 +122,24 @@ test("truSDX: espera tras abrir y sondea 38400 solo como respaldo", async () => 
   await delayed.close();
 });
 
-test("QMX: reintenta con DTR alto si no contesta con DTR bajo", async () => {
-  const port = fakePort(new FakeRig({ digits: 11, frequency: 14074000 }), { usbVendorId: 0x26aa, usbProductId: 0x0030 });
+test("QMX: filtro USB 0483:A34C y reintento DTR alto solo como respaldo", async () => {
+  assert.deepEqual(R.RIG_PROFILES.qmx.filters, [{ usbVendorId: 0x0483, usbProductId: 0xa34c }]);
+  const port = fakePort(new FakeRig({ digits: 11, frequency: 14074000 }), { usbVendorId: 0x0483, usbProductId: 0xa34c });
   port.rig.dropReplies = 99;
   port.setSignals = async function (value) { this.signals.push(value); if (value.dataTerminalReady) this.rig.dropReplies = 0; };
   const link = new R.RigCatLink("qmx", { api: fakeApi([port]), sessionOptions: { ...fast, retries: 0 } });
   await link.connect(port);
   assert.deepEqual(port.signals.at(-1), { dataTerminalReady: true, requestToSend: false });
   await link.close();
+});
+
+test("YAESU HRI 26AA:0030 se identifica como tal y no se sondea como QMX", async () => {
+  assert.equal(R.rigUsbNonCat({ usbVendorId: 0x26aa, usbProductId: 0x0030 }).label, "YAESU HRI USB I/F");
+  assert.equal(R.rigUsbNonCat({ usbVendorId: 0x0483, usbProductId: 0xa34c }), null);
+  const port = fakePort(new FakeRig({ digits: 11, frequency: 14074000 }), { usbVendorId: 0x26aa, usbProductId: 0x0030 });
+  const link = new R.RigCatLink("qmx", { api: fakeApi([port]), sessionOptions: { ...fast, retries: 0 } });
+  await assert.rejects(link.connect(port), error => error.code === "RIG_NOT_CAT");
+  assert.deepEqual(port.rig.received, []);
 });
 
 test("las lecturas se reintentan tras respuestas perdidas y se descartan bytes basura", async () => {

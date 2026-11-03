@@ -242,14 +242,20 @@
     // Bench-measured: the CP2105 Enhanced port answers at 38400 8N1; FA is 9 digits (FA439300000;).
     ftx1: { id: "ftx1", label: "Yaesu FTX-1", defaultBaud: 38400, bauds: [4800, 9600, 19200, 38400, 115200],
       digits: 9, strictVfo: true, filters: [{ usbVendorId: 0x10c4 }], probe: "ID;", probePrefix: "ID", probeReply: "ID0840;" },
-    // USB CDC (unverified on the bench): identified with FA; and, if silent, retried once with DTR asserted.
+    // Bench-measured: USB 0483:A34C (STMicroelectronics VID is shared, so VID+PID are matched), CDC at 38400 with DTR/RTS low;
+    // ID; -> ID020; and FA; -> 11 digits. The DTR-high retry is only a harmless fallback.
     qmx: { id: "qmx", label: "QRP Labs QMX / QMX+", defaultBaud: 38400, bauds: BAUDS, digits: 11, strictVfo: false,
-      filters: [], probe: "FA;", probePrefix: "F", dtrRetry: true },
+      filters: [{ usbVendorId: 0x0483, usbProductId: 0xa34c }], probe: "FA;", probePrefix: "F", dtrRetry: true },
     // CH340, bench-measured: 115200 8N1 works (38400 returns garbage), "ID;" is answered "?;" so FA; identifies it,
     // and the radio needs ~1.5 s after open before the first command. 38400 is only a fallback probe.
     trusdx: { id: "trusdx", label: "(tr)uSDX", defaultBaud: 115200, fallbackBauds: [38400], bauds: BAUDS, digits: 11,
       strictVfo: false, filters: [], probe: "FA;", probePrefix: "F", openDelayMs: 1500 }
   };
+  // 26AA:0030 is the "YAESU HRI USB I/F" (FTX-1 family accessory); it does not speak Kenwood CAT and is never probed.
+  const RIG_USB_NON_CAT = [{ usbVendorId: 0x26aa, usbProductId: 0x0030, label: "YAESU HRI USB I/F" }];
+  function rigUsbNonCat(info) {
+    return RIG_USB_NON_CAT.find(entry => info && entry.usbVendorId === info.usbVendorId && entry.usbProductId === info.usbProductId) || null;
+  }
   function rigProfile(id) {
     const profile = RIG_PROFILES[id];
     R.assert(profile, "Radio CAT no admitida.");
@@ -404,6 +410,8 @@
       const transport = this.createTransport(this.api);
       try {
         await transport.open(baud, this.profile.filters, { lowControlLines: true, port });
+        const nonCat = rigUsbNonCat(transport.port?.getInfo?.());
+        if (nonCat) throw rigError("RIG_NOT_CAT", `${nonCat.label} no es una radio CAT Kenwood; no se sondea.`);
         if (this.openDelayMs) await new Promise(resolve => setTimeout(resolve, this.openDelayMs));
         const session = new RigCatSession(transport, this.profile, this.sessionOptions);
         try { await session.identify(); }
@@ -477,7 +485,7 @@
       if (transport) await transport.close();
     }
   }
-  Object.assign(R, { BufferedTransport, SerialTransport, USBTransport, RIG_PROFILES, rigFrequencyCommand, parseRigFrequency,
+  Object.assign(R, { BufferedTransport, SerialTransport, USBTransport, RIG_PROFILES, rigUsbNonCat, rigFrequencyCommand, parseRigFrequency,
     RigCatSession, RigCatLink });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);
