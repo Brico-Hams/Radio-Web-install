@@ -557,11 +557,11 @@
     <string name="satellite_tab_satellites">Satelliten</string>
     <string name="satellite_tab_settings">Einstellungen</string>
     <string name="satellite_observer">Beobachter</string>
-    <string name="satellite_use_gps">Letzte GPS-Position verwenden</string>
+    <string name="satellite_use_gps">Telefonposition abrufen</string>
     <string name="satellite_save_observer">Speichern und Überflüge berechnen</string>
     <string name="satellite_gps_none">Keine aktuelle Position. GPS-App öffnen oder Koordinaten eingeben.</string>
     <string name="satellite_gps_fix">Position vor %1$d min, Genauigkeit %2$.0f m. Prüfen und speichern.</string>
-    <string name="satellite_gps_retry">Berechtigung erteilt. Erneut auf Letzte GPS-Position verwenden tippen.</string>
+    <string name="satellite_gps_retry">Berechtigung erteilt. Erneut auf Telefonposition abrufen tippen.</string>
     <string name="satellite_gps_denied">Keine Standortberechtigung: Koordinaten manuell eingeben.</string>
     <string name="satellite_data">Satellitendaten</string>
     <string name="satellite_data_state">%1$d Satelliten und %2$d RX-Frequenzen; aktualisiert %3$s UTC.</string>

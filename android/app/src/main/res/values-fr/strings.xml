@@ -557,11 +557,10 @@
     <string name="satellite_tab_satellites">Satellites</string>
     <string name="satellite_tab_settings">Réglages</string>
     <string name="satellite_observer">Observateur</string>
-    <string name="satellite_use_gps">Utiliser la dernière position GPS</string>
-    <string name="satellite_save_observer">Enregistrer et calculer les passages</string>
+    <string name="satellite_use_gps">    Obtenir la position du téléphone</string>    <string name="satellite_save_observer">Enregistrer et calculer les passages</string>
     <string name="satellite_gps_none">Aucune position récente. Ouvrez une app GPS ou saisissez les coordonnées.</string>
     <string name="satellite_gps_fix">Position datant de %1$d min, précision %2$.0f m. Vérifiez et enregistrez.</string>
-    <string name="satellite_gps_retry">Autorisation accordée. Appuyez à nouveau sur Utiliser la dernière position GPS.</string>
+    <string name="satellite_gps_retry">Autorisation accordée. Appuyez à nouveau sur Obtenir la position du téléphone.</string>
     <string name="satellite_gps_denied">Sans autorisation de localisation : saisissez les coordonnées.</string>
     <string name="satellite_data">Données des satellites</string>
     <string name="satellite_data_state">%1$d satellites et %2$d fréquences RX ; mise à jour %3$s UTC.</string>

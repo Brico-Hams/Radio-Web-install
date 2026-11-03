@@ -557,11 +557,11 @@
     <string name="satellite_tab_satellites">Satellites</string>
     <string name="satellite_tab_settings">Settings</string>
     <string name="satellite_observer">Observer</string>
-    <string name="satellite_use_gps">Use last GPS position</string>
+    <string name="satellite_use_gps">Get phone position</string>
     <string name="satellite_save_observer">Save and calculate passes</string>
     <string name="satellite_gps_none">No recent position. Open a GPS app or enter coordinates.</string>
     <string name="satellite_gps_fix">Position from %1$d min ago, accuracy %2$.0f m. Review and save.</string>
-    <string name="satellite_gps_retry">Permission granted. Tap Use last GPS position again.</string>
+    <string name="satellite_gps_retry">Permission granted. Tap Get phone position again.</string>
     <string name="satellite_gps_denied">No location permission: enter coordinates manually.</string>
     <string name="satellite_data">Satellite data</string>
     <string name="satellite_data_state">%1$d satellites and %2$d RX frequencies; updated %3$s UTC.</string>

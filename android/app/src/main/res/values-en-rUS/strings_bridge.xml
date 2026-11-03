@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- SAT CAT: not armed is a recoverable state -->
+    <string name="err_cat_not_armed">The radio is not in SAT RX with CAT enabled. 1) On the radio open SAT RX Bricohams. 2) Press key 8 to enable CAT. The app keeps polling and tunes by itself as soon as the radio is ready.</string>
+    <string name="cat_sat_steps_title">Enable CAT on the radio (3 steps)</string>
+    <string name="cat_sat_steps">1. Connect the radio over USB OTG and tap Choose device.\n2. On the radio open SAT RX Bricohams.\n3. Press key 8 (CAT enabled) and tune from here.</string>
+    <string name="cat_lease_recovered">The radio is back in SAT RX with CAT: the tuning was applied again.</string>
+    <string name="rig_usb_reattached">USB reconnected: opening the radio again.</string>
+
+    <!-- Phone location (SAT module) -->
+    <string name="satellite_gps_asking">Grant the location permission (precise or approximate).</string>
+    <string name="satellite_gps_off">Phone location is turned off. Turn it on in Settings and tap Get phone position again, or enter the coordinates manually.</string>
+    <string name="satellite_gps_searching">Searching for a position (GPS, network and fused). %1$d s left. Keep the screen on, preferably outdoors; a cold GPS start can take minutes.</string>
+    <string name="satellite_gps_refining">Position received: refining accuracy for %1$d more s…</string>
+    <string name="satellite_gps_sats">Satellites visible %1$d, used %2$d</string>
+    <string name="satellite_gps_cancel">Cancel search</string>
+    <string name="satellite_gps_network_hint">No network location. Turn on Google Location Accuracy and Wi-Fi scanning in the location settings to get a quick position.</string>
+    <string name="satellite_gps_open_settings">Open location settings</string>
+    <string name="satellite_gps_use_saved">Use last saved position (%1$s)</string>
+    <string name="satellite_gps_timeout">No position arrived in time. Go outdoors, check the phone location settings or enter the coordinates manually.</string>
+    <string name="satellite_gps_fix_detail">Source %1$s, accuracy %2$s, age %3$d s. Review and save.</string>
+    <string name="satellite_gps_approximate">Approximate permission: accuracy of several km (enough for passes, better with precise location).</string>
+
+    <!-- Diagnostics / bridge -->
+    <string name="home_open_diagnostics">Bridge / USB diagnostics</string>
+    <string name="diag_title">Bridge / Diagnostics</string>
+    <string name="diag_intro">Connect the radios over USB OTG. The test only reads and tunes in receive mode and restores the frequency: it does not transmit or write memory.</string>
+    <string name="diag_refresh">Scan USB devices</string>
+    <string name="diag_no_devices">No USB serial adapters. Connect the radio over OTG and tap Scan.</string>
+    <string name="diag_kind_unknown">Not recognized</string>
+    <string name="diag_device_line">%1$s · driver %2$s · %3$d port(s)</string>
+    <string name="diag_test_one">Test</string>
+    <string name="diag_run_all">Test all (all radios and modules)</string>
+    <string name="diag_running">Testing %1$s…</string>
+    <string name="diag_done">Test finished. Share the report if you like.</string>
+    <string name="diag_share">Share report</string>
+    <string name="diag_skipped">skipped (previous step failed)</string>
+    <string name="diag_step_open">Open USB</string>
+    <string name="diag_step_identify">Identify (ID)</string>
+    <string name="diag_step_read">Read frequency</string>
+    <string name="diag_step_set">Set test frequency</string>
+    <string name="diag_step_readback">Read frequency back</string>
+    <string name="diag_step_restore">Restore original frequency</string>
+    <string name="diag_step_hello">Firmware hello</string>
+    <string name="diag_step_tune">CAT RX tuning</string>
+    <string name="diag_step_lease">Renew tuning (lease)</string>
+    <string name="diag_step_release">Release tuning (STOP)</string>
+    <string name="err_diag_lease">The tuning renewal returned %1$s instead of RENEWED.</string>
+    <string name="err_diag_ptt_keyed">The radio reports PTT active during the test. The test does not transmit: check the radio.</string>
+    <string name="err_sat_invalid">Invalid response for %1$s or from another transfer.</string>
+    <string name="err_sat_rejected">The radio rejected %1$s (status %2$d).</string>
+    <string name="diag_run_modules">Test all (Quansheng modules, read-only)</string>
+    <string name="diag_step_module">Test one module</string>
+    <string name="diag_save_report">Save report</string>
+    <string name="diag_report_saved">Report saved to %1$s</string>
+    <string name="diag_report_save_error">Could not save the report: %1$s</string>
+    <string name="diag_not_armed">pending: the radio is not in SAT RX with CAT enabled (key 8)</string>
+    <string name="diag_legacy_no_flash">pending: firmware v6.0 without a physical Flash reader</string>
+    <string name="diag_ardf_no_session">no ARDF session started on the radio (pending)</string>
+    <string name="diag_mod_link">Link and hello</string>
+    <string name="diag_mod_channels">Channel reading</string>
+    <string name="diag_mod_flash">Calibration and Flash reader</string>
+    <string name="diag_mod_slots">Multiboot slots</string>
+    <string name="diag_mod_presets">Spectrum presets</string>
+    <string name="diag_mod_ardf">ARDF statistics</string>
+    <string name="diag_mod_passes">SAT pass table</string>
+    <string name="diag_mod_cat_tune">CAT RX tuning (restores itself)</string>
+    <string name="diag_step_cat_hello">CAT hello</string>
+    <string name="diag_step_cat_status">CAT RX status</string>
+    <string name="diag_step_ptt_status">PTT status (query only)</string>
+    <string name="diag_step_channels">Read channels</string>
+    <string name="diag_step_calibration">Read calibration</string>
+    <string name="diag_step_flash_probe">Flash probe (read + CRC)</string>
+    <string name="diag_step_slots">Query slots</string>
+    <string name="diag_step_presets">Export presets</string>
+    <string name="diag_step_ardf">Read ARDF statistics</string>
+    <string name="diag_step_passes">Read passes (radio clock untouched)</string>
+    <string name="diag_run_all_hint">Test all runs every module one after another; you can also launch them one by one. None of them transmits.</string>
+    <string name="diag_bridge_title">TCP bridge (optional)</string>
+    <string name="diag_bridge_warning">WARNING: the bridge forwards, without authentication, everything arriving over the local network to the CAT of the chosen radio. Enable it only on a trusted network and turn it off when done. It stays active only while this screen is open.</string>
+    <string name="diag_bridge_start">Start bridge</string>
+    <string name="diag_bridge_stop">Stop bridge</string>
+    <string name="diag_bridge_off">Bridge off.</string>
+    <string name="diag_bridge_on">Bridge active. Connect from the PC to %1$s port %2$d (raw TCP).</string>
+    <string name="diag_bridge_client">Client connected: %1$s</string>
+    <string name="diag_bridge_error">Could not start the bridge: %1$s</string>
+
+    <!-- PRO mode -->
+    <string name="pro_mode_label">PRO mode (no mandatory backup)</string>
+    <string name="pro_mode_title">Enable PRO mode</string>
+    <string name="pro_mode_warning">In PRO mode you can write without a prior full backup. A failed or interrupted write can leave the radio unusable with no copy to recover it. For experienced users only. It turns off when you leave this screen.</string>
+    <string name="pro_mode_accept">I understand the risk</string>
+    <string name="pro_no_backup_warning">PRO MODE: there is no backup of this session. If something fails you will not be able to recover the radio.</string>
+</resources>

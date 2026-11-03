@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- SAT CAT: not armed is a recoverable state -->
+    <string name="err_cat_not_armed">La radio n\'est pas en SAT RX avec CAT activé. 1) Sur la radio, ouvrez SAT RX Bricohams. 2) Appuyez sur la touche 8 pour activer CAT. L\'app continue d\'interroger et se règle toute seule dès que la radio est prête.</string>
+    <string name="cat_sat_steps_title">Activer CAT sur la radio (3 étapes)</string>
+    <string name="cat_sat_steps">1. Branchez la radio en USB OTG et appuyez sur Choisir l\'appareil.\n2. Sur la radio, ouvrez SAT RX Bricohams.\n3. Appuyez sur la touche 8 (CAT activé) et réglez depuis ici.</string>
+    <string name="cat_lease_recovered">La radio est revenue en SAT RX avec CAT : le réglage a été réappliqué.</string>
+    <string name="rig_usb_reattached">USB reconnecté : réouverture de la radio.</string>
+
+    <!-- Phone location (SAT module) -->
+    <string name="satellite_gps_asking">Accordez l\'autorisation de localisation (précise ou approximative).</string>
+    <string name="satellite_gps_off">La localisation du téléphone est désactivée. Activez-la dans les Paramètres et appuyez à nouveau sur Obtenir la position du téléphone, ou saisissez les coordonnées.</string>
+    <string name="satellite_gps_searching">Recherche de la position (GPS, réseau et fusionné). %1$d s restantes. Gardez l\'écran allumé, de préférence en extérieur ; un démarrage à froid du GPS peut prendre des minutes.</string>
+    <string name="satellite_gps_refining">Position reçue : affinage de la précision pendant %1$d s de plus…</string>
+    <string name="satellite_gps_sats">Satellites visibles %1$d, utilisés %2$d</string>
+    <string name="satellite_gps_cancel">Annuler la recherche</string>
+    <string name="satellite_gps_network_hint">Pas de localisation réseau. Activez la Précision de la localisation Google et la recherche Wi-Fi dans les paramètres de localisation pour obtenir rapidement une position.</string>
+    <string name="satellite_gps_open_settings">Ouvrir les paramètres de localisation</string>
+    <string name="satellite_gps_use_saved">Utiliser la dernière position enregistrée (%1$s)</string>
+    <string name="satellite_gps_timeout">Aucune position reçue à temps. Sortez à l\'extérieur, vérifiez la localisation du téléphone ou saisissez les coordonnées.</string>
+    <string name="satellite_gps_fix_detail">Source %1$s, précision %2$s, âge %3$d s. Vérifiez et enregistrez.</string>
+    <string name="satellite_gps_approximate">Autorisation approximative : précision de plusieurs km (suffisant pour les passages, meilleure avec la localisation précise).</string>
+
+    <!-- Diagnostics / bridge -->
+    <string name="home_open_diagnostics">Pont / Diagnostic USB</string>
+    <string name="diag_title">Pont / Diagnostic</string>
+    <string name="diag_intro">Branchez les radios en USB OTG. Le test lit seulement, règle en réception et restaure la fréquence : il n\'émet pas et n\'écrit pas en mémoire.</string>
+    <string name="diag_refresh">Rechercher les appareils USB</string>
+    <string name="diag_no_devices">Aucun adaptateur USB série. Branchez la radio en OTG et appuyez sur Rechercher.</string>
+    <string name="diag_kind_unknown">Non reconnu</string>
+    <string name="diag_device_line">%1$s · pilote %2$s · %3$d port(s)</string>
+    <string name="diag_test_one">Tester</string>
+    <string name="diag_run_all">Tout tester (toutes les radios et modules)</string>
+    <string name="diag_running">Test de %1$s…</string>
+    <string name="diag_done">Test terminé. Partagez le rapport si vous le souhaitez.</string>
+    <string name="diag_share">Partager le rapport</string>
+    <string name="diag_skipped">ignoré (l\'étape précédente a échoué)</string>
+    <string name="diag_step_open">Ouvrir USB</string>
+    <string name="diag_step_identify">Identifier (ID)</string>
+    <string name="diag_step_read">Lire la fréquence</string>
+    <string name="diag_step_set">Régler la fréquence de test</string>
+    <string name="diag_step_readback">Relire la fréquence</string>
+    <string name="diag_step_restore">Restaurer la fréquence d\'origine</string>
+    <string name="diag_step_hello">Hello du firmware</string>
+    <string name="diag_step_tune">Réglage CAT RX</string>
+    <string name="diag_step_lease">Renouveler le réglage (lease)</string>
+    <string name="diag_step_release">Libérer le réglage (STOP)</string>
+    <string name="err_diag_lease">Le renouvellement du réglage a renvoyé %1$s au lieu de RENEWED.</string>
+    <string name="err_diag_ptt_keyed">La radio indique PTT actif pendant le test. Le test n\'émet pas : vérifiez la radio.</string>
+    <string name="err_sat_invalid">Réponse de %1$s invalide ou d\'un autre transfert.</string>
+    <string name="err_sat_rejected">La radio a refusé %1$s (état %2$d).</string>
+    <string name="diag_run_modules">Tout tester (modules Quansheng, lecture seule)</string>
+    <string name="diag_step_module">Tester un module</string>
+    <string name="diag_save_report">Enregistrer le rapport</string>
+    <string name="diag_report_saved">Rapport enregistré dans %1$s</string>
+    <string name="diag_report_save_error">Impossible d\'enregistrer le rapport : %1$s</string>
+    <string name="diag_not_armed">en attente : la radio n\'est pas en SAT RX avec CAT activé (touche 8)</string>
+    <string name="diag_legacy_no_flash">en attente : firmware v6.0 sans lecteur de Flash physique</string>
+    <string name="diag_ardf_no_session">aucune session ARDF démarrée sur la radio (en attente)</string>
+    <string name="diag_mod_link">Liaison et hello</string>
+    <string name="diag_mod_channels">Lecture des canaux</string>
+    <string name="diag_mod_flash">Calibration et lecteur de Flash</string>
+    <string name="diag_mod_slots">Slots multiboot</string>
+    <string name="diag_mod_presets">Presets de spectre</string>
+    <string name="diag_mod_ardf">Statistiques ARDF</string>
+    <string name="diag_mod_passes">Table des passages SAT</string>
+    <string name="diag_mod_cat_tune">Réglage CAT RX (se restaure seul)</string>
+    <string name="diag_step_cat_hello">Hello CAT</string>
+    <string name="diag_step_cat_status">État CAT RX</string>
+    <string name="diag_step_ptt_status">État PTT (consultation seule)</string>
+    <string name="diag_step_channels">Lire les canaux</string>
+    <string name="diag_step_calibration">Lire la calibration</string>
+    <string name="diag_step_flash_probe">Sonde Flash (lecture + CRC)</string>
+    <string name="diag_step_slots">Interroger les slots</string>
+    <string name="diag_step_presets">Exporter les presets</string>
+    <string name="diag_step_ardf">Lire les statistiques ARDF</string>
+    <string name="diag_step_passes">Lire les passages (horloge de la radio intacte)</string>
+    <string name="diag_run_all_hint">Tout tester exécute chaque module l\'un après l\'autre ; vous pouvez aussi les lancer un par un. Aucun n\'émet.</string>
+    <string name="diag_bridge_title">Pont TCP (optionnel)</string>
+    <string name="diag_bridge_warning">ATTENTION : le pont transmet sans authentification tout ce qui arrive par le réseau local au CAT de la radio choisie. Activez-le seulement sur un réseau de confiance et éteignez-le ensuite. Il reste actif uniquement tant que cet écran est ouvert.</string>
+    <string name="diag_bridge_start">Démarrer le pont</string>
+    <string name="diag_bridge_stop">Arrêter le pont</string>
+    <string name="diag_bridge_off">Pont éteint.</string>
+    <string name="diag_bridge_on">Pont actif. Connectez-vous depuis le PC à %1$s port %2$d (TCP brut).</string>
+    <string name="diag_bridge_client">Client connecté : %1$s</string>
+    <string name="diag_bridge_error">Impossible de démarrer le pont : %1$s</string>
+
+    <!-- PRO mode -->
+    <string name="pro_mode_label">Mode PRO (sans sauvegarde obligatoire)</string>
+    <string name="pro_mode_title">Activer le mode PRO</string>
+    <string name="pro_mode_warning">En mode PRO, on peut écrire sans sauvegarde complète préalable. Une écriture échouée ou interrompue peut rendre la radio inutilisable, sans copie pour la récupérer. Réservé aux utilisateurs expérimentés. Désactivé en quittant cet écran.</string>
+    <string name="pro_mode_accept">Je comprends le risque</string>
+    <string name="pro_no_backup_warning">MODE PRO : il n\'y a pas de sauvegarde de cette session. En cas d\'échec, vous ne pourrez pas récupérer la radio.</string>
+</resources>

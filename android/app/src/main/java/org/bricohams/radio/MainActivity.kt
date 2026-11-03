@@ -147,7 +147,12 @@ class MainActivity : LocalizedActivity() {
                     tab = name
                     render()
                 }
-            }.also { navigation[name] = it }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
+            }.also {
+                navigation[name] = it
+                // One line per label: smaller text, tight padding, no min width; ellipsize as a last resort.
+                it.setSingleLine(true); it.ellipsize = android.text.TextUtils.TruncateAt.END
+                it.textSize = 13f; it.minWidth = 0; it.setPadding(dp(4), dp(12), dp(4), dp(12))
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply {
                 val gap = dp(3); setMargins(gap, dp(8), gap, 0)
             })
         }

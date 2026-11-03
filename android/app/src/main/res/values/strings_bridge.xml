@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+<resources>
     <!-- SAT CAT: not armed is a recoverable state -->
     <string name="err_cat_not_armed">La radio no está en SAT RX con CAT habilitado. 1) En la radio abre SAT RX Bricohams. 2) Pulsa la tecla 8 para habilitar CAT. La app sigue consultando y sintoniza sola en cuanto la radio esté lista.</string>
     <string name="cat_sat_steps_title">Activar CAT en la radio (3 pasos)</string>
@@ -9,8 +9,14 @@
 
     <!-- Phone location (SAT module) -->
     <string name="satellite_gps_asking">Concede el permiso de ubicación (precisa o aproximada).</string>
-    <string name="satellite_gps_off">La ubicación del teléfono está desactivada. Actívala en Ajustes y vuelve a pulsar Usar GPS, o escribe las coordenadas a mano.</string>
-    <string name="satellite_gps_searching">Buscando posición (GPS, red y fusionado, hasta 25 s)… Mantén la pantalla abierta, mejor al aire libre.</string>
+    <string name="satellite_gps_off">La ubicación del teléfono está desactivada. Actívala en Ajustes y vuelve a pulsar Obtener posición del teléfono, o escribe las coordenadas a mano.</string>
+    <string name="satellite_gps_searching">Buscando posición (GPS, red y fusionado). Quedan %1$d s. Mantén la pantalla abierta, mejor al aire libre; un arranque en frío del GPS puede tardar minutos.</string>
+    <string name="satellite_gps_refining">Posición recibida: afinando la precisión durante %1$d s más…</string>
+    <string name="satellite_gps_sats">Satélites visibles %1$d, usados %2$d</string>
+    <string name="satellite_gps_cancel">Cancelar búsqueda</string>
+    <string name="satellite_gps_network_hint">Sin ubicación por red. Activa Precisión de ubicación de Google y el escaneo de Wi-Fi en los ajustes de ubicación para obtener una posición rápida.</string>
+    <string name="satellite_gps_open_settings">Abrir ajustes de ubicación</string>
+    <string name="satellite_gps_use_saved">Usar última posición guardada (%1$s)</string>
     <string name="satellite_gps_timeout">No llegó ninguna posición a tiempo. Sal al exterior, comprueba la ubicación del teléfono o escribe las coordenadas a mano.</string>
     <string name="satellite_gps_fix_detail">Fuente %1$s, precisión %2$s, antigüedad %3$d s. Revisa y guarda.</string>
     <string name="satellite_gps_approximate">Permiso aproximado: precisión de varios km (suficiente para pases, mejora con ubicación precisa).</string>

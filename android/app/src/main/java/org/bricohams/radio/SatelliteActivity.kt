@@ -22,6 +22,7 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
+import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -642,6 +643,18 @@ class SatelliteActivity : LocalizedActivity() {
             field("height", R.id.satellite_height, R.string.satellite_height, "0")
             field("minimum", R.id.satellite_minimum, R.string.satellite_minimum, "10")
             addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_use_gps)) { useGps(fields) })
+            gpsCancel = Brand.button(this@SatelliteActivity, getString(R.string.satellite_gps_cancel)) { phoneLocation?.finishNow() }
+                .apply { visibility = View.GONE }
+            addView(gpsCancel)
+            gpsSettings = Brand.button(this@SatelliteActivity, getString(R.string.satellite_gps_open_settings)) {
+                runCatching { startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+            }.apply { visibility = View.GONE }
+            addView(gpsSettings)
+            val saved = PhoneLocation.loadLast(this@SatelliteActivity)
+            if (saved != null) {
+                val age = android.text.format.DateUtils.getRelativeTimeSpanString(saved.timeMs, System.currentTimeMillis(), android.text.format.DateUtils.MINUTE_IN_MILLIS)
+                addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_gps_use_saved, age)) { applyFix(fields, saved, saved = true) })
+            }
             addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_save_observer), true) {
                 try {
                     // Blank or non-numeric input becomes NaN so validation shows the translated message, not "empty String".
@@ -787,6 +800,8 @@ class SatelliteActivity : LocalizedActivity() {
 
     private var gpsFields: Map<String, EditText>? = null
     private var phoneLocation: PhoneLocation? = null
+    private var gpsCancel: Button? = null
+    private var gpsSettings: Button? = null
 
     /** Requests FINE+COARSE together (Android 12+ lets the user pick approximate only, which is enough for passes). */
     private fun useGps(fields: Map<String, EditText>) {
@@ -801,18 +816,37 @@ class SatelliteActivity : LocalizedActivity() {
             runCatching { startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
             return
         }
-        status.setText(R.string.satellite_gps_searching)
-        val search = PhoneLocation(this) { fix, live -> if (!isDestroyed) showFix(fix, live) }
+        status.text = getString(R.string.satellite_gps_searching, (PhoneLocation.TIMEOUT_MS / 1000).toInt())
+        gpsCancel?.visibility = View.VISIBLE
+        val search = PhoneLocation(this, { progress -> if (!isDestroyed) showProgress(progress) }) { fix, live ->
+            if (!isDestroyed) showFix(fix, live)
+        }
         phoneLocation = search
         search.start()
     }
 
+    private fun showProgress(progress: SearchProgress) {
+        val seconds = ((progress.remainingMs + 999) / 1000).toInt()
+        val lines = ArrayList<String>()
+        lines += getString(if (progress.haveFix) R.string.satellite_gps_refining else R.string.satellite_gps_searching, seconds)
+        if (progress.visibleSatellites != null) lines += getString(R.string.satellite_gps_sats, progress.visibleSatellites, progress.usedSatellites ?: 0)
+        if (progress.networkHint) lines += getString(R.string.satellite_gps_network_hint)
+        status.text = lines.joinToString("\n")
+        gpsSettings?.visibility = if (progress.networkHint) View.VISIBLE else View.GONE
+    }
+
     private fun showFix(fix: PositionFix?, live: Boolean) {
+        gpsCancel?.visibility = View.GONE
         val fields = gpsFields
         if (fix == null || fields == null) {
             status.setText(if (live) R.string.satellite_gps_timeout else R.string.satellite_gps_none)
             return
         }
+        applyFix(fields, fix, saved = false)
+    }
+
+    private fun applyFix(fields: Map<String, EditText>, fix: PositionFix, saved: Boolean) {
+        if (!saved && fix.ageMs(System.currentTimeMillis()) <= LocationSelector.FRESH_MS) PhoneLocation.saveLast(this, fix)
         fields.getValue("latitude").setText(String.format(Locale.ROOT, "%.5f", fix.latitude))
         fields.getValue("longitude").setText(String.format(Locale.ROOT, "%.5f", fix.longitude))
         fix.altitudeM?.let { fields.getValue("height").setText(String.format(Locale.ROOT, "%.3f", it / 1000)) }
@@ -963,6 +997,7 @@ class SatelliteActivity : LocalizedActivity() {
     }
     override fun onPause() {
         phoneLocation?.stop()
+        gpsCancel?.visibility = View.GONE
         updating = false
         handler.removeCallbacks(ticker)
         syncCompass()
