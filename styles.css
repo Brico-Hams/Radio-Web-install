@@ -59,22 +59,25 @@ nav a[aria-current],.guide-tab[aria-pressed=true]{background:#352517;border-colo
 .pill{background:#352517;border-color:#805322}
 .device-icon{background:#352517;border-color:#805322;box-shadow:inset 0 -12px #241b12}
 .step-badge{border-color:#805322}
-.button.primary,.skip{color:#241407}
+.button.primary,.skip{color:#23272b}
 
 /* Shared design system for the hosted workspace, offline installers and help. */
 :root {
   color-scheme: light;
-  --bg: #f3f5f9;
-  --panel: #ffffff;
-  --sidebar: #ffffff;
-  --line: #dce2eb;
-  --text: #19263b;
-  --muted: #526179;
-  --accent: #f7941d;
-  --mint: #a64b00;
-  --blue: #205da8;
-  --surface-soft: #edf1f7;
-  --surface-selected: #fff0dc;
+  --brand: #23272b;
+  --bg: #ffffff;
+  --panel: #f6f7f8;
+  --sidebar: #f6f7f8;
+  --line: #dce1e5;
+  --text: #23272b;
+  --muted: #59636b;
+  --accent: #f26b1d;
+  --link: #aa410b;
+  --focus: #f26b1d;
+  --mint: #aa410b;
+  --blue: #aa410b;
+  --surface-soft: #edeff1;
+  --surface-selected: #ffefe5;
   --input-bg: #ffffff;
   --warning-bg: #fff6e6;
   --warning-line: #b88128;
@@ -85,17 +88,19 @@ nav a[aria-current],.guide-tab[aria-pressed=true]{background:#352517;border-colo
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0e1420;
-  --panel: #172131;
-  --sidebar: #121b29;
-  --line: #334157;
-  --text: #edf2fb;
-  --muted: #afbdd1;
-  --mint: #ffb456;
-  --blue: #9dc5ff;
-  --surface-soft: #202c3f;
-  --surface-selected: #3a2b1d;
-  --input-bg: #101a2a;
+  --bg: #111518;
+  --panel: #1c2329;
+  --sidebar: #1c2329;
+  --line: #38434c;
+  --text: #f6f8fa;
+  --muted: #bac4cc;
+  --link: #ffa06a;
+  --focus: #ffc18f;
+  --mint: #ffa06a;
+  --blue: #ffa06a;
+  --surface-soft: #252e36;
+  --surface-selected: #33261d;
+  --input-bg: #111518;
   --warning-bg: #302719;
   --warning-line: #997139;
   --warning-text: #f4d49b;
@@ -105,9 +110,10 @@ nav a[aria-current],.guide-tab[aria-pressed=true]{background:#352517;border-colo
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    --bg: #0e1420; --panel: #172131; --sidebar: #121b29; --line: #334157;
-    --text: #edf2fb; --muted: #afbdd1; --mint: #ffb456; --blue: #9dc5ff;
-    --surface-soft: #202c3f; --surface-selected: #3a2b1d; --input-bg: #101a2a;
+    --bg: #111518; --panel: #1c2329; --sidebar: #1c2329; --line: #38434c;
+    --text: #f6f8fa; --muted: #bac4cc; --link: #ffa06a; --focus: #ffc18f;
+    --mint: #ffa06a; --blue: #ffa06a;
+    --surface-soft: #252e36; --surface-selected: #33261d; --input-bg: #111518;
     --warning-bg: #302719; --warning-line: #997139; --warning-text: #f4d49b;
     --error: #ffacb5; --shadow: 0 8px 28px rgb(0 0 0 / 14%);
   }
@@ -117,7 +123,7 @@ button, input, select, textarea { font: inherit; }
 button:disabled { opacity: .55; }
 button, .button, summary, select { touch-action: manipulation; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, textarea:focus-visible {
-  outline: 3px solid var(--blue); outline-offset: 3px;
+  outline: 3px solid var(--focus); outline-offset: 3px;
 }
 [hidden] { display: none !important; }
 .sidebar { width: 248px; padding: 28px 18px 22px; gap: 0; }
@@ -167,8 +173,8 @@ h1, h2, h3 { text-wrap: balance; }
 .feature-list { color: var(--muted); font-size: 12px; gap: 10px; }
 .tool-card > .button { margin-top: auto; }
 .button { min-height: 44px; border-radius: 11px; padding: 12px 17px; gap: 10px; font-size: 13px; font-weight: 650; text-align: center; line-height: 1.4; }
-.button.primary, .skip { color: #241407; background: var(--accent); border-color: #bf6900; }
-.button.primary:not(:disabled):hover { background: #ffb454; color: #241407; }
+.button.primary, .skip { color: #23272b; background: var(--accent); border-color: #b94e0f; }
+.button.primary:not(:disabled):hover { background: #ff8a45; color: #23272b; }
 .button.secondary { color: var(--text); background: var(--panel); border-color: var(--line); }
 .button.secondary:not(:disabled):hover { background: var(--surface-soft); border-color: var(--muted); }
 .guide-tab { min-height: 40px; padding: 9px 13px; border-radius: 10px; font-size: 12px; background: var(--panel); color: var(--muted); }
@@ -211,7 +217,7 @@ td, th { padding: 12px; }
 th { background: var(--surface-soft); color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .3px; }
 .table-scroll thead { position: sticky; top: 0; z-index: 1; }
 tbody tr:hover { background: var(--surface-soft); }
-tbody tr:focus-within { outline: 2px solid var(--blue); outline-offset: -2px; }
+tbody tr:focus-within { outline: 2px solid var(--focus); outline-offset: -2px; }
 .table-scroll .button, td .guide-tab { min-height: 36px; font-size: 12px; }
 details { border-radius: 12px; }
 summary { cursor: pointer; min-height: 44px; padding: 10px 0; font-size: 13px; font-weight: 650; color: var(--text); }

@@ -54,8 +54,22 @@ test("modern palettes preserve AA text contrast, orange branding and distinct wa
     assert(contrast(palette["warning-text"], palette["warning-bg"]) >= 4.5, `${mode}: warning`);
     assert(contrast(palette.error, palette.panel) >= 4.5, `${mode}: error`);
   }
-  assert(contrast("#241407", light.accent) >= 4.5);
-  assert.equal(light.accent, "#f7941d");
+  assert(contrast("#23272b", light.accent) >= 4.5);
+  assert.equal(light.accent, "#f26b1d");
+  assert.equal(light.brand, "#23272b");
+  const official = {
+    light: { bg: "#ffffff", panel: "#f6f7f8", text: "#23272b", muted: "#59636b", line: "#dce1e5", link: "#aa410b", focus: "#f26b1d" },
+    dark: { bg: "#111518", panel: "#1c2329", text: "#f6f8fa", muted: "#bac4cc", line: "#38434c", link: "#ffa06a", focus: "#ffc18f" }
+  };
+  for (const [mode, palette] of [["light", light], ["dark", dark]]) {
+    for (const [token, value] of Object.entries(official[mode])) {
+      assert.equal(palette[token], value, `${mode}: ${token}`);
+    }
+    assert.equal(palette.mint, palette.link, `${mode}: accent text uses link`);
+    assert.equal(palette.blue, palette.link, `${mode}: blue uses link`);
+    assert(contrast(palette.focus, palette.bg) >= 3, `${mode}: focus`);
+  }
+  assert(css.includes("var(--focus)"));
   assert(css.includes("prefers-reduced-motion: no-preference"));
   assert(css.includes("forced-colors: active"));
 });

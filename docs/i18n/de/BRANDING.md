@@ -39,15 +39,17 @@ Das Originallogo bleibt unverändert. Zustände behalten immer ausdrücklichen T
 
 | Token | Hell | Dunkel | Verwendung |
 | --- | --- | --- | --- |
-| `--bg` | `#f3f5f9` | `#0e1420` | Hintergrund |
-| `--panel` | `#ffffff` | `#172131` | Karten und Bereiche |
-| `--line` | `#dce2eb` | `#334157` | Dekorative Ränder |
-| `--text` | `#19263b` | `#edf2fb` | Haupttext |
-| `--muted` | `#526179` | `#afbdd1` | Sekundärtext |
-| `--mint` | `#a64b00` | `#ffb456` | Akzenttext |
-| `--blue` | `#205da8` | `#9dc5ff` | Links und Fokus |
+| `--brand` | `#23272b` | `#23272b` | BricoHams |
+| `--accent` | `#f26b1d` | `#f26b1d` | BricoHams |
+| `--bg` | `#ffffff` | `#111518` | Hintergrund |
+| `--panel` | `#f6f7f8` | `#1c2329` | Karten und Bereiche |
+| `--line` | `#dce1e5` | `#38434c` | Dekorative Ränder |
+| `--text` | `#23272b` | `#f6f8fa` | Haupttext |
+| `--muted` | `#59636b` | `#bac4cc` | Sekundärtext |
+| `--link` (`--mint`, `--blue`) | `#aa410b` | `#ffa06a` | Links und Fokus |
+| `--focus` | `#f26b1d` | `#ffc18f` | WCAG |
 
-Primäre Schaltflächen: Text `#241407` auf `--accent: #f7941d`. Tests prüfen
+Primäre Schaltflächen: Text `#23272b` auf `--accent: #f26b1d`. Tests prüfen
 mindestens 4,5:1 Textkontrast in beiden Paletten. Hauptbedienelemente mit 44 px,
 sichtbarer Fokus, intern scrollende Tabellen, horizontale mobile Navigation
 und Animationen nur ohne angeforderte Bewegungsreduktion.

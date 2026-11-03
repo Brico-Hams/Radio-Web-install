@@ -38,15 +38,19 @@ El logotipo original no cambia. Los estados siempre conservan texto explícito.
 
 | Token | Claro | Oscuro | Uso |
 | --- | --- | --- | --- |
-| `--bg` | `#f3f5f9` | `#0e1420` | Fondo |
-| `--panel` | `#ffffff` | `#172131` | Tarjetas y paneles |
-| `--line` | `#dce2eb` | `#334157` | Bordes decorativos |
-| `--text` | `#19263b` | `#edf2fb` | Texto principal |
-| `--muted` | `#526179` | `#afbdd1` | Texto secundario |
-| `--mint` | `#a64b00` | `#ffb456` | Texto de acento |
-| `--blue` | `#205da8` | `#9dc5ff` | Enlaces y foco |
+| `--brand` | `#23272b` | `#23272b` | Grafito de marca y texto de botones |
+| `--accent` | `#f26b1d` | `#f26b1d` | Naranja de marca (botones) |
+| `--bg` | `#ffffff` | `#111518` | Fondo |
+| `--panel` | `#f6f7f8` | `#1c2329` | Superficies, tarjetas y paneles |
+| `--line` | `#dce1e5` | `#38434c` | Bordes decorativos |
+| `--text` | `#23272b` | `#f6f8fa` | Texto principal |
+| `--muted` | `#59636b` | `#bac4cc` | Texto secundario |
+| `--link` (`--mint`, `--blue`) | `#aa410b` | `#ffa06a` | Enlaces y texto de acento |
+| `--focus` | `#f26b1d` | `#ffc18f` | Anillo de foco |
 
-Botones primarios: texto `#241407` sobre `--accent: #f7941d`. Las pruebas
+Paleta sRGB oficial de BricoHams. Los colores semánticos (aviso, error) y el
+logotipo no cambian. Botones primarios: texto grafito `#23272b` sobre
+`--accent: #f26b1d`. Las pruebas
 comprueban contraste mínimo 4,5:1 para texto en ambas paletas. Controles
 principales de 44 px, foco visible, tablas con desplazamiento interno,
 navegación móvil horizontal y animación solo sin reducción de movimiento.

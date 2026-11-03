@@ -38,15 +38,17 @@ The original logo is unchanged. States always retain explicit text.
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `--bg` | `#f3f5f9` | `#0e1420` | Background |
-| `--panel` | `#ffffff` | `#172131` | Cards and panels |
-| `--line` | `#dce2eb` | `#334157` | Decorative borders |
-| `--text` | `#19263b` | `#edf2fb` | Primary text |
-| `--muted` | `#526179` | `#afbdd1` | Secondary text |
-| `--mint` | `#a64b00` | `#ffb456` | Accent text |
-| `--blue` | `#205da8` | `#9dc5ff` | Links and focus |
+| `--brand` | `#23272b` | `#23272b` | BricoHams |
+| `--accent` | `#f26b1d` | `#f26b1d` | BricoHams |
+| `--bg` | `#ffffff` | `#111518` | Background |
+| `--panel` | `#f6f7f8` | `#1c2329` | Cards and panels |
+| `--line` | `#dce1e5` | `#38434c` | Decorative borders |
+| `--text` | `#23272b` | `#f6f8fa` | Primary text |
+| `--muted` | `#59636b` | `#bac4cc` | Secondary text |
+| `--link` (`--mint`, `--blue`) | `#aa410b` | `#ffa06a` | Links and focus |
+| `--focus` | `#f26b1d` | `#ffc18f` | WCAG |
 
-Primary buttons: `#241407` text on `--accent: #f7941d`. Tests check a
+Primary buttons: `#23272b` text on `--accent: #f26b1d`. Tests check a
 minimum 4.5:1 text contrast in both palettes. Main controls are 44 px,
 with visible focus, internally scrolling tables, horizontal mobile navigation,
 and animations only when reduced motion is not requested.

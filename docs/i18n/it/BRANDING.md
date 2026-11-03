@@ -38,15 +38,17 @@ Il logo originale non cambia. Gli stati conservano sempre un testo esplicito.
 
 | Token | Chiaro | Scuro | Uso |
 | --- | --- | --- | --- |
-| `--bg` | `#f3f5f9` | `#0e1420` | Sfondo |
-| `--panel` | `#ffffff` | `#172131` | Schede e pannelli |
-| `--line` | `#dce2eb` | `#334157` | Bordi decorativi |
-| `--text` | `#19263b` | `#edf2fb` | Testo principale |
-| `--muted` | `#526179` | `#afbdd1` | Testo secondario |
-| `--mint` | `#a64b00` | `#ffb456` | Testo d'accento |
-| `--blue` | `#205da8` | `#9dc5ff` | Link e focus |
+| `--brand` | `#23272b` | `#23272b` | BricoHams |
+| `--accent` | `#f26b1d` | `#f26b1d` | BricoHams |
+| `--bg` | `#ffffff` | `#111518` | Sfondo |
+| `--panel` | `#f6f7f8` | `#1c2329` | Schede e pannelli |
+| `--line` | `#dce1e5` | `#38434c` | Bordi decorativi |
+| `--text` | `#23272b` | `#f6f8fa` | Testo principale |
+| `--muted` | `#59636b` | `#bac4cc` | Testo secondario |
+| `--link` (`--mint`, `--blue`) | `#aa410b` | `#ffa06a` | Link e focus |
+| `--focus` | `#f26b1d` | `#ffc18f` | WCAG |
 
-Pulsanti primari: testo `#241407` su `--accent: #f7941d`. I test verificano
+Pulsanti primari: testo `#23272b` su `--accent: #f26b1d`. I test verificano
 un contrasto minimo del testo di 4,5:1 nelle due palette. Controlli principali
 di 44 px, focus visibile, tabelle con scorrimento interno, navigazione mobile
 orizzontale e animazioni solo senza richiesta di riduzione del movimento.
