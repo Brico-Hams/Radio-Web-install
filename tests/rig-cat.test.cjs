@@ -81,7 +81,7 @@ test("FTX-1: abre a 38400 con DTR/RTS bajos una sola vez, identifica y usa FA de
   await link.close();
 });
 
-test("QMX y truSDX usan FA de 11 digitos y truSDX arranca a 38400 configurable", async () => {
+test("QMX y truSDX usan FA de 11 digitos y truSDX arranca a 115200 configurable", async () => {
   assert.equal(R.rigFrequencyCommand(R.RIG_PROFILES.qmx, "A", 14074000), "FA00014074000;");
   assert.equal(R.rigFrequencyCommand(R.RIG_PROFILES.trusdx, "B", 7074000), "FB00007074000;");
   assert.equal(R.rigFrequencyCommand(R.RIG_PROFILES.ftx1, "A", 439300000), "FA439300000;");
@@ -89,16 +89,47 @@ test("QMX y truSDX usan FA de 11 digitos y truSDX arranca a 38400 configurable",
   assert.throws(() => R.parseRigFrequency(R.RIG_PROFILES.ftx1, "FA00439300000;"), /invalida/);
   assert.throws(() => R.parseRigFrequency(R.RIG_PROFILES.qmx, "FA439300000;"), /invalida/);
   assert.throws(() => R.rigFrequencyCommand(R.RIG_PROFILES.ftx1, "A", 10 ** 9), /fuera de rango/);
-  assert.equal(R.RIG_PROFILES.trusdx.defaultBaud, 38400);
+  assert.equal(R.RIG_PROFILES.trusdx.defaultBaud, 115200);
+  assert.deepEqual(R.RIG_PROFILES.trusdx.fallbackBauds, [38400]);
+  assert.equal(R.RIG_PROFILES.trusdx.openDelayMs, 1500);
   for (const id of ["qmx", "trusdx"]) {
-    const port = fakePort(new FakeRig({ digits: 11, frequency: 14074000 }), { usbVendorId: 0x1a86, usbProductId: 0x7523 });
-    const link = new R.RigCatLink(id, { api: fakeApi([port]), baud: id === "trusdx" ? 115200 : undefined, sessionOptions: fast });
+    const port = fakePort(new FakeRig({ digits: 11, frequency: 14074000, id: "?;" }), { usbVendorId: 0x1a86, usbProductId: 0x7523 });
+    const link = new R.RigCatLink(id, { api: fakeApi([port]), openDelayMs: 0, sessionOptions: fast });
     await link.connect(port);
     assert.equal(port.openArgs.baudRate, id === "trusdx" ? 115200 : 38400);
     assert.equal(await link.setFrequency("A", 7074000), 7074000);
     assert.ok(port.rig.received.includes("FA00007074000;"));
+    assert.ok(!port.rig.received.includes("ID;"));
     await link.close();
   }
+});
+
+test("truSDX: espera tras abrir y sondea 38400 solo como respaldo", async () => {
+  const port = fakePort(new FakeRig({ digits: 11, frequency: 7074000 }), { usbVendorId: 0x1a86, usbProductId: 0x7523 });
+  const bauds = [];
+  const open = port.open.bind(port);
+  port.open = async options => { bauds.push(options.baudRate); await open(options); port.rig.dropReplies = bauds.length === 1 ? 99 : 0; };
+  const link = new R.RigCatLink("trusdx", { api: fakeApi([port]), openDelayMs: 0, sessionOptions: { ...fast, retries: 0 } });
+  await link.connect(port);
+  assert.deepEqual(bauds, [115200, 38400]);
+  assert.equal(link.baud, 38400);
+  await link.close();
+  const started = Date.now();
+  const delayed = new R.RigCatLink("trusdx", { api: fakeApi([port]), sessionOptions: fast });
+  port.rig.dropReplies = 0;
+  await delayed.connect(port);
+  assert.ok(Date.now() - started >= 1400);
+  await delayed.close();
+});
+
+test("QMX: reintenta con DTR alto si no contesta con DTR bajo", async () => {
+  const port = fakePort(new FakeRig({ digits: 11, frequency: 14074000 }), { usbVendorId: 0x26aa, usbProductId: 0x0030 });
+  port.rig.dropReplies = 99;
+  port.setSignals = async function (value) { this.signals.push(value); if (value.dataTerminalReady) this.rig.dropReplies = 0; };
+  const link = new R.RigCatLink("qmx", { api: fakeApi([port]), sessionOptions: { ...fast, retries: 0 } });
+  await link.connect(port);
+  assert.deepEqual(port.signals.at(-1), { dataTerminalReady: true, requestToSend: false });
+  await link.close();
 });
 
 test("las lecturas se reintentan tras respuestas perdidas y se descartan bytes basura", async () => {

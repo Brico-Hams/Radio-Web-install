@@ -242,12 +242,13 @@
     // Bench-measured: the CP2105 Enhanced port answers at 38400 8N1; FA is 9 digits (FA439300000;).
     ftx1: { id: "ftx1", label: "Yaesu FTX-1", defaultBaud: 38400, bauds: [4800, 9600, 19200, 38400, 115200],
       digits: 9, strictVfo: true, filters: [{ usbVendorId: 0x10c4 }], probe: "ID;", probePrefix: "ID", probeReply: "ID0840;" },
-    // USB CDC: the baud rate is ignored by the radio, so any rate works.
+    // USB CDC (unverified on the bench): identified with FA; and, if silent, retried once with DTR asserted.
     qmx: { id: "qmx", label: "QRP Labs QMX / QMX+", defaultBaud: 38400, bauds: BAUDS, digits: 11, strictVfo: false,
-      filters: [], probe: "FA;", probePrefix: "F" },
-    // CH340: DTR/RTS toggling resets the radio and 38400 is the stable default (configurable).
-    trusdx: { id: "trusdx", label: "(tr)uSDX", defaultBaud: 38400, bauds: BAUDS, digits: 11, strictVfo: false,
-      filters: [], probe: "FA;", probePrefix: "F" }
+      filters: [], probe: "FA;", probePrefix: "F", dtrRetry: true },
+    // CH340, bench-measured: 115200 8N1 works (38400 returns garbage), "ID;" is answered "?;" so FA; identifies it,
+    // and the radio needs ~1.5 s after open before the first command. 38400 is only a fallback probe.
+    trusdx: { id: "trusdx", label: "(tr)uSDX", defaultBaud: 115200, fallbackBauds: [38400], bauds: BAUDS, digits: 11,
+      strictVfo: false, filters: [], probe: "FA;", probePrefix: "F", openDelayMs: 1500 }
   };
   function rigProfile(id) {
     const profile = RIG_PROFILES[id];
@@ -357,9 +358,11 @@
   // Keeps a rig connected: opens with DTR/RTS low, and re-opens by itself when the cable comes back.
   class RigCatLink {
     constructor(profileId, { baud, api = root.navigator && root.navigator.serial, onState = () => {}, reconnectDelayMs = 1500,
-      maxReconnectAttempts = 30, createTransport = serial => new SerialTransport(serial), sessionOptions = {} } = {}) {
+      maxReconnectAttempts = 30, createTransport = serial => new SerialTransport(serial), sessionOptions = {}, openDelayMs } = {}) {
       this.profile = rigProfile(profileId);
+      this.explicitBaud = baud !== undefined;
       this.baud = baud ?? this.profile.defaultBaud;
+      this.openDelayMs = openDelayMs ?? this.profile.openDelayMs ?? 0;
       R.assert(Number.isInteger(this.baud) && this.baud > 0, "Velocidad serie no valida.");
       this.api = api;
       this.onState = onState;
@@ -385,16 +388,38 @@
       this.api?.addEventListener?.("connect", this.plugged);
     }
     async openWith(port) {
+      // A user-chosen baud is never overridden; fallback bauds are only probed when the default stays silent.
+      const bauds = [this.baud, ...(this.explicitBaud ? [] : (this.profile.fallbackBauds || []))];
+      let lastError;
+      for (const baud of bauds) {
+        try { await this.openAt(baud, port); return; }
+        catch (error) {
+          lastError = error;
+          if (error.code !== "RIG_TIMEOUT" && !/respuesta inesperada|frecuencia invalida/i.test(error.message)) throw error;
+        }
+      }
+      throw lastError;
+    }
+    async openAt(baud, port) {
       const transport = this.createTransport(this.api);
       try {
-        await transport.open(this.baud, this.profile.filters, { lowControlLines: true, port });
+        await transport.open(baud, this.profile.filters, { lowControlLines: true, port });
+        if (this.openDelayMs) await new Promise(resolve => setTimeout(resolve, this.openDelayMs));
         const session = new RigCatSession(transport, this.profile, this.sessionOptions);
-        await session.identify();
+        try { await session.identify(); }
+        catch (error) {
+          const raw = transport.port;
+          if (!this.profile.dtrRetry || error.code !== "RIG_TIMEOUT" || typeof raw?.setSignals !== "function") throw error;
+          // Some CDC devices only transmit while DTR is asserted.
+          await raw.setSignals({ dataTerminalReady: true, requestToSend: false });
+          await session.identify();
+        }
         const info = transport.port?.getInfo?.();
         if (info) this.portInfo = info;
         transport.onDisconnect = error => this.lost(transport, error);
         this.transport = transport;
         this.session = session;
+        this.baud = baud;
         this.attempts = 0;
         this.setState("open");
       } catch (error) {
