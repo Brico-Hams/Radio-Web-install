@@ -38,18 +38,34 @@ The original logo is unchanged. States always retain explicit text.
 
 | Token | Light | Dark | Use |
 | --- | --- | --- | --- |
-| `--bg` | `#f3f5f9` | `#0e1420` | Background |
-| `--panel` | `#ffffff` | `#172131` | Cards and panels |
-| `--line` | `#dce2eb` | `#334157` | Decorative borders |
-| `--text` | `#19263b` | `#edf2fb` | Primary text |
-| `--muted` | `#526179` | `#afbdd1` | Secondary text |
-| `--mint` | `#a64b00` | `#ffb456` | Accent text |
-| `--blue` | `#205da8` | `#9dc5ff` | Links and focus |
+| `--bg` | `#FFFFFF` | `#111518` | Background |
+| `--surface` | `#F6F7F8` | `#1C2329` | Cards and panels |
+| `--text` | `#23272B` | `#F6F8FA` | Primary text |
+| `--text-muted` | `#59636B` | `#BAC4CC` | Secondary text |
+| `--border` | `#DCE1E5` | `#38434C` | Borders |
+| `--link` | `#AA410B` | `#FFA06A` | Links |
+| `--focus` | `#F26B1D` | `#FFC18F` | Focus ring |
+| `--brand-orange` | `#F26B1D` | `#F26B1D` | Bricohams orange |
+| `--on-accent` | `#23272B` | `#23272B` | Text on orange |
 
-Primary buttons: `#241407` text on `--accent: #f7941d`. Tests check a
-minimum 4.5:1 text contrast in both palettes. Main controls are 44 px,
-with visible focus, internally scrolling tables, horizontal mobile navigation,
-and animations only when reduced motion is not requested.
+Source of truth: the official colour manual `BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf`, which is not included in the repository. The brand graphite is `--brand-ink`. The theme is applied with `data-theme` on the root element and `localStorage`.
+
+Primary buttons: `--on-accent` text on `--brand-orange: #F26B1D` in both themes, never white on orange. Orange is not used as small text on a light background. Visible focus with `outline: 3px solid var(--focus)`. Main controls are 44 px, with internally scrolling tables, horizontal mobile navigation, and animations only when reduced motion is not requested.
+
+Calculated WCAG 2.1 contrast (minimum 4.5:1 for text and 3:1 for the focus ring):
+
+| Pair | Light | Dark |
+| --- | --- | --- |
+| `--text` / `--bg` | 15.0 | 17.2 |
+| `--text` / `--surface` | 14.0 | 14.9 |
+| `--text-muted` / `--bg` | 6.1 | 10.3 |
+| `--text-muted` / `--surface` | 5.7 | 9.0 |
+| `--link` / `--bg` | 6.0 | 9.2 |
+| `--link` / `--surface` | 5.6 | 7.9 |
+| `--on-accent` / `--brand-orange` | 4.9 | 4.9 |
+| `--focus` / `--bg` | 3.05 | 11.6 |
+
+Logo: original PNG only, never filtered or inverted; in dark mode it sits on a discreet white plate (`--plate`). Error and warning states keep explicit text and meet AA in both themes.
 
 ## Structure
 
@@ -59,7 +75,7 @@ and animations only when reduced motion is not requested.
 
 ## Typography
 
-System font (`system-ui`, Segoe UI, Roboto…), without external web fonts, to comply with the CSP and avoid loading third-party resources.
+`Inter` for the interface and `Montserrat` 700–800 for large headings, falling back to system fonts (`system-ui`, Segoe UI, Roboto…). No external web fonts are loaded, to comply with the CSP and work offline.
 
 ## Voice
 

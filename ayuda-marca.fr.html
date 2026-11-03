@@ -47,15 +47,30 @@
 <h2 id="paleta">Palette</h2>
 <p>Refonte du 28-10-2026 : orange Bricohams, surfaces neutres et cartes clairement structurées. Le site et les installateurs partagent le même design. Apparence propose Système, Clair et Sombre ; le choix est enregistré localement, sans compte, et suit les changements du système en mode Système. L&#39;aide utilise le même choix. Android adapte ses contrôles natifs au système. Le logo original reste inchangé. Les états conservent toujours un texte explicite.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Token</th><th scope="col">Clair</th><th scope="col">Sombre</th><th scope="col">Usage</th></tr></thead><tbody>
-<tr><td><code>--bg</code></td><td><code>#f3f5f9</code></td><td><code>#0e1420</code></td><td>Fond</td></tr>
-<tr><td><code>--panel</code></td><td><code>#ffffff</code></td><td><code>#172131</code></td><td>Cartes et panneaux</td></tr>
-<tr><td><code>--line</code></td><td><code>#dce2eb</code></td><td><code>#334157</code></td><td>Bordures décoratives</td></tr>
-<tr><td><code>--text</code></td><td><code>#19263b</code></td><td><code>#edf2fb</code></td><td>Texte principal</td></tr>
-<tr><td><code>--muted</code></td><td><code>#526179</code></td><td><code>#afbdd1</code></td><td>Texte secondaire</td></tr>
-<tr><td><code>--mint</code></td><td><code>#a64b00</code></td><td><code>#ffb456</code></td><td>Texte d&#39;accent</td></tr>
-<tr><td><code>--blue</code></td><td><code>#205da8</code></td><td><code>#9dc5ff</code></td><td>Liens et focus</td></tr>
+<tr><td><code>--bg</code></td><td><code>#FFFFFF</code></td><td><code>#111518</code></td><td>Fond</td></tr>
+<tr><td><code>--surface</code></td><td><code>#F6F7F8</code></td><td><code>#1C2329</code></td><td>Cartes et panneaux</td></tr>
+<tr><td><code>--text</code></td><td><code>#23272B</code></td><td><code>#F6F8FA</code></td><td>Texte principal</td></tr>
+<tr><td><code>--text-muted</code></td><td><code>#59636B</code></td><td><code>#BAC4CC</code></td><td>Texte secondaire</td></tr>
+<tr><td><code>--border</code></td><td><code>#DCE1E5</code></td><td><code>#38434C</code></td><td>Bordures</td></tr>
+<tr><td><code>--link</code></td><td><code>#AA410B</code></td><td><code>#FFA06A</code></td><td>Liens</td></tr>
+<tr><td><code>--focus</code></td><td><code>#F26B1D</code></td><td><code>#FFC18F</code></td><td>Anneau de focus</td></tr>
+<tr><td><code>--brand-orange</code></td><td><code>#F26B1D</code></td><td><code>#F26B1D</code></td><td>Orange Bricohams</td></tr>
+<tr><td><code>--on-accent</code></td><td><code>#23272B</code></td><td><code>#23272B</code></td><td>Texte sur orange</td></tr>
 </tbody></table></div>
-<p>Boutons principaux : texte <code>#241407</code> sur <code>--accent: #f7941d</code>. Les tests vérifient un contraste minimal de 4,5:1 pour les textes dans les deux palettes. Contrôles principaux de 44 px, focus visible, tableaux à défilement interne, navigation mobile horizontale et animations uniquement sans réduction des mouvements.</p>
+<p>Source de référence : le manuel officiel des couleurs <code>BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf</code>, non inclus dans le dépôt. Le graphite de la marque est <code>--brand-ink</code>. Le thème s&#39;applique avec <code>data-theme</code> sur l&#39;élément racine et <code>localStorage</code>.</p>
+<p>Boutons principaux : texte <code>--on-accent</code> sur <code>--brand-orange: #F26B1D</code> dans les deux thèmes, jamais blanc sur orange. L&#39;orange n&#39;est pas utilisé comme petit texte sur fond clair. Focus visible avec <code>outline: 3px solid var(--focus)</code>. Contrôles principaux de 44 px, tableaux à défilement interne, navigation mobile horizontale et animations uniquement sans réduction des mouvements.</p>
+<p>Contraste WCAG 2.1 calculé (minimum 4,5:1 pour le texte et 3:1 pour l&#39;anneau de focus) :</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Paire</th><th scope="col">Clair</th><th scope="col">Sombre</th></tr></thead><tbody>
+<tr><td><code>--text</code> / <code>--bg</code></td><td>15,0</td><td>17,2</td></tr>
+<tr><td><code>--text</code> / <code>--surface</code></td><td>14,0</td><td>14,9</td></tr>
+<tr><td><code>--text-muted</code> / <code>--bg</code></td><td>6,1</td><td>10,3</td></tr>
+<tr><td><code>--text-muted</code> / <code>--surface</code></td><td>5,7</td><td>9,0</td></tr>
+<tr><td><code>--link</code> / <code>--bg</code></td><td>6,0</td><td>9,2</td></tr>
+<tr><td><code>--link</code> / <code>--surface</code></td><td>5,6</td><td>7,9</td></tr>
+<tr><td><code>--on-accent</code> / <code>--brand-orange</code></td><td>4,9</td><td>4,9</td></tr>
+<tr><td><code>--focus</code> / <code>--bg</code></td><td>3,05</td><td>11,6</td></tr>
+</tbody></table></div>
+<p>Logo : uniquement le PNG original, sans filtre ni inversion ; en mode sombre il se place sur une plaque blanche discrète (<code>--plate</code>). Les états d&#39;erreur et d&#39;avertissement conservent un texte explicite et respectent AA dans les deux thèmes.</p>
 <h2 id="estructura">Structure</h2>
 <ul>
 <li>Barre supérieure fixe : état de connexion (copie de <code>#radio-status</code>), badge de mode (<code>#mode-badge</code>) et bouton « ⌁ Connecter », qui actionne celui de la section et se désactive avec lui.</li>
@@ -63,7 +78,7 @@
 <li>Libellé au-dessus du titre : <code>RADIOAFICIÓN · HAZLO TÚ MISMO</code>.</li>
 </ul>
 <h2 id="tipografia">Typographie</h2>
-<p>Police système (<code>system-ui</code>, Segoe UI, Roboto…), sans polices web externes, pour respecter la CSP et ne pas charger de ressources tierces.</p>
+<p><code>Inter</code> pour l&#39;interface et <code>Montserrat</code> 700–800 pour les grands titres, avec repli sur les polices système (<code>system-ui</code>, Segoe UI, Roboto…). Aucune police web externe n&#39;est chargée, pour respecter la CSP et fonctionner hors ligne.</p>
 <h2 id="voz">Ton</h2>
 <ul>
 <li>Espagnol clair, technique et honnête : expliquer les limites avant les promesses.</li>

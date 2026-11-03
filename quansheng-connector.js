@@ -279,6 +279,7 @@
           const wrapped = new Error(`${label}: ${error.message}`, { cause: error });
           wrapped.code = error.code;
           wrapped.catRecoverable = true;
+          if (error.catInfo) wrapped.catInfo = error.catInfo; // Keep the capability hint for UI/wait loops.
           throw wrapped;
         }
         this.connected = false;

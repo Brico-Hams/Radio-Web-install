@@ -312,7 +312,7 @@ test("all four app entry points load same-origin locale assets before app.js und
     assert.match(html, /script-src 'self'/);
     assert.doesNotMatch(html, /\sonchange=|<script(?![^>]*src=)/);
   }
-  assert.match(read("styles.css"), /--accent:#f7941d/);
+  assert.match(read("styles.css"), /--brand-orange:#F26B1D/i);
   assert.doesNotMatch(read("styles.css"), /\.brand-logo\{[^}]*filter:/);
 });
 

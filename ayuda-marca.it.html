@@ -47,15 +47,30 @@
 <h2 id="paleta">Palette</h2>
 <p>Restyling del 28-10-2026: arancione Bricohams, superfici neutre e schede con una gerarchia chiara. Sito e programmi di installazione condividono il design. Aspetto offre Sistema, Chiaro e Scuro; la scelta viene salvata localmente, senza account, e segue le modifiche del sistema in modalità Sistema. La guida usa la stessa scelta. Android adatta i controlli nativi al sistema. Il logo originale non cambia. Gli stati conservano sempre un testo esplicito.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Token</th><th scope="col">Chiaro</th><th scope="col">Scuro</th><th scope="col">Uso</th></tr></thead><tbody>
-<tr><td><code>--bg</code></td><td><code>#f3f5f9</code></td><td><code>#0e1420</code></td><td>Sfondo</td></tr>
-<tr><td><code>--panel</code></td><td><code>#ffffff</code></td><td><code>#172131</code></td><td>Schede e pannelli</td></tr>
-<tr><td><code>--line</code></td><td><code>#dce2eb</code></td><td><code>#334157</code></td><td>Bordi decorativi</td></tr>
-<tr><td><code>--text</code></td><td><code>#19263b</code></td><td><code>#edf2fb</code></td><td>Testo principale</td></tr>
-<tr><td><code>--muted</code></td><td><code>#526179</code></td><td><code>#afbdd1</code></td><td>Testo secondario</td></tr>
-<tr><td><code>--mint</code></td><td><code>#a64b00</code></td><td><code>#ffb456</code></td><td>Testo d&#39;accento</td></tr>
-<tr><td><code>--blue</code></td><td><code>#205da8</code></td><td><code>#9dc5ff</code></td><td>Link e focus</td></tr>
+<tr><td><code>--bg</code></td><td><code>#FFFFFF</code></td><td><code>#111518</code></td><td>Sfondo</td></tr>
+<tr><td><code>--surface</code></td><td><code>#F6F7F8</code></td><td><code>#1C2329</code></td><td>Schede e pannelli</td></tr>
+<tr><td><code>--text</code></td><td><code>#23272B</code></td><td><code>#F6F8FA</code></td><td>Testo principale</td></tr>
+<tr><td><code>--text-muted</code></td><td><code>#59636B</code></td><td><code>#BAC4CC</code></td><td>Testo secondario</td></tr>
+<tr><td><code>--border</code></td><td><code>#DCE1E5</code></td><td><code>#38434C</code></td><td>Bordi</td></tr>
+<tr><td><code>--link</code></td><td><code>#AA410B</code></td><td><code>#FFA06A</code></td><td>Link</td></tr>
+<tr><td><code>--focus</code></td><td><code>#F26B1D</code></td><td><code>#FFC18F</code></td><td>Anello di focus</td></tr>
+<tr><td><code>--brand-orange</code></td><td><code>#F26B1D</code></td><td><code>#F26B1D</code></td><td>Arancione Bricohams</td></tr>
+<tr><td><code>--on-accent</code></td><td><code>#23272B</code></td><td><code>#23272B</code></td><td>Testo sull&#39;arancione</td></tr>
 </tbody></table></div>
-<p>Pulsanti primari: testo <code>#241407</code> su <code>--accent: #f7941d</code>. I test verificano un contrasto minimo del testo di 4,5:1 nelle due palette. Controlli principali di 44 px, focus visibile, tabelle con scorrimento interno, navigazione mobile orizzontale e animazioni solo senza richiesta di riduzione del movimento.</p>
+<p>Fonte di riferimento: il manuale ufficiale dei colori <code>BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf</code>, non incluso nel repository. Il grafite del marchio è <code>--brand-ink</code>. Il tema viene applicato con <code>data-theme</code> sull&#39;elemento radice e <code>localStorage</code>.</p>
+<p>Pulsanti primari: testo <code>--on-accent</code> su <code>--brand-orange: #F26B1D</code> in entrambi i temi, mai bianco su arancione. L&#39;arancione non si usa come testo piccolo su sfondo chiaro. Focus visibile con <code>outline: 3px solid var(--focus)</code>. Controlli principali di 44 px, tabelle con scorrimento interno, navigazione mobile orizzontale e animazioni solo senza richiesta di riduzione del movimento.</p>
+<p>Contrasto WCAG 2.1 calcolato (minimo 4,5:1 per il testo e 3:1 per l&#39;anello di focus):</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Coppia</th><th scope="col">Chiaro</th><th scope="col">Scuro</th></tr></thead><tbody>
+<tr><td><code>--text</code> / <code>--bg</code></td><td>15,0</td><td>17,2</td></tr>
+<tr><td><code>--text</code> / <code>--surface</code></td><td>14,0</td><td>14,9</td></tr>
+<tr><td><code>--text-muted</code> / <code>--bg</code></td><td>6,1</td><td>10,3</td></tr>
+<tr><td><code>--text-muted</code> / <code>--surface</code></td><td>5,7</td><td>9,0</td></tr>
+<tr><td><code>--link</code> / <code>--bg</code></td><td>6,0</td><td>9,2</td></tr>
+<tr><td><code>--link</code> / <code>--surface</code></td><td>5,6</td><td>7,9</td></tr>
+<tr><td><code>--on-accent</code> / <code>--brand-orange</code></td><td>4,9</td><td>4,9</td></tr>
+<tr><td><code>--focus</code> / <code>--bg</code></td><td>3,05</td><td>11,6</td></tr>
+</tbody></table></div>
+<p>Logo: solo il PNG originale, mai filtrato o invertito; in modalità scura è posato su una discreta placca bianca (<code>--plate</code>). Gli stati di errore e avviso conservano un testo esplicito e rispettano AA in entrambi i temi.</p>
 <h2 id="estructura">Struttura</h2>
 <ul>
 <li>Barra superiore fissa: stato della connessione (copia di <code>#radio-status</code>), badge della modalità (<code>#mode-badge</code>) e pulsante «⌁ Connetti», che aziona quello della sezione e viene disabilitato insieme a esso.</li>
@@ -63,7 +78,7 @@
 <li>Etichetta sopra il titolo: <code>RADIOAFICIÓN · HAZLO TÚ MISMO</code>.</li>
 </ul>
 <h2 id="tipografia">Tipografia</h2>
-<p>Font di sistema (<code>system-ui</code>, Segoe UI, Roboto…), senza font web esterni, per rispettare la CSP e non caricare risorse di terzi.</p>
+<p><code>Inter</code> per l&#39;interfaccia e <code>Montserrat</code> 700–800 per i titoli grandi, con ripiego sui font di sistema (<code>system-ui</code>, Segoe UI, Roboto…). Non vengono caricati font web esterni, per rispettare la CSP e funzionare offline.</p>
 <h2 id="voz">Tono</h2>
 <ul>
 <li>Spagnolo chiaro, tecnico e onesto: i limiti vengono spiegati prima delle promesse.</li>

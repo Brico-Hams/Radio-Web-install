@@ -47,15 +47,30 @@
 <h2 id="paleta">Farbpalette</h2>
 <p>Neugestaltung vom 28.10.2026: Bricohams-Orange, neutrale Flächen und klar gegliederte Karten. Website und Installationspakete verwenden dasselbe Design. Darstellung bietet System, Hell und Dunkel; die Auswahl wird lokal ohne Konto gespeichert und folgt im Systemmodus den Systemeinstellungen. Die Hilfe nutzt dieselbe Auswahl. Android passt seine nativen Bedienelemente an das System an. Das Originallogo bleibt unverändert. Zustände behalten immer ausdrücklichen Text.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Token</th><th scope="col">Hell</th><th scope="col">Dunkel</th><th scope="col">Verwendung</th></tr></thead><tbody>
-<tr><td><code>--bg</code></td><td><code>#f3f5f9</code></td><td><code>#0e1420</code></td><td>Hintergrund</td></tr>
-<tr><td><code>--panel</code></td><td><code>#ffffff</code></td><td><code>#172131</code></td><td>Karten und Bereiche</td></tr>
-<tr><td><code>--line</code></td><td><code>#dce2eb</code></td><td><code>#334157</code></td><td>Dekorative Ränder</td></tr>
-<tr><td><code>--text</code></td><td><code>#19263b</code></td><td><code>#edf2fb</code></td><td>Haupttext</td></tr>
-<tr><td><code>--muted</code></td><td><code>#526179</code></td><td><code>#afbdd1</code></td><td>Sekundärtext</td></tr>
-<tr><td><code>--mint</code></td><td><code>#a64b00</code></td><td><code>#ffb456</code></td><td>Akzenttext</td></tr>
-<tr><td><code>--blue</code></td><td><code>#205da8</code></td><td><code>#9dc5ff</code></td><td>Links und Fokus</td></tr>
+<tr><td><code>--bg</code></td><td><code>#FFFFFF</code></td><td><code>#111518</code></td><td>Hintergrund</td></tr>
+<tr><td><code>--surface</code></td><td><code>#F6F7F8</code></td><td><code>#1C2329</code></td><td>Karten und Bereiche</td></tr>
+<tr><td><code>--text</code></td><td><code>#23272B</code></td><td><code>#F6F8FA</code></td><td>Haupttext</td></tr>
+<tr><td><code>--text-muted</code></td><td><code>#59636B</code></td><td><code>#BAC4CC</code></td><td>Sekundärtext</td></tr>
+<tr><td><code>--border</code></td><td><code>#DCE1E5</code></td><td><code>#38434C</code></td><td>Ränder</td></tr>
+<tr><td><code>--link</code></td><td><code>#AA410B</code></td><td><code>#FFA06A</code></td><td>Links</td></tr>
+<tr><td><code>--focus</code></td><td><code>#F26B1D</code></td><td><code>#FFC18F</code></td><td>Fokusring</td></tr>
+<tr><td><code>--brand-orange</code></td><td><code>#F26B1D</code></td><td><code>#F26B1D</code></td><td>Bricohams-Orange</td></tr>
+<tr><td><code>--on-accent</code></td><td><code>#23272B</code></td><td><code>#23272B</code></td><td>Text auf Orange</td></tr>
 </tbody></table></div>
-<p>Primäre Schaltflächen: Text <code>#241407</code> auf <code>--accent: #f7941d</code>. Tests prüfen mindestens 4,5:1 Textkontrast in beiden Paletten. Hauptbedienelemente mit 44 px, sichtbarer Fokus, intern scrollende Tabellen, horizontale mobile Navigation und Animationen nur ohne angeforderte Bewegungsreduktion.</p>
+<p>Maßgebliche Quelle: das offizielle Farbhandbuch <code>BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf</code>, das nicht im Repository enthalten ist. Das Markengrafit ist <code>--brand-ink</code>. Das Thema wird mit <code>data-theme</code> am Wurzelelement und <code>localStorage</code> angewendet.</p>
+<p>Primäre Schaltflächen: Text <code>--on-accent</code> auf <code>--brand-orange: #F26B1D</code> in beiden Themes, nie Weiß auf Orange. Orange wird nicht als kleiner Text auf hellem Hintergrund verwendet. Sichtbarer Fokus mit <code>outline: 3px solid var(--focus)</code>. Hauptbedienelemente mit 44 px, intern scrollende Tabellen, horizontale mobile Navigation und Animationen nur ohne angeforderte Bewegungsreduktion.</p>
+<p>Berechneter WCAG-2.1-Kontrast (mindestens 4,5:1 für Text und 3:1 für den Fokusring):</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Paar</th><th scope="col">Hell</th><th scope="col">Dunkel</th></tr></thead><tbody>
+<tr><td><code>--text</code> / <code>--bg</code></td><td>15,0</td><td>17,2</td></tr>
+<tr><td><code>--text</code> / <code>--surface</code></td><td>14,0</td><td>14,9</td></tr>
+<tr><td><code>--text-muted</code> / <code>--bg</code></td><td>6,1</td><td>10,3</td></tr>
+<tr><td><code>--text-muted</code> / <code>--surface</code></td><td>5,7</td><td>9,0</td></tr>
+<tr><td><code>--link</code> / <code>--bg</code></td><td>6,0</td><td>9,2</td></tr>
+<tr><td><code>--link</code> / <code>--surface</code></td><td>5,6</td><td>7,9</td></tr>
+<tr><td><code>--on-accent</code> / <code>--brand-orange</code></td><td>4,9</td><td>4,9</td></tr>
+<tr><td><code>--focus</code> / <code>--bg</code></td><td>3,05</td><td>11,6</td></tr>
+</tbody></table></div>
+<p>Logo: nur das Original-PNG, nie gefiltert oder invertiert; im dunklen Modus liegt es auf einer dezenten weißen Platte (<code>--plate</code>). Fehler- und Warnzustände behalten ausdrücklichen Text und erfüllen AA in beiden Themes.</p>
 <h2 id="estructura">Aufbau</h2>
 <ul>
 <li>Feste obere Leiste: Verbindungsstatus (Kopie von <code>#radio-status</code>), Moduskennzeichen (<code>#mode-badge</code>) und Schaltfläche „⌁ Verbinden“, die die Schaltfläche im Abschnitt auslöst und zusammen mit ihr deaktiviert wird.</li>
@@ -63,7 +78,7 @@
 <li>Beschriftung über dem Titel: <code>RADIOAFICIÓN · HAZLO TÚ MISMO</code>.</li>
 </ul>
 <h2 id="tipografia">Typografie</h2>
-<p>Systemschrift (<code>system-ui</code>, Segoe UI, Roboto…), keine externen Webfonts, um die CSP einzuhalten und keine Ressourcen Dritter zu laden.</p>
+<p><code>Inter</code> für die Oberfläche und <code>Montserrat</code> 700–800 für große Überschriften, mit Rückfall auf Systemschriften (<code>system-ui</code>, Segoe UI, Roboto…). Es werden keine externen Webfonts geladen, um die CSP einzuhalten und offline zu funktionieren.</p>
 <h2 id="voz">Sprache</h2>
 <ul>
 <li>Klares, technisches und ehrliches Spanisch: Grenzen werden vor Versprechen erklärt.</li>

@@ -38,18 +38,34 @@ Le logo original reste inchangé. Les états conservent toujours un texte explic
 
 | Token | Clair | Sombre | Usage |
 | --- | --- | --- | --- |
-| `--bg` | `#f3f5f9` | `#0e1420` | Fond |
-| `--panel` | `#ffffff` | `#172131` | Cartes et panneaux |
-| `--line` | `#dce2eb` | `#334157` | Bordures décoratives |
-| `--text` | `#19263b` | `#edf2fb` | Texte principal |
-| `--muted` | `#526179` | `#afbdd1` | Texte secondaire |
-| `--mint` | `#a64b00` | `#ffb456` | Texte d'accent |
-| `--blue` | `#205da8` | `#9dc5ff` | Liens et focus |
+| `--bg` | `#FFFFFF` | `#111518` | Fond |
+| `--surface` | `#F6F7F8` | `#1C2329` | Cartes et panneaux |
+| `--text` | `#23272B` | `#F6F8FA` | Texte principal |
+| `--text-muted` | `#59636B` | `#BAC4CC` | Texte secondaire |
+| `--border` | `#DCE1E5` | `#38434C` | Bordures |
+| `--link` | `#AA410B` | `#FFA06A` | Liens |
+| `--focus` | `#F26B1D` | `#FFC18F` | Anneau de focus |
+| `--brand-orange` | `#F26B1D` | `#F26B1D` | Orange Bricohams |
+| `--on-accent` | `#23272B` | `#23272B` | Texte sur orange |
 
-Boutons principaux : texte `#241407` sur `--accent: #f7941d`. Les tests vérifient
-un contraste minimal de 4,5:1 pour les textes dans les deux palettes. Contrôles
-principaux de 44 px, focus visible, tableaux à défilement interne, navigation
-mobile horizontale et animations uniquement sans réduction des mouvements.
+Source de référence : le manuel officiel des couleurs `BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf`, non inclus dans le dépôt. Le graphite de la marque est `--brand-ink`. Le thème s'applique avec `data-theme` sur l'élément racine et `localStorage`.
+
+Boutons principaux : texte `--on-accent` sur `--brand-orange: #F26B1D` dans les deux thèmes, jamais blanc sur orange. L'orange n'est pas utilisé comme petit texte sur fond clair. Focus visible avec `outline: 3px solid var(--focus)`. Contrôles principaux de 44 px, tableaux à défilement interne, navigation mobile horizontale et animations uniquement sans réduction des mouvements.
+
+Contraste WCAG 2.1 calculé (minimum 4,5:1 pour le texte et 3:1 pour l'anneau de focus) :
+
+| Paire | Clair | Sombre |
+| --- | --- | --- |
+| `--text` / `--bg` | 15,0 | 17,2 |
+| `--text` / `--surface` | 14,0 | 14,9 |
+| `--text-muted` / `--bg` | 6,1 | 10,3 |
+| `--text-muted` / `--surface` | 5,7 | 9,0 |
+| `--link` / `--bg` | 6,0 | 9,2 |
+| `--link` / `--surface` | 5,6 | 7,9 |
+| `--on-accent` / `--brand-orange` | 4,9 | 4,9 |
+| `--focus` / `--bg` | 3,05 | 11,6 |
+
+Logo : uniquement le PNG original, sans filtre ni inversion ; en mode sombre il se place sur une plaque blanche discrète (`--plate`). Les états d'erreur et d'avertissement conservent un texte explicite et respectent AA dans les deux thèmes.
 
 ## Structure
 
@@ -59,7 +75,7 @@ mobile horizontale et animations uniquement sans réduction des mouvements.
 
 ## Typographie
 
-Police système (`system-ui`, Segoe UI, Roboto…), sans polices web externes, pour respecter la CSP et ne pas charger de ressources tierces.
+`Inter` pour l'interface et `Montserrat` 700–800 pour les grands titres, avec repli sur les polices système (`system-ui`, Segoe UI, Roboto…). Aucune police web externe n'est chargée, pour respecter la CSP et fonctionner hors ligne.
 
 ## Ton
 

@@ -1315,6 +1315,11 @@ Estado CAT: ARMADO (CAT READY RX). Ya puedes sintonizar.|CAT status: ARMED (CAT 
 Estado CAT: NO armado. Sigue los pasos 1 y 2 en la radio; la pagina espera y no hace falta reconectar.|CAT status: NOT armed. Follow steps 1 and 2 on the radio; the page waits and no reconnect is needed.|État CAT : NON armé. Suivez les étapes 1 et 2 sur la radio ; la page attend, inutile de se reconnecter.|CAT-Status: NICHT armiert. Folge den Schritten 1 und 2 am Funkgerät; die Seite wartet, ein erneutes Verbinden ist nicht nötig.
 Esperando a que armes CAT con 8 en SAT RX (se comprueba cada 0,5 s)...|Waiting for you to arm CAT with 8 in SAT RX (checked every 0.5 s)...|En attente que vous armiez CAT avec 8 dans SAT RX (vérifié toutes les 0,5 s)...|Warte, bis du CAT mit 8 in SAT RX armierst (Prüfung alle 0,5 s)...
 La radio dejo de estar armada (¿pulsaste 8, EXIT o una tecla?). Vuelve a SAT RX y pulsa 8: se reanuda solo.|The radio is no longer armed (did you press 8, EXIT or a key?). Go back to SAT RX and press 8: it resumes by itself.|La radio n’est plus armée (avez-vous appuyé sur 8, EXIT ou une touche ?). Retournez dans SAT RX et appuyez sur 8 : cela reprend tout seul.|Das Funkgerät ist nicht mehr armiert (8, EXIT oder eine Taste gedrückt?). Gehe zurück zu SAT RX und drücke 8: Es setzt sich selbst fort.
+Transmitir (PTT CAT)|Transmit (CAT PTT)|Émettre (PTT CAT)|Senden (CAT-PTT)
+Soltar PTT|Release PTT|Relâcher le PTT|PTT loslassen
+Transmitir CAT TX|Transmit CAT TX|Émettre CAT TX|CAT-TX senden
+Soltar PTT CAT TX|Release CAT TX PTT|Relâcher le PTT CAT TX|CAT-TX-PTT loslassen
+PTT CAT sin usar.|CAT PTT unused.|PTT CAT inutilisé.|CAT-PTT unbenutzt.
 `.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;

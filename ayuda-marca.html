@@ -47,15 +47,30 @@
 <h2 id="paleta">Paleta</h2>
 <p>Rediseño del 28-10-2026: naranja Bricohams, superficies neutras y tarjetas con jerarquía clara. La web y los instaladores comparten el mismo diseño. El selector Apariencia permite Sistema, Claro y Oscuro; se guarda localmente, sin cuenta, y sigue los cambios del sistema cuando está en Sistema. La ayuda usa la misma preferencia. Android adapta sus controles nativos al sistema. El logotipo original no cambia. Los estados siempre conservan texto explícito.</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">Token</th><th scope="col">Claro</th><th scope="col">Oscuro</th><th scope="col">Uso</th></tr></thead><tbody>
-<tr><td><code>--bg</code></td><td><code>#f3f5f9</code></td><td><code>#0e1420</code></td><td>Fondo</td></tr>
-<tr><td><code>--panel</code></td><td><code>#ffffff</code></td><td><code>#172131</code></td><td>Tarjetas y paneles</td></tr>
-<tr><td><code>--line</code></td><td><code>#dce2eb</code></td><td><code>#334157</code></td><td>Bordes decorativos</td></tr>
-<tr><td><code>--text</code></td><td><code>#19263b</code></td><td><code>#edf2fb</code></td><td>Texto principal</td></tr>
-<tr><td><code>--muted</code></td><td><code>#526179</code></td><td><code>#afbdd1</code></td><td>Texto secundario</td></tr>
-<tr><td><code>--mint</code></td><td><code>#a64b00</code></td><td><code>#ffb456</code></td><td>Texto de acento</td></tr>
-<tr><td><code>--blue</code></td><td><code>#205da8</code></td><td><code>#9dc5ff</code></td><td>Enlaces y foco</td></tr>
+<tr><td><code>--bg</code></td><td><code>#FFFFFF</code></td><td><code>#111518</code></td><td>Fondo</td></tr>
+<tr><td><code>--surface</code></td><td><code>#F6F7F8</code></td><td><code>#1C2329</code></td><td>Tarjetas y paneles</td></tr>
+<tr><td><code>--text</code></td><td><code>#23272B</code></td><td><code>#F6F8FA</code></td><td>Texto principal</td></tr>
+<tr><td><code>--text-muted</code></td><td><code>#59636B</code></td><td><code>#BAC4CC</code></td><td>Texto secundario</td></tr>
+<tr><td><code>--border</code></td><td><code>#DCE1E5</code></td><td><code>#38434C</code></td><td>Bordes</td></tr>
+<tr><td><code>--link</code></td><td><code>#AA410B</code></td><td><code>#FFA06A</code></td><td>Enlaces</td></tr>
+<tr><td><code>--focus</code></td><td><code>#F26B1D</code></td><td><code>#FFC18F</code></td><td>Anillo de foco</td></tr>
+<tr><td><code>--brand-orange</code></td><td><code>#F26B1D</code></td><td><code>#F26B1D</code></td><td>Naranja Bricohams</td></tr>
+<tr><td><code>--on-accent</code></td><td><code>#23272B</code></td><td><code>#23272B</code></td><td>Texto sobre naranja</td></tr>
 </tbody></table></div>
-<p>Botones primarios: texto <code>#241407</code> sobre <code>--accent: #f7941d</code>. Las pruebas comprueban contraste mínimo 4,5:1 para texto en ambas paletas. Controles principales de 44 px, foco visible, tablas con desplazamiento interno, navegación móvil horizontal y animación solo sin reducción de movimiento.</p>
+<p>Fuente de verdad: el manual oficial de colores <code>BricoHams_Guia_Colores_Web_Pantone_Claro_Oscuro_con_Prompt_IA.pdf</code>, que no se incluye en el repositorio. El grafito de marca es <code>--brand-ink</code>. El tema se aplica con <code>data-theme</code> en el elemento raíz y <code>localStorage</code>.</p>
+<p>Botones primarios: texto <code>--on-accent</code> sobre <code>--brand-orange: #F26B1D</code> en ambos temas, nunca blanco sobre naranja. El naranja no se usa como texto pequeño sobre fondo claro. Foco visible con <code>outline: 3px solid var(--focus)</code>. Controles principales de 44 px, tablas con desplazamiento interno, navegación móvil horizontal y animación solo sin reducción de movimiento.</p>
+<p>Contraste WCAG 2.1 calculado (mínimo 4,5:1 para texto y 3:1 para el anillo de foco):</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Par</th><th scope="col">Claro</th><th scope="col">Oscuro</th></tr></thead><tbody>
+<tr><td><code>--text</code> / <code>--bg</code></td><td>15,0</td><td>17,2</td></tr>
+<tr><td><code>--text</code> / <code>--surface</code></td><td>14,0</td><td>14,9</td></tr>
+<tr><td><code>--text-muted</code> / <code>--bg</code></td><td>6,1</td><td>10,3</td></tr>
+<tr><td><code>--text-muted</code> / <code>--surface</code></td><td>5,7</td><td>9,0</td></tr>
+<tr><td><code>--link</code> / <code>--bg</code></td><td>6,0</td><td>9,2</td></tr>
+<tr><td><code>--link</code> / <code>--surface</code></td><td>5,6</td><td>7,9</td></tr>
+<tr><td><code>--on-accent</code> / <code>--brand-orange</code></td><td>4,9</td><td>4,9</td></tr>
+<tr><td><code>--focus</code> / <code>--bg</code></td><td>3,05</td><td>11,6</td></tr>
+</tbody></table></div>
+<p>Logotipo: solo el PNG original, sin filtros ni inversión; en modo oscuro se coloca sobre una placa blanca discreta (<code>--plate</code>). Los estados de error y aviso conservan texto explícito y cumplen AA en ambos temas.</p>
 <h2 id="estructura">Estructura</h2>
 <ul>
 <li>Barra superior fija: estado de la conexión (copia de <code>#radio-status</code>), distintivo de modo (<code>#mode-badge</code>) y botón «⌁ Conectar», que acciona el de la sección y se deshabilita con él.</li>
@@ -63,7 +78,7 @@
 <li>Etiqueta sobre el título: <code>RADIOAFICIÓN · HAZLO TÚ MISMO</code>.</li>
 </ul>
 <h2 id="tipografia">Tipografía</h2>
-<p>Fuente del sistema (<code>system-ui</code>, Segoe UI, Roboto…), sin fuentes web externas, para respetar la CSP y no cargar recursos de terceros.</p>
+<p><code>Inter</code> para la interfaz y <code>Montserrat</code> 700–800 para los titulares grandes, con respaldo en fuentes del sistema (<code>system-ui</code>, Segoe UI, Roboto…). No se cargan fuentes web externas, para respetar la CSP y funcionar sin conexión.</p>
 <h2 id="voz">Voz</h2>
 <ul>
 <li>Español claro, técnico y honesto: los límites se explican antes que las promesas.</li>
