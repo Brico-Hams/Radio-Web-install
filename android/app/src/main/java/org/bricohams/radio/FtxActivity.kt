@@ -31,6 +31,7 @@ import java.util.concurrent.Executors
 import org.bricohams.digital.DecodedMessage
 import org.bricohams.digital.WavIo
 import org.bricohams.digital.fec.Ldpc174
+import org.bricohams.digital.ftx.ApContext
 
 /** FT8 / FT4 / FT2 with the project's own codecs: receive from the audio input or a WAV, build WAVs, play one frame on a slot. */
 class FtxActivity : LocalizedActivity() {
@@ -41,6 +42,7 @@ class FtxActivity : LocalizedActivity() {
         const val LDPC_ASSET = "ftx-ldpc174.json"
         const val MAX_ROWS = 200
         const val MAX_WAV_BYTES = 32 * 1024 * 1024
+        const val DX_CALL_PREFERENCE = "ftx_dx_call"
     }
 
     private class SaveRequest(val mode: FtxMode, val message: String, val toneHz: Double)
@@ -65,6 +67,8 @@ class FtxActivity : LocalizedActivity() {
     private var pendingSave: SaveRequest? = null
     private var inputs: List<AudioDeviceInfo> = emptyList()
     private val results = ArrayList<DecodedMessage>()
+    // Own and worked-station calls for the a-priori decoding passes; replaced on every field change.
+    @Volatile private var ap: ApContext? = null
 
     private lateinit var modeRow: LinearLayout
     private lateinit var modeInfo: TextView
@@ -77,6 +81,7 @@ class FtxActivity : LocalizedActivity() {
     private lateinit var rxStatus: TextView
     private lateinit var resultRows: LinearLayout
     private lateinit var callField: EditText
+    private lateinit var dxField: EditText
     private lateinit var messageField: EditText
     private lateinit var toneField: EditText
     private lateinit var txInfo: TextView
@@ -134,6 +139,10 @@ class FtxActivity : LocalizedActivity() {
                 getSharedPreferences(RigActivity.PREFERENCES, MODE_PRIVATE).getString("callsign", "") ?: "",
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS)
             card.addView(callField)
+            dxField = field(R.id.ftx_dx_call, R.string.ftx_dx_call_hint,
+                getSharedPreferences(RigActivity.PREFERENCES, MODE_PRIVATE).getString(DX_CALL_PREFERENCE, "") ?: "",
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
+            card.addView(dxField)
             messageField = field(R.id.ftx_message, R.string.ftx_message_hint, "",
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
             card.addView(messageField)
@@ -149,7 +158,7 @@ class FtxActivity : LocalizedActivity() {
             card.addView(txStatus)
             card.addView(Brand.text(this, 13f, colors.muted).apply { setText(R.string.ftx_tx_legal) })
         }
-        for (view in listOf(callField, messageField, toneField)) view.addTextChangedListener(object : TextWatcher {
+        for (view in listOf(callField, dxField, messageField, toneField)) view.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) = refresh()
@@ -246,6 +255,7 @@ class FtxActivity : LocalizedActivity() {
     }
 
     private fun refresh() {
+        ap = ApContext(callOrNull(), dxField.text.toString())
         val decodable = codecs.decoder(mode) != null
         val listening = receiver != null
         listen.isEnabled = decodable && !listening && !txActive && !busy
@@ -276,8 +286,9 @@ class FtxActivity : LocalizedActivity() {
             val utc = if (message.frameStartUtcMillis > 0) clockFormat.format(Instant.ofEpochMilli(message.frameStartUtcMillis)) else "--:--:--"
             resultRows.addView(Brand.text(this, 13f, colors.text).apply {
                 typeface = Typeface.MONOSPACE
-                text = String.format(Locale.ROOT, "%s %+4d %+5.1f %4d  %s", utc, Math.round(message.snrDb),
-                    message.timeOffsetSeconds, Math.round(message.audioHz), message.text)
+                text = String.format(Locale.ROOT, "%s %+4d %+5.1f %4d  %s%s", utc, Math.round(message.snrDb),
+                    message.timeOffsetSeconds, Math.round(message.audioHz), message.text,
+                    message.apTag?.let { " $it" } ?: "")
             })
         }
     }
@@ -329,7 +340,7 @@ class FtxActivity : LocalizedActivity() {
             override fun finished() = ui {
                 if (token == generation) { receiver = null; refresh() }
             }
-        }, clock)
+        }, clock) { ap }
         receiver = rx
         rxStatus.setText(R.string.ftx_rx_starting)
         refresh()
@@ -388,12 +399,13 @@ class FtxActivity : LocalizedActivity() {
         refresh()
         if (requestCode == REQUEST_OPEN) {
             val selected = mode
+            val context = ap
             rxStatus.setText(R.string.ftx_wav_working)
             worker.execute {
                 try {
                     val bytes = contentResolver.readDocument(uri, MAX_WAV_BYTES)
                     val audio = WavIo.read(ByteArrayInputStream(bytes))
-                    val found = codecs.decodeAudio(selected, audio) { DeadlineBudget(System.nanoTime() + 60_000_000_000L) }
+                    val found = codecs.decodeAudio(selected, audio, context) { DeadlineBudget(System.nanoTime() + 60_000_000_000L) }
                     ui {
                         addResults(found)
                         rxStatus.text = if (found.isEmpty()) getString(R.string.ftx_wav_none) else getString(R.string.ftx_wav_done, found.size)
@@ -437,7 +449,8 @@ class FtxActivity : LocalizedActivity() {
             return
         }
         val call = checkNotNull(callOrNull())
-        getSharedPreferences(RigActivity.PREFERENCES, MODE_PRIVATE).edit().putString("callsign", call).apply()
+        getSharedPreferences(RigActivity.PREFERENCES, MODE_PRIVATE).edit().putString("callsign", call)
+            .putString(DX_CALL_PREFERENCE, dxField.text.toString().trim().uppercase(Locale.ROOT)).apply()
         val selected = mode
         val message = FtxMessages.normalize(messageField.text.toString())
         val toneHz = FtxCodecs.parseTone(selected, toneField.text.toString())
@@ -449,7 +462,7 @@ class FtxActivity : LocalizedActivity() {
             try {
                 val samples = FtxCodecs.pcm16(codecs.frame(selected, message, toneHz))
                 var shown = -1L
-                player.send(samples, FtxCodecs.RATE, selected.slotMs, sinkFactory(), waiting = { left ->
+                player.send(samples, FtxCodecs.RATE, selected.slotMs, sinkFactory(), leadMs = selected.leadMs, waiting = { left ->
                     if (left / 250 != shown) {
                         shown = left / 250
                         ui { txStatus.text = getString(R.string.ftx_tx_waiting, left / 1000.0) }

@@ -200,7 +200,7 @@ class SatelliteActivityTest {
 
     @Test fun offlineFailureIsVisibleAndManualRetryPopulatesTheOpenMap() {
         var attempts = 0
-        SatelliteActivity.fetch = { _, _ -> attempts++; throw IOException("offline-test") }
+        SatelliteActivity.fetch = { url, _ -> if (url == SatelliteSources.TLE_URL) attempts++; throw IOException("offline-test") }
         val controller = Robolectric.buildActivity(SatelliteActivity::class.java).setup()
         try {
             val activity = controller.get()

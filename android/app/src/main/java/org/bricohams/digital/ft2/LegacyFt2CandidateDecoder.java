@@ -9,7 +9,7 @@ import org.bricohams.digital.fec.Ldpc174;
 import org.bricohams.digital.ftx.FtxReceiver;
 import org.bricohams.digital.ftx.FtxRxProfile;
 
-/** Receiver for the legacy FT2 candidate profile (288 samples per symbol); not a registered codec. */
+/** Receiver for the legacy FT2 candidate profile (288 samples per symbol); exposed by CodecRegistry as a beta codec. */
 public final class LegacyFt2CandidateDecoder {
     public static final String PROFILE_ID = "ft2-legacy-candidate-v1";
 

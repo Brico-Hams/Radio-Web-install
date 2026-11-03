@@ -14,12 +14,105 @@ data class Transmitter(val norad: Int, val description: String, val downlinkHz: 
 object SatelliteSources {
     const val TLE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=amateur&FORMAT=tle"
     const val TRANSMITTERS_URL = "https://db.satnogs.org/api/transmitters/?format=json"
+    const val SATNOGS_TLE_URL = "https://db.satnogs.org/api/tle/?format=json"
+    const val AMSAT_TLE_URL = "https://www.amsat.org/tle/current/nasabare.txt"
+    const val SOURCE_TIMEOUT_MS = 10000
+    private const val MAX_AGE_MS = 7 * 86400000L
+    private const val MAX_FUTURE_MS = 86400000L
+    private const val MAX_SATELLITES = 250
+
+    enum class TleSource(val label: String) { CELESTRAK("CelesTrak"), SATNOGS("SatNOGS"), AMSAT("AMSAT") }
+
+    class Downloaded(val tle: List<Tle>, val transmitters: List<Transmitter>, val source: TleSource, val warning: String)
+
+    /** Epoch of a TLE in UTC milliseconds, read from line 1 columns 19-32 (yyddd.dddddddd). */
+    fun epochMillis(tle: Tle): Long {
+        val year = tle.line1.substring(18, 20).trim().toInt().let { if (it < 57) 2000 + it else 1900 + it }
+        val day = tle.line1.substring(20, 32).trim().toDouble()
+        val start = java.util.GregorianCalendar(java.util.TimeZone.getTimeZone("UTC")).apply {
+            clear(); set(year, 0, 1)
+        }.timeInMillis
+        return start + ((day - 1) * 86400000.0).toLong()
+    }
+
+    fun isFresh(tle: Tle, now: Long): Boolean = try {
+        val epoch = epochMillis(tle)
+        now - epoch <= MAX_AGE_MS && epoch - now <= MAX_FUTURE_MS
+    } catch (error: RuntimeException) { false }
+
+    /** Drops stale/future entries; fails when nothing usable remains so the next source is tried. */
+    private fun freshOrFail(list: List<Tle>, now: Long, source: TleSource): List<Tle> =
+        list.filter { isFresh(it, now) }.ifEmpty { throw IOException("${source.label}: TLE caducados o vacios.") }
+
+    /** SatNOGS DB /api/tle: objects with tle0 (name), tle1, tle2, norad_cat_id; only satellites in [norads] are kept. */
+    fun parseSatnogsTle(text: String, norads: Set<Int>): List<Tle> {
+        val array = try { JSONArray(text) } catch (error: JSONException) {
+            throw IllegalArgumentException("Respuesta SatNOGS no valida: ${error.message}", error)
+        }
+        val best = HashMap<Int, Tle>()
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val norad = item.optInt("norad_cat_id", -1)
+            if (norad !in norads || item.isNull("tle1") || item.isNull("tle2")) continue
+            val name = (if (item.isNull("tle0")) "" else item.optString("tle0")).trim().removePrefix("0 ").trim()
+                .filter { it.code in 32..126 }.ifBlank { "NORAD $norad" }
+            val tle = try { Tle(name, item.getString("tle1").trim(), item.getString("tle2").trim()).validated() }
+                catch (error: RuntimeException) { continue }
+            if (tle.norad != norad) continue
+            val old = best[norad]
+            if (old == null || epochMillis(tle) > epochMillis(old)) best[norad] = tle
+        }
+        return best.values.sortedBy { it.norad }.take(MAX_SATELLITES)
+    }
+
+    /** AMSAT nasabare.txt: plain three-line sets (name, line 1, line 2). */
+    fun parseNasabare(bytes: ByteArray): List<Tle> = parseTle(bytes).take(MAX_SATELLITES)
+
+    /**
+     * CelesTrak first; when it fails, SatNOGS DB (restricted to satellites with transmitters), then AMSAT.
+     * Sources run sequentially on the calling thread; throws only if every source fails.
+     */
+    fun download(fetch: (String, Int) -> ByteArray, now: Long = System.currentTimeMillis()): Downloaded {
+        val failures = ArrayList<String>()
+        fun transmittersFor(tle: List<Tle>): Pair<List<Transmitter>, String> = try {
+            parseTransmitters(fetch(TRANSMITTERS_URL, 16 * 1024 * 1024).toString(Charsets.UTF_8), tle.map { it.norad }.toSet()) to ""
+        } catch (error: IOException) { emptyList<Transmitter>() to (error.message ?: "") }
+        catch (error: IllegalArgumentException) { emptyList<Transmitter>() to (error.message ?: "") }
+
+        try {
+            val tle = freshOrFail(parseTle(fetch(TLE_URL, 256 * 1024)), now, TleSource.CELESTRAK)
+            val (list, warning) = transmittersFor(tle)
+            return Downloaded(tle, list, TleSource.CELESTRAK, warning)
+        } catch (error: IOException) { failures.add("CelesTrak: ${error.message}") }
+        catch (error: IllegalArgumentException) { failures.add("CelesTrak: ${error.message}") }
+
+        try {
+            val raw = fetch(TRANSMITTERS_URL, 16 * 1024 * 1024).toString(Charsets.UTF_8)
+            val withTransmitters = JSONArray(raw).let { array ->
+                (0 until array.length()).map { array.getJSONObject(it).optInt("norad_cat_id", -1) }.filter { it > 0 }.toSet()
+            }
+            val tle = freshOrFail(parseSatnogsTle(fetch(SATNOGS_TLE_URL, 8 * 1024 * 1024).toString(Charsets.UTF_8), withTransmitters),
+                now, TleSource.SATNOGS)
+            return Downloaded(tle, parseTransmitters(raw, tle.map { it.norad }.toSet()), TleSource.SATNOGS, "")
+        } catch (error: IOException) { failures.add("SatNOGS: ${error.message}") }
+        catch (error: IllegalArgumentException) { failures.add("SatNOGS: ${error.message}") }
+        catch (error: JSONException) { failures.add("SatNOGS: ${error.message}") }
+
+        try {
+            val tle = freshOrFail(parseNasabare(fetch(AMSAT_TLE_URL, 256 * 1024)), now, TleSource.AMSAT)
+            val (list, warning) = transmittersFor(tle)
+            return Downloaded(tle, list, TleSource.AMSAT, warning)
+        } catch (error: IOException) { failures.add("AMSAT: ${error.message}") }
+        catch (error: IllegalArgumentException) { failures.add("AMSAT: ${error.message}") }
+
+        throw IOException(failures.joinToString("; "))
+    }
 
     fun fetch(url: String, limit: Int): ByteArray {
         val connection = URL(url).openConnection() as? HttpsURLConnection ?: throw IOException("Solo se admite HTTPS.")
         try {
-            connection.connectTimeout = 15000
-            connection.readTimeout = 30000
+            connection.connectTimeout = SOURCE_TIMEOUT_MS
+            connection.readTimeout = SOURCE_TIMEOUT_MS
             connection.instanceFollowRedirects = false
             connection.setRequestProperty("User-Agent", "Bricohams-Android")
             if (connection.responseCode != 200) throw IOException("${connection.url.host} respondio HTTP ${connection.responseCode}.")

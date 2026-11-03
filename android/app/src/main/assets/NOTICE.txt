@@ -39,7 +39,9 @@ with Look4sat, Robot36, HAMRS, LoTW or radio manufacturers.
 Data used by the satellite screen (not bundled code):
 Natural Earth 1:110m land outlines (public domain), simplified in world-land-110m.txt.
 Source: https://github.com/nvkelso/natural-earth-vector
-TLE downloaded on request from CelesTrak (https://celestrak.org).
+TLE downloaded on request from CelesTrak (https://celestrak.org); if it is
+unreachable, from SatNOGS DB (https://db.satnogs.org, CC BY-SA 4.0) or AMSAT
+(https://www.amsat.org).
 Transmitter frequencies downloaded on request from SatNOGS DB
 (https://db.satnogs.org), licensed CC BY-SA 4.0.
 
@@ -49,4 +51,7 @@ Bricohams code under GPL-3.0-or-later. The asset ftx-ldpc174.json contains the
 LDPC(174,91) generator and parity numeric data published with the QEX 2020
 FT4/FT8 paper (Franke, Somerville, Taylor) and its ARRL supplement, designated
 public domain by the authors, with the conditions recorded in the project docs.
-FT2 is a legacy candidate validated against one external receiver.
+FT2 is a beta, validated against one external receiver. Ordered-statistics
+decoding, a-priori passes and multi-symbol soft metrics are implemented from
+published algorithm descriptions and protocol facts only; no Decodium or WSJT-X
+source code was copied, translated or paraphrased.

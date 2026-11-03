@@ -13,7 +13,7 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicInteger
 import org.bricohams.digital.CodecException
 import org.bricohams.digital.DecodedMessage
-
+import org.bricohams.digital.ftx.ApContext
 internal interface FtxInput : PcmSource {
     val sampleRate: Int
 }
@@ -82,7 +82,8 @@ internal class FtxReceiver(
     private val codecs: FtxCodecs,
     private val openInput: () -> FtxInput,
     private val listener: Listener,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val ap: () -> ApContext? = { null }
 ) {
     interface Listener {
         fun listening(inputRate: Int)
@@ -183,7 +184,7 @@ internal class FtxReceiver(
                 try {
                     val deadline = System.nanoTime() + mode.slotMs * 900_000L
                     val budget = DeadlineBudget(deadline, { !running })
-                    val messages = codecs.decodeSlot(mode, slot.samples, slot.startUtcMs, budget)
+                    val messages = codecs.decodeSlot(mode, slot.samples, slot.startUtcMs, budget, ap())
                     if (running) listener.decoded(slot.startUtcMs, messages)
                 } catch (error: CodecException) {
                     if (running) when (error.reason) {
@@ -203,7 +204,7 @@ internal class FtxReceiver(
     }
 }
 
-/** Plays one frame once, starting 0.5 s after the next UTC slot boundary. The radio's PTT or VOX is the operator's. */
+/** Plays one frame once, starting [leadMs] after the next UTC slot boundary. The radio's PTT or VOX is the operator's. */
 internal class FtxTransmitter(
     private val clock: () -> Long = System::currentTimeMillis,
     private val sleep: (Long) -> Unit = Thread::sleep
@@ -223,14 +224,14 @@ internal class FtxTransmitter(
     }
 
     /** Blocks until the audio has played. [waiting] gets the milliseconds left before the audio starts. */
-    fun send(samples: ShortArray, sampleRate: Int, slotMs: Long, sink: AudioSink,
+    fun send(samples: ShortArray, sampleRate: Int, slotMs: Long, sink: AudioSink, leadMs: Long = FtxCodecs.LEAD_MS,
              waiting: (Long) -> Unit = {}, sending: () -> Unit = {}) {
         try {
-            requireUi(samples.isNotEmpty() && samples.size * 1000L / sampleRate + FtxCodecs.LEAD_MS <= slotMs) {
+            requireUi(samples.isNotEmpty() && samples.size * 1000L / sampleRate + leadMs <= slotMs) {
                 UiText(R.string.err_ftx_tx_length)
             }
             val now = clock()
-            val target = now + DigitalClock.msToNextSlot(now, slotMs) + FtxCodecs.LEAD_MS
+            val target = now + DigitalClock.msToNextSlot(now, slotMs) + leadMs
             while (true) {
                 checkUi(!cancelled) { UiText(R.string.err_ftx_tx_cancelled) }
                 val left = target - clock()

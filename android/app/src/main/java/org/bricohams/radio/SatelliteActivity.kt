@@ -774,22 +774,19 @@ class SatelliteActivity : LocalizedActivity() {
         status.setText(R.string.satellite_downloading)
         audioWorker.execute {
             try {
-                val tle = SatelliteSources.parseTle(fetch(SatelliteSources.TLE_URL, 256 * 1024))
-                var warning = ""
-                val list = try {
-                    SatelliteSources.parseTransmitters(fetch(SatelliteSources.TRANSMITTERS_URL, 16 * 1024 * 1024).toString(Charsets.UTF_8),
-                        tle.map { it.norad }.toSet())
-                } catch (error: IOException) {
-                    warning = errorText(error); store.transmitters()
-                } catch (error: IllegalArgumentException) {
-                    warning = errorText(error); store.transmitters()
-                }
-                store.saveCatalog(tle, list)
+                val result = SatelliteSources.download(fetch)
+                val list = if (result.warning.isEmpty()) result.transmitters else store.transmitters()
+                store.saveCatalog(result.tle, list)
+                preferences.edit().putString("tle-source", result.source.name).apply()
+                val sourceText = if (result.source == SatelliteSources.TleSource.CELESTRAK)
+                    getString(R.string.satellite_tle_source, result.source.label)
+                else getString(R.string.satellite_tle_source_fallback, result.source.label)
                 runOnUiThread {
                     if (isDestroyed) return@runOnUiThread
                     loadCatalog()
                     if (page != Page.DETAIL) show(page)
-                    status.text = getString(R.string.satellite_downloaded, catalog.size, transmitters.values.sumOf { it.size }, warning)
+                    status.text = getString(R.string.satellite_downloaded, catalog.size, transmitters.values.sumOf { it.size },
+                        listOf(sourceText, result.warning).filter { it.isNotBlank() }.joinToString(" "))
                 }
             } catch (error: IOException) { report(error) }
             catch (error: IllegalArgumentException) { report(error) }

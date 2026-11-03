@@ -566,11 +566,13 @@
     <string name="satellite_data">Satellite data</string>
     <string name="satellite_data_state">%1$d satellites and %2$d RX frequencies; updated %3$s UTC.</string>
     <string name="satellite_download">Update TLE and frequencies</string>
-    <string name="satellite_downloading">Downloading TLE from CelesTrak and frequencies from SatNOGS…</string>
+    <string name="satellite_downloading">Downloading TLE (CelesTrak, or SatNOGS/AMSAT if unreachable) and frequencies from SatNOGS…</string>
+    <string name="satellite_tle_source">TLE: %1$s.</string>
+    <string name="satellite_tle_source_fallback">TLE: %1$s (CelesTrak not responding).</string>
     <string name="satellite_downloaded">Updated: %1$d satellites, %2$d frequencies in the radio bands. %3$s</string>
-    <string name="satellite_credits">TLE: CelesTrak (amateur group). Frequencies: SatNOGS DB, CC BY-SA 4.0. Map: Natural Earth, public domain. Downloads only when you tap Update; TLE expire after 7 days.</string>
+    <string name="satellite_credits">TLE: CelesTrak (amateur group) or, if unreachable, SatNOGS DB (CC BY-SA 4.0) or AMSAT. Frequencies: SatNOGS DB, CC BY-SA 4.0. Map: Natural Earth, public domain. Downloads only when you tap Update; TLE expire after 7 days.</string>
     <string name="satellite_no_catalog">No saved satellites. They download automatically when you open this screen online. Retry or import a TLE file.</string>
-    <string name="satellite_auto_update">Automatically update TLE and frequencies on opening (every 24 h). HTTPS: CelesTrak and SatNOGS; your location is not sent.</string>
+    <string name="satellite_auto_update">Automatically update TLE and frequencies on opening (every 24 h). HTTPS: CelesTrak, SatNOGS and AMSAT; your location is not sent.</string>
     <string name="satellite_no_observer">Set your position in Settings to calculate passes.</string>
     <string name="satellite_none_selected">No satellites selected. Select them in Satellites.</string>
     <string name="satellite_no_passes">No passes in the next 24 h for the selected satellites.</string>
@@ -949,6 +951,7 @@
     <string name="ftx_wav_save_error">Could not save the WAV: %1$s</string>
     <string name="ftx_tx_title">Transmit</string>
     <string name="ftx_call_hint">My callsign</string>
+    <string name="ftx_dx_call_hint">DX callsign (optional, AP decoding)</string>
     <string name="ftx_message_hint">Message (for example CQ EA1ABC IN80)</string>
     <string name="ftx_tone_hint">Tone 0 frequency (Hz)</string>
     <string name="ftx_save_wav">Save WAV</string>

@@ -7,6 +7,8 @@ public final class FtxRxProfile {
     public static final int SAMPLE_RATE = 12000;
     /** Baseband samples per symbol after decimation. */
     static final int BB_SYM = 32;
+    /** Default start of an FT2 frame inside its 3.75 s slot; the receiver reports DT relative to it. */
+    public static final double FT2_LEAD_SECONDS = 0.15;
 
     public final String profileId;
     public final Mode mode;
@@ -44,11 +46,18 @@ public final class FtxRxProfile {
     final double bbRate;
     final double bandCenterHz;
     final double dupRefinedHz;
+    /** Multi-symbol soft metrics, adaptive sync threshold and sync-quality gate (FT2 only for now). */
+    final boolean enhanced;
+    /** Decode passes: the first one plus subtraction passes. */
+    final int maxPasses;
+    /** Frame start inside the slot that reports DT = 0. */
+    public final double nominalStartSeconds;
 
     private FtxRxProfile(String profileId, Mode mode, int tones, int sps, int symbols, int lead, int[] syncStart,
             int[][] syncTones, int[] dataPos, int bitsPerSymbol, int[] toneToValue, boolean scrambled,
             int minSamples, int maxSamples, int startMin, int startMax, boolean clampStart, int minBlocks,
-            double bt, GfskSynth.RampMode ramp, int firHalf, double firCutoffHz, double refineHz, double hzStep) {
+            double bt, GfskSynth.RampMode ramp, int firHalf, double firCutoffHz, double refineHz, double hzStep,
+            boolean enhanced, int maxPasses, double nominalStartSeconds) {
         this.profileId = profileId;
         this.mode = mode;
         this.tones = tones;
@@ -74,6 +83,9 @@ public final class FtxRxProfile {
         this.firCutoffHz = firCutoffHz;
         this.refineHz = refineHz;
         this.hzStep = hzStep;
+        this.enhanced = enhanced;
+        this.maxPasses = maxPasses;
+        this.nominalStartSeconds = nominalStartSeconds;
         this.llrScale = 2.8;
         this.hop = sps / 4;
         this.fftSize = 2 * sps;
@@ -134,16 +146,17 @@ public final class FtxRxProfile {
                 new int[] {0, 36, 72},
                 new int[][] {{3, 1, 4, 0, 6, 5, 2}, {3, 1, 4, 0, 6, 5, 2}, {3, 1, 4, 0, 6, 5, 2}},
                 concat(range(7, 35), range(43, 71)), 3, new int[] {0, 1, 3, 2, 6, 4, 5, 7}, false,
-                151680, 180000, -18000, 30000, false, 2, 2.0, GfskSynth.RampMode.FT8_EDGE_240, 140, 110, 2.5, 0.25);
+                151680, 180000, -18000, 30000, false, 2, 2.0, GfskSynth.RampMode.FT8_EDGE_240, 140, 110, 2.5, 0.25,
+                false, 3, 0.5);
 
         static final FtxRxProfile FT4 = new FtxRxProfile("ft4-standard-77-v1", Mode.FT4, 4, 576, 103, 1,
                 new int[] {0, 33, 66, 99}, FT4_SYNC, FT4_DATA, 2, FT4_VALUE, true,
                 60480, 90000, -12000, 30000, true, 3, 1.0, GfskSynth.RampMode.EXTRA_SYMBOLS, 72, 4 * 12000.0 / 576,
-                8.0, 0.5);
+                8.0, 0.5, false, 3, 0.5);
 
         static final FtxRxProfile FT2 = new FtxRxProfile("ft2-legacy-candidate-v1", Mode.FT2_LEGACY, 4, 288, 103, 1,
                 new int[] {0, 33, 66, 99}, FT4_SYNC, FT4_DATA, 2, FT4_VALUE, true,
                 30240, 45000, -6000, 15000, true, 3, 1.0, GfskSynth.RampMode.EXTRA_SYMBOLS, 36, 4 * 12000.0 / 288,
-                16.0, 1.0);
+                16.0, 1.0, true, 4, FT2_LEAD_SECONDS);
     }
 }

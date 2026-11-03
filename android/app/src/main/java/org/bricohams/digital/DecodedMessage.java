@@ -5,9 +5,16 @@ public final class DecodedMessage {
     public final String profileId, text;
     public final long frameStartUtcMillis;
     public final double audioHz, timeOffsetSeconds, snrDb;
+    /** "a1".."a3" when found with a-priori information, otherwise null. */
+    public final String apTag;
 
     public DecodedMessage(Mode mode, String profileId, String text, long frameStartUtcMillis,
             double audioHz, double timeOffsetSeconds, double snrDb) {
+        this(mode, profileId, text, frameStartUtcMillis, audioHz, timeOffsetSeconds, snrDb, null);
+    }
+
+    public DecodedMessage(Mode mode, String profileId, String text, long frameStartUtcMillis,
+            double audioHz, double timeOffsetSeconds, double snrDb, String apTag) {
         if (mode == null || profileId == null || profileId.isEmpty() || text == null || text.isEmpty()
                 || !Double.isFinite(audioHz) || audioHz < 0 || !Double.isFinite(timeOffsetSeconds)
                 || Double.isInfinite(snrDb)) {
@@ -20,5 +27,6 @@ public final class DecodedMessage {
         this.audioHz = audioHz;
         this.timeOffsetSeconds = timeOffsetSeconds;
         this.snrDb = snrDb;
+        this.apTag = apTag;
     }
 }
