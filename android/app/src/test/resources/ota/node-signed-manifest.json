@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "package": "org.bricohams.radicodex",
+  "versionCode": 17,
+  "versionName": "1.1.0",
+  "minSdk": 26,
+  "apk": {
+    "url": "https://github.com/Brico-Hams/Radio-Web-install/releases/download/radicodex-1.1.0/RadiCodex-1.1.0.apk",
+    "sha256": "e0f26d8bced2547e35eaee55c410eabbfb8ecb2f4687d47f0b77f5dbde784816",
+    "size": 3294858
+  },
+  "notes": {
+    "es": "# Novedades de la 1.0.1\r\n\r\n- Aviso al cambiar de versión de la app, con estas notas.\r\n- Aviso cuando una radio conectada cambia de firmware (Quansheng y radios CAT), para revalidar pruebas y ajustes.\r\n- Pantalla «Actualizaciones»: búsqueda manual y diaria de nuevas versiones con verificación de firma, huella y certificado; la instalación siempre la confirmas tú.\r\n- La versión se muestra en «Alcance y privacidad» y en el informe de diagnóstico.\r\n- Mapa de satélites: satélite y huella seleccionados bien visibles con la paleta de marca.",
+    "en": "# What's new in 1.0.1\r\n\r\n- Notice when the app version changes, with these notes.\r\n- Notice when a connected radio changes firmware (Quansheng and CAT radios), so tests and settings can be re-validated.\r\n- New \"Updates\" screen: manual and daily check for new versions, verifying signature, hash and certificate; you always confirm the installation.\r\n- The version is shown in \"Scope and privacy\" and in the diagnostics report.\r\n- Satellite map: the selected satellite and footprint are clearly visible with the brand palette."
+  },
+  "signature": "Ocw1rdVrKCqNFXsiy/IviXbkUoKWacNLM5nDYDNYPtSnc/oQOgKaJXw4UxbHFiYDtVQmSMSyXAc/BRRd9DBdCw=="
+}

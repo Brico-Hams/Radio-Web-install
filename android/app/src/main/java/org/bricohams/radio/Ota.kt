@@ -16,7 +16,7 @@ import java.util.TreeMap
 object OtaConfig {
     const val MANIFEST_URL = "https://github.com/Brico-Hams/Radio-Web-install/releases/latest/download/radicodex-update.json"
     /** Raw 32-byte Ed25519 release public key as 64 hex digits (`node scripts/ota-manifest.cjs keygen`). Empty = channel disabled. */
-    const val PUBLIC_KEY_HEX = ""
+    const val PUBLIC_KEY_HEX = "00980a6d0cc6b02e69b24d5d9caf5424bf7a0a4748247f3782f0b91a0134e68d"
     const val CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
     const val MAX_MANIFEST_BYTES = 64 * 1024
     const val MAX_APK_BYTES = 150L * 1024 * 1024
