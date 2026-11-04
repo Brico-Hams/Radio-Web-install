@@ -1,6 +1,6 @@
 # RadiCodex by BricoHams
 
-Version 1.0.1 (versionCode 16) : l'APK s'appelle RadiCodex by BricoHams (identifiant `org.bricohams.radicodex`).
+Version 1.0.2 (versionCode 17) : l'APK s'appelle RadiCodex by BricoHams (identifiant `org.bricohams.radicodex`).
 
 Guide pas à pas : [Tutoriels de RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 
@@ -51,7 +51,7 @@ pas encore été modifiée : sa migration finale reste à faire.
 ## Installation et données
 
 Les APK de débogage sont signées avec la clé debug de l’outil Android. L’APK de
-publication `RadiCodex-1.0.1.apk` n’est signée avec la clé de publication de
+publication `RadiCodex-1.0.2.apk` n’est signée avec la clé de publication de
 RadiCodex que si la release GitHub l’inclut ; vérifiez le SHA-256 publié avec
 elle. Elle n’est pas distribuée par Google Play. Les fonctions marquées comme
 expérimentales n’ont toujours pas été validées avec une vraie radio.
