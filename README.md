@@ -165,22 +165,7 @@ Ver [construccion, controles, licencias y limites](docs/BRICOHAMS-FIRMWARE.md#nu
 
 ### Android: RadiCodex by BricoHams
 
-La APK nativa 1.0.2 (versionCode 17) incluye libros General/POTA/SOTA y contactos locales editables con busqueda e importacion ADIF con vista previa, exportacion
-ADIF/JSON, sesiones ARDF con historial, estadisticas, segmentos GPS filtrados y observaciones GPS puntuales, y Morse de texto
-y WAV PCM experimental. Incorpora CAT RX temporal por USB CDC ACM y
-adaptadores CH34x/CP210x/FTDI/Prolific reconocidos. Satelites al estilo Look4sat con marca
-Bricohams: TLE de CelesTrak y frecuencias de SatNOGS con actualizacion automatica opcional al abrir, cada 24 h (o
-TLE importados), pases SGP4 offline con radar polar y mapa mundial, Doppler RX
-del pase por CAT, grabacion del pase a WAV y busqueda de imagenes Robot36.
-El mapa aparece sin permiso GPS ni observador; los pases requieren guardar tu
-ubicacion. Conserva el catalogo sin red mientras sus TLE sigan vigentes y la
-seleccion guardada. Pruebas host, lint y APK 0.8.3 verificados en CI con
-JDK 17/SDK 35; instalacion y permisos en telefono fisico siguen pendientes.
-Captura microfono en primer plano hasta 60 s para decodificar despues Morse
-o Robot36; no es decodificacion continua. Incluye editor de canales F4HWN v6 con respaldo completo verificado y relectura;
-no incluye subida LoTW. Decodifica SSTV Robot36 experimental desde WAV y exporta PNG.
-Compila para Android 8.0+;
-las pruebas host no sustituyen pruebas en telefono.
+La APK nativa 1.0.2 (versionCode 17) es una aplicacion Kotlin independiente para Android 8.0+, sin servidor ni cuentas, con interfaz en español, English, Français y Deutsch. Incluye: libros General/POTA/SOTA con contactos editables, busqueda y UTC automatico; importacion ADIF con vista previa, exportacion ADIF/JSON y restauracion de copia (para LoTW solo se exporta ADIF para TQSL, sin subida); sesiones ARDF con historial, balizas, estadisticas, segmentos GPS filtrados y observaciones GPS puntuales; Morse de texto y WAV PCM experimental; captura de microfono en primer plano hasta 60 s para decodificar despues Morse o Robot36 (no es decodificacion continua); SSTV Robot36 experimental (decodificacion de WAV o microfono y codificador para PTT CAT con indicativo obligatorio y limite de 120 s); CAT RX/TX temporal por USB CDC ACM y adaptadores CH34x/CP210x/FTDI/Prolific reconocidos con identificacion F4HWN v6+; editor de canales FM F4HWN v6 con respaldo completo verificado y relectura; y Satelites al estilo Look4sat con TLE de CelesTrak y frecuencias de SatNOGS (actualizacion automatica opcional cada 24 h o TLE importados), pases SGP4 offline con cuenta atras, radar polar y mapa mundial, Doppler RX por CAT, grabacion del pase a WAV y busqueda de imagenes Robot36. No envia tu ubicacion a servicios externos. Las pruebas fisicas de la 1.0.2 estan aprobadas segun el usuario (sin resultados detallados: ver [Estado de entrega](docs/ESTADO-ENTREGA.md)); las pruebas host no sustituyen las pruebas en telefono de versiones posteriores.
 Consulta [funciones, permisos, compilacion y limites](docs/ANDROID.md).
 
 | Documento | Contenido |
