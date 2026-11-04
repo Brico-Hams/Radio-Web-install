@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "bricohams/presets.h"
+#include "bricohams/bands.h"
+#include "bricohams/loot.h"
 #include "scheduler.h"
 #include "dcs.h"
 
@@ -42,6 +44,10 @@ static const uint8_t bhSpecGainMax[] = {3, 7, 3, 7};
 static const char *const bhSpecGainNames[] = {"LNAs", "LNA", "MIX", "PGA"};
 static const uint32_t bhSpecSteps[] = {125, 250, 625, 1250};
 static bool bhSpecActive;
+static bh_loot bhSpecLoot;
+static uint8_t bhSpecLootCursor;
+static uint8_t bhSpecBand;
+static char bhSpecLootText[16];
 static uint8_t bhSpecTransfer[BH_PRESET_BLOB_BYTES];
 static uint8_t bhSpecTransferState;
 static uint32_t bhSpecTransferToken;
@@ -263,8 +269,7 @@ static void BH_SPEC_AdjustGain(bool increase)
 
 static bool BH_SPEC_InBand(uint32_t first, uint32_t last)
 {
-    return (first >= 13600000 && last <= 17400000) ||
-        (first >= 40000000 && last <= 47000000);
+    return bh_band_rx_allowed(first, last);
 }
 
 static void BH_SPEC_Reset(uint8_t samples)
@@ -324,6 +329,9 @@ static void BH_SPEC_Start(void)
     bhSpecTransferState = 0;
     memset(&bhSpec, 0, sizeof(bhSpec));
     memset(&bhSpecPresets, 0, sizeof(bhSpecPresets));
+    bh_loot_clear(&bhSpecLoot);
+    bhSpecLootCursor = 0;
+    bhSpecBand = 0;
     bhSpecCenter = gRxVfo->pRX->Frequency;
     bhSpecStep = 0;
     bhSpecSettleMs = 20;
@@ -400,6 +408,54 @@ static void BH_SPEC_Update(void)
         bhSpecNextPreset = bhSpecMulti;
 }
 
+static void BH_SPEC_NextBand(void)
+{
+    bh_spectrum_config band;
+    if (!bh_band_config(bhSpecBand, &band)) {
+        bhSpecNotice = "BAND PRESET ERR";
+        return;
+    }
+    for (bhSpecStep = 0; bhSpecStep < 4; ++bhSpecStep)
+        if (bhSpecSteps[bhSpecStep] == band.step_10hz)
+            break;
+    if (bhSpecStep == 4) {
+        bhSpecStep = 0;
+        bhSpecNotice = "BAND PRESET ERR";
+        return;
+    }
+    bhSpecSettleMs = band.settle_ms;
+    bhSpecCenter = band.first_10hz + 64U * band.step_10hz;
+    bhSpecMulti = false;
+    BH_SPEC_Reset(band.samples_per_bin);
+    bhSpecNotice = bh_band_name(bhSpecBand);
+    bhSpecBand = (uint8_t)((bhSpecBand + 1U) % BH_BAND_COUNT);
+}
+
+static void BH_SPEC_LootAdd(uint32_t frequency)
+{
+    if (BH_SPEC_InBand(frequency, frequency) && bh_loot_add(&bhSpecLoot, frequency))
+        bhSpecLootCursor = 0;
+}
+
+static void BH_SPEC_LootScroll(bool older)
+{
+    const uint8_t count = bhSpecLoot.count;
+    uint32_t frequency;
+    for (uint8_t n = 1; n < count; ++n) {
+        const uint8_t index = (uint8_t)((bhSpecLootCursor + (older ? n : count - n)) % count);
+        if (bh_loot_get(&bhSpecLoot, index, &frequency) && BH_SPEC_InBand(frequency, frequency) &&
+            !BH_SPEC_IsExcluded(frequency)) {
+            bhSpecLootCursor = index;
+            BH_SPEC_CaptureTune(frequency);
+            snprintf(bhSpecLootText, sizeof(bhSpecLootText), "LOOT %u/%u",
+                (unsigned)(index + 1U), (unsigned)count);
+            bhSpecNotice = bhSpecLootText;
+            return;
+        }
+    }
+    bhSpecNotice = "LOOT: NO OTHER";
+}
+
 static bool BH_SPEC_Key(KEY_Code_t key)
 {
     bhSpecTransferState = 0;
@@ -432,6 +488,7 @@ static bool BH_SPEC_Key(KEY_Code_t key)
                     bhSpecNotice = "RX OUT OF BAND";
                 else {
                     BH_SPEC_CaptureTune(frequency);
+                    BH_SPEC_LootAdd(frequency);
                     bhSpecInputActive = false;
                 }
             }
@@ -464,6 +521,8 @@ static bool BH_SPEC_Key(KEY_Code_t key)
             bhSpecNotice = NULL;
         } else if (bhSpecRegisters && (key == KEY_1 || key == KEY_7)) {
             BH_SPEC_AdjustGain(key == KEY_7);
+        } else if (key == KEY_1 || key == KEY_7) {
+            BH_SPEC_LootScroll(key == KEY_7);
         } else if (key == KEY_STAR) {
             bhSpecInputActive = true;
             bhSpecInputLength = 0;
@@ -525,7 +584,9 @@ static bool BH_SPEC_Key(KEY_Code_t key)
         }
         bhSpecCapture = true;
         bhSpecRegisters = false;
-        BH_SPEC_CaptureTune(bhSpec.config.first_10hz + (uint32_t)strongest * bhSpec.config.step_10hz);
+        const uint32_t captured = bhSpec.config.first_10hz + (uint32_t)strongest * bhSpec.config.step_10hz;
+        BH_SPEC_CaptureTune(captured);
+        BH_SPEC_LootAdd(captured);
         return true;
     }
     if (key == KEY_0) {
@@ -548,8 +609,10 @@ static bool BH_SPEC_Key(KEY_Code_t key)
         bhSpecNotice = "BLACKLIST CLEARED";
         return true;
     }
-    if (key == KEY_2)
+    if (key == KEY_2) {
+        BH_SPEC_NextBand();
         return true;
+    }
     if (key == KEY_STAR) {
         bhSpecSettleMs = bhSpecSettleMs >= 80 ? 10 : (uint16_t)(bhSpecSettleMs * 2U);
         BH_SPEC_Reset(bhSpec.initialized ? bhSpec.config.samples_per_bin : 1);

@@ -30,7 +30,7 @@ function integrateModule(work, module) {
   const core = ardf ? "ardf" : spectrum ? "spectrum" : "doppler";
   const sources = [`${core}.c`, `${core}.h`, `${module}_foxhunt.inc`];
   if (module === "satellite") sources.push("cat_rx.c", "cat_rx.h", "cat_tx.c", "cat_tx.h", "passes.c", "passes.h");
-  if (spectrum) sources.push("presets.c", "presets.h");
+  if (spectrum) sources.push("presets.c", "presets.h", "bands.c", "bands.h", "loot.c", "loot.h");
   const root = path.join(__dirname, "..");
   const staged = new Map();
   const change = (name, before, after) => {
@@ -38,7 +38,7 @@ function integrateModule(work, module) {
     const content = staged.get(file) ?? fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n");
     staged.set(file, replaceOnce(content, before, after, name));
   };
-  change("CMakeLists.txt", "add_library(App INTERFACE)", `add_library(App INTERFACE)\ntarget_compile_definitions(App INTERFACE ${define})\ntarget_sources(App INTERFACE bricohams/${core}.c${spectrum ? " bricohams/presets.c" : module === "satellite" ? " bricohams/cat_rx.c bricohams/cat_tx.c bricohams/passes.c" : ""})`);
+  change("CMakeLists.txt", "add_library(App INTERFACE)", `add_library(App INTERFACE)\ntarget_compile_definitions(App INTERFACE ${define})\ntarget_sources(App INTERFACE bricohams/${core}.c${spectrum ? " bricohams/presets.c bricohams/bands.c bricohams/loot.c" : module === "satellite" ? " bricohams/cat_rx.c bricohams/cat_tx.c bricohams/passes.c" : ""})`);
   for (const name of ["scheduler.c", "scheduler.h"])
     change(name, "#ifdef ENABLE_FEAT_F4HWN_OVERLAY_APPS", `#if defined(ENABLE_FEAT_F4HWN_OVERLAY_APPS) || defined(${define})`);
   change("app/foxhunt.c", '#include "app/foxhunt.h"', `#include "app/foxhunt.h"\n\n#ifdef ${define}\nstatic void BH_${prefix}_Draw(void);\nstatic bool BH_${prefix}_Key(KEY_Code_t key);\n#endif`);
