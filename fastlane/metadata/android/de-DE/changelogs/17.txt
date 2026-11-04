@@ -1,0 +1,1 @@
+RadiCodex 1.0.2: signierte Version, Builds der Varianten GitHub und F-Droid, verbesserte USB-Erkennung und Stabilität.
