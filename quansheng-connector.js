@@ -39,7 +39,9 @@
     R.assert(length <= size - 4, "Longitud UART invalida.");
     // Host replies use 0xffff instead of a calculated CRC in this firmware.
     const crc = R.view(body).getUint16(size, true);
-    R.assert(crc === 0xffff || crc === crc16(body.subarray(0, size)), "CRC UART incorrecto.");
+    const calculated = crc16(body.subarray(0, size));
+    R.assert(crc === 0xffff || crc === calculated,
+      `CRC UART incorrecto (recibido 0x${crc.toString(16)}, calculado 0x${calculated.toString(16)}).`);
     return { type: R.view(body).getUint16(0, true), data: body.slice(4, 4 + length) };
   }
   function slotHeader(data) {
@@ -226,22 +228,47 @@
     }
     async receiveResponse(expected, timeout = 4000, recoverableTimeout = false) {
       const deadline = Date.now() + timeout;
+      const state = { rejected: null };
+      try {
+        return await this.scanResponse(expected, deadline, recoverableTimeout, state);
+      } catch (error) {
+        if (state.rejected && error.code === "READ_TIMEOUT") {
+          error.message += ` Ultima trama descartada: ${state.rejected.message}`;
+        }
+        throw error;
+      }
+    }
+    async scanResponse(expected, deadline, recoverableTimeout, state) {
       let previous = 0;
       while (Date.now() < deadline) {
         const byte = (await this.transport.readExact(1, Math.max(1, deadline - Date.now()), !recoverableTimeout))[0];
         if (previous !== 0xab || byte !== 0xcd) { previous = byte; continue; }
         const length = await this.transport.readExact(2, Math.max(1, deadline - Date.now()), !recoverableTimeout);
         const size = R.view(length).getUint16(0, true);
-        R.assert(size >= 4 && size <= 512, "Longitud de paquete F4HWN fuera de rango.");
+        if (size < 4 || size > 512) {
+          // False sync (0xAB 0xCD inside stale or unrelated bytes): rescan right after the 0xAB.
+          state.rejected = new Error("Longitud de paquete F4HWN fuera de rango.");
+          this.transport.unread(Uint8Array.of(0xcd, ...length));
+          previous = 0;
+          continue;
+        }
         const rest = await this.transport.readExact(size + 4, Math.max(1, deadline - Date.now()), !recoverableTimeout);
         const frame = new Uint8Array(size + 8);
         frame.set([0xab, 0xcd, ...length]);
         frame.set(rest, 4);
-        const response = decodePacket(frame);
+        let response;
+        try { response = decodePacket(frame); }
+        catch (error) {
+          // A bad frame is never accepted, but it may be a false sync that swallowed the real reply: rescan after the 0xAB.
+          state.rejected = error;
+          this.transport.unread(frame.subarray(1));
+          previous = 0;
+          continue;
+        }
         if (response.type === expected) return response.data;
         previous = 0;
       }
-      throw new Error(`No se recibio respuesta 0x${expected.toString(16)}.`);
+      throw new Error(`No se recibio respuesta 0x${expected.toString(16)}.${state.rejected ? ` Ultima trama descartada: ${state.rejected.message}` : ""}`);
     }
     async identify() {
       this.timestamp = Date.now() >>> 0;
