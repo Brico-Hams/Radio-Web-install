@@ -1,0 +1,36 @@
+1
+00:00:00,000 --> 00:00:05,800
+REAL capture: signed RadiCodex 1.0.2 on an Android emulator (no radio connected)
+
+2
+00:00:06,000 --> 00:00:11,800
+Home: more radio and reception tools
+
+3
+00:00:12,000 --> 00:00:17,800
+OpenGD77 over USB: screen, clock and UTC (no radio: interface only)
+
+4
+00:00:18,000 --> 00:00:22,800
+Back to Home
+
+5
+00:00:23,000 --> 00:00:34,800
+F4HWN v6 channel editor (Beta): connect, full backup, read, edit and write
+
+6
+00:00:35,000 --> 00:00:40,800
+Robot36 SSTV from WAV: decode and save PNG
+
+7
+00:00:41,000 --> 00:00:46,800
+Logbook: callsign, frequency, mode and RST
+
+8
+00:00:47,000 --> 00:00:52,800
+ARDF: sessions and observations
+
+9
+00:00:53,000 --> 00:01:01,800
+Text Morse and experimental WAV audio
+

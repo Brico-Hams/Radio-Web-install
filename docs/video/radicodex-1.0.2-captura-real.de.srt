@@ -1,0 +1,36 @@
+1
+00:00:00,000 --> 00:00:05,800
+ECHTE Aufnahme: signierte RadiCodex 1.0.2 im Android-Emulator (kein Funkgerät verbunden)
+
+2
+00:00:06,000 --> 00:00:11,800
+Start: weitere Funk- und Empfangswerkzeuge
+
+3
+00:00:12,000 --> 00:00:17,800
+OpenGD77 über USB: Bildschirm, Uhr und UTC (ohne Funkgerät: nur Oberfläche)
+
+4
+00:00:18,000 --> 00:00:22,800
+Zurück zum Start
+
+5
+00:00:23,000 --> 00:00:34,800
+F4HWN-v6-Kanaleditor (Beta): verbinden, Vollbackup, lesen, bearbeiten und schreiben
+
+6
+00:00:35,000 --> 00:00:40,800
+Robot36-SSTV aus WAV: dekodieren und PNG speichern
+
+7
+00:00:41,000 --> 00:00:46,800
+Logbuch: Rufzeichen, Frequenz, Modus und RST
+
+8
+00:00:47,000 --> 00:00:52,800
+ARDF: Sitzungen und Beobachtungen
+
+9
+00:00:53,000 --> 00:01:01,800
+Text-Morse und experimentelles WAV-Audio
+
