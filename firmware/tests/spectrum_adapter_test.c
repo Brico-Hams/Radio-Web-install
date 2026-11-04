@@ -78,7 +78,7 @@ int main(void)
     CHECK(!bhSpecError && foxAudioMode == 0 && bhSpec.config.bins == 128);
     CHECK(bhSpec.config.first_10hz == 14542000 && bhSpec.config.step_10hz == 125);
     CHECK(rx.Frequency == 14550000);
-    CHECK(BH_SPEC_Key(KEY_1) && BH_SPEC_Key(KEY_2) && BH_SPEC_Key(KEY_PTT) && !BH_SPEC_Key(KEY_3));
+    CHECK(BH_SPEC_Key(KEY_1) && BH_SPEC_Key(KEY_PTT) && !BH_SPEC_Key(KEY_3));
     CHECK(!bhSpecCapture && strcmp(bhSpecNotice, "WAIT SAMPLES") == 0);
     BH_SPEC_Key(KEY_0);
     CHECK(!bhSpecMulti && strcmp(bhSpecNotice, "SAVE 2 PRESETS") == 0);
@@ -630,6 +630,52 @@ int main(void)
         CHECK(bhSpecPresets.entries[index].spectrum.settle_ms == delays[index]);
     BH_SPEC_Start();
     CHECK(bhSpec.config.settle_ms == 20 && bhSpecSettleMs == 20);
+    BH_SPEC_Stop();
+    // Band presets documented by autumn1rain/karina-v3-k1: RX-only, inside the supported ranges.
+    BH_SPEC_Start();
+    for (unsigned round = 0; round < BH_BAND_COUNT + 1U; ++round) {
+        const uint8_t index = (uint8_t)(round % BH_BAND_COUNT);
+        bh_spectrum_config expected;
+        CHECK(bh_band_config(index, &expected));
+        CHECK(BH_SPEC_Key(KEY_2) && !bhSpecError);
+        CHECK(bhSpec.config.first_10hz == expected.first_10hz && bhSpec.config.step_10hz == expected.step_10hz);
+        CHECK(bhSpec.config.bins == 128 && strcmp(bhSpecNotice, bh_band_name(index)) == 0);
+        CHECK(bhSpecCenter == expected.first_10hz + 64U * expected.step_10hz);
+        while (bhSpec.frames < 1) {
+            tick += 2;
+            BH_SPEC_Update();
+            CHECK(bh_band_rx_allowed(tuned, tuned));
+        }
+    }
+    BH_SPEC_Stop();
+    // Loot: explicit captures are remembered, scrolled with 1/7 and honour the blacklist.
+    BH_SPEC_Start();
+    uint32_t captured[3];
+    const unsigned loot_bins[3] = {10, 20, 30};
+    for (unsigned i = 0; i < 3; ++i) {
+        bhSpec.levels[loot_bins[i]] = 900;
+        bhSpec.bin = (uint16_t)(loot_bins[i] + 1U);
+        CHECK(BH_SPEC_Key(KEY_PTT) && bhSpecCapture);
+        captured[i] = bhSpecCaptureFrequency;
+        CHECK(captured[i] == bhSpec.config.first_10hz + loot_bins[i] * 125U);
+        CHECK(BH_SPEC_Key(KEY_EXIT) && !bhSpecCapture);
+    }
+    CHECK(bhSpecLoot.count == 3 && bhSpecLoot.frequency_10hz[0] == captured[2]);
+    bhSpec.levels[30] = 900;
+    bhSpec.bin = 31;
+    CHECK(BH_SPEC_Key(KEY_PTT) && bhSpecLoot.count == 3 && bhSpecLoot.frequency_10hz[0] == captured[2]);
+    CHECK(BH_SPEC_Key(KEY_7) && bhSpecCaptureFrequency == captured[1] && tuned == captured[1]);
+    CHECK(strcmp(bhSpecNotice, "LOOT 2/3") == 0);
+    CHECK(BH_SPEC_Key(KEY_4) && BH_SPEC_IsExcluded(captured[1]));
+    CHECK(BH_SPEC_Key(KEY_1) && bhSpecCaptureFrequency == captured[2] && strcmp(bhSpecNotice, "LOOT 1/3") == 0);
+    CHECK(BH_SPEC_Key(KEY_7) && bhSpecCaptureFrequency == captured[0] && strcmp(bhSpecNotice, "LOOT 3/3") == 0);
+    CHECK(BH_SPEC_InBand(tuned, tuned));
+    BH_SPEC_Stop();
+    BH_SPEC_Start();
+    CHECK(bhSpecLoot.count == 0);
+    bhSpec.levels[5] = 900;
+    bhSpec.bin = 6;
+    CHECK(BH_SPEC_Key(KEY_PTT) && BH_SPEC_Key(KEY_7) && strcmp(bhSpecNotice, "LOOT: NO OTHER") == 0);
     BH_SPEC_Stop();
     puts("Spectrum adapter: RF/display/presets/CSS/file transfer checked with mocks; not physical validation");
     return EXIT_SUCCESS;
