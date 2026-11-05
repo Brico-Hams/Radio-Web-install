@@ -57,6 +57,6 @@ Las variantes fusion, labs, ardf y satellite no incluyen estas fuentes y no se h
 
 Dos compilaciones independientes con `--preset FieldOps --module spectrum --option ENABLE_FEAT_F4HWN_BEACON=OFF` (ARM GCC 13.3.1, base F4HWN v6.1.0 `f556a96`, fuentes Fusion61 locales no publicadas) dieron `bricohams.fieldops.spectrum.v6.1.0.bin` identico:
 120 284 B (slot 120 832 B, 548 B libres), SHA-256 `CF5E8C52B9599D4CF68D1F003991D758A92B2FFD6BB4E30DFC090333261A8145`. Tambien coinciden el `.elf` y `build-info.json`.
-11/11 pruebas host del firmware correctas. **El binario no se publica**: no hay prueba fisica en UV-5K V3.
+11/11 pruebas host del firmware correctas. **El binario no esta en el catalogo firmado**: no hay prueba fisica en UV-5K V3 ni firma CI. Publicado el 2026-11-05 solo como pre-release sin firma (`fw-spectrum-presets-v6.1.0`).
 
 Pasos pendientes en radio real (sin flashear a ciegas): 1) copia completa de la radio con el flujo F4HWN de Web Install y verificacion de su CRC; 2) cargar la imagen solo con bootloader/Multiboot que admita el slot y con cable de recuperacion; 3) comprobar arranque, LCD/teclas, tecla 2 (11 bandas, solo RX) y teclas 1/7 en captura (Loot); 4) restaurar la copia y confirmar identificacion F4HWN y respaldo automatico con una trama UART ruidosa.
