@@ -1,0 +1,19 @@
+1
+00:00:00,100 --> 00:00:04,900
+BH Fusion v6.1.0 for UV-K5 V3 / UV-K1. No firmware emulator: scenes recreated from signed catalog data.
+
+2
+00:00:05,100 --> 00:00:09,900
+Verified identity: 107940 bytes, 12892 bytes free in the 120832 B slot, SHA-256 e053c1d3671a…
+
+3
+00:00:10,100 --> 00:00:14,900
+Verified build options: 51 enabled and 31 disabled; modules: —.
+
+4
+00:00:15,100 --> 00:00:19,900
+Module feature per the manifest: F4HWN multiboot base with physical backup read (0x0738) and CRC (0x073e), without widening RAW writes.
+
+5
+00:00:20,100 --> 00:00:24,900
+Status: Beta, built with ARM GCC 13.3.1. Not hardware-tested: do not flash without a full backup and a recovery cable.

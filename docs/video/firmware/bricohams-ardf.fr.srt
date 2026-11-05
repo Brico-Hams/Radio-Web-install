@@ -1,0 +1,19 @@
+1
+00:00:00,100 --> 00:00:04,900
+BH ARDF v6.1.0 pour UV-K5 V3 / UV-K1. Pas d'émulateur du firmware : scènes reconstituées à partir du catalogue signé.
+
+2
+00:00:05,100 --> 00:00:09,900
+Identité vérifiée : 114324 octets, 6508 octets libres dans le slot de 120832 o, SHA-256 5e2aec16b7a8…
+
+3
+00:00:10,100 --> 00:00:14,900
+Options de compilation vérifiées : 53 actives, 29 désactivées ; modules : ardf.
+
+4
+00:00:15,100 --> 00:00:19,900
+Fonction du module selon le manifeste : statistiques ARDF, instantané de 140 o, observation manuelle avec la touche 8, sans écriture persistante.
+
+5
+00:00:20,100 --> 00:00:24,900
+Statut : bêta, compilé avec ARM GCC 13.3.1. Non testé sur matériel : ne flashez pas sans sauvegarde complète ni câble de récupération.
