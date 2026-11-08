@@ -51,6 +51,10 @@ test("los instalables incluyen el catalogo y todos los recursos web permitidos",
   for (const file of ALLOWED_FILES) {
     if (files.includes(file) || /^ayuda-.+\.(en|de|it|fr)\.html$/.test(file) ||
       /^docs\/atlas\/.+\.(jpg|svg)$/.test(file) || file === "satellite.min.js") continue;
+    if (/^docs\/manuals\/.+\.pdf$/.test(file)) {
+      assert(build.includes('"$root"/docs/manuals/*.pdf'));
+      continue;
+    }
     if (/^data\/channel-templates\/.+\.json$/.test(file)) {
       assert(build.includes('"$root"/data/channel-templates/*.json'));
       continue;

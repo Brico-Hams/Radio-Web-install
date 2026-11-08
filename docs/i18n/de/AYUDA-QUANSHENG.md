@@ -6,6 +6,8 @@ Commit `ca3a4271386049e7b459b215cef0ad0eea1a30ca`.
 Diese Anleitung schreibt Funktionen von v6.1/v6.3 nicht automatisch v4 oder v5 zu.
 Wie das Funkgerät intern funktioniert (Pins, Speicher, Protokoll, Bootloader,
 Schaltpläne und Fotos): [Technischer Atlas UV-K5 V3](ATLAS-UV-K5-V3.md).
+Das vollständige F4HWN-Menühandbuch (68 Menüs, ALL-Warnung und druckbare
+Kurzübersicht) finden Sie im [F4HWN-Handbuch](MANUAL-F4HWN.md).
 
 ## Einfache Kanäle und Ländervorlagen
 

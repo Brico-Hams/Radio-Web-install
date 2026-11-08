@@ -12,6 +12,7 @@ const pages = Object.freeze({
   "AYUDA-QUANSHENG.md": "ayuda-quansheng.html",
   "AYUDA-OPCIONES-F4HWN.md": "ayuda-opciones-f4hwn.html",
   "F4HWN-PRESETS.md": "ayuda-presets-f4hwn.html",
+  "MANUAL-F4HWN.md": "ayuda-manual-f4hwn.html",
   "AYUDA-ARDF.md": "ayuda-ardf.html",
   "AYUDA-EGZUMER.md": "ayuda-egzumer.html",
   "AYUDA-PACK-DIM0S.md": "ayuda-pack-dim0s.html",
@@ -328,7 +329,8 @@ function destination(target, source, lang = "es") {
   const resolved = file ? path.resolve(root, "docs", path.dirname(source), file) : path.join(root, "docs", source);
   assert(fs.existsSync(resolved), `Enlace local roto en ${source}: ${target}`);
   const asset = path.relative(root, resolved).replace(/\\/g, "/");
-  if (/^precompiled\/chirp\/(f4hwn\.chirp\.v6\.1\.0\.py|manifest\.json|NOTICE\.txt|COPYING\.txt)$/.test(asset)) return asset;
+  if (/^precompiled\/chirp\/(f4hwn\.chirp\.v6\.1\.0\.py|manifest\.json|NOTICE\.txt|COPYING\.txt)$/.test(asset) ||
+    /^docs\/manuals\/[\w.-]+\.pdf$/.test(asset)) return asset;
   const relative = path.relative(path.join(root, "docs"), resolved).replace(/\\/g, "/");
   const page = pages[relative.replace(/^i18n\/[a-z]{2}\//, "")];
   // App pages and the full help center stay local and preserve the guide language.

@@ -18,7 +18,7 @@ app_files=(
   ftx1.html ftx1-menu.js ftx1-core.js ftx1-ui.js
   index.html opengd77.html quansheng.html ayuda.html ayuda.en.html ayuda.fr.html ayuda.de.html bricohams-logo.png styles.css
   ayuda-firmwares.html ayuda-configuracion.html ayuda-quansheng.html help-docs.css
-  ayuda-opciones-f4hwn.html ayuda-presets-f4hwn.html ayuda-ardf.html
+  ayuda-opciones-f4hwn.html ayuda-presets-f4hwn.html ayuda-ardf.html ayuda-manual-f4hwn.html
   ayuda-opengd77.html ayuda-opengd77-modelos.html ayuda-karina.html ayuda-bricohams.html
   ayuda-anytone.html ayuda-ftx1.html ayuda-referencias.html ayuda-arquitectura.html ayuda-marca.html
   ayuda-decisiones.html ayuda-despliegue.html
@@ -44,6 +44,9 @@ stage_app() {
   # Diagrams and photos of the UV-K5 V3 atlas, served as docs/atlas/* (same paths as server.cjs).
   mkdir -p "$destination/docs/atlas"
   cp "$root"/docs/atlas/*.jpg "$root"/docs/atlas/*.svg "$destination/docs/atlas/"
+  # Printable F4HWN menu manual (PDF), served as docs/manuals/* (same path as server.cjs).
+  mkdir -p "$destination/docs/manuals"
+  cp "$root"/docs/manuals/*.pdf "$destination/docs/manuals/"
   mkdir -p "$destination/precompiled/apps"
   cp "$root"/precompiled/*.bin "$root"/precompiled/*.json "$root"/precompiled/*.txt "$destination/precompiled/"
   # Signatures travel with the images: the installer refuses unsigned firmware.
