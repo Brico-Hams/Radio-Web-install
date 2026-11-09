@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { ALLOWED_FILES } = require("../server.cjs");
 
 const root = path.join(__dirname, "..");
@@ -16,5 +17,9 @@ function build(outDir = path.join(root, "dist")) {
   fs.writeFileSync(path.join(outDir, "runtime.json"), JSON.stringify({ mode: "web" }));
   fs.writeFileSync(path.join(outDir, ".nojekyll"), "");
 }
-if (require.main === module) build();
+if (require.main === module) {
+  // Refresh the rate-limit fallback snapshot; a failure keeps the committed one.
+  spawnSync(process.execPath, [path.join(__dirname, "fetch-firmware-fallback.cjs")], { stdio: "inherit" });
+  build();
+}
 module.exports = { build };

@@ -55,6 +55,10 @@ test("los instalables incluyen el catalogo y todos los recursos web permitidos",
       assert(build.includes('"$root"/docs/manuals/*.pdf'));
       continue;
     }
+    if (file === "data/firmware-catalog-fallback.json") {
+      assert(build.includes('cp "$root/data/firmware-catalog-fallback.json"'));
+      continue;
+    }
     if (/^data\/channel-templates\/.+\.json$/.test(file)) {
       assert(build.includes('"$root"/data/channel-templates/*.json'));
       continue;

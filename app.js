@@ -167,6 +167,7 @@ function detail(tool) {
         <p id="model-help" class="model-help" role="status">Selecciona un modelo para consultar su conexion.</p>
         <label class="check"><input id="confirmed" type="checkbox"><span>He comprobado el modelo y el firmware. Autorizo leer la radio y guardar automaticamente copias locales.</span></label>
         <button id="radio-connect" class="button primary big" type="button" disabled>Conectar radio</button>
+        <button id="backup-retry" class="button primary" type="button" hidden disabled>Reintentar copia</button>
         <p id="radio-detected" class="radio-detected" role="status">Radio detectada: ninguna.</p>
         <button id="radio-disconnect" class="button secondary" type="button" disabled>Desconectar</button>
         <p id="radio-status" class="model-help" role="status">Sin conexion.</p>

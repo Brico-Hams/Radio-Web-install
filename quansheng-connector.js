@@ -8,7 +8,9 @@
   const FLASH_PROBE_TIMEOUT_MS = 1500;
   const FLASH_UNSUPPORTED_TEXT = "Este firmware no admite la copia de Flash externa (0x0738). La copia de EEPROM y calibracion sigue disponible. Instala una compilacion Bricohams con 0x0738 para habilitarla.";
   const FLASH_UNSUPPORTED_SCOPE = "Solo lectura: este firmware no admite la copia de Flash externa (0x0738). Calibracion y configuracion guardadas; escritura bloqueada. Instala una compilacion Bricohams con 0x0738 para habilitarla.";
+  const FLASH_CHUNK_RETRIES = 3;
   const stripPeriods = text => String(text).replace(/[.\s]+$/, "");
+  const isLostReply = error => error.code === "READ_TIMEOUT" || /^No se recibio respuesta/.test(error.message);
   const KEY = Uint8Array.of(0x16, 0x6c, 0x14, 0xe6, 0x2e, 0x91, 0x0d, 0x40, 0x21, 0x35, 0xd5, 0x40, 0x13, 0x03, 0xe9, 0x80);
   function crc16(data) {
     let crc = 0;
@@ -211,12 +213,16 @@
       this.transport.quanshengUSBPadding = true;
       this.catSequence = 0;
       this.flashReadSupport = null;
+      this.flashResume = null;
+      this.flashChunkTimeoutMs = 4000;
+      this.flashRetryDelayMs = 150;
     }
     async connect(model) {
       R.assert(["UV-K1", "UV-K5-V3"].includes(model), "Modelo Quansheng no compatible.");
       await this.transport.open(38400);
       this.connected = true;
       this.flashReadSupport = null;
+      this.flashResume = null;
       return this.run("Identificacion F4HWN", async () => {
         this.model = model;
         await this.identify();
@@ -804,20 +810,51 @@
       v.setUint32(0, address, true);
       v.setUint16(4, length, true);
       v.setUint32(6, this.timestamp, true);
-      let data;
-      try { data = await this.exchange(0x0738, request, 0x0739, probing ? FLASH_PROBE_TIMEOUT_MS : 4000, probing); }
-      catch (error) {
-        if (probing && error.code === "READ_TIMEOUT" && !this.transport.error) {
-          this.flashReadSupport = "unsupported";
-          throw this.flashUnsupportedError(error);
+      const retries = probing ? 0 : FLASH_CHUNK_RETRIES;
+      for (let attempt = 0; ; attempt++) {
+        let data;
+        try { data = await this.exchange(0x0738, request, 0x0739, probing ? FLASH_PROBE_TIMEOUT_MS : this.flashChunkTimeoutMs, true); }
+        catch (error) {
+          if (probing && error.code === "READ_TIMEOUT" && !this.transport.error) {
+            this.flashReadSupport = "unsupported";
+            throw this.flashUnsupportedError(error);
+          }
+          if (!probing && !this.transport.error && isLostReply(error)) {
+            if (attempt < retries) { await this.resyncFlashLink(attempt + 1); continue; }
+            throw this.flashInterruptedError(address, retries, error);
+          }
+          const hint = probing
+            ? "El firmware activo puede carecer de lectura fisica; leer canales con CHIRP no confirma esta capacidad. Comprueba una compilacion compatible y la conexion USB."
+            : "Comprueba la conexion USB.";
+          throw new Error(`Lectura Flash 0x0738 en 0x${address.toString(16)} (${length} bytes): ${stripPeriods(error.message)}. ${hint} No se habilitara escritura.`, { cause: error });
         }
-        throw new Error(`Lectura Flash 0x0738 en 0x${address.toString(16)} (${length} bytes): ${stripPeriods(error.message)}. El firmware activo puede carecer de lectura fisica; leer canales con CHIRP no confirma esta capacidad. Comprueba una compilacion compatible y la conexion USB. No se habilitara escritura.`, { cause: error });
+        // A late reply to an earlier request can arrive after a resync: ignore it and ask again.
+        const stale = data.length !== length + 7 || R.view(data).getUint32(0, true) !== address ||
+          R.view(data).getUint16(4, true) !== length;
+        if (stale && attempt < retries) { await this.resyncFlashLink(attempt + 1); continue; }
+        R.assert(!stale && data[6] === 0,
+          `Lectura Flash 0x0738 rechazada en 0x${address.toString(16)}. Se requiere una compilacion con lectura fisica de Flash externa.`);
+        this.flashReadSupport = "supported";
+        return data.slice(7);
       }
-      R.assert(data.length === length + 7 && R.view(data).getUint32(0, true) === address &&
-        R.view(data).getUint16(4, true) === length && data[6] === 0,
-      `Lectura Flash 0x0738 rechazada en 0x${address.toString(16)}. Se requiere una compilacion con lectura fisica de Flash externa.`);
-      this.flashReadSupport = "supported";
-      return data.slice(7);
+    }
+    // Drains stale bytes and repeats the hello (same session timestamp) so the firmware answers the next request.
+    async resyncFlashLink(attempt) {
+      await new Promise(resolve => setTimeout(resolve, this.flashRetryDelayMs * attempt));
+      try {
+        this.transport.clear();
+        const hello = new Uint8Array(4);
+        R.view(hello).setUint32(0, this.timestamp, true);
+        await this.exchange(0x0514, hello, 0x0515, 1500, true);
+        this.transport.clear();
+      } catch { /* best effort: the next chunk attempt reports a real link failure */ }
+    }
+    flashInterruptedError(address, retries, cause) {
+      const error = new Error(`Lectura de Flash interrumpida en 0x${address.toString(16)} tras ${retries} reintentos (USB inestable). Reintenta la copia; la radio sigue conectada.`, { cause });
+      error.code = "FLASH_READ_INTERRUPTED";
+      error.address = address;
+      error.recoverable = true;
+      return error;
     }
     // Returns "supported" | "unsupported" without ever failing the session for a missing 0x0738.
     async probeFlashRead() {
@@ -835,11 +872,16 @@
       const probe = await this.readFlashBlockRaw(0, 128);
       R.assert(await this.flashRangeCRCRaw(0, probe.length) === R.crc32(probe),
         "El CRC de la prueba de 128 bytes de Flash no coincide con la radio. No se habilitara escritura.");
-      const out = new Uint8Array(0x200000);
-      for (let address = 0; address < out.length; address += 128) {
-        out.set(await this.readFlashBlockRaw(address, 128), address);
-        progress((address + 128) / out.length);
+      // An interrupted read keeps the verified chunks so "Reintentar copia" resumes at the failed address.
+      const state = this.flashResume || (this.flashResume = { out: new Uint8Array(0x200000), address: 0 });
+      const { out } = state;
+      progress(state.address / out.length);
+      while (state.address < out.length) {
+        out.set(await this.readFlashBlockRaw(state.address, 128), state.address);
+        state.address += 128;
+        progress(state.address / out.length);
       }
+      this.flashResume = null;
       return out;
     }
     async flashRangeCRCRaw(address, length) {

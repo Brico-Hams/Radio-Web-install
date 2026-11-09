@@ -60,6 +60,7 @@
     let connector = null;
     let permit = null;
     let partialPermit = null;
+    let backupRetry = false;
     let busy = false;
     let catTracking = false;
     let image = null;
@@ -117,6 +118,11 @@
       if ($("gd77-full-backup")) $("gd77-full-backup").disabled = $("radio-connect").disabled;
       document.querySelectorAll("[data-gd77-live]").forEach(button => { button.disabled = busy || !connected; });
       $("radio-disconnect").disabled = busy || catTracking || !connector;
+      if ($("backup-retry")) {
+        const retry = backupRetry && connected && !permit;
+        $("backup-retry").hidden = !retry;
+        $("backup-retry").disabled = busy || !retry;
+      }
       model.disabled = busy || Boolean(connector);
       confirmation.disabled = busy || Boolean(connector);
       pro.disabled = busy || Boolean(connector);
@@ -1777,6 +1783,19 @@
         autoLivePending = true;
         return;
       }
+      await createBackup();
+    }
+    async function createBackup() {
+      backupRetry = false;
+      try { await runBackup(); }
+      catch (error) {
+        // The radio stays connected and identified; writes stay locked until a full backup completes.
+        backupRetry = Boolean(error.recoverable && connector?.connected && !connector.transport.error);
+        if (backupRetry) $("backup-status").textContent = "Escrituras bloqueadas: copia incompleta. Pulsa Reintentar copia; la radio sigue conectada.";
+        throw error;
+      }
+    }
+    async function runBackup() {
       if (navigator.storage?.persist) {
         const persistent = await navigator.storage.persist();
         log(persistent ? "Almacenamiento persistente concedido." : "Persistencia no garantizada por el navegador: exporta las copias.");
@@ -1817,10 +1836,15 @@
     attach("radio-disconnect", "Desconectar", async () => {
       permit = null;
       partialPermit = null;
+      backupRetry = false;
       R.revokeBackup(connector);
       await connector.disconnect();
       connector = null;
       $("backup-status").textContent = "Escrituras bloqueadas: nueva sesion requiere nuevo respaldo.";
+    });
+    if ($("backup-retry")) attach("backup-retry", "Reintentar copia", async () => {
+      R.assert(backupRetry && connector?.connected, "No hay una copia pendiente que reintentar.");
+      await createBackup();
     });
     attach("refresh-backups", "Consultar historial local", history);
     model.addEventListener("change", state);

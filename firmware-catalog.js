@@ -35,6 +35,68 @@
     return { data, manifest };
   }
   const MAX_FILE = 4 * 1024 * 1024;
+  const GITHUB_CACHE_PREFIX = "rw-github-cache-v1:";
+  const CATALOG_FALLBACK_URL = "data/firmware-catalog-fallback.json";
+  const formatDate = ms => Number.isFinite(ms) ? new Date(ms).toLocaleString() : "?";
+  const formatClock = ms => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  function defaultStorage() {
+    try { return root.localStorage || null; } catch { return null; }
+  }
+  function readCache(storage, url) {
+    try {
+      const entry = JSON.parse(storage.getItem(GITHUB_CACHE_PREFIX + url));
+      return entry && Number.isFinite(entry.fetchedAt) && entry.body !== undefined ? entry : null;
+    } catch { return null; }
+  }
+  function writeCache(storage, url, entry) {
+    try { storage.setItem(GITHUB_CACHE_PREFIX + url, JSON.stringify(entry)); } catch { /* quota: the cache is optional */ }
+  }
+  // Only listing data comes from the fallback; downloads are still verified against SHA-256 afterwards.
+  async function loadStaticCatalog(url, fetchImpl, fallbackURL) {
+    try {
+      const response = await fetchImpl(fallbackURL, { signal: AbortSignal.timeout(15000), credentials: "omit", cache: "no-cache" });
+      if (!response.ok) return null;
+      const data = await response.json();
+      if (data?.version !== 1 || !data.pages || !Array.isArray(data.pages[url])) return null;
+      return { body: data.pages[url], generatedAt: Date.parse(data.generatedAt) };
+    } catch { return null; }
+  }
+  // GitHub API JSON with an ETag cache (a 304 does not count against the unauthenticated limit)
+  // and a cache/static fallback when the limit is reached.
+  async function githubCachedJSON(url, options = {}) {
+    const { fetchImpl = root.fetch.bind(root), storage = defaultStorage(), onNotice = () => {}, fallbackURL = CATALOG_FALLBACK_URL } = options;
+    const cached = storage ? readCache(storage, url) : null;
+    const headers = { Accept: "application/vnd.github+json" };
+    if (cached?.etag) headers["If-None-Match"] = cached.etag;
+    let response;
+    try { response = await fetchImpl(url, { signal: AbortSignal.timeout(30000), credentials: "omit", headers }); }
+    catch (error) {
+      if (cached) { onNotice({ kind: "offline", cachedAt: cached.fetchedAt }); return cached.body; }
+      throw error;
+    }
+    if (response.status === 304 && cached) return cached.body;
+    if (response.ok) {
+      const body = await response.json();
+      if (storage) writeCache(storage, url, { etag: response.headers.get("etag"), fetchedAt: Date.now(), body });
+      return body;
+    }
+    if (response.status === 403 || response.status === 429) {
+      const reset = Number(response.headers.get("x-ratelimit-reset"));
+      const resetAt = Number.isFinite(reset) && reset > 0 ? reset * 1000 : null;
+      if (cached) { onNotice({ kind: "rate-limit", source: "cache", cachedAt: cached.fetchedAt, resetAt }); return cached.body; }
+      const fallback = await loadStaticCatalog(url, fetchImpl, fallbackURL);
+      if (fallback) { onNotice({ kind: "rate-limit", source: "static", cachedAt: fallback.generatedAt, resetAt }); return fallback.body; }
+    }
+    throw new Error(`GitHub respondio HTTP ${response.status}. Reintenta mas tarde.`);
+  }
+  function catalogNoticeText(notice) {
+    const date = formatDate(notice.cachedAt);
+    if (notice.kind === "offline") return `No se pudo contactar con GitHub; se usa la copia guardada (${date}).`;
+    const base = notice.source === "static"
+      ? `Límite de GitHub alcanzado; se usa el catálogo incluido en el sitio (${date})`
+      : `Límite de GitHub alcanzado; se usa la copia guardada (${date})`;
+    return notice.resetAt ? `${base} — se podrá actualizar a las ${formatClock(notice.resetAt)}.` : `${base}.`;
+  }
   // Web mode: the user downloads the file at the official source and loads it here; same size/SHA-256 guarantees.
   async function verifyLocalFirmware(entry, data, fileName) {
     R.assert(data instanceof Uint8Array && data.length > 0 && data.length <= MAX_FILE, "El archivo debe tener entre 1 B y 4 MiB.");
@@ -143,14 +205,10 @@
           edition: "Standard", url, source: url, publisher: "OpenGD77 / VK3KYY", expectedSHA256: null, size: null,
           verification: "manual-file-no-published-hash", format: "zip", slotCompatible: false }] };
       }
-      const files = await loadQuanshengEntries(target, async url => {
-        const response = await fetch(url,
-          { signal: AbortSignal.timeout(30000), credentials: "omit", headers: { Accept: "application/vnd.github+json" } });
-        R.assert(response.ok, `GitHub respondio HTTP ${response.status}. Reintenta mas tarde.`);
-        return response.json();
-      });
+      const notices = [];
+      const files = await loadQuanshengEntries(target, url => githubCachedJSON(url, { onNotice: notice => notices.push(notice) }));
       const entries = files.map(entry => ({ ...entry, id: `${target}|${entry.url}` }));
-      return { target, label: config.label, fetchedAt, expiresAt: "n/a", entries };
+      return { target, label: config.label, fetchedAt, expiresAt: "n/a", entries, notice: notices[0] ? catalogNoticeText(notices[0]) : "" };
     }
     $("firmware-target").addEventListener("change", () => clear("Modelo cambiado. Consulta de nuevo para evitar mezclar firmware."));
     model.addEventListener("change", () => {
@@ -166,7 +224,7 @@
       catalog = result;
       $("firmware-entry").replaceChildren(new Option("Selecciona firmware y variante", ""),
         ...result.entries.map(entry => new Option(`${entry.publisher} / ${entry.version} / ${entry.name} / ${sizeText(entry)}${entry.family === "quansheng" && !entry.slotCompatible ? " / solo descarga" : ""}`, entry.id)));
-      $("firmware-status").textContent = `${result.label}: ${result.entries.length} archivos. Consulta: ${result.fetchedAt}. Caduca: ${result.expiresAt}.`;
+      $("firmware-status").textContent = `${result.label}: ${result.entries.length} archivos. Consulta: ${result.fetchedAt}. Caduca: ${result.expiresAt}.${result.notice ? ` ${result.notice}` : ""}`;
     }));
     $("firmware-entry").addEventListener("change", () => {
       loaded = null;
@@ -236,6 +294,6 @@
     }));
     refreshState();
   }
-  Object.assign(R, { mountFirmwareCatalog, verifyFirmwarePayload, verifyLocalFirmware });
+  Object.assign(R, { mountFirmwareCatalog, verifyFirmwarePayload, verifyLocalFirmware, githubCachedJSON, catalogNoticeText, formatClock });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

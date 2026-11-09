@@ -12,7 +12,7 @@ const BASE_FILES = [
       "f4hwn-fusion", "f4hwn-fieldops", "f4hwn-transfer", "f4hwn-labs"].map(id => `precompiled/${id}.bin.sig`)]
     .filter(file => fsSync.existsSync(path.join(__dirname, file))),
   "channel-templates.js", "channel-template-ui.js", "channel-template-worker.js",
-  "data/channel-templates/satellites.json",
+  "data/channel-templates/satellites.json", "data/firmware-catalog-fallback.json",
   ...["ES", "GB", "US", "DE", "FR", "HU", "IT"].flatMap(code =>
     [`data/channel-templates/${code}.json`, `data/channel-templates/${code}-passes.json`]),
   "anytone.html", "anytone-core.js", "anytone-ui.js",

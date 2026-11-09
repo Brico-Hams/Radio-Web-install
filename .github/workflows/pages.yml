@@ -27,6 +27,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm test
       - run: npm run build:pages
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: node scripts/fetch-satellites.cjs --out dist/data/satellites.json --previous "$PAGES_ORIGIN/data/satellites.json"
         env:
           PAGES_ORIGIN: ${{ vars.PAGES_ORIGIN }}

@@ -53,6 +53,8 @@
       try {
         return await action();
       } catch (error) {
+        // The link is intact and the operator can retry without reconnecting.
+        if (error.recoverable && !this.transport.error) throw error;
         this.connected = false;
         throw new Error(`${label}: ${String(error.message).replace(/[.\s]+$/, "")}. Desconecta y vuelve a conectar antes de continuar.`, { cause: error });
       } finally {

@@ -12,6 +12,8 @@ mkdir -p "$output"
 # Bricohams Quansheng Studio ships with every installer, downloaded at the commit and SHA-256 pinned in studio.lock.json.
 node "$root/scripts/fetch-studio.cjs"
 node "$root/scripts/build-help.cjs"
+# Rate-limit fallback listing for the firmware catalog; a failed refresh keeps the committed snapshot.
+node "$root/scripts/fetch-firmware-fallback.cjs"
 app_files=(
   LICENSE AUTHORS.md ACKNOWLEDGEMENTS.md SUPPORT.md SECURITY.md
   anytone.html anytone-core.js anytone-ui.js
@@ -56,6 +58,7 @@ stage_app() {
   cp "$root"/precompiled/chirp/*.py "$root"/precompiled/chirp/*.json "$root"/precompiled/chirp/*.txt "$destination/precompiled/chirp/"
   mkdir -p "$destination/data/channel-templates"
   cp "$root"/data/channel-templates/*.json "$destination/data/channel-templates/"
+  cp "$root/data/firmware-catalog-fallback.json" "$destination/data/firmware-catalog-fallback.json"
   mkdir -p "$destination/node_modules"
   cp -R "$root/node_modules/satellite.js" "$destination/node_modules/satellite.js"
   node - "$destination" <<'NODE'
