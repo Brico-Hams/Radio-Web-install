@@ -345,6 +345,12 @@ Ein gemeinsamer Rhino-Kontext führt nur feste Assets aus, nie heruntergeladenen
 
 Position, Auswahl und letzter Downlink je Satellit werden privat gespeichert, außerhalb des Feld-JSON. Kein abgeleiteter Uplink; keine linearen Transponder.
 
+### Überflugdiagramm und Zielmodus
+
+Tippst du einen Überflug an (oder **Überflugdiagramm und Zielen** in CAT), öffnet sich das Polardiagramm: Die Mitte ist der Zenit (90°), der Rand der Horizont (0°), mit Ringen bei 0°, 30° und 60° und den Marken N, O, S, W. Die ganze Bahn von AOS bis LOS wird gezeichnet (alle 10 s ein Punkt) mit Markern für AOS, LOS und maximale Elevation; der bereits geflogene Teil ist grau, der Rest orange (gestrichelt, solange der Überflug noch nicht begonnen hat). Die aktuelle Satellitenposition wird jede Sekunde aktualisiert. Oben stehen der Countdown bis AOS oder LOS, aktuelle Az und El, Höhe und Entfernung, darunter jeder Transponder mit Downlink und Uplink, Doppler-korrigiert für deine Position (manuell oder GPS), und sein Modus.
+
+Mit **Zielen** nutzt du die Handysensoren: Das Diagramm dreht sich so, dass oben die Richtung liegt, in die die Oberkante des Handys zeigt (aufrecht oder flach); ein Fadenkreuz markiert diese Richtung und ein Pfeil führt zum Satelliten, mit Text wie „23° nach rechts drehen · 12° anheben“. Bei weniger als 5° Abweichung in Azimut und Elevation erscheint „Im Ziel“. Die Richtung bezieht sich auf geografisch Nord (magnetische Deklination für Position, Höhe und Datum). Bei geringer Sensorgenauigkeit erscheint „Kompass kalibrieren (Handy in Achterform bewegen)“; halte das Handy von Metall und Magneten fern. Ohne Orientierungssensoren bleibt das Diagramm mit Nord oben und der Grund wird angezeigt. Die Sensoren laufen nur bei sichtbarem Bildschirm im Zielmodus, der Bildschirm bleibt an; beim Verlassen werden sie abgeschaltet. Die Genauigkeit muss noch mit echten Handys geprüft werden.
+
 ### Doppler-RX des ausgewählten Überflugs
 
 Mit der Auswahl eines Überflugs wird CAT mit einer Momentaufnahme von TLE,

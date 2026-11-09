@@ -326,6 +326,12 @@ Un seul contexte Rhino partagé exécute les assets fixes, jamais du code télé
 
 Position, sélection et dernière descente de chaque satellite sont conservées en privé, hors JSON de terrain. Aucun uplink déduit ; transpondeurs linéaires non pris en charge.
 
+### Graphique du passage et mode Viser
+
+En touchant un passage (ou **Graphique du passage et visée** dans CAT), son graphique polaire s'ouvre : le centre est le zénith (90°), le bord l'horizon (0°), avec des anneaux à 0°, 30° et 60° et les repères N, E, S, O. Toute la trajectoire de l'AOS à la LOS est tracée (un point toutes les 10 s) avec des marques AOS, LOS et élévation maximale ; la partie déjà parcourue est en gris et le reste en orange (en pointillés tant que le passage n'a pas commencé). La position actuelle du satellite est mise à jour chaque seconde. L'en-tête montre le compte à rebours jusqu'à l'AOS ou la LOS, Az et El actuels, altitude et distance, puis chaque émetteur avec sa descente et sa montée corrigées du Doppler pour votre position (manuelle ou GPS) et son mode.
+
+Touchez **Viser** pour utiliser les capteurs du téléphone : le graphique tourne pour que le haut de l'écran soit la direction vers laquelle pointe la tranche supérieure du téléphone (à la verticale ou à plat), un réticule marque cette direction et une flèche mène au satellite avec un texte comme « Tournez de 23° vers la droite · Montez de 12° ». À moins de 5° d'écart en azimut et en élévation, « Sur la cible » s'affiche. Le cap est relatif au nord vrai (déclinaison magnétique de votre position, altitude et date). Si la précision du capteur est faible, « Calibrer la boussole (bougez le téléphone en huit) » s'affiche ; éloignez le téléphone des métaux et des aimants. Sans capteurs d'orientation, le graphique reste nord en haut et la raison est indiquée. Les capteurs ne fonctionnent que lorsque l'écran est visible et en mode Viser, et l'écran reste allumé ; en quittant, ils s'éteignent. La précision reste à valider sur de vrais téléphones.
+
 ### Doppler RX du passage sélectionné
 
 Sélectionner un passage ouvre CAT avec un instantané du TLE, de l’observateur,

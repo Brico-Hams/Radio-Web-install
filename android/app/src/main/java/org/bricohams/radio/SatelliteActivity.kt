@@ -22,6 +22,7 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -50,6 +51,7 @@ class SatelliteActivity : LocalizedActivity() {
         private const val DEFAULT_DOWNLINK = 145800000L
         private const val CATALOG_REFRESH_MS = 86400000L
         private const val RETRY_DELAY_MS = 900000L
+        const val EXTRA_OPEN_PLAN = "open-pass-plan"
     }
     private enum class Page { PASSES, MAP, SATELLITES, SETTINGS, DETAIL }
     private data class OrbitKey(val tle: Tle, val observer: ObserverPosition)
@@ -74,7 +76,7 @@ class SatelliteActivity : LocalizedActivity() {
     private val cards = ArrayList<Card>()
     private var dirty = true
     private var opened: PassTrack? = null
-    private var liveRadar: LivePassView? = null
+    private var liveRadar: PassRadarView? = null
     private var liveCountdown: TextView? = null
     private var liveValues: TextView? = null
     private var liveRange: TextView? = null
@@ -82,11 +84,12 @@ class SatelliteActivity : LocalizedActivity() {
     private var livePoint: TextView? = null
     private var liveModes: LinearLayout? = null
     private val liveTransmitters = ArrayList<Pair<Transmitter, TextView>>()
-    private var compass: RotorCompass? = null
-    private var compassAvailable = false
-    private var heading: Double? = null
-    private var phoneElevation: Double? = null
-    private var compassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
+    private var pointer: PointingSensor? = null
+    private var sensorsAvailable = false
+    private var aiming = false
+    private var deviceAzimuth: Double? = null
+    private var deviceElevation: Double? = null
+    private var sensorAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
     private var updating = false
     /** Counts live-view refreshes; host tests use it to prove updates stop in onPause. */
     @Volatile internal var liveTicks = 0
@@ -181,7 +184,11 @@ class SatelliteActivity : LocalizedActivity() {
         }
         setContentView(root)
         loadCatalog()
-        show(if (observer() == null) Page.MAP else Page.PASSES)
+        val requested = intent.getStringExtra(EXTRA_OPEN_PLAN)?.let {
+            try { SatellitePlanJson.decode(it) } catch (error: IllegalArgumentException) { report(error); null }
+        }
+        show(if (observer() == null && requested == null) Page.MAP else Page.PASSES)
+        requested?.let { openPass(PassTrack(it, emptyList())) }
     }
 
     private fun page(key: Page, build: LinearLayout.() -> Unit) {
@@ -212,7 +219,7 @@ class SatelliteActivity : LocalizedActivity() {
             Page.SATELLITES to R.string.satellite_tab_satellites, Page.SETTINGS to R.string.satellite_tab_settings)) {
             navigation.addView(Brand.chip(this, getString(label), key == target || (target == Page.DETAIL && key == Page.PASSES)) { show(key) })
         }
-        syncCompass()
+        syncSensor()
         tick()
     }
 
@@ -366,8 +373,8 @@ class SatelliteActivity : LocalizedActivity() {
     private fun openPass(track: PassTrack) {
         opened = track
         liveTransmitters.clear()
-        heading = null; phoneElevation = null
-        compassAvailable = RotorCompass.supported(this)
+        aiming = false; deviceAzimuth = null; deviceElevation = null
+        sensorsAvailable = PointingSensor.supported(this)
         val tle = track.plan.tle
         page(Page.DETAIL) {
             addView(Brand.row(this@SatelliteActivity,
@@ -383,7 +390,7 @@ class SatelliteActivity : LocalizedActivity() {
             liveCountdown = Brand.text(this@SatelliteActivity, 34f, colors.accent, bold = true).also { addView(it) }
             liveValues = Brand.text(this@SatelliteActivity, 22f, bold = true).also { addView(it) }
             liveRange = Brand.text(this@SatelliteActivity, 15f, colors.muted).also { addView(it) }
-            val view = LivePassView(this@SatelliteActivity).apply {
+            val view = PassRadarView(this@SatelliteActivity).apply {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
                 cardinals = getString(R.string.live_cardinals).split(',').toTypedArray()
                 this.track = opened?.track.orEmpty()
@@ -489,7 +496,7 @@ class SatelliteActivity : LocalizedActivity() {
             worker.execute {
                 try {
                     val orbit = orbit(track.plan.tle, track.plan.observer)
-                    val sampled = track.copy(track = SatellitePasses.sample(track.plan.pass) { orbit.look(it) })
+                    val sampled = track.copy(track = PassPointing.sampleTrack(track.plan.pass) { orbit.look(it) })
                     runOnUiThread {
                         if (!isDestroyed && token == generation) {
                             passes = passes.map { if (it == track) sampled else it }
@@ -888,35 +895,43 @@ class SatelliteActivity : LocalizedActivity() {
     private fun buildModeChips() {
         val row = liveModes ?: return
         row.removeAllViews()
-        if (!compassAvailable) { row.visibility = View.GONE; return }
+        if (!sensorsAvailable) { row.visibility = View.GONE; return }
         row.visibility = View.VISIBLE
-        val compassOn = preferences.getBoolean("live-compass", true)
-        fun choose(value: Boolean) {
-            preferences.edit().putBoolean("live-compass", value).apply()
-            buildModeChips(); renderLive(System.currentTimeMillis())
-        }
-        row.addView(Brand.chip(this, getString(R.string.live_mode_north), !compassOn) { choose(false) })
-        row.addView(Brand.chip(this, getString(R.string.live_mode_compass), compassOn) { choose(true) })
+        row.addView(Brand.chip(this, getString(R.string.pass_aim), aiming) {
+            aiming = !aiming
+            deviceAzimuth = null; deviceElevation = null
+            buildModeChips(); syncSensor(); renderLive(System.currentTimeMillis())
+        })
     }
 
-    private fun compassMode() = compassAvailable && preferences.getBoolean("live-compass", true)
+    private var lastSensorRender = 0L
 
-    /** The compass only runs while the live view is visible and the activity is resumed. */
-    private fun syncCompass() {
-        val wanted = updating && page == Page.DETAIL && opened != null && compassAvailable
-        if (wanted && compass == null) {
-            compass = RotorCompass(this) { reading ->
-                heading = heading?.let { PassGeometry.smooth(it, reading.trueAzimuth, 0.3) } ?: reading.trueAzimuth
-                phoneElevation = -reading.pitch
-                compassAccuracy = reading.accuracy
-                renderLive(System.currentTimeMillis())
+    /** Sensors run only in Apuntar mode while the pass view is visible and resumed; the screen stays on meanwhile. */
+    private fun syncSensor() {
+        val wanted = updating && page == Page.DETAIL && opened != null && sensorsAvailable && aiming
+        if (wanted && pointer == null) {
+            pointer = PointingSensor(this) { reading ->
+                deviceAzimuth = deviceAzimuth?.let { PassGeometry.smooth(it, reading.trueAzimuth, 0.25) } ?: reading.trueAzimuth
+                deviceElevation = deviceElevation?.let { PassPointing.smoothLinear(it, reading.elevation, 0.25) } ?: reading.elevation
+                sensorAccuracy = reading.accuracy
+                val time = System.currentTimeMillis()
+                if (time - lastSensorRender >= 80) { lastSensorRender = time; renderLive(time) }
             }.also { it.start(opened?.plan?.observer ?: observer()) }
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else if (!wanted) {
-            compass?.stop()
-            compass = null
-            heading = null; phoneElevation = null
+            pointer?.stop()
+            pointer = null
+            deviceAzimuth = null; deviceElevation = null
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
+
+    private fun accuracyName(value: Int) = getString(when (value) {
+        SensorManager.SENSOR_STATUS_ACCURACY_HIGH -> R.string.pass_aim_acc_high
+        SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM -> R.string.pass_aim_acc_medium
+        SensorManager.SENSOR_STATUS_ACCURACY_LOW -> R.string.pass_aim_acc_low
+        else -> R.string.pass_aim_acc_unreliable
+    })
 
     private fun renderLive(now: Long) {
         val track = opened ?: return
@@ -934,46 +949,38 @@ class SatelliteActivity : LocalizedActivity() {
         liveValues?.text = getString(R.string.live_name_values, track.plan.tle.name, values)
         liveRange?.text = if (position == null) getString(R.string.live_aos_hint, pass.aos.azimuth)
             else getString(R.string.live_alt_range, PassGeometry.altitudeKm(position, track.plan.observer.heightKm), position.rangeKm)
-        val mode = compassMode()
-        val phoneHeading = if (mode) heading else null
+        val azimuth = if (aiming) deviceAzimuth else null
+        val elevation = if (aiming) deviceElevation else null
+        val target = position ?: pass.aos.takeIf { rising }
+        val aim = if (azimuth != null && elevation != null && target != null) PassPointing.aim(azimuth, elevation, target) else null
         liveRadar?.let {
             it.now = now
-            it.headingUp = phoneHeading ?: 0.0
-            it.headingLabel = phoneHeading?.let { value -> getString(R.string.live_heading, value) }.orEmpty()
+            it.headingUp = azimuth
+            it.device = if (azimuth != null && elevation != null) Pair(azimuth, elevation) else null
+            it.target = target
+            it.onTarget = aim?.onTarget == true
+            it.headingLabel = azimuth?.let { value -> getString(R.string.live_heading, value) }.orEmpty()
         }
         liveHeadingNote?.text = when {
-            !compassAvailable -> getString(R.string.live_compass_missing)
-            !mode -> ""
-            heading == null -> getString(R.string.live_compass_waiting)
-            compassAccuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW -> getString(R.string.live_compass_calibrate)
-            else -> ""
+            !sensorsAvailable -> getString(R.string.live_compass_missing)
+            !aiming -> ""
+            azimuth == null -> getString(R.string.live_compass_waiting)
+            sensorAccuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW ->
+                getString(R.string.pass_aim_accuracy, accuracyName(sensorAccuracy)) + "\n" + getString(R.string.pass_aim_calibrate)
+            else -> getString(R.string.pass_aim_accuracy, accuracyName(sensorAccuracy))
         }
         liveHeadingNote?.visibility = if (liveHeadingNote?.text.isNullOrEmpty()) View.GONE else View.VISIBLE
-        val target = position ?: pass.aos.takeIf { rising }
-        val aim = when {
+        val phrases = PassPointing.Phrases({ getString(R.string.pass_aim_left, it) }, { getString(R.string.pass_aim_right, it) },
+            { getString(R.string.pass_aim_up, it) }, { getString(R.string.pass_aim_down, it) }, getString(R.string.pass_aim_on_target))
+        val aimText = when {
             target == null -> ""
-            phoneHeading == null -> getString(R.string.live_point_abs, target.azimuth, target.elevation)
-            else -> {
-                val pointing = PassGeometry.pointing(phoneHeading, target, phoneElevation)
-                val turn = pointing.turn ?: 0.0
-                val horizontal = when {
-                    turnDegrees(turn) == 0 -> getString(R.string.live_point_ok)
-                    turn < 0 -> getString(R.string.live_point_left, turnDegrees(turn))
-                    else -> getString(R.string.live_point_right, turnDegrees(turn))
-                }
-                val raise = pointing.raise
-                val vertical = when {
-                    raise == null -> getString(R.string.live_el_target, pointing.targetElevation)
-                    raise >= 0.5 -> getString(R.string.live_el_raise, turnDegrees(raise), pointing.targetElevation)
-                    raise <= -0.5 -> getString(R.string.live_el_lower, turnDegrees(raise), pointing.targetElevation)
-                    else -> getString(R.string.live_el_ok, pointing.targetElevation)
-                }
-                getString(R.string.live_point, horizontal, vertical)
-            }
+            aim == null -> getString(R.string.live_point_abs, target.azimuth, target.elevation)
+            else -> PassPointing.instruction(aim, phrases)
         }
-        livePoint?.text = aim
-        livePoint?.visibility = if (aim.isEmpty()) View.GONE else View.VISIBLE
-        liveRadar?.contentDescription = getString(R.string.satellite_radar_description, listOf(values, aim).filter { it.isNotEmpty() }.joinToString(". "))
+        livePoint?.text = aimText
+        livePoint?.setTextColor(if (aim?.onTarget == true) colors.positive else colors.accent)
+        livePoint?.visibility = if (aimText.isEmpty()) View.GONE else View.VISIBLE
+        liveRadar?.contentDescription = getString(R.string.satellite_radar_description, listOf(values, aimText).filter { it.isNotEmpty() }.joinToString(". "))
         val rate = if (position == null) null else PassGeometry.rangeRateKmS(track.track, now)
         val nominal = if (rate == null) " " + getString(R.string.live_tx_nominal) else ""
         for ((transmitter, row) in liveTransmitters) {
@@ -990,7 +997,7 @@ class SatelliteActivity : LocalizedActivity() {
         super.onResume()
         updateCatalogIfNeeded()
         updating = true
-        syncCompass()
+        syncSensor()
         handler.post(ticker)
     }
     override fun onPause() {
@@ -998,7 +1005,7 @@ class SatelliteActivity : LocalizedActivity() {
         gpsCancel?.visibility = View.GONE
         updating = false
         handler.removeCallbacks(ticker)
-        syncCompass()
+        syncSensor()
         super.onPause()
     }
     private fun report(error: Exception) {

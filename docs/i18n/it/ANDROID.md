@@ -328,6 +328,12 @@ Un contesto Rhino condiviso esegue solo asset fissi, mai codice scaricato, senza
 
 Posizione, selezione e ultimo downlink per satellite restano privati, fuori dal JSON di campo. Nessun uplink dedotto; transponder lineari non supportati.
 
+### Grafico del passaggio e modalità Punta
+
+Toccando un passaggio (o **Grafico del passaggio e puntamento** in CAT) si apre il suo grafico polare: il centro è lo zenit (90°), il bordo l'orizzonte (0°), con anelli a 0°, 30° e 60° e i segni N, E, S, O. Viene disegnata tutta la traiettoria da AOS a LOS (un punto ogni 10 s) con indicatori di AOS, LOS ed elevazione massima; la parte già percorsa è grigia e il resto arancione (tratteggiato finché il passaggio non è iniziato). La posizione attuale del satellite si aggiorna ogni secondo. In alto compaiono il conto alla rovescia verso AOS o LOS, Az ed El attuali, altitudine e distanza, e sotto ogni trasmettitore con discesa e salita corrette per il Doppler per la tua posizione (manuale o GPS) e il suo modo.
+
+Tocca **Punta** per usare i sensori del telefono: il grafico ruota in modo che in alto ci sia la direzione verso cui indica il bordo superiore del telefono (in verticale o piatto), un mirino segna quella direzione e una freccia porta al satellite con un testo come «Gira di 23° a destra · Alza di 12°». Entro 5° di errore in azimut ed elevazione compare «Sul bersaglio». La direzione è riferita al nord vero (declinazione magnetica per posizione, altitudine e data). Con bassa precisione del sensore compare «Calibra la bussola (muovi il telefono a otto)»; tieni il telefono lontano da metalli e magneti. Senza sensori di orientamento resta il grafico con il nord in alto e ne viene spiegato il motivo. I sensori funzionano solo con la schermata visibile e in modalità Punta, e lo schermo resta acceso; uscendo si spengono. La precisione va ancora validata con telefoni reali.
+
 ### Doppler RX del passaggio selezionato
 
 Selezionare un passaggio apre CAT con un'istantanea di TLE, osservatore,

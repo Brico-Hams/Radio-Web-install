@@ -317,6 +317,12 @@ One shared Rhino context runs fixed assets only, never downloaded code, without 
 
 Position, satellite selection and last downlink per satellite persist privately, outside field JSON. No uplink is inferred; linear transponders are unsupported.
 
+### Pass chart and Aim mode
+
+Tapping a pass (or **Pass chart and aiming** in CAT) opens its polar chart: the centre is the zenith (90°), the rim is the horizon (0°), with rings at 0°, 30° and 60° and N, E, S, W marks. The whole track from AOS to LOS is drawn (one sample every 10 s) with AOS, LOS and maximum-elevation markers; the part already flown is grey and the rest orange (dashed while the pass has not started). The satellite's current position updates every second. The header shows the countdown to AOS or LOS, current Az and El, altitude and range, and below it every transmitter with its downlink and uplink Doppler-corrected for your position (manual or GPS) and its mode.
+
+Tap **Aim** to use the phone sensors: the chart turns so that the direction the phone's top edge points to (upright or flat) is at the top, a crosshair marks that direction and an arrow leads to the satellite with text such as "Turn 23° right · Raise 12°". Within 5° in azimuth and elevation it shows "On target". Headings are true north (magnetic declination for your position, altitude and date). When sensor accuracy is low it shows "Calibrate compass (move the phone in a figure eight)"; keep the phone away from metal and magnets. Without orientation sensors the north-up chart stays and the reason is shown. Sensors only run while the screen is visible and in Aim mode, and the screen stays on; leaving switches them off. Accuracy still has to be validated on real phones.
+
 ### Doppler RX for the selected pass
 
 Selecting a pass opens CAT with a snapshot of the TLE, observer, downlink,

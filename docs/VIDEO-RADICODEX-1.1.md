@@ -19,7 +19,7 @@ Vídeo explicativo de 6-8 minutos grabado en el Samsung S20 FE real con `adb scr
 
 ## Plan de escenas
 
-La tabla es la fuente de `scripts/video-assemble.ps1`: no cambies el orden de las columnas ni el formato `Vnn`. Las duraciones objetivo suman 455 s (7 min 35 s) sin la tarjeta de título.
+La tabla es la fuente de `scripts/video-assemble.ps1`: no cambies el orden de las columnas ni el formato `Vnn`. Las duraciones objetivo suman 495 s (8 min 15 s) sin la tarjeta de título.
 
 | ID | Pantalla / módulo | Radio (OTG) | Acciones | Subtítulo ES | Subtitle EN | Duración (s) |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -36,7 +36,8 @@ La tabla es la fuente de `scripts/video-assemble.ps1`: no cambies el orden de la
 | V11 | Modos digitales FT8 / FT4 / FT2 | truSDX | Elegir FT2, escuchar audio USB o un WAV, mostrar las decodificaciones (OSD y decodificación a priori). | Decodificador FT2 mejorado: OSD y decodificación a priori. | Improved FT2 decoder: OSD and a-priori decoding. | 40 |
 | V12 | Satélites: ubicación GPS | ninguna | Abrir Satélites, pulsar Obtener posición del teléfono, conceder precisa o aproximada; mostrar satélites vistos y usados (hasta 180 s). | Ubicación GPS del teléfono: precisa o aproximada. | Phone GPS location: precise or approximate. | 35 |
 | V13 | Satélites: TLE y pases | ninguna | Actualizar TLE; mostrar el orden CelesTrak, SatNOGS, AMSAT; abrir un pase y su Doppler. | TLE con respaldo: CelesTrak, SatNOGS y AMSAT. | TLE fallback: CelesTrak, SatNOGS and AMSAT. | 30 |
-| V14 | Actualizaciones (OTA) y aviso de cambios | ninguna | Abrir Actualizaciones (compilación GitHub), buscar versión y mostrar la verificación de firma; enseñar el aviso de cambio de app o firmware. | Actualizaciones OTA firmadas y aviso al cambiar app o firmware. | Signed OTA updates and a notice when the app or firmware changes. | 30 |
+| V14 | Satélites: gráfico del pase y Apuntar | ninguna | Tocar un pase; mostrar el gráfico polar con la trayectoria AOS-LOS y el satélite moviéndose, la cuenta atrás y los transmisores con Doppler; pulsar Apuntar, sostener el móvil en vertical y girar hasta ver «En el blanco»; mostrar el aviso de calibrar la brújula. | Gráfico del pase y modo Apuntar: sigue la flecha hasta el satélite. | Pass chart and Aim mode: follow the arrow to the satellite. | 40 |
+| V15 | Actualizaciones (OTA) y aviso de cambios | ninguna | Abrir Actualizaciones (compilación GitHub), buscar versión y mostrar la verificación de firma; enseñar el aviso de cambio de app o firmware. | Actualizaciones OTA firmadas y aviso al cambiar app o firmware. | Signed OTA updates and a notice when the app or firmware changes. | 30 |
 
 ## Tarjeta de título y cierre
 

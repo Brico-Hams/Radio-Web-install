@@ -415,6 +415,12 @@ satelite se guardan en preferencias privadas; exportaciones JSON de campo
 no las incluyen. No se deduce un uplink ni se soportan transpondedores
 lineales: el CAT de la radio solo corrige la bajada.
 
+### Gráfico del pase y modo Apuntar
+
+Al tocar un pase (o con **Ver gráfico del pase y apuntar** en CAT) se abre su gráfico polar: el centro es el cenit (90°) y el borde el horizonte (0°), con anillos a 0°, 30° y 60° y las marcas N, E, S, O. Se dibuja toda la trayectoria de AOS a LOS (una muestra cada 10 s) con marcas de AOS, LOS y elevación máxima; la parte ya recorrida va en gris y la que falta en naranja (discontinua si el pase aún no ha empezado). La posición actual del satélite se actualiza cada segundo. Arriba se ven la cuenta atrás a AOS o LOS, Az y El actuales, altitud y distancia, y debajo cada transmisor con su bajada y subida corregidas por Doppler para tu posición (manual o GPS) y su modo.
+
+Pulsa **Apuntar** para usar los sensores del móvil: el gráfico gira para que arriba quede la dirección a la que apunta el borde superior del móvil (en vertical o plano), una mira marca esa dirección y una flecha lleva hacia el satélite con un texto como «Gira 23° a la derecha · Sube 12°». Con menos de 5° de error en azimut y elevación aparece «En el blanco». El rumbo es norte verdadero (declinación magnética de tu posición, altitud y fecha). Si la precisión del sensor es baja se muestra «Calibrar brújula (mueve el móvil en ocho)»; aleja el móvil de metales e imanes. Sin sensores de orientación se mantiene el gráfico con el norte arriba y se explica el motivo. Los sensores solo funcionan mientras la pantalla está visible y en modo Apuntar, y la pantalla permanece encendida; al salir se apagan. Falta validar la precisión con móviles reales.
+
 ### Doppler RX del pase seleccionado
 
 **Abrir CAT RX y Doppler de este pase**, bajo el radar, abre CAT con una instantanea de TLE, observador,
