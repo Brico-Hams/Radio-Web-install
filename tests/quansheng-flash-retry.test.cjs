@@ -54,7 +54,7 @@ class FlashDevice extends R.BufferedTransport {
       const length = le(data).getUint16(4, true);
       this.reads.push(address);
       const remaining = this.drops.get(address) || 0;
-      if (remaining > 0) { this.drops.set(address, remaining - 1); return; }
+      if (remaining > 0 && (!this.dropLength || length === this.dropLength)) { this.drops.set(address, remaining - 1); return; }
       result = new Uint8Array(length + 7);
       le(result).setUint32(0, address, true);
       le(result).setUint16(4, length, true);
@@ -112,7 +112,7 @@ test("una direccion que siempre falla da error tras 3 reintentos, mantiene la co
     return true;
   });
   assert.equal(permit, null);
-  assert.equal(countAt(device, 0x41f00), 4, "1 intento + 3 reintentos");
+  assert.equal(countAt(device, 0x41f00), 12, "4 intentos con bloques de 128, 64 y 32 bytes");
   assert.equal(connector.connected, true);
   assert.ok(!device.error);
   assert.equal([...store.records.values()][0].status, "failed");
@@ -122,5 +122,20 @@ test("una direccion que siempre falla da error tras 3 reintentos, mantiene la co
   const flash = await connector.readFlashRaw();
   assert.ok(R.equal(flash, device.flash));
   assert.equal(countAt(device, 0x1000), 1, "los bloques buenos no se vuelven a leer");
+  await connector.disconnect();
+});
+
+test("si solo se pierden respuestas de 128 bytes, la lectura baja a bloques de 64 y es exacta", async () => {
+  const device = new FlashDevice(new Map([[0x41f00, Infinity]]));
+  device.dropLength = 128;
+  const connector = quick(new R.QuanshengConnector(device));
+  await connector.connect("UV-K5-V3");
+  const messages = [];
+  connector.onProgress = ({ message }) => { if (message) messages.push(message); };
+  const flash = await connector.readFlashRaw();
+  assert.ok(R.equal(flash, device.flash));
+  assert.equal(countAt(device, 0x41f00), 5, "4 intentos de 128 bytes y 1 de 64");
+  assert.ok(messages.some(message => /bloques de 64 bytes/.test(message)));
+  assert.equal(connector.connected, true);
   await connector.disconnect();
 });

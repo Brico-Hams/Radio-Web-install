@@ -1133,7 +1133,7 @@ test("Instalar slot escribe imagen antes de cabecera y verifica CRC", async () =
   const writes = device.commands.filter(item => item.type === 0x0724);
   assert.equal(le(writes[0].data).getUint32(2, true), 0x1000);
   assert.equal(le(writes.at(-1).data).getUint32(2, true), 0);
-  assert.equal(device.commands.at(-1).type, 0x0726);
+  assert.deepEqual(device.commands.slice(-2).map(item => item.type), [0x0726, 0x0720], "CRC en la radio y relectura de cabecera del slot");
 });
 test("Main, imagenes invalidas, versiones v5 y nombres invalidos no se borran", async () => {
   const device = new QuanshengDevice(); const connector = new R.QuanshengConnector(device);

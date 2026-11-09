@@ -5,7 +5,12 @@
   const CAT_REMOTE_TEXT = "Activa «CAT remoto» en la radio (en SAT RX pulsa F+8; debe verse el indicador CAT en pantalla)";
   const CAT_TX_REMOTE_TEXT = "Activa «CAT remoto» en la radio (en SAT RX pulsa F+8) para permitir PTT por CAT";
   const CAT_HOLDOFF_TEXT = ". Se pulso una tecla en la radio: espera unos segundos";
-  const FLASH_PROBE_TIMEOUT_MS = 1500;
+  const FLASH_PROBE_TIMEOUT_MS = 2500;
+  // Slot reads in Studio wait 3000 ms (index.html:2024) and NOR block writes 8000 ms (index.html:2124).
+  const SLOT_WRITE_TIMEOUT_MS = 8000;
+  const SLOT_INFO_RETRY_DELAY_MS = 180;
+  // Chunk sizes tried in order when a 0x0738 reply keeps getting lost (Studio never reads blocks above 0x80, index.html:975).
+  const FLASH_CHUNK_SIZES = Object.freeze([128, 64, 32]);
   const FLASH_UNSUPPORTED_TEXT = "Este firmware no admite la copia de Flash externa (0x0738). La copia de EEPROM y calibracion sigue disponible. Instala una compilacion Bricohams con 0x0738 para habilitarla.";
   const FLASH_UNSUPPORTED_SCOPE = "Solo lectura: este firmware no admite la copia de Flash externa (0x0738). Calibracion y configuracion guardadas; escritura bloqueada. Instala una compilacion Bricohams con 0x0738 para habilitarla.";
   const FLASH_CHUNK_RETRIES = 3;
@@ -34,7 +39,7 @@
     v.setUint16(6 + size, 0xbadc, true);
     return out;
   }
-  function decodePacket(frame) {
+  function decodePacket(frame, lenientCrc = false) {
     R.assert(frame.length >= 12, "Trama UART demasiado corta.");
     const size = R.view(frame).getUint16(2, true);
     R.assert(frame.length === size + 8 && frame[0] === 0xab && frame[1] === 0xcd &&
@@ -46,7 +51,8 @@
     // Host replies use 0xffff instead of a calculated CRC in this firmware.
     const crc = R.view(body).getUint16(size, true);
     const calculated = crc16(body.subarray(0, size));
-    R.assert(crc === 0xffff || crc === calculated,
+    // Bootloader notices may carry a CRC that does not match; Studio counts it but keeps the frame (index.html:2152-2154).
+    R.assert(lenientCrc || crc === 0xffff || crc === calculated,
       `CRC UART incorrecto (recibido 0x${crc.toString(16)}, calculado 0x${calculated.toString(16)}).`);
     return { type: R.view(body).getUint16(0, true), data: body.slice(4, 4 + length) };
   }
@@ -216,10 +222,13 @@
       this.flashResume = null;
       this.flashChunkTimeoutMs = 4000;
       this.flashRetryDelayMs = 150;
+      this.slotRetryDelayMs = 80;
+      this.slotInfoRetryDelayMs = SLOT_INFO_RETRY_DELAY_MS;
+      this.lenientIncomingCrc = false;
     }
     async connect(model) {
       R.assert(["UV-K1", "UV-K5-V3"].includes(model), "Modelo Quansheng no compatible.");
-      await this.transport.open(38400);
+      await this.transport.open(38400, [], { bufferSize: 65536 });
       this.connected = true;
       this.flashReadSupport = null;
       this.flashResume = null;
@@ -234,6 +243,10 @@
       this.stopCatTransmit();
       return super.disconnect();
     }
+    // Single timer entry point so code loaded in timer-less sandboxes can still pause.
+    pause(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
     async exchange(type, data, expected = type + 1, timeout = 4000, recoverableTimeout = false) {
       await this.transport.write(packet(type, data));
       return this.receiveResponse(expected, timeout, recoverableTimeout);
@@ -244,7 +257,7 @@
       try {
         return await this.scanResponse(expected, deadline, recoverableTimeout, state);
       } catch (error) {
-        if (state.rejected && error.code === "READ_TIMEOUT") {
+        if (state.rejected && error.code === "READ_TIMEOUT" && !/Ultima trama descartada/.test(error.message)) {
           error.message += ` Ultima trama descartada: ${state.rejected.message}`;
         }
         throw error;
@@ -269,7 +282,7 @@
         frame.set([0xab, 0xcd, ...length]);
         frame.set(rest, 4);
         let response;
-        try { response = decodePacket(frame); }
+        try { response = decodePacket(frame, this.lenientIncomingCrc); }
         catch (error) {
           // A bad frame is never accepted, but it may be a false sync that swallowed the real reply: rescan after the 0xAB.
           state.rejected = error;
@@ -280,7 +293,9 @@
         if (response.type === expected) return response.data;
         previous = 0;
       }
-      throw new Error(`No se recibio respuesta 0x${expected.toString(16)}.${state.rejected ? ` Ultima trama descartada: ${state.rejected.message}` : ""}`);
+      const lost = new Error(`No se recibio respuesta 0x${expected.toString(16)}.${state.rejected ? ` Ultima trama descartada: ${state.rejected.message}` : ""}`);
+      lost.code = "READ_TIMEOUT";
+      throw lost;
     }
     async identify() {
       this.timestamp = Date.now() >>> 0;
@@ -873,16 +888,37 @@
       R.assert(await this.flashRangeCRCRaw(0, probe.length) === R.crc32(probe),
         "El CRC de la prueba de 128 bytes de Flash no coincide con la radio. No se habilitara escritura.");
       // An interrupted read keeps the verified chunks so "Reintentar copia" resumes at the failed address.
-      const state = this.flashResume || (this.flashResume = { out: new Uint8Array(0x200000), address: 0 });
+      const state = this.flashResume || (this.flashResume = { out: new Uint8Array(0x200000), address: 0, size: 128, good: 0 });
       const { out } = state;
       progress(state.address / out.length);
       while (state.address < out.length) {
-        out.set(await this.readFlashBlockRaw(state.address, 128), state.address);
+        out.set(await this.readFlashChunk(state), state.address);
         state.address += 128;
         progress(state.address / out.length);
       }
       this.flashResume = null;
       return out;
+    }
+    // Reads one 128-byte block. When the reply to the full-size request keeps getting lost, the same block is
+    // fetched in 64- and then 32-byte requests (one USB packet each); the size recovers after 64 clean blocks.
+    async readFlashChunk(state) {
+      const address = state.address;
+      let failure;
+      for (const size of FLASH_CHUNK_SIZES.filter(item => item <= state.size)) {
+        try {
+          const block = new Uint8Array(128);
+          for (let offset = 0; offset < 128; offset += size) block.set(await this.readFlashBlockRaw(address + offset, size), offset);
+          if (size !== state.size) { state.size = size; state.good = 0; }
+          else if (size !== 128 && ++state.good >= 64) { state.size = 128; state.good = 0; }
+          return block;
+        } catch (error) {
+          if (error.code !== "FLASH_READ_INTERRUPTED") throw error;
+          failure = error;
+          const next = FLASH_CHUNK_SIZES.find(item => item < size);
+          if (next) this.progress(address / state.out.length, `Respuesta de Flash perdida: leyendo en bloques de ${next} bytes.`);
+        }
+      }
+      throw failure;
     }
     async flashRangeCRCRaw(address, length) {
       R.assert(Number.isInteger(address) && Number.isInteger(length) && address >= 0 &&
@@ -941,7 +977,16 @@
     }
     async infoRaw(slot) {
       R.assert(Number.isInteger(slot) && slot >= 0 && slot <= 4, "Slot invalido.");
-      const data = await this.exchange(0x0720, Uint8Array.of(slot));
+      // Read-only query: Studio retries it once after 180 ms before reporting a failure (index.html:2073-2090).
+      let data;
+      for (let attempt = 0; ; attempt++) {
+        try { data = await this.exchange(0x0720, Uint8Array.of(slot), 0x0721, 3000, true); break; }
+        catch (error) {
+          if (attempt >= 1 || this.transport.error || !isLostReply(error)) throw error;
+          await this.pause(this.slotInfoRetryDelayMs);
+          this.transport.clear();
+        }
+      }
       R.assert(data.length === 66 && data[0] === slot, "Respuesta de slot incorrecta.");
       return { slot, status: data[1], ...slotHeader(data.slice(2)) };
     }
@@ -965,14 +1010,16 @@
       for (let attempt = 0; ; attempt++) {
         try {
           const response = await this.exchange(type, data, type + 1,
-            [0x0722, 0x0728, 0x0732].includes(type) ? 35000 : retryable ? 1500 : 5000, retryable);
+            [0x0722, 0x0728, 0x0732].includes(type) ? 35000 : retryable ? SLOT_WRITE_TIMEOUT_MS : 5000, retryable);
           R.assert(response.length === 2 && response[0] === slot && response[1] === 0, `Operacion de slot rechazada: ${response[1]}.`);
           return;
         } catch (error) {
           // Only identical NOR writes are idempotent; never retry erase/reset.
-          if (!retryable || error.code !== "READ_TIMEOUT" || this.transport.error || attempt >= 4) throw error;
+          if (!retryable || !isLostReply(error) || this.transport.error || attempt >= 4) throw error;
           this.progress(0, `Respuesta perdida: reintentando bloque identico (${attempt + 1}/4).`);
-          await new Promise(resolve => setTimeout(resolve, 60));
+          // Studio waits 80 ms (index.html:2124); draining afterwards keeps a late ACK from answering the next block.
+          await this.pause(this.slotRetryDelayMs);
+          this.transport.clear();
         }
       }
     }
@@ -1031,6 +1078,10 @@
         await chunk(0, header);
         this.progress(1, "Verificando CRC en la radio");
         R.assert(await this.validateRaw(slot) === checksum, "CRC de la imagen escrita distinto al original.");
+        // Studio also re-reads the slot header after the CRC check (index.html:2133-2134).
+        const written = await this.infoRaw(slot);
+        R.assert(written.status === 0 && written.magic === 0x31424d46 && written.size === image.length && written.crc === checksum,
+          "CRC verificado, pero el slot no informa una cabecera valida. No arranques el slot sin comprobarlo.");
       });
     }
     async appInfoRaw(slot) {

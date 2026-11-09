@@ -64,7 +64,88 @@
       acknowledgement: `DFU PRINCIPAL ${this.model}`, sha256 });
     return { stage, sha256, size: firmware.length, assets: parsed.assets };
   };
+  // Notice count, wait windows and page retries come from Studio's DFU writer (index.html:2257-2308).
+  const DFU_NOTICES = 5;
+  const DFU_HANDSHAKE_ROUNDS = 3;
+  const DFU_PAGE_ATTEMPTS = 4;
   class QuanshengFactoryDFU extends R.QuanshengConnector {
+    constructor(transport) {
+      super(transport);
+      // Studio opens the bootloader port without DTR and without the CDC padding byte (index.html:2139).
+      this.transport.quanshengUSBPadding = false;
+      // Bootloader notices may carry a CRC that does not match; the frame structure is still validated.
+      this.lenientIncomingCrc = true;
+      this.dfuNoticeWindowMs = 12000;
+      this.dfuHandshakeWindowMs = 6000;
+      this.dfuHandshakePauseMs = 50;
+      this.dfuAckTimeoutMs = 3000;
+    }
+    // Reads one 0x0518 notice; an expired wait is not an error while the overall window is still open.
+    async nextDfuNotice(deadline, step) {
+      try { return await this.receiveResponse(0x0518, Math.min(step, Math.max(100, deadline - Date.now())), true); }
+      catch (error) {
+        if (error.code === "READ_TIMEOUT" && !this.transport.error) return null;
+        throw error;
+      }
+    }
+    async collectDfuNotices() {
+      const deadline = Date.now() + this.dfuNoticeWindowMs;
+      let notices = 0;
+      let version = "";
+      let first = null;
+      while (notices < DFU_NOTICES && Date.now() < deadline) {
+        const info = await this.nextDfuNotice(deadline, 2000);
+        if (!info || info.length < 32) continue;
+        const text = R.text(info.subarray(16, 32));
+        if (!/^\d+\.\d+\.\d+$/.test(text)) continue;
+        R.assert(!first || R.equal(info.subarray(0, 32), first), "Identificacion DFU inconsistente; no se escribe.");
+        first = info.slice(0, 32);
+        version = text;
+        notices++;
+        this.progress(0, `DFU: avisos del bootloader ${notices}/${DFU_NOTICES}.`);
+      }
+      R.assert(notices >= DFU_NOTICES, "No se han recibido suficientes avisos DFU coherentes (0x0518). No se ha escrito nada. Comprueba que la radio esta en modo DFU (PTT al encender).");
+      return version;
+    }
+    // Each handshake (0x0530) answers a fresh 0x0518 notice and is followed by a short pause, like Studio.
+    async dfuHandshake(version) {
+      const deadline = Date.now() + this.dfuHandshakeWindowMs;
+      let rounds = 0;
+      while (rounds < DFU_HANDSHAKE_ROUNDS && Date.now() < deadline) {
+        if (!await this.nextDfuNotice(deadline, 1800)) continue;
+        await this.transport.write(R.quanshengPacket(0x0530, new TextEncoder().encode(version.slice(0, 4))));
+        rounds++;
+        await this.pause(this.dfuHandshakePauseMs);
+      }
+      R.assert(rounds === DFU_HANDSHAKE_ROUNDS, "No se completo el saludo DFU (0x0530). No se ha escrito firmware.");
+    }
+    // Rewrites the identical page until the bootloader confirms exactly this page with status 0.
+    // Late ACKs for earlier pages are ignored; a lost reply or a bootloader error code triggers a rewrite.
+    async dfuWritePage(request, page, count) {
+      let failure = null;
+      for (let attempt = 1; attempt <= DFU_PAGE_ATTEMPTS; attempt++) {
+        await this.transport.write(R.quanshengPacket(0x0519, request));
+        const deadline = Date.now() + this.dfuAckTimeoutMs;
+        let timeout = null;
+        let reason = "";
+        try {
+          while (Date.now() < deadline) {
+            const response = await this.receiveResponse(0x051a, Math.max(100, deadline - Date.now()), true);
+            if (response.length < 8 || R.view(response).getUint16(4, true) !== page) { reason = "respuesta fuera de secuencia"; continue; }
+            const code = R.view(response).getUint16(6, true);
+            if (code === 0) return;
+            reason = `codigo de error del bootloader 0x${code.toString(16)}`;
+            break;
+          }
+        } catch (error) {
+          if (error.code !== "READ_TIMEOUT" || this.transport.error) throw error;
+          timeout = error;
+        }
+        failure = reason || !timeout ? new Error(`DFU: pagina ${page + 1}/${count} sin confirmacion valida tras ${DFU_PAGE_ATTEMPTS} intentos (${reason || "tiempo de espera agotado"}).`) : timeout;
+        if (attempt < DFU_PAGE_ATTEMPTS) this.progress(page / count, `DFU: reintentando la misma pagina ${page + 1} (${attempt}/${DFU_PAGE_ATTEMPTS - 1}).`);
+      }
+      throw failure;
+    }
     async flashFactory(stage, acknowledgement) {
       const receipt = stages.get(stage);
       R.assert(receipt && !receipt.completed && receipt.model === this.model,
@@ -73,19 +154,12 @@
       const target = FACTORY[receipt.model];
       R.assert(await R.sha256(receipt.firmware) === receipt.sha256, "La imagen preparada ha cambiado.");
       return this.run("Programar firmware interno por DFU", async () => {
-        const info = await this.receiveResponse(0x0518, 10000);
-        R.assert(info.length >= 32, "Identificacion DFU incompleta.");
-        const version = R.text(info.subarray(16, 32));
+        const version = await this.collectDfuNotices();
         R.assert(target.bootloader.test(version),
           `Bootloader ${version} no reconocido para ${receipt.model}; no se escribe.`);
-        for (let index = 0; index < 3; index++) {
-          if (index) {
-            const repeated = await this.receiveResponse(0x0518, 5000);
-            R.assert(repeated.length >= 32 && R.equal(repeated.subarray(0, 32), info.subarray(0, 32)),
-              "Identificacion DFU inconsistente; no se escribe.");
-          }
-          await this.transport.write(R.quanshengPacket(0x0530, new TextEncoder().encode(version.slice(0, 4))));
-        }
+        await this.dfuHandshake(version);
+        // Residual notices must not be mistaken for page replies.
+        this.transport.clear();
         const timestamp = Date.now() >>> 0;
         const count = Math.ceil(receipt.firmware.length / 256);
         for (let page = 0; page < count; page++) {
@@ -94,18 +168,7 @@
           R.view(request).setUint16(4, page, true);
           R.view(request).setUint16(6, count, true);
           request.set(receipt.firmware.subarray(page * 256, (page + 1) * 256), 12);
-          for (let attempt = 0; ; attempt++) {
-            try {
-              await this.transport.write(R.quanshengPacket(0x0519, request));
-              const response = await this.receiveResponse(0x051a, 5000, true);
-              R.assert(response.length === 8 && R.view(response).getUint16(4, true) === page &&
-                R.view(response).getUint16(6, true) === 0, `DFU: pagina ${page + 1} rechazada o respuesta fuera de secuencia.`);
-              break;
-            } catch (error) {
-              if (error.code !== "READ_TIMEOUT" || this.transport.error || attempt >= 3) throw error;
-              this.progress(page / count, `DFU: reintentando la misma pagina ${page + 1} (${attempt + 1}/3).`);
-            }
-          }
+          await this.dfuWritePage(request, page, count);
           this.progress((page + 1) / count, `DFU: pagina ${page + 1}/${count} confirmada`);
         }
         receipt.completed = true;
@@ -116,7 +179,7 @@
     async openFactory(model) {
       R.assert(FACTORY[model], "Modelo DFU no compatible.");
       this.model = model;
-      await this.transport.open(38400);
+      await this.transport.open(38400, [], { bufferSize: 65536 });
       this.connected = true;
     }
   }

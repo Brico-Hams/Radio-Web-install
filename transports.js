@@ -93,7 +93,10 @@
         this.port = matching.length === 1 ? matching[0] : await this.api.requestPort({ filters });
       }
       try {
-        await this.port.open({ baudRate, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none" });
+        const serialOptions = { baudRate, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none" };
+        // Studio opens the DFU port with a 64 KiB buffer (index.html:2139); the 255-byte default can overrun while the page is busy.
+        if (options.bufferSize) serialOptions.bufferSize = options.bufferSize;
+        await this.port.open(serialOptions);
         if (this.quanshengUSBPadding && typeof this.port.setSignals === "function") {
           await this.port.setSignals({ dataTerminalReady: true });
         } else if (options.lowControlLines && typeof this.port.setSignals === "function") {

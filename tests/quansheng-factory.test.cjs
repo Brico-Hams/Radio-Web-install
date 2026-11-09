@@ -63,10 +63,12 @@ class Bootloader extends R.BufferedTransport {
     const info = new Uint8Array(32);
     info.fill(17, 0, 16);
     info.set(new TextEncoder().encode(this.version), 16);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 8; i++) {
       const notification = info.slice();
       if (this.inconsistent && i === 1) notification[0]++;
-      this.push(reply(0x0518, notification));
+      const frame = reply(0x0518, notification);
+      if (this.badNoticeCrc) frame[frame.length - 4] ^= 0xff;
+      this.push(frame);
     }
   }
   async close() { this.opened = false; }
@@ -86,6 +88,11 @@ class Bootloader extends R.BufferedTransport {
     le(response).setUint32(0, le(request.data).getUint32(0, true), true);
     le(response).setUint16(4, this.wrongPage ? page + 1 : page, true);
     le(response).setUint16(6, this.rejected ? 3 : 0, true);
+    if (this.staleAck && this.pages.length === 1) {
+      const stale = new Uint8Array(8);
+      le(stale).setUint16(4, 99, true);
+      this.push(reply(0x051a, stale));
+    }
     this.push(reply(0x051a, response));
     assert.equal(count, Math.ceil(71712 / 256));
   }
@@ -156,9 +163,11 @@ test("DFU never programs an unrecognized bootloader or continues after a rejecte
     if (failure === "bootloader") transport.version = "2.01.00";
     else transport[failure] = true;
     const dfu = new f.api.QuanshengFactoryDFU(transport);
+    dfu.dfuAckTimeoutMs = 100;
     await dfu.openFactory("UV-K5-V3");
     await assert.rejects(dfu.flashFactory(stage, "DFU UV-K5-V3"), /Bootloader|pagina/);
-    assert.equal(transport.pages.length, failure === "bootloader" ? 0 : 1);
+    assert.equal(transport.pages.length, failure === "bootloader" ? 0 : 4);
+    assert.ok(transport.pages.every(page => page === 0), "same page rewritten, never skipped");
     assert.equal(dfu.connected, false);
     await dfu.disconnect();
   }
@@ -218,6 +227,34 @@ test("DFU requires consistent device identity during the complete handshake", as
   await dfu.openFactory("UV-K5-V3");
   await assert.rejects(dfu.flashFactory(stage, "DFU UV-K5-V3"), /inconsistente/);
   assert.equal(transport.pages.length, 0);
+  await dfu.disconnect();
+});
+test("DFU follows Studio: no USB padding, notices with bad CRC accepted, stale ACKs ignored, 5 notices + 3 paced handshakes", async () => {
+  const f = fixture();
+  const stage = await f.connector.prepareFactoryRestore(f.flash, f.firmware, f.permit, "FABRICA UV-K5-V3");
+  const transport = new Bootloader();
+  transport.badNoticeCrc = true;
+  transport.staleAck = true;
+  const dfu = new f.api.QuanshengFactoryDFU(transport);
+  assert.equal(transport.quanshengUSBPadding, false);
+  await dfu.openFactory("UV-K5-V3");
+  const result = await dfu.flashFactory(stage, "DFU UV-K5-V3");
+  assert.equal(result.pages, 281);
+  assert.deepEqual(transport.commands.slice(0, 3).map(command => command.type), [0x0530, 0x0530, 0x0530]);
+  assert.deepEqual(transport.pages.slice(0, 2), [0, 1]);
+  await dfu.disconnect();
+});
+test("DFU refuses to write when fewer than five coherent notices arrive", async () => {
+  const f = fixture();
+  const stage = await f.connector.prepareFactoryRestore(f.flash, f.firmware, f.permit, "FABRICA UV-K5-V3");
+  const transport = new Bootloader();
+  const dfu = new f.api.QuanshengFactoryDFU(transport);
+  dfu.dfuNoticeWindowMs = 300;
+  await dfu.openFactory("UV-K5-V3");
+  transport.clear();
+  for (let i = 0; i < 4; i++) transport.push(reply(0x0518, Uint8Array.from({ length: 32 }, (_, n) => n < 16 ? 17 : "7.00.07".charCodeAt(n - 16) || 0)));
+  await assert.rejects(dfu.flashFactory(stage, "DFU UV-K5-V3"), /suficientes avisos/);
+  assert.equal(transport.pages.length + transport.commands.length, 0);
   await dfu.disconnect();
 });
 test("main firmware DFU requires full backup, strict v6 PY32 vectors and separate explicit confirmation", async () => {
