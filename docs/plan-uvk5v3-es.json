@@ -1,0 +1,33 @@
+{
+  "model": "UV-K5-V3",
+  "description": "Bricohams slots of a UV-K5 V3: one bank per slot, one scan list per zone. CSV paths are relative to the repository root; airport communities come from OurAirports airports.csv (--airports, default tmp/airports.csv).",
+  "banks": {
+    "1": {
+      "label": "slot 1 BH Spectrum",
+      "entries": [
+        { "csv": "chirp/local/repetidores-fm-ea0-ea6.csv", "zoneBy": "district" }
+      ]
+    },
+    "2": {
+      "label": "slot 2 BH Satellite",
+      "entries": [
+        { "csv": "chirp/local/repetidores-fm-ea7-ea9.csv", "zoneBy": "district" },
+        { "csv": "chirp/local/aeropuertos-am-rx-md-vc.csv", "zoneBy": "community" },
+        { "csv": "chirp/local/pmr446-cb-rx.csv", "filter": { "zone": "PMR446" }, "zoneBy": "service" }
+      ]
+    },
+    "3": {
+      "label": "slot 3 BH ARDF",
+      "entries": [
+        { "csv": "chirp/local/aeropuertos-am-rx-an-mc.csv", "zoneBy": "community" },
+        { "csv": "chirp/local/pmr446-cb-rx.csv", "filter": { "zone": "PMR446" }, "zoneBy": "service" }
+      ]
+    },
+    "4": {
+      "label": "slot 4 BH Labs",
+      "entries": [
+        { "csv": "chirp/local/pmr446-cb-rx.csv", "zoneBy": "service" }
+      ]
+    }
+  }
+}

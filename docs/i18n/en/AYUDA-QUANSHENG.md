@@ -712,6 +712,19 @@ the local file; they do not prove that firmware displays the channels or that
 the change reached a physical slot. See [REMER, airports, and commercial FM](AYUDA-ANYTONE.md)
 for the differences between local preparation, parser compatibility, and RF testing.
 
+## TK-11: settings, channels and memory backup
+
+The Quansheng TK-11 (AP8048 MCU, internal Flash only, 999 channels) has its own panel under Quansheng > Tools. It talks over Web Serial at 38400 baud using the protocol documented by the CHIRP driver and offers a full backup of the CPS-visible memory (two identical reads and a SHA-256 per block), restore, an editor for the confirmed settings, a 999-channel table with country template import, CSV export and a hex viewer.
+
+There is no firmware update for the TK-11: no public protocol exists and the risk of bricking the radio is high. Every write first requires a verified full backup and only touches areas confirmed by CHIRP; calibration and unknown areas are never written. The exact location of the calibration inside the internal Flash is not confirmed (a third-party source places it in a range that overlaps CHIRP settings structures), so it is treated as unresolved and the radio's own content outside the known structures is always preserved.
+
+| Feature of other web tools | Status | Reason |
+| --- | --- | --- |
+| EEPROM backup and restore, calibration dump and restore, screen mirror, F4HWN flashing | Already available | They exist on this site with their safeguards |
+| Hex viewer, TK-11 settings and channel editor | Implemented | Read-only or confirmed fields only |
+| Calibration editors, clean EEPROM, lock password | Not implemented | They write sensitive areas and can brick the radio |
+| Short messages (SMR) and TK-11 flashing | Not implemented | No verified public protocol or brick risk |
+
 ## Choose hardware before firmware
 
 | Radio/revision | Relationship to this website | Rule |
@@ -721,7 +734,7 @@ for the differences between local preparation, parser compatibility, and RF test
 | UV-K5(8), UV-K6, UV-K5+ V1 | Karina V1/OneOfEleven or other V1 projects | Outside the PY32 slot connector's scope |
 | UV-K5 V2 | Different hardware | Neither V1 nor V3 images based on appearance alone |
 | UV-K5(99) and commercial labels | The name may cover different revisions | Identify MCU/revision using the project's source |
-| TK-11 and similar-looking Baofeng radios | Not connector targets | Do not use these images |
+| TK-11 and similar-looking Baofeng radios | Only the TK-11 has its own panel (settings, channels and backup, no firmware); Baofeng radios are not targets | Do not use these images |
 
 The ARDF manual even warns that V3 labels can be found on V2 hardware. The
 sticker helps but is not conclusive. USB-C does not guarantee that all firmware

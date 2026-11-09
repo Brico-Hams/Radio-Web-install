@@ -111,7 +111,7 @@
       }
       if (partialPermit && !R.hasPartialBackup(connector, partialPermit)) partialPermit = null;
       const api = page === "quansheng" || model.value === "SERIAL" ? "serial" : "usb";
-      $("radio-connect").disabled = busy || Boolean(connector) || !model.value || !(confirmation.checked || pro.checked) || !(api in navigator) || !root.isSecureContext;
+      $("radio-connect").disabled = busy || Boolean(connector) || !model.value || model.value === "TK-11" || !(confirmation.checked || pro.checked) || !(api in navigator) || !root.isSecureContext;
       if ($("qs-connect-readonly")) $("qs-connect-readonly").disabled = $("radio-connect").disabled;
       if ($("qs-connect-channels")) $("qs-connect-channels").disabled = $("radio-connect").disabled;
       if ($("gd77-connect-live")) $("gd77-connect-live").disabled = $("radio-connect").disabled;
@@ -1719,6 +1719,7 @@
         log(`ERROR: catalogo precompilado: ${error.message}`);
       });
     async function connectRadio(withBackup) {
+      R.assert(model.value !== "TK-11", "El TK-11 se gestiona en su panel propio, sin firmware.");
       permit = null;
       partialPermit = null;
       originalConfiguration = null;

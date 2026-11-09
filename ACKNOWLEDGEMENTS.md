@@ -24,6 +24,8 @@ Las licencias y avisos originales siguen siendo obligatorios.
 | [(tr)uSDX · DL2MAN](https://dl2man.de/) y [uSDX · PE1NNZ](https://github.com/threeme3/usdx) | **Coautores del soporte (tr)uSDX** de la APK: Guido (PE1NNZ, concepto, circuito y código del uSDX) y Manuel (DL2MAN, (tr)uSDX, PCB sándwich y LPF clase E). Comandos CAT y streaming de audio según [“(tr)uSDX Details”](https://dl2man.de/5-trusdx-details/). No se reutiliza su código | Proyecto y firmware de sus autores |
 | Manuales de Yaesu (FT-817ND/818ND/857D/897D, FTX-1 CAT 2508-C) e Icom (IC-705 CI-V rev. 6) | CAT multirradio de la APK, escrito desde estos documentos | Documentación del fabricante |
 | Manuales CAT de QRP Labs (QMX firmware 1.04_003, QDX Rev 1.06) | CAT de QMX/QMX+ y QDX/QDX-M en la APK, escrito desde estos documentos | Documentación del fabricante |
+| [CHIRP · kk7ds/chirp](https://github.com/kk7ds/chirp) `chirp/drivers/tk11.py` (Dan Smith 2012, Thibaut Berg 2025) | Tramado, XOR, CRC16-XMODEM, comandos 0x01F4-0x01FE y 0x05DD y mapa de memoria del Quansheng TK-11; `tk11-connector.js` es una portación/reimplementación con atribución | GPL-3.0-or-later |
+| [Multi-UVTools · spm81](https://github.com/spm81/Multi-UVTools) | Solo se consultó qué funciones existen (nombres de herramientas); el repositorio no tiene licencia, así que no se copia ni traduce código, textos ni interfaz | Sin licencia (todos los derechos reservados) |
 | [FT8CN](https://github.com/N0BOY/FT8CN) (BG7YOZ) | Estudiado solo para entender cómo resuelve CAT, USB serie y audio en Android; no se copia código ni recursos | MIT |
 
 ## Dependencias

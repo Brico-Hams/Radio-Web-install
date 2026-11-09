@@ -751,6 +751,19 @@ no una prueba de que el firmware los muestre en la pantalla ni de que el cambio
 haya llegado a un slot fisico. Consulta [REMER, aeropuertos y FM comercial](AYUDA-ANYTONE.md)
 para las diferencias entre preparacion local, compatibilidad de parser y prueba RF.
 
+## TK-11: ajustes, canales y copia de memoria
+
+El Quansheng TK-11 (MCU AP8048, solo Flash interna, 999 canales) tiene su propio panel en Quansheng > Herramientas. Habla por Web Serial a 38400 baudios con el protocolo documentado por el driver CHIRP y ofrece copia completa de la memoria visible por el CPS (dos lecturas identicas y SHA-256 por bloque), restauracion, editor de los ajustes confirmados, tabla de 999 canales con importacion de plantillas de pais, exportacion CSV y visor hexadecimal.
+
+No hay actualizacion de firmware para el TK-11: no existe un protocolo publico y el riesgo de dejar la radio inservible es alto. Toda escritura exige antes una copia completa verificada y solo toca zonas confirmadas por CHIRP; la calibracion y las zonas desconocidas nunca se escriben. La ubicacion exacta de la calibracion dentro de la Flash interna no esta confirmada (una fuente de terceros la situa en un rango que se solapa con estructuras de ajustes de CHIRP), asi que se trata como no resuelta y se conserva siempre el contenido de la radio fuera de las estructuras conocidas.
+
+| Funcion de otras herramientas web | Estado | Motivo |
+| --- | --- | --- |
+| Copia y restauracion de EEPROM, volcado y restauracion de calibracion, espejo de pantalla, flasheo F4HWN | Ya disponible | Existen en esta web con sus protecciones |
+| Visor hexadecimal, editor de ajustes y de canales del TK-11 | Implementado | Solo lectura o campos confirmados |
+| Editores de calibracion, limpiar EEPROM, contrasena de bloqueo | No implementado | Escriben zonas sensibles y pueden inutilizar la radio |
+| Mensajes cortos (SMR) y flasheo del TK-11 | No implementado | Sin protocolo publico verificado o riesgo de brick |
+
 ## Elegir hardware antes de firmware
 
 | Radio/revision | Relacion con esta web | Regla |
@@ -760,7 +773,7 @@ para las diferencias entre preparacion local, compatibilidad de parser y prueba 
 | UV-K5(8), UV-K6, UV-K5+ V1 | Karina V1/OneOfEleven u otros proyectos V1 | Fuera del conector de slots PY32 |
 | UV-K5 V2 | Hardware diferente | Ni V1 ni V3 por parecido exterior |
 | UV-K5(99) y etiquetas comerciales | El nombre puede abarcar revisiones diferentes | Identificar MCU/revision con fuente del proyecto |
-| TK-11 y Baofeng de aspecto parecido | No son destinos del conector | No usar estas imagenes |
+| TK-11 y Baofeng de aspecto parecido | Solo el TK-11 tiene panel propio (ajustes, canales y copia, sin firmware); los Baofeng no son destinos | No usar estas imagenes |
 
 El manual ARDF advierte incluso de etiquetas V3 en hardware V2. La pegatina
 ayuda pero no es prueba unica. USB-C no garantiza que cualquier firmware hable

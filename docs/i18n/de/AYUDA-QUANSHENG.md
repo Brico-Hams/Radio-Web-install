@@ -637,6 +637,19 @@ und Prüfen importierter Kanäle validieren die lokale Datei; sie belegen weder,
 noch dass die Änderung einen physischen Slot erreicht hat. Siehe [REMER, Flughäfen und kommerzielles FM](AYUDA-ANYTONE.md)
 zu den Unterschieden zwischen lokaler Vorbereitung, Parser-Kompatibilität und RF-Test.
 
+## TK-11: Einstellungen, Kanäle und Speichersicherung
+
+Das Quansheng TK-11 (AP8048-MCU, nur interner Flash, 999 Kanäle) hat ein eigenes Panel unter Quansheng > Werkzeuge. Es spricht über Web Serial mit 38400 Baud das vom CHIRP-Treiber dokumentierte Protokoll und bietet eine vollständige Sicherung des für das CPS sichtbaren Speichers (zwei identische Lesevorgänge und ein SHA-256 je Block), Wiederherstellung, einen Editor für die bestätigten Einstellungen, eine Tabelle mit 999 Kanälen samt Länder-Vorlagenimport, CSV-Export und eine Hex-Ansicht.
+
+Für das TK-11 gibt es kein Firmware-Update: Es existiert kein öffentliches Protokoll, und das Risiko, das Funkgerät unbrauchbar zu machen, ist hoch. Jeder Schreibvorgang verlangt zuvor eine geprüfte vollständige Sicherung und berührt nur von CHIRP bestätigte Bereiche; Kalibrierung und unbekannte Bereiche werden nie geschrieben. Die genaue Lage der Kalibrierung im internen Flash ist nicht bestätigt (eine Drittquelle platziert sie in einem Bereich, der sich mit CHIRP-Einstellungsstrukturen überschneidet), daher gilt sie als ungeklärt, und der eigene Inhalt des Geräts außerhalb der bekannten Strukturen bleibt stets erhalten.
+
+| Funktion anderer Web-Werkzeuge | Status | Grund |
+| --- | --- | --- |
+| EEPROM-Sicherung und -Wiederherstellung, Kalibrierungs-Dump und -Wiederherstellung, Bildschirmspiegel, F4HWN-Flashen | Bereits vorhanden | Sie existieren auf dieser Seite mit ihren Schutzmaßnahmen |
+| Hex-Ansicht, Einstellungs- und Kanaleditor für das TK-11 | Umgesetzt | Nur lesen oder bestätigte Felder |
+| Kalibrierungseditoren, EEPROM leeren, Sperrpasswort | Nicht umgesetzt | Sie schreiben sensible Bereiche und können das Gerät unbrauchbar machen |
+| Kurznachrichten (SMR) und Flashen des TK-11 | Nicht umgesetzt | Kein geprüftes öffentliches Protokoll oder Brick-Risiko |
+
 ## Hardware vor Firmware auswählen
 
 | Funkgerät/Revision | Verhältnis zu dieser Website | Regel |
@@ -646,7 +659,7 @@ zu den Unterschieden zwischen lokaler Vorbereitung, Parser-Kompatibilität und R
 | UV-K5(8), UV-K6, UV-K5+ V1 | Karina V1/OneOfEleven oder andere V1-Projekte | Außerhalb des PY32-Slot-Connectors |
 | UV-K5 V2 | Andere Hardware | Weder V1 noch V3 wegen ähnlichen Aussehens |
 | UV-K5(99) und Handelsbezeichnungen | Der Name kann verschiedene Revisionen umfassen | MCU/Revision anhand der Projektquelle identifizieren |
-| TK-11 und ähnlich aussehende Baofeng-Geräte | Keine Ziele des Connectors | Diese Images nicht verwenden |
+| TK-11 und ähnlich aussehende Baofeng-Geräte | Nur das TK-11 hat ein eigenes Panel (Einstellungen, Kanäle und Sicherung, ohne Firmware); Baofeng-Geräte sind keine Ziele | Diese Images nicht verwenden |
 
 Das ARDF-Handbuch warnt sogar vor V3-Aufklebern auf V2-Hardware. Der Aufkleber ist hilfreich,
 aber kein alleiniger Nachweis. USB-C garantiert weder, dass jede Firmware dasselbe Protokoll verwendet,

@@ -97,7 +97,7 @@
         // Studio opens the DFU port with a 64 KiB buffer (index.html:2139); the 255-byte default can overrun while the page is busy.
         if (options.bufferSize) serialOptions.bufferSize = options.bufferSize;
         await this.port.open(serialOptions);
-        if (this.quanshengUSBPadding && typeof this.port.setSignals === "function") {
+        if ((this.quanshengUSBPadding || options.dtr) && typeof this.port.setSignals === "function") {
           await this.port.setSignals({ dataTerminalReady: true });
         } else if (options.lowControlLines && typeof this.port.setSignals === "function") {
           // Rigs such as the truSDX (CH340) and QMX reset or error when DTR/RTS toggle: force both low once, never again.

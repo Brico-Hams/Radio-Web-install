@@ -176,8 +176,12 @@
           onRecord(record);
         });
         R.assert(connector.connected && !connector.transport.error && connector.session === session, "La conexion cambio durante el respaldo.");
-        R.assert(record.files.some(file => file.name === "calibration"), "Falta calibracion.");
-        if (report.complete) {
+        const tk11 = connector.family === "tk11";
+        if (tk11) {
+          R.assert(report.complete && ["memory", "manifest"].every(name => record.files.some(file => file.name === name)),
+            "Falta la memoria completa del TK-11 o su manifiesto.");
+        } else R.assert(record.files.some(file => file.name === "calibration"), "Falta calibracion.");
+        if (report.complete && !tk11) {
           const stm32 = ["calibration-factory", "spi-flash", "mcu-rom", "manifest"].every(name => record.files.some(file => file.name === name));
           R.assert(stm32 && report.writeLocked || record.files.some(file => file.name === "base-firmware") && record.files.some(file => file.name === "external-flash"), "Falta firmware base o Flash completa.");
         }

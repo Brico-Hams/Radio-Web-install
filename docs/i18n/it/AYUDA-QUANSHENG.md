@@ -712,6 +712,19 @@ Le nuove funzioni per modificare, cancellare e verificare canali dopo l'importaz
 sono convalide del file locale, non una prova che il firmware li mostri sul display né
 che la modifica sia stata trasferita a uno slot fisico. Consulta [REMER, aeroporti e FM commerciale](AYUDA-ANYTONE.md)
 per le differenze tra preparazione locale, compatibilità del parser e test RF.
+## TK-11: impostazioni, canali e backup della memoria
+
+Il Quansheng TK-11 (MCU AP8048, solo Flash interna, 999 canali) ha un pannello dedicato in Quansheng > Strumenti. Comunica via Web Serial a 38400 baud con il protocollo documentato dal driver CHIRP e offre il backup completo della memoria visibile al CPS (due letture identiche e uno SHA-256 per blocco), il ripristino, un editor delle impostazioni confermate, una tabella di 999 canali con importazione dei modelli per paese, l'esportazione CSV e un visualizzatore esadecimale.
+
+Per il TK-11 non esiste alcun aggiornamento del firmware: non esiste un protocollo pubblico e il rischio di rendere la radio inutilizzabile è alto. Ogni scrittura richiede prima un backup completo verificato e tocca solo aree confermate da CHIRP; la calibrazione e le aree sconosciute non vengono mai scritte. La posizione esatta della calibrazione nella Flash interna non è confermata (una fonte di terzi la colloca in un intervallo che si sovrappone alle strutture delle impostazioni di CHIRP), quindi è considerata irrisolta e il contenuto proprio della radio fuori dalle strutture note viene sempre conservato.
+
+| Funzione di altri strumenti web | Stato | Motivo |
+| --- | --- | --- |
+| Backup e ripristino EEPROM, copia e ripristino della calibrazione, specchio dello schermo, flash F4HWN | Già disponibile | Esistono su questo sito con le loro protezioni |
+| Visualizzatore esadecimale, editor di impostazioni e canali del TK-11 | Implementato | Sola lettura o campi confermati |
+| Editor di calibrazione, pulizia EEPROM, password di blocco | Non implementato | Scrivono aree sensibili e possono rendere la radio inutilizzabile |
+| Messaggi brevi (SMR) e flash del TK-11 | Non implementato | Nessun protocollo pubblico verificato o rischio di brick |
+
 ## Scegliere l'hardware prima del firmware
 
 | Radio/revisione | Relazione con questo sito | Regola |
@@ -721,7 +734,7 @@ per le differenze tra preparazione locale, compatibilità del parser e test RF.
 | UV-K5(8), UV-K6, UV-K5+ V1 | Karina V1/OneOfEleven o altri progetti V1 | Fuori dal connettore slot PY32 |
 | UV-K5 V2 | Hardware diverso | Né V1 né V3 per somiglianza esteriore |
 | UV-K5(99) ed etichette commerciali | Il nome può comprendere revisioni diverse | Identifica MCU/revisione in base alla fonte del progetto |
-| TK-11 e Baofeng dall'aspetto simile | Non sono destinazioni del connettore | Non usare queste immagini |
+| TK-11 e Baofeng dall'aspetto simile | Solo il TK-11 ha un pannello dedicato (impostazioni, canali e backup, senza firmware); i Baofeng non sono destinazioni | Non usare queste immagini |
 
 Il manuale ARDF avverte persino della presenza di etichette V3 su hardware V2. L'etichetta
 aiuta ma non è una prova univoca. USB-C non garantisce che ogni firmware utilizzi

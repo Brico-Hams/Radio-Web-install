@@ -78,7 +78,8 @@ const tools = {
     firmware: "Multiboot requiere F4HWN v6.0.0 o posterior con soporte Multiboot. No es compatible con cualquier UV-K5.",
     models: [
       ["UV-K1", "Quansheng UV-K1 (PY32F071)", "Web Serial. Cable USB-C de datos o cable USB-serie compatible de doble conector."],
-      ["UV-K5-V3", "Quansheng UV-K5 V3 (PY32F071)", "Web Serial. Comprueba que sea V3 y que use el MCU PY32F071, no una revision anterior."]
+      ["UV-K5-V3", "Quansheng UV-K5 V3 (PY32F071)", "Web Serial. Comprueba que sea V3 y que use el MCU PY32F071, no una revision anterior."],
+      ["TK-11", "Quansheng TK-11 (AP8048)", "Web Serial a 38400 baudios. Se gestiona en el panel TK-11 de Herramientas: ajustes, canales y copia de memoria. Sin firmware."]
     ],
     features: ["4 slots editables + Main protegido", "Restablecer bancos CFG 1-4", "CRC despues de instalar", "Backup Flash con lectura fisica y CRC"],
     guides: [
@@ -126,7 +127,7 @@ const VIEWS = {
   canales: ["#radio-operations", '[data-group="canales"]', "#planning-panel"],
   satelites: ["#radio-operations", '[data-group="cat"]', "#planning-panel"],
   firmware: ["#official-firmware", "#precompiled-panel", "#precompiled-apps-panel", "#radio-operations", '[data-group="slots"]', '[data-group="apps"]', "#custom-firmware"],
-  herramientas: ["#qs-native-menu", "#qs-native-tools", "#qs-factory-native", "#qs-live-panel", "#qs-rf-panel", "#radio-operations", '[data-group="ardf"]', '[data-group="espectro"]']
+  herramientas: ["#qs-native-menu", "#qs-native-tools", "#qs-factory-native", "#qs-live-panel", "#qs-rf-panel", "#tk11-panel", "#radio-operations", '[data-group="ardf"]', '[data-group="espectro"]']
 };
 const VIEW_TABS = { canales: "repeaters", satelites: "sat" };
 let currentView = null;
@@ -282,10 +283,11 @@ if (current) {
   confirmed.addEventListener("change", update);
   pro.addEventListener("change", update);
   if (globalThis.RadioWorkspace) globalThis.RadioWorkspace.mountRadioUI(page);
+  if (page === "quansheng") globalThis.RadioWorkspace?.mountTK11UI?.(document.getElementById("main"));
   launch.addEventListener("click", () => {
     if (launch.disabled) return;
     if (page === "quansheng") {
-      const panel = document.getElementById("qs-native-menu");
+      const panel = document.getElementById(model.value === "TK-11" ? "tk11-panel" : "qs-native-menu");
       showView("herramientas");
       panel.tabIndex = -1;
       panel.scrollIntoView({ block: "start" });

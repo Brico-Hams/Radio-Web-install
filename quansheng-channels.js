@@ -12,14 +12,22 @@
     const index = number - 1;
     return { record: index * 16, name: 0x4000 + index * 16, attributes: 0x8000 + index * 2 };
   }
-  function frequency(value) {
+  // CTCSS table of the F4HWN firmware (chirp_common.TONES order); the stored code is the index.
+  const CTCSS = [67.0, 69.3, 71.9, 74.4, 77.0, 79.7, 82.5, 85.4, 88.5, 91.5, 94.8, 97.4, 100.0, 103.5, 107.2, 110.9,
+    114.8, 118.8, 123.0, 127.3, 131.8, 136.5, 141.3, 146.2, 151.4, 156.7, 159.8, 162.2, 165.5, 167.9, 171.3, 173.8,
+    177.3, 179.9, 183.5, 186.2, 189.9, 192.8, 196.6, 199.5, 203.5, 206.5, 210.7, 218.1, 225.7, 229.1, 233.6, 241.8,
+    250.3, 254.1];
+  // `wide` (channel.extended) opens the radio's full 18-470 MHz receive range for AM airband, CB and military UHF.
+  function frequency(value, wide = false) {
     R.assert(/^\d{1,3}(?:\.\d{1,5})?$/.test(String(value)), "Frecuencia Quansheng: MHz con hasta 5 decimales.");
     const units = Math.round(Number(value) * 100000);
-    R.assert(units >= 13600000 && units <= 17400000 || units >= 40000000 && units <= 47000000,
+    if (wide) R.assert(units >= 1800000 && units <= 47000000, "Frecuencia Quansheng fuera de 18-470 MHz.");
+    else R.assert(units >= 13600000 && units <= 17400000 || units >= 40000000 && units <= 47000000,
       "La importacion Beta se limita a RX VHF 136-174 y UHF 400-470 MHz.");
     return units;
   }
   const bandFor = rx => rx < 13700000 ? 1 : rx < 17400000 ? 2 : rx < 35000000 ? 3 : rx < 40000000 ? 4 : rx < 47000000 ? 5 : 6;
+  const bandForWide = rx => rx < 10800000 ? 0 : bandFor(rx);
   function scanList(value) {
     R.assert(Number.isInteger(value) && value >= 0 && value <= 25, "Lista Quansheng: 0 (ninguna), 1-24 o 25 (todas).");
     return value;
@@ -64,7 +72,7 @@
     let duplicates = 0;
     for (const channel of channels) {
       const memory = plannedMemory(templateRecord, channel, scanList(channel.scanList ?? targetList));
-      const key = identity({ name: channel.name.slice(0, 10), rx: (memory.rx / 100000).toFixed(5), tx: (memory.tx / 100000).toFixed(5), mode: 0 });
+      const key = identity({ name: channel.name.slice(0, 10), rx: (memory.rx / 100000).toFixed(5), tx: (memory.tx / 100000).toFixed(5),       mode: channel.mode });
       if (known.has(key)) { duplicates++; continue; }
       let destination = 0;
       for (let number = 1; number <= 1024 && !destination; number++) if (!occupied(result, number)) destination = number;
@@ -75,27 +83,38 @@
     }
     return { image: result, added, duplicates };
   }
-  // One planned FM channel on a template record: RX-only, tones off, band and scan list set.
+  // One planned channel on a template record: RX-only, tones off, band and scan list set.
+  // Only with channel.extended: AM (mode 1), 18-470 MHz, TX allowed (rxOnly false) and a TX CTCSS tone (ctcss Hz;
+  // ctcssRx also sets it as the receive squelch tone).
   function plannedMemory(templateRecord, channel, list) {
-    R.assert(channel.mode === 0, "Quansheng solo importa canales FM analogicos.");
+    const wide = channel.extended === true;
+    R.assert(channel.mode === 0 || wide && channel.mode === 1, "Quansheng solo importa canales FM analogicos.");
     R.assert(/^[\x20-\x7e]{1,16}$/.test(channel.name), "Nombre Quansheng: 1-16 caracteres ASCII (se guardan los primeros 10).");
-    const rx = frequency(channel.rx);
-    const tx = frequency(channel.tx);
+    const rx = frequency(channel.rx, wide);
+    const tx = frequency(channel.tx, wide);
     R.assert((rx < 35000000) === (tx < 35000000), "RX y TX deben permanecer en la misma banda.");
     const record = templateRecord.slice();
     const view = R.view(record);
     view.setUint32(0, rx, true);
     view.setUint32(4, Math.abs(tx - rx), true);
     record.fill(0, 8, 11);
-    record[11] = tx > rx ? 1 : tx < rx ? 2 : 0;
+    if (wide && channel.ctcss !== undefined) {
+      const code = CTCSS.indexOf(Number(channel.ctcss));
+      R.assert(code >= 0, `Subtono CTCSS ${channel.ctcss} Hz no existe en la tabla Quansheng.`);
+      record[9] = code;
+      record[10] = 0x10;
+      if (channel.ctcssRx) { record[8] = code; record[10] |= 1; }
+    }
+    record[11] = (wide ? channel.mode << 4 : 0) | (tx > rx ? 1 : tx < rx ? 2 : 0);
     record[12] = (record[12] & ~1) | 64;
+    if (wide && channel.rxOnly === false) record[12] &= ~64;
     if (channel.narrow !== undefined) record[12] = (record[12] & ~2) | (channel.narrow ? 2 : 0);
     record[13] = 0;
     const name = new Uint8Array(16);
     name.set(new TextEncoder().encode(channel.name.slice(0, 10)));
     const attributes = new Uint8Array(2);
     // F4HWN frequencyBandTable: BAND2 108-137, BAND3 137-174 ... BAND6 400-470 MHz (attribute value = band index).
-    R.view(attributes).setUint16(0, bandFor(rx) | (list << 8), true);
+    R.view(attributes).setUint16(0, (wide ? bandForWide(rx) : bandFor(rx)) | (list << 8), true);
     return { record, name, attributes, rx, tx };
   }
   function updateQuanshengChannel(image, channel) {
@@ -269,7 +288,7 @@
     restored.set(backup.subarray(0, 0x8800));
     return restored;
   }
-  Object.assign(R, { QUANSHENG_CONFIG_SIZE: CONFIG_SIZE, readQuanshengChannels, appendQuanshengChannels, restoreQuanshengChannels,
+  Object.assign(R, { QUANSHENG_CONFIG_SIZE: CONFIG_SIZE, QUANSHENG_CTCSS: CTCSS, readQuanshengChannels, appendQuanshengChannels, restoreQuanshengChannels,
     updateQuanshengChannel, deleteQuanshengChannel, copyQuanshengChannel, moveQuanshengChannel, assignQuanshengScanList,
     groupQuanshengChannels, readQuanshengMemory, plannedQuanshengMemory, insertQuanshengMemory, moveQuanshengChannels });
   if (typeof module !== "undefined") module.exports = R;
