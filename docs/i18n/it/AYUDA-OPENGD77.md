@@ -98,6 +98,16 @@ modalità/indirizzi MCU arbitrari per simulare questa funzione.
 Se per «originale» si intende il firmware commerciale di fabbrica già sostituito, serve solo
 una copia precedente all'installazione; la lettura di OpenGD77 non recupera quei byte.
 
+### Backup completo MD-UV390 (GPS) / MD-UV380 (fase 1)
+
+Con OpenGD77 già installato, l'app web legge sulle radio STM32 la calibrazione di fabbrica (area 10, registri di sicurezza della Flash SPI), la copia locale di calibrazione (0x10000), l'intera Flash SPI e la ROM dell'MCU, e scarica uno ZIP con `calibration-factory.bin`, `calibration-local.bin`, `spi-flash.bin`, `mcu-rom.bin` e `manifest.json` (SHA-256 di ogni parte). È **completo** solo se tutto è stato letto e una seconda lettura di entrambe le calibrazioni coincide.
+
+1. Installa prima OpenGD77 con il CPS ufficiale: con il firmware TYT originale la calibrazione non è leggibile via USB.
+2. Collega la radio e premi **Backup completo UV390/UV380**.
+3. Scarica lo ZIP e conservalo fuori dal browser.
+
+Il firmware TYT originale **non** si può salvare dal browser: conserva il `.bin` ufficiale e il CPS TYT. L'UV390 condivide la piattaforma dell'UV380 e corrisponde all'immagine standard OpenMDUV380, non 10W PLUS; il progetto OpenGD77 non conferma l'immagine esatta di ogni variante, quindi controlla prima l'etichetta 10W/PLUS. Il flashing resta esterno (OpenGD77 CPS) e la scrittura dal web resta bloccata. Dimensioni e indirizzi provengono dal profilo del modello e non sono verificati su hardware.
+
 ## Controllo dal vivo e CAT per modello (2026-11-01)
 
 **OpenGD77 non ha un CAT di sintonia via USB.** Il codice sorgente del firmware (`usb_com.c`, rami MK22 e STM32) accetta solo letture di memoria (`R`), scritture del codeplug (`W`/`X`) e comandi CPS (`C`). Non esiste alcun comando per impostare o leggere la frequenza, cambiare modo o canale o attivare il PTT, quindi l'app web e l'APK **non lo simulano**. Il Doppler dei satelliti lo calcola la radio stessa nel menu Satellite, con i keps caricati dal CPS ufficiale e con il suo orologio.

@@ -34,7 +34,7 @@ const tools = {
     firmware: "El equipo debe tener instalado el firmware OpenGD77 correspondiente a su modelo.",
     models: [
       ["MK22", "GD-77 / DM-1801 / RD-5R", "WebUSB. En Windows, comprueba el controlador WinUSB indicado por el CPS."],
-      ["STM32", "MD-UV380 / MD-9600 / MD-2017 / DM-1701", "WebUSB. En Windows, comprueba el controlador WinUSB indicado por el CPS."],
+      ["STM32", "MD-UV380 / MD-UV390 (GPS) / MD-9600 / MD-2017 / DM-1701", "WebUSB. En Windows, comprueba el controlador WinUSB indicado por el CPS. MD-UV390 (GPS): misma plataforma que MD-UV380; backup completo con OpenGD77 ya instalado."],
       ["SERIAL", "Baofeng DM-32 / UV008", "Web Serial. Utiliza el puerto serie USB; no necesita el controlador WinUSB del grupo anterior."]
     ],
     features: ["Conexion USB / Serial", "Copia automatica de calibracion", "Editor de canales existentes", "Lectura del codeplug estandar"],

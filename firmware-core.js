@@ -18,6 +18,8 @@
     "DM-1801A": { family: "MK22", label: "DM-1801A (no DM-1801)", group: "MK22", pattern: /^OpenDM1801A(?:_(?:Japanese|NMEA|NMEA_Japanese))?\.zip$/ },
     "RD-5R": { family: "MK22", label: "RD-5R", group: "MK22", pattern: /^OpenRD5R(?:_Japanese)?\.zip$/ },
     "MD-UV380": { family: "STM32", label: "MD-UV380 / RT-3S (no 10W PLUS)", group: "MDUV380_DM1701", pattern: /^OpenMDUV380(?:_Japanese)?\.zip$/ },
+    // Same standard image as MD-UV380 (never the 10W PLUS one); OpenGD77 does not confirm each UV390 variant.
+    "MD-UV390": { family: "STM32", label: "MD-UV390 (GPS) - imagen estandar OpenMDUV380, variante no confirmada: revisa antes la etiqueta 10W/PLUS", alias: "MD-UV380", group: "MDUV380_DM1701", pattern: /^OpenMDUV380(?:_Japanese)?\.zip$/ },
     "MD-UV380-10W-PLUS": { family: "STM32", label: "MD-UV380 10W PLUS (hardware distinto)", group: "MDUV380_DM1701", pattern: /^OpenMDUV380_10W_PLUS(?:_Japanese)?\.zip$/ },
     "DM-1701": { family: "STM32", label: "DM-1701", group: "MDUV380_DM1701", pattern: /^OpenDM1701(?:_Japanese)?\.zip$/ },
     "RT-84": { family: "STM32", label: "RT-84", group: "MDUV380_DM1701", pattern: /^OpenRT84(?:_Japanese)?\.zip$/ },

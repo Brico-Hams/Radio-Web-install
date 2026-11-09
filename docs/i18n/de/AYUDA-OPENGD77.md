@@ -46,6 +46,16 @@ Verbinden identifiziert das Gerät und führt automatisch BackupManager aus, bev
 
 Dieser Schutz schafft keinen nicht vorhandenen Firmware-Leser. Es lässt sich nicht behaupten, dass die vollständige Originalfirmware bereits automatisch gesichert wird. Es werden keine willkürlichen MCU-Modi/-Adressen ausprobiert, um diese Funktion vorzutäuschen. Wenn «Original» die bereits ersetzte kommerzielle Werksfirmware meint, hilft nur eine vor der Installation erstellte Kopie; das Auslesen von OpenGD77 stellt diese Bytes nicht wieder her.
 
+### Vollständiges Backup MD-UV390 (GPS) / MD-UV380 (Stufe 1)
+
+Bei bereits installiertem OpenGD77 liest die Web-App bei STM32-Funkgeräten die Werkskalibrierung (Bereich 10, Sicherheitsregister des SPI-Flash), die lokale Kalibrierkopie (0x10000), den gesamten SPI-Flash und das MCU-ROM und lädt ein ZIP mit `calibration-factory.bin`, `calibration-local.bin`, `spi-flash.bin`, `mcu-rom.bin` und `manifest.json` (SHA-256 je Teil) herunter. Es ist nur **vollständig**, wenn alles gelesen wurde und ein zweites Lesen beider Kalibrierungen übereinstimmt.
+
+1. Installiere zuerst OpenGD77 mit der offiziellen CPS: mit der originalen TYT-Firmware ist die Kalibrierung per USB nicht lesbar.
+2. Verbinde das Funkgerät und drücke **Vollständiges Backup UV390/UV380**.
+3. Lade das ZIP herunter und bewahre es außerhalb des Browsers auf.
+
+Die originale TYT-Firmware lässt sich im Browser **nicht** sichern: Behalte die offizielle `.bin` und die TYT-CPS. Das UV390 teilt die Plattform des UV380 und wird dem Standard-Image OpenMDUV380 zugeordnet, nicht 10W PLUS; das OpenGD77-Projekt bestätigt das genaue Image je Variante nicht, prüfe daher zuerst das 10W/PLUS-Etikett. Das Flashen bleibt extern (OpenGD77-CPS) und das Schreiben aus dem Web bleibt gesperrt. Größen und Adressen stammen aus dem Modellprofil und sind nicht auf Hardware geprüft.
+
 ## Live-Steuerung und CAT je Modell (2026-11-01)
 
 **OpenGD77 hat kein Abstimm-CAT über USB.** Der Firmware-Quellcode (`usb_com.c`, MK22- und STM32-Zweig) akzeptiert nur Speicherlesungen (`R`), Codeplug-Schreibvorgänge (`W`/`X`) und CPS-Befehle (`C`). Es gibt keinen Befehl, um die Frequenz zu setzen oder zu lesen, Betriebsart oder Kanal zu wechseln oder PTT auszulösen; Web-App und APK **täuschen das nicht vor**. Das Funkgerät berechnet den Satelliten-Doppler selbst im Satellitenmenü aus den mit dem offiziellen CPS geladenen Keps und seiner Uhr.

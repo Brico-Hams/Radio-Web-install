@@ -114,6 +114,7 @@
       if ($("qs-connect-readonly")) $("qs-connect-readonly").disabled = $("radio-connect").disabled;
       if ($("qs-connect-channels")) $("qs-connect-channels").disabled = $("radio-connect").disabled;
       if ($("gd77-connect-live")) $("gd77-connect-live").disabled = $("radio-connect").disabled;
+      if ($("gd77-full-backup")) $("gd77-full-backup").disabled = $("radio-connect").disabled;
       document.querySelectorAll("[data-gd77-live]").forEach(button => { button.disabled = busy || !connected; });
       $("radio-disconnect").disabled = busy || catTracking || !connector;
       model.disabled = busy || Boolean(connector);
@@ -252,6 +253,18 @@
           download(`radio-backup-${record.id}.rwb.json`, await R.exportBackup(latest), "application/json");
         }));
         li.append(button);
+        if (R.gd77BackupZip && record.files.some(file => file.name === "manifest") && record.files.some(file => file.name === "mcu-rom")) {
+          const zip = document.createElement("button");
+          zip.type = "button";
+          zip.className = "button primary";
+          zip.textContent = "ZIP UV390/UV380";
+          zip.addEventListener("click", () => action("Exportar ZIP UV390/UV380", async () => {
+            const latest = await store.get(record.id);
+            R.assert(latest, "La copia ya no existe.");
+            download(`radio-backup-${record.id}.zip`, await R.gd77BackupZip(latest.files), "application/zip");
+          }));
+          li.append(zip);
+        }
         for (const file of record.files) {
           const button = document.createElement("button");
           button.type = "button";
@@ -1480,7 +1493,13 @@
         <canvas id="gd77-screen-canvas" class="qs-live-screen" width="128" height="64" role="img" aria-label="Pantalla de la radio OpenGD77" hidden></canvas>
         <p id="gd77-live-status" role="status">Sin conexion en vivo.</p>
         <div class="table-scroll"><table><caption>Funciones de radio por USB para el modelo detectado</caption><thead><tr><th>Funcion</th><th>Estado</th><th>Motivo</th></tr></thead><tbody id="gd77-capabilities"><tr><td colspan="3">Conecta para ver el modelo detectado. La matriz completa por modelo esta en la ayuda OpenGD77.</td></tr></tbody></table></div>
-        <h2>Codeplug OpenGD77</h2><p class="muted">Al conectar se inicia automaticamente la copia de calibracion y codeplug estandar de 128 KiB. El firmware MCU original no se puede respaldar de forma integral con el protocolo verificado actual: la copia es parcial y bloquea posteriores operaciones de radio, incluso lecturas adicionales. El archivo de la copia se abre para edicion offline. No incluye canales extendidos 1025+.</p>
+        <h2>Codeplug OpenGD77</h2><p class="muted">Al conectar se inicia automaticamente la copia de calibracion y codeplug estandar de 128 KiB. En MK22 y SERIAL el firmware MCU original no se puede respaldar de forma integral con el protocolo verificado actual: la copia es parcial y bloquea posteriores operaciones de radio, incluso lecturas adicionales. En STM32 con OpenGD77 la copia completa incluye ademas calibracion de fabrica, Flash SPI y ROM MCU. El archivo de la copia se abre para edicion offline. No incluye canales extendidos 1025+.</p>
+        <h2>Backup completo UV390/UV380</h2>
+        <ol><li>Instala antes OpenGD77 con el CPS oficial: con firmware TYT de fabrica la calibracion no se puede leer por USB.</li><li>Selecciona la familia STM32 y conecta la radio.</li><li>Pulsa el boton de backup completo y espera a que terminen las seis fases.</li><li>Descarga el ZIP con calibration-factory.bin, calibration-local.bin, spi-flash.bin, mcu-rom.bin y manifest.json.</li></ol>
+        <p><a href="ayuda-opengd77.html">Ayuda OpenGD77: backup completo UV390/UV380</a></p>
+        <button id="gd77-full-backup" class="button primary" type="button" disabled>Backup completo UV390/UV380</button>
+        <p class="muted">El firmware TYT STOCK no se puede respaldar desde el navegador: conserva el .bin oficial de TYT y su CPS. El flasheo sigue siendo externo (OpenGD77 CPS) en esta etapa; la escritura desde la web continua bloqueada.</p>
+        <p role="alert"><strong>Aviso:</strong> el proyecto OpenGD77 no confirma la imagen exacta de cada variante del UV390; la web usa la imagen estandar OpenMDUV380. Revisa primero la etiqueta 10W/PLUS.</p>
         <div class="operation-buttons"><button id="read-codeplug" data-connected class="button secondary" type="button" disabled>Leer codeplug</button><button id="write-codeplug" data-write class="button primary" type="button" disabled>Escribir codeplug</button><button id="save-codeplug" class="button secondary" type="button">Guardar binario 128 KiB</button></div>
         <label for="codeplug-file">Abrir codeplug binario de 128 KiB (no JSON del CPS ni firmware)</label><input id="codeplug-file" type="file" accept=".bin,.g77">
         <div class="table-scroll"><table><thead><tr><th>Canal</th><th>Nombre</th><th>RX MHz</th><th>TX MHz</th><th>Modo</th><th>Editar</th></tr></thead><tbody id="channels-body"></tbody></table></div>
@@ -1766,8 +1785,12 @@
         $("backup-status").textContent = `${record.status}: ${record.files.map(file => file.name).join(", ") || "iniciando"} ${record.scope}`;
       });
       log(result.record.scope);
-      download(`radio-backup-${result.record.id}.rwb.json`, await R.exportBackup(result.record), "application/json");
-      permit = result.permit;
+      const fullStm32 = result.record.files.some(file => file.name === "manifest") && result.record.files.some(file => file.name === "mcu-rom");
+      if (fullStm32 && result.record.status === "complete") {
+        download(`radio-backup-${result.record.id}.zip`, await R.gd77BackupZip(result.record.files), "application/zip");
+      } else {
+        download(`radio-backup-${result.record.id}.rwb.json`, await R.exportBackup(result.record), "application/json");
+      }
       partialPermit = result.partialPermit || null;
       if (partialPermit) log(R.QUANSHENG_FLASH_UNSUPPORTED_TEXT);
       log("Exportacion automatica solicitada al navegador. Comprueba Descargas; el historial permite repetirla.");
@@ -1789,6 +1812,7 @@
     }
     attach("radio-connect", "Conectar y crear respaldo automatico", () => connectRadio(true));
     if ($("gd77-connect-live")) attach("gd77-connect-live", "Conectar OpenGD77 solo lectura / en vivo", () => connectRadio(false));
+    if ($("gd77-full-backup")) attach("gd77-full-backup", "Backup completo UV390/UV380", () => connectRadio(true));
     if ($("qs-connect-readonly")) attach("qs-connect-readonly", "Conectar Quansheng solo lectura / CAT", () => connectRadio(false));
     attach("radio-disconnect", "Desconectar", async () => {
       permit = null;

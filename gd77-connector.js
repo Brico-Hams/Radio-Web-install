@@ -2,6 +2,8 @@
   "use strict";
   const R = root.RadioWorkspace;
   const MODELS = ["GD-77", "GD-77S", "DM-1801", "RD-5R", "DM-1801A", "MD-9600", "MD-UV380", "MD-380", "DM-1701", "MD-2017", "DM-1701 RGB", "DM-32", "UV008"];
+  // Selectable names that the radio reports under another model; MODELS stays index-aligned with the radio type field.
+  const ALIASES = Object.freeze({ "MD-UV390 (GPS)": "MD-UV380" });
   // Upstream usb_com.c (open-ham/OpenGD77 MK22 and the MD-UV380 STM32 tree) only has R/W/X memory access and 'C' CPS
   // commands: there is no USB command to tune, change mode/channel or key the transmitter. Doppler runs inside the radio.
   const NO_CAT = "El protocolo USB de OpenGD77 no tiene ordenes de sintonia, modo, canal ni PTT.";
@@ -16,6 +18,16 @@
     codeplug: { label: "Leer y editar codeplug (archivo local)" },
     keps: { label: "Cargar keps de satelites", reason: "Formato de keps en Flash no publicado; usa el CPS oficial OpenGD77." }
   };
+  // STM32 OpenGD77 CPS memory areas (usb_com.c): 1 SPI flash, 2 EEPROM (calibration copy at 0x10000), 5 MCU ROM,
+  // 10 FLASH_SECURITY_REGISTERS (factory calibration, non-MK22 only). Sizes come from the profile, never from the radio.
+  // The MCU ROM base is the absolute internal-flash address; confirm against usb_com.c on real hardware.
+  const STM32_BACKUP = Object.freeze({ spiFlashSize: 0x1000000, mcuRomBase: 0x08000000, mcuRomSize: 0x100000 });
+  const STM32_READ_BLOCK = 512;
+  const BACKUP_FILES = Object.freeze({
+    calibration: "calibration-local.bin", "calibration-factory": "calibration-factory.bin", codeplug: "codeplug.bin",
+    "spi-flash": "spi-flash.bin", "mcu-rom": "mcu-rom.bin", manifest: "manifest.json"
+  });
+  const STM32_REQUIRED_PARTS = ["calibration", "calibration-factory", "spi-flash", "mcu-rom", "manifest"];
   // Display buffers: UC1701.c (MK22, page-ordered mono) and HX8353E_display.c (STM32, RGB565 byte-swapped).
   const PROFILES = {
     "GD-77": { family: "MK22", screen: { width: 128, height: 64, format: "mono" } },
@@ -23,12 +35,14 @@
     "DM-1801": { family: "MK22", screen: { width: 128, height: 64, format: "mono" } },
     "RD-5R": { family: "MK22", screen: { width: 128, height: 48, format: "mono" }, note: "USB no fiable durante TX (sin hotspot)." },
     "DM-1801A": { family: "MK22", screen: { width: 128, height: 64, format: "mono" } },
-    "MD-9600": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" } },
-    "MD-UV380": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" }, note: "Incluye RT3S y UV390." },
-    "MD-380": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" } },
-    "DM-1701": { family: "STM32", screen: { width: 160, height: 128, format: "bgr565" }, note: "Incluye RT84." },
-    "MD-2017": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" } },
-    "DM-1701 RGB": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" } },
+    "MD-9600": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" }, fullBackup: STM32_BACKUP },
+    "MD-UV380": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" }, note: "Incluye RT3S y UV390.", fullBackup: STM32_BACKUP },
+    // The radio reports MD-UV380 for the UV390 (same platform), so this entry is a selectable alias, not a detected type.
+    "MD-UV390 (GPS)": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" }, note: "GPS; misma plataforma que MD-UV380", alias: "MD-UV380", fullBackup: STM32_BACKUP },
+    "MD-380": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" }, fullBackup: STM32_BACKUP },
+    "DM-1701": { family: "STM32", screen: { width: 160, height: 128, format: "bgr565" }, note: "Incluye RT84.", fullBackup: STM32_BACKUP },
+    "MD-2017": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" }, fullBackup: STM32_BACKUP },
+    "DM-1701 RGB": { family: "STM32", screen: { width: 160, height: 128, format: "rgb565" }, fullBackup: STM32_BACKUP },
     "DM-32": { family: "SERIAL", screen: null, note: "Familia SERIAL: pantalla y reloj no verificados en el codigo fuente." },
     "UV008": { family: "SERIAL", screen: null, note: "Familia SERIAL: pantalla y reloj no verificados en el codigo fuente." }
   };
@@ -72,6 +86,80 @@
       { start: 0xb000, end: 0x1ee60, address: flashBased ? 0x9b000 : 0x7b000, mode: 1, write: 3 },
       { start: 0x1ee60, end: 0x20000, address: flashBased ? 0x20000 : 0, mode: 1, write: 3 }
     ];
+  }
+  const hex = value => `0x${value.toString(16)}`;
+  // Uncompressed ZIP (method 0) so the backup needs no library and ships in every build.
+  function storeZip(entries, date = new Date()) {
+    const encoder = new TextEncoder();
+    const time = date.getHours() << 11 | date.getMinutes() << 5 | date.getSeconds() >> 1;
+    const day = Math.max(0, date.getFullYear() - 1980) << 9 | (date.getMonth() + 1) << 5 | date.getDate();
+    const chunks = [];
+    const directory = [];
+    let offset = 0;
+    for (const { name, bytes } of entries) {
+      R.bytes(bytes);
+      const label = encoder.encode(name);
+      const crc = R.crc32(bytes);
+      const local = new Uint8Array(30 + label.length);
+      const lv = R.view(local);
+      lv.setUint32(0, 0x04034b50, true);
+      lv.setUint16(4, 20, true);
+      lv.setUint16(6, 0x0800, true);
+      lv.setUint16(10, time, true);
+      lv.setUint16(12, day, true);
+      lv.setUint32(14, crc, true);
+      lv.setUint32(18, bytes.length, true);
+      lv.setUint32(22, bytes.length, true);
+      lv.setUint16(26, label.length, true);
+      local.set(label, 30);
+      const entry = new Uint8Array(46 + label.length);
+      const ev = R.view(entry);
+      ev.setUint32(0, 0x02014b50, true);
+      ev.setUint16(4, 20, true);
+      ev.setUint16(6, 20, true);
+      ev.setUint16(8, 0x0800, true);
+      ev.setUint16(12, time, true);
+      ev.setUint16(14, day, true);
+      ev.setUint32(16, crc, true);
+      ev.setUint32(20, bytes.length, true);
+      ev.setUint32(24, bytes.length, true);
+      ev.setUint16(28, label.length, true);
+      ev.setUint32(42, offset, true);
+      entry.set(label, 46);
+      chunks.push(local, bytes);
+      directory.push(entry);
+      offset += local.length + bytes.length;
+      R.assert(offset < 0xffffffff, "El ZIP supera 4 GiB.");
+    }
+    const size = directory.reduce((sum, entry) => sum + entry.length, 0);
+    const end = new Uint8Array(22);
+    const dv = R.view(end);
+    dv.setUint32(0, 0x06054b50, true);
+    dv.setUint16(8, directory.length, true);
+    dv.setUint16(10, directory.length, true);
+    dv.setUint32(12, size, true);
+    dv.setUint32(16, offset, true);
+    const all = [...chunks, ...directory, end];
+    const out = new Uint8Array(all.reduce((sum, part) => sum + part.length, 0));
+    let position = 0;
+    for (const part of all) {
+      out.set(part, position);
+      position += part.length;
+    }
+    return out;
+  }
+  // Builds the downloadable archive from a stored complete STM32 backup; refuses anything not proven by its manifest.
+  async function backupZip(files) {
+    const byName = new Map(files.map(file => [file.name, file.bytes]));
+    for (const name of STM32_REQUIRED_PARTS) R.assert(byName.has(name), `Falta ${BACKUP_FILES[name]}: la copia no esta completa.`);
+    const manifest = JSON.parse(new TextDecoder().decode(byName.get("manifest")));
+    R.assert(manifest.format === "radio-workspace-stm32-backup" && manifest.complete === true, "El manifiesto no declara una copia completa.");
+    for (const part of manifest.parts) {
+      const bytes = byName.get(part.name);
+      R.assert(bytes && bytes.length === part.length && await R.sha256(bytes) === part.sha256, `SHA-256 distinto al del manifiesto: ${part.file}.`);
+    }
+    const entries = Object.keys(BACKUP_FILES).filter(name => byName.has(name)).map(name => ({ name: BACKUP_FILES[name], bytes: byName.get(name) }));
+    return storeZip(entries, new Date(manifest.createdAt));
   }
   class GD77Connector extends R.Connector {
     constructor(family, transport) {
@@ -187,6 +275,7 @@
     }
     async backup(emit) {
       return this.run("Respaldo automatico", () => this.cps(async () => {
+        if (this.family === "STM32") return this.backupSTM32(emit);
         const address = this.family === "MK22" ? 0x80000 : 0x10000;
         const length = this.family === "MK22" ? 4096 : 512;
         const calibration = await this.readMemory(2, address, length, value => this.progress(value, "Leyendo calibracion"));
@@ -198,6 +287,75 @@
           scope: "RESPALDO PARCIAL: calibracion y codeplug guardados; firmware MCU original NO respaldado. Operaciones de radio bloqueadas: no se ha verificado un protocolo de lectura completa del firmware MCU para esta familia. No se sustituye por una imagen descargada."
         };
       }));
+    }
+    // STM32 OpenGD77 only: factory calibration (area 10), local copy, SPI flash and MCU ROM, with a SHA-256 manifest.
+    // complete is true only if every part was read and a second read of both calibration areas hashes identically.
+    async backupSTM32(emit) {
+      const plan = PROFILES[this.info.model].fullBackup;
+      R.assert(plan, `${this.info.model}: copia completa STM32 no definida en el perfil.`);
+      const parts = [];
+      const failures = [];
+      const step = (index, text) => `Copia completa ${index}/6: ${text}`;
+      const store = async (name, data, area, address, contains) => {
+        await emit(name, data, { area, address, contains });
+        parts.push({ name, file: BACKUP_FILES[name], area, address: hex(address), length: data.length, sha256: await R.sha256(data) });
+      };
+      // A failed part must not leave stale reply bytes in front of the next request.
+      const attempt = async (what, action) => {
+        try {
+          return await action();
+        } catch (error) {
+          if (this.transport.error) throw error;
+          failures.push(`${what}: ${error.message}`);
+          this.transport.clear();
+          return null;
+        }
+      };
+      const local = await this.readMemory(2, 0x10000, 512, value => this.progress(value, step(1, "calibracion local")));
+      await store("calibration", local, 2, 0x10000, "Copia local de calibracion en 0x10000 (puede estar modificada)");
+      const factory = await attempt("calibracion de fabrica (area 10)", async () => {
+        const data = await this.readMemory(10, 0, 512, value => this.progress(value, step(2, "calibracion de fabrica")));
+        R.validateCalibration(data);
+        return data;
+      });
+      if (factory) await store("calibration-factory", factory, 10, 0, "Calibracion de fabrica: registros de seguridad de la Flash SPI");
+      const codeplug = await this.readCodeplugRaw();
+      await store("codeplug", codeplug, 1, 0, "Codeplug estandar 128 KiB");
+      let spi = null;
+      let rom = null;
+      if (factory) {
+        spi = await attempt("Flash SPI (area 1)", () => this.readMemory(1, 0, plan.spiFlashSize,
+          value => this.progress(value, step(4, "Flash SPI completa")), STM32_READ_BLOCK));
+        if (spi) await store("spi-flash", spi, 1, 0, "Flash SPI completa segun el perfil del modelo");
+        rom = await attempt("ROM MCU (area 5)", () => this.readMemory(5, plan.mcuRomBase, plan.mcuRomSize,
+          value => this.progress(value, step(5, "ROM MCU (OpenGD77 instalado)")), STM32_READ_BLOCK));
+        if (rom) await store("mcu-rom", rom, 5, plan.mcuRomBase, "Firmware MCU actual (OpenGD77 instalado), no el firmware TYT de fabrica");
+      }
+      let verified = false;
+      if (factory && spi && rom) {
+        const again = await attempt("segunda lectura de calibracion", async () => [
+          await this.readMemory(10, 0, 512, value => this.progress(value, step(6, "verificando calibracion de fabrica"))),
+          await this.readMemory(2, 0x10000, 512, value => this.progress(value, step(6, "verificando calibracion local")))
+        ]);
+        verified = Boolean(again) && R.equal(again[0], factory) && R.equal(again[1], local);
+        if (again && !verified) failures.push("la segunda lectura de calibracion no coincide con la primera");
+      }
+      const complete = failures.length === 0 && verified && Boolean(factory && spi && rom);
+      const manifest = {
+        format: "radio-workspace-stm32-backup", version: 1, createdAt: new Date().toISOString(),
+        model: this.info.model, aliases: Object.entries(ALIASES).filter(([, target]) => target === this.info.model).map(([alias]) => alias),
+        firmware: this.info.firmware, build: this.info.build, radioType: this.info.radioType, structVersion: this.info.structVersion,
+        sizeSource: "perfil del modelo (no leido de la radio)", complete, verified, failures, parts,
+        notes: ["Firmware TYT STOCK no incluido: no se puede leer desde el navegador. Conserva el .bin oficial y el CPS de TYT.",
+          "La ROM MCU es el OpenGD77 instalado, no el firmware de fabrica."]
+      };
+      await emit("manifest", new TextEncoder().encode(JSON.stringify(manifest, null, 2)), { contains: "Manifiesto con SHA-256 de cada parte" });
+      const scope = complete
+        ? "RESPALDO COMPLETO STM32: calibracion de fabrica, calibracion local, Flash SPI y ROM MCU leidas; calibraciones verificadas con una segunda lectura. No incluye el firmware TYT de fabrica. La escritura desde esta web sigue bloqueada."
+        : !factory
+          ? "RESPALDO PARCIAL: no se pudo leer la calibracion de fabrica (area 10). Con firmware TYT de fabrica no es posible; instala antes OpenGD77. No se leyo Flash SPI ni ROM MCU."
+          : "RESPALDO PARCIAL: alguna parte no se pudo leer o la segunda lectura de calibracion no coincide. No lo uses como copia completa.";
+      return { complete, writeLocked: true, scope, manifest };
     }
     async ackWrite(request, subcommand) {
       await this.transport.write(request);
@@ -245,6 +403,7 @@
       }, true));
     }
   }
-  Object.assign(R, { GD77Connector, gd77Segments: segments, gd77Models: MODELS, gd77Capabilities: capabilities, gd77DecodeScreen: decodeScreen });
+  Object.assign(R, { GD77Connector, gd77Segments: segments, gd77Models: MODELS, gd77Aliases: ALIASES, gd77Capabilities: capabilities, gd77DecodeScreen: decodeScreen,
+    gd77StoreZip: storeZip, gd77BackupZip: backupZip, gd77BackupFiles: BACKUP_FILES });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

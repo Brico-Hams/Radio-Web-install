@@ -98,6 +98,16 @@ modos/direcciones arbitrarios del MCU para aparentar esa funcion.
 Si «original» significa firmware comercial de fabrica ya reemplazado, solo sirve
 una copia anterior a la instalacion; leer OpenGD77 no recupera esos bytes.
 
+### Backup completo MD-UV390 (GPS) / MD-UV380 (etapa 1)
+
+Con OpenGD77 ya instalado, la web lee en las radios STM32 la calibración de fábrica (área 10, registros de seguridad de la Flash SPI), la copia local de calibración (0x10000), la Flash SPI completa y la ROM del MCU, y descarga un ZIP con `calibration-factory.bin`, `calibration-local.bin`, `spi-flash.bin`, `mcu-rom.bin` y `manifest.json` (SHA-256 de cada parte). Solo es **completo** si todo se leyó y una segunda lectura de ambas calibraciones coincide.
+
+1. Instala antes OpenGD77 con el CPS oficial: con firmware TYT de fábrica la calibración no se puede leer por USB.
+2. Conecta la radio y pulsa **Backup completo UV390/UV380**.
+3. Descarga el ZIP y guárdalo fuera del navegador.
+
+El firmware TYT de fábrica **no** se puede respaldar desde el navegador: conserva el `.bin` oficial y el CPS de TYT. El UV390 comparte plataforma con el UV380 y se asigna a la imagen estándar OpenMDUV380, no a 10W PLUS; el proyecto OpenGD77 no confirma la imagen exacta de cada variante, así que revisa primero la etiqueta 10W/PLUS. El flasheo sigue siendo externo (OpenGD77 CPS) y la escritura desde la web continúa bloqueada. Tamaños y direcciones salen del perfil del modelo y no se han comprobado en hardware.
+
 ## Control en vivo y CAT por modelo (2026-11-01)
 
 **OpenGD77 no tiene CAT de sintonía por USB.** El código fuente del firmware (`usb_com.c`, ramas MK22 y STM32) solo acepta lecturas de memoria (`R`), escrituras de codeplug (`W`/`X`) y órdenes CPS (`C`). No existe ninguna orden para fijar o leer la frecuencia, cambiar modo o canal ni activar el PTT, así que la web y el APK **no lo simulan**. El Doppler de satélites lo calcula la propia radio en su menú Satélite con los keps cargados desde el CPS oficial y con su reloj.

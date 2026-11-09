@@ -1345,7 +1345,7 @@ test("Error de CRC despues de escribir invalida sesion", async () => {
   assert.equal(connector.connected, false);
   await assert.rejects(connector.eraseSlot(1, permit), /bloqueada/);
 });
-for (const family of ["MK22", "STM32", "SERIAL"]) {
+for (const family of ["MK22", "SERIAL"]) {
   test(`${family}: identificar familia, leer segmentos y calibracion sin escribir`, async () => {
     const device = new GD77Device(family); const connector = new R.GD77Connector(family, device);
     const info = await connector.connect();

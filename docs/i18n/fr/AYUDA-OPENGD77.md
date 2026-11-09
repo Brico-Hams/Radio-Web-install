@@ -47,6 +47,16 @@ La connexion identifie l'appareil et lance automatiquement BackupManager avant d
 Cette protection ne crée pas un lecteur de firmware inexistant. Il n'est pas possible d'affirmer que le firmware original complet est déjà sauvegardé automatiquement. Aucun mode/adresse MCU arbitraire n'est testé pour simuler cette fonction.
 Si « original » désigne le firmware commercial d'usine déjà remplacé, seule une copie antérieure à l'installation convient ; la lecture d'OpenGD77 ne récupère pas ces octets.
 
+### Sauvegarde complète MD-UV390 (GPS) / MD-UV380 (étape 1)
+
+Avec OpenGD77 déjà installé, l'application web lit sur les radios STM32 la calibration d'usine (zone 10, registres de sécurité de la Flash SPI), la copie locale de calibration (0x10000), toute la Flash SPI et la ROM du MCU, puis télécharge un ZIP avec `calibration-factory.bin`, `calibration-local.bin`, `spi-flash.bin`, `mcu-rom.bin` et `manifest.json` (SHA-256 de chaque partie). Elle n'est **complète** que si tout a été lu et si une seconde lecture des deux calibrations est identique.
+
+1. Installez d'abord OpenGD77 avec le CPS officiel : avec le firmware TYT d'origine, la calibration n'est pas lisible par USB.
+2. Connectez la radio et appuyez sur **Sauvegarde complète UV390/UV380**.
+3. Téléchargez le ZIP et conservez-le hors du navigateur.
+
+Le firmware TYT d'origine ne peut **pas** être sauvegardé depuis le navigateur : conservez le `.bin` officiel et le CPS TYT. L'UV390 partage la plateforme de l'UV380 et correspond à l'image standard OpenMDUV380, pas 10W PLUS ; le projet OpenGD77 ne confirme pas l'image exacte de chaque variante, vérifiez donc d'abord l'étiquette 10W/PLUS. Le flashage reste externe (OpenGD77 CPS) et l'écriture depuis le web reste bloquée. Tailles et adresses proviennent du profil du modèle et ne sont pas vérifiées sur matériel.
+
 ## Contrôle en direct et CAT par modèle (2026-11-01)
 
 **OpenGD77 n'a pas de CAT d'accord par USB.** Le code source du firmware (`usb_com.c`, branches MK22 et STM32) n'accepte que des lectures mémoire (`R`), des écritures de codeplug (`W`/`X`) et des commandes CPS (`C`). Aucune commande ne règle ni ne lit la fréquence, ne change le mode ou le canal, ni n'active le PTT : l'application web et l'APK **ne le simulent pas**. La radio calcule elle-même le Doppler des satellites dans son menu Satellite, à partir des keps chargés avec le CPS officiel et de son horloge.
