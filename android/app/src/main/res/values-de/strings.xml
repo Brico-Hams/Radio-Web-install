@@ -697,6 +697,7 @@
     <string name="pass_countdown_los">Läuft, LOS in %1$s</string>
     <string name="pass_finished">Beendet</string>
     <string name="pass_partial">" (durch das Fenster gekürzt)"</string>
+    <string name="pass_start_unknown">" (läuft, Beginn nicht berechnet)"</string>
     <string name="pass_current">Jetzt Az %1$.1f°, El %2$.1f°, %3$.0f km</string>
     <string name="pass_detail">%1$s\nAOS %2$s Az %3$.0f°\nMax %4$s El %5$.1f°\nLOS %6$s Az %7$.0f°\nTeilweise Anfang=%8$s Ende=%9$s\nBeobachter %10$.6f, %11$.6f, %12$.3f km; RX %13$d Hz\n%14$s</string>
     <string name="rotor_open">AZ/EL-Rotor: diesen Überflug vorbereiten und verfolgen</string>

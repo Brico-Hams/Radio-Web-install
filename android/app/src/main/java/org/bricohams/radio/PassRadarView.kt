@@ -61,6 +61,9 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
     private var cx = 0f
     private var cy = 0f
     private var radius = 0f
+    private var labelDx = 0.7071f
+    private var labelDy = -0.7071f
+    private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colors.surface; alpha = 220 }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
@@ -80,6 +83,7 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
     private fun trace() {
         past.reset(); future.reset()
         if (radius <= 0f) return
+        pickLabelRadial()
         // The future path starts at the last past sample so the two colours join without a gap.
         val firstFuture = track.indexOfFirst { it.time > now }
         track.forEachIndexed { index, look ->
@@ -92,6 +96,26 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
                 else if (index == firstFuture) future.moveTo(px, py)
                 future.lineTo(px, py)
             }
+        }
+    }
+
+    // Of 16 screen radials, the one whose ring labels are farthest from every track sample.
+    private fun pickLabelRadial() {
+        if (track.isEmpty()) return
+        var best = -1f
+        for (step in 0 until 16) {
+            val angle = Math.toRadians(step * 22.5)
+            val dx = sin(angle).toFloat()
+            val dy = -cos(angle).toFloat()
+            var nearest = Float.MAX_VALUE
+            for (look in track) {
+                val (x, y) = spot(look)
+                for (elevation in intArrayOf(0, 30, 60)) {
+                    val d = radius * (90 - elevation) / 90f
+                    nearest = minOf(nearest, hypot(x - dx * d, y - dy * d))
+                }
+            }
+            if (nearest > best) { best = nearest; labelDx = dx; labelDy = dy }
         }
     }
 
@@ -112,12 +136,20 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
             val (x, y) = PassGeometry.project(az, 0.0, radius, up)
             canvas.drawLine(cx - x, cy - y, cx + x, cy + y, grid)
         }
-        // Elevation labels stay on a fixed diagonal so they remain readable while the chart turns.
-        for (elevation in listOf(0, 30, 60)) {
-            val offset = radius * (90 - elevation) / 90f * 0.7071f
-            canvas.drawText("$elevation°", cx + offset + 2 * density, cy - offset - 2 * density, small)
+        // Elevation labels sit on the screen radial farthest from the track, on a small pill so they stay legible.
+        val pill = pillPaint
+        for (elevation in listOf(0, 30, 60, 90)) {
+            val text = "$elevation°"
+            val distance = radius * (90 - elevation) / 90f
+            val lx = cx + labelDx * distance
+            val ly = cy + labelDy * distance
+            val half = small.measureText(text) / 2 + 3 * density
+            val high = small.textSize / 2 + 2 * density
+            val px = if (elevation == 0) lx - half else lx + (if (elevation == 90) half else 0f)
+            canvas.drawRoundRect(px - half, ly - high, px + half, ly + high, high, high, pill)
+            small.textAlign = Paint.Align.CENTER
+            canvas.drawText(text, px, ly + small.textSize * 0.35f, small)
         }
-        canvas.drawText("90°", cx + 4 * density, cy - 4 * density, small)
         cardinals.forEachIndexed { index, name ->
             val (x, y) = PassGeometry.project(index * 90.0, 0.0, radius + 15 * density, up)
             label.color = if (index == 0) colors.orange else colors.text

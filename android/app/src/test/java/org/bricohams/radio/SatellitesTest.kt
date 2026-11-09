@@ -45,6 +45,27 @@ class SatellitesTest {
             assertThrows(IllegalArgumentException::class.java) { orbit.predict(orbit.epoch + 7 * 86400000 - 1000, hours = 1) }
         }
     }
+    @Test fun inProgressPassFindsRealAosBeforeSearchStart() {
+        orbit().use { orbit ->
+            val middle = 1792390010000L
+            val pass = orbit.predict(middle, minimum = 0.0).first()
+            assertFalse(pass.partialStart)
+            assertTrue(pass.aos.time < middle - 60000)
+            assertEquals(0.0, pass.aos.elevation, 0.5)
+            assertEquals(orbit.look(pass.aos.time).azimuth, pass.aos.azimuth, 0.5)
+            assertTrue(pass.maximum.elevation >= orbit.look(middle).elevation - 1e-9)
+            assertTrue(pass.los.time > middle)
+        }
+    }
+    @Test fun passStillUpAtWindowEndFindsRealLos() {
+        orbit().use { orbit ->
+            val middle = 1792390010000L
+            val pass = orbit.predict(middle - 3600000L, hours = 1, minimum = 0.0).last()
+            assertFalse(pass.partialEnd)
+            assertTrue(pass.los.time > middle)
+            assertEquals(0.0, pass.los.elevation, 0.5)
+        }
+    }
     @Test fun tleCatalogPreservesLinesAndRejectsInvalidOrDuplicateData() {
         assertEquals(listOf(tle), Tle.parseCatalog("0 ISS\r\n${tle.line1}\r\n${tle.line2}\r\n"))
         assertEquals(25544, Tle.parseCatalog("${tle.line1}\n${tle.line2}").single().norad)

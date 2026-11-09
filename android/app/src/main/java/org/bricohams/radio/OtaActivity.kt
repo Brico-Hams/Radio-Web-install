@@ -22,7 +22,7 @@ import kotlin.concurrent.thread
 /** Announcements triggered by a version or firmware change. */
 object ReleaseNotices {
     fun showWhatsNew(activity: Activity, change: VersionChange) {
-        val notes = Changelog.forContext(activity, change.current.code)
+        val notes = Changelog.forContext(activity, change.current.code, dropTitle = true)
         val body = StringBuilder(notes ?: activity.getString(R.string.whatsnew_generic, change.current.toString()))
         change.previous?.let { body.append("\n\n").append(activity.getString(R.string.whatsnew_previous, it.toString())) }
         AlertDialog.Builder(activity)
