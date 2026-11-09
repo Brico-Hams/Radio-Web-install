@@ -31,7 +31,7 @@
     <string name="live_image_lost">Das Bild ging beim Neuaufbau des Bildschirms verloren. Eine neue Aufnahme dekodieren.</string>
     <string name="app_name">RadiCodex</string>
     <string name="cat_intro">Experimentelles USB/CAT, nur Bricohams SAT RX v1. CAT funktioniert nur über USB (kein Bluetooth-CAT). Nicht physisch auf Android getestet.</string>
-    <string name="cat_help">RadiCodex - USB OTG: CDC ACM und erkannte Einzelport-Adapter CH34x, CP210x, FTDI oder Prolific. Am Funkgerät: SAT RX und Taste 8 für CAT RX. Keine Kanäle, kein EEPROM, keine Kalibrierung. Das Funkgerät verwirft die Abstimmung nach 3 s ohne Erneuerung; die App erneuert sie alle 1,2 s bis STOP oder bis du den Bildschirm verlässt.</string>
+    <string name="cat_help">RadiCodex - USB OTG: CDC ACM und erkannte Einzelport-Adapter CH34x, CP210x, FTDI oder Prolific. Am Funkgerät: SAT RX und F+8 für CAT RX. Keine Kanäle, kein EEPROM, keine Kalibrierung. Das Funkgerät verwirft die Abstimmung nach 3 s ohne Erneuerung; die App erneuert sie alle 1,2 s bis STOP oder bis du den Bildschirm verlässt.</string>
     <string name="cat_sstv_record">SSTV aufnehmen (CAT stimmt weiter ab)</string>
     <string name="cat_sstv_stop">Aufnahme stoppen und dekodieren</string>
     <string name="cat_sstv_sending">SSTV wird über CAT-PTT gesendet...</string>
@@ -806,7 +806,7 @@
     <string name="err_rig_resolution">Die Frequenz muss ein Vielfaches von %1$d Hz sein.</string>
     <string name="err_rig_channel">Speicherkanal %1$d liegt außerhalb des Bereichs.</string>
     <string name="err_rig_audio_length">Das Audio ist zu lang (höchstens %1$d Sekunden).</string>
-    <string name="home_open_rig_cat">CAT Multi-Radio (FT-817, FT-857, IC-705, FTX-1, (tr)uSDX)</string>
+    <string name="home_open_rig_cat">CAT Multi-Radio (FT-817, FT-857, IC-705, FTX-1, (tr)uSDX, QMX/QMX+, Quansheng (F4HWN))</string>
     <string name="satellite_open_rig_cat">In CAT Multi-Radio öffnen</string>
     <string name="rig_title">Bricohams CAT Multi-Radio</string>
     <string name="rig_disconnected">Nicht mit einem Funkgerät verbunden.</string>

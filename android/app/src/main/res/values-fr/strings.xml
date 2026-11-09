@@ -31,7 +31,7 @@
     <string name="live_image_lost">L\'image a été perdue lors de la recréation de l\'écran. Décodez une nouvelle capture.</string>
     <string name="app_name">RadiCodex</string>
     <string name="cat_intro">USB/CAT expérimental, uniquement Bricohams SAT RX v1. Le CAT fonctionne uniquement par USB (pas de CAT Bluetooth). Non testé physiquement sur Android.</string>
-    <string name="cat_help">RadiCodex - USB OTG : CDC ACM et adaptateurs reconnus CH34x, CP210x, FTDI ou Prolific à un port. Sur la radio : SAT RX et touche 8 pour CAT RX. Ni canaux, ni EEPROM, ni étalonnage. La radio abandonne l\'accord après 3 s sans renouvellement ; l\'app le renouvelle toutes les 1,2 s jusqu\'à STOP ou la sortie de l\'écran.</string>
+    <string name="cat_help">RadiCodex - USB OTG : CDC ACM et adaptateurs reconnus CH34x, CP210x, FTDI ou Prolific à un port. Sur la radio : SAT RX et F+8 pour CAT RX. Ni canaux, ni EEPROM, ni étalonnage. La radio abandonne l\'accord après 3 s sans renouvellement ; l\'app le renouvelle toutes les 1,2 s jusqu\'à STOP ou la sortie de l\'écran.</string>
     <string name="cat_sstv_record">Enregistrer SSTV (CAT continue l\'accord)</string>
     <string name="cat_sstv_stop">Arrêter l\'enregistrement et décoder</string>
     <string name="cat_sstv_sending">Transmission SSTV par PTT CAT...</string>
@@ -805,7 +805,7 @@
     <string name="err_rig_resolution">La fréquence doit être un multiple de %1$d Hz.</string>
     <string name="err_rig_channel">Le canal mémoire %1$d est hors plage.</string>
     <string name="err_rig_audio_length">L’audio est trop long (%1$d secondes maximum).</string>
-    <string name="home_open_rig_cat">CAT multi-radio (FT-817, FT-857, IC-705, FTX-1, (tr)uSDX)</string>
+    <string name="home_open_rig_cat">CAT multi-radio (FT-817, FT-857, IC-705, FTX-1, (tr)uSDX, QMX/QMX+, Quansheng (F4HWN))</string>
     <string name="satellite_open_rig_cat">Ouvrir dans CAT multi-radio</string>
     <string name="rig_title">Bricohams CAT multi-radio</string>
     <string name="rig_disconnected">Aucune radio connectée.</string>

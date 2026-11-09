@@ -31,7 +31,7 @@
     <string name="live_image_lost">La imagen se perdio al recrear la pantalla. Decodifica una captura nueva.</string>
     <string name="app_name">RadiCodex</string>
     <string name="cat_intro">USB/CAT experimental, solo Bricohams SAT RX v1. CAT funciona solo por USB (no hay CAT por Bluetooth). Sin prueba fisica Android.</string>
-    <string name="cat_help">RadiCodex - USB OTG: CDC ACM y adaptadores reconocidos CH34x, CP210x, FTDI o Prolific de un puerto. En la radio: SAT RX y tecla 8 para CAT RX. Sin canales, EEPROM ni calibracion. La radio revierte la sintonia a los 3 s sin renovar; la app la renueva cada 1,2 s hasta STOP o hasta salir de la pantalla.</string>
+    <string name="cat_help">RadiCodex - USB OTG: CDC ACM y adaptadores reconocidos CH34x, CP210x, FTDI o Prolific de un puerto. En la radio: SAT RX y F+8 para CAT RX. Sin canales, EEPROM ni calibracion. La radio revierte la sintonia a los 3 s sin renovar; la app la renueva cada 1,2 s hasta STOP o hasta salir de la pantalla.</string>
     <string name="cat_sstv_record">Grabar SSTV (CAT sigue sintonizando)</string>
     <string name="cat_pass_record">Grabar pase completo (WAV hasta LOS)</string>
     <string name="cat_pass_record_stop">Detener grabacion del pase</string>
@@ -816,7 +816,7 @@
     <string name="err_rig_resolution">La frecuencia debe ser múltiplo de %1$d Hz.</string>
     <string name="err_rig_channel">El canal de memoria %1$d está fuera de rango.</string>
     <string name="err_rig_audio_length">El audio es demasiado largo (máximo %1$d segundos).</string>
-    <string name="home_open_rig_cat">CAT multiradio (FT-817, FT-857, IC-705, FTX-1, (tr)uSDX)</string>
+    <string name="home_open_rig_cat">CAT multiradio (FT-817, FT-857, IC-705, FTX-1, (tr)uSDX, QMX/QMX+, Quansheng (F4HWN))</string>
     <string name="satellite_open_rig_cat">Abrir en CAT multiradio</string>
     <string name="rig_title">Bricohams CAT multiradio</string>
     <string name="rig_disconnected">Sin conexión con la radio.</string>
