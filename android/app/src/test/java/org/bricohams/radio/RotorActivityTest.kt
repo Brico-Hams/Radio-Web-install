@@ -9,6 +9,7 @@ import android.widget.EditText
 import android.widget.TextView
 import org.json.JSONObject
 import org.junit.After
+import org.junit.Before
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,8 +20,6 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 import java.io.File
-import java.time.LocalDate
-import java.time.ZoneOffset
 import java.util.Collections
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
@@ -55,23 +54,21 @@ class RotorActivityTest {
         ReflectionHelpers.getField<ExecutorService>(activity, "worker").submit {}.get(60, TimeUnit.SECONDS)
         shadowOf(Looper.getMainLooper()).idle()
     }
-    private fun freshTle(): Tle {
-        val today = LocalDate.now(ZoneOffset.UTC)
-        val epoch = "%02d%03d.00000000".format(java.util.Locale.ROOT, today.year % 100, today.dayOfYear)
-        val base = SatellitesTest.tle.line1.substring(0, 18) + epoch + SatellitesTest.tle.line1.substring(32, 68)
-        val checksum = base.sumOf { if (it in '0'..'9') it - '0' else if (it == '-') 1 else 0 } % 10
-        return Tle("ISS (ZARYA)", base + checksum, SatellitesTest.tle.line2)
-    }
+    // Fixed instant inside the TLE's validity window, so the pass never depends on the wall clock.
+    private val pinnedNow = SatellitesTest.start
+
     private fun upcomingPlan(): SatellitePlan {
-        val tle = freshTle()
+        val tle = Tle("ISS (ZARYA)", SatellitesTest.tle.line1, SatellitesTest.tle.line2)
         val pass = SatelliteOrbit(tle, SatellitesTest.observer, File("src/main/assets/satellite-6.0.1.js").readText(),
             File("src/main/assets/orbital-engine.js").readText()).use { orbit ->
-            orbit.predict(System.currentTimeMillis() + 120_000).first { !it.partialStart }
+            // AOS strictly in the future of the pinned clock: the activity must aim at the AOS point, not the current position.
+            orbit.predict(pinnedNow).first { it.aos.time > pinnedNow + 120_000 }
         }
         return SatellitePlan(tle, SatellitesTest.observer, 145800000, pass)
     }
 
-    @After fun restoreTransport() { RotorActivity.transportFactory = null }
+    @Before fun pinClock() { RotorActivity.nowMillis = { pinnedNow } }
+    @After fun restoreTransport() { RotorActivity.transportFactory = null; RotorActivity.nowMillis = System::currentTimeMillis }
 
     @Test fun connectsPreparesPassAndStopsThroughInjectedTransport() {
         val rotor = Rotor()

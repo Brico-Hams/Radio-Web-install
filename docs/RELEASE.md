@@ -12,3 +12,13 @@ Todos los secretos se leen de variables de entorno, prompts o rutas fuera del re
 5. **GitHub Release**: etiqueta `android-v<version>`; sube APK firmado, `radicodex-update.json`, `SHA256SUMS*` y las firmas.
 6. **Pages**: copia `radicodex-update.json`, `precompiled/*.sig` y `precompiled/SHA256SUMS*` a la rama principal; `pages.yml` publica `ota.html`. Requiere Pages activado y la variable `PAGES_SHARED_ORIGIN_ACCEPTED=true` (o repo `<org>.github.io`) y `PAGES_ORIGIN`. La app usa como respaldo el asset fijo `releases/download/radicodex-ota/radicodex-update.json` (no depende de «Latest»; lo sube `android.yml`). Las releases `android-v*` y `fw-*` se crean con `--latest=false`; solo `v*` es Latest.
 7. **F-Droid**: MR en fdroiddata segun `android/FDROID.md`.
+
+## Refrescar el catalogo de firmware
+
+Si cambian los parches o el toolchain, `bricohams-firmware.yml` falla en "Verify release firmware matches the web and installer catalog" (ardf, satellite, spectrum). El catalogo debe generarse con el mismo toolchain que CI: **Arm GNU 13.3.rel1** (`ARM_GCC` del workflow); una compilacion local con otra version (p. ej. 14.2.Rel1) produce binarios distintos.
+
+1. Actions → *Bricohams firmware* → *Run workflow* en la rama con `refresh_catalog` activado (solo omite la verificacion; nunca en etiquetas `v*`).
+2. Descarga los artefactos `bricohams-firmware-<variante>` y copialos a `firmware-builds/<lote>/<variante>/artifacts/`.
+3. Actualiza el SHA-256 fijado y el lote de cada variante en `scripts/publish-firmware.cjs` y ejecuta `node scripts/publish-firmware.cjs`.
+4. Revisa y haz commit de `precompiled/` (y firmas, paso 3 de arriba), y ejecuta `npm test`.
+5. Crea la etiqueta `v*`: la verificacion debe pasar con el catalogo nuevo.

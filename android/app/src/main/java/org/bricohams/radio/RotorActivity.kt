@@ -42,6 +42,8 @@ class RotorActivity : LocalizedActivity() {
         private const val TRACK_SAMPLES = 300
         /** Host tests replace the radio link; arguments are (context, BLE selected, token). */
         internal var transportFactory: ((Context, Boolean, String) -> RotorTransport)? = null
+        /** Host tests pin the wall clock so pass maths is deterministic. */
+        internal var nowMillis: () -> Long = System::currentTimeMillis
     }
 
     private val colors by lazy { Brand.Palette(this) }
@@ -233,8 +235,8 @@ class RotorActivity : LocalizedActivity() {
 
     // Worker thread.
     private fun syncTime(connected: RotorClient, current: RotorStatus): RotorTimeSync {
-        val result = if (current.supportsAppTime) connected.syncTime(System.currentTimeMillis()) else RotorTimeSync.UNSUPPORTED
-        lastTimeSync = System.currentTimeMillis()
+        val result = if (current.supportsAppTime)         connected.syncTime(nowMillis()) else RotorTimeSync.UNSUPPORTED
+                lastTimeSync = nowMillis()
         return result
     }
 
@@ -252,7 +254,7 @@ class RotorActivity : LocalizedActivity() {
 
     private fun prepare(connected: RotorClient): String {
         val selected = plan ?: throw LocalizedStateException(UiText(R.string.rotor_need_plan))
-        checkUi(System.currentTimeMillis() < selected.pass.los.time) { UiText(R.string.err_pass_ended) }
+        checkUi(nowMillis() < selected.pass.los.time) { UiText(R.string.err_pass_ended) }
         var current = connected.status()
         checkUi(current.homed) { UiText(R.string.rotor_need_homing) }
         checkUi(!current.busy) { UiText(R.string.rotor_need_idle) }
@@ -260,7 +262,7 @@ class RotorActivity : LocalizedActivity() {
         connected.setSite(selected.observer)
         connected.loadSatellite(selected.tle)
         current = connected.status()
-        val target = acquisition(current, System.currentTimeMillis())
+        val target = acquisition(current, nowMillis())
             ?: throw LocalizedStateException(UiText(R.string.rotor_err_track))
         connected.move(target.first, target.second)
         return getString(R.string.rotor_prepared, target.first, target.second)
@@ -284,7 +286,7 @@ class RotorActivity : LocalizedActivity() {
         val connected = client ?: return
         try {
             var current = connected.status()
-            val now = System.currentTimeMillis()
+            val now = nowMillis()
             if (current.supportsAppTime && current.timeSource != "gnss" && now - lastTimeSync > 60000) {
                 syncTime(connected, current)
                 current = connected.status()

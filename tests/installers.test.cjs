@@ -89,6 +89,17 @@ test("Linux y FreeBSD comparten un unico lanzador y Windows reemplaza la app al 
   }
 });
 
+test("el workflow de firmware sube artefactos antes de verificar y no interpola inputs en scripts", () => {
+  const workflow = read(".github/workflows/bricohams-firmware.yml");
+  assert.match(workflow, /refresh_catalog:\s*\n\s+description:[^\n]*\n\s+type: boolean/);
+  assert.ok(workflow.indexOf("actions/upload-artifact") < workflow.indexOf("name: Verify release firmware"));
+  assert.match(workflow, /name: Verify release firmware[^\n]*\n\s+if: github\.event_name != 'workflow_dispatch' \|\| !inputs\.refresh_catalog/);
+  assert.match(workflow, /13\.3\.rel1/);
+  for (const run of workflow.split(/\n\s+run: /).slice(1)) {
+    assert.doesNotMatch(run.split(/\n\s+- /)[0], /\$\{\{\s*inputs\./, "inputs must reach run scripts through env");
+  }
+});
+
 test("la documentación da instrucciones por sistema y explica la generación por release", () => {
   const readme = read("README.md");
   const deployment = read("docs/DEPLOYMENT.md");
