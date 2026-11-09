@@ -10,9 +10,9 @@
       "edition": "BH ARDF",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.6",
-      "size": 114324,
-      "sha256": "5e2aec16b7a8d6c6d1880fdcb82e66fada4e29c5a5fdafe3397e585e629ef661",
+      "distributionVersion": "v0.5.9",
+      "size": 114336,
+      "sha256": "d5033d07759d3f0eb631cfd41664999b699e954f5da7015d2fdfdfa223613a14",
       "path": "precompiled/bricohams-ardf.bin",
       "targets": [
         "UV-K1",
@@ -133,17 +133,17 @@
         "sourceDateEpoch": 1791342406,
         "toolchain": {
           "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 114324,
+        "imageBytes": 114336,
         "memory": {
           "ramUsedBytes": 12576,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 3808,
-          "imageBytes": 114324,
+          "imageBytes": 114336,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 6508
+          "slotFreeBytes": 6496
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -154,15 +154,15 @@
         "moduleSources": [
           {
             "file": "App/bricohams/ardf.c",
-            "sha256": "7775938bc557a0b1c345936ee6e76fab5576353564c476fcfebe5624d9ad12ec"
+            "sha256": "201457df6bca68290c8a26aafc98bafd755b2742f1a485e0129cdf3c0f984860"
           },
           {
             "file": "App/bricohams/ardf.h",
-            "sha256": "448cf598d8d061853c5e49b3cee0dba82d3e8650ddfee5689f38370d49b1ca6e"
+            "sha256": "4b12d66266a791147b70cd234bd2e3a59c996f022edf5f439c78a2f8a28a59a4"
           },
           {
             "file": "App/bricohams/ardf_foxhunt.inc",
-            "sha256": "5fa7121bd880e04da8b7c6cc564fc34fe3ddfd081ce74151df607058f4a65bdc"
+            "sha256": "b3ea67ce01cec9bdcd40ecc34e005f0bed6a7e2fd29bf3204a9bd097617b9d05"
           },
           {
             "file": "App/CMakeLists.txt",
@@ -192,7 +192,7 @@
           },
           {
             "file": "App/bricohams/bootlogo.h",
-            "sha256": "162e185cc924680a68ba4e83e6b0fb46a863d0996a1501ff68b1008132fbba01"
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
           }
         ],
         "backupReadIntegration": {
@@ -239,9 +239,9 @@
       "edition": "BH Satellite",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.7",
-      "size": 118136,
-      "sha256": "724b11ee47c5d069bf9d55b65f55c6b237c42a976650987c73c363e61060087b",
+      "distributionVersion": "v0.5.9",
+      "size": 118496,
+      "sha256": "bb4627012464cdbde3303714320979bcefa82eec27c88a9005c8aed6de451860",
       "path": "precompiled/bricohams-satellite.bin",
       "targets": [
         "UV-K1",
@@ -361,18 +361,18 @@
         },
         "sourceDateEpoch": 1791342406,
         "toolchain": {
-          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 14.2.Rel1 (Build arm-14.52)) 14.2.1 20241119\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
+          "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 118136,
+        "imageBytes": 118496,
         "memory": {
           "ramUsedBytes": 12416,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 3968,
-          "imageBytes": 118136,
+          "imageBytes": 118496,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 2696
+          "slotFreeBytes": 2336
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -383,39 +383,39 @@
         "moduleSources": [
           {
             "file": "App/bricohams/doppler.c",
-            "sha256": "8eee2300fa329a7759ef8ce8b3b8f28184f372883643f3101496cabc7518334b"
+            "sha256": "1183133f13fc89691c29333d307921336d230c6b0baef35f33e23c743d771c1f"
           },
           {
             "file": "App/bricohams/doppler.h",
-            "sha256": "afb6cf8fa13d148163135389599b13d3769a8c32ed642a2b46ef56f1521296df"
+            "sha256": "8fb590cd5d6fc0f938a77faaa3997dece019cc348fe05c4c99bf564211535aaa"
           },
           {
             "file": "App/bricohams/satellite_foxhunt.inc",
-            "sha256": "fdbff7f8b83152d1515a2d1879676987cbb9d7475f170b3f20b317807afdd8ab"
+            "sha256": "b06f8d7878dcd01ac913767e700ce0250c324ab3792fdfb0d07f4edcb643009e"
           },
           {
             "file": "App/bricohams/cat_rx.c",
-            "sha256": "2e69065903400ba15dfe4222f9cdc3c9c2842c9af8e9569b178e7334be534def"
+            "sha256": "e8ce5c43e8781f0d4e6637fef5c823022a28c25b13b68dbe065d5542007ab195"
           },
           {
             "file": "App/bricohams/cat_rx.h",
-            "sha256": "97cebf3a66166673c1a085a4fc4c6f04d0dc5e3bc9e96cde49da001c04b67440"
+            "sha256": "3db65a779b6695dd0fa3174541d1077eedb419208ec031ffd4a4a5680c560f54"
           },
           {
             "file": "App/bricohams/cat_tx.c",
-            "sha256": "1479fb2b9d64a4c522bbea1f0f633c02ff2a541305fd13609cc055f9fb8b8e4e"
+            "sha256": "1858c1181d5d789737524a5927a9d577e1f8eb94e8390b0c56614441d11e2d9b"
           },
           {
             "file": "App/bricohams/cat_tx.h",
-            "sha256": "0fd7a393646603bf40bfbe716eb90f03413f9361926baba7fa26e3c668722f44"
+            "sha256": "2a703a78224ef294dd7ae10d8fffb614e43a8f72d64663ea2e1bc522a4826114"
           },
           {
             "file": "App/bricohams/passes.c",
-            "sha256": "cde7150350b202489c228ca62a03d016fd5dfc1903c7f2942af4056b4ef17e83"
+            "sha256": "fbb73062b16b47219faf709ca019d3f5eb281ce4c4f672db511b2565d6c96938"
           },
           {
             "file": "App/bricohams/passes.h",
-            "sha256": "63a53ba4d10a7425ab043f41b713c6faa89a40191e1c6f5f4ce71e205038d953"
+            "sha256": "dffe8610b31d898c8b3993c28dcf76ca888b1e1dafb60c648dfa9ab9f47bf7c9"
           },
           {
             "file": "App/CMakeLists.txt",
@@ -457,7 +457,7 @@
           },
           {
             "file": "App/bricohams/bootlogo.h",
-            "sha256": "162e185cc924680a68ba4e83e6b0fb46a863d0996a1501ff68b1008132fbba01"
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
           }
         ],
         "backupReadIntegration": {
@@ -531,9 +531,9 @@
       "edition": "BH Spectrum",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.6",
-      "size": 118584,
-      "sha256": "3164be3c7cd49725897bc680d7f379a9f861ce4addb9c2b9ca460cc37bfb7ee4",
+      "distributionVersion": "v0.5.9",
+      "size": 119464,
+      "sha256": "784a2d902f61d628e7dc58cc62124bc1c33fcac3d254d629b894fc6e06a3f06d",
       "path": "precompiled/bricohams-spectrum.bin",
       "targets": [
         "UV-K1",
@@ -654,17 +654,17 @@
         "sourceDateEpoch": 1791342406,
         "toolchain": {
           "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 118584,
+        "imageBytes": 119464,
         "memory": {
-          "ramUsedBytes": 13472,
+          "ramUsedBytes": 13600,
           "ramCapacityBytes": 16384,
-          "ramFreeBytes": 2912,
-          "imageBytes": 118584,
+          "ramFreeBytes": 2784,
+          "imageBytes": 119464,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 2248
+          "slotFreeBytes": 1368
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -675,27 +675,43 @@
         "moduleSources": [
           {
             "file": "App/bricohams/spectrum.c",
-            "sha256": "767d96d57dc8d40edd5b03b091e7a5f91157cf6df8b075fa3726a58c8e206c54"
+            "sha256": "b79f6423d9fffc10f14ace2bdf55b5fbe3cc6e07279fe61ed203d5650b6d5d60"
           },
           {
             "file": "App/bricohams/spectrum.h",
-            "sha256": "346f10b4aeda84b67f38cf72224da48b02f2df756232a4294b72a75334fb7e64"
+            "sha256": "8b778fe5f6f042335115d56c6f4337fd728afd136884d4b1f0697ee20373967f"
           },
           {
             "file": "App/bricohams/spectrum_foxhunt.inc",
-            "sha256": "ee4639e0735b7f2332e09e4cbfdbf06697b6772e311792faa3a052763e850a57"
+            "sha256": "64fc1eb99f6ab8f3874384dbe7ad19c11fb8cba8ac4c0a70db706943e5c192a7"
           },
           {
             "file": "App/bricohams/presets.c",
-            "sha256": "4cc03959fa0da880193707961fafaa53381105c38c9a312d244aebbd908a466f"
+            "sha256": "e56c57ac7f18584d96c21cc10bc4943deaaaecb6a44c3709a683446829e8c977"
           },
           {
             "file": "App/bricohams/presets.h",
-            "sha256": "565c47611a2f3feecb2c5d7744bc8fe10a2f8d83d245b6bf5930f7315a39680c"
+            "sha256": "7a868c024ef569937045ab9d84b2c4578a7e69afbebb5626f25f0dc0bd6eae0c"
+          },
+          {
+            "file": "App/bricohams/bands.c",
+            "sha256": "20ab45531c0799d7538329eb1b4c3952f9e3d150b4606a3cbd4b7629376d78be"
+          },
+          {
+            "file": "App/bricohams/bands.h",
+            "sha256": "7daf7d591b90108cbcdf3c03a10f76f6dce78bcb80fe3784ce209b15b2d2a533"
+          },
+          {
+            "file": "App/bricohams/loot.c",
+            "sha256": "026e639d9d837964625a42e7278ad4b099df9d34c82c01e7af1ad91182d21c2c"
+          },
+          {
+            "file": "App/bricohams/loot.h",
+            "sha256": "abb9bb826098fddf5cda747854b973c0539c793649d0ec31b06c354a7d23aaef"
           },
           {
             "file": "App/CMakeLists.txt",
-            "sha256": "e3bc188b93e3edc8b77faec4eea97139361c6a3d25f00cf4477d88dd108288e5"
+            "sha256": "9dd323dd5000ad57ab1a1c9f9275182c520171332a13a3eee364a8b2fc0af64f"
           },
           {
             "file": "App/scheduler.c",
@@ -721,7 +737,7 @@
           },
           {
             "file": "App/bricohams/bootlogo.h",
-            "sha256": "162e185cc924680a68ba4e83e6b0fb46a863d0996a1501ff68b1008132fbba01"
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
           }
         ],
         "backupReadIntegration": {

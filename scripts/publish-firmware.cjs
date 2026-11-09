@@ -36,10 +36,11 @@ async function publishApps() {
   console.log(`Catalogo apps publicado: ${entries.length} apps con SHA-256 y FAP1 verificados.`);
 }
 const builds = [
-  ["bricohams-ardf", "ardf", "BH ARDF", "5e2aec16b7a8d6c6d1880fdcb82e66fada4e29c5a5fdafe3397e585e629ef661"],
+  ["bricohams-ardf", "ardf", "BH ARDF",   "d5033d07759d3f0eb631cfd41664999b699e954f5da7015d2fdfdfa223613a14", "ci-20261109", "v0.5.9"],
   // v0.5.7: CAT remoto outside SAT RX (bench-verified on a UV-K5 V3 on 2026-11-03).
-  ["bricohams-satellite", "satellite", "BH Satellite", "724b11ee47c5d069bf9d55b65f55c6b237c42a976650987c73c363e61060087b", "catremoto-20261103", "v0.5.7"],
-  ["bricohams-spectrum", "spectrum", "BH Spectrum", "3164be3c7cd49725897bc680d7f379a9f861ce4addb9c2b9ca460cc37bfb7ee4"],
+    // CI rebuild, structurally verified on a UV-K1 slot (write + CRC) on 2026-11-09, boot not yet tested.
+    ["bricohams-satellite", "satellite", "BH Satellite", "bb4627012464cdbde3303714320979bcefa82eec27c88a9005c8aed6de451860", "ci-20261109", "v0.5.9"],
+    ["bricohams-spectrum", "spectrum", "BH Spectrum", "784a2d902f61d628e7dc58cc62124bc1c33fcac3d254d629b894fc6e06a3f06d", "ci-20261109", "v0.5.9"],
   ["bricohams-labs", "labs", "BH Labs", "938a7cd80b489c9c1746b710c7ae4533526674b13e5f97083f6bea850721140a"],
   ["bricohams-fusion", "fusion", "BH Fusion", "e053c1d3671a33bb2361d91ec5555404763bd69e4f0d2548549e6b2a68d86356"],
   ["f4hwn-fusion", "f4hwn-fusion", "BH F4 Fusion", "1009c0f54b29b8d4ea0d81b2fffcfabe09056bccd336dabcba4c102b3a810503"],
