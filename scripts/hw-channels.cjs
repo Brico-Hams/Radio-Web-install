@@ -5,6 +5,7 @@
 //   node scripts/hw-channels.cjs COM18 backup --model UV-K1|UV-K5-V3 --out <dir>
 //   node scripts/hw-channels.cjs COM18 load   --model UV-K1|UV-K5-V3 --template data/channel-templates/ES.json --backup <dir> [--region ES-M]
 //   node scripts/hw-channels.cjs COM18 load-plan --model UV-K5-V3 --plan docs/plan-uvk5v3-es.json --bank 1 --backup <dir>
+//   node scripts/hw-channels.cjs COM18 install-apps --model UV-K5-V3 --backup <dir> [--apps SystemInfo,BroadcastFM]
 //   node scripts/hw-channels.cjs plan-check --plan docs/plan-uvk5v3-es.json   (offline: zones and scan lists per bank)
 // --model is REQUIRED (the radio does not report its model); without it the script prints usage and exits 2.
 // All protocol, backup, permit and channel code is the web's own (quansheng-connector.js, backup-store.js,
@@ -20,6 +21,7 @@ require("../planning-core.js");
 require("../channel-templates.js");
 require("../quansheng-connector.js");
 require("../quansheng-channels.js");
+require("../precompiled-catalog.js");
 try { require("../quansheng-tools.js"); } catch { /* optional: only adds assetInfoRaw (v7 active slot) */ }
 
 const MODELS = ["UV-K1", "UV-K5-V3"];
@@ -27,6 +29,7 @@ const USAGE = "Usage: node scripts/hw-channels.cjs <PORT> info   --model UV-K1|U
   "       node scripts/hw-channels.cjs <PORT> backup --model UV-K1|UV-K5-V3 --out <dir>\n" +
   "       node scripts/hw-channels.cjs <PORT> load   --model UV-K1|UV-K5-V3 --template <country.json> --backup <dir> [--region <id>]\n" +
   "       node scripts/hw-channels.cjs <PORT> load-plan --model UV-K5-V3 --plan <plan.json> --bank <1-4> --backup <dir> [--airports <airports.csv>]\n" +
+  "       node scripts/hw-channels.cjs <PORT> install-apps --model UV-K1|UV-K5-V3 --backup <dir> [--apps SystemInfo,BroadcastFM,...]   (Labs v6.1.0 only; default: all six catalog apps)\n" +
   "       node scripts/hw-channels.cjs plan-check --plan <plan.json> [--bank <1-4>] [--airports <airports.csv>]   (offline, no radio)";
 const MANIFEST_FORMAT = "bricohams-hw-channels-backup";
 const MAX_BACKUP_AGE_MS = 12 * 3600 * 1000;
@@ -672,6 +675,109 @@ async function commandLoadPlan(connector, info, args) {
   console.log("      Reinicia la radio manualmente para recargar sus caches (the web does not reboot the radio automatically).");
 }
 
+// ---- install-apps: precompiled Labs apps -> the next empty app slots ---------------------------------------------------
+
+const APPS_DIR = path.join(__dirname, "..", "precompiled", "apps");
+const INSTALLED_STATUSES = [0, 3, 9]; // the web treats these as a complete app (valid, ABI/API mismatch, missing capability)
+const EMPTY_APP_STATUS = 2;
+
+// Reads the catalog, validates it with the web's validateAppCatalog and verifies every selected .app against its pinned
+// size and SHA-256 plus the manifest (verifyPrecompiledApp: parseQuanshengApp, name, version, ABI, minimum API).
+async function loadAppCatalog({ dir = APPS_DIR, names, readFile = file => fs.readFileSync(path.join(dir, file)) } = {}) {
+  const entries = R.validateAppCatalog(JSON.parse(readFile("catalog.json").toString("utf8")));
+  const wanted = names && names.length ? names : entries.map(entry => entry.id);
+  R.assert(new Set(wanted).size === wanted.length, "Duplicate app in --apps.");
+  const apps = [];
+  for (const id of wanted) {
+    const entry = entries.find(item => item.id === id);
+    R.assert(entry, `App ${id} is not in the catalog (${entries.map(item => item.id).join(", ")}).`);
+    const bytes = await R.verifyPrecompiledApp(entry, new Uint8Array(readFile(path.basename(entry.path))));
+    apps.push({ entry, bytes, header: R.parseQuanshengApp(bytes).header });
+  }
+  return apps;
+}
+
+// Slot assignment: skip apps already installed with the same name, version and code CRC; put the rest into the empty
+// slots in ascending order; never reuse a slot holding anything else; refuse when empty slots run out.
+function planAppSlots(slots, apps) {
+  const skip = [];
+  const pending = [];
+  for (const app of apps) {
+    const same = slots.find(slot => INSTALLED_STATUSES.includes(slot.status) && slot.name === app.header.name &&
+      slot.appVersion === app.header.appVersion && slot.codeCRC === app.header.codeCRC);
+    if (same) skip.push({ id: app.entry.id, slot: same.slot });
+    else pending.push(app);
+  }
+  const empty = slots.filter(slot => slot.status === EMPTY_APP_STATUS).map(slot => slot.slot).sort((a, b) => a - b);
+  R.assert(pending.length <= empty.length,
+    `Not enough empty app slots: ${pending.length} app(s) to install, ${empty.length} empty slot(s). Nothing is overwritten; free slots in the web first.`);
+  return { skip, install: pending.map((app, index) => ({ id: app.entry.id, slot: empty[index] })) };
+}
+
+const slotLine = item => `${item.slot + 1}:${item.status === EMPTY_APP_STATUS ? "empty" : INSTALLED_STATUSES.includes(item.status) ? `${item.name} ${item.appVersion}` : item.statusText}`;
+
+async function commandInstallApps(connector, info, args) {
+  const { model, backupDir, apps } = args;
+  console.log(`      apps: ${apps.map(app => `${app.entry.id} ${app.entry.version}`).join(", ")}`);
+  const { manifest, parts } = await step(`validate backup directory ${backupDir} (manifest, SHA-256, Flash CRC, 12 h session window)`,
+    () => readBackupDir(backupDir, model));
+  await step("radio identity matches the backup (model, firmware, calibration SHA-256, configuration)", async () => {
+    R.assert(manifest.device?.model === info.model && manifest.device?.firmware === info.firmware,
+      `Backup is from ${manifest.device?.model} ${manifest.device?.firmware}; the radio is ${info.model} ${info.firmware}.`);
+    const calibration = await connector.readCalibration();
+    R.assert(await R.sha256(calibration) === parts.calibration.entry.sha256, "Calibration differs from the backup: this is another radio or it changed.");
+    const configuration = await connector.readConfiguration();
+    R.assert(R.equal(configuration, parts.configuration.bytes), "The active configuration changed since the backup. Make a new backup.");
+  });
+  await step("active firmware is Labs v6.1.0 with app support (firmware text and slot listing 0x0730)", async () => {
+    const release = apps[0].entry.firmwareRelease;
+    R.assert(info.firmware.includes(release), `Firmware "${info.firmware}" is not ${release}; the catalog apps target F4HWN Labs ${release}.`);
+    const slots = await connector.listApps();
+    R.assert(slots.length > 0, "The firmware reports no app slots: boot the Labs edition.");
+  });
+  const { record, permit } = await step("session write permit: fresh full verified backup through BackupManager (10-20 min)", async () => {
+    const result = await runWebBackup(connector);
+    R.assert(result.permit && result.record.status === "complete", "Backup incomplete: writes stay locked.");
+    return result;
+  });
+  const liveCalibration = record.files.find(item => item.name === "calibration");
+  if (liveCalibration.sha256 !== parts.calibration.entry.sha256) { fail("calibration changed during the session; aborting before any write"); return; }
+  await step("configuration: two identical reads, equal to configuration.bin", () => originalConfiguration(connector, parts.configuration.bytes));
+
+  const slots = await step("list app slots", () => connector.listApps());
+  console.log(`      slots: ${slots.map(slotLine).join(" ")}`);
+  const plan = await step("plan slots (skip identical installs, empty slots only)", async () => planAppSlots(slots, apps));
+  for (const item of plan.skip) console.log(`      SKIP  ${item.id}: already in slot ${item.slot + 1} with the same version and CRC`);
+  for (const item of plan.install) console.log(`      PLAN  ${item.id} -> slot ${item.slot + 1}`);
+
+  for (const { id, slot } of plan.install) {
+    const app = apps.find(item => item.entry.id === id);
+    showProgress(connector);
+    let result;
+    try { result = await step(`install ${id} in slot ${slot + 1} (connector.installApp, per-write read-back)`, () => connector.installApp(slot, app.bytes, permit)); }
+    finally { endProgress(); }
+    await step(`verify ${id}: status Valida, exported bytes equal the catalog file`, async () => {
+      R.assert(result.status === 0, `installApp status: ${result.statusText}.`);
+      const readBack = await connector.readApp(slot);
+      R.assert(R.equal(readBack, app.bytes), "The app read back from the radio differs from the catalog file.");
+      const now = (await connector.listApps()).find(item => item.slot === slot);
+      R.assert(now && now.status === 0 && now.name === app.header.name && now.appVersion === app.header.appVersion && now.codeCRC === app.header.codeCRC,
+        `Slot ${slot + 1} reports ${now?.statusText} after the install.`);
+    });
+  }
+
+  const finalSlots = await step("list app slots again", () => connector.listApps());
+  console.log(`      slots: ${finalSlots.map(slotLine).join(" ")}`);
+  for (const { id, slot } of plan.install) {
+    const app = apps.find(item => item.entry.id === id);
+    const now = finalSlots.find(item => item.slot === slot);
+    if (!now || now.status !== 0 || now.name !== app.header.name) fail(`${id} is not valid in slot ${slot + 1} in the final listing`);
+  }
+  const calibrationAfter = await step("calibration unchanged after install", () => connector.readCalibration());
+  if (await R.sha256(calibrationAfter) !== parts.calibration.entry.sha256) fail("calibration differs from the backup after installing");
+  console.log(`      summary: ${plan.install.length} installed, ${plan.skip.length} skipped (already installed), ${apps.length} requested; ${failures} problems`);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const flag = name => {
@@ -688,6 +794,7 @@ async function main() {
   const planPath = flag("--plan");
   const bankText = flag("--bank");
   const airportsPath = flag("--airports");
+  const appsText = flag("--apps");
   if (args[0] === "plan-check") {
     // Offline: prints the zones and scan lists a plan produces from the real CSV files; no port, no radio.
     try {
@@ -701,8 +808,9 @@ async function main() {
   if (!MODELS.includes(model)) console.error("Error: --model is required (UV-K1 or UV-K5-V3); the radio does not report its model.");
   const missing = command === "backup" && !out ? "--out" : command === "load" && (!templatePath || !backupDir) ? "--template and --backup"
     : command === "load-plan" && (!planPath || !backupDir || !/^[1-4]$/.test(bankText || "")) ? "--plan, --bank <1-4> and --backup" : "";
-  if (missing) console.error(`Error: ${command} requires ${missing}.`);
-  if (!portName || !["info", "backup", "load", "load-plan"].includes(command) || !MODELS.includes(model) || missing) {
+  const missingApps = command === "install-apps" && !backupDir ? "--backup" : "";
+  if (missing || missingApps) console.error(`Error: ${command} requires ${missing || missingApps}.`);
+  if (!portName || !["info", "backup", "load", "load-plan", "install-apps"].includes(command) || missingApps || !MODELS.includes(model) || missing) {
     console.error(USAGE);
     process.exit(2);
   }
@@ -716,6 +824,13 @@ async function main() {
     try { bankPlan = await bankPlanFromFile(planPath, model, Number(bankText), airportsPath); await readBackupDir(backupDir, model); }
     catch (error) { fail(`Refusing to load the plan, nothing written: ${error.message}`); console.log("RESULT: FAIL"); process.exit(1); }
   }
+  let appList;
+  if (command === "install-apps") {
+    try {
+      appList = await loadAppCatalog({ names: appsText ? appsText.split(",").map(item => item.trim()).filter(Boolean) : undefined });
+      await readBackupDir(backupDir, model);
+    } catch (error) { fail(`Refusing to install apps, nothing written: ${error.message}`); console.log("RESULT: FAIL"); process.exit(1); }
+  }
   let connector;
   try {
     const connection = await connect(portName, model);
@@ -723,6 +838,7 @@ async function main() {
     if (command === "info") await commandInfo(connector, connection.info);
     else if (command === "backup") await commandBackup(connector, connection.info, path.resolve(out));
     else if (command === "load-plan") await commandLoadPlan(connector, connection.info, { model, backupDir: path.resolve(backupDir), bank: Number(bankText), plan: bankPlan });
+    else if (command === "install-apps") await commandInstallApps(connector, connection.info, { model, backupDir: path.resolve(backupDir), apps: appList });
     else await commandLoad(connector, connection.info, { model, templatePath, backupDir: path.resolve(backupDir), region });
   } catch (error) {
     endProgress();
@@ -736,4 +852,5 @@ async function main() {
 
 if (require.main === module) main().catch(error => { console.error(error); process.exit(1); });
 module.exports = { parseCsv, districtZone, serviceZone, communityZone, airportRegions, channelFromRow, buildBankPlan, planBankImage,
-  verifyBank, MAX_BANK_CHANNELS, MAX_ZONES, reusableBackupState, withConfiguration, originalConfiguration };
+  verifyBank, MAX_BANK_CHANNELS, MAX_ZONES, reusableBackupState, withConfiguration, originalConfiguration,
+  loadAppCatalog, planAppSlots };

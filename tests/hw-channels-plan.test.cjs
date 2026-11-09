@@ -199,6 +199,39 @@ test("original configuration needs two identical reads that equal configuration.
   await assert.rejects(H.originalConfiguration(connectorOf(other.slice(), other.slice()), backup), /configuration changed between backup and load/);
 });
 
+test("app slots: skip identical installs, use empty slots only, refuse when full", async () => {
+  const apps = await H.loadAppCatalog({ names: ["SystemInfo", "Tetris", "Cube3D"] });
+  assert.equal(apps.length, 3);
+  const slot = (index, status, header = {}) => ({ slot: index, status, statusText: "", name: "", appVersion: "", codeCRC: 0, ...header });
+  const installed = app => ({ name: app.header.name, appVersion: app.header.appVersion, codeCRC: app.header.codeCRC });
+  const foreign = { name: "Other", appVersion: "1.0", codeCRC: 7 };
+
+  const plan = H.planAppSlots([slot(0, 0, installed(apps[0])), slot(1, 0, foreign), slot(2, 2), slot(3, 4, foreign), slot(4, 2), slot(5, 2)], apps);
+  assert.deepEqual(plan.skip, [{ id: "SystemInfo", slot: 0 }]);
+  assert.deepEqual(plan.install, [{ id: "Tetris", slot: 2 }, { id: "Cube3D", slot: 4 }]);
+
+  const stale = H.planAppSlots([slot(0, 0, { ...installed(apps[0]), codeCRC: 1 }), slot(1, 2), slot(2, 2)], apps.slice(0, 1));
+  assert.deepEqual(stale.install, [{ id: "SystemInfo", slot: 1 }]);
+
+  assert.throws(() => H.planAppSlots([slot(0, 0, foreign), slot(1, 6, foreign), slot(2, 2)], apps), /Not enough empty app slots/);
+  assert.deepEqual(H.planAppSlots([slot(0, 0, installed(apps[0])), slot(1, 0, installed(apps[1])), slot(2, 0, installed(apps[2]))], apps).install, []);
+});
+
+test("app catalog files are checked against the pinned size and SHA-256", async () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dir = path.join(__dirname, "..", "precompiled", "apps");
+  const readFile = file => fs.readFileSync(path.join(dir, file));
+  assert.equal((await H.loadAppCatalog({ readFile })).length, 6);
+  const tampered = file => {
+    const bytes = new Uint8Array(readFile(file));
+    if (file === "Tetris.app") bytes[bytes.length - 1] ^= 1;
+    return Buffer.from(bytes);
+  };
+  await assert.rejects(H.loadAppCatalog({ readFile: tampered, names: ["Tetris"] }), /corrupta/);
+  await assert.rejects(H.loadAppCatalog({ readFile, names: ["Nope"] }), /not in the catalog/);
+});
+
 function regionMap(count) {
   const keys = ["AN", "AR", "AS", "CB", "CE", "CL", "CM", "CN", "CT", "EX", "GA", "IB", "MC", "MD", "ML", "NC", "PV", "RI", "VC"].slice(0, count);
   return Object.fromEntries(keys.map((key, index) => [`LE${String.fromCharCode(65 + index)}${String.fromCharCode(65 + index)}`, `ES-${key}`]));
