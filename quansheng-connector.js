@@ -5,6 +5,10 @@
   const CAT_REMOTE_TEXT = "Activa «CAT remoto» en la radio (en SAT RX pulsa F+8; debe verse el indicador CAT en pantalla)";
   const CAT_TX_REMOTE_TEXT = "Activa «CAT remoto» en la radio (en SAT RX pulsa F+8) para permitir PTT por CAT";
   const CAT_HOLDOFF_TEXT = ". Se pulso una tecla en la radio: espera unos segundos";
+  const FLASH_PROBE_TIMEOUT_MS = 1500;
+  const FLASH_UNSUPPORTED_TEXT = "Este firmware no admite la copia de Flash externa (0x0738). La copia de EEPROM y calibracion sigue disponible. Instala una compilacion Bricohams con 0x0738 para habilitarla.";
+  const FLASH_UNSUPPORTED_SCOPE = "Solo lectura: este firmware no admite la copia de Flash externa (0x0738). Calibracion y configuracion guardadas; escritura bloqueada. Instala una compilacion Bricohams con 0x0738 para habilitarla.";
+  const stripPeriods = text => String(text).replace(/[.\s]+$/, "");
   const KEY = Uint8Array.of(0x16, 0x6c, 0x14, 0xe6, 0x2e, 0x91, 0x0d, 0x40, 0x21, 0x35, 0xd5, 0x40, 0x13, 0x03, 0xe9, 0x80);
   function crc16(data) {
     let crc = 0;
@@ -206,11 +210,13 @@
       this.family = "quansheng";
       this.transport.quanshengUSBPadding = true;
       this.catSequence = 0;
+      this.flashReadSupport = null;
     }
     async connect(model) {
       R.assert(["UV-K1", "UV-K5-V3"].includes(model), "Modelo Quansheng no compatible.");
       await this.transport.open(38400);
       this.connected = true;
+      this.flashReadSupport = null;
       return this.run("Identificacion F4HWN", async () => {
         this.model = model;
         await this.identify();
@@ -781,23 +787,48 @@
     readCalibration() {
       return this.run("Leer calibracion", () => this.readCalibrationRaw());
     }
+    flashUnsupportedError(cause) {
+      const error = new Error(FLASH_UNSUPPORTED_TEXT, cause ? { cause } : undefined);
+      error.code = "FLASH_READ_UNSUPPORTED";
+      return error;
+    }
+    // The first 0x0738 read of a session is the probe: a short, non-fatal timeout marks the firmware as
+    // unsupported for the rest of the session so no later chunk waits for a full transport timeout.
     async readFlashBlockRaw(address, length) {
       R.assert(Number.isInteger(address) && address >= 0 && Number.isInteger(length) &&
         length > 0 && length <= 128 && address + length <= 0x200000, "Rango de lectura Flash invalido.");
+      if (this.flashReadSupport === "unsupported") throw this.flashUnsupportedError();
+      const probing = this.flashReadSupport === null;
       const request = new Uint8Array(10);
       const v = R.view(request);
       v.setUint32(0, address, true);
       v.setUint16(4, length, true);
       v.setUint32(6, this.timestamp, true);
       let data;
-      try { data = await this.exchange(0x0738, request); }
+      try { data = await this.exchange(0x0738, request, 0x0739, probing ? FLASH_PROBE_TIMEOUT_MS : 4000, probing); }
       catch (error) {
-        throw new Error(`Lectura Flash 0x0738 en 0x${address.toString(16)} (${length} bytes): ${error.message}. El firmware activo puede carecer de lectura fisica; leer canales con CHIRP no confirma esta capacidad. Comprueba una compilacion compatible y la conexion USB. No se habilitara escritura.`, { cause: error });
+        if (probing && error.code === "READ_TIMEOUT" && !this.transport.error) {
+          this.flashReadSupport = "unsupported";
+          throw this.flashUnsupportedError(error);
+        }
+        throw new Error(`Lectura Flash 0x0738 en 0x${address.toString(16)} (${length} bytes): ${stripPeriods(error.message)}. El firmware activo puede carecer de lectura fisica; leer canales con CHIRP no confirma esta capacidad. Comprueba una compilacion compatible y la conexion USB. No se habilitara escritura.`, { cause: error });
       }
       R.assert(data.length === length + 7 && R.view(data).getUint32(0, true) === address &&
         R.view(data).getUint16(4, true) === length && data[6] === 0,
       `Lectura Flash 0x0738 rechazada en 0x${address.toString(16)}. Se requiere una compilacion con lectura fisica de Flash externa.`);
+      this.flashReadSupport = "supported";
       return data.slice(7);
+    }
+    // Returns "supported" | "unsupported" without ever failing the session for a missing 0x0738.
+    async probeFlashRead() {
+      if (this.flashReadSupport) return this.flashReadSupport;
+      if (this.info?.legacyReadOnly) return this.flashReadSupport = "unsupported";
+      try { await this.readFlashBlockRaw(0, 128); }
+      catch (error) {
+        if (error.code === "FLASH_READ_UNSUPPORTED") return "unsupported";
+        throw error;
+      }
+      return "supported";
     }
     async readFlashRaw(progress = () => {}) {
       this.progress(0, "Comprobando lectura fisica Flash y CRC con 128 bytes");
@@ -822,7 +853,7 @@
       let response;
       try { response = await this.exchange(0x073e, request, 0x073f, 30000); }
       catch (error) {
-        throw new Error(`CRC Flash 0x073e en 0x${address.toString(16)} (${length} bytes): ${error.message}. El firmware activo puede carecer de CRC de lectura fisica. Comprueba una compilacion compatible y la conexion USB. No se habilitara escritura.`, { cause: error });
+        throw new Error(`CRC Flash 0x073e en 0x${address.toString(16)} (${length} bytes): ${stripPeriods(error.message)}. El firmware activo puede carecer de CRC de lectura fisica. Comprueba una compilacion compatible y la conexion USB. No se habilitara escritura.`, { cause: error });
       }
       R.assert(response.length === 13 && R.view(response).getUint32(0, true) === address &&
         R.view(response).getUint32(4, true) === length && response[12] === 0,
@@ -850,7 +881,14 @@
           return { complete: false, scope: "Solo lectura: F4HWN v6.0 no admite el respaldo Flash completo requerido. Calibracion y configuracion guardadas; escritura bloqueada. Se requiere una compilacion compatible con lectura fisica de Flash externa y CRC." };
         }
         this.progress(0, "Flash externa 2 MiB: puede tardar 10-20 minutos a 38400 baudios. No desconectes.");
-        const flash = await this.readFlashRaw(value => this.progress(value, "Leyendo Flash externa completa (2 MiB)"));
+        let flash;
+        try { flash = await this.readFlashRaw(value => this.progress(value, "Leyendo Flash externa completa (2 MiB)")); }
+        catch (error) {
+          if (error.code !== "FLASH_READ_UNSUPPORTED") throw error;
+          const configuration = await this.readConfigurationRaw();
+          await emit("configuration", configuration, { address: 0, contains: "Configuracion logica del banco activo; NO es una copia de toda la Flash" });
+          return { complete: false, flashReadUnsupported: true, scope: FLASH_UNSUPPORTED_SCOPE };
+        }
         const verifiedCRC32 = await this.verifyFlashRaw(flash);
         await emit("external-flash", flash, { address: 0, verifiedCRC32, contains: "Flash externa completa, configuraciones, Main, slots, apps y logs" });
         R.assert(R.equal(calibration, flash.subarray(0x10000, 0x10200)), "La calibracion no coincide con la Flash fisica. Respaldo bloqueado.");
@@ -1080,6 +1118,7 @@
     }
   }
   Object.assign(R, { QuanshengConnector, inspectSpectrumPresets, encodeSatellitePass, decodeSatellitePass,
-    selectSatellitePasses, SATELLITE_PASS_TABLE: PASS, quanshengPacket: packet, decodeQuanshengPacket: decodePacket, quanshengBaseFromFlash: baseFromFlash, crc16, parseQuanshengApp: parseApp, QUANSHENG_APP_STATUS: APP_STATUS, inspectQuanshengSlotImage: inspectSlotImage });
+    selectSatellitePasses, SATELLITE_PASS_TABLE: PASS, quanshengPacket: packet, decodeQuanshengPacket: decodePacket, quanshengBaseFromFlash: baseFromFlash, crc16, parseQuanshengApp: parseApp, QUANSHENG_APP_STATUS: APP_STATUS, inspectQuanshengSlotImage: inspectSlotImage,
+    QUANSHENG_FLASH_UNSUPPORTED_TEXT: FLASH_UNSUPPORTED_TEXT });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

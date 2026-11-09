@@ -8,11 +8,13 @@ Principal: **GitHub Pages** (`ota.html` muestra la version, notas en 4 idiomas, 
 
 Respaldo (la app lo usa si el principal falla por red): **asset de GitHub Release**:
 
-`https://github.com/Brico-Hams/Radio-Web-install/releases/latest/download/radicodex-update.json`
+`https://github.com/Brico-Hams/Radio-Web-install/releases/download/radicodex-ota/radicodex-update.json`
+
+La release `radicodex-ota` es una etiqueta fija (no depende de «Latest»): `android.yml` copia allí el `radicodex-update.json` adjunto a cada release `android-v*` (`gh release upload --clobber`). Las releases `android-v*` y `fw-*` nunca se marcan como Latest, para que `releases/latest` siga siendo la release de instaladores locales `v*`.
 
 Solo el sabor `github` incluye el actualizador; el sabor `fdroid` lo elimina junto con `REQUEST_INSTALL_PACKAGES`. Ver `docs/RELEASE.md`.
 
-Requisito: la release de Android debe ser la marcada como **Latest** y llevar adjuntos el APK y `radicodex-update.json`. El manifiesto está firmado con Ed25519; la clave pública está embebida en la app (`OtaConfig.PUBLIC_KEY_HEX`, en `Ota.kt`). Mientras esté vacía, el canal queda desactivado y la app dice que no está configurado.
+Requisito: la release de Android (**no** Latest) debe llevar adjuntos el APK y `radicodex-update.json`. El manifiesto está firmado con Ed25519; la clave pública está embebida en la app (`OtaConfig.PUBLIC_KEY_HEX`, en `Ota.kt`). Mientras esté vacía, el canal queda desactivado y la app dice que no está configurado.
 
 ## Generar las claves (una sola vez)
 
@@ -36,7 +38,7 @@ node scripts/ota-manifest.cjs keygen --private D:\secretos\radicodex-ota.pem
    `versionCode`, `versionName` y `minSdk` se leen de `build.gradle.kts` (se pueden forzar con `--version-code`, `--version-name`, `--min-sdk`). `--url` fija la URL del APK; por defecto, `releases/download/android-v<versionName>/<nombre>.apk`. Las notas se toman de los assets `changelog-<código>.<idioma>.md` o de `--notes es=fichero.md`.
    Alternativa: `$env:RADICODEX_OTA_PRIVATE_KEY = Get-Content -Raw ...pem`.
 4. Comprueba: `node scripts/ota-manifest.cjs verify --manifest radicodex-update.json --public-key <hex>`.
-5. Crea la release `android-v<versionName>` en GitHub, adjunta el APK (con el mismo nombre que la URL) y `radicodex-update.json`, y márcala como Latest.
+5. Crea la release `android-v<versionName>` en GitHub, adjunta el APK (con el mismo nombre que la URL) y `radicodex-update.json`. Créala con `--latest=false` (el workflow ya lo hace); el job `release-signed` copia el manifiesto a `radicodex-ota`.
 
 ## Formato del manifiesto
 

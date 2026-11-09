@@ -134,6 +134,8 @@ test("Android packaging and tag release artifacts match the current versionCode"
   assert.match(workflow, /java-version: "17"/);
   assert.match(workflow, /needs: build/);
   assert.match(workflow, /gh release upload "\$TAG"/);
+  assert.match(workflow, /gh release create "\$TAG"[^\n]*--latest=false/);
+  assert.match(workflow, /gh release upload radicodex-ota [^\n]*--clobber/);
   for (const kind of ["debug", "androidTest"]) {
     const name = new RegExp(`radicodex-\\d+\\.\\d+\\.\\d+-${kind}\\.apk`);
     const fromWorkflow = workflow.match(new RegExp(`upload/(${name.source})`));

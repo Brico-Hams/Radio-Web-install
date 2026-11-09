@@ -257,8 +257,8 @@
       }
     }
   };
-  proto.readExternalFlash = function () {
-    R.assert(!this.info?.legacyReadOnly, "Flash fisica no disponible en el firmware activo. Arranca una compilacion con lectura fisica y CRC.");
+  proto.readExternalFlash = async function () {
+    if (await this.probeFlashRead() === "unsupported") throw this.flashUnsupportedError();
     return this.run("Backup Flash externa", async () => {
       const flash = await this.readFlashRaw(value => this.progress(value, "Leyendo Flash externa 2 MiB"));
       await this.verifyFlashRaw(flash);

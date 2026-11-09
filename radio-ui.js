@@ -33,6 +33,7 @@
     const store = new R.BackupStore();
     let connector = null;
     let permit = null;
+    let partialPermit = null;
     let busy = false;
     let catTracking = false;
     let image = null;
@@ -59,6 +60,12 @@
       $("radio-log").scrollTop = $("radio-log").scrollHeight;
     };
     const fail = error => {
+      if (error.code === "FLASH_READ_UNSUPPORTED") {
+        status.textContent = error.message;
+        delete status.dataset.error;
+        log(error.message);
+        return;
+      }
       const message = error instanceof AggregateError ? `${error.message}: ${error.errors.map(item => item.message).join("; ")}` : error.message;
       status.textContent = `ERROR: ${message}`;
       status.dataset.error = "true";
@@ -71,6 +78,7 @@
         permit = null;
         $("backup-status").textContent = "Escritura bloqueada: respaldo o conexion invalidados. Reconecta para crear una nueva copia.";
       }
+      if (partialPermit && !R.hasPartialBackup(connector, partialPermit)) partialPermit = null;
       const api = page === "quansheng" || model.value === "SERIAL" ? "serial" : "usb";
       $("radio-connect").disabled = busy || Boolean(connector) || !model.value || !(confirmation.checked || pro.checked) || !(api in navigator) || !root.isSecureContext;
       if ($("qs-connect-readonly")) $("qs-connect-readonly").disabled = $("radio-connect").disabled;
@@ -94,6 +102,16 @@
       }
       document.querySelectorAll("[data-connected]").forEach(button => { button.disabled = busy || catTracking || !connected || page === "opengd77" && !permit; });
       document.querySelectorAll("[data-write]").forEach(button => { button.disabled = busy || catTracking || !connected || !permit; });
+      document.querySelectorAll("[data-internal-write]").forEach(button => { button.disabled = busy || catTracking || !connected || !(permit || partialPermit); });
+      const flashBackup = $("qs-flash-backup");
+      if (flashBackup) {
+        const unsupported = connector?.flashReadSupport === "unsupported";
+        if (unsupported) {
+          flashBackup.disabled = true;
+          flashBackup.title = R.QUANSHENG_FLASH_UNSUPPORTED_TEXT;
+          if ($("qs-flash-info")) $("qs-flash-info").textContent = R.QUANSHENG_FLASH_UNSUPPORTED_TEXT;
+        } else flashBackup.removeAttribute("title");
+      }
       if ($("write-codeplug")) $("write-codeplug").disabled = busy || !connected || !permit || !image;
       if ($("qs-write")) $("qs-write").disabled = busy || !connected || !permit || !image || !originalConfiguration;
       if ($("slot-install")) $("slot-install").disabled = busy || !connected || !permit || !slotImage;
@@ -118,7 +136,7 @@
         $("qs-connect-channels").disabled = true;
         $("qs-live-start").disabled = true;
         model.disabled = true;
-        document.querySelectorAll("[data-connected], [data-write]").forEach(button => { button.disabled = true; });
+        document.querySelectorAll("[data-connected], [data-write], [data-internal-write]").forEach(button => { button.disabled = true; });
       }
       if ($("qs-channel-model")) {
         $("qs-channel-model").value = model.value;
@@ -159,6 +177,7 @@
         if (connector && (!connector.connected || connector.transport.error)) {
           R.revokeBackup(connector);
           permit = null;
+          partialPermit = null;
           originalConfiguration = null;
           try {
             await connector.disconnect();
@@ -320,6 +339,7 @@
         await connector.disconnect();
         connector = null;
         permit = null;
+        partialPermit = null;
         originalConfiguration = null;
         $("qs-live-status").textContent = "Orden de reinicio enviada, sin ACK. Puerto cerrado; verifica el arranque y reconecta para respaldar.";
         log("Reinicio solicitado una sola vez; sin confirmacion de arranque.");
@@ -1464,6 +1484,7 @@
     });
     if (page === "quansheng") factoryControls = R.mountFactoryRestore({
       model, action, log, getConnector: () => connector, getPermit: () => permit,
+      getInternalPermit: () => permit || partialPermit,
       onProgress: ({ value, message }) => { $("radio-progress").value = value; status.textContent = message; }
     });
     if (page === "quansheng") R.mountPrecompiledCatalog({ model, action, log, useImage, download })
@@ -1473,6 +1494,7 @@
       });
     async function connectRadio(withBackup) {
       permit = null;
+      partialPermit = null;
       originalConfiguration = null;
       if (withBackup) await stored();
       connector = page === "quansheng" ? new R.QuanshengConnector() : new R.GD77Connector(model.value);
@@ -1482,6 +1504,7 @@
         if (connector !== activeConnector) return;
         R.revokeBackup(connector);
         permit = null;
+        partialPermit = null;
         connector.connected = false;
         $("backup-status").textContent = "Conexion perdida: permiso de escritura revocado. Se requiere nuevo respaldo.";
         fail(error);
@@ -1491,6 +1514,7 @@
       log(`Radio: ${info.model}; firmware: ${info.firmware}.`);
       if ($("radio-detected")) $("radio-detected").textContent = `Radio detectada: ${info.model} · firmware ${info.firmware}`;
       if (page === "quansheng") {
+        await connector.probeFlashRead().catch(() => "unknown");
         rfRows = [];
         $("qs-rf-body").replaceChildren();
         $("qs-rf-export").disabled = true;
@@ -1539,6 +1563,8 @@
       log(result.record.scope);
       download(`radio-backup-${result.record.id}.rwb.json`, await R.exportBackup(result.record), "application/json");
       permit = result.permit;
+      partialPermit = result.partialPermit || null;
+      if (partialPermit) log(R.QUANSHENG_FLASH_UNSUPPORTED_TEXT);
       log("Exportacion automatica solicitada al navegador. Comprueba Descargas; el historial permite repetirla.");
       if (page === "quansheng") {
         image = result.record.files.find(file => file.name === "configuration")?.bytes.slice() || await connector.readConfiguration();
@@ -1561,6 +1587,7 @@
     if ($("qs-connect-readonly")) attach("qs-connect-readonly", "Conectar Quansheng solo lectura / CAT", () => connectRadio(false));
     attach("radio-disconnect", "Desconectar", async () => {
       permit = null;
+      partialPermit = null;
       R.revokeBackup(connector);
       await connector.disconnect();
       connector = null;

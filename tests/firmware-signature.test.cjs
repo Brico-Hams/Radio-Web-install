@@ -137,7 +137,7 @@ test("OTA page is CSP-friendly and the app keeps the GitHub Release asset as fal
   assert.doesNotMatch(html, /<script(?![^>]*\ssrc=)[^>]*>|\sstyle=|<style|\son[a-z]+=/i);
   const kotlin = fs.readFileSync(path.join(root, "android/app/src/main/java/org/bricohams/radio/Ota.kt"), "utf8");
   assert.match(kotlin, /MANIFEST_URL = "https:\/\/brico-hams\.github\.io\/Radio-Web-install\/radicodex-update\.json"/);
-  assert.match(kotlin, /FALLBACK_MANIFEST_URL = "https:\/\/github\.com\/Brico-Hams\/Radio-Web-install\/releases\/latest\/download\/radicodex-update\.json"/);
+  assert.match(kotlin, /FALLBACK_MANIFEST_URL = "https:\/\/github\.com\/Brico-Hams\/Radio-Web-install\/releases\/download\/radicodex-ota\/radicodex-update\.json"/);
   const key = kotlin.match(/PUBLIC_KEY_HEX = "([0-9a-f]{64})"/)?.[1];
   assert.equal(ota.PUBLIC_KEY_HEX, key, "ota.js must embed the same OTA public key as the app");
 });

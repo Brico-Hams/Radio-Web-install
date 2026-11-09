@@ -69,5 +69,5 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           tag="$RELEASE_TAG"
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "Bricohams Radio Workspace $tag" --generate-notes
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --latest --title "Bricohams Radio Workspace $tag" --generate-notes
           gh release upload "$tag" dist/installers/* --clobber

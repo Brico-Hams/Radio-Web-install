@@ -3,6 +3,7 @@
   const R = root.RadioWorkspace;
   const permits = new WeakMap();
   const slotPermits = new WeakMap();
+  const partialPermits = new WeakMap();
   const revoked = new WeakSet();
   R.revokeBackup = connector => revoked.add(connector);
   R.hasBackup = (connector, permit) => {
@@ -18,19 +19,35 @@
     R.assertBackup(connector, permit);
     const receipt = permits.get(permit);
     if (receipt.skipped) return;
+    await verifyStoredReceipt(connector, receipt);
+  };
+  async function verifyStoredReceipt(connector, receipt) {
     try {
       const saved = await receipt.store.get(receipt.recordId);
-      R.assert(saved && saved.status === "complete" && saved.files.length === receipt.hashes.length, "La copia persistente ya no esta completa.");
+      R.assert(saved && saved.status === receipt.status && saved.files.length === receipt.hashes.length, "La copia persistente ya no esta completa.");
       for (const expected of receipt.hashes) {
         const file = saved.files.find(item => item.name === expected.name);
         R.assert(file && file.bytes.length === expected.size && await R.sha256(file.bytes) === expected.sha256,
           "La copia persistente cambio o esta corrupta.");
       }
-      R.assertBackup(connector, permit);
+      R.assert(connector.connected && connector.session === receipt.session && !connector.transport.error && !revoked.has(connector),
+        "La sesion ha cambiado.");
     } catch (error) {
       revoked.add(connector);
       throw new Error(`Escritura bloqueada al verificar el respaldo: ${error.message}`, { cause: error });
     }
+  }
+  // Only for firmware without external Flash read (0x0738): a persisted calibration + configuration copy.
+  // It is never accepted by assertBackup, so every write to external Flash still needs the complete backup.
+  R.hasPartialBackup = (connector, permit) => {
+    const receipt = partialPermits.get(permit);
+    return Boolean(receipt && receipt.connector === connector && receipt.session === connector.session &&
+      connector.connected && !connector.transport.error && !revoked.has(connector));
+  };
+  R.verifyPartialBackup = async (connector, permit) => {
+    R.assert(R.hasPartialBackup(connector, permit),
+      "Escritura bloqueada: falta copia parcial persistida y verificada de esta sesion.");
+    await verifyStoredReceipt(connector, partialPermits.get(permit));
   };
   // PRO mode only: explicit, per-session authority to write without a stored backup. It is bound to the
   // connector session like a normal permit, so a reconnect or a lost link revokes it.
@@ -163,6 +180,9 @@
         if (report.complete) {
           R.assert(record.files.some(file => file.name === "base-firmware") && record.files.some(file => file.name === "external-flash"), "Falta firmware base o Flash completa.");
         }
+        if (report.flashReadUnsupported) {
+          R.assert(!report.complete && record.files.some(file => file.name === "configuration"), "Falta copia parcial de configuracion.");
+        }
         record.status = report.complete ? "complete" : "partial";
         record.scope = report.scope;
         await this.store.put(record);
@@ -170,10 +190,18 @@
         R.assert(stored && stored.status === record.status, "No se pudo confirmar el estado de la copia.");
         for (const file of stored.files) R.assert(await R.sha256(file.bytes) === file.sha256, "Respaldo corrupto al releerlo.");
         onRecord(record);
-        if (!report.complete) return { record, permit: null };
+        if (!report.complete) {
+          if (!report.flashReadUnsupported) return { record, permit: null };
+          const partialPermit = Object.freeze({});
+          partialPermits.set(partialPermit, {
+            connector, session, store: this.store, recordId: record.id, status: "partial",
+            hashes: record.files.map(file => ({ name: file.name, size: file.bytes.length, sha256: file.sha256 }))
+          });
+          return { record, permit: null, partialPermit };
+        }
         const permit = Object.freeze({});
         permits.set(permit, {
-          connector, session, store: this.store, recordId: record.id,
+          connector, session, store: this.store, recordId: record.id, status: "complete",
           hashes: record.files.map(file => ({ name: file.name, size: file.bytes.length, sha256: file.sha256 }))
         });
         return { record, permit };

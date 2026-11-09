@@ -48,13 +48,16 @@
     });
   };
   R.QuanshengConnector.prototype.prepareMainFirmwareDFU = async function (firmware, permit, acknowledgement) {
-    R.assertBackup(this, permit);
+    // Internal-flash DFU never writes external Flash, so a verified partial backup (firmware without 0x0738) suffices.
+    const partial = R.hasPartialBackup?.(this, permit) === true;
+    if (!partial) R.assertBackup(this, permit);
     R.assert(FACTORY[this.model], "Modelo DFU no compatible.");
     const parsed = R.inspectQuanshengFirmwarePackage(R.bytes(firmware));
     firmware = parsed.image;
     R.assert(acknowledgement === `FIRMWARE PRINCIPAL ${this.model}`,
       "Confirma la sustitucion del firmware interno; no es instalar un slot.");
-    await R.verifyBackup(this, permit);
+    if (partial) await R.verifyPartialBackup(this, permit);
+    else await R.verifyBackup(this, permit);
     const sha256 = await R.sha256(firmware);
     const stage = Object.freeze({});
     stages.set(stage, { model: this.model, firmware, completed: false,
@@ -117,7 +120,7 @@
       this.connected = true;
     }
   }
-  function mountFactoryRestore({ model, action, log, getConnector, getPermit, onProgress }) {
+  function mountFactoryRestore({ model, action, log, getConnector, getPermit, getInternalPermit = getPermit, onProgress }) {
     const panel = document.createElement("section");
     panel.className = "panel operations";
     panel.id = "qs-factory-native";
@@ -130,9 +133,9 @@
       <p id="qs-factory-native-status" role="status">Selecciona el modelo exacto. No se ha iniciado ninguna restauracion.</p>`;
     panel.insertAdjacentHTML("beforeend", `<hr><h3>Firmware principal / DFU Bricohams</h3>
       <p>Protocolo DFU PY32 propio: BIN F4HWN v6.x o paquete v7 FWAT/FWA1 completo, imagen interna hasta 118 KiB. Nunca UV-K5 V1 ni stock arbitrario. SHA-256 y estructura no acreditan autor ni compatibilidad fisica. En v7 es obligatorio instalar los recursos del mismo paquete tras arrancar y crear un respaldo nuevo.</p>
-      <p>Exige respaldo completo de esta conexion y confirmacion literal. Reemplaza firmware interno; no sincroniza Main externo, no cambia de slot ni SetCfg y no borra canales/calibracion. El multiboot puede restaurar otra imagen al arrancar: revisa el inventario y comprueba el arranque manual. No garantiza rollback ni recuperacion del estado transitorio.</p>
+      <p>Exige respaldo completo de esta conexion (o, si el firmware no admite la copia de Flash externa, copia parcial verificada de calibracion y configuracion) y confirmacion literal. Reemplaza firmware interno; no sincroniza Main externo, no cambia de slot ni SetCfg y no borra canales/calibracion. El multiboot puede restaurar otra imagen al arrancar: revisa el inventario y comprueba el arranque manual. No garantiza rollback ni recuperacion del estado transitorio.</p>
       <label for="qs-main-firmware-file">Firmware principal BIN v6 o paquete v7</label><input id="qs-main-firmware-file" type="file" accept=".bin">
-      <button id="qs-main-firmware-prepare" data-write class="button secondary" type="button" disabled>Preparar firmware principal y bloquear sesion</button>
+      <button id="qs-main-firmware-prepare" data-internal-write class="button secondary" type="button" disabled>Preparar firmware principal y bloquear sesion</button>
       <p id="qs-main-firmware-status" role="status">Sin firmware preparado. No se ejecuta DFU automaticamente.</p>
       <p>Tras preparar, desconecta aqui, entra en DFU manteniendo PTT al encender y usa el boton del paso 2. No cierres esta pagina ni cambies de radio.</p>`);
     document.getElementById("qs-rf-panel").before(panel);
@@ -172,7 +175,7 @@
         log("Preparacion DFU principal cancelada.");
         return;
       }
-      const receipt = await getConnector().prepareMainFirmwareDFU(bytes, getPermit(), word);
+      const receipt = await getConnector().prepareMainFirmwareDFU(bytes, getInternalPermit(), word);
       stage = receipt.stage;
       stageModel = model.value;
       mainFirmware = true;

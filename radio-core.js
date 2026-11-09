@@ -54,7 +54,7 @@
         return await action();
       } catch (error) {
         this.connected = false;
-        throw new Error(`${label}: ${error.message}. Desconecta y vuelve a conectar antes de continuar.`, { cause: error });
+        throw new Error(`${label}: ${String(error.message).replace(/[.\s]+$/, "")}. Desconecta y vuelve a conectar antes de continuar.`, { cause: error });
       } finally {
         this.busy = false;
       }

@@ -219,8 +219,27 @@ jobs:
           prerelease=()
           case "$version" in *-beta*) prerelease=(--prerelease) ;; esac
           if ! gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag "${prerelease[@]}" \
+            # Never "Latest": releases/latest must keep pointing at the workspace v* release with the local installers.
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --verify-tag --latest=false "${prerelease[@]}" \
               --title "RadiCodex by BricoHams $version" \
               --notes "RadiCodex by BricoHams $version for Android. Verify the SHA-256 published next to the APK."
           fi
           gh release upload "$TAG" "signed/RadiCodex-$version.apk" "signed/RadiCodex-$version.apk.sha256" --clobber -R "$GITHUB_REPOSITORY"
+      - name: Publish the OTA manifest on the fixed radicodex-ota release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir ota
+          if ! gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p radicodex-update.json -D ota 2>/dev/null; then
+            echo "::notice title=OTA::$TAG has no radicodex-update.json; attach it and re-run, or upload it to radicodex-ota by hand."
+            exit 0
+          fi
+          if ! gh release view radicodex-ota -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create radicodex-ota -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest=false \
+              --title "RadiCodex OTA manifest" \
+              --notes "Fixed channel for the signed radicodex-update.json used as the app's OTA fallback. Updated by the Android workflow."
+          fi
+          gh release upload radicodex-ota ota/radicodex-update.json --clobber -R "$GITHUB_REPOSITORY"

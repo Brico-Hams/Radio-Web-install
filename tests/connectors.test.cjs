@@ -755,7 +755,7 @@ test("Flash fisica rechaza rangos protegidos, tramas entre paginas y legacy sin 
   await assert.rejects(connector.writeFlashChunkRaw(0x10000, new Uint8Array(128)), /protegido/);
   await assert.rejects(connector.writeFlashChunkRaw(0x11ff0, new Uint8Array(128)), /invalido/);
   connector.info.legacyReadOnly = true;
-  assert.throws(() => connector.readExternalFlash(), /no disponible/);
+  await assert.rejects(connector.readExternalFlash(), /no admite la copia de Flash externa/);
   assert.equal(device.commands.length, count);
   await connector.disconnect();
 });
