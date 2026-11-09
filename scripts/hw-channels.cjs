@@ -140,9 +140,92 @@ async function commandInfo(connector, info) {
   console.log("      active CFG bank: the connector reads the active bank only and has no field naming it; check CFG in SysInf.");
 }
 
-async function commandBackup(connector, outDir) {
+const BASE_PARTS = ["calibration", "external-flash", "base-firmware"];
+
+// True when `manifest` is a complete record whose calibration, external-flash and base-firmware parts match their
+// SHA-256, from this session and from the same radio; only configuration.bin may then be missing.
+// readPart(file) returns the bytes of a file in the backup directory, or null when absent.
+async function reusableBackupState({ manifest, readPart, model, firmware, calibrationSha256, now = Date.now() }) {
+  const no = reason => ({ reusable: false, reason });
+  if (!manifest || manifest.format !== MANIFEST_FORMAT || manifest.version !== 1) return no("manifest not made by hw-channels backup");
+  if (manifest.status !== "complete") return no(`status ${manifest.status}`);
+  if (manifest.model !== model) return no(`model ${manifest.model}`);
+  if (manifest.device?.firmware !== firmware) return no(`firmware ${manifest.device?.firmware}`);
+  const age = now - Date.parse(manifest.createdAt);
+  if (!Number.isFinite(age) || age < -60000 || age > MAX_BACKUP_AGE_MS) return no("older than 12 h");
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  for (const part of BASE_PARTS) {
+    const entry = files.find(item => item.name === part);
+    if (!entry || entry.file !== PART_FILES[part]) return no(`missing ${part}`);
+    const bytes = readPart(entry.file);
+    if (!bytes || bytes.length !== entry.size || await R.sha256(bytes) !== entry.sha256) return no(`${part} hash mismatch`);
+    if (part === "calibration" && entry.sha256 !== calibrationSha256) return no("calibration differs from the live radio");
+  }
+  return { reusable: true, hasConfiguration: files.some(item => item.name === "configuration") };
+}
+
+// Adds configuration.bin to a manifest's files (replacing any previous entry); the status stays as is.
+function withConfiguration(manifest, bytes, sha256) {
+  const files = manifest.files.filter(item => item.name !== "configuration");
+  files.push({ name: "configuration", file: PART_FILES.configuration, size: bytes.length, sha256, metadata: null });
+  return { ...manifest, files };
+}
+
+// Two identical reads of the configuration image (on the V3 it lives inside the external Flash, not as its own part).
+async function readConfigurationTwice(connector) {
+  const first = new Uint8Array(await connector.readConfiguration());
+  const second = new Uint8Array(await connector.readConfiguration());
+  R.assert(R.equal(first, second), "Two configuration reads differ: the radio changed while reading.");
+  R.assert(first.length === R.QUANSHENG_CONFIG_SIZE, "Configuration has the wrong size.");
+  R.readQuanshengChannels(first);
+  return first;
+}
+
+// The "original" configuration a write starts from: two identical live reads that must equal the backup's configuration.bin.
+async function originalConfiguration(connector, backupBytes) {
+  const original = await readConfigurationTwice(connector);
+  R.assert(R.equal(original, backupBytes), "configuration changed between backup and load; aborting before any write");
+  return original.slice();
+}
+
+async function finishBackupConfiguration(connector, outDir, manifest) {
+  const bytes = await step("read configuration twice (must be byte-identical)", () => readConfigurationTwice(connector));
+  const sha256 = await R.sha256(bytes);
+  fs.writeFileSync(path.join(outDir, PART_FILES.configuration), bytes);
+  const updated = withConfiguration(manifest, bytes, sha256);
+  fs.writeFileSync(path.join(outDir, "manifest.json"), JSON.stringify(updated, null, 2));
+  console.log(`      configuration: ${bytes.length} bytes sha256 ${sha256}`);
+  const disk = new Uint8Array(fs.readFileSync(path.join(outDir, PART_FILES.configuration)));
+  if (disk.length !== bytes.length || await R.sha256(disk) !== sha256) fail("configuration.bin: on-disk copy differs from the verified read");
+  const missing = REQUIRED_PARTS.filter(part => !updated.files.some(entry => entry.name === part));
+  if (missing.length) { fail(`backup incomplete (missing ${missing.join(", ")}): load will refuse it.`); return; }
+  if (!failures) pass(`backup complete and saved to ${path.resolve(outDir)}`);
+}
+
+async function commandBackup(connector, info, outDir) {
   const manifestPath = path.join(outDir, "manifest.json");
-  if (fs.existsSync(manifestPath)) { fail(`Refusing to overwrite an existing backup: ${manifestPath}`); return; }
+  if (fs.existsSync(manifestPath)) {
+    let state;
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const liveCalibration = await connector.readCalibration();
+      state = await reusableBackupState({
+        manifest, model: info.model, firmware: info.firmware, calibrationSha256: await R.sha256(liveCalibration),
+        readPart: file => { const full = path.join(outDir, file); return fs.existsSync(full) ? new Uint8Array(fs.readFileSync(full)) : null; }
+      });
+      if (state.reusable) {
+        if (state.hasConfiguration) { fail(`Refusing to overwrite an existing backup: ${manifestPath}`); return; }
+        pass(`existing complete backup in ${outDir} matches the radio; only configuration.bin is missing`);
+        await finishBackupConfiguration(connector, outDir, manifest);
+        return;
+      }
+    } catch (error) {
+      fail(`cannot reuse existing backup: ${error.message}`);
+      return;
+    }
+    fail(`Refusing to overwrite an existing backup (${state.reason}): ${manifestPath}`);
+    return;
+  }
   const result = await step("full verified backup: calibration + configuration + external Flash 0x0738 (10-20 min, do not disconnect)",
     () => runWebBackup(connector));
   const { record } = result;
@@ -165,12 +248,12 @@ async function commandBackup(connector, outDir) {
     const disk = new Uint8Array(fs.readFileSync(path.join(outDir, entry.file)));
     if (disk.length !== entry.size || await R.sha256(disk) !== entry.sha256) fail(`${entry.file}: on-disk copy differs from the verified backup`);
   }
-  const missing = REQUIRED_PARTS.filter(part => !files.some(entry => entry.name === part));
-  if (record.status !== "complete" || !result.permit || missing.length) {
-    fail(`backup incomplete (status ${record.status}${missing.length ? `, missing ${missing.join(", ")}` : ""}): ${record.scope}. load will refuse it.`);
+  if (record.status !== "complete" || !result.permit) {
+    fail(`backup incomplete (status ${record.status}): ${record.scope}. load will refuse it.`);
     return;
   }
-  if (!failures) pass(`backup complete and saved to ${path.resolve(outDir)}`);
+  if (failures) return;
+  await finishBackupConfiguration(connector, outDir, manifest);
 }
 
 // Validates a backup directory made by the `backup` command; returns the parsed parts.
@@ -248,10 +331,9 @@ async function commandLoad(connector, info, args) {
     R.assert(result.permit && result.record.status === "complete", "Backup incomplete: writes stay locked.");
     return result;
   });
-  const original = record.files.find(item => item.name === "configuration").bytes.slice();
   const liveCalibration = record.files.find(item => item.name === "calibration");
   if (liveCalibration.sha256 !== parts.calibration.entry.sha256) { fail("calibration changed during the session; aborting before any write"); return; }
-  if (!R.equal(original, parts.configuration.bytes)) { fail("configuration changed between backup and load; aborting before any write"); return; }
+  const original = await step("original configuration: two identical reads, equal to configuration.bin", () => originalConfiguration(connector, parts.configuration.bytes));
 
   const before = R.readQuanshengChannels(original);
   const plan = await step("plan import exactly like the web (appendQuanshengChannels, scan list 25, RX-only, tones off)", async () => planTemplateImport(original, channels));
@@ -560,10 +642,9 @@ async function commandLoadPlan(connector, info, args) {
     R.assert(result.permit && result.record.status === "complete", "Backup incomplete: writes stay locked.");
     return result;
   });
-  const original = record.files.find(item => item.name === "configuration").bytes.slice();
   const liveCalibration = record.files.find(item => item.name === "calibration");
   if (liveCalibration.sha256 !== parts.calibration.entry.sha256) { fail("calibration changed during the session; aborting before any write"); return; }
-  if (!R.equal(original, parts.configuration.bytes)) { fail("configuration changed between backup and load; aborting before any write"); return; }
+  const original = await step("original configuration: two identical reads, equal to configuration.bin", () => originalConfiguration(connector, parts.configuration.bytes));
 
   const before = R.readQuanshengChannels(original);
   const planned = await step(`plan bank replacement (plannedMemory per channel, memories 1-${channels.length}, ${before.length} existing cleared)`, async () => {
@@ -639,7 +720,7 @@ async function main() {
     const connection = await connect(portName, model);
     connector = connection.connector;
     if (command === "info") await commandInfo(connector, connection.info);
-    else if (command === "backup") await commandBackup(connector, path.resolve(out));
+    else if (command === "backup") await commandBackup(connector, connection.info, path.resolve(out));
     else if (command === "load-plan") await commandLoadPlan(connector, connection.info, { model, backupDir: path.resolve(backupDir), bank: Number(bankText), plan: bankPlan });
     else await commandLoad(connector, connection.info, { model, templatePath, backupDir: path.resolve(backupDir), region });
   } catch (error) {
@@ -654,4 +735,4 @@ async function main() {
 
 if (require.main === module) main().catch(error => { console.error(error); process.exit(1); });
 module.exports = { parseCsv, districtZone, serviceZone, communityZone, airportRegions, channelFromRow, buildBankPlan, planBankImage,
-  verifyBank, MAX_BANK_CHANNELS, MAX_ZONES };
+  verifyBank, MAX_BANK_CHANNELS, MAX_ZONES, reusableBackupState, withConfiguration, originalConfiguration };

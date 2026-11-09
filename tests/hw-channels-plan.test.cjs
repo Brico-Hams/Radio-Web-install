@@ -128,6 +128,48 @@ test("more than 200 channels or more than 24 zones are refused", () => {
   assert.throws(() => plan(undefined), /More than 24 zones/);
 });
 
+test("an existing complete backup is reused only when every part matches the live radio; configuration.bin completes it", async () => {
+  const bytesOf = (name, fill) => new Uint8Array(16).fill(fill);
+  const disk = { "calibration.bin": bytesOf("c", 1), "external-flash.bin": bytesOf("f", 2), "base-firmware.bin": bytesOf("b", 3) };
+  const entry = (name, file) => ({ name, file, size: 16, sha256: null, metadata: null });
+  const files = [entry("calibration", "calibration.bin"), entry("external-flash", "external-flash.bin"), entry("base-firmware", "base-firmware.bin")];
+  for (const item of files) item.sha256 = await R.sha256(disk[item.file]);
+  const manifest = { format: "bricohams-hw-channels-backup", version: 1, createdAt: new Date().toISOString(), status: "complete",
+    model: "UV-K5-V3", device: { firmware: "F4HWN v6.1.0" }, files };
+  const base = { manifest, readPart: file => disk[file] ?? null, model: "UV-K5-V3", firmware: "F4HWN v6.1.0", calibrationSha256: files[0].sha256 };
+
+  const ok = await H.reusableBackupState(base);
+  assert.equal(ok.reusable, true);
+  assert.equal(ok.hasConfiguration, false);
+  assert.equal((await H.reusableBackupState({ ...base, calibrationSha256: "00" })).reusable, false);
+  assert.equal((await H.reusableBackupState({ ...base, firmware: "F4HWN v7.0.0" })).reusable, false);
+  assert.equal((await H.reusableBackupState({ ...base, model: "UV-K1" })).reusable, false);
+  assert.equal((await H.reusableBackupState({ ...base, manifest: { ...manifest, status: "partial" } })).reusable, false);
+  assert.equal((await H.reusableBackupState({ ...base, now: Date.now() + 13 * 3600 * 1000 })).reusable, false);
+  assert.equal((await H.reusableBackupState({ ...base, readPart: file => file === "external-flash.bin" ? bytesOf("x", 9) : disk[file] })).reusable, false);
+  assert.equal((await H.reusableBackupState({ ...base, manifest: { ...manifest, files: files.slice(0, 2) } })).reusable, false);
+
+  const config = new Uint8Array(R.QUANSHENG_CONFIG_SIZE);
+  const completed = H.withConfiguration(manifest, config, "abc");
+  assert.equal(completed.status, "complete");
+  assert.equal(completed.files.length, 4);
+  assert.deepEqual(completed.files.find(item => item.name === "configuration"), { name: "configuration", file: "configuration.bin", size: config.length, sha256: "abc", metadata: null });
+  assert.equal(H.withConfiguration(completed, config, "def").files.filter(item => item.name === "configuration").length, 1);
+  assert.equal(manifest.files.length, 3);
+});
+
+test("original configuration needs two identical reads that equal configuration.bin", async () => {
+  const backup = configuration();
+  const other = configuration();
+  other[0x100] = 1;
+  const connectorOf = (...reads) => ({ readConfiguration: async () => reads.shift() });
+
+  const ok = await H.originalConfiguration(connectorOf(backup.slice(), backup.slice()), backup);
+  assert.ok(R.equal(ok, backup));
+  await assert.rejects(H.originalConfiguration(connectorOf(backup.slice(), other), backup), /Two configuration reads differ/);
+  await assert.rejects(H.originalConfiguration(connectorOf(other.slice(), other.slice()), backup), /configuration changed between backup and load/);
+});
+
 function regionMap(count) {
   const keys = ["AN", "AR", "AS", "CB", "CE", "CL", "CM", "CN", "CT", "EX", "GA", "IB", "MC", "MD", "ML", "NC", "PV", "RI", "VC"].slice(0, count);
   return Object.fromEntries(keys.map((key, index) => [`LE${String.fromCharCode(65 + index)}${String.fromCharCode(65 + index)}`, `ES-${key}`]));
