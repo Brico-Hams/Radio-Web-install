@@ -757,6 +757,8 @@ El Quansheng TK-11 (MCU AP8048, solo Flash interna, 999 canales) tiene su propio
 
 No hay actualizacion de firmware para el TK-11: no existe un protocolo publico y el riesgo de dejar la radio inservible es alto. Toda escritura exige antes una copia completa verificada y solo toca zonas confirmadas por CHIRP; la calibracion y las zonas desconocidas nunca se escriben. La ubicacion exacta de la calibracion dentro de la Flash interna no esta confirmada (una fuente de terceros la situa en un rango que se solapa con estructuras de ajustes de CHIRP), asi que se trata como no resuelta y se conserva siempre el contenido de la radio fuera de las estructuras conocidas.
 
+El panel puede comparar dos copias de memoria (.bin) y lista los rangos de bytes que difieren con el nombre de la zona, sin tocar la radio. Sirve para mapear ajustes: cambia una opcion en la radio y haz otra copia.
+
 | Funcion de otras herramientas web | Estado | Motivo |
 | --- | --- | --- |
 | Copia y restauracion de EEPROM, volcado y restauracion de calibracion, espejo de pantalla, flasheo F4HWN | Ya disponible | Existen en esta web con sus protecciones |

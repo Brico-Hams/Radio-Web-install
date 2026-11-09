@@ -643,6 +643,8 @@ Das Quansheng TK-11 (AP8048-MCU, nur interner Flash, 999 Kanäle) hat ein eigene
 
 Für das TK-11 gibt es kein Firmware-Update: Es existiert kein öffentliches Protokoll, und das Risiko, das Funkgerät unbrauchbar zu machen, ist hoch. Jeder Schreibvorgang verlangt zuvor eine geprüfte vollständige Sicherung und berührt nur von CHIRP bestätigte Bereiche; Kalibrierung und unbekannte Bereiche werden nie geschrieben. Die genaue Lage der Kalibrierung im internen Flash ist nicht bestätigt (eine Drittquelle platziert sie in einem Bereich, der sich mit CHIRP-Einstellungsstrukturen überschneidet), daher gilt sie als ungeklärt, und der eigene Inhalt des Geräts außerhalb der bekannten Strukturen bleibt stets erhalten.
 
+Das Panel kann zwei Speichersicherungen (.bin) vergleichen und listet die abweichenden Byte-Bereiche mit dem Namen des Bereichs auf, ohne das Funkgerät zu berühren. Das hilft beim Zuordnen von Einstellungen: Eine Option am Gerät ändern und erneut sichern.
+
 | Funktion anderer Web-Werkzeuge | Status | Grund |
 | --- | --- | --- |
 | EEPROM-Sicherung und -Wiederherstellung, Kalibrierungs-Dump und -Wiederherstellung, Bildschirmspiegel, F4HWN-Flashen | Bereits vorhanden | Sie existieren auf dieser Seite mit ihren Schutzmaßnahmen |

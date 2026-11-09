@@ -718,6 +718,8 @@ Il Quansheng TK-11 (MCU AP8048, solo Flash interna, 999 canali) ha un pannello d
 
 Per il TK-11 non esiste alcun aggiornamento del firmware: non esiste un protocollo pubblico e il rischio di rendere la radio inutilizzabile è alto. Ogni scrittura richiede prima un backup completo verificato e tocca solo aree confermate da CHIRP; la calibrazione e le aree sconosciute non vengono mai scritte. La posizione esatta della calibrazione nella Flash interna non è confermata (una fonte di terzi la colloca in un intervallo che si sovrappone alle strutture delle impostazioni di CHIRP), quindi è considerata irrisolta e il contenuto proprio della radio fuori dalle strutture note viene sempre conservato.
 
+Il pannello può confrontare due backup di memoria (.bin) ed elenca gli intervalli di byte che differiscono con il nome dell’area, senza toccare la radio. È utile per mappare le impostazioni: cambia un’opzione sulla radio e fai un nuovo backup.
+
 | Funzione di altri strumenti web | Stato | Motivo |
 | --- | --- | --- |
 | Backup e ripristino EEPROM, copia e ripristino della calibrazione, specchio dello schermo, flash F4HWN | Già disponibile | Esistono su questo sito con le loro protezioni |
