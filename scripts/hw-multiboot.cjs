@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 // Hardware validation of the web connector's Multiboot slot code against a real radio.
-//   node scripts/hw-multiboot.cjs COM18 list
-//   node scripts/hw-multiboot.cjs COM18 roundtrip <slot 1-4> <image.bin> [--name NAME] [--model UV-K5-V3] [--backup]
+//   node scripts/hw-multiboot.cjs COM18 list --model UV-K1|UV-K5-V3
+//   node scripts/hw-multiboot.cjs COM18 roundtrip <slot 1-4> <image.bin> --model UV-K1|UV-K5-V3 [--name NAME] [--backup]
+// --model is REQUIRED (the radio does not report its model); without it the script prints usage and exits 2.
 // `serialport` is resolved at runtime (e.g. NODE_PATH pointing at a temporary install); it is not a project dependency.
 const fs = require("node:fs");
 const path = require("node:path");
@@ -92,13 +93,14 @@ async function main() {
     const [, value] = args.splice(index, 2);
     return value;
   };
-  const model = flag("--model", "UV-K1");
+  const model = flag("--model", undefined);
   const name = flag("--name", "HWTEST");
   const withBackup = args.includes("--backup");
   const positional = args.filter(arg => arg !== "--backup");
   const [portName, command, slotArg, imagePath] = positional;
-  if (!portName || !["list", "roundtrip"].includes(command)) {
-    console.error("Usage: node scripts/hw-multiboot.cjs <PORT> list\n       node scripts/hw-multiboot.cjs <PORT> roundtrip <slot 1-4> <image.bin> [--name NAME] [--model UV-K1|UV-K5-V3] [--backup]");
+  if (!portName || !["list", "roundtrip"].includes(command) || !["UV-K1", "UV-K5-V3"].includes(model)) {
+    if (!["UV-K1", "UV-K5-V3"].includes(model)) console.error("Error: --model is required (UV-K1 or UV-K5-V3); the radio does not report its model.");
+    console.error("Usage: node scripts/hw-multiboot.cjs <PORT> list --model UV-K1|UV-K5-V3\n       node scripts/hw-multiboot.cjs <PORT> roundtrip <slot 1-4> <image.bin> --model UV-K1|UV-K5-V3 [--name NAME] [--backup]");
     process.exit(2);
   }
   let slot;

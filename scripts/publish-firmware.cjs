@@ -38,7 +38,7 @@ async function publishApps() {
 const builds = [
   ["bricohams-ardf", "ardf", "BH ARDF",   "d5033d07759d3f0eb631cfd41664999b699e954f5da7015d2fdfdfa223613a14", "ci-20261109", "v0.5.9"],
   // v0.5.7: CAT remoto outside SAT RX (bench-verified on a UV-K5 V3 on 2026-11-03).
-    // CI rebuild, structurally verified on a UV-K1 slot (write + CRC) on 2026-11-09, boot not yet tested.
+    // CI rebuild, structurally verified on a UV-K5 V3 slot (write + CRC) on 2026-11-09, boot not yet tested.
     ["bricohams-satellite", "satellite", "BH Satellite", "bb4627012464cdbde3303714320979bcefa82eec27c88a9005c8aed6de451860", "ci-20261109", "v0.5.9"],
     ["bricohams-spectrum", "spectrum", "BH Spectrum", "784a2d902f61d628e7dc58cc62124bc1c33fcac3d254d629b894fc6e06a3f06d", "ci-20261109", "v0.5.9"],
   ["bricohams-labs", "labs", "BH Labs", "938a7cd80b489c9c1746b710c7ae4533526674b13e5f97083f6bea850721140a"],
