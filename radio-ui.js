@@ -29,6 +29,32 @@
     }
     return "saved";
   }
+  const SLOT_MAGIC = 0x31424d46;
+  const SLOT_MAX = 0x1d800;
+  const EMPTY_CELL = "\u2014";
+  // Presentation model of one row of the firmware-slot table; slot 0 (Main) is read-only.
+  function slotRowModel(item) {
+    const main = item.slot === 0;
+    const unknown = item.status === null || item.status === undefined;
+    const state = main ? "protected" : unknown ? "unknown" : item.status === 0 ? "valid" : item.status === 1 ? "empty" :
+      item.status === 5 ? "crc" : "error";
+    const hasHeader = !unknown && item.magic === SLOT_MAGIC && item.status !== 1 && item.size > 0;
+    return {
+      slot: item.slot, main, state,
+      label: main ? "M (protegido)" : String(item.slot),
+      name: hasHeader && item.name ? item.name : EMPTY_CELL,
+      version: hasHeader && item.firmware ? item.firmware : EMPTY_CELL,
+      sizeKiB: hasHeader ? (item.size / 1024).toFixed(1) : EMPTY_CELL,
+      canInstall: !main,
+      canVerify: !main && (state === "valid" || state === "crc"),
+      canErase: !main && state !== "empty" && state !== "unknown"
+    };
+  }
+  // Catalog images offered for Multiboot: stable v6.x for the connected model that fit a slot.
+  function slotCatalogEntries(entries, model) {
+    return entries.filter(entry => /^v6\./.test(entry.version) && entry.size >= 256 && entry.size <= SLOT_MAX &&
+      entry.targets.includes(model));
+  }
   function mountRadioUI(page) {
     const store = new R.BackupStore();
     let connector = null;
@@ -39,6 +65,10 @@
     let image = null;
     let originalConfiguration = null;
     let slotImage = null;
+    let slotImageLabel = "";
+    let slotItems = null;
+    let slotTarget = false;
+    let slotOperation = false;
     let editNumber = null;
     let planning = null;
     let renderCodeplug = null;
@@ -114,7 +144,6 @@
       }
       if ($("write-codeplug")) $("write-codeplug").disabled = busy || !connected || !permit || !image;
       if ($("qs-write")) $("qs-write").disabled = busy || !connected || !permit || !image || !originalConfiguration;
-      if ($("slot-install")) $("slot-install").disabled = busy || !connected || !permit || !slotImage;
       document.querySelectorAll("#radio-operations input, #radio-operations select").forEach(input => { input.disabled = busy; });
       $("backup-status").dataset.ready = Boolean(permit);
       planning?.setBusy(busy);
@@ -380,7 +409,7 @@
           ["qs-flash-file", "Backup / Restore Flash externa"],
           ["precompiled-apps-panel", "Catalogo de apps"],
           ["app-slot", "Orden y gestion de apps"],
-          ["slot-number", "Slots y bancos CFG"],
+          ["slots-heading", "Slots y bancos CFG"],
           ["qs-rf-panel", "Registro RF, filtros y exportacion"]
         ].map(([id, label]) => `<a class="button secondary" href="#${id}">${label}</a>`).join("")}</div>
         <p>DFU acepta BIN v6 y paquetes v7 FWAT/FWA1. Los recursos v7 se instalan despues, con respaldo nuevo y Build ID igual al firmware activo; no se cargan automaticamente ni en otros slots. No hay validacion fisica v7 en esta unidad. Stock requiere dos archivos originales: no se sustituyen por copias inventadas.</p>
@@ -434,19 +463,34 @@
         <label for="spectrum-presets-file">Archivo de presets BHSP v1 (208 bytes)</label><input id="spectrum-presets-file" type="file" accept=".bhsp,.bin">
         <div class="operation-buttons"><button id="spectrum-presets-export" data-connected class="button secondary" type="button" disabled>Exportar presets RAM a archivo</button><button id="spectrum-presets-import" data-connected class="button secondary" type="button" disabled>Importar archivo a RAM (reemplaza tabla)</button></div>
         <p id="spectrum-presets-status" role="status">Sin transferencia. Al salir/apagar se pierde la tabla RAM; conserva el archivo para recuperarla. Importar no sintoniza ni reanuda el barrido: 9 recupera un preset y 4 reanuda.</p>
-        <h2>Firmware Slots / Multiconfig</h2>
-        <p class="muted">Escrituras solo tras respaldo completo. La copia Flash requiere una compilacion con lectura fisica 0x0738 y CRC 0x073e; el nombre Labs o la version no lo garantizan. Main es la aplicacion base inicializada por el firmware, no el bootloader.</p>
-        <div class="operation-buttons"><button id="slots-refresh" data-connected class="button secondary" type="button" disabled>Consultar slots</button></div>
-        <div class="table-scroll"><table><thead><tr><th>Slot</th><th>Nombre</th><th>Version</th><th>Bytes</th><th>Estado</th><th>CRC</th></tr></thead><tbody id="slots-body"></tbody></table></div>
-        <label for="slot-number">Slot / banco de destino (Main protegido)</label><select id="slot-number"><option value="1">1 / CFG 1</option><option value="2">2 / CFG 2</option><option value="3">3 / CFG 3</option><option value="4">4 / CFG 4</option></select>
-        <label for="slot-file">Imagen F4HWN estable v6.x (maximo 118 KiB)</label><input id="slot-file" type="file" accept=".bin">
-        <label for="slot-library-folder">Biblioteca local: selecciona tu carpeta Multiboot (no se sube a ningun servidor)</label><input id="slot-library-folder" type="file" webkitdirectory multiple>
-        <label for="slot-library-entry">Imagen de la biblioteca</label><select id="slot-library-entry"><option value="">Selecciona primero una carpeta</option></select>
-        <p id="slot-library-info" class="card-note" role="status">Solo se preparan imagenes F4HWN v6.x con vectores PY32 validos. Karina V1, ARDF sin compatibilidad verificada, stock y versiones antiguas no se habilitan para slots. La validacion estructural no acredita autenticidad ni compatibilidad fisica.</p>
-        <button id="slot-library-use" class="button secondary" type="button">Preparar imagen local (sin escribir)</button>
-        <label for="slot-name">Nombre (ASCII, maximo 15 caracteres)</label><input id="slot-name" maxlength="15" value="F4HWN">
-        <div class="operation-buttons"><button id="slot-install" data-write class="button primary" type="button" disabled>Instalar y verificar CRC</button><button id="slot-erase" data-write class="button secondary" type="button" disabled>Borrar firmware del slot</button><button id="bank-reset" data-write class="button secondary" type="button" disabled>Restablecer banco CFG</button></div>
-        <p class="card-note">Cambiar firmware: MENU al encender y seleccion en la radio. Cambiar solo banco: SetCfg en la radio. No se inventa un comando remoto para estas acciones. No se implementa flash DFU ni restauracion de calibracion.</p>
+        <h2 id="slots-heading">Ranuras de firmware</h2>
+        <div class="slots-panel">
+          <p>Guarda varios firmwares F4HWN compatibles en la radio y elige uno al arrancar (manten MENU). La escritura solo afecta a la Flash externa; la radio sigue utilizable.</p>
+          <div class="slots-toolbar"><button id="slots-refresh" data-connected class="button primary" type="button" disabled>Actualizar ranuras</button></div>
+          <div class="table-scroll" role="region" aria-labelledby="slots-heading" tabindex="0"><table class="slots-table"><caption class="sr-only">Ranuras de firmware de la radio: Main y ranuras 1 a 4</caption><thead><tr><th scope="col">#</th><th scope="col">Edicion</th><th scope="col">Version</th><th scope="col">Tamano (KiB)</th><th scope="col">Estado</th><th scope="col">Acciones</th></tr></thead><tbody id="slots-body"></tbody></table></div>
+          <div class="slots-source">
+            <label for="slot-catalog">Firmware F4HWN compatible con multiboot</label>
+            <select id="slot-catalog"><option value="">Selecciona un firmware</option></select>
+            <p class="slots-divider" role="separator">o cargar un archivo local</p>
+            <label for="slot-file">Archivo de firmware (.bin)</label>
+            <div class="file-picker"><input id="slot-file" type="file" accept=".bin" aria-describedby="slot-file-name"><label class="button secondary" for="slot-file">Elegir archivo</label><span id="slot-file-name">Ningun archivo seleccionado</span></div>
+            <p id="slots-selection" class="card-note" role="status">Ningun firmware seleccionado.</p>
+          </div>
+          <div id="slots-progress-box" class="slots-progress" hidden><progress id="slots-progress" max="1" value="0" aria-label="Progreso de la ranura"></progress><span id="slots-percent" translate="no"></span><p id="slots-status" role="status" aria-live="polite"></p></div>
+          <p id="slots-boot-help" class="slots-boot-help" role="status" hidden>Para arrancar esta ranura: apaga la radio, enciendela manteniendo MENU, elige la ranura y confirma con M dos veces.</p>
+          <p class="card-note">Escrituras solo tras respaldo completo. La copia Flash requiere una compilacion con lectura fisica 0x0738 y CRC 0x073e; el nombre Labs o la version no lo garantizan. Main es la aplicacion base inicializada por el firmware, no el bootloader.</p>
+          <details class="slots-advanced">
+            <summary>Avanzado</summary>
+            <label for="slot-name">Nombre (ASCII, maximo 15 caracteres)</label><input id="slot-name" maxlength="15" value="F4HWN">
+            <label for="slot-library-folder">Biblioteca local: selecciona tu carpeta Multiboot (no se sube a ningun servidor)</label><input id="slot-library-folder" type="file" webkitdirectory multiple>
+            <label for="slot-library-entry">Imagen de la biblioteca</label><select id="slot-library-entry"><option value="">Selecciona primero una carpeta</option></select>
+            <p id="slot-library-info" class="card-note" role="status">Solo se preparan imagenes F4HWN v6.x con vectores PY32 validos. Karina V1, ARDF sin compatibilidad verificada, stock y versiones antiguas no se habilitan para slots. La validacion estructural no acredita autenticidad ni compatibilidad fisica.</p>
+            <button id="slot-library-use" class="button secondary" type="button">Preparar imagen local (sin escribir)</button>
+            <label for="slot-number">Slot / banco de destino (Main protegido)</label><select id="slot-number"><option value="1">1 / CFG 1</option><option value="2">2 / CFG 2</option><option value="3">3 / CFG 3</option><option value="4">4 / CFG 4</option></select>
+            <div class="operation-buttons"><button id="bank-reset" data-write class="button secondary" type="button" disabled>Restablecer banco CFG</button></div>
+            <p class="card-note">Cambiar solo banco: SetCfg en la radio. No se inventa un comando remoto para estas acciones. No se implementa flash DFU ni restauracion de calibracion.</p>
+          </details>
+        </div>
         <h2 id="apps">Apps de F4HWN Labs</h2>
         <p class="muted">Apps (APRS, SSTV, sondas, CW, caza del zorro...) en los huecos de la Flash externa. Solo las ejecuta la edicion Labs y cada una exige un nivel de API minimo: usa las de la misma version que el firmware arrancado. Una app es codigo nativo con acceso total a la radio; instala solo las que conozcas. No toca canales, ajustes, calibracion ni firmware.</p>
         <p class="muted">Descarga los <code>.app</code> de tu version en <a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/tree/main/archive/apps" target="_blank" rel="noopener noreferrer">archive/apps de F4HWN &nearr;</a> o de una compilacion a medida.</p>
@@ -575,48 +619,216 @@
         const result = await connector.writeSpectrumPresets(new Uint8Array(await file.arrayBuffer()));
         $("spectrum-presets-status").textContent = `${result.entries.length} presets importados y releidos en RAM. Sin EEPROM ni cambio de sintonia; 9 recupera un preset, 4 reanuda. Conserva el archivo para la proxima sesion.`;
       }));
-      async function refreshSlots() {
-        const slots = await connector.listSlots();
+      const slotStates = { valid: "Valida", empty: "Vacia", crc: "Error CRC", error: "Error", protected: "Protegido", unknown: "Sin consultar" };
+      const slotButton = (text, label, kind, permission, handler) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `button ${kind}`;
+        button.setAttribute("translate", "yes");
+        button.setAttribute("aria-label", label);
+        button.setAttribute(permission, "");
+        button.textContent = text;
+        button.addEventListener("click", handler);
+        return button;
+      };
+      const markSlotTarget = number => {
+        $("slot-number").value = String(number);
+        slotTarget = true;
+        document.querySelectorAll("#slots-body tr").forEach(row => {
+          if (row.dataset.slot === String(number)) row.dataset.target = "";
+          else delete row.dataset.target;
+        });
+      };
+      const showSlotStatus = (message, progress = null) => {
+        $("slots-progress-box").hidden = false;
+        $("slots-status").textContent = message;
+        if (progress === null) {
+          $("slots-progress").removeAttribute("value");
+          $("slots-percent").textContent = "";
+        } else {
+          $("slots-progress").value = progress;
+          $("slots-percent").textContent = `${Math.round(progress * 100)}%`;
+        }
+      };
+      // Single place that records the image chosen for a slot and mirrors it in the UI.
+      function setSlotImage(bytes, name, label = "", source = "") {
+        slotImage = bytes || null;
+        slotImageLabel = bytes ? label : "";
+        if (bytes) $("slot-name").value = name;
+        if (source !== "file") {
+          $("slot-file").value = "";
+          $("slot-file-name").textContent = "Ningun archivo seleccionado";
+        }
+        if (source !== "catalog" && $("slot-catalog")) $("slot-catalog").value = "";
+        $("slots-selection").textContent = bytes ? `Firmware seleccionado: ${label}. Aun no escrito en la radio.` : "Ningun firmware seleccionado.";
+      }
+      const slotSource = () => ({ image: slotImage, label: slotImageLabel || $("slot-name").value });
+      function renderSlots(items) {
         $("slots-body").replaceChildren();
-        const statuses = ["Cabecera valida", "Vacio / magic invalido", "Formato desconocido", "Incompleto", "Tamano invalido", "CRC invalido", "Error SPI", "Slot invalido", "Sin autorizacion", "Error RAM", "Protegido"];
-        for (const item of slots) {
+        for (const item of items) {
+          const model = slotRowModel(item);
           const row = document.createElement("tr");
-          for (const [index, text] of [item.slot === 0 ? "M (protegido)" : item.slot, item.name, item.firmware, item.size, statuses[item.status] || `Error ${item.status}`].entries()) {
+          row.dataset.slot = String(model.slot);
+          if (model.main) row.dataset.protected = "";
+          if ($("slot-number").value === String(model.slot) && !model.main && slotTarget) row.dataset.target = "";
+          for (const [text, translated] of [[model.label, true], [model.name, false], [model.version, false], [model.sizeKiB, false]]) {
             const cell = document.createElement("td");
-            if (index === 0 || index === 4) cell.setAttribute("translate", "yes");
-            cell.textContent = String(text);
+            if (translated) cell.setAttribute("translate", "yes");
+            cell.textContent = text;
             row.append(cell);
           }
-          const cell = document.createElement("td");
-          cell.setAttribute("translate", "yes");
-          const button = document.createElement("button");
-          button.type = "button";
-          button.className = "guide-tab";
-          button.dataset.connected = "";
-          button.textContent = "Verificar";
-          button.addEventListener("click", () => action(`Verificar slot ${item.slot}`, async () => {
-            const crc = await connector.validateSlot(item.slot);
-            cell.textContent = `CRC correcto: ${crc.toString(16).padStart(8, "0")}`;
-          }));
-          cell.append(button);
-          row.append(cell);
+          const stateCell = document.createElement("td");
+          const badge = document.createElement("span");
+          badge.className = "slot-badge";
+          badge.dataset.state = model.state;
+          badge.setAttribute("translate", "yes");
+          badge.textContent = slotStates[model.state];
+          stateCell.append(badge);
+          row.append(stateCell);
+          const actions = document.createElement("td");
+          const group = document.createElement("div");
+          group.className = "slots-actions";
+          if (model.canInstall) {
+            group.append(slotButton("Instalar aqui", `Instalar en la ranura ${model.slot}`, "primary", "data-write", () => installInSlot(model.slot)));
+          }
+          if (model.canVerify) {
+            group.append(slotButton("Verificar CRC", `Verificar CRC de la ranura ${model.slot}`, "secondary", "data-connected", () => verifySlot(model.slot)));
+          }
+          if (model.canErase) {
+            group.append(slotButton("Vaciar", `Vaciar la ranura ${model.slot}`, "secondary", "data-write", () => eraseSlotRow(model.slot)));
+          }
+          if (model.main) {
+            const lock = document.createElement("span");
+            lock.setAttribute("translate", "yes");
+            lock.textContent = "Protegido";
+            group.append(lock);
+          }
+          actions.append(group);
+          row.append(actions);
           $("slots-body").append(row);
         }
       }
-      attach("slots-refresh", "Consultar slots", refreshSlots);
+      async function refreshSlots() {
+        slotItems = await connector.listSlots();
+        renderSlots(slotItems);
+      }
+      renderSlots([0, 1, 2, 3, 4].map(slot => ({ slot, status: null })));
+      attach("slots-refresh", "Actualizar ranuras", refreshSlots);
+      async function installInSlot(number) {
+        const { image, label } = slotSource();
+        markSlotTarget(number);
+        if (!image) {
+          $("slots-progress-box").hidden = false;
+          $("slots-status").textContent = "Elige primero un firmware del catalogo o un archivo local.";
+          $("slot-catalog").focus();
+          return;
+        }
+        await action("Instalar firmware en la ranura", async () => {
+          const current = (slotItems || await connector.listSlots()).find(item => item.slot === number);
+          const occupant = current && slotRowModel(current).state !== "empty" ? slotRowModel(current).name : "";
+          const detail = occupant
+            ? `Se instalara ${label} en la ranura ${number}, que contiene ${occupant}. Ese firmware se borrara. Main y calibracion no se modifican. No apagues ni desconectes la radio.`
+            : `Se instalara ${label} en la ranura ${number}, actualmente vacia. Main y calibracion no se modifican. No apagues ni desconectes la radio.`;
+          if (!root.confirm(detail) ||
+            !consent(`Se reemplazara el firmware de la ranura ${number} por ${label}. No apagues ni desconectes.`, `SLOT ${number}`)) {
+            log("Instalacion cancelada.");
+            return;
+          }
+          $("slots-boot-help").hidden = true;
+          slotOperation = true;
+          showSlotStatus("Borrando la ranura", null);
+          try {
+            await connector.writeSlot(number, image, $("slot-name").value, permit);
+          } finally { slotOperation = false; }
+          await refreshSlots();
+          markSlotTarget(number);
+          showSlotStatus(`Ranura ${number} instalada y verificada (CRC ${R.crc32(image).toString(16).padStart(8, "0")}).`, 1);
+          $("slots-boot-help").hidden = false;
+        });
+      }
+      async function verifySlot(number) {
+        await action("Verificar CRC de la ranura", async () => {
+          showSlotStatus("Verificando CRC en la radio", null);
+          try {
+            const crc = await connector.validateSlot(number);
+            showSlotStatus(`CRC correcto en la ranura ${number}: ${crc.toString(16).padStart(8, "0")}`, 1);
+          } catch (error) {
+            const row = document.querySelector(`#slots-body tr[data-slot="${number}"] .slot-badge`);
+            if (row) { row.dataset.state = "crc"; row.textContent = slotStates.crc; }
+            showSlotStatus(`Error CRC en la ranura ${number}.`, 1);
+            throw error;
+          }
+        });
+      }
+      async function eraseSlotRow(number) {
+        markSlotTarget(number);
+        await action("Vaciar ranura", async () => {
+          const current = slotItems?.find(item => item.slot === number);
+          const name = current ? slotRowModel(current).name : EMPTY_CELL;
+          if (!root.confirm(`Se vaciara la ranura ${number} (${name}). Se borra su firmware, no sus ajustes. Main no se modifica.`) ||
+            !consent(`Se borrara el firmware de la ranura ${number}, NO sus ajustes.`, `BORRAR ${number}`)) {
+            log("Borrado cancelado.");
+            return;
+          }
+          $("slots-boot-help").hidden = true;
+          slotOperation = true;
+          showSlotStatus("Borrando la ranura", null);
+          try { await connector.eraseSlot(number, permit); } finally { slotOperation = false; }
+          await refreshSlots();
+          showSlotStatus(`Ranura ${number} vaciada.`, 1);
+        });
+      }
       $("slot-file").addEventListener("change", () => action("Cargar firmware local", async () => {
-        slotImage = null;
         const file = $("slot-file").files[0];
-        R.assert(file && file.size >= 256 && file.size <= 0x1d800, "Selecciona una imagen de 256 bytes a 118 KiB.");
+        if (!file) { setSlotImage(null); return; }
+        setSlotImage(null);
+        R.assert(file.size >= 256 && file.size <= 0x1d800, "Selecciona una imagen de 256 bytes a 118 KiB.");
         const bytes = new Uint8Array(await file.arrayBuffer());
         R.inspectQuanshengSlotImage(bytes, file.name);
-        slotImage = bytes;
-        log(`Archivo local: ${file.name}; SHA-256 ${await R.sha256(slotImage)}. Aun no escrito.`);
+        setSlotImage(bytes, "F4HWN", file.name, "file");
+        $("slot-file-name").textContent = file.name;
+        log(`Archivo local: ${file.name}; SHA-256 ${await R.sha256(bytes)}. Aun no escrito.`);
       }));
+      let slotCatalog = [];
+      const slotCatalogBytes = new Map();
+      const renderSlotCatalog = () => {
+        const entries = slotCatalogEntries(slotCatalog, model.value || "UV-K1");
+        $("slot-catalog").replaceChildren(new Option(entries.length ? "Selecciona un firmware" : "Sin firmwares compatibles en el catalogo", ""),
+          ...entries.map(entry => new Option(`${entry.edition} · ${entry.version} · ${(entry.size / 1024).toFixed(1)} KiB`, entry.id)));
+      };
+      // Only images whose hash, signature and slot structure verify are offered.
+      async function loadSlotCatalog() {
+        const response = await fetch("precompiled/catalog.json", { cache: "no-store", signal: AbortSignal.timeout(15000) });
+        R.assert(response.ok, `Catalogo precompilado: HTTP ${response.status}.`);
+        const entries = R.validatePrecompiledCatalog(await response.json());
+        const checked = await Promise.allSettled(slotCatalogEntries(entries, "UV-K1").map(async entry => {
+            const download = await fetch(entry.path, { cache: "no-store", signal: AbortSignal.timeout(60000) });
+            R.assert(download.ok, `Firmware precompilado: HTTP ${download.status}.`);
+            const bytes = await R.verifyPrecompiledImage(entry, new Uint8Array(await download.arrayBuffer()));
+            await R.verifyPrecompiledSignature(entry, bytes);
+            slotCatalogBytes.set(entry.id, bytes);
+            return entry;
+          }));
+        slotCatalog = checked.filter(result => result.status === "fulfilled").map(result => result.value);
+        for (const result of checked) if (result.status === "rejected") log(`Catalogo multiboot: imagen omitida (${result.reason.message}).`);
+        renderSlotCatalog();
+      }
+      model.addEventListener("change", renderSlotCatalog);
+      $("slot-catalog").addEventListener("change", () => action("Preparar firmware del catalogo", async () => {
+        const entry = slotCatalog.find(item => item.id === $("slot-catalog").value);
+        if (!entry) { setSlotImage(null); return; }
+        const bytes = slotCatalogBytes.get(entry.id);
+        R.assert(bytes, "Imagen del catalogo no verificada.");
+        R.inspectQuanshengSlotImage(bytes);
+        setSlotImage(bytes.slice(), entry.edition, `${entry.edition} ${entry.version}`, "catalog");
+        log(`${entry.edition}: ${entry.sha256}; preparado para ranura, sin escritura.`);
+      }));
+      if (page === "quansheng") loadSlotCatalog().catch(error => log(`ERROR: catalogo multiboot no disponible: ${error.message}`));
+
       let library = [];
       $("slot-library-folder").addEventListener("change", () => action("Examinar biblioteca Multiboot local", async () => {
         library = [];
-        slotImage = null;
+        setSlotImage(null);
         $("slot-library-entry").replaceChildren(new Option("Sin imagenes", ""));
         $("slot-library-info").textContent = "Examinando imagenes locales...";
         try {
@@ -659,20 +871,8 @@
         const entry = library[$("slot-library-entry").value];
         R.assert(entry?.bytes, entry?.reason || "Selecciona una imagen local admitida.");
         R.inspectQuanshengSlotImage(entry.bytes, entry.name.split(/[\\/]/).pop());
-        slotImage = entry.bytes.slice();
-        $("slot-file").value = "";
-        $("slot-name").value = "F4HWN";
+        setSlotImage(entry.bytes.slice(), "F4HWN", entry.name.split(/[\\/]/).pop());
         log(`Imagen local preparada: ${entry.name}; SHA-256 ${entry.sha256}. Sin escritura; exige respaldo completo y confirmacion para instalar.`);
-      });
-      attach("slot-install", "Instalar firmware", async () => {
-        if (!consent(`Se reemplazara el firmware externo del slot ${slot()}. No apagues ni desconectes.`, `SLOT ${slot()}`)) { log("Instalacion cancelada."); return; }
-        await connector.writeSlot(slot(), slotImage, $("slot-name").value, permit);
-        await refreshSlots();
-      });
-      attach("slot-erase", "Borrar firmware del slot", async () => {
-        if (!consent(`Se borrara el firmware del slot ${slot()}, NO sus ajustes.`, `BORRAR ${slot()}`)) { log("Borrado cancelado."); return; }
-        await connector.eraseSlot(slot(), permit);
-        await refreshSlots();
       });
       attach("bank-reset", "Restablecer banco", async () => {
         if (!consent(`Se eliminaran canales y ajustes del banco CFG ${slot()}. No es borrar firmware.`, `CFG ${slot()}`)) { log("Restablecimiento cancelado."); return; }
@@ -1465,7 +1665,8 @@
     });
     const useImage = (data, edition) => {
       if (data && page === "quansheng") R.inspectQuanshengSlotImage(data);
-      slotImage = data;
+      if (page === "quansheng") setSlotImage(data, edition, edition);
+      else slotImage = data;
       $("slot-file").value = "";
       $("slot-name").value = edition;
       log(data ? "Imagen preparada para slot; no se ha modificado la radio." : "Modelo cambiado: imagen de slot eliminada de la seleccion.");
@@ -1499,7 +1700,11 @@
       if (withBackup) await stored();
       connector = page === "quansheng" ? new R.QuanshengConnector() : new R.GD77Connector(model.value);
       const activeConnector = connector;
-      connector.onProgress = ({ value, message }) => { $("radio-progress").value = value; status.textContent = `${message} (${Math.round(value * 100)}%)`; };
+      connector.onProgress = ({ value, message }) => {
+        $("radio-progress").value = value;
+        status.textContent = `${message} (${Math.round(value * 100)}%)`;
+        if (slotOperation) showSlotStatus(message, value);
+      };
       connector.transport.onDisconnect = error => {
         if (connector !== activeConnector) return;
         R.revokeBackup(connector);
@@ -1616,5 +1821,5 @@
     else status.textContent = "Sin conexion. Al conectar comenzara el respaldo automatico.";
     state();
   }
-  Object.assign(R, { mountRadioUI });
+  Object.assign(R, { mountRadioUI, slotRowModel, slotCatalogEntries });
 })(globalThis);

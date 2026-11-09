@@ -32,13 +32,13 @@ test("catalog has complete, unique locale tuples and preserves technical safety 
   }
   for (const locale of ["en-US", "fr", "de"]) {
     for (const label of ["Saltar al contenido", "Conectar y respaldar", "Leer codeplug", "Guardar canal (RX)",
-      "Instalar y verificar CRC", "Restablecer banco CFG", "Calcular proximos pases",
+      "Instalar aqui", "Restablecer banco CFG", "Calcular proximos pases",
       "1. Restaurar Flash stock y verificar", "Consultar modelos oficiales"]) {
       assert.notEqual(I.translate(label, locale), label, `${locale}: ${label}`);
     }
     const warning = rows.find(row => row[0].startsWith("Solo firmware con acceso fisico"))[0];
     for (const token of ["38400", "bootloader"]) assert.ok(I.translate(warning, locale).toLowerCase().includes(token));
-    const slot = rows.find(row => row[0].startsWith("Instalar y verificar CRC borra"))[0];
+    const slot = rows.find(row => row[0].startsWith("Instalar aqui borra"))[0];
     assert.ok(I.translate(slot, locale).includes("118 KiB"));
     assert.ok(I.translate("Escrituras bloqueadas: sin copia verificada.", locale).length > 20);
   }

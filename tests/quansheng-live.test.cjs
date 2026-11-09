@@ -199,7 +199,7 @@ test("native tools menu stays inside this web without delegating operations to U
   const ui = fs.readFileSync(path.join(__dirname, "..", "radio-ui.js"), "utf8");
   assert.doesNotMatch(ui, /data-studio-tool|https:\/\/armel\.github\.io\/uvstudio\/#/);
   for (const target of ["qs-factory-native", "qs-live-panel", "qs-main-firmware-file", "qs-calibration-file",
-    "qs-logo-file", "qs-flash-file", "precompiled-apps-panel", "app-slot", "slot-number", "qs-rf-panel"]) {
+    "qs-logo-file", "qs-flash-file", "precompiled-apps-panel", "app-slot", "slots-heading", "qs-rf-panel"]) {
     assert.ok(ui.includes(`["${target}",`), target);
   }
   assert.match(ui, /href="#\$\{id\}"/);

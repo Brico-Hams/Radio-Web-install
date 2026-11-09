@@ -987,6 +987,7 @@
         header.set(new TextEncoder().encode(name), 16);
         header.set(new TextEncoder().encode(`v${version}`.slice(0, 15)), 32);
         await chunk(0, header);
+        this.progress(1, "Verificando CRC en la radio");
         R.assert(await this.validateRaw(slot) === checksum, "CRC de la imagen escrita distinto al original.");
       });
     }

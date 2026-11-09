@@ -84,9 +84,9 @@ const tools = {
     guides: [
       ["Multiboot", [
         "Haz una copia de calibracion y de los canales. La copia Flash completa requiere una compilacion con lectura fisica y CRC; el nombre Labs o la version no lo garantizan.",
-        "Inicia normalmente con F4HWN compatible. Usa Consultar slots en esta web; no uses DFU para gestionar slots.",
+        "Inicia normalmente con F4HWN compatible. Usa Actualizar ranuras en esta web; no uses DFU para gestionar slots.",
         "Elige un firmware F4HWN estable v6.x compatible, un slot del 1 al 4 y, opcionalmente, un nombre de hasta 15 caracteres.",
-        "Instalar y verificar CRC borra, escribe y verifica el slot. No desconectes el cable. El limite de imagen por slot es 118 KiB.",
+        "Instalar aqui borra, escribe y verifica el slot. No desconectes el cable. El limite de imagen por slot es 118 KiB.",
         "Para cambiar de firmware, apaga y enciende manteniendo solo MENU (M), no PTT. Selecciona el slot y confirma dos veces con M.",
         "Main (M) esta protegido. No apagues durante Init Main ni durante Writing / Verify."
       ]],
@@ -384,7 +384,7 @@ function showView(name, focus = null) {
 function setupViews() {
   const operations = document.getElementById("radio-operations");
   document.getElementById("planning-panel").before(operations);
-  const groups = [[/^CAT RX/, "cat"], [/ARDF/, "ardf"], [/Espectro/, "espectro"], [/Slots/, "slots"], [/^Apps/, "apps"], [/^Canales/, "canales"]];
+  const groups = [[/^CAT RX/, "cat"], [/ARDF/, "ardf"], [/Espectro/, "espectro"], [/Slots|Ranuras/, "slots"], [/^Apps/, "apps"], [/^Canales/, "canales"]];
   let group = null;
   for (const node of [...operations.children]) {
     if (node.tagName === "H2" || !group) {
