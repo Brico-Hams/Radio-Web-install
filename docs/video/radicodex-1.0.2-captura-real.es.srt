@@ -1,0 +1,36 @@
+1
+00:00:00,000 --> 00:00:05,800
+Captura REAL: RadiCodex 1.0.2 firmada, en emulador Android (sin radio conectada)
+
+2
+00:00:06,000 --> 00:00:11,800
+Inicio: más herramientas de radio y recepción
+
+3
+00:00:12,000 --> 00:00:17,800
+OpenGD77 por USB: pantalla, reloj y UTC (sin radio: solo interfaz)
+
+4
+00:00:18,000 --> 00:00:22,800
+Vuelta a Inicio
+
+5
+00:00:23,000 --> 00:00:34,800
+Editor de canales F4HWN v6 (Beta): conectar, copia completa, leer, editar y escribir
+
+6
+00:00:35,000 --> 00:00:40,800
+SSTV Robot36 desde WAV: decodificar y guardar PNG
+
+7
+00:00:41,000 --> 00:00:46,800
+Libro de guardia: indicativo, frecuencia, modo y RST
+
+8
+00:00:47,000 --> 00:00:52,800
+ARDF: sesiones y observaciones
+
+9
+00:00:53,000 --> 00:01:01,800
+Morse de texto y audio WAV experimental
+

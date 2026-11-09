@@ -41,7 +41,7 @@ node scripts/ota-manifest.cjs keygen --private D:\secretos\radicodex-ota.pem
 ## Formato del manifiesto
 
 ```
-{ "schema": 1, "package": "org.bricohams.radicodex", "versionCode": 17, "versionName": "1.0.2", "minSdk": 26,
+{ "schema": 1, "package": "org.bricohams.radicodex", "versionCode": 18, "versionName": "1.1.0", "minSdk": 26,
   "apk": { "url": "https://...", "sha256": "<64 hex>", "size": 12345678 },
   "notes": { "es": "...", "en": "...", "fr": "...", "de": "..." },
   "signature": "<base64 Ed25519>" }

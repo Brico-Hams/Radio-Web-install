@@ -1,0 +1,19 @@
+1
+00:00:00,100 --> 00:00:04,900
+BH Satellite v6.1.0 für UV-K5 V3 / UV-K1. Kein Firmware-Emulator: Szenen aus den signierten Katalogdaten nachgebildet.
+
+2
+00:00:05,100 --> 00:00:09,900
+Geprüfte Identität: 118136 Bytes, 2696 Bytes frei im 120832-B-Slot, SHA-256 724b11ee47c5…
+
+3
+00:00:10,100 --> 00:00:14,900
+Geprüfte Build-Optionen: 53 aktiv, 29 inaktiv; Module: satellite.
+
+4
+00:00:15,100 --> 00:00:19,900
+Modulfunktion laut Manifest: CAT RX (Taste 8), CAT TX mit Taste 9 scharfgeschaltet (jede Taste bricht ab, max. 120 s) und 64 Überflüge auf Taste 0.
+
+5
+00:00:20,100 --> 00:00:24,900
+Status: Beta, gebaut mit ARM GCC 13.3.1. Nicht auf Hardware getestet: nicht ohne vollständiges Backup und Wiederherstellungskabel flashen.

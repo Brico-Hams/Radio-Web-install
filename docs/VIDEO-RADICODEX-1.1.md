@@ -15,7 +15,7 @@ Vídeo explicativo de 6-8 minutos grabado en el Samsung S20 FE real con `adb scr
 1. `adb devices` debe listar el S20 FE; activa Opciones de desarrollador y depuración USB.
 2. Radios cargadas: Quansheng UV-K5 con BH Satellite v0.5.7, Yaesu FTX-1, (tr)uSDX con firmware 2.00t o posterior y QRP Labs QMX+.
 3. Cables OTG listos para cambiar de radio sin tocar el teléfono más de lo necesario.
-4. Instala el APK de GitHub 1.1.0 (versionCode 17) para poder grabar también la escena de actualización.
+4. Instala el APK de GitHub 1.1.0 (versionCode 18) para poder grabar también la escena de actualización.
 
 ## Plan de escenas
 

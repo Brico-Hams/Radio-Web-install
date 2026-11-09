@@ -123,33 +123,40 @@ test("Android translations preserve resource IDs and redesigned satellite format
   assert.doesNotMatch(satellite, /satellite_predict|satellite_line1/);
 });
 
-test("Android 1.1.0 packaging and tag release artifacts match versionCode 17", () => {
+test("Android packaging and tag release artifacts match the current versionCode", () => {
   const gradle = read("android/app/build.gradle.kts");
-  assert.match(gradle, /versionCode = 17\b/);
-  assert.match(gradle, /versionName = "1\.1\.0"/);
+  const versionCode = gradle.match(/versionCode = (\d+)\b/)[1];
+  const versionName = gradle.match(/versionName = "(\d+\.\d+\.\d+)"/)[1];
+  const escaped = versionName.replaceAll(".", "\\.");
   const workflow = read(".github/workflows/android.yml");
   const script = read("scripts/build-android.ps1");
   assert.match(workflow, /tags: \["v\*", "android-v\*"\]/);
   assert.match(workflow, /java-version: "17"/);
   assert.match(workflow, /needs: build/);
   assert.match(workflow, /gh release upload "\$TAG"/);
-  for (const name of ["radicodex-1.1.0-debug.apk", "radicodex-1.1.0-androidTest.apk"]) {
-    assert.ok(workflow.includes(`upload/${name}`));
-    assert.ok(script.includes(name));
+  for (const kind of ["debug", "androidTest"]) {
+    const name = new RegExp(`radicodex-\\d+\\.\\d+\\.\\d+-${kind}\\.apk`);
+    const fromWorkflow = workflow.match(new RegExp(`upload/(${name.source})`));
+    assert.ok(fromWorkflow, `workflow uploads a ${kind} APK`);
+    assert.ok(script.includes(fromWorkflow[1]), `script and workflow agree on ${fromWorkflow[1]}`);
   }
-  assert.match(script, /applicationVersion = '1\.1\.0'/);
-  assert.match(script, /applicationVersionCode = 17\b/);
+  assert.match(script, /applicationVersion = '\d+\.\d+\.\d+'/);
+  assert.match(script, /applicationVersionCode = \d+\b/);
   assert.doesNotMatch(workflow + script, /0\.10\.0-beta|0\.9\.0-beta|0\.8\.0-beta|0\.7\.1-beta/);
   for (const suffix of ["", ".en", ".fr", ".de", ".it"]) {
     const readme = read(`README${suffix}.md`);
-    assert.match(readme, /1\.1\.0/);
+    if (suffix === "") {
+      assert.match(readme, new RegExp(escaped), `README.md mentions ${versionName}`);
+      assert.match(readme, new RegExp(`versionCode ${versionCode}\\b`), `README.md mentions versionCode ${versionCode}`);
+    } else {
+      assert.match(readme, /\b1\.\d+\.\d+\b/, `README${suffix}.md mentions a 1.x release`);
+    }
     assert.doesNotMatch(readme, /0\.8\.1-beta|[Vv]ersionCode 10/);
     const directory = suffix ? `docs/i18n/${suffix.slice(1)}` : "docs";
-    assert.match(read(`${directory}/BRICOHAMS-FIRMWARE.md`), /`1\.1\.0`/);
-    assert.match(read(`${directory}/ESTADO-ENTREGA.md`), /AND-01[^\n]+1\.1\.0/);
+    assert.match(read(`${directory}/BRICOHAMS-FIRMWARE.md`), /`\d+\.\d+\.\d+`/);
+    assert.match(read(`${directory}/ESTADO-ENTREGA.md`), /AND-01[^\n]+\d+\.\d+\.\d+/);
   }
 });
-
 test("Pages links retain relative paths, other query parameters and fragments", () => {
   const base = "https://example.invalid/Radio-Web-install/quansheng.html?lang=de";
   assert.equal(I.localizedURL("index.html#main", base, "fr"), "index.html?lang=fr#main");

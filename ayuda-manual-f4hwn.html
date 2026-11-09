@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Manual F4HWN (FH4): guía de menús Bricohams: ayuda de Bricohams por modelo y version.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Manual F4HWN (FH4): guía de menús Bricohams | Bricohams Radio Workspace</title>
+  <link rel="icon" href="bricohams-logo.png" type="image/png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="appearance.js" defer></script>
+  <link rel="stylesheet" href="help-docs.css">
+  <link rel="alternate" hreflang="es" href="ayuda-manual-f4hwn.html">
+  <link rel="alternate" hreflang="en-US" href="ayuda-manual-f4hwn.en.html">
+  <link rel="alternate" hreflang="de" href="ayuda-manual-f4hwn.de.html">
+  <link rel="alternate" hreflang="it" href="ayuda-manual-f4hwn.it.html">
+  <link rel="alternate" hreflang="fr" href="ayuda-manual-f4hwn.fr.html">
+</head>
+<body>
+  <a class="skip" href="#main">Saltar al contenido</a>
+  <main id="main" class="firmware-help">
+    <header><a href="index.html?lang=es"><img src="bricohams-logo.png" alt="Bricohams" width="240" height="89"></a>
+      <nav aria-label="Ayuda"><a href="ayuda-referencias.html">Documentacion y referencias</a> · <a href="ayuda-firmwares.html">Biblioteca de firmware</a> · <a href="ayuda-atlas-uv-k5-v3.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=es">Quansheng</a> · <a href="opengd77.html?lang=es">OpenGD77</a></nav>
+      <nav class="languages" aria-label="Idioma"><a href="ayuda-manual-f4hwn.html" hreflang="es" lang="es" aria-current="page">Español</a> · <a href="ayuda-manual-f4hwn.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-manual-f4hwn.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-manual-f4hwn.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-manual-f4hwn.fr.html" hreflang="fr" lang="fr">Français</a></nav>
+    </header>
+    <nav class="panel" aria-label="Contenido de esta guia"><h2>En esta guia</h2><ul><li><a href="#primero-activa-all">Primero: activa ALL</a></li><li><a href="#alcance-y-numeracion">Alcance y numeración</a></li><li><a href="#menus-criticos-paso-a-paso">Menús críticos paso a paso</a></li><li><a href="#referencia-de-los-68-menus">Referencia de los 68 menús</a></li><li><a href="#recomendaciones-de-operacion">Recomendaciones de operación</a></li><li><a href="#fuentes">Fuentes</a></li></ul></nav>
+    <article class="panel"><h1 id="manual-f4hwn-fh4-guia-de-menus-bricohams">Manual F4HWN (FH4): guía de menús Bricohams</h1>
+<p>Manual de referencia del firmware F4HWN (FH4) para Quansheng UV-K5 y UV-K6: bloqueo, retroiluminación y los 68 menús del equipo. Edición Bricohams del 8-11-2026. <a href="docs/manuals/Manual_F4HWN_FH4_Bricohams_v2.pdf">Manual completo en PDF</a> (13 páginas; incluye el anexo imprimible de referencia rápida de 3 páginas, páginas 11-13).</p>
+<h2 id="primero-activa-all">Primero: activa ALL</h2>
+<p>Pulsa MENU y selecciona <code>ALL</code> antes de usar esta guía. Sin ALL no aparecerán todos los menús.</p>
+<ol>
+<li>Pulsa la tecla MENU del equipo.</li>
+<li>En la pantalla de selección, busca la opción ALL.</li>
+<li>Confirma ALL y luego entra al menú general para ver todas las opciones.</li>
+</ol>
+<p>Si no seleccionas ALL, solo aparecerá una parte de los menús disponibles, la numeración visible puede parecer incompleta respecto a esta guía y la cantidad total de opciones puede variar según la versión y la compilación del firmware. Tras seleccionar ALL, usa la guía por el nombre del menú y no solo por su número.</p>
+<h2 id="alcance-y-numeracion">Alcance y numeración</h2>
+<p>F4HWN (FH4) es un firmware personalizado desarrollado por Armel, F4HWN, para equipos de la familia Quansheng UV-K5 y variantes compatibles, incluido el UV-K6. Incorpora mejoras de interfaz, recepción, teclas configurables, escaneo y gestión de la energía. La disponibilidad de funciones depende tanto del equipo como de las opciones de compilación.</p>
+<p>Las 68 entradas siguen el orden editorial del manual, no la numeración universal de todas las versiones F4HWN. La lista real puede cambiar entre compilaciones. Localiza siempre los ajustes por su nombre corto (nemónico) si el número no coincide, y comprueba <code>SysInf</code> para saber qué compilación tienes instalada. Algunas opciones citadas son condicionales o pueden presentar rótulos distintos.</p>
+<p>Nota Bricohams: las imágenes de este instalador web son F4HWN v6.1.0 para UV-K5 V3 / UV-K1 (ediciones Bricohams en slots). Los menús se localizan por su nemónico y las opciones dependen de la compilación.</p>
+<p>Discrepancia de numeración señalada por el propio manual: la sección 2.3 del PDF numera BLTime, BLMin y BLMax como 38, 39 y 40, mientras que la tabla los numera 36, 37 y 38. Esta guía sigue la tabla.</p>
+<h2 id="menus-criticos-paso-a-paso">Menús críticos paso a paso</h2>
+<h3 id="keylck-30-bloqueo-automatico">KeyLck (30): bloqueo automático</h3>
+<ol>
+<li>Pulsa MENU en la pantalla principal.</li>
+<li>Localiza <code>KeyLck</code> con las teclas de navegación.</li>
+<li>Pulsa MENU para editar y selecciona OFF o un tiempo entre 00:15 y 10:00, en pasos de 15 segundos.</li>
+<li>Confirma con MENU y sal con EXIT.</li>
+<li>Espera el tiempo configurado sin pulsar teclas y verifica el bloqueo. Para desbloquear, usa la combinación prevista por tu edición; en muchas variantes es una pulsación prolongada de F/#.</li>
+</ol>
+<p>Consejo: 00:30-01:00 para transporte; OFF para manejo continuo. El alcance de este bloqueo depende de <code>SetLck</code>.</p>
+<h3 id="setlck-63-alcance-del-bloqueo">SetLck (63): alcance del bloqueo</h3>
+<ol>
+<li>Abre MENU y busca <code>SetLck</code>.</li>
+<li>Pulsa MENU para cambiar el ajuste.</li>
+<li>Selecciona KEYS para bloquear solo las teclas, dejando el PTT operativo, o KEYS+PTT para bloquear también el pulsador de transmisión.</li>
+<li>Confirma, sal y prueba el funcionamiento de forma segura, sin transmitir fuera de las frecuencias autorizadas.</li>
+</ol>
+<p>Consejo: KEYS+PTT evita emisiones accidentales en transporte; KEYS permite utilizar el PTT sin desbloquear.</p>
+<h3 id="bltime-blmin-blmax-y-bltxrx-luz-fija">BLTime, BLMin, BLMax y BLTxRx: luz fija</h3>
+<ol>
+<li>Busca <code>BLTime</code> (36 en la tabla) y selecciona ON para mantener la retroiluminación permanentemente encendida. Otras opciones: OFF o de 5 segundos a 5 minutos, de 5 en 5 s.</li>
+<li>Entra en <code>BLMin</code> (37): ajusta el brillo mínimo o de reposo, normalmente 0-9; empieza por 0-2 para ahorrar energía.</li>
+<li>Entra en <code>BLMax</code> (38): ajusta el brillo de activación, normalmente 1-10; 3-5 es un punto de partida práctico.</li>
+<li>Comprueba <code>BLTxRx</code> (39): OFF, TX, RX o TX/RX; elige qué eventos activan la iluminación.</li>
+<li>Confirma cada valor y observa la pantalla en reposo, recepción y transmisión permitida. Si se apaga inesperadamente, revisa los valores de brillo mínimo y los atajos de apagado temporal.</li>
+</ol>
+<p>Autonomía: mantener encendida la retroiluminación, en especial con BLMin/BLMax altos, puede reducir notablemente la duración de la batería. BLTime=ON con brillo elevado descarga antes la batería; para el uso diario prueba BLTime=10-20 s y un brillo bajo. ON resulta útil en sobremesa, con alimentación adecuada o cuando prevalece la visibilidad.</p>
+<h2 id="referencia-de-los-68-menus">Referencia de los 68 menús</h2>
+<p>Organización funcional del manual. La numeración puede no coincidir con compilaciones diferentes; prioriza siempre el nemónico.</p>
+<h3 id="01-13-parametros-basicos-de-radio-audio-y-transmision">01-13: parámetros básicos de radio, audio y transmisión</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">N.º</th><th scope="col">Menú</th><th scope="col">Función</th><th scope="col">Opciones</th></tr></thead><tbody>
+<tr><td>01</td><td><code>Step</code></td><td>Salto de sintonía.</td><td>0,01; 0,05; 0,1; 0,25; 0,5; 1; 1,25; 2,5; 5; 6,25; 8,33; 9; 10; 12,5; 15; 20; 25; 30; 50; 100; 125; 200; 250 y 500 kHz, según compilación.</td></tr>
+<tr><td>02</td><td><code>Power</code></td><td>Potencia de transmisión del canal. La potencia real depende de frecuencia, batería y calibración.</td><td>USER, LOW1-LOW5, MID y HIGH. Aproximaciones: inferior a 20 mW, 125 mW, 250 mW, 500 mW, 1 W, 2 W y 5 W; USER adopta <code>SetPwr</code>.</td></tr>
+<tr><td>03</td><td><code>RxDCS</code></td><td>Filtra la recepción mediante códigos DCS digitales. Debe coincidir con la señal recibida.</td><td>OFF y códigos normal (N) o invertido (I) de la tabla estándar disponible, como D023N/D023I y hasta D754.</td></tr>
+<tr><td>04</td><td><code>TxDCS</code></td><td>Envía un código DCS durante la transmisión. No proporciona privacidad ni cifrado.</td><td>OFF y códigos DCS de la tabla estándar en polaridad N o I.</td></tr>
+<tr><td>05</td><td><code>RxCTCS</code></td><td>Abre el audio solo cuando detecta el subtono analógico CTCSS seleccionado.</td><td>OFF o tonos normalizados de 67,0 a 254,1 Hz, incluidos 88,5, 100,0 y 123,0 Hz.</td></tr>
+<tr><td>06</td><td><code>TxCTCS</code></td><td>Añade al audio transmitido el subtono CTCSS elegido; úsalo cuando un repetidor exija un tono de acceso.</td><td>OFF o tonos estándar de 67,0 a 254,1 Hz.</td></tr>
+<tr><td>07</td><td><code>TxODir</code></td><td>Dirección del desplazamiento de transmisión.</td><td>OFF (sin desplazamiento), + (transmite por encima de RX) o − (por debajo).</td></tr>
+<tr><td>08</td><td><code>TxOffs</code></td><td>Magnitud del desplazamiento TX/RX en MHz; ajustable por pasos del equipo. Ejemplo: 0,600 MHz en un repetidor que lo requiera.</td><td>Nominalmente entre 0 y 999,99999 MHz según límites de banda.</td></tr>
+<tr><td>09</td><td><code>W/N</code></td><td>Ancho de canal. Adáptalo al canal y a las reglas aplicables.</td><td>WIDE (aprox. 25 kHz) o NARROW (12,5 kHz; puede usar el ajuste más estrecho de <code>SetNFM</code>).</td></tr>
+<tr><td>10</td><td><code>BusyCL</code></td><td>Bloqueo por canal ocupado.</td><td>OFF permite pulsar PTT con actividad detectada; ON impide transmitir cuando el canal se considera ocupado.</td></tr>
+<tr><td>11</td><td><code>Compnd</code></td><td>Compansor de audio: comprime audio en emisión y/o expande en recepción; conviene que ambos extremos sean compatibles.</td><td>OFF, TX, RX o TX/RX.</td></tr>
+<tr><td>12</td><td><code>Mode</code></td><td>Modo de demodulación. Las modalidades y la capacidad de transmisión dependen del hardware y la versión.</td><td>FM, AM y, cuando la compilación lo incluye, USB.</td></tr>
+<tr><td>13</td><td><code>TXLock</code></td><td>Bloqueo de transmisión específico del canal.</td><td>OFF habilita TX sujeto al resto de restricciones; ON convierte el canal en uso solo recepción.</td></tr>
+</tbody></table></div>
+<h3 id="14-23-memorias-canales-y-listas-de-escaneo">14-23: memorias, canales y listas de escaneo</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">N.º</th><th scope="col">Menú</th><th scope="col">Función</th><th scope="col">Opciones</th></tr></thead><tbody>
+<tr><td>14</td><td><code>ScAdd1</code></td><td>Incluye el canal actual en la lista de escaneo 1; puede pertenecer también a otras listas.</td><td>OFF / ON.</td></tr>
+<tr><td>15</td><td><code>ScAdd2</code></td><td>Incluye el canal actual en la lista de escaneo 2.</td><td>OFF / ON.</td></tr>
+<tr><td>16</td><td><code>ScAdd3</code></td><td>Incluye el canal actual en la lista de escaneo 3.</td><td>OFF / ON.</td></tr>
+<tr><td>17</td><td><code>SList1</code></td><td>Parámetros de prioridad/canales de la lista 1 en las variantes que exponen esta entrada. El significado exacto puede variar.</td><td>Canales programados de memoria (0-199) y selección sin prioridad según edición.</td></tr>
+<tr><td>18</td><td><code>SList2</code></td><td>Parámetros de prioridad/canales de la lista 2; verifica el rótulo de pantalla.</td><td>Posiciones de memoria 0-199 y desactivación de prioridad según edición.</td></tr>
+<tr><td>19</td><td><code>SList3</code></td><td>Parámetros de prioridad/canales de la lista 3.</td><td>Posiciones de memoria 0-199 y desactivación de prioridad según edición.</td></tr>
+<tr><td>20</td><td><code>SList</code></td><td>Lista utilizada al iniciar el escaneo.</td><td>LIST [0] (canales sin lista), LIST [1], LIST [2], LIST [3], LISTS [1,2,3] o ALL (todos los canales).</td></tr>
+<tr><td>21</td><td><code>ChSave</code></td><td>Guarda la frecuencia y los ajustes del VFO en una memoria libre o seleccionada. Revisa antes de confirmar, pues puede sobrescribir datos.</td><td>Memoria 0-199.</td></tr>
+<tr><td>22</td><td><code>ChDele</code></td><td>Elimina el canal de memoria seleccionado. Afecta a los datos almacenados: guarda copia con CHIRP antes de borrar en masa.</td><td>Memoria 0-199.</td></tr>
+<tr><td>23</td><td><code>ChName</code></td><td>Edita el nombre mostrado de un canal de memoria.</td><td>Memoria 0-199; hasta 10 caracteres en las versiones documentadas: letras, números, espacios y algunos símbolos.</td></tr>
+</tbody></table></div>
+<h3 id="24-32-teclas-bloqueo-y-ahorro">24-32: teclas, bloqueo y ahorro</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">N.º</th><th scope="col">Menú</th><th scope="col">Función</th><th scope="col">Opciones</th></tr></thead><tbody>
+<tr><td>24</td><td><code>ScnRev</code></td><td>Comportamiento al detectar señal durante el escaneo.</td><td>STOP (detenerse), CARRIER (reanudar al cesar la señal, con espera seleccionable de 0,25 a 20 s) o TIMEOUT (reanudar tras 5-120 s aunque siga la señal).</td></tr>
+<tr><td>25</td><td><code>F1Shrt</code></td><td>Función de pulsación corta del botón lateral F1.</td><td>Según compilación: NONE, MONITOR, SCAN, POWER, FLASHLIGHT, VOX, FM RADIO, VFO A/B, VFO/MEM, LOCK KEYPAD, 1750 Hz, BACKLIGHT y otras.</td></tr>
+<tr><td>26</td><td><code>F1Long</code></td><td>Función de pulsación larga del botón lateral F1; puede reservarse para bloqueo o monitor.</td><td>Mismas familias de acciones asignables que <code>F1Shrt</code>.</td></tr>
+<tr><td>27</td><td><code>F2Shrt</code></td><td>Función de pulsación corta del botón lateral F2.</td><td>Una acción de la lista disponible, por ejemplo SCAN, POWER, MONITOR, MUTE o cambio de RX MODE.</td></tr>
+<tr><td>28</td><td><code>F2Long</code></td><td>Función de pulsación larga de F2.</td><td>Opciones de asignación equivalentes, sujetas a las funciones activadas en la compilación.</td></tr>
+<tr><td>29</td><td><code>M Long</code></td><td>Acción de pulsación larga de MENU.</td><td>Puede asignarse a linterna, escaneo, cambio VFO/memoria, bloqueo, luz y otras funciones previstas por la edición.</td></tr>
+<tr><td>30</td><td><code>KeyLck</code></td><td>Temporizador de bloqueo automático del teclado. El alcance del bloqueo se define en <code>SetLck</code> (63).</td><td>OFF o desde 00:15 hasta 10:00 min en intervalos de 15 s.</td></tr>
+<tr><td>31</td><td><code>TxTOut</code></td><td>Tiempo máximo de transmisión continua (TOT). Al agotarse interrumpe TX; <code>SetTOT</code> controla cómo avisa.</td><td>Intervalos de 5 s, típicamente desde 30 s hasta 15 min según firmware.</td></tr>
+<tr><td>32</td><td><code>BatSav</code></td><td>Ahorro energético del receptor. Valores mayores favorecen la autonomía, pero pueden empeorar la detección de señales breves.</td><td>OFF o relaciones de reposo/actividad 1:1, 1:2, 1:3, 1:4 y 1:5.</td></tr>
+</tbody></table></div>
+<h3 id="33-41-pantalla-retroiluminacion-y-contraste">33-41: pantalla, retroiluminación y contraste</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">N.º</th><th scope="col">Menú</th><th scope="col">Función</th><th scope="col">Opciones</th></tr></thead><tbody>
+<tr><td>33</td><td><code>BatTxt</code></td><td>Información de batería en la interfaz.</td><td>NONE (sin texto), VOLTAGE (tensión en V) o PERCENT (porcentaje estimado).</td></tr>
+<tr><td>34</td><td><code>ChDisp</code></td><td>Presentación del canal. Requiere nombre guardado para mostrarlo.</td><td>FREQ (frecuencia), CHANNEL NUMBER (número), NAME (nombre) o NAME+FREQ.</td></tr>
+<tr><td>35</td><td><code>POnMsg</code></td><td>Pantalla/aviso de encendido; rótulos concretos según edición.</td><td>ALL/FULL (información completa), SOUND, MESSAGE, VOLTAGE o NONE.</td></tr>
+<tr><td>36</td><td><code>BLTime</code></td><td>Duración de la luz de fondo. ON aumenta el consumo; <code>BLMin</code> y <code>BLMax</code> modulan el brillo.</td><td>OFF, 5 s a 5 min en pasos de 5 s, u ON (siempre encendida).</td></tr>
+<tr><td>37</td><td><code>BLMin</code></td><td>Brillo mínimo o de reposo. 0 reduce al mínimo o apaga la luz en reposo; un valor mayor consume más.</td><td>Niveles 0-9 (ciertos controladores muestran 0-10).</td></tr>
+<tr><td>38</td><td><code>BLMax</code></td><td>Brillo máximo con la pantalla activada. Usa el mínimo legible; el contraste puede ajustarse aparte mediante <code>SetCtr</code>.</td><td>Niveles 1-10.</td></tr>
+<tr><td>39</td><td><code>BLTxRx</code></td><td>Activación de la iluminación durante la comunicación; controla los eventos de encendido de luz al transmitir o recibir.</td><td>OFF, TX, RX o TX/RX.</td></tr>
+<tr><td>40</td><td><code>SetCtr</code></td><td>Contraste del LCD. Ajústalo para equilibrar legibilidad y sombreado, especialmente si se usa inversión visual.</td><td>Valores 1-15.</td></tr>
+<tr><td>41</td><td><code>SetInv</code></td><td>Invierte la apariencia de la pantalla. No cambia el consumo de retroiluminación de manera equivalente a <code>BLTime</code>.</td><td>OFF (normal) u ON (invertida).</td></tr>
+</tbody></table></div>
+<h3 id="42-52-alertas-tonos-y-senalizacion-dtmf">42-52: alertas, tonos y señalización DTMF</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">N.º</th><th scope="col">Menú</th><th scope="col">Función</th><th scope="col">Opciones</th></tr></thead><tbody>
+<tr><td>42</td><td><code>Beep</code></td><td>Pitido de confirmación de pulsaciones.</td><td>OFF / ON.</td></tr>
+<tr><td>43</td><td><code>Roger</code></td><td>Aviso al soltar PTT. Respeta las prácticas del canal.</td><td>OFF, ROGER (pitido) o MDC (señalización de tipo datos en compilaciones que la ofrecen).</td></tr>
+<tr><td>44</td><td><code>STE</code></td><td>Supresión de cola de ruido al finalizar una transmisión; requiere compatibilidad para resultar eficaz.</td><td>OFF / ON.</td></tr>
+<tr><td>45</td><td><code>RP STE</code></td><td>Supresión de cola a través de repetidor.</td><td>OFF o retardos 100-1000 ms (pasos de 100 ms), según versión.</td></tr>
+<tr><td>46</td><td><code>1 Call</code></td><td>Canal de llamada rápida asignado al acceso mediante atajo/tecla compatible.</td><td>Memoria 0-199.</td></tr>
+<tr><td>47</td><td><code>UPCode</code></td><td>Cadena DTMF que puede emitirse al pulsar PTT.</td><td>Hasta 16 caracteres, con dígitos 0-9 y símbolos DTMF permitidos.</td></tr>
+<tr><td>48</td><td><code>DWCode</code></td><td>Cadena DTMF que puede emitirse al soltar PTT.</td><td>Hasta 16 caracteres del alfabeto DTMF permitido.</td></tr>
+<tr><td>49</td><td><code>PTT ID</code></td><td>Momento de emisión de la identificación DTMF.</td><td>OFF, UP CODE, DOWN CODE, UP+DOWN CODE o APOLLO QUINDAR (según edición).</td></tr>
+<tr><td>50</td><td><code>D ST</code></td><td>Reproducción local de tonos DTMF durante el marcado.</td><td>OFF / ON.</td></tr>
+<tr><td>51</td><td><code>D Prel</code></td><td>Tiempo previo de señalización DTMF; permite estabilizar el enlace antes de enviar tonos.</td><td>Valores 3-99 unidades de 10 ms (30-990 ms).</td></tr>
+<tr><td>52</td><td><code>D Live</code></td><td>Descodificador DTMF en tiempo real en pantalla. Requiere recepción de tonos suficientemente limpia.</td><td>OFF / ON.</td></tr>
+</tbody></table></div>
+<h3 id="53-60-sistema-recepcion-y-ajustes-finos">53-60: sistema, recepción y ajustes finos</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">N.º</th><th scope="col">Menú</th><th scope="col">Función</th><th scope="col">Opciones</th></tr></thead><tbody>
+<tr><td>53</td><td><code>VOX</code></td><td>Transmisión activada por voz. Prueba con el ruido ambiente; un umbral inadecuado ocasiona activaciones indeseadas.</td><td>OFF o niveles 1-10 de sensibilidad.</td></tr>
+<tr><td>54</td><td><code>SysInf</code></td><td>Información de sistema, normalmente solo lectura: versión del firmware y datos como la tensión de batería. La información exacta depende de la compilación.</td><td>Consulta / solo lectura.</td></tr>
+<tr><td>55</td><td><code>RxMode</code></td><td>Gestión de doble escucha: controla qué VFO se escucha y cuál transmite.</td><td>MAIN ONLY, DUAL RX RESPOND, CROSS BAND o MAIN TX DUAL RX.</td></tr>
+<tr><td>56</td><td><code>Sql</code></td><td>Nivel de silenciador. 0 deja abierto el audio; niveles altos requieren señal más fuerte para abrir el squelch.</td><td>0-9.</td></tr>
+<tr><td>57</td><td><code>SetPwr</code></td><td>Define la potencia que usará Power=USER (valores nominales).</td><td>Inferior a 20 mW, 125 mW, 250 mW, 500 mW, 1 W, 2 W o 5 W.</td></tr>
+<tr><td>58</td><td><code>SetPTT</code></td><td>Comportamiento del PTT. Verifica el estado TX al utilizar ONEPUSH.</td><td>CLASSIC (mantener pulsado para transmitir) o ONEPUSH (conmutación por pulsaciones).</td></tr>
+<tr><td>59</td><td><code>SetTOT</code></td><td>Forma del aviso de tiempo límite de TX. No sustituye el ajuste <code>TxTOut</code>.</td><td>OFF, SOUND (sonido), VISUAL (pantalla) o ALL (ambos).</td></tr>
+<tr><td>60</td><td><code>SetEOT</code></td><td>Aviso de final de transmisión. Distinto de <code>Roger</code>, que añade señalización al audio transmitido.</td><td>OFF, SOUND, VISUAL o ALL.</td></tr>
+</tbody></table></div>
+<h3 id="61-68-interfaz-avanzada-y-opciones-de-compilacion">61-68: interfaz avanzada y opciones de compilación</h3>
+<div class="table-scroll"><table><thead><tr><th scope="col">N.º</th><th scope="col">Menú</th><th scope="col">Función</th><th scope="col">Opciones</th></tr></thead><tbody>
+<tr><td>61</td><td><code>SetMet</code></td><td>Estilo del medidor de intensidad de señal (S-meter).</td><td>TINY o CLASSIC.</td></tr>
+<tr><td>62</td><td><code>SetGUI</code></td><td>Estilo/tamaño de la tipografía principal del VFO. Cambia la presentación, no la sensibilidad de radio.</td><td>TINY o CLASSIC.</td></tr>
+<tr><td>63</td><td><code>SetLck</code></td><td>Alcance del bloqueo de teclado. Trabaja con el temporizador <code>KeyLck</code>.</td><td>KEYS (solo teclas) o KEYS+PTT (teclas y pulsador de transmisión).</td></tr>
+<tr><td>64</td><td><code>SetTmr</code></td><td>Visualización de temporizadores de recepción/transmisión.</td><td>OFF / ON.</td></tr>
+<tr><td>65</td><td><code>SetOff</code></td><td>Apagado automático del equipo.</td><td>OFF o plazo seleccionable desde 1 min hasta 2 h, normalmente por pasos de 1 min.</td></tr>
+<tr><td>66</td><td><code>SetNFM</code></td><td>Ancho de banda cuando <code>W/N</code> está en estrecho. NARROWER solo está presente en compilaciones que lo incluyen.</td><td>NARROW (~12,5 kHz) o NARROWER (~6,25 kHz).</td></tr>
+<tr><td>67</td><td><code>SetVol</code></td><td>Ajuste de ganancia/volumen interno; no equivale al control físico de volumen.</td><td>Niveles 0-63 en compilaciones con ENABLE_FEAT_F4HWN_VOL.</td></tr>
+<tr><td>68</td><td><code>SetKey</code></td><td>Remapeo de tecla especial en variantes RescueOps. No está disponible en todas las compilaciones.</td><td>MENU, UP, DOWN, EXIT o STAR.</td></tr>
+</tbody></table></div>
+<h2 id="recomendaciones-de-operacion">Recomendaciones de operación</h2>
+<ul>
+<li>Guarda con CHIRP una copia de las memorias y de la configuración antes de flashear, restaurar o borrar canales: <a href="ayuda-quansheng.html">módulo CHIRP F4HWN</a>.</li>
+<li>Los tonos CTCSS/DCS seleccionan señales: no proporcionan privacidad, cifrado ni una garantía de canal libre.</li>
+<li>Respeta siempre las limitaciones de banda, potencia y licencia aplicables. La capacidad técnica de transmitir fuera de una banda no equivale a autorización.</li>
+<li>Si una entrada cambia de número o falta, comprueba <code>SysInf</code> y consulta la compilación instalada antes de interpretar el ajuste.</li>
+</ul>
+<h2 id="fuentes">Fuentes</h2>
+<ul>
+<li>Repositorio original: <a href="https://github.com/armel/uv-k1-k5v3-firmware-custom" target="_blank" rel="noopener noreferrer">https://github.com/armel/uv-k1-k5v3-firmware-custom</a></li>
+<li>Definición de lista y opciones: <a href="https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/main/App/ui/menu.c" target="_blank" rel="noopener noreferrer">https://github.com/armel/uv-k1-k5v3-firmware-custom/blob/main/App/ui/menu.c</a></li>
+<li>Referencia documental de menús: <a href="https://deepwiki.com/armel/uv-k1-k5v3-firmware-custom/8.1-menu-item-reference" target="_blank" rel="noopener noreferrer">https://deepwiki.com/armel/uv-k1-k5v3-firmware-custom/8.1-menu-item-reference</a></li>
+<li>Controlador CHIRP con valores configurables: <a href="https://github.com/armel/uv-k5-chirp-driver" target="_blank" rel="noopener noreferrer">https://github.com/armel/uv-k5-chirp-driver</a></li>
+</ul>
+<p>Nota editorial: guía técnica independiente preparada con la identidad gráfica facilitada de Bricohams. No se presenta como documentación oficial del desarrollador. Los rangos y funciones pueden variar por compilación.</p>
+<p><a href="ayuda-quansheng.html">Quansheng y versiones</a> · <a href="ayuda-opciones-f4hwn.html">Opciones de compilación F4HWN</a> · <a href="ayuda-bricohams.html">Firmware Bricohams</a></p></article>
+    <footer><p>Documento generado desde el Markdown versionado. Consulta las fuentes y limites de cada guia. <a href="ayuda-firmwares.html">Volver al indice</a>.</p></footer>
+  </main>
+</body>
+</html>

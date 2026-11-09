@@ -37,6 +37,7 @@
         <li><a href="ayuda-atlas-uv-k5-v3.en.html">UV-K5 V3 / UV-K1 technical atlas: pinout, memory, protocol, bootloader, schematics, and photos</a></li>
         <li><a href="ayuda-validacion-v3-android.en.html">V3/Android audit in progress: contacts, per-slot banks, CAT, hardware compatibility, and pending evidence</a></li>
         <li><a href="ayuda-opciones-f4hwn.en.html">All F4HWN build options</a> · <a href="ayuda-presets-f4hwn.en.html">ON/OFF values by edition</a></li>
+        <li><a href="ayuda-manual-f4hwn.en.html">F4HWN (FH4) manual: all 68 menus, the ALL warning and a printable quick reference</a></li>
         <li><a href="ayuda-ardf.en.html">ARDF: gain, cycles, and configuration</a></li>
         <li><a href="ayuda-egzumer.en.html">Original Egzumer: V1 source code and options</a> · <a href="ayuda-pack-dim0s.en.html">Dim0s pack and Karina V3/UV-K1</a></li>
         <li><a href="ayuda-opengd77.en.html">OpenGD77: FM/DMR configuration</a> · <a href="ayuda-opengd77-modelos.en.html">Models, aliases, and revisions</a></li>
@@ -168,7 +169,7 @@
         <tr><td><samp>No se encontro una interfaz CDC OpenGD77 normal.</samp></td><td>Radio in bootloader/DFU mode or running firmware other than OpenGD77.</td><td>Restart the radio in normal mode.</td></tr>
         <tr><td><samp>Error al configurar CDC. Comprueba el controlador USB.</samp></td><td>Windows without WinUSB for <code>1FC9:0094</code>.</td><td>Install WinUSB with Zadig.</td></tr>
         <tr><td><samp>Cable USB desconectado.</samp> <samp>Cable serie desconectado.</samp> <samp>La radio cerro el puerto.</samp></td><td>Loose connector, USB power saving, or radio turned off.</td><td>Reconnect and retry; a new backup will be required.</td></tr>
-        <tr><td><samp>CRC UART incorrecto.</samp> <samp>Trama UART demasiado corta.</samp></td><td>Cable noise, mismatched baud rate, or non-F4HWN firmware.</td><td>Try another cable or port; confirm F4HWN v6+.</td></tr>
+        <tr><td><samp>CRC UART incorrecto (recibido</samp> <samp>Trama UART demasiado corta.</samp></td><td>Cable noise, mismatched baud rate, or non-F4HWN firmware.</td><td>Try another cable or port; confirm F4HWN v6+.</td></tr>
         <tr><td><samp>El CRC de la Flash leida no coincide con la radio.</samp></td><td>Transmission error or firmware without RAW read and physical CRC.</td><td>Check the active build and USB connection. The Labs name or version does not guarantee these capabilities. Writes remain blocked.</td></tr>
         <tr><td><samp>Main no inicializado o cabecera no compatible.</samp></td><td>The radio does not have a valid Main image.</td><td>Writing will not be enabled. Consult the F4HWN documentation.</td></tr>
         <tr><td><samp>IndexedDB no disponible</samp> <samp>La copia no se pudo confirmar en disco.</samp></td><td>Private window, full disk, or blocked storage.</td><td>Use a regular window, free disk space, and allow site storage.</td></tr>

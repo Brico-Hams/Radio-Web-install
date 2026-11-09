@@ -160,19 +160,8 @@ Vedere [compilazione, controlli, licenze e limiti](docs/i18n/it/BRICOHAMS-FIRMWA
 
 ### Android: RadiCodex by BricoHams
 
-L’APK nativa 1.1.0 include contatti locali modificabili con ricerca e importazione ADIF con anteprima, esportazione
-ADIF/JSON, sessioni ARDF con cronologia, statistiche, segmenti GPS filtrati e osservazioni GPS puntuali, e Morse da testo
-e WAV PCM sperimentale. Integra CAT RX temporaneo tramite USB CDC ACM e
-adattatori riconosciuti CH34x/CP210x/FTDI/Prolific. Calcola i passaggi SGP4 offline
-con TLE importati e consente il tracciamento Doppler RX del passaggio selezionato.
-Acquisisce l’audio del microfono in primo piano per un massimo di 60 s per decodificare poi Morse
-o Robot36; non è decodifica continua. Include l’editor canali F4HWN v6 con backup completo verificato e rilettura,
-ma non il caricamento LoTW. Decodifica SSTV Robot36 sperimentale da WAV ed esporta PNG.
-Compila per Android 8.0+;
-i test host non sostituiscono le prove sul telefono.
+L’APK nativa 1.1.0 (versionCode 18) è un’app Kotlin indipendente per Android 8.0+, senza server né account, con interfaccia in Español, English, Français e Deutsch. Include: libri General/POTA/SOTA con contatti modificabili, ricerca e UTC automatico; importazione ADIF con anteprima, esportazione ADIF/JSON e ripristino del backup (per LoTW solo esportazione ADIF per TQSL, senza caricamento); sessioni ARDF con cronologia, boe, statistiche, segmenti GPS filtrati e osservazioni GPS puntuali; Morse da testo e Morse WAV PCM sperimentale; acquisizione microfono in primo piano fino a 60 s per decodificare poi Morse o Robot36 (non è decodifica continua); SSTV Robot36 sperimentale (decodifica da WAV o microfono ed encoder per PTT CAT con nominativo obbligatorio e limite di 120 s); CAT RX/TX temporaneo tramite USB CDC ACM e adattatori CH34x/CP210x/FTDI/Prolific riconosciuti con identificazione F4HWN v6+, più CAT per FTX-1, truSDX, QMX+ e Quansheng; editor canali FM F4HWN v6 con backup completo verificato e rilettura; e Satelliti in stile Look4sat con TLE CelesTrak e frequenze SatNOGS (con ripiego AMSAT, aggiornamento automatico opzionale ogni 24 h, o TLE importati), passaggi SGP4 offline con conto alla rovescia, grafico del passaggio e modalità Aim, radar polare e mappa del mondo, Doppler RX via CAT, registrazione del passaggio in WAV e ricerca di immagini Robot36. Non invia la tua posizione a servizi esterni. La 1.0.2 (versionCode 17) è la versione precedente pubblicata; i suoi test fisici sono approvati secondo l’utente (senza risultati dettagliati; vedi [Stato della consegna](docs/i18n/it/ESTADO-ENTREGA.md)); i test host non sostituiscono i test su telefono delle versioni successive.
 Consulta [funzioni, permessi, compilazione e limiti](docs/i18n/it/ANDROID.md).
-
-VersionCode 12 conserva i libri 0.8.0 (Generale/POTA/SOTA), inserimento rapido, conferma duplicati, selezione satelliti, radar polare, mappa mondiale offline, registrazione WAV del passaggio e ricerca SSTV. Gli aggiornamenti CelesTrak/SatNOGS opzionali avvengono all'apertura, ogni 24 h. La mappa appare senza permesso GPS o osservatore; i passaggi richiedono la posizione salvata. I TLE validi conservati funzionano offline e la selezione resta salvata. Controlli e validazione sono tradotti. Test host, lint e APK 0.8.3 verificati in CI con JDK 17/SDK 35; installazione e permessi su telefono fisico restano da provare.
 
 | Documento | Contenuto |
 | --- | --- |

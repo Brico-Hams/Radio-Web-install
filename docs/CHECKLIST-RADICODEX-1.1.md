@@ -1,6 +1,6 @@
 # Checklist de pruebas RadiCodex 1.1.0
 
-Plantilla de pruebas en el dispositivo real (Samsung S20 FE, versionCode 17) con las cuatro radios por OTG. Rellena **Resultado** (OK / FALLO / N/A) y **Evidencia** (captura, clip, ruta del informe o línea de log).
+Plantilla de pruebas en el dispositivo real (Samsung S20 FE, versionCode 18) con las cuatro radios por OTG. Rellena **Resultado** (OK / FALLO / N/A) y **Evidencia** (captura, clip, ruta del informe o línea de log).
 
 ## Reglas de seguridad
 
@@ -20,7 +20,7 @@ Plantilla de pruebas en el dispositivo real (Samsung S20 FE, versionCode 17) con
 
 | ID | Módulo | Radio | Pasos | Resultado esperado | Verificación adb/logcat/serial | Riesgo | Resultado | Evidencia |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| T01 | Instalación y versión | ninguna | Instalar el APK de GitHub 1.1.0 y abrir la app. | versionName 1.1.0, versionCode 17. | `dumpsys package` muestra 1.1.0 y 17. | Bajo |  |  |
+| T01 | Instalación y versión | ninguna | Instalar el APK de GitHub 1.1.0 y abrir la app. | versionName 1.1.0, versionCode 18. | `dumpsys package` muestra 1.1.0 y 18. | Bajo |  |  |
 | T02 | Novedades | ninguna | Primer arranque tras actualizar. | Diálogo Novedades 1.1.0 en el idioma del teléfono (es/en/de/fr). | Captura; no hay errores en logcat. | Bajo |  |  |
 | T03 | Aspecto BricoHams v1.1 | ninguna | Recorrer Inicio y varios módulos. | Grafito `#23272B` y naranja `#F26B1D`; contraste legible. | Captura. | Bajo |  |  |
 | T04 | DeX | ninguna | Conectar a monitor con Samsung DeX y abrir la app. | La interfaz se adapta y es utilizable con ratón y teclado. | Captura de DeX. | Bajo |  |  |

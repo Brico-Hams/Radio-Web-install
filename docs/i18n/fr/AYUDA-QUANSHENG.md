@@ -6,6 +6,8 @@ commit `ca3a4271386049e7b459b215cef0ad0eea1a30ca`.
 Ce guide n’attribue pas automatiquement les fonctions v6.1/v6.3 à v4 ou v5.
 Fonctionnement interne de la radio (broches, mémoires, protocole, bootloader,
 schémas et photos) : [Atlas technique UV-K5 V3](ATLAS-UV-K5-V3.md).
+Le manuel complet des menus F4HWN (68 menus, avertissement ALL et référence
+rapide imprimable) se trouve dans [Manuel F4HWN](MANUAL-F4HWN.md).
 
 ## Canaux simples et modèles par pays
 

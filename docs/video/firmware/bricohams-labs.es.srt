@@ -1,0 +1,19 @@
+1
+00:00:00,100 --> 00:00:04,900
+BH Labs v6.1.0 para UV-K5 V3 / UV-K1. Sin emulador del firmware: escenas recreadas con datos del catálogo firmado.
+
+2
+00:00:05,100 --> 00:00:09,900
+Identidad verificada: 114896 bytes, 5936 bytes libres en el slot de 120832 B, SHA-256 938a7cd80b48…
+
+3
+00:00:10,100 --> 00:00:14,900
+Opciones de compilación verificadas: 57 activas y 27 desactivadas; módulos: —.
+
+4
+00:00:15,100 --> 00:00:19,900
+Función del módulo según el manifiesto: base F4HWN multiboot con lectura física de respaldo (0x0738) y CRC (0x073e), sin ampliar escritura RAW.
+
+5
+00:00:20,100 --> 00:00:24,900
+Estado: Beta, compilado con ARM GCC 13.3.1. No probado en hardware: no flashees sin copia completa y cable de recuperación.

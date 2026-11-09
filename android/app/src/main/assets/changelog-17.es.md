@@ -1,12 +1,5 @@
-# Novedades 1.1.0
+# Novedades de la 1.0.2
 
-- CAT para FTX-1, truSDX (115200), QMX+ y Quansheng.
-- Quansheng CAT remoto: F+8 en SAT RX; actúa sobre el VFO y vuelve a tu frecuencia. Requiere el firmware BH Satellite v0.5.7.
-- GPS del móvil en Satélites: preciso o aproximado, número de satélites y hasta 180 s de búsqueda.
-- TLE con respaldo: CelesTrak, después SatNOGS y después AMSAT.
-- Pantalla Puente / Diagnóstico con «Probar todo».
-- Decodificador FT2 mejorado (OSD y decodificación a priori).
-- Aviso cuando cambia la app o el firmware de una radio.
-- Actualizaciones OTA firmadas (compilación de GitHub).
-- Nuevo aspecto BricoHams (manual de marca v1.1).
-- Compatible con Samsung DeX.
+- Entrega firmada 1.0.2 con APK y SHA-256 publicados en GitHub Releases.
+- Compilación de las variantes GitHub y F-Droid en CI y pestaña activa en naranja de marca.
+- Mejoras de identificación USB de radios y de estabilidad.

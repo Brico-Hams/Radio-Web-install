@@ -1,0 +1,11 @@
+# RadiCodex 1.0.2 — vídeo de captura real / real capture video
+
+**ES** — Captura REAL (emulador Android AVD API 36, sin radio conectada) de la APK firmada `RadiCodex-1.0.2.apk` (SHA-256 `9a1f793e…74e8`, coincide con el `.sha256` de la release `android-v1.0.2`). Muestra Inicio, OpenGD77 por USB (solo interfaz), editor Quansheng F4HWN v6 (Beta), SSTV Robot36 desde WAV, Libro de guardia, ARDF y Morse. No muestra hardware ni firmware UV-K5 V3 funcionando. Subtítulos incrustados y `.srt`: es/en/de/fr/it (sin voz).
+
+**EN** — REAL capture (Android AVD API 36 emulator, no radio attached) of the signed `RadiCodex-1.0.2.apk` (SHA-256 `9a1f793e…74e8`, matches the `android-v1.0.2` release `.sha256`). Shows Home, OpenGD77 over USB (UI only), Quansheng F4HWN v6 editor (Beta), SSTV Robot36 from WAV, Logbook, ARDF and Morse. It does not show UV-K5 V3 hardware or firmware running. Embedded subtitles and `.srt`: es/en/de/fr/it (no voice-over).
+
+**DE** — ECHTE Aufnahme (Android-AVD-Emulator API 36, kein Funkgerät angeschlossen) der signierten `RadiCodex-1.0.2.apk` (SHA-256 `9a1f793e…74e8`, entspricht der `.sha256` des Releases `android-v1.0.2`). Zeigt Start, OpenGD77 über USB (nur Oberfläche), Quansheng-F4HWN-v6-Editor (Beta), SSTV Robot36 aus WAV, Logbuch, ARDF und Morse. Keine UV-K5-V3-Hardware/Firmware zu sehen. Untertitel eingebettet und `.srt`: es/en/de/fr/it (ohne Ton).
+
+**FR** — Capture RÉELLE (émulateur Android AVD API 36, sans radio connectée) de l'APK signée `RadiCodex-1.0.2.apk` (SHA-256 `9a1f793e…74e8`, identique au `.sha256` de la release `android-v1.0.2`). Montre Accueil, OpenGD77 par USB (interface seule), éditeur Quansheng F4HWN v6 (bêta), SSTV Robot36 depuis WAV, Journal de bord, ARDF et Morse. Ne montre ni matériel ni firmware UV-K5 V3. Sous-titres intégrés et `.srt` : es/en/de/fr/it (sans voix).
+
+**IT** — Cattura REALE (emulatore Android AVD API 36, nessuna radio collegata) dell'APK firmato `RadiCodex-1.0.2.apk` (SHA-256 `9a1f793e…74e8`, coincide con il `.sha256` della release `android-v1.0.2`). Mostra Home, OpenGD77 via USB (solo interfaccia), editor Quansheng F4HWN v6 (Beta), SSTV Robot36 da WAV, Registro, ARDF e Morse. Non mostra hardware né firmware UV-K5 V3. Sottotitoli incorporati e `.srt`: es/en/de/fr/it (senza voce).

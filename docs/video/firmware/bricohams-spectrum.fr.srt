@@ -1,0 +1,19 @@
+1
+00:00:00,100 --> 00:00:04,900
+BH Spectrum v6.1.0 pour UV-K5 V3 / UV-K1. Pas d'émulateur du firmware : scènes reconstituées à partir du catalogue signé.
+
+2
+00:00:05,100 --> 00:00:09,900
+Identité vérifiée : 118584 octets, 2248 octets libres dans le slot de 120832 o, SHA-256 3164be3c7cd4…
+
+3
+00:00:10,100 --> 00:00:14,900
+Options de compilation vérifiées : 53 actives, 29 désactivées ; modules : spectrum.
+
+4
+00:00:15,100 --> 00:00:19,900
+Fonction du module selon le manifeste : préréglages de spectre de 208 o par blocs de 104 o ; balayage en pause requis ; sans écriture persistante.
+
+5
+00:00:20,100 --> 00:00:24,900
+Statut : bêta, compilé avec ARM GCC 13.3.1. Non testé sur matériel : ne flashez pas sans sauvegarde complète ni câble de récupération.

@@ -1,6 +1,6 @@
 # RadiCodex by BricoHams
 
-Version 1.1.0 (versionCode 17): Die APK heißt RadiCodex by BricoHams (Kennung `org.bricohams.radicodex`).
+Version 1.1.0 (versionCode 18): Die APK heißt RadiCodex by BricoHams (Kennung `org.bricohams.radicodex`). Die 1.0.2 (versionCode 17) ist die vorherige veröffentlichte Version.
 
 Schritt-für-Schritt-Anleitung: [Anleitungen zu RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 

@@ -57,6 +57,14 @@
       this.buffer = this.buffer.slice(length);
       return result;
     }
+    // Returns bytes already consumed to the head of the buffer so a framer can resynchronise.
+    unread(data) {
+      R.assert(!this.pending, "No se puede devolver datos con una lectura pendiente.");
+      const joined = new Uint8Array(data.length + this.buffer.length);
+      joined.set(data);
+      joined.set(this.buffer, data.length);
+      this.buffer = joined;
+    }
     clear() {
       R.assert(!this.pending, "No se puede vaciar una lectura pendiente.");
       this.buffer = new Uint8Array();

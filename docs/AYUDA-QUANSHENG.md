@@ -6,6 +6,8 @@ commit `ca3a4271386049e7b459b215cef0ad0eea1a30ca`.
 Esta guia no atribuye automaticamente las funciones v6.1/v6.3 a v4 o v5.
 Como funciona la radio por dentro (pines, memorias, protocolo, bootloader,
 esquemas y fotos): [Atlas tecnico UV-K5 V3](ATLAS-UV-K5-V3.md).
+El manual completo de menus F4HWN (68 menus, aviso ALL y referencia rapida
+imprimible) esta en [Manual F4HWN](MANUAL-F4HWN.md).
 
 ## Canales sencillos y plantillas por pais
 

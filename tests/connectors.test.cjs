@@ -812,6 +812,30 @@ test("Rechazar CRC UART corrupto, footer y longitud truncada", () => {
   assert.throws(() => R.decodeQuanshengPacket(bad), /corrupta/);
   assert.throws(() => R.decodeQuanshengPacket(bad.subarray(0, 4)), /corta/);
 });
+test("Identificacion F4HWN resincroniza con ruido, falsa sincronia y respuesta fragmentada", async () => {
+  const device = new R.BufferedTransport(); device.opened = true;
+  const connector = new R.QuanshengConnector(device);
+  const version = new Uint8Array(36); version.set(new TextEncoder().encode("F4HWN v6.2.0"));
+  const reply = response(0x0515, version);
+  const corrupt = response(0x0515, version, true);
+  const falseSync = Uint8Array.of(0, 0xab, 0xcd, 8, 0); // swallows the first bytes of the next frame
+  const pending = connector.receiveResponse(0x0515, 2000);
+  device.push(falseSync);
+  device.push(corrupt.subarray(0, 7));
+  device.push(corrupt.subarray(7));
+  device.push(reply.subarray(0, 1));
+  device.push(reply.subarray(1, 20));
+  device.push(reply.subarray(20));
+  assert.equal(R.text((await pending).subarray(0, 16)), "F4HWN v6.2.0");
+  assert.equal(device.error, null);
+});
+test("Una trama con CRC invalido nunca se acepta como respuesta", async () => {
+  const device = new R.BufferedTransport(); device.opened = true;
+  const connector = new R.QuanshengConnector(device);
+  const pending = connector.receiveResponse(0x0515, 100);
+  device.push(response(0x0515, new Uint8Array(36), true));
+  await assert.rejects(pending, /CRC UART incorrecto \(recibido 0x1234/);
+});
 test("Buffer conserva paquetes fragmentados y bytes sobrantes", async () => {
   const transport = new R.BufferedTransport(); transport.opened = true;
   const read = transport.readExact(3);

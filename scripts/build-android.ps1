@@ -63,7 +63,7 @@ try {
         version = 1
         applicationId = 'org.bricohams.radicodex'
         applicationVersion = '1.1.0'
-        applicationVersionCode = 17
+        applicationVersionCode = 18
         stability = 'stable'
         signing = 'debug'
         minimumApi = 26
