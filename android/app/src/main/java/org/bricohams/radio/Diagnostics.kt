@@ -93,6 +93,8 @@ class DiagnosticsRunner(
             list.add(DiagStep(name, false, describe(error), skipped = true)); null
         } catch (error: CatNotArmedException) {
             list.add(DiagStep(name, false, describe(error), skipped = true)); null
+        } catch (error: RadioNotAvailableException) {
+            list.add(DiagStep(name, false, describe(error), skipped = true)); null
         } catch (error: Exception) {
             list.add(DiagStep(name, false, describe(error))); null
         }
@@ -156,7 +158,11 @@ class DiagnosticsRunner(
         return DiagResult(kind, steps.list)
     }
 
-    private fun ensureIdentified(memory: QuanshengMemory) { if (memory.firmware.isEmpty()) memory.identify() }
+    /**
+     * The radio keeps one session timestamp, set by the last hello (0x0514), and ignores 0x051B/0x7B30 requests carrying
+     * another one. Every module re-sends the hello, so a CAT hello in between can never leave a stale value.
+     */
+    private fun ensureIdentified(memory: QuanshengMemory) { memory.identify() }
 
     /**
      * One read-only Quansheng module. Only these commands can be sent: hello, CAT query (op 0), PTT query (op 0, never key),
@@ -169,10 +175,11 @@ class DiagnosticsRunner(
             QuanshengModule.LINK -> {
                 val hello = steps.run(label(R.string.diag_step_hello)) { val name = memory.identify(); Unit to name }
                 if (hello == null) return DiagResult(title, steps.list)
-                steps.runOptional(label(R.string.diag_step_cat_hello)) { Unit to cat.identify() }
+                steps.runOptional(label(R.string.diag_step_cat_hello)) { Unit to cat.identify(memory.sessionTimestamp) }
                 steps.runOptional(label(R.string.diag_step_cat_status)) {
                     val state = cat.query()
-                    Unit to "active=${state.active} remote=${state.remote} f=${mhzText(state.frequency10Hz * 10)} MHz"
+                    Unit to "active=${state.active} remote=${state.remote} f=${mhzText(state.frequency10Hz * 10)} MHz" +
+                        if (state.anyScreen) " anyScreen remoteEnabled=${state.remoteEnabled} holdoff=${state.holdoff}" else ""
                 }
                 steps.runOptional(label(R.string.diag_step_ptt_status)) {
                     val state = cat.pttQuery()
@@ -193,7 +200,7 @@ class DiagnosticsRunner(
                     Unit to "${memory.readCalibration().size} bytes"
                 }
                 if (memory.legacyReadOnly) steps.pending(label(R.string.diag_step_flash_probe), label(R.string.diag_legacy_no_flash))
-                else steps.run(label(R.string.diag_step_flash_probe)) {
+                else steps.runOptional(label(R.string.diag_step_flash_probe)) {
                     val block = memory.readFlashBlock(0, 128)
                     checkUi(memory.flashRangeCrc(0, 128) == QuanshengMemory.crc32(block)) { UiText(R.string.err_flash_crc, "0") }
                     Unit to "CRC OK"
@@ -220,7 +227,7 @@ class DiagnosticsRunner(
             }
             QuanshengModule.CAT_TUNE -> {
                 val armed = steps.runOptional(label(R.string.diag_step_cat_status)) {
-                    cat.identify()
+                    cat.identify(memory.sessionTimestamp)
                     val active = cat.query().active
                     active to active.toString()
                 }

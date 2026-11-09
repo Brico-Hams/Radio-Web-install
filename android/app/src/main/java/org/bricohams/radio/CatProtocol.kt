@@ -67,13 +67,23 @@ object QuanshengFrames {
     }
 }
 
-data class CatState(val active: Boolean, val remote: Boolean, val pending: Boolean, val frequency10Hz: Long)
+/**
+ * CAT RX v1 state. [anyScreen] (capability bit 3), [remoteEnabled] (flag bit 3, "CAT remoto") and [holdoff] (flag bit 4,
+ * a key was just pressed) are only meaningful with capabilities 15, as in quansheng-connector.js.
+ */
+data class CatState(val active: Boolean, val remote: Boolean, val pending: Boolean, val frequency10Hz: Long,
+    val anyScreen: Boolean = false, val remoteEnabled: Boolean = false, val holdoff: Boolean = false)
 
 /**
- * The radio is not in SAT RX with CAT enabled (key 8). It is a recoverable state, not a link failure: the user can arm the
- * radio and the host keeps polling. Kept an IllegalArgumentException like the validation errors it replaces.
+ * The radio is not in SAT RX with CAT enabled (key 8), or on firmware that works on any screen, "CAT remoto" is off or in
+ * holdoff. It is a recoverable state, not a link failure: the user can arm the radio and the host keeps polling. Kept an
+ * IllegalArgumentException like the validation errors it replaces.
  */
 class CatNotArmedException(override val text: UiText = UiText(R.string.err_cat_not_armed)) :
+    IllegalArgumentException(text.toString()), LocalizedError
+
+/** A read-only feature this firmware or radio state does not offer (no CAT TX, empty pass table, no Flash reader): informative, not a fault. */
+class RadioNotAvailableException(override val text: UiText) :
     IllegalArgumentException(text.toString()), LocalizedError
 
 /** CAT TX v1 (0x7B02): PTT leased by the host, armed only on the radio (SAT RX, key 9). */
@@ -138,9 +148,9 @@ class CatProtocol(
         }
     }
     private fun sequenceOf(response: ByteArray) = (response[2].toInt() and 255) or ((response[3].toInt() and 255) shl 8)
-    @Synchronized fun identify(): String {
-        val timestamp = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
-            .putInt(System.currentTimeMillis().toInt()).array()
+    /** The hello also sets the radio's session timestamp; pass the one in use ([QuanshengMemory.sessionTimestamp]) so it stays valid. */
+    @Synchronized fun identify(sessionTimestamp: Int = System.currentTimeMillis().toInt()): String {
+        val timestamp = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(sessionTimestamp).array()
         val response = request(0x0514, timestamp, 0x0515, IDENTIFY_MS) { true }
         requireUi(response.size >= 16) { UiText(R.string.err_cat_identification_incomplete) }
         val firmware = response.takeWhile { it in 0x20..0x7e }.toByteArray().toString(Charsets.US_ASCII).trim()
@@ -157,15 +167,24 @@ class CatProtocol(
         requireUi(response[0].toInt() == 1) { UiText(R.string.err_cat_response_invalid) }
         val view = ByteBuffer.wrap(response).order(ByteOrder.LITTLE_ENDIAN)
         val status = response[1].toInt() and 255
-        if (status == 5) throw CatNotArmedException()
-        requireUi(status == if (operation == 0) 0 else 1) { UiText(R.string.err_cat_rejected, status) }
-        requireUi(view.getInt(4) == 7) { UiText(R.string.err_cat_capabilities) }
-        val applied = view.getInt(8).toLong() and 0xffffffffL
+        val capabilities = view.getInt(4)
         val flags = view.getInt(12)
-        requireUi(flags in 0..7 && (if (flags and 1 != 0) inBand(applied) else applied == 0L && flags == 0)) {
+        val anyScreen = capabilities == 15
+        val remoteEnabled = anyScreen && flags and 8 != 0
+        val holdoff = anyScreen && flags and 16 != 0
+        if (status == 5) {
+            throw if (!anyScreen) CatNotArmedException()
+            else CatNotArmedException(UiText(if (holdoff) R.string.err_cat_remote_holdoff else R.string.err_cat_remote_off))
+        }
+        requireUi(status == if (operation == 0) 0 else 1) { UiText(R.string.err_cat_rejected, status) }
+        requireUi((capabilities == 7 && flags in 0..7) || (capabilities == 15 && flags in 0..31)) {
+            UiText(R.string.err_cat_capabilities)
+        }
+        val applied = view.getInt(8).toLong() and 0xffffffffL
+        requireUi(if (flags and 1 != 0) inBand(applied) else applied == 0L && flags and 7 == 0) {
             UiText(R.string.err_cat_state_inconsistent)
         }
-        return CatState(flags and 1 != 0, flags and 2 != 0, flags and 4 != 0, applied)
+        return CatState(flags and 1 != 0, flags and 2 != 0, flags and 4 != 0, applied, anyScreen, remoteEnabled, holdoff)
     }
     @Synchronized private fun ptt(operation: Int, accepted: Set<Int>): PttState {
         sequence = (sequence + 1) and 65535
@@ -175,10 +194,13 @@ class CatProtocol(
         val response = request(0x7b02, payload, 0x7b03) { it.size == 16 && sequenceOf(it) == expectedSequence }
         requireUi(response[0].toInt() == 1) { UiText(R.string.err_cat_tx_response_invalid) }
         val view = ByteBuffer.wrap(response).order(ByteOrder.LITTLE_ENDIAN)
-        requireUi(view.getInt(4) == 8) { UiText(R.string.err_cat_tx_unsupported) }
+        val capabilities = view.getInt(4)
+        if (capabilities != 8 && capabilities != 24) throw RadioNotAvailableException(UiText(R.string.err_cat_tx_unsupported))
         val flags = view.getInt(8)
         val denied = (flags shr 8) and 255
-        requireUi(flags and 0xffff00e0.toInt() == 0 && denied in 0..MAX_DENIED_STATE) {
+        // Capabilities 24 (any screen) also use bits 4 (remote on) and 5 (holdoff).
+        val reserved = if (capabilities == 24) 0xffff00c0.toInt() else 0xffff00e0.toInt()
+        requireUi(flags and reserved == 0 && denied in 0..MAX_DENIED_STATE) {
             UiText(R.string.err_cat_tx_state_inconsistent)
         }
         val state = PttState(flags and 1 != 0, flags and 2 != 0, flags and 4 != 0, flags and 8 != 0, denied,

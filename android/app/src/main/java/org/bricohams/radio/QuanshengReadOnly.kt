@@ -88,6 +88,7 @@ class QuanshengReadOnly(
         val reply = memory.exchange(0x7b30, request, 0x7b31, 2000)
         requireUi(reply.size >= 12 && u8(reply[0]) == 1 && u8(reply[2]) == operation && u8(reply[10]) == PASS_MAX &&
             u8(reply[11]) == PASS_BYTES) { UiText(R.string.err_sat_invalid, "pass table") }
+        if (u8(reply[1]) == 5 && operation == 0) throw RadioNotAvailableException(UiText(R.string.diag_passes_none))
         requireUi(u8(reply[1]) == 0) { UiText(R.string.err_sat_rejected, "pass table", u8(reply[1])) }
         requireUi(reply.size == 12 + if (operation == 4) count * PASS_BYTES else 0) { UiText(R.string.err_sat_invalid, "pass table") }
         return Triple(u8(reply[3]), view(reply).getInt(4).toLong() and 0xffffffffL, reply.copyOfRange(12, reply.size))

@@ -49,6 +49,9 @@
     <string name="err_diag_ptt_keyed">Das Funkgerät meldet PTT aktiv während des Tests. Der Test sendet nicht: Funkgerät prüfen.</string>
     <string name="err_sat_invalid">Ungültige Antwort von %1$s oder von einer anderen Übertragung.</string>
     <string name="err_sat_rejected">Das Funkgerät hat %1$s abgelehnt (Status %2$d).</string>
+    <string name="err_cat_remote_off">„Remote-CAT“ am Funkgerät aktivieren (in SAT RX F+8 drücken; die CAT-Anzeige muss erscheinen).</string>
+    <string name="err_cat_remote_holdoff">„Remote-CAT“ am Funkgerät aktivieren (in SAT RX F+8 drücken). Am Funkgerät wurde gerade eine Taste gedrückt: einige Sekunden warten.</string>
+    <string name="diag_passes_none">Keine Überflugtabelle im Funkgerät geladen (Hinweis).</string>
     <string name="diag_run_modules">Alles testen (Quansheng-Module, nur Lesen)</string>
     <string name="diag_step_module">Ein Modul testen</string>
     <string name="diag_save_report">Bericht speichern</string>

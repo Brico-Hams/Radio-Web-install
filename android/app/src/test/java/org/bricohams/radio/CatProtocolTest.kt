@@ -19,6 +19,8 @@ class CatProtocolTest {
         var neverApply = false
         var wrongSequence = false
         var wrongCrc = false
+        var capabilities = 7
+        var extraFlags = 0
         var firmware = "F4HWN v6.1.0"
         var preface: (() -> ByteArray)? = null
         override fun write(bytes: ByteArray, timeoutMs: Int) {
@@ -38,9 +40,9 @@ class CatProtocolTest {
             if (operation == 2) { target = 14580000; pending = true; remote = false }
             val seq = (view.getShort(2).toInt() + if (wrongSequence) 1 else 0).toShort()
             val response = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
-                .put(1).put(if (operation == 0) 0 else 1).putShort(seq).putInt(7)
+                .put(1).put(if (operation == 0) 0 else 1).putShort(seq).putInt(capabilities)
                 .putInt(if (active) applied.toInt() else 0)
-                .putInt(if (active) 1 or (if (remote) 2 else 0) or (if (pending) 4 else 0) else 0).array()
+                .putInt((if (active) 1 or (if (remote) 2 else 0) or (if (pending) 4 else 0) else 0) or extraFlags).array()
             val frame = QuanshengFrames.encode(0x7b01, response)
             if (wrongCrc) frame[10] = (frame[10].toInt() xor 1).toByte()
             byteArrayOf(0, 0xab.toByte(), 0).forEach(buffer::add)
@@ -197,6 +199,33 @@ class CatProtocolTest {
         assertEquals(CatLease.Result.RECOVERED, lease.renewIfDue())
         assertEquals(listOf(0, 1), radio.operations)
         assertTrue(radio.remote)
+    }
+    @Test fun capabilities15WithRemoteEnabledAndHoldoffFlagsAreAccepted() {
+        val radio = Radio().apply { capabilities = 15; extraFlags = 8 or 16 }
+        val state = CatProtocol(radio, sleep = {}).query()
+        assertTrue(state.active && state.anyScreen && state.remoteEnabled && state.holdoff)
+        radio.extraFlags = 8
+        val remoteOnly = CatProtocol(radio, sleep = {}).query()
+        assertTrue(remoteOnly.remoteEnabled && !remoteOnly.holdoff)
+        radio.active = false
+        radio.extraFlags = 16
+        val idle = CatProtocol(radio, sleep = {}).query()
+        assertTrue(!idle.active && idle.holdoff && idle.frequency10Hz == 0L)
+    }
+    @Test fun tuneWorksOnAnyScreenFirmware() {
+        val radio = Radio().apply { capabilities = 15; extraFlags = 8 }
+        assertEquals(43650000L, CatProtocol(radio, sleep = {}).tune(43650000).frequency10Hz)
+    }
+    @Test fun capabilities7RejectsFlagsAbove7AndUnknownCapabilitiesAreRefused() {
+        assertThrows(IllegalArgumentException::class.java) {
+            CatProtocol(Radio().apply { extraFlags = 8 }, sleep = {}).query()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            CatProtocol(Radio().apply { capabilities = 11 }, sleep = {}).query()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            CatProtocol(Radio().apply { capabilities = 15; extraFlags = 32 }, sleep = {}).query()
+        }
     }
     @Test fun notArmedIsARecoverableExceptionNotALinkFailure() {
         val radio = Radio().apply { active = false }

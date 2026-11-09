@@ -49,6 +49,9 @@
     <string name="err_diag_ptt_keyed">La radio indica PTT activo durante la prueba. La prueba no transmite: revisa la radio.</string>
     <string name="err_sat_invalid">Respuesta de %1$s inválida o de otra transferencia.</string>
     <string name="err_sat_rejected">La radio rechazó %1$s (estado %2$d).</string>
+    <string name="err_cat_remote_off">Activa «CAT remoto» en la radio (en SAT RX pulsa F+8; debe verse el indicador CAT en pantalla).</string>
+    <string name="err_cat_remote_holdoff">Activa «CAT remoto» en la radio (en SAT RX pulsa F+8). Se pulsó una tecla en la radio: espera unos segundos.</string>
+    <string name="diag_passes_none">Sin tabla de pases cargada en la radio (informativo).</string>
     <string name="diag_run_modules">Probar todo (módulos Quansheng, solo lectura)</string>
     <string name="diag_step_module">Probar un módulo</string>
     <string name="diag_save_report">Guardar informe</string>

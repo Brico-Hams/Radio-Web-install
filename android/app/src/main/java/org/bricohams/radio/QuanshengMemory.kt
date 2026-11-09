@@ -105,9 +105,10 @@ class QuanshengMemory(
         checkIdentified()
         requireUi(address >= 0 && length in 1..128 && address <= FLASH_SIZE - length) { UiText(R.string.err_flash_read_range) }
         val data = exchange(0x0738, le(10).putInt(address).putShort(length.toShort()).putInt(timestamp).array())
-        requireUi(data.size == length + 7 && view(data).getInt(0) == address &&
-            (view(data).getShort(4).toInt() and 65535) == length && data[6].toInt() == 0) {
-            UiText(R.string.err_flash_read_rejected, Integer.toHexString(address))
+        if (!(data.size == length + 7 && view(data).getInt(0) == address &&
+                (view(data).getShort(4).toInt() and 65535) == length && data[6].toInt() == 0)) {
+            // Firmware without 0x0738 answers with an error status: the Flash reader is simply not there.
+            throw RadioNotAvailableException(UiText(R.string.err_flash_read_rejected, Integer.toHexString(address)))
         }
         return data.copyOfRange(7, data.size)
     }
