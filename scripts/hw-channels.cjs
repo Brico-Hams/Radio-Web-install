@@ -294,19 +294,19 @@ function selectTemplateChannels(templatePath, region) {
   return { file, channels };
 }
 
-// Mirrors planning.addTemplateChannels + radio-ui importChannels: first FM channel is the record template, no grouping, scan list 25.
+// Mirrors planning.addTemplateChannels + radio-ui importChannels: first FM channel is the record template (default record on an empty bank), no grouping, scan list 25.
 function planTemplateImport(image, channels) {
   const template = R.readQuanshengChannels(image).filter(channel => channel.mode === 0)[0];
-  R.assert(template, "The active bank has no FM channel to use as record template (the web requires one too).");
+  const templateNumber = template ? template.number : 0;
   const grouped = R.groupQuanshengChannels(image, channels, "none", 25);
-  const result = R.appendQuanshengChannels(image, grouped.channels, template.number, {});
+  const result = R.appendQuanshengChannels(image, grouped.channels, templateNumber, {});
   const decoded = R.readQuanshengChannels(result.image);
   for (const entry of channels) {
     const storedName = entry.name.slice(0, 10);
     R.assert(decoded.some(channel => channel.name === storedName && channel.rx === entry.rx && channel.tx === entry.tx &&
       channel.mode === entry.mode && channel.rxOnly), `The parser cannot read channel ${entry.name} back; nothing is written.`);
   }
-  return { ...result, templateNumber: template.number };
+  return { ...result, templateNumber: templateNumber || "default record (empty bank)" };
 }
 
 async function commandLoad(connector, info, args) {
@@ -569,18 +569,19 @@ function printZones(plan) {
 
 // The planned bank image: every existing memory cleared, channel i written to memory i+1 with plannedMemory.
 function planBankImage(image, channels) {
+  // An empty bank has no FM channel to copy: template 0 selects the library's default F4HWN record.
   const template = R.readQuanshengChannels(image).find(channel => channel.mode === 0);
-  R.assert(template, "The active bank has no FM channel to use as record template (the web requires one too).");
+  const templateNumber = template ? template.number : 0;
   let result = image;
   for (const channel of R.readQuanshengChannels(image)) result = R.deleteQuanshengChannel(result, channel.number);
   result = result.slice();
   channels.forEach((channel, index) => {
-    const memory = R.plannedQuanshengMemory(image, channel, template.number, channel.scanList);
+    const memory = R.plannedQuanshengMemory(image, channel, templateNumber, channel.scanList);
     result.set(memory.record, index * 16);
     result.set(memory.name, 0x4000 + index * 16);
     result.set(memory.attributes, 0x8000 + index * 2);
   });
-  return { image: result, templateNumber: template.number };
+  return { image: result, templateNumber: templateNumber || "default record (empty bank)" };
 }
 
 // Compares memories 1..N of an image with the plan. Returns { problems, zones: [{ zone, list, count, ok }] }.

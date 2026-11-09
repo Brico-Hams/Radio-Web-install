@@ -37,6 +37,7 @@
     const channelsBody = el("tbody", { id: "tk11-channels-body" });
     const hexView = el("pre", { id: "tk11-hex", translate: "no", tabIndex: 0 });
     const fileInput = el("input", { type: "file", accept: ".bin", id: "tk11-restore-file", hidden: true });
+    const csvInput = el("input", { type: "file", accept: ".csv,text/csv", id: "tk11-import-csv-file", hidden: true });
     const templateSelect = el("select", { id: "tk11-template-country", "aria-label": "Pais de la plantilla" },
       el("option", { value: "", text: "Selecciona un pais" }),
       ...R.TEMPLATE_COUNTRIES.map(country => el("option", { value: country.code, text: country.name })));
@@ -49,7 +50,8 @@
         if (key === "connect") node.disabled = busy || Boolean(connector) || !("serial" in navigator);
         else if (key === "disconnect") node.disabled = busy || !connector;
         else if (["write-settings", "write-channels", "restore"].includes(key)) node.disabled = busy || !connected || !permit || !memory;
-        else if (key === "csv") node.disabled = !channels.some(Boolean);
+        else if (key === "csv" || key === "csv-tk11") node.disabled = !channels.some(Boolean);
+        else if (key === "import-csv") node.disabled = busy;
         else if (key === "download") node.disabled = !memory;
         else if (key === "hex") node.disabled = !memory;
         else if (key === "template") node.disabled = busy || !templateSelect.value;
@@ -176,6 +178,18 @@
     });
     buttons.download = button("Descargar memoria leida", () => download("tk11-memory.bin", memory, "application/octet-stream"));
     buttons.csv = button("Exportar canales (CSV)", () => download("tk11-channels.csv", T.channelsToCsv(channels), "text/csv"));
+    buttons["csv-tk11"] = button("Exportar CSV TK-11 Manager", () => download("tk11-manager-channels.csv", T.channelsToTk11Csv(channels), "text/csv"));
+    buttons["import-csv"] = button("Importar CSV (TK-11 o CHIRP)", () => csvInput.click());
+    csvInput.onchange = () => action("Leyendo el CSV", async () => {
+      const file = csvInput.files[0];
+      csvInput.value = "";
+      R.assert(file && file.size <= 2 * 1024 * 1024, "Selecciona un archivo CSV de menos de 2 MB.");
+      const result = T.channelsFromCsv(await file.text());
+      R.assert(result.channels.some(Boolean), "El CSV no contiene ningun canal valido.");
+      channels = result.channels;
+      renderChannels();
+      status.textContent = `${channels.filter(Boolean).length} canales importados del CSV; ${result.skipped.length} filas omitidas. La radio no se modifica hasta pulsar Escribir canales.`;
+    });
     buttons.template = button("Importar plantilla de pais", () => action("Cargando plantilla", async () => {
       const code = templateSelect.value;
       const response = await fetch(`data/channel-templates/${code}.json`);
@@ -198,7 +212,7 @@
       el("table", {}, el("thead", {}, el("tr", {}, el("th", { text: "Ajuste" }), el("th", { text: "Valor" }), el("th", { text: "Estado" }))), settingsBody),
       el("div", { className: "actions" }, buttons["write-settings"]),
       el("h3", { text: "Canales (999)" }),
-      el("div", { className: "actions" }, templateSelect, buttons.template, buttons.csv, buttons["write-channels"]),
+      el("div", { className: "actions" }, templateSelect, buttons.template, buttons["import-csv"], csvInput, buttons.csv, buttons["csv-tk11"], buttons["write-channels"]),
       el("table", {}, el("thead", {}, el("tr", {}, el("th", { text: "Canal" }), el("th", { text: "Nombre" }), el("th", { text: "RX MHz" }),
         el("th", { text: "Desplazamiento MHz" }), el("th", { text: "Direccion" }), el("th", { text: "Modo" }), el("th", { text: "Potencia" }))), channelsBody),
       el("h3", { text: "Memoria" }),

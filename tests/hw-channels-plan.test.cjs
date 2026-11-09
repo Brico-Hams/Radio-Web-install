@@ -103,6 +103,35 @@ test("a plan writes memories 1..N with a scan list per zone and reads back clean
   assert.equal(check.zones.find(zone => zone.zone === "Madrid").ok, false);
 });
 
+test("an empty bank is planned from the default F4HWN record and reads back", () => {
+  const empty = R.deleteQuanshengChannel(configuration(), 1);
+  assert.equal(R.readQuanshengChannels(empty).length, 0);
+  const files = {
+    "air.csv": csv([airport("LECU", "GND", "121.800000", "Madrid")]),
+    "rep.csv": csv([repeater("ED7YAA", "145.775000")]),
+    "pmr.csv": csv([pmr(1), cb(1, "AM", "26.965000")])
+  };
+  const plan = H.buildBankPlan([
+    { csv: "rep.csv", zoneBy: "district" }, { csv: "air.csv", zoneBy: "community" }, { csv: "pmr.csv", filter: { zone: "PMR446" }, zoneBy: "service" }
+  ], { readText: name => files[name], communityOf });
+  const planned = H.planBankImage(empty, plan.channels);
+  assert.deepEqual(H.verifyBank(planned.image, plan.channels).problems, []);
+  const decoded = R.readQuanshengChannels(planned.image);
+  assert.equal(decoded.length, plan.channels.length);
+  plan.channels.forEach((channel, index) => {
+    const found = decoded[index];
+    assert.deepEqual([found.rx, found.mode, found.rxOnly, found.scanList], [channel.rx, channel.mode, channel.rxOnly, channel.scanList]);
+  });
+  const pmr1 = decoded.find(channel => channel.name === "PMR01");
+  assert.equal(pmr1.narrow, true);
+  const record = planned.image.subarray(16 * decoded.indexOf(pmr1), 16 * decoded.indexOf(pmr1) + 16);
+  assert.deepEqual([record[8], record[9], record[10], record[12] & 0x3d, record[13], record[14], record[15]], [0, 0, 0, 0, 0, 4, 0]);
+  // appendQuanshengChannels (the web importer) accepts template 0 on the empty image too.
+  const appended = R.appendQuanshengChannels(empty, plan.channels, 0);
+  assert.equal(appended.added, plan.channels.length);
+  assert.throws(() => R.appendQuanshengChannels(empty, plan.channels, 5), /plantilla/);
+});
+
 test("the bank is replaced: old memories beyond the plan are cleared", () => {
   const original = configuration();
   const channels = H.buildBankPlan([{ csv: "p.csv", zoneBy: "service" }], { readText: () => csv([pmr(1), pmr(2)]), communityOf }).channels;

@@ -298,6 +298,223 @@
     });
     return rows.join("\r\n") + "\r\n";
   }
+  // TK-11 CSV: the column layout read by the TK-11 Manager import and produced by CHIRP-to-TK11-csv
+  // (https://github.com/nikantgr/CHIRP-to-TK11-csv, GPL-3.0, (c) 2025 Nikos K. Kantarakias). The CHIRP conversion
+  // below is ported from its convert_chirp_to_tk11.py; see ACKNOWLEDGEMENTS.md. The "Powrer" header spelling is
+  // part of that format and is kept on purpose. Meaning of MSW, the scan-list numbering and the PTTID/ScanList
+  // vocabulary beyond the values seen in that converter are UNVERIFIED against the TK-11 Manager itself.
+  const CSV_HEADER = Object.freeze(["No.", "Name", "RX Freq[MHZ]", "TX Freq[MHZ]", "QT Encode Type", "QT Encode1", "QT Decode Type",
+    "QT Decode", "MSW", "Band", "Powrer", "Busy Lock", "ScanList", "Demode", "Freq Reverse", "SQ", "Encrypt", "Signaling Decode", "PTTID", "Signal"]);
+  const CSV_QUOTED = new Set(["RX Freq[MHZ]", "TX Freq[MHZ]", "QT Encode1", "QT Decode", "MSW", "Band"]);
+  const CSV_DECIMAL = new Set(["RX Freq[MHZ]", "TX Freq[MHZ]", "QT Encode1", "QT Decode"]);
+  const CSV_NAME_MAX = 12;
+  const CSV_TX_OFF_HZ = 153000;
+  const CSV_PTT = ["OFF", "Start", "End", "Start & end"];
+  const CSV_POWER = { low: "Low", middle: "Mid", mid: "Mid", high: "High" };
+  const csvNumber = value => Number(String(value ?? "").trim().replace(",", "."));
+  const csvText = value => String(value ?? "").trim();
+
+  function parseCsv(text) {
+    const source = String(text).replace(/^\uFEFF/, "");
+    const rows = [];
+    let row = [];
+    let cell = "";
+    let quoted = false;
+    for (let index = 0; index < source.length; index++) {
+      const char = source[index];
+      if (quoted) {
+        if (char !== '"') cell += char;
+        else if (source[index + 1] === '"') { cell += '"'; index++; }
+        else quoted = false;
+      } else if (char === '"') quoted = true;
+      else if (char === ",") { row.push(cell); cell = ""; }
+      else if (char === "\n" || char === "\r") {
+        if (char === "\r" && source[index + 1] === "\n") index++;
+        row.push(cell); rows.push(row); row = []; cell = "";
+      } else cell += char;
+    }
+    R.assert(!quoted, "CSV con comillas sin cerrar.");
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    return rows.filter(items => items.some(item => item.trim() !== ""));
+  }
+  function csvRecords(text) {
+    const rows = parseCsv(text);
+    R.assert(rows.length, "El CSV esta vacio.");
+    const header = rows[0].map(name => name.trim());
+    return { header, records: rows.slice(1).map(items => Object.fromEntries(header.map((name, index) => [name, items[index] ?? ""]))) };
+  }
+
+  function csvToneCell(tone) {
+    if (!tone) return ["Null", "Null"];
+    if (tone.type === "CTCSS") return ["Ctcss", Number(tone.value).toFixed(1)];
+    return [tone.type === "DCS" ? "NDCS" : "IDCS", String(tone.value).padStart(3, "0")];
+  }
+  // One object per slot (null = empty slot), keyed by the TK-11 CSV header.
+  function channelsToTk11Rows(channels) {
+    const last = channels.reduce((found, channel, index) => channel ? index : found, -1);
+    return channels.slice(0, last + 1).map((channel, index) => {
+      if (!channel) return null;
+      const delta = channel.direction === "+" ? channel.offsetHz : channel.direction === "-" ? -channel.offsetHz : 0;
+      const [encodeType, encode] = csvToneCell(channel.txTone);
+      const [decodeType, decode] = csvToneCell(channel.rxTone);
+      return {
+        "No.": String(index + 1), Name: channel.name.slice(0, CSV_NAME_MAX), "RX Freq[MHZ]": (channel.rxHz / 1e6).toFixed(5),
+        "TX Freq[MHZ]": ((channel.rxHz + delta) / 1e6).toFixed(5), "QT Encode Type": encodeType, "QT Encode1": encode,
+        "QT Decode Type": decodeType, "QT Decode": decode, MSW: "2K", Band: channel.narrow ? "12.5K" : "25K",
+        Powrer: channel.power === "Mid" ? "Middle" : channel.power, "Busy Lock": channel.busyLock ? "ON" : "OFF",
+        ScanList: channel.scanList === null ? "None" : String(channel.scanList + 1), Demode: channel.mode,
+        "Freq Reverse": channel.reverse ? "ON" : "OFF", SQ: String(channel.squelch), Encrypt: channel.encrypt ? String(channel.encrypt) : "OFF",
+        "Signaling Decode": "OFF", PTTID: CSV_PTT[PTT_IDS.indexOf(channel.pttId)] ?? "OFF", Signal: channel.signal
+      };
+    });
+  }
+  // options.quote quotes the numeric columns like the "-quotes" output of the converter; options.decimal "," writes comma decimals.
+  function tk11RowsToCsv(rows, options = {}) {
+    const decimal = options.decimal === "," ? "," : ".";
+    const format = (name, value) => {
+      let text = String(value ?? "");
+      if (decimal === "," && CSV_DECIMAL.has(name) && text && text !== "Null") text = text.replace(".", ",");
+      const needs = /[",\r\n]/.test(text);
+      return needs || ((options.quote || decimal === ",") && CSV_QUOTED.has(name)) ? `"${text.replaceAll('"', '""')}"` : text;
+    };
+    const lines = [CSV_HEADER.join(",")];
+    rows.forEach((row, index) => {
+      lines.push(row && row["RX Freq[MHZ]"] !== undefined
+        ? CSV_HEADER.map(name => format(name, name === "No." ? row[name] ?? String(index + 1) : row[name])).join(",")
+        : `${row?.["No."] ?? index + 1}${",".repeat(CSV_HEADER.length - 1)}`);
+    });
+    return lines.join("\r\n") + "\r\n";
+  }
+  const channelsToTk11Csv = (channels, options) => tk11RowsToCsv(channelsToTk11Rows(channels), options);
+
+  function chirpTx(frequency, duplex, offset) {
+    const rx = parseFloat(frequency);
+    if (!Number.isFinite(rx)) return frequency;
+    const delta = parseFloat(offset);
+    if (duplex === "-") return (rx - delta).toFixed(5);
+    if (duplex === "+") return (rx + delta).toFixed(5);
+    if (duplex === "split") return delta.toFixed(5);
+    if (duplex === "off") return (CSV_TX_OFF_HZ / 1e6).toFixed(5);
+    return rx.toFixed(5);
+  }
+  function chirpTones(row) {
+    const polarity = row.DtcsPolarity ?? "NN";
+    const dcsType = char => char === "N" ? "NDCS" : char === "R" ? "IDCS" : "Null";
+    const txPolarity = dcsType(polarity[0] || "N");
+    const rxPolarity = dcsType(polarity[1] || "N");
+    const or = value => value || "Null";
+    const result = { encodeType: "Null", encode: "Null", decodeType: "Null", decode: "Null" };
+    const tone = row.Tone ?? "";
+    if (tone === "Tone") Object.assign(result, { encodeType: "Ctcss", encode: or(row.rToneFreq) });
+    else if (tone === "TSQL") Object.assign(result, { encodeType: "Ctcss", encode: or(row.cToneFreq), decodeType: "Ctcss", decode: or(row.cToneFreq) });
+    else if (tone === "DTCS") Object.assign(result, { encodeType: txPolarity, encode: or(row.DtcsCode), decodeType: rxPolarity, decode: or(row.DtcsCode) });
+    else if (tone === "DTCS-R") Object.assign(result, { encodeType: txPolarity, encode: or(row.DtcsCode), decodeType: "IDCS", decode: or(row.RxDtcsCode) });
+    else if (tone === "Cross" && row.CrossMode) {
+      const [txMode, rxMode] = row.CrossMode.includes("->") ? row.CrossMode.split("->") : ["None", "None"];
+      if (txMode === "Tone") Object.assign(result, { encodeType: "Ctcss", encode: or(row.rToneFreq) });
+      else if (txMode === "DTCS") Object.assign(result, { encodeType: txPolarity, encode: or(row.DtcsCode) });
+      if (rxMode === "Tone") Object.assign(result, { decodeType: "Ctcss", decode: or(row.cToneFreq) });
+      else if (rxMode === "DTCS") Object.assign(result, { decodeType: rxPolarity, decode: or(row.RxDtcsCode) });
+    }
+    return result;
+  }
+  // CHIRP CSV records (objects keyed by CHIRP's header) to TK-11 rows, one per location from the lowest to the highest used;
+  // missing or blank locations become empty rows ({"No."} only) so the numbering stays contiguous from 1.
+  function chirpToTk11Rows(records) {
+    const byLocation = new Map();
+    for (const record of records) {
+      const location = csvText(record.Location);
+      if (!location) continue;
+      R.assert(/^\d+$/.test(location), `Location de CHIRP no valida: ${location}.`);
+      byLocation.set(Number(location), record);
+    }
+    if (!byLocation.size) return [];
+    const locations = [...byLocation.keys()];
+    const rows = [];
+    for (let location = Math.min(...locations); location <= Math.max(...locations); location++) {
+      const row = byLocation.get(location);
+      const number = String(rows.length + 1);
+      if (!row || Object.entries(row).every(([key, value]) => key === "Location" || !csvText(value))) { rows.push({ "No.": number }); continue; }
+      const frequency = csvText(row.Frequency);
+      R.assert(frequency && Number.isFinite(parseFloat(frequency)), `Frecuencia no valida en la location ${location} de CHIRP.`);
+      const mode = csvText(row.Mode) || "FM";
+      const tones = chirpTones(row);
+      rows.push({
+        "No.": number, Name: (row.Name ?? "").slice(0, CSV_NAME_MAX), "RX Freq[MHZ]": parseFloat(frequency).toFixed(5),
+        "TX Freq[MHZ]": chirpTx(frequency, csvText(row.Duplex), csvText(row.Offset) || "0.0"),
+        "QT Encode Type": tones.encodeType, "QT Encode1": tones.encode, "QT Decode Type": tones.decodeType, "QT Decode": tones.decode,
+        MSW: "2K", Band: mode === "NFM" ? "12.5K" : "25K", Powrer: { Low: "Low", High: "High" }[csvText(row.Power)] ?? "Middle", "Busy Lock": "OFF",
+        ScanList: "1", Demode: MODES.includes(mode) ? mode : "FM", "Freq Reverse": "OFF", SQ: "3", Encrypt: "OFF",
+        "Signaling Decode": "OFF", PTTID: "OFF", Signal: "DTMF"
+      });
+    }
+    return rows;
+  }
+  function chirpCsvToTk11Csv(text, options) {
+    const { header, records } = csvRecords(text);
+    R.assert(header.includes("Location") && header.includes("Frequency"), "No es un CSV de CHIRP (faltan Location y Frequency).");
+    return tk11RowsToCsv(chirpToTk11Rows(records), options);
+  }
+
+  function csvTone(type, value) {
+    const key = csvText(type).toLowerCase();
+    if (!key || key === "null") return null;
+    const kind = { ctcss: "CTCSS", ndcs: "DCS", idcs: "DCS-I" }[key];
+    R.assert(kind, `Tipo de tono CSV desconocido: ${type}.`);
+    const number = csvNumber(value);
+    R.assert(Number.isFinite(number), `Valor de tono CSV no valido: ${value}.`);
+    return { type: kind, value: number };
+  }
+  function channelFromRow(row) {
+    const rxText = csvText(row["RX Freq[MHZ]"]);
+    if (!rxText) return null;
+    const rxHz = Math.round(csvNumber(rxText) * 1e6 / 10) * 10;
+    R.assert(Number.isFinite(rxHz), `Frecuencia RX no valida: ${rxText}.`);
+    const txText = csvText(row["TX Freq[MHZ]"]);
+    const txHz = txText ? Math.round(csvNumber(txText) * 1e6 / 10) * 10 : rxHz;
+    R.assert(Number.isFinite(txHz), `Frecuencia TX no valida: ${txText}.`);
+    const power = CSV_POWER[csvText(row.Powrer).toLowerCase()];
+    const ptt = CSV_PTT.findIndex(name => name.toLowerCase() === csvText(row.PTTID).toLowerCase());
+    const scan = csvText(row.ScanList);
+    const encrypt = csvText(row.Encrypt);
+    const squelch = csvText(row.SQ);
+    const demode = csvText(row.Demode).toUpperCase() || "FM";
+    return {
+      rxHz, offsetHz: Math.abs(txHz - rxHz), direction: txHz > rxHz ? "+" : txHz < rxHz ? "-" : "",
+      rxTone: csvTone(row["QT Decode Type"], row["QT Decode"]), txTone: csvTone(row["QT Encode Type"], row["QT Encode1"]),
+      narrow: demode === "NFM" || csvText(row.Band).toUpperCase() === "12.5K", power: power ?? "Low", busyLock: csvText(row["Busy Lock"]).toUpperCase() === "ON",
+      reverse: csvText(row["Freq Reverse"]).toUpperCase() === "ON", pttId: PTT_IDS[ptt < 0 ? 0 : ptt], mode: demode === "NFM" ? "FM" : demode,
+      scanList: /^\d+$/.test(scan) ? Number(scan) - 1 : null, squelch: squelch ? Number(squelch) : 4,
+      encrypt: /^\d+$/.test(encrypt) ? Number(encrypt) : 0, name: csvText(row.Name).replace(/[^\x20-\x7e]/g, "?").slice(0, 16),
+      signal: csvText(row.Signal).toUpperCase() === "5TONE" ? "5TONE" : "DTMF"
+    };
+  }
+  // Accepts a TK-11 CSV or a CHIRP CSV (detected from the header). Rows that fail validation are skipped and reported;
+  // nothing is written to the radio here.
+  function channelsFromCsv(text) {
+    const { header, records } = csvRecords(text);
+    let format = "tk11";
+    let rows = records;
+    if (header.includes("RX Freq[MHZ]") && header.includes("TX Freq[MHZ]")) format = "tk11";
+    else if (header.includes("Location") && header.includes("Frequency")) { format = "chirp"; rows = chirpToTk11Rows(records); }
+    else R.assert(false, "Formato CSV no reconocido: se esperaba TK-11 Manager o CHIRP.");
+    const channels = [];
+    const skipped = [];
+    rows.forEach((row, position) => {
+      const number = /^\d+$/.test(csvText(row["No."])) ? Number(row["No."]) : position + 1;
+      try {
+        R.assert(number >= 1 && number <= CHANNELS, `Numero de canal fuera de 1-${CHANNELS}.`);
+        const channel = channelFromRow(row);
+        if (!channel) return;
+        encodeChannel(channel);
+        R.assert(channels[number - 1] === undefined, "Numero de canal repetido.");
+        channels[number - 1] = channel;
+      } catch (error) {
+        skipped.push({ row: number, reason: error.message });
+      }
+    });
+    return { format, channels: Array.from(channels, channel => channel ?? null), skipped };
+  }
   function hexDump(data, start = 0, length = data.length - start) {
     const lines = [];
     for (let index = start; index < start + length; index += 16) {
@@ -460,7 +677,8 @@
     TK11Connector,
     TK11: Object.freeze({ MEMORY_SIZE, CHUNK, CHANNELS, BASE, CMD, OFFSETS, WRITABLE, SETTINGS, frame, unframe, crc16, header,
       assertWritable, usageFlag, decodeChannel, encodeChannel, decodeChannels, encodeChannels, decodeSettings, encodeSettings,
-      decodeFm, channelsToCsv, channelsFromTemplate, hexDump, hex })
+      decodeFm, channelsToCsv, channelsFromTemplate, hexDump, hex, CSV_HEADER, parseCsv, channelsToTk11Rows, tk11RowsToCsv, channelsToTk11Csv,
+      chirpToTk11Rows, chirpCsvToTk11Csv, channelsFromCsv })
   });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

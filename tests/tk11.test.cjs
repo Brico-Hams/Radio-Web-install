@@ -230,6 +230,61 @@ test("channel write encodes 999 slots with usage flags through the verified path
   assert.ok(radio.writes.every(write => write.offset < 0x11400));
 });
 
+test("CHIRP CSV converts to the TK-11 CSV layout (port of CHIRP-to-TK11-csv) and imports back into channels", () => {
+  const chirp = [
+    "Location,Name,Frequency,Duplex,Offset,Tone,rToneFreq,cToneFreq,DtcsCode,DtcsPolarity,RxDtcsCode,CrossMode,Mode,TStep,Skip,Power,Comment",
+    "1,PMR01,446.006250,off,0.000000,,88.5,88.5,023,NN,023,Tone->Tone,NFM,6.25,,Low,solo RX",
+    '3,EDYAR LONGNAME,145.675000,-,0.600000,Tone,77.0,77.0,023,NN,023,Tone->Tone,FM,25.00,,High,"a, b"',
+    "4,DCS,433.500000,+,1.600000,DTCS,88.5,88.5,047,NR,047,Tone->Tone,FM,25.00,,Mid,",
+    "5,CROSS,433.600000,,0.000000,Cross,88.5,100.0,023,NN,051,Tone->DTCS,AM,25.00,,Low,"
+  ].join("\n");
+  const lines = T.chirpCsvToTk11Csv(chirp).trimEnd().split("\r\n");
+  assert.equal(lines[0], "No.,Name,RX Freq[MHZ],TX Freq[MHZ],QT Encode Type,QT Encode1,QT Decode Type,QT Decode,MSW,Band,Powrer,Busy Lock,ScanList,Demode,Freq Reverse,SQ,Encrypt,Signaling Decode,PTTID,Signal");
+  assert.equal(lines.length, 6);
+  assert.equal(lines[1], "1,PMR01,446.00625,0.15300,Null,Null,Null,Null,2K,12.5K,Low,OFF,1,FM,OFF,3,OFF,OFF,OFF,DTMF");
+  assert.equal(lines[2], "2" + ",".repeat(19));
+  assert.equal(lines[3], "3,EDYAR LONGNA,145.67500,145.07500,Ctcss,77.0,Null,Null,2K,25K,High,OFF,1,FM,OFF,3,OFF,OFF,OFF,DTMF");
+  assert.equal(lines[4], "4,DCS,433.50000,435.10000,NDCS,047,IDCS,047,2K,25K,Middle,OFF,1,FM,OFF,3,OFF,OFF,OFF,DTMF");
+  assert.equal(lines[5], "5,CROSS,433.60000,433.60000,Ctcss,88.5,NDCS,051,2K,25K,Low,OFF,1,AM,OFF,3,OFF,OFF,OFF,DTMF");
+  assert.ok(T.chirpCsvToTk11Csv(chirp, { quote: true }).includes('"145.67500","145.07500",Ctcss,"77.0",Null,"Null","2K","25K",High'));
+  assert.ok(T.chirpCsvToTk11Csv(chirp, { decimal: "," }).includes('"145,67500","145,07500",Ctcss,"77,0",Null,"Null","2K","25K",High'));
+  assert.throws(() => T.chirpCsvToTk11Csv("No.,Name\n1,A"), /CHIRP/);
+
+  const result = T.channelsFromCsv(chirp);
+  assert.equal(result.format, "chirp");
+  assert.deepEqual(result.skipped, []);
+  assert.equal(result.channels.length, 5);
+  assert.equal(result.channels[1], null);
+  const [pmr, , repeater, dcs, cross] = result.channels;
+  assert.deepEqual([pmr.rxHz, pmr.direction, pmr.offsetHz, pmr.narrow, pmr.power], [446006250, "-", 445853250, true, "Low"]);
+  assert.deepEqual([repeater.name, repeater.direction, repeater.offsetHz, repeater.power, repeater.rxTone], ["EDYAR LONGNA", "-", 600000, "High", null]);
+  assert.deepEqual(repeater.txTone, { type: "CTCSS", value: 77 });
+  assert.deepEqual([dcs.direction, dcs.offsetHz, dcs.power, dcs.txTone, dcs.rxTone], ["+", 1600000, "Mid", { type: "DCS", value: 47 }, { type: "DCS-I", value: 47 }]);
+  assert.deepEqual([cross.mode, cross.txTone, cross.rxTone], ["AM", { type: "CTCSS", value: 88.5 }, { type: "DCS", value: 51 }]);
+
+  for (const options of [undefined, { quote: true }, { decimal: "," }]) {
+    const again = T.channelsFromCsv(T.channelsToTk11Csv(result.channels, options));
+    assert.equal(again.format, "tk11");
+    assert.deepEqual(again.channels, result.channels);
+    assert.deepEqual(T.channelsFromCsv(T.chirpCsvToTk11Csv(chirp, options)).channels, result.channels);
+  }
+  assert.equal(T.channelsToTk11Csv([null, null]).trimEnd().split("\r\n").length, 1);
+});
+
+test("TK-11 CSV import skips invalid rows with a reason and rejects unknown layouts", () => {
+  const header = T.CSV_HEADER.join(",");
+  const csv = `${header}\r\n1,BAD,5000.00000,5000.00000,Null,Null,Null,Null,2K,25K,Low,OFF,1,FM,OFF,3,OFF,OFF,OFF,DTMF\r\n` +
+    "2,OK,145.50000,145.50000,Null,Null,Null,Null,2K,25K,Low,OFF,None,FM,OFF,3,OFF,OFF,Start & end,5TONE\r\n";
+  const result = T.channelsFromCsv(`\uFEFF${csv}`);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].row, 1);
+  assert.match(result.skipped[0].reason, /fuera de rango/);
+  assert.equal(result.channels[0], null);
+  assert.deepEqual([result.channels[1].scanList, result.channels[1].pttId, result.channels[1].signal], [null, "Start+End", "5TONE"]);
+  assert.throws(() => T.channelsFromCsv("a,b\n1,2"), /Formato CSV no reconocido/);
+  assert.throws(() => T.parseCsv('a,"b'), /comillas/);
+});
+
 test("channels export to CSV and the hex viewer formats offsets", () => {
   const csv = T.channelsToCsv([{ name: 'A"B', rxHz: 145500000, offsetHz: 0, direction: "", mode: "FM", power: "Low", narrow: false }]);
   assert.match(csv, /^Location,Name,Frequency/);

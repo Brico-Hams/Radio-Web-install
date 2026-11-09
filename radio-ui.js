@@ -1165,8 +1165,7 @@
         const chosen = Number($("plan-template")?.value);
         if (chosen) return chosen;
         const fm = R.readQuanshengChannels(image).find(channel => channel.mode === 0);
-        R.assert(fm, "El walkie necesita al menos un canal FM que sirva de plantilla para cargar canales de catalogo.");
-        return fm.number;
+        return fm ? fm.number : 0;
       }
       // Memories are built before inserting: an insertion may move the template channel.
       function memoriesOf(items) {

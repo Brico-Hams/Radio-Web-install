@@ -837,8 +837,8 @@
       stagedEntries: () => [...staged.values()],
       addTemplateChannels(channels) {
         const template = templates().find(channel => channel.mode === 0);
-        R.assert(template, "Lee o abre primero un archivo con al menos un canal FM.");
-        return importChannels(channels, template.number);
+        R.assert(template || page === "quansheng", "Lee o abre primero un archivo con al menos un canal FM.");
+        return importChannels(channels, template ? template.number : 0);
       },
       refreshTemplates
     };

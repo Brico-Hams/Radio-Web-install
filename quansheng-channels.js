@@ -56,18 +56,40 @@
     }
     return channels;
   }
+  // Record of a new FM channel when the bank has no channel to copy (empty bank). 16 bytes, F4HWN/CHIRP uv-k5 layout;
+  // frequency and offset are filled by plannedMemory, the rest keeps the conservative defaults of a new web channel:
+  //   0-3   RX frequency, u32 LE, 10 Hz units          (set per channel)
+  //   4-7   TX offset, u32 LE, 10 Hz units             (set per channel)
+  //   8     RX CTCSS/DCS code                          0 = none
+  //   9     TX CTCSS/DCS code                          0 = none
+  //   10    tone flags (TX high nibble, RX low nibble) 0 = no tone
+  //   11    modulation (high nibble) | offset direction (low nibble)   0 = FM, no offset
+  //   12    bit0 reverse=0, bit1 bandwidth 0 = wide (plannedMemory sets narrow when asked; FM default is NOT narrow),
+  //         bits2-3 TX power 0 = low, bit4 busy-lockout off, bit6 TX lock (plannedMemory sets it: RX only)
+  //   13    DTMF flags 0 = off
+  //   14    step index, CHIRP STEPS order [2.5, 5, 6.25, 10, 12.5, 25, 8.33] kHz: 4 = 12.5 kHz
+  //   15    scrambler 0 = off (compander is a radio setting, not in the record)
+  function defaultQuanshengRecord() {
+    const record = new Uint8Array(16);
+    record[14] = 4;
+    return record;
+  }
+  // The template is a channel number, or 0/undefined for the default record (empty bank).
+  function templateRecordFor(image, templateNumber, available) {
+    if (!templateNumber) return defaultQuanshengRecord();
+    R.assert(available(templateNumber), "Selecciona un canal FM existente como plantilla Quansheng.");
+    return memoryAt(image, templateNumber).record;
+  }
   function appendQuanshengChannels(image, channels, templateNumber, options = {}) {
     configuration(image);
     R.assert(Array.isArray(channels) && channels.length > 0 && channels.length <= 1024, "Selecciona 1-1024 canales.");
     const existing = readQuanshengChannels(image);
-    const template = existing.find(channel => channel.number === templateNumber);
-    R.assert(template && template.mode === 0, "Selecciona un canal FM existente como plantilla Quansheng.");
-    const source = positions(templateNumber);
+    const templateRecord = templateRecordFor(image, templateNumber,
+      number => existing.some(channel => channel.number === number && channel.mode === 0));
     const targetList = scanList(options.scanList ?? 25);
     const result = image.slice();
     const identity = channel => `${channel.name}:${channel.rx}:${channel.tx}:${channel.mode}`;
     const known = new Set(existing.filter(channel => channel.rxOnly).map(identity));
-    const templateRecord = image.slice(source.record, source.record + 16);
     let added = 0;
     let duplicates = 0;
     for (const channel of channels) {
@@ -215,9 +237,9 @@
   }
   function plannedQuanshengMemory(image, channel, templateNumber, list = 25) {
     configuration(image);
-    R.assert(occupied(image, templateNumber) && (image[positions(templateNumber).record + 11] >>> 4) === 0,
-      "Selecciona un canal FM existente como plantilla Quansheng.");
-    return plannedMemory(memoryAt(image, templateNumber).record, channel, scanList(list));
+    const templateRecord = templateRecordFor(image, templateNumber,
+      number => occupied(image, number) && (image[positions(number).record + 11] >>> 4) === 0);
+    return plannedMemory(templateRecord, channel, scanList(list));
   }
   // Inserts a memory at a position; the occupied memories from there move down one place, up to the next free one.
   function insertQuanshengMemory(image, memory, position) {
@@ -288,7 +310,7 @@
     restored.set(backup.subarray(0, 0x8800));
     return restored;
   }
-  Object.assign(R, { QUANSHENG_CONFIG_SIZE: CONFIG_SIZE, QUANSHENG_CTCSS: CTCSS, readQuanshengChannels, appendQuanshengChannels, restoreQuanshengChannels,
+  Object.assign(R, { QUANSHENG_CONFIG_SIZE: CONFIG_SIZE, QUANSHENG_CTCSS: CTCSS, defaultQuanshengRecord, readQuanshengChannels, appendQuanshengChannels, restoreQuanshengChannels,
     updateQuanshengChannel, deleteQuanshengChannel, copyQuanshengChannel, moveQuanshengChannel, assignQuanshengScanList,
     groupQuanshengChannels, readQuanshengMemory, plannedQuanshengMemory, insertQuanshengMemory, moveQuanshengChannels });
   if (typeof module !== "undefined") module.exports = R;

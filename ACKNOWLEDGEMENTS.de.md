@@ -12,6 +12,7 @@ Die nativen Werkzeuge für Viewer/Tastatur, Neustart, Wartung, DFU, App-Verwaltu
 | --- | --- | --- |
 | [OpenGD77-Web-CPS (grid.radio)](https://grid.radio/opengd77/) | CPS-Protokoll `C`/`R`/`W`/`X`, Modi, Speicherbelegung, Treiberanleitung | Website Dritter |
 | [OpenGD77](https://www.opengd77.com/) · [open-ham/OpenGD77](https://github.com/open-ham/OpenGD77) | Codeplug-Format und benutzerdefinierter Datenblock (Satelliten vom Typ 3) | GPL-2.0 |
+| [CHIRP-to-TK11-csv](https://github.com/nikantgr/CHIRP-to-TK11-csv) `convert_chirp_to_tk11.py` (© 2025 Nikos K. Kantarakias, SY1EBE) | TK-11-CSV-Importformat (Spalten, Werte, Töne) und Umwandlung von CHIRP nach TK-11; die Logik von `chirpToTk11Rows` und `tk11RowsToCsv` in `tk11-connector.js` ist eine geänderte JavaScript-Portierung (Leistung aus CHIRP übernommen, keine Regionalvariante) | GPL-3.0 |
 | [F4HWN · armel/uv-k1-k5v3-firmware-custom](https://github.com/armel/uv-k1-k5v3-firmware-custom) und dessen [Wiki](https://github.com/armel/uv-k1-k5v3-firmware-custom/wiki) | UART, Multiboot, Multiconfig, Slots, CRC | Apache-2.0 |
 | [UV Studio](https://armel.github.io/uvstudio/) | Slot-/Sicherungsablauf und LCD/RF-Log-Interoperabilitätsreferenz; festgelegte Revision `e7aa946f6de002559e1aaf3f91765db7fc2ed567`. Der Web-Viewer ist unabhängig implementiert, keine Kopie des Website-Codes | Website Dritter |
 | [egzumer/uv-k5-firmware-custom](https://github.com/egzumer/uv-k5-firmware-custom) | Vorgänger der F4HWN-Firmware und ihres Protokolls | Apache-2.0 |
