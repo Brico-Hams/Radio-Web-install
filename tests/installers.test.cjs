@@ -55,6 +55,8 @@ test("los instalables incluyen el catalogo y todos los recursos web permitidos",
       assert(build.includes('"$root"/docs/manuals/*.pdf'));
       continue;
     }
+    // The signed OTA manifest only exists for the Pages channel; installed copies never self-update the APK.
+    if (file === "radicodex-update.json") continue;
     if (file === "data/firmware-catalog-fallback.json") {
       assert(build.includes('cp "$root/data/firmware-catalog-fallback.json"'));
       continue;
