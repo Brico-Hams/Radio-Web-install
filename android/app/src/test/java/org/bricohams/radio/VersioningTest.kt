@@ -59,6 +59,7 @@ class VersioningTest {
         assertEquals("Hi\n• one", Changelog.load(17, "en-US") { files[it] })
         assertEquals("Hola\n• uno", Changelog.load(17, "fr") { files[it] })
         assertNull(Changelog.load(18, "es") { files[it] })
+        assertEquals("• uno", Changelog.load(17, "es", dropTitle = true) { files[it] })
     }
 
     @Test

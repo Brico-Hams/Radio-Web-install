@@ -601,6 +601,19 @@
     <string name="live_compass_missing">Ce téléphone n\'a pas de boussole : seul Nord en haut est affiché.</string>
     <string name="live_compass_waiting">En attente des données de la boussole…</string>
     <string name="live_compass_calibrate">Boussole imprécise : calibrez en bougeant le téléphone en huit, loin des métaux.</string>
+    <string name="pass_aim">Viser</string>
+    <string name="pass_aim_left">Tournez de %1$d° vers la gauche</string>
+    <string name="pass_aim_right">Tournez de %1$d° vers la droite</string>
+    <string name="pass_aim_up">Montez de %1$d°</string>
+    <string name="pass_aim_down">Descendez de %1$d°</string>
+    <string name="pass_aim_on_target">Sur la cible</string>
+    <string name="pass_aim_accuracy">Précision du capteur : %1$s</string>
+    <string name="pass_aim_acc_high">haute</string>
+    <string name="pass_aim_acc_medium">moyenne</string>
+    <string name="pass_aim_acc_low">faible</string>
+    <string name="pass_aim_acc_unreliable">non fiable</string>
+    <string name="pass_aim_calibrate">Calibrer la boussole (bougez le téléphone en huit)</string>
+    <string name="pass_open_chart">Graphique du passage et visée</string>
     <string name="live_point_abs">Visez ici : Az %1$.0f° · El %2$.0f°</string>
     <string name="live_point">Visez ici : %1$s · %2$s</string>
     <string name="live_point_ok">cap correct</string>
@@ -683,6 +696,7 @@
     <string name="pass_countdown_los">En cours, LOS dans %1$s</string>
     <string name="pass_finished">Terminé</string>
     <string name="pass_partial">" (tronqué par la fenêtre)"</string>
+    <string name="pass_start_unknown">" (en cours, début non calculé)"</string>
     <string name="pass_current">Actuellement az %1$.1f°, él %2$.1f°, %3$.0f km</string>
     <string name="pass_detail">%1$s\nAOS %2$s az %3$.0f°\nMax %4$s él %5$.1f°\nLOS %6$s az %7$.0f°\nPartiel début=%8$s fin=%9$s\nObservateur %10$.6f, %11$.6f, %12$.3f km; RX %13$d Hz\n%14$s</string>
     <string name="rotor_open">Rotor AZ/EL : préparer et suivre ce passage</string>

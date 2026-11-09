@@ -1569,7 +1569,7 @@ contraste, orientacion o legibilidad en la radio. No se han flasheado.
 
 ## Fase posterior solicitada: RadiCodex by BricoHams
 
-La APK nativa `1.0.2` incorpora libro de guardia con busqueda e importacion ADIF, ADIF/JSON,
+La APK nativa `1.1.0` incorpora libro de guardia con busqueda e importacion ADIF, ADIF/JSON,
 restauracion JSON, sesiones ARDF con historial/estadisticas y suma filtrada de segmentos,
 GPS puntual, Morse de texto/WAV experimental
 y CAT RX temporal por USB CDC ACM y adaptadores reconocidos CH34x/CP210x/FTDI/Prolific.

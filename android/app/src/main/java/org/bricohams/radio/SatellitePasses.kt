@@ -1,11 +1,6 @@
 package org.bricohams.radio
 
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Path
-import android.view.View
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -53,8 +48,8 @@ object SatellitePasses {
         val pass = track.plan.pass
         val day = DateTimeFormatter.ofPattern("dd/MM HH:mm:ss", Locale.ROOT).withZone(zone)
         val clock = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT).withZone(zone)
-        val cut = if (pass.partialStart || pass.partialEnd)
-            phrase(context, R.string.pass_partial, " (cortado por la ventana)") else ""
+        val cut = (if (pass.partialStart) phrase(context, R.string.pass_start_unknown, " (en curso, inicio no calculado)") else "") +
+            (if (pass.partialEnd) phrase(context, R.string.pass_partial, " (cortado por la ventana)") else "")
         return String.format(Locale.ROOT, "%s (%d)%s\nAOS %s  LOS %s  %d min\nMax %.1f°  Az %.0f° → %.0f°\n%s",
             track.plan.tle.name, track.plan.tle.norad, cut, day.format(Instant.ofEpochMilli(pass.aos.time)),
             clock.format(Instant.ofEpochMilli(pass.los.time)), (pass.los.time - pass.aos.time + 30000) / 60000,
@@ -67,72 +62,12 @@ object SatellitePasses {
             phrase(context, R.string.pass_current, "Ahora az %1\$.1f°, el %2\$.1f°, %3\$.0f km",
                 it.azimuth, it.elevation, it.rangeKm)
         } ?: countdown(pass, now, context)
-        return phrase(context, R.string.pass_detail, "%s\nAOS %s az %.0f°\nMax %s el %.1f°\nLOS %s az %.0f°\nParcial inicio=%s fin=%s\nObservador %.6f, %.6f, %.3f km; RX %d Hz\n%s",
+        val text = phrase(context, R.string.pass_detail, "%s\nAOS %s az %.0f°\nMax %s el %.1f°\nLOS %s az %.0f°\nParcial inicio=%s fin=%s\nObservador %.6f, %.6f, %.3f km; RX %d Hz\n%s",
             plan.tle.name, Instant.ofEpochMilli(pass.aos.time), pass.aos.azimuth, Instant.ofEpochMilli(pass.maximum.time),
             pass.maximum.elevation, Instant.ofEpochMilli(pass.los.time), pass.los.azimuth, pass.partialStart, pass.partialEnd,
             plan.observer.latitude, plan.observer.longitude, plan.observer.heightKm, plan.downlinkHz, position)
+        return if (pass.partialStart) text.replaceFirst(Regex("AOS [^\\n]*"),
+            phrase(context, R.string.pass_start_unknown, " (en curso, inicio no calculado)").trim(' ', '(', ')')) else text
     }
 }
 
-class PassRadarView(context: Context) : View(context) {
-    var track: List<SatelliteLook> = emptyList()
-        set(value) { field = value; trace(); invalidate() }
-    var now = 0L
-        set(value) { field = value; invalidate() }
-    private val density = resources.displayMetrics.density
-    private val ink = context.obtainStyledAttributes(intArrayOf(android.R.attr.textColorPrimary)).run {
-        try { getColor(0, Color.GRAY) } finally { recycle() }
-    }
-    private val grid = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = density; color = ink; alpha = 110 }
-    private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ink; textSize = 13 * density; textAlign = Paint.Align.CENTER }
-    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 3 * density; color = Brand.ORANGE
-    }
-    private val dot = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val path = Path()
-    private var cx = 0f
-    private var cy = 0f
-    private var radius = 0f
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val width = MeasureSpec.getSize(widthMeasureSpec)
-        setMeasuredDimension(width, minOf(width, (320 * density).toInt()))
-    }
-    override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
-        super.onSizeChanged(width, height, oldWidth, oldHeight)
-        cx = width / 2f
-        cy = height / 2f
-        radius = minOf(cx, cy) - 18 * density
-        trace()
-    }
-    // Built outside onDraw so the 1 s refresh does not reallocate the track.
-    private fun trace() {
-        path.reset()
-        track.forEachIndexed { index, look ->
-            val (x, y) = SatellitePasses.polar(look, radius)
-            if (index == 0) path.moveTo(cx + x, cy + y) else path.lineTo(cx + x, cy + y)
-        }
-    }
-    private fun mark(canvas: Canvas, look: SatelliteLook, color: Int, size: Float) {
-        val (x, y) = SatellitePasses.polar(look, radius)
-        dot.color = color
-        canvas.drawCircle(cx + x, cy + y, size * density, dot)
-    }
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        if (radius <= 0) return
-        for (elevation in 0..60 step 30) canvas.drawCircle(cx, cy, radius * (90 - elevation) / 90f, grid)
-        canvas.drawLine(cx - radius, cy, cx + radius, cy, grid)
-        canvas.drawLine(cx, cy - radius, cx, cy + radius, grid)
-        val offset = 5 * density
-        canvas.drawText("N", cx, cy - radius - offset, label)
-        canvas.drawText("S", cx, cy + radius + offset + label.textSize * 0.8f, label)
-        canvas.drawText("E", cx + radius + offset + label.textSize * 0.4f, cy + label.textSize * 0.4f, label)
-        canvas.drawText("O", cx - radius - offset - label.textSize * 0.4f, cy + label.textSize * 0.4f, label)
-        if (track.size >= 2) {
-            canvas.drawPath(path, line)
-            mark(canvas, track.first(), Color.rgb(46, 160, 67), 5f)
-            mark(canvas, track.last(), Color.rgb(207, 34, 46), 5f)
-        }
-        SatellitePasses.at(track, now)?.let { mark(canvas, it, Brand.ORANGE, 8f) }
-    }
-}

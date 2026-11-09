@@ -1,6 +1,6 @@
 # RadiCodex by BricoHams
 
-Versione 1.0.2 (versionCode 17): l'APK si chiama RadiCodex by BricoHams (identificatore `org.bricohams.radicodex`).
+Versione 1.1.0 (versionCode 18): l'APK si chiama RadiCodex by BricoHams (identificatore `org.bricohams.radicodex`). La 1.0.2 (versionCode 17) è la versione precedente pubblicata.
 
 Guida passo passo: [Tutorial di RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 
@@ -51,7 +51,7 @@ non è ancora stata modificata: la migrazione definitiva è ancora in sospeso.
 ## Installazione e dati
 
 Le APK di debug sono firmate con la chiave debug degli strumenti Android.
-L'APK di rilascio `RadiCodex-1.0.2.apk` è firmata con la chiave di rilascio di
+L'APK di rilascio `RadiCodex-1.1.0.apk` è firmata con la chiave di rilascio di
 RadiCodex solo se la release GitHub la include; verifica lo SHA-256 pubblicato
 insieme all'APK. Non viene distribuita tramite Google Play. Le funzioni indicate
 come sperimentali non sono ancora validate con una radio reale.
@@ -328,6 +328,12 @@ Un contesto Rhino condiviso esegue solo asset fissi, mai codice scaricato, senza
 
 Posizione, selezione e ultimo downlink per satellite restano privati, fuori dal JSON di campo. Nessun uplink dedotto; transponder lineari non supportati.
 
+### Grafico del passaggio e modalità Punta
+
+Toccando un passaggio (o **Grafico del passaggio e puntamento** in CAT) si apre il suo grafico polare: il centro è lo zenit (90°), il bordo l'orizzonte (0°), con anelli a 0°, 30° e 60° e i segni N, E, S, O. Viene disegnata tutta la traiettoria da AOS a LOS (un punto ogni 10 s) con indicatori di AOS, LOS ed elevazione massima; la parte già percorsa è grigia e il resto arancione (tratteggiato finché il passaggio non è iniziato). La posizione attuale del satellite si aggiorna ogni secondo. In alto compaiono il conto alla rovescia verso AOS o LOS, Az ed El attuali, altitudine e distanza, e sotto ogni trasmettitore con discesa e salita corrette per il Doppler per la tua posizione (manuale o GPS) e il suo modo.
+
+Tocca **Punta** per usare i sensori del telefono: il grafico ruota in modo che in alto ci sia la direzione verso cui indica il bordo superiore del telefono (in verticale o piatto), un mirino segna quella direzione e una freccia porta al satellite con un testo come «Gira di 23° a destra · Alza di 12°». Entro 5° di errore in azimut ed elevazione compare «Sul bersaglio». La direzione è riferita al nord vero (declinazione magnetica per posizione, altitudine e data). Con bassa precisione del sensore compare «Calibra la bussola (muovi il telefono a otto)»; tieni il telefono lontano da metalli e magneti. Senza sensori di orientamento resta il grafico con il nord in alto e ne viene spiegato il motivo. I sensori funzionano solo con la schermata visibile e in modalità Punta, e lo schermo resta acceso; uscendo si spengono. La precisione va ancora validata con telefoni reali.
+
 ### Doppler RX del passaggio selezionato
 
 Selezionare un passaggio apre CAT con un'istantanea di TLE, osservatore,
@@ -505,6 +511,58 @@ L'anteprima dell'immagine non sopravvive alla rotazione. Non esiste un servizio,
 registrazione in background, PTT, TX né decodifica continua in streaming:
 prima si acquisisce, poi si decodifica. Un risultato sintetico corretto
 non convalida la ricezione RF reale né il percorso microfono di un telefono.
+
+## Guida per modulo e radio CAT (1.1.0)
+
+Riepilogo di ogni modulo di RadiCodex 1.1.0: scopo, passi base e tabella delle radio con CAT via USB OTG. **Non trasmettere mai senza antenna o carico fittizio**: nessun passo di questa guida lo richiede e i test diagnostici solo ricevono.
+
+### Radio e CAT via OTG
+
+| Radio | Identificativo USB | Baud | Come attivare il CAT |
+| --- | --- | --- | --- |
+| Quansheng UV-K5 con BH Satellite | `0x36B7` | `38400` | Firmware v0.5.7: in SAT RX premi F+8 (CAT remoto); agisce sul VFO e torna alla tua frequenza. Firmware vecchio: SAT RX e tasto 8. |
+| Yaesu FTX-1 | `0x10C4:0xEA70` | `38400` | Porta Enhanced COM (CAT-1) con lo stesso CAT-1 RATE sulla radio; firmware MAIN 1.08 o successivo. |
+| (tr)uSDX | `0x1A86:0x7523` | `115200` | Firmware 2.00t o successivo; con uno precedente l'app prova `38400`. |
+| QRP Labs QMX+ | `0x0483:0xA34C` | `38400` | Porta COM USB virtuale; la velocità non conta. Senza antenna: non trasmettere con essa. |
+
+Le altre radio del menu CAT multiradio (FT-817/818, FT-857/897, IC-705, QDX) sono nei tutorial. Una radio che non risponde non viene forzata: controlla cavo, porta e baud.
+
+### Moduli: scopo e passi
+
+| Modulo | Scopo | Passi |
+| --- | --- | --- |
+| Registro | Registrare contatti General, POTA e SOTA con ADIF e JSON. | Crea il registro, aggiungi contatti, cerca, importa ADIF con anteprima o esporta. |
+| ARDF | Sessioni di radiogoniometria con GPS. | Avvia la sessione, annota le osservazioni e controlla statistiche e storico. |
+| Morse | Testo in Morse e audio WAV sperimentale. | Scrivi punti e linee o importa un WAV e controlla il risultato. |
+| SSTV | Immagini Robot36 da WAV, microfono o CAT. | Scegli il modo, ricevi o importa e salva il PNG; per la TX usa il tuo nominativo e un carico fittizio. |
+| CAT Quansheng | Sintonia remota in ricezione dell'UV-K5. | Collega via OTG, scegli il dispositivo, attiva il CAT sulla radio (tabella), sintonizza e premi STOP alla fine. |
+| CAT multiradio | Controllo di FTX-1, (tr)uSDX, QMX+ e altre radio. | Scegli modello e baud, collega, leggi o cambia frequenza e modo; PTT solo con carico fittizio confermato e mai con la QMX+. |
+| Modi digitali | FT8, FT4 e FT2 con decoder proprio (OSD e decodifica a priori). | Scegli modo e banda, ascolta l'audio USB o un WAV e controlla le decodifiche. |
+| Ricevitore dal vivo | Morse e Robot36 con il microfono. | Concedi il permesso, cattura fino a 60 s e decodifica. |
+| Satelliti | Passaggi SGP4, Doppler RX e mappa. | Aggiorna i TLE, imposta la posizione, scegli un passaggio e segui il Doppler. |
+| Editor canali Quansheng | Leggere e modificare i canali dell'UV-K5. | Fai il backup completo, modifica, scrivi e verifica la rilettura. |
+| OpenGD77 | Schermo e orologio UTC di una radio OpenGD77. | Collega, scegli il dispositivo e usa Schermo, Orologio o Ping. |
+| Diagnostica e Bridge | Provare radio e moduli senza trasmettere. | Premi Cerca e poi Prova o Prova tutto. |
+| Aggiornamenti | Aggiornare l'app (solo build GitHub). | Cerca, controlla e conferma l'installazione. |
+
+I TLE si scaricano da CelesTrak e, se fallisce, da SatNOGS e poi AMSAT; puoi anche importarli offline.
+
+### Diagnostica e Bridge
+
+Dalla Home apri Bridge USB / Diagnostica. Rileva le radio collegate via OTG (Quansheng, FTX-1, (tr)uSDX e QMX+) e verifica apertura USB, identificazione, lettura della frequenza, impostazione di una frequenza di prova in ricezione, rilettura e ripristino dell'originale. Non trasmette né scrive memorie.
+
+- Premi Cerca dispositivi USB e poi Prova su una radio, oppure **Prova tutto** per tutte le radio e i moduli.
+- Sulla Quansheng il test dei moduli legge collegamento, canali, calibrazione, slot, preset, ARDF e passaggi; la radio deve essere in SAT RX con il CAT attivo.
+- Condividi o salva il rapporto alla fine.
+- Il bridge TCP è opzionale: inoltra il CAT della radio scelta a un PC sulla rete locale senza autenticazione. Attivalo solo su una rete fidata e spegnilo dopo; funziona solo con lo schermo aperto.
+
+### Posizione GPS
+
+In Satelliti, Ottieni la posizione del telefono chiede il permesso di localizzazione, precisa o approssimata. Cerca fino a 180 s con GPS, rete e fused, mostra i satelliti visti e usati e affina la precisione prima che tu controlli e salvi. Con il permesso approssimato la precisione è di diversi km, sufficiente per i passaggi. Se non arriva la posizione, esci all'aperto, controlla la localizzazione del telefono, usa l'ultima posizione salvata o scrivi le coordinate. La posizione resta sul telefono.
+
+### Aggiornamenti (OTA)
+
+Solo nella build GitHub; la build F-Droid non ha l'aggiornatore. Home e Aggiornamenti cerca nuove versioni a mano o ogni giorno, di default su reti non a consumo. Prima dell'installer Android si verificano firma del manifest, SHA-256, dimensione, pacchetto e certificato; Android chiede sempre la tua conferma e non ci sono installazioni silenziose. Dopo l'aggiornamento l'app mostra le novità e avvisa anche quando cambia il firmware di una radio collegata.
 
 ## Compilazione
 

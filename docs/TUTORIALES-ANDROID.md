@@ -12,7 +12,7 @@ Guía paso a paso de la APK única de RadiCodex by BricoHams (`org.bricohams.rad
 
 1. Descarga la APK y comprueba su SHA-256 publicado (ver [RadiCodex by BricoHams](ANDROID.md)).
 2. Abre el archivo desde el gestor de archivos o el navegador. Android pedirá autorizar la instalación desde esa aplicación: acéptalo solo para este paso.
-3. La APK no se distribuye por Google Play. Las APK de depuración usan la clave debug; la APK de publicación `RadiCodex-1.0.2.apk` solo está firmada con la clave de publicación si la release la incluye (comprueba su SHA-256).
+3. La APK no se distribuye por Google Play. Las APK de depuración usan la clave debug; la APK de publicación `RadiCodex-1.1.0.apk` solo está firmada con la clave de publicación si la release la incluye (comprueba su SHA-256).
 4. Abre RadiCodex. Verás el aviso "Datos locales. Exporta tus datos antes de desinstalar."
 
 **Resultado esperado:** pantalla principal con las secciones "Tu estación de radio", "Radio y recepción", "Tus datos y copias" y "Alcance y privacidad".

@@ -602,6 +602,19 @@
     <string name="live_compass_missing">Dieses Handy hat keinen Kompass: es wird nur Nord oben angezeigt.</string>
     <string name="live_compass_waiting">Warte auf Kompassdaten…</string>
     <string name="live_compass_calibrate">Kompass ungenau: Handy in Achterform bewegen und von Metall fernhalten.</string>
+    <string name="pass_aim">Zielen</string>
+    <string name="pass_aim_left">%1$d° nach links drehen</string>
+    <string name="pass_aim_right">%1$d° nach rechts drehen</string>
+    <string name="pass_aim_up">%1$d° anheben</string>
+    <string name="pass_aim_down">%1$d° senken</string>
+    <string name="pass_aim_on_target">Im Ziel</string>
+    <string name="pass_aim_accuracy">Sensorgenauigkeit: %1$s</string>
+    <string name="pass_aim_acc_high">hoch</string>
+    <string name="pass_aim_acc_medium">mittel</string>
+    <string name="pass_aim_acc_low">niedrig</string>
+    <string name="pass_aim_acc_unreliable">unzuverlässig</string>
+    <string name="pass_aim_calibrate">Kompass kalibrieren (Handy in Achterform bewegen)</string>
+    <string name="pass_open_chart">Überflugdiagramm und Zielen</string>
     <string name="live_point_abs">Hierhin zeigen: Az %1$.0f° · El %2$.0f°</string>
     <string name="live_point">Hierhin zeigen: %1$s · %2$s</string>
     <string name="live_point_ok">Kurs stimmt</string>
@@ -684,6 +697,7 @@
     <string name="pass_countdown_los">Läuft, LOS in %1$s</string>
     <string name="pass_finished">Beendet</string>
     <string name="pass_partial">" (durch das Fenster gekürzt)"</string>
+    <string name="pass_start_unknown">" (läuft, Beginn nicht berechnet)"</string>
     <string name="pass_current">Jetzt Az %1$.1f°, El %2$.1f°, %3$.0f km</string>
     <string name="pass_detail">%1$s\nAOS %2$s Az %3$.0f°\nMax %4$s El %5$.1f°\nLOS %6$s Az %7$.0f°\nTeilweise Anfang=%8$s Ende=%9$s\nBeobachter %10$.6f, %11$.6f, %12$.3f km; RX %13$d Hz\n%14$s</string>
     <string name="rotor_open">AZ/EL-Rotor: diesen Überflug vorbereiten und verfolgen</string>

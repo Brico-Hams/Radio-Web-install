@@ -70,19 +70,25 @@ object Changelog {
     fun candidates(code: Long, language: String): List<String> =
         listOf("$code.$language.md", "$code.${language.substringBefore('-')}.md", "$code.es.md").distinct()
 
-    /** First candidate that [open] can read (null = missing), rendered as plain text. */
-    fun load(code: Long, language: String, open: (String) -> String?): String? {
-        for (name in candidates(code, language)) open("changelog-$name")?.let { return plain(it) }
+    /** First candidate that [open] can read (null = missing), rendered as plain text; [dropTitle] removes a leading heading. */
+    fun load(code: Long, language: String, dropTitle: Boolean = false, open: (String) -> String?): String? {
+        for (name in candidates(code, language)) open("changelog-$name")?.let { return plain(if (dropTitle) withoutTitle(it) else it) }
         return null
+    }
+
+    fun withoutTitle(markdown: String): String {
+        val lines = markdown.lines()
+        val first = lines.indexOfFirst { it.isNotBlank() }
+        return if (first >= 0 && lines[first].trimStart().startsWith("#")) lines.drop(first + 1).joinToString("\n") else markdown
     }
 
     fun plain(markdown: String): String = markdown.lines().joinToString("\n") { line ->
         line.replace(Regex("^#+\\s*"), "").replace(Regex("^\\s*[-*]\\s+"), "• ")
     }.trim()
 
-    fun forContext(context: Context, code: Long): String? {
+    fun forContext(context: Context, code: Long, dropTitle: Boolean = false): String? {
         val language = context.resources.configuration.locales[0].toLanguageTag()
-        return load(code, language) { path ->
+        return load(code, language, dropTitle) { path ->
             try { context.assets.open(path).use { String(it.readBytes(), Charsets.UTF_8) } } catch (_: java.io.IOException) { null }
         }
     }

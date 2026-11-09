@@ -1,6 +1,6 @@
 # RadiCodex by BricoHams
 
-Version 1.0.2 (versionCode 17): the APK is called RadiCodex by BricoHams (package `org.bricohams.radicodex`).
+Version 1.1.0 (versionCode 18): the APK is called RadiCodex by BricoHams (package `org.bricohams.radicodex`). 1.0.2 (versionCode 17) is the previous published release.
 
 Step-by-step guide: [RadiCodex by BricoHams tutorials](TUTORIALES-ANDROID.md).
 
@@ -51,7 +51,7 @@ palette has not yet been changed: its final migration remains pending.
 ## Installation and data
 
 Debug APKs are signed with the Android tool's debug key. The release APK
-`RadiCodex-1.0.2.apk` is signed with the RadiCodex release key only if the
+`RadiCodex-1.1.0.apk` is signed with the RadiCodex release key only if the
 GitHub release includes it; verify the published SHA-256 alongside it. It is not
 distributed through Google Play. Features marked as experimental still have no
 validation with a real radio. Android will ask you to
@@ -317,6 +317,12 @@ One shared Rhino context runs fixed assets only, never downloaded code, without 
 
 Position, satellite selection and last downlink per satellite persist privately, outside field JSON. No uplink is inferred; linear transponders are unsupported.
 
+### Pass chart and Aim mode
+
+Tapping a pass (or **Pass chart and aiming** in CAT) opens its polar chart: the centre is the zenith (90°), the rim is the horizon (0°), with rings at 0°, 30° and 60° and N, E, S, W marks. The whole track from AOS to LOS is drawn (one sample every 10 s) with AOS, LOS and maximum-elevation markers; the part already flown is grey and the rest orange (dashed while the pass has not started). The satellite's current position updates every second. The header shows the countdown to AOS or LOS, current Az and El, altitude and range, and below it every transmitter with its downlink and uplink Doppler-corrected for your position (manual or GPS) and its mode.
+
+Tap **Aim** to use the phone sensors: the chart turns so that the direction the phone's top edge points to (upright or flat) is at the top, a crosshair marks that direction and an arrow leads to the satellite with text such as "Turn 23° right · Raise 12°". Within 5° in azimuth and elevation it shows "On target". Headings are true north (magnetic declination for your position, altitude and date). When sensor accuracy is low it shows "Calibrate compass (move the phone in a figure eight)"; keep the phone away from metal and magnets. Without orientation sensors the north-up chart stays and the reason is shown. Sensors only run while the screen is visible and in Aim mode, and the screen stays on; leaving switches them off. Accuracy still has to be validated on real phones.
+
 ### Doppler RX for the selected pass
 
 Selecting a pass opens CAT with a snapshot of the TLE, observer, downlink,
@@ -489,6 +495,58 @@ preview does not survive rotation. There is no service, background recording,
 PTT, TX, or continuous streaming decode: capture first, decode afterward.
 A correct synthetic result does not validate real RF reception or a phone's
 microphone path.
+
+## Guide by module and CAT radios (1.1.0)
+
+Summary of every RadiCodex 1.1.0 module: purpose, basic steps and the table of radios with CAT over USB OTG. **Never transmit without an antenna or dummy load**: no step in this guide requires it and the diagnostic tests only receive.
+
+### Radios and CAT over OTG
+
+| Radio | USB identifier | Baud | How to enable CAT |
+| --- | --- | --- | --- |
+| Quansheng UV-K5 with BH Satellite | `0x36B7` | `38400` | Firmware v0.5.7: in SAT RX press F+8 (remote CAT); it works on the VFO and returns to your frequency. Old firmware: SAT RX and key 8. |
+| Yaesu FTX-1 | `0x10C4:0xEA70` | `38400` | Enhanced COM port (CAT-1) with the same CAT-1 RATE on the radio; MAIN firmware 1.08 or later. |
+| (tr)uSDX | `0x1A86:0x7523` | `115200` | Firmware 2.00t or later; with an older one the app tries `38400`. |
+| QRP Labs QMX+ | `0x0483:0xA34C` | `38400` | Virtual USB COM port; the speed does not matter. No antenna: do not transmit with it. |
+
+The other radios in the multi-radio CAT menu (FT-817/818, FT-857/897, IC-705, QDX) are described in the tutorials. A radio that does not answer is not forced: check cable, port and baud rate.
+
+### Modules: purpose and steps
+
+| Module | Purpose | Steps |
+| --- | --- | --- |
+| Logbook | Log General, POTA and SOTA contacts with ADIF and JSON. | Create the log, add contacts, search, import ADIF with preview or export. |
+| ARDF | Fox-hunting sessions with GPS. | Start the session, note observations and review statistics and history. |
+| Morse | Text to Morse and experimental WAV audio. | Type dots and dashes or import a WAV and review the result. |
+| SSTV | Robot36 images from WAV, microphone or CAT. | Pick the mode, receive or import and save the PNG; for TX use your callsign and a dummy load. |
+| Quansheng CAT | Remote receive tuning of the UV-K5. | Connect by OTG, pick the device, enable CAT on the radio (table), tune and press STOP when done. |
+| Multi-radio CAT | Control of FTX-1, (tr)uSDX, QMX+ and other radios. | Pick model and baud rate, connect, read or change frequency and mode; PTT only with a confirmed dummy load and never with the QMX+. |
+| Digital modes | FT8, FT4 and FT2 with our own decoder (OSD and a-priori decoding). | Pick mode and band, listen to USB audio or a WAV and review the decodes. |
+| Live receiver | Morse and Robot36 with the microphone. | Grant permission, capture up to 60 s and decode. |
+| Satellites | SGP4 passes, RX Doppler and map. | Update the TLEs, set your position, pick a pass and follow the Doppler. |
+| Quansheng channel editor | Read and edit UV-K5 channels. | Make the full backup, edit, write and check the readback. |
+| OpenGD77 | Screen and UTC clock of an OpenGD77 radio. | Connect, pick the device and use Screen, Clock or Ping. |
+| Diagnostics and Bridge | Test radios and modules without transmitting. | Press Search and then Test or Test all. |
+| Updates | Update the app (GitHub build only). | Check, review and confirm the installation. |
+
+TLEs are downloaded from CelesTrak and, if that fails, from SatNOGS and then AMSAT; you can also import them offline.
+
+### Diagnostics and Bridge
+
+From Home open USB Bridge / Diagnostics. It detects radios connected by OTG (Quansheng, FTX-1, (tr)uSDX and QMX+) and checks opening USB, identifying, reading the frequency, setting a test receive frequency, reading it back and restoring the original. It does not transmit or write memories.
+
+- Press Search USB devices and then Test on a radio, or **Test all** for every radio and module.
+- On the Quansheng the module test reads link, channels, calibration, slots, presets, ARDF and passes; the radio must be in SAT RX with CAT enabled.
+- Share or save the report when finished.
+- The TCP bridge is optional: it forwards the chosen radio's CAT to a PC over the local network without authentication. Enable it only on a trusted network and switch it off when done; it only works while the screen is open.
+
+### GPS location
+
+In Satellites, Get phone position asks for location permission, precise or approximate. It searches up to 180 s with GPS, network and fused providers, shows satellites seen and used and refines the accuracy before you review and save. With approximate permission accuracy is several km, enough for passes. If no position arrives, go outdoors, check the phone location setting, use the last saved position or type the coordinates. The position stays on the phone.
+
+### Updates (OTA)
+
+GitHub build only; the F-Droid build has no updater. Home and Updates checks for new versions manually or daily, by default on unmetered networks. Before opening the Android installer the manifest signature, SHA-256, size, package and certificate are verified; Android always asks for your confirmation and there are no silent installs. After updating, the app shows the release notes and also warns when the firmware of a connected radio changes.
 
 ## Build
 

@@ -158,6 +158,21 @@ class SatelliteOrbit(
         var previous = look(start)
         var aos: SatelliteLook? = previous.takeIf { it.elevation >= minimum }
         var maximum = previous
+        var startsPartial = false
+        if (aos != null) {
+            // Already in progress: walk backwards (bounded) to the real AOS instead of clamping it to the search start.
+            var inside = previous
+            var found: SatelliteLook? = null
+            var t = start
+            while (found == null && start - t < MAX_BACKTRACK_MS) {
+                val earlier = t - 10000L
+                val sample = try { look(earlier) } catch (_: IllegalArgumentException) { break }
+                if (sample.elevation < minimum) { found = crossing(earlier, t, true); break }
+                if (sample.elevation > maximum.elevation) maximum = sample
+                inside = sample; t = earlier
+            }
+            if (found != null) aos = found else { startsPartial = true; aos = inside }
+        }
         var time = start
         while (time < end) {
             if (Thread.currentThread().isInterrupted) throw LocalizedInterruptedIOException(UiText(R.string.err_prediction_cancelled))
@@ -171,15 +186,28 @@ class SatelliteOrbit(
             if (aos != null) {
                 if (point.elevation > maximum.elevation) maximum = point
                 if (point.elevation < minimum) {
-                    passes.add(SatellitePass(aos, maximum, crossing(previous.time, time, false), aos.time == start, false))
-                    aos = null
+                    passes.add(SatellitePass(aos, maximum, crossing(previous.time, time, false), startsPartial, false))
+                    aos = null; startsPartial = false
                 }
             }
             previous = point
         }
-        if (aos != null) passes.add(SatellitePass(aos, maximum, previous, aos.time == start, true))
+        if (aos != null) {
+            // Still up at the end of the window: look forward (bounded) for the real LOS.
+            var last = previous
+            var los: SatelliteLook? = null
+            while (los == null && last.time - end < MAX_BACKTRACK_MS) {
+                val later = last.time + 10000L
+                val sample = try { look(later) } catch (_: IllegalArgumentException) { break }
+                if (sample.elevation < minimum) { los = crossing(last.time, later, false); break }
+                if (sample.elevation > maximum.elevation) maximum = sample
+                last = sample
+            }
+            passes.add(SatellitePass(aos, maximum, los ?: last, startsPartial, los == null))
+        }
         return passes
     }
+    private companion object { const val MAX_BACKTRACK_MS = 30 * 60000L }
     /** Range rate in km/s (central difference over one second); positive = receding. */
     fun rangeRateKmS(time: Long): Double = look(time + 500).rangeKm - look(time - 500).rangeKm
     fun target(plan: SatellitePlan, time: Long): SatelliteTarget {

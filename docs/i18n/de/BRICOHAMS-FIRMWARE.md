@@ -1513,7 +1513,7 @@ Kontrast, Ausrichtung oder Lesbarkeit auf dem Funkgerät. Es wurde nicht geflash
 
 ## Angeforderte spätere Phase: RadiCodex by BricoHams
 
-Die native APK `1.0.2` enthält ein Logbuch mit ADIF-Suche und -Import, ADIF/JSON,
+Die native APK `1.1.0` enthält ein Logbuch mit ADIF-Suche und -Import, ADIF/JSON,
 JSON-Wiederherstellung, ARDF-Sitzungen mit Historie/Statistiken und gefilterter Segment-Summe,
 punktuellem GPS, experimentellem Morse aus Text/WAV
 sowie temporärem CAT RX über USB CDC ACM und erkannten CH34x/CP210x/FTDI/Prolific-Adaptern.

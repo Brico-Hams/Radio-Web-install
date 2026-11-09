@@ -224,6 +224,12 @@ class CatActivity : LocalizedActivity() {
                 })
                 button(R.string.cat_start_tracking) { startTracking() }
                 content.addView(Button(this).apply {
+                    setText(R.string.pass_open_chart)
+                    setOnClickListener {
+                        startActivity(Intent(this@CatActivity, SatelliteActivity::class.java).putExtra(SatelliteActivity.EXTRA_OPEN_PLAN, planText))
+                    }
+                })
+                content.addView(Button(this).apply {
                     setText(R.string.cat_stop_tracking)
                     setOnClickListener {
                         trackingRequested = false

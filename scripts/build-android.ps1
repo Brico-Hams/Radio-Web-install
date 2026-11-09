@@ -21,8 +21,8 @@ try {
     & .\android\gradlew.bat -p android :app:testGithubDebugUnitTest :app:lintGithubDebug :app:assembleGithubDebug :app:assembleGithubDebugAndroidTest --no-daemon
     if ($LASTEXITCODE -ne 0) { throw "La compilacion Android fallo: $LASTEXITCODE" }
     $artifacts = @(
-        @{ Source = 'android\app\build\outputs\apk\github\debug\app-github-debug.apk';         Name = 'radicodex-1.0.1-debug.apk' },
-                @{ Source = 'android\app\build\outputs\apk\androidTest\github\debug\app-github-debug-androidTest.apk'; Name = 'radicodex-1.0.1-androidTest.apk' }
+        @{ Source = 'android\app\build\outputs\apk\github\debug\app-github-debug.apk';         Name = 'radicodex-1.1.0-debug.apk' },
+                @{ Source = 'android\app\build\outputs\apk\androidTest\github\debug\app-github-debug-androidTest.apk'; Name = 'radicodex-1.1.0-androidTest.apk' }
     )
     foreach ($artifact in $artifacts) {
         & $signer verify $artifact.Source
@@ -62,8 +62,8 @@ try {
         format = 'bricohams-android-build'
         version = 1
         applicationId = 'org.bricohams.radicodex'
-        applicationVersion = '1.0.1'
-        applicationVersionCode = 16
+        applicationVersion = '1.1.0'
+        applicationVersionCode = 18
         stability = 'stable'
         signing = 'debug'
         minimumApi = 26

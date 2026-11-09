@@ -1,6 +1,6 @@
 # RadiCodex by BricoHams
 
-Version 1.0.2 (versionCode 17): Die APK heißt RadiCodex by BricoHams (Kennung `org.bricohams.radicodex`).
+Version 1.1.0 (versionCode 18): Die APK heißt RadiCodex by BricoHams (Kennung `org.bricohams.radicodex`). Die 1.0.2 (versionCode 17) ist die vorherige veröffentlichte Version.
 
 Schritt-für-Schritt-Anleitung: [Anleitungen zu RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 
@@ -52,7 +52,7 @@ Die endgültige Migration steht noch aus.
 ## Installation und Daten
 
 Debug-APKs sind mit dem Debug-Schlüssel des Android-Tools signiert. Die
-Release-APK `RadiCodex-1.0.2.apk` ist nur dann mit dem RadiCodex-Release-Schlüssel
+Release-APK `RadiCodex-1.1.0.apk` ist nur dann mit dem RadiCodex-Release-Schlüssel
 signiert, wenn die GitHub-Release sie enthält; überprüfe damit die
 veröffentlichte SHA-256-Prüfsumme. Sie wird nicht über Google Play verteilt.
 Als experimentell gekennzeichnete Funktionen sind weiterhin nicht mit einem
@@ -345,6 +345,12 @@ Ein gemeinsamer Rhino-Kontext führt nur feste Assets aus, nie heruntergeladenen
 
 Position, Auswahl und letzter Downlink je Satellit werden privat gespeichert, außerhalb des Feld-JSON. Kein abgeleiteter Uplink; keine linearen Transponder.
 
+### Überflugdiagramm und Zielmodus
+
+Tippst du einen Überflug an (oder **Überflugdiagramm und Zielen** in CAT), öffnet sich das Polardiagramm: Die Mitte ist der Zenit (90°), der Rand der Horizont (0°), mit Ringen bei 0°, 30° und 60° und den Marken N, O, S, W. Die ganze Bahn von AOS bis LOS wird gezeichnet (alle 10 s ein Punkt) mit Markern für AOS, LOS und maximale Elevation; der bereits geflogene Teil ist grau, der Rest orange (gestrichelt, solange der Überflug noch nicht begonnen hat). Die aktuelle Satellitenposition wird jede Sekunde aktualisiert. Oben stehen der Countdown bis AOS oder LOS, aktuelle Az und El, Höhe und Entfernung, darunter jeder Transponder mit Downlink und Uplink, Doppler-korrigiert für deine Position (manuell oder GPS), und sein Modus.
+
+Mit **Zielen** nutzt du die Handysensoren: Das Diagramm dreht sich so, dass oben die Richtung liegt, in die die Oberkante des Handys zeigt (aufrecht oder flach); ein Fadenkreuz markiert diese Richtung und ein Pfeil führt zum Satelliten, mit Text wie „23° nach rechts drehen · 12° anheben“. Bei weniger als 5° Abweichung in Azimut und Elevation erscheint „Im Ziel“. Die Richtung bezieht sich auf geografisch Nord (magnetische Deklination für Position, Höhe und Datum). Bei geringer Sensorgenauigkeit erscheint „Kompass kalibrieren (Handy in Achterform bewegen)“; halte das Handy von Metall und Magneten fern. Ohne Orientierungssensoren bleibt das Diagramm mit Nord oben und der Grund wird angezeigt. Die Sensoren laufen nur bei sichtbarem Bildschirm im Zielmodus, der Bildschirm bleibt an; beim Verlassen werden sie abgeschaltet. Die Genauigkeit muss noch mit echten Handys geprüft werden.
+
 ### Doppler-RX des ausgewählten Überflugs
 
 Mit der Auswahl eines Überflugs wird CAT mit einer Momentaufnahme von TLE,
@@ -539,6 +545,58 @@ bleibt bei Rotation nicht erhalten. Es gibt weder Dienst, Hintergrundaufnahme,
 PTT, TX noch kontinuierliche Streaming-Decodierung: Zuerst wird aufgenommen,
 danach decodiert. Ein korrektes synthetisches Ergebnis validiert weder den
 realen HF-Empfang noch den Mikrofonpfad eines Telefons.
+
+## Leitfaden nach Modul und CAT-Funkgeräten (1.1.0)
+
+Übersicht aller Module von RadiCodex 1.1.0: Zweck, Grundschritte und die Tabelle der Funkgeräte mit CAT über USB OTG. **Sende niemals ohne Antenne oder Kunstlast**: Kein Schritt dieses Leitfadens verlangt es und die Diagnosetests empfangen nur.
+
+### Funkgeräte und CAT über OTG
+
+| Funkgerät | USB-Kennung | Baud | CAT aktivieren |
+| --- | --- | --- | --- |
+| Quansheng UV-K5 mit BH Satellite | `0x36B7` | `38400` | Firmware v0.5.7: in SAT RX F+8 drücken (CAT remote); wirkt auf das VFO und kehrt zu deiner Frequenz zurück. Alte Firmware: SAT RX und Taste 8. |
+| Yaesu FTX-1 | `0x10C4:0xEA70` | `38400` | Enhanced-COM-Port (CAT-1) mit gleicher CAT-1 RATE am Gerät; MAIN-Firmware 1.08 oder neuer. |
+| (tr)uSDX | `0x1A86:0x7523` | `115200` | Firmware 2.00t oder neuer; bei älterer probiert die App `38400`. |
+| QRP Labs QMX+ | `0x0483:0xA34C` | `38400` | Virtueller USB-COM-Port; die Geschwindigkeit spielt keine Rolle. Keine Antenne: nicht damit senden. |
+
+Die übrigen Funkgeräte im Multi-Radio-CAT-Menü (FT-817/818, FT-857/897, IC-705, QDX) stehen in den Tutorials. Ein Gerät, das nicht antwortet, wird nicht erzwungen: Kabel, Port und Baudrate prüfen.
+
+### Module: Zweck und Schritte
+
+| Modul | Zweck | Schritte |
+| --- | --- | --- |
+| Logbuch | General-, POTA- und SOTA-Kontakte mit ADIF und JSON erfassen. | Logbuch anlegen, Kontakte hinzufügen, suchen, ADIF mit Vorschau importieren oder exportieren. |
+| ARDF | Fuchsjagd-Sitzungen mit GPS. | Sitzung starten, Beobachtungen notieren, Statistik und Verlauf prüfen. |
+| Morse | Text zu Morse und experimentelles WAV-Audio. | Punkte und Striche eingeben oder ein WAV importieren und das Ergebnis prüfen. |
+| SSTV | Robot36-Bilder aus WAV, Mikrofon oder CAT. | Modus wählen, empfangen oder importieren und das PNG speichern; für TX dein Rufzeichen und eine Kunstlast verwenden. |
+| Quansheng-CAT | Fernabstimmung des Empfangs der UV-K5. | Per OTG verbinden, Gerät wählen, CAT am Gerät aktivieren (Tabelle), abstimmen und am Ende STOP drücken. |
+| Multi-Radio-CAT | Steuerung von FTX-1, (tr)uSDX, QMX+ und anderen Geräten. | Modell und Baudrate wählen, verbinden, Frequenz und Modus lesen oder ändern; PTT nur mit bestätigter Kunstlast und nie mit der QMX+. |
+| Digitale Modi | FT8, FT4 und FT2 mit eigenem Decoder (OSD und A-priori-Dekodierung). | Modus und Band wählen, USB-Audio oder ein WAV hören und die Dekodierungen prüfen. |
+| Live-Empfänger | Morse und Robot36 mit dem Mikrofon. | Berechtigung erteilen, bis zu 60 s aufnehmen und dekodieren. |
+| Satelliten | SGP4-Überflüge, RX-Doppler und Karte. | TLEs aktualisieren, Position festlegen, Überflug wählen und dem Doppler folgen. |
+| Quansheng-Kanaleditor | UV-K5-Kanäle lesen und bearbeiten. | Vollständige Sicherung anlegen, bearbeiten, schreiben und das Zurücklesen prüfen. |
+| OpenGD77 | Bildschirm und UTC-Uhr eines OpenGD77-Geräts. | Verbinden, Gerät wählen und Bildschirm, Uhr oder Ping nutzen. |
+| Diagnose und Bridge | Funkgeräte und Module ohne Senden testen. | Suchen drücken und dann Testen oder Alles testen. |
+| Updates | App aktualisieren (nur GitHub-Build). | Prüfen, ansehen und die Installation bestätigen. |
+
+Die TLEs kommen von CelesTrak und bei Ausfall von SatNOGS und danach AMSAT; du kannst sie auch offline importieren.
+
+### Diagnose und Bridge
+
+Öffne auf der Startseite USB-Bridge / Diagnose. Sie erkennt per OTG angeschlossene Funkgeräte (Quansheng, FTX-1, (tr)uSDX und QMX+) und prüft USB öffnen, Identifizieren, Frequenz lesen, eine Test-Empfangsfrequenz setzen, zurücklesen und das Original wiederherstellen. Sie sendet nicht und schreibt keine Speicher.
+
+- USB-Geräte suchen drücken und dann Testen bei einem Gerät, oder **Alles testen** für alle Geräte und Module.
+- Bei der Quansheng liest der Modultest Verbindung, Kanäle, Kalibrierung, Slots, Presets, ARDF und Überflüge; das Gerät muss in SAT RX mit aktiviertem CAT sein.
+- Bericht am Ende teilen oder speichern.
+- Die TCP-Bridge ist optional: Sie leitet das CAT des gewählten Geräts ohne Authentifizierung über das lokale Netz an einen PC weiter. Nur in einem vertrauenswürdigen Netz aktivieren und danach ausschalten; sie funktioniert nur bei geöffnetem Bildschirm.
+
+### GPS-Standort
+
+In Satelliten fragt Handyposition holen die Standortberechtigung ab, genau oder ungefähr. Es sucht bis zu 180 s mit GPS, Netz und Fused, zeigt gesehene und genutzte Satelliten und verfeinert die Genauigkeit, bevor du prüfst und speicherst. Mit ungefährer Berechtigung beträgt die Genauigkeit mehrere km, genug für Überflüge. Kommt keine Position, geh ins Freie, prüfe die Standorteinstellung, nutze die zuletzt gespeicherte Position oder gib die Koordinaten ein. Die Position bleibt auf dem Handy.
+
+### Updates (OTA)
+
+Nur im GitHub-Build; der F-Droid-Build hat keinen Updater. Start und Updates sucht manuell oder täglich nach neuen Versionen, standardmäßig in ungemessenen Netzen. Vor dem Android-Installer werden Manifest-Signatur, SHA-256, Größe, Paket und Zertifikat geprüft; Android fragt immer nach deiner Bestätigung, es gibt keine stillen Installationen. Nach dem Update zeigt die App die Neuigkeiten und warnt auch, wenn sich die Firmware eines verbundenen Geräts ändert.
 
 ## Kompilierung
 

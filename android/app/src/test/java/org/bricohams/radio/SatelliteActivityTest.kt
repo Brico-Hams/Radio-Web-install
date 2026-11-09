@@ -94,10 +94,10 @@ class SatelliteActivityTest {
             assertTrue(text(activity), text(activity).contains("AOS ") && text(activity).contains("FM"))
             cards.first().performClick()
             idle(activity)
-            val radar = all(activity).filterIsInstance<LivePassView>().single()
+            val radar = all(activity).filterIsInstance<PassRadarView>().single()
             assertTrue(text(activity), text(activity).contains("Seguimiento en vivo") && text(activity).contains("Az ") && text(activity).contains("El "))
             assertTrue(radar.contentDescription.toString().startsWith("Radar polar del pase."))
-            assertEquals(60, radar.track.size)
+            assertTrue("track ${radar.track.size}", radar.track.size > 20) // 10 s samples over a ~4-10 min pass
             assertTrue(text(activity).contains("437.8000 MHz  FM  Repeater"))
             click(activity, "Conectar CAT: Doppler, SSTV y grabacion")
             val intent = shadowOf(activity).nextStartedActivity
@@ -140,8 +140,8 @@ class SatelliteActivityTest {
             idle(activity)
             all(activity).first { it.isClickable && it.contentDescription?.startsWith("ISS (ZARYA) (25544)") == true }.performClick()
             idle(activity)
-            val radar = all(activity).filterIsInstance<LivePassView>().single()
-            assertEquals(60, radar.track.size)
+            val radar = all(activity).filterIsInstance<PassRadarView>().single()
+            assertTrue("track ${radar.track.size}", radar.track.size > 20) // 10 s samples over a ~4-10 min pass
             val shown = text(activity)
             assertTrue(shown, shown.contains("Seguimiento en vivo") && Regex("Az [\\d.—]+").containsMatchIn(shown))
             assertTrue(shown, shown.contains("Voice · FM") && shown.contains("Invertido: no"))
