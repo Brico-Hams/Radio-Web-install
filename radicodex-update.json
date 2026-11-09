@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "package": "org.bricohams.radicodex",
+  "versionCode": 18,
+  "versionName": "1.1.0",
+  "minSdk": 26,
+  "apk": {
+    "url": "https://github.com/Brico-Hams/Radio-Web-install/releases/download/android-v1.1.0/RadiCodex-1.1.0.apk",
+    "sha256": "5c24eb760b121d103b7dafc59d8f932d910f46c6c071481b4bfbab5593af59b8",
+    "size": 2234276
+  },
+  "notes": {
+    "es": "Novedades 1.1.0: CAT para FTX-1, truSDX (115200), QMX+ y Quansheng (CAT remoto con F+8 en SAT RX, firmware BH Satellite v0.5.7). GPS del móvil en Satélites (hasta 180 s). TLE con respaldo CelesTrak, SatNOGS y AMSAT. Pantalla Puente/Diagnóstico con «Probar todo». FT2 mejorado (OSD, decodificación a priori). Aviso al cambiar app o firmware. OTA firmadas (GitHub). Nuevo aspecto BricoHams v1.1. Compatible con DeX.",
+    "en": "What's new in 1.1.0: CAT for the FTX-1, truSDX (115200), QMX+ and Quansheng (remote CAT with F+8 in SAT RX, BH Satellite firmware v0.5.7). Phone GPS in Satellites (up to 180 s). TLE fallback CelesTrak, SatNOGS and AMSAT. Bridge/Diagnostics screen with \"Test all\". Improved FT2 (OSD, a-priori decoding). Notice when the app or radio firmware changes. Signed OTA updates (GitHub). New BricoHams look v1.1. DeX friendly.",
+    "fr": "Nouveautés 1.1.0 : CAT pour FTX-1, truSDX (115200), QMX+ et Quansheng (CAT à distance avec F+8 en SAT RX, firmware BH Satellite v0.5.7). GPS du téléphone dans Satellites (jusqu'à 180 s). Repli des TLE CelesTrak, SatNOGS et AMSAT. Écran Pont/Diagnostic avec « Tout tester ». FT2 amélioré (OSD, décodage a priori). Avertissement si l'app ou le firmware change. Mises à jour OTA signées (GitHub). Nouveau look BricoHams v1.1. Compatible DeX.",
+    "de": "Neu in 1.1.0: CAT für FTX-1, truSDX (115200), QMX+ und Quansheng (Fern-CAT mit F+8 in SAT RX, Firmware BH Satellite v0.5.7). Handy-GPS im Satellitenmodul (bis 180 s). TLE-Ausweichquellen CelesTrak, SatNOGS und AMSAT. Bridge-/Diagnosebildschirm mit „Alles testen“. Verbesserter FT2-Decoder (OSD, A-priori). Hinweis bei App- oder Firmware-Wechsel. Signierte OTA-Updates (GitHub). Neues BricoHams-Design v1.1. DeX-tauglich."
+  },
+  "signature": "PqL0Hgy+RASuzZ0CPjMltpAZ+mcTSZr6Ij/jlzhdoE8SH9ceAoSyxkkzvb72LYY7sSGrWUB4LkXXtJDn/pj0DA=="
+}
