@@ -29,6 +29,10 @@ Las licencias y avisos originales siguen siendo obligatorios.
 | [TK-11 Manager · URZ](https://urez.org/tk-11-manager-la-herramienta-definitiva-para-programar-tu-quansheng-tk-11-desde-el-pc/) (Fernando Lamarca Belanche, RxSTAR) | Solo se leyó el artículo público para documentar qué ofrece la herramienta; no se copia ni analiza su código y no se reutiliza ningún recurso | Sin licencia consultada |
 | [Multi-UVTools · spm81](https://github.com/spm81/Multi-UVTools) | Solo se consultó qué funciones existen (nombres de herramientas); el repositorio no tiene licencia, así que no se copia ni traduce código, textos ni interfaz | Sin licencia (todos los derechos reservados) |
 | [FT8CN](https://github.com/N0BOY/FT8CN) (BG7YOZ) | Estudiado solo para entender cómo resuelve CAT, USB serie y audio en Android; no se copia código ni recursos | MIT |
+| [pe1hvh/chirp_radtel_rt950pro](https://github.com/pe1hvh/chirp_radtel_rt950pro) `radtel_rt950pro.py` (© 2025 Nathan G. Barguss 2E0NBS, © 2026 PE1HVH) | Radtel RT-950 Pro: tabla de 20 claves XOR y regla de selección, sesión de clonado, formato de canal de 32 bytes (BCD, tonos CTCSS/DCS) y bloque APRS de 128 bytes (`_APRS_SPECS`); `Rt950Protocol.kt` es una portación a Kotlin con cambios | MIT |
+| [infamy/NeonPlug](https://github.com/infamy/NeonPlug) `src/radios/rt950pro` | Radtel RT-950 Pro por Bluetooth LE: UUID, desbloqueo `ff31`, regiones de memoria, trama `SEND` fija y tiempos de espera de confirmación | MIT |
+| [frrojas92/rt950_tak_bridge](https://github.com/frrojas92/rt950_tak_bridge) (Fernando Rojas, CA6FEG) | KISS sobre BLE del RT-950 Pro (tramado y desescape de `ffe1`) en `Aprs.kt` | MIT |
+| [nivingoonesekera/Radtel-RT-950Pro-BLE-bridge-for-CHIRP-and-CPS](https://github.com/nivingoonesekera/Radtel-RT-950Pro-BLE-bridge-for-CHIRP-and-CPS) `ble_bridge.py` | Desbloqueo, ritmo de escritura en fragmentos de 20 bytes y reconexión BLE del RT-950 Pro en `Rt950Ble.kt` | MIT |
 
 ## Dependencias
 
