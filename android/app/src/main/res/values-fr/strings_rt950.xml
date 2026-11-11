@@ -127,6 +127,9 @@
     <string name="rt950_zp_variant_ch960">CH960 (960 canaux)</string>
     <string name="rt950_zp_variant_ch990">CH990 (990 canaux)</string>
     <string name="rt950_zp_variant_warning">Choisissez CH990 seulement si vous êtes sûr que votre radio a 990 canaux. Avec « Inconnue » ou « CH960 », les canaux 961-990 (zone 10, emplacements 70-99) ne sont jamais écrits.</string>
+    <string name="rt950_zp_first_zone">Première zone (1-10 ; vide = première zone libre de la sauvegarde)</string>
+    <string name="err_rt950_first_zone_range">La première zone doit être comprise entre 1 et %1$d</string>
+    <string name="err_rt950_first_zone_overflow">Avec la première zone %1$d, une zone du plan tomberait sur la zone %2$d, mais la dernière disponible est la %3$d (ou elle entre en conflit avec la zone PMR/CB). Rien n\'a été écrit.</string>
     <string name="rt950_zp_overwrite">Écraser les zones occupées</string>
     <string name="rt950_zp_preview">Aperçu du plan</string>
     <string name="rt950_zp_write">Écrire le modèle</string>

@@ -41,15 +41,37 @@ object Rt950ZoneWriter {
             (variant == Rt950Variant.CH990 || !Rt950Protocol.isCh990Slot(zone, it)) && !Rt950Channels.isBlank(saved.channelRecord(zone, it))
         }
 
-    fun plan(zonePlan: ChannelTemplates.ZonePlan, saved: Rt950Backup, variant: Rt950Variant): Plan {
+    /** First zone (1-10) with no channel at all in [saved]; 1 when every zone holds something. */
+    fun defaultFirstZone(saved: Rt950Backup, variant: Rt950Variant): Int =
+        (1..Rt950Protocol.ZONES).firstOrNull { occupiedSlots(saved, it, variant).isEmpty() } ?: 1
+
+    private fun isPmrZone(zone: ChannelTemplates.Zone) =
+        zone.regionIds.isNotEmpty() && zone.regionIds.all { it == "PMR446" || it == "CB27" }
+
+    /**
+     * Regional/SAT zones are shifted so plan zone 1 lands on [firstZone] (n -> n + firstZone - 1); the PMR446/CB zone keeps its
+     * index. Throws before anything is written when a shifted zone passes the last available zone or hits the PMR/CB zone.
+     */
+    fun plan(zonePlan: ChannelTemplates.ZonePlan, saved: Rt950Backup, variant: Rt950Variant, firstZone: Int = 1): Plan {
+        requireUi(firstZone in 1..Rt950Protocol.ZONES) { UiText(R.string.err_rt950_first_zone_range, Rt950Protocol.ZONES) }
+        val shift = firstZone - 1
+        val pmrZone = zonePlan.zones.firstOrNull { isPmrZone(it) }
+        val last = if (pmrZone != null) Rt950Protocol.ZONES - 1 else Rt950Protocol.ZONES
         var omitted = zonePlan.omitted
-        val zones = zonePlan.zones.mapNotNull { zone ->
+        val target = zonePlan.zones.map { zone -> zone to if (zone === pmrZone) zone.index else zone.index + shift }
+        for ((zone, index) in target) {
+            if (zone === pmrZone) continue
+            requireUi(index <= last && index != pmrZone?.index) {
+                UiText(R.string.err_rt950_first_zone_overflow, firstZone, index, last)
+            }
+        }
+        val zones = target.mapNotNull { (zone, index) ->
             val mapped = zone.channels.mapNotNull { toChannel(it) }
             omitted += zone.channels.size - mapped.size
             if (mapped.isEmpty()) return@mapNotNull null
-            val slots = mapped.mapIndexed { index, channel -> index + 1 to channel }.toMap()
-            val occupied = occupiedSlots(saved, zone.index, variant)
-            ZoneWrite(zone.index, zone.name, slots, occupied.size, occupied.count { it in slots })
+            val slots = mapped.mapIndexed { slot, channel -> slot + 1 to channel }.toMap()
+            val occupied = occupiedSlots(saved, index, variant)
+            ZoneWrite(index, zone.name, slots, occupied.size, occupied.count { it in slots })
         }
         return Plan(variant, zones, omitted)
     }

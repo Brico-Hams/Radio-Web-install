@@ -127,6 +127,9 @@
     <string name="rt950_zp_variant_ch960">CH960 (960 Kanäle)</string>
     <string name="rt950_zp_variant_ch990">CH990 (990 Kanäle)</string>
     <string name="rt950_zp_variant_warning">CH990 nur wählen, wenn du sicher bist, dass dein Gerät 990 Kanäle hat. Bei „Unbekannt“ oder „CH960“ werden die Kanäle 961-990 (Zone 10, Plätze 70-99) nie geschrieben.</string>
+    <string name="rt950_zp_first_zone">Erste Zone (1-10; leer = erste leere Zone der Sicherung)</string>
+    <string name="err_rt950_first_zone_range">Die erste Zone muss zwischen 1 und %1$d liegen</string>
+    <string name="err_rt950_first_zone_overflow">Mit erster Zone %1$d würde eine Planzone auf Zone %2$d landen, die letzte verfügbare ist aber %3$d (oder sie kollidiert mit der PMR/CB-Zone). Es wurde nichts geschrieben.</string>
     <string name="rt950_zp_overwrite">Belegte Zonen überschreiben</string>
     <string name="rt950_zp_preview">Plan-Vorschau</string>
     <string name="rt950_zp_write">Vorlage schreiben</string>

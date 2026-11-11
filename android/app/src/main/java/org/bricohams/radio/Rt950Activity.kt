@@ -98,6 +98,7 @@ class Rt950Activity : LocalizedActivity() {
     private lateinit var zpPmr: CheckBox
     private lateinit var zpCb: CheckBox
     private lateinit var zpOverwrite: CheckBox
+    private lateinit var zpFirstZone: EditText
     private lateinit var zpStatus: TextView
     private var zpDataset: ChannelTemplates.Dataset? = null
     private var zpRegions = listOf<ChannelTemplates.Region>()
@@ -569,6 +570,7 @@ class Rt950Activity : LocalizedActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
         }
         note(card, R.string.rt950_zp_variant_warning)
+        zpFirstZone = field(card, R.string.rt950_zp_first_zone, "", InputType.TYPE_CLASS_NUMBER)
         zpOverwrite = check(card, R.string.rt950_zp_overwrite)
         button(card, R.string.rt950_zp_preview) { previewZonePlan() }
         button(card, R.string.rt950_zp_write, true) { confirmZonePlan() }
@@ -610,7 +612,9 @@ class Rt950Activity : LocalizedActivity() {
             zpCb.isChecked && loaded.country.code == "ES")
         val profile = ChannelTemplates.profiles(readAsset("profiles.json")).first { it.id == "rt950pro" }
         val zonePlan = ChannelTemplates.zonePlan(profile, channels, variantConfirmed = chosen == Rt950Variant.CH990)
-        return Rt950ZoneWriter.plan(zonePlan, saved, chosen)
+        if (zpFirstZone.text.isNullOrBlank()) zpFirstZone.setText(Rt950ZoneWriter.defaultFirstZone(saved, chosen).toString())
+        val first = zpFirstZone.text.toString().trim().toIntOrNull() ?: 0
+        return Rt950ZoneWriter.plan(zonePlan, saved, chosen, first)
     }
 
     private fun previewZonePlan() {

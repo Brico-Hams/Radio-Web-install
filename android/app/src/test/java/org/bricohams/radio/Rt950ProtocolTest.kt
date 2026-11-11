@@ -228,6 +228,24 @@ class Rt950ProtocolTest {
         Rt950ZoneWriter.check(empty, Rt950Variant.CH960, false)
     }
 
+    @Test fun firstZoneShiftsRegionalZonesAndRefusesOverflowWithPmr() {
+        val radio = Radio()
+        val backup = backupOf(radio)
+        val plan = Rt950ZoneWriter.plan(zonePlan(1, "R1", listOf(template("A", "145.60000"))), backup, Rt950Variant.CH960, 5)
+        assertEquals(listOf(5), plan.zones.map { it.zone })
+        assertEquals(1, Rt950ZoneWriter.write(session(radio, Rt950Variant.CH960), plan, false).size)
+        assertEquals("A", Rt950Channels.decode(radio.block(Rt950Channels.index(5, 1) * 32 / 128 * 128)
+            .copyOfRange(Rt950Channels.index(5, 1) * 32 % 128, Rt950Channels.index(5, 1) * 32 % 128 + 32))!!.name)
+        assertEquals(1, Rt950ZoneWriter.defaultFirstZone(backup, Rt950Variant.CH960))
+
+        val ch = listOf(template("A", "145.60000"))
+        val withPmr = ChannelTemplates.ZonePlan("rt950pro", listOf(
+            ChannelTemplates.Zone(1, "R1", listOf("R"), ch), ChannelTemplates.Zone(2, "R2", listOf("R2"), ch),
+            ChannelTemplates.Zone(10, "PMR446", listOf("PMR446"), ch)), emptyMap(), ch, 0, emptyList())
+        assertThrows(IllegalArgumentException::class.java) { Rt950ZoneWriter.plan(withPmr, backup, Rt950Variant.CH960, 9) }
+        assertEquals(listOf(8, 9, 10), Rt950ZoneWriter.plan(withPmr, backup, Rt950Variant.CH960, 8).zones.map { it.zone })
+    }
+
     @Test fun verifyReportsMismatchAndAffectedZones() {
         val radio = Radio().apply { corruptWrites = true }
         val plan = Rt950ZoneWriter.plan(zonePlan(1, "Z1", listOf(template("A", "145.60000"))), backupOf(radio), Rt950Variant.UNKNOWN)
