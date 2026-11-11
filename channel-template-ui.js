@@ -1,23 +1,26 @@
 (function (root) {
   "use strict";
   const R = root.RadioWorkspace;
-  function mountCountryTemplates({ container, action, download, addChannels, loadPasses }) {
+  function mountCountryTemplates({ container, action, download, addChannels, loadPasses, nativeProfile = "" }) {
     container.innerHTML = `<h3>2. Elegir plantilla</h3>
       <p>Elige pais y zona, revisa la seleccion y anadela al archivo local. La radio no se modifica.</p>
       <div class="template-filters">
         <div><label for="country-template">Pais</label><select id="country-template"></select></div>
         <div><label for="region-template">Region / estado</label><select id="region-template"><option value="">Todas las regiones</option></select></div>
+        <div><label for="profile-template">Modelo de destino</label><select id="profile-template"></select></div>
       </div>
       <label for="search-template">Buscar indicativo o localidad</label><input id="search-template" type="search" maxlength="80">
-      <label class="check"><input id="pmr-template" type="checkbox"> Anadir PMR446 (16 canales solo RX)</label>
+      <label class="check"><input id="airport-template" type="checkbox" checked> Anadir aeropuertos (AM solo RX, 118-136.975 MHz)</label>
+      <label class="check"><input id="pmr-template" type="checkbox" checked> Anadir PMR446 (16 canales solo RX)</label>
       <label class="check"><input id="sat-template" type="checkbox"> Anadir memorias de satelites FM (solo RX)</label>
-      <p>PMR446 no autoriza transmitir con un walkie de radioaficionado. Las memorias SAT no contienen horarios ni seguimiento Doppler.</p>
+      <p>PMR446 no autoriza transmitir con un walkie de radioaficionado. Las memorias SAT no contienen horarios ni seguimiento Doppler. Los aeropuertos son frecuencias publicadas, no para navegacion.</p>
       <p id="template-coverage" role="status"></p>
+      <p id="template-profile-note" role="status"></p>
       <div class="operation-buttons"><button id="template-select" type="button" class="button secondary">Seleccionar resultados (max. 1024)</button><button id="template-clear" type="button" class="button secondary">Quitar seleccion</button></div>
       <div class="table-scroll template-preview"><table><thead><tr><th>Elegir</th><th>Nombre</th><th>RX MHz</th><th>Localidad</th></tr></thead><tbody id="template-preview"></tbody></table></div>
       <div class="operation-buttons"><button id="template-previous" type="button" class="button secondary">Anterior</button><span id="template-page" role="status"></span><button id="template-next" type="button" class="button secondary">Siguiente</button></div>
       <p id="template-count" role="status"></p>
-      <div class="operation-buttons"><button id="template-add" type="button" class="button primary">Anadir seleccion al archivo local</button><button id="template-export" type="button" class="button secondary">Descargar seleccion CSV</button></div>
+      <div class="operation-buttons"><button id="template-add" type="button" class="button primary">Anadir seleccion al archivo local</button><button id="template-export" type="button" class="button secondary">Descargar seleccion para el modelo</button></div>
       <details class="template-pass-panel"><summary>Pases del mes por zona</summary>
         <p>Prevision orientativa, no operativa. Solo dias restantes del mes UTC. Mas de 7 dias desde el TLE: provisional. Recalcula con tu posicion y TLE reciente antes de usar.</p>
         <label for="template-pass-zone">Ciudad / punto de referencia</label><select id="template-pass-zone"></select>
@@ -36,7 +39,10 @@
       </details><p id="template-status" role="status"></p>`;
     const $ = id => container.querySelector(`#${id}`);
     for (const country of R.TEMPLATE_COUNTRIES) $("country-template").add(new Option(country.name, country.code));
-    let file = null, forecast = null, satellites = null, entries = [], passRows = [], passSource = null;
+    if (nativeProfile === "opengd77") $("profile-template").add(new Option("OpenGD77 (archivo local abierto)", "opengd77"));
+    for (const [id, profile] of Object.entries(R.TEMPLATE_PROFILES)) $("profile-template").add(new Option(profile.label, id));
+    $("profile-template").value = nativeProfile || "radicodex";
+    let file = null, airports = null, forecast = null, satellites = null, entries = [], passRows = [], passSource = null;
     let page = 0, passPage = 0, request = 0, previewRequest = 0, blocked = false, calculating = false;
     const selected = new Set(), cache = new Map();
     const text = (id, value) => { $(id).textContent = value; };
@@ -62,7 +68,7 @@
     }
     function on(id, label, handler) { $(id).addEventListener("click", () => run(label, handler)); }
     function updateButtons() {
-      $("template-add").disabled = blocked || !file || !selected.size;
+      $("template-add").disabled = blocked || !file || !selected.size || !nativeProfile || $("profile-template").value !== nativeProfile;
       $("template-export").disabled = blocked || !selected.size;
       $("template-recalculate").disabled = blocked || calculating || !file;
       $("template-week").disabled = blocked || calculating || !file;
@@ -78,7 +84,7 @@
         checkbox.setAttribute("aria-label", `Seleccionar ${entry.name}`);
         checkbox.addEventListener("change", () => { checkbox.checked ? selected.add(entry.key) : selected.delete(entry.key); count(); });
         choice.append(checkbox); row.append(choice);
-        for (const value of [entry.name, entry.rx, entry.city || entry.region || "SAT / PMR"]) {
+        for (const value of [entry.name, R.templateModulation(entry) === "AM" ? `${entry.rx} AM` : entry.rx, entry.city || entry.region || "SAT / PMR"]) {
           const cell = document.createElement("td"); cell.textContent = value; row.append(cell);
         }
         $("template-preview").append(row);
@@ -88,7 +94,22 @@
       $("template-next").disabled = page + 1 >= pages;
       count();
     }
-    function count() { text("template-count", `${selected.size} seleccionados / ${entries.length} resultados.`); updateButtons(); }
+    const PROFILE_NOTES = {
+      radicodex: "RadiCodex: CSV de referencia con modulacion y RX_Only explicitos. No programa ninguna radio.",
+      rt950pro: "Radtel RT-950 Pro: CSV FM/AM de referencia; no hay contrato de importacion verificado ni posiciones de memoria, y no se genera archivo CPS.",
+      uvk5v3: "UV-K5 V3: FM y AM solo RX con bloqueo de TX en la memoria; CSV compatible con CHIRP o carga al archivo local.",
+      d878: "AT-D878: proyecto Bricohams AnyTone solo FM; no hay AM y no se genera archivo CPS.",
+      ftx1: "FTX-1: CSV FM/AM de referencia. El editor CAT no garantiza el bloqueo de TX por memoria.",
+      opengd77: "OpenGD77: solo FM; se omiten los canales AM."
+    };
+    function count() {
+      const profile = $("profile-template").value, chosenEntries = entries.filter(entry => selected.has(entry.key));
+      const prepared = R.prepareTemplateExport(profile, chosenEntries);
+      const reasons = Object.entries(prepared.reasons).map(([reason, total]) => `${reason} ${total}`).join(", ");
+      text("template-count", `${selected.size} seleccionados / ${entries.length} resultados.`);
+      text("template-profile-note", `${PROFILE_NOTES[profile]} ${chosenEntries.length ? `${prepared.accepted.length} representables; ${prepared.omitted} omitidos${reasons ? ` (${reasons})` : ""}.` : ""}`);
+      updateButtons();
+    }
     async function preview() {
       if (!file) return;
       const current = ++previewRequest, country = file;
@@ -96,27 +117,35 @@
       if ($("sat-template").checked && !satellites) satellites = await json("satellites");
       if (current !== previewRequest || country !== file) return;
       entries = R.countryTemplateChannels(file, { region: $("region-template").value, query: $("search-template").value,
-        pmr: $("pmr-template").checked, satellites: $("sat-template").checked ? satellites : null });
+        pmr: $("pmr-template").checked, satellites: $("sat-template").checked ? satellites : null,
+        airports: $("airport-template").checked ? airports : null });
       selected.clear(); page = 0;
       render();
     }
     async function load() {
       const id = ++request, code = $("country-template").value;
       previewRequest++;
-      file = null; forecast = null; passSource = null; entries = []; selected.clear(); passRows = [];
+      file = null; airports = null; forecast = null; passSource = null; entries = []; selected.clear(); passRows = [];
       $("region-template").replaceChildren(new Option("Todas las regiones", ""));
       $("template-pass-zone").replaceChildren(); render(); renderPasses();
       const pmr = R.TEMPLATE_COUNTRIES.find(country => country.code === code).pmr;
-      $("pmr-template").disabled = !pmr; if (!pmr) $("pmr-template").checked = false;
+      $("pmr-template").disabled = !pmr; $("pmr-template").checked = pmr;
       text("template-coverage", "Cargando plantilla...");
       const data = R.validateCountryTemplate(await json(code), code);
+      let airportData = null, airportError = "";
+      try { airportData = R.validateAirportTemplate(await json(`${code}-airports`), code); }
+      catch (error) { airportError = error.message; }
       if (id !== request) return;
-      file = data;
+      file = data; airports = airportData;
+      $("airport-template").disabled = !airports;
       for (const region of file.regions) {
-        const total = file.channels.filter(entry => entry.regionId === region.id).length;
+        const total = file.channels.filter(entry => entry.regionId === region.id).length +
+          (airports ? airports.frequencies.filter(entry => airports.airports[entry.ident].regionId === region.id).length : 0);
         $("region-template").add(new Option(`${region.name} (${total})`, region.id));
       }
-      text("template-coverage", `${file.channels.length} repetidores FM disponibles. HearHam.com · ${file.fetchedAt.slice(0, 10)}. Cobertura parcial; no es un registro nacional completo.`);
+      text("template-coverage", `${file.channels.length} repetidores FM disponibles. HearHam.com · ${file.fetchedAt.slice(0, 10)}. Cobertura parcial; no es un registro nacional completo. ${airports ?
+        `${airports.frequencies.length} frecuencias AM de ${Object.keys(airports.airports).length} aeropuertos (OurAirports, dominio publico) · ${airports.fetchedAt.slice(0, 10)}; ${airports.rejected.total} excluidas. Cobertura parcial.` :
+        `Aeropuertos no disponibles: ${airportError}`}`);
       await preview();
       text("template-status", "Selecciona una region o busca una localidad. Ningun canal se selecciona automaticamente.");
     }
@@ -195,7 +224,8 @@
       });
     }
     $("country-template").addEventListener("change", () => run("Cargar plantilla de pais", load));
-    for (const id of ["region-template", "pmr-template", "sat-template"]) $(id).addEventListener("change", () => run("Actualizar plantilla", preview));
+    for (const id of ["region-template", "pmr-template", "sat-template", "airport-template"]) $(id).addEventListener("change", () => run("Actualizar plantilla", preview));
+    $("profile-template").addEventListener("change", count);
     $("search-template").addEventListener("input", () => run("Actualizar plantilla", preview));
     on("template-select", "Seleccionar resultados (max. 1024)", async () => {
       R.assert(entries.length <= 1024, "Mas de 1024 canales: elige una region o filtra antes de seleccionar todos.");
@@ -208,12 +238,21 @@
     on("template-pass-next", "Siguiente", async () => { passPage++; renderPasses(); });
     const chosen = () => { const channels = entries.filter(entry => selected.has(entry.key)); R.assert(channels.length > 0, "Selecciona canales de la plantilla."); return channels; };
     on("template-add", "Anadir seleccion al archivo local", async () => {
-      const channels = chosen(), result = await addChannels(channels); selected.clear(); render();
-      text("template-status", `${result.added} canales anadidos; ${result.duplicates} duplicados omitidos. La radio no se modifica.`);
+      const prepared = R.templateImportChannels($("profile-template").value, chosen());
+      R.assert(prepared.accepted.length > 0, "Ningun canal seleccionado es representable en el modelo con modo y bloqueo de TX seguros.");
+      const result = await addChannels(prepared.accepted); selected.clear(); render();
+      text("template-status", `${result.added} canales anadidos; ${result.duplicates} duplicados omitidos; ${prepared.omitted} no representables en el modelo omitidos. La radio no se modifica.`);
     });
-    on("template-export", "Descargar seleccion CSV", async () => download(`channels-${$("country-template").value}.csv`, R.channelCSV(chosen()), "text/csv;charset=utf-8"));
+    on("template-export", "Descargar seleccion para el modelo", async () => {
+      const profile = $("profile-template").value;
+      R.assert(Object.hasOwn(R.TEMPLATE_PROFILES, profile), "Elige un modelo exportable.");
+      const result = R.templateExportFile(profile, chosen());
+      const zone = $("region-template").value || $("country-template").value;
+      download(`template-${profile}-${zone}.${result.extension}`, result.content, result.mime);
+      text("template-status", `${result.accepted.length} canales exportados para ${result.label}; ${result.omitted} omitidos por modo, banda o bloqueo de TX. ${result.warnings.length ? "Este formato no garantiza solo RX; revisa TX antes de usarlo. " : ""}La radio no se modifica.`);
+    });
     run("Cargar plantilla de pais", load);
-    return { setBusy(value) { blocked = value; container.querySelectorAll("input,select,button").forEach(control => { control.disabled = value; }); $("pmr-template").disabled = value || $("country-template").value === "US"; if (!value) { render(); renderPasses(); } updateButtons(); } };
+    return { setBusy(value) { blocked = value; container.querySelectorAll("input,select,button").forEach(control => { control.disabled = value; }); $("pmr-template").disabled = value || $("country-template").value === "US"; $("airport-template").disabled = value || !airports; if (!value) { render(); renderPasses(); } updateButtons(); } };
   }
   R.mountCountryTemplates = mountCountryTemplates;
 })(globalThis);

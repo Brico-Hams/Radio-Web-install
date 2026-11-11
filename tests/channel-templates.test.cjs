@@ -181,6 +181,133 @@ test("weekly radio passes join 48 h predictPasses windows inside TLE validity fo
   assert.deepEqual(messages[0].result.passes, passes);
   assert.throws(() => R.weeklyTemplatePasses(satellites, murcia, now + 10 * 86400000), /TLE/);
 });
+const airportCountries = R.TEMPLATE_COUNTRIES.map(country => ({ ...country, airports: json(`${country.code}-airports`) }));
+test("airport ingestion keeps only published AM carriers on the 25/8.33 kHz grid, with provenance and declared exclusions", () => {
+  const { buildAirportTemplates, parseCSV, airbandFrequency } = require("../scripts/fetch-channel-templates.cjs");
+  assert.deepEqual(airbandFrequency("118.00833"), { rx: "118.00833" });
+  assert.deepEqual(airbandFrequency("136.975"), { rx: "136.97500" });
+  assert.deepEqual(airbandFrequency("118.005"), { reason: "offGridOrDesignator" });
+  assert.deepEqual(airbandFrequency("117.975"), { reason: "outsideAirband" });
+  assert.deepEqual(airbandFrequency("137.000"), { reason: "outsideAirband" });
+  assert.equal(airbandFrequency(""), null);
+  assert.equal(parseCSV('a,b\r\n"x, ""y""",2\r\n')[0].a, 'x, "y"');
+  const airportRows = parseCSV([
+    "id,ident,type,name,latitude_deg,longitude_deg,iso_country,iso_region,municipality",
+    '1,AAAA,small_airport,"Airport, One",0.5,0.5,ES,ES-ONE,Town',
+    "2,BBBB,closed,Closed,0.5,0.5,ES,ES-ONE,Town",
+    "3,CCCC,small_airport,Outside,50,50,ES,ES-XX,Nowhere",
+    "4,DDDD,small_airport,Other,0.5,2.5,GB,GB-XX,Elsewhere"].join("\n"));
+  const frequencyRows = parseCSV(["id,airport_ref,airport_ident,type,description,frequency_mhz",
+    "10,1,AAAA,TWR,Tower,118.300", "11,1,AAAA,ATIS,,118.005", "12,1,AAAA,GND,,118.00833", "13,1,AAAA,VOR,,113.500",
+    "14,1,AAAA,APP,,", "15,2,BBBB,TWR,,118.300", "16,3,CCCC,TWR,,118.300", "17,4,DDDD,TWR,,121.500", "10,1,AAAA,TWR,dup,118.300"].join("\n"));
+  const files = buildAirportTemplates(airportRows, frequencyRows, features, 0);
+  const spain = files.find(file => file.country === "ES"), britain = files.find(file => file.country === "GB");
+  assert.equal(files.length, 7);
+  assert.deepEqual(spain.frequencies.map(entry => [entry.id, entry.rx]), [[10, "118.30000"], [12, "118.00833"]].sort((a, b) => a[1].localeCompare(b[1])));
+  assert.equal(spain.airports.AAAA.regionId, "ES-ONE");
+  assert.equal(britain.frequencies.length, 1);
+  assert.equal(britain.airports.DDDD.regionId, "GB-ONE");
+  assert.deepEqual({ ...spain.rejected }, { total: 6, closedAirport: 1, invalidFrequency: 1, outsideAirband: 1, offGridOrDesignator: 1, noRegion: 1, duplicate: 1 });
+  assert.equal(spain.license, "Public Domain");
+  assert.match(spain.coverage, /not a complete/);
+  const channels = R.airportChannels(spain);
+  assert.equal(channels[0].mode, "AM");
+  assert.equal(channels[0].tx, channels[0].rx);
+  assert(channels.every(channel => channel.rxOnly && channel.txLocked && channel.ident === "AAAA" && channel.sourceId && channel.source.includes("ourairports.com")));
+  assert.throws(() => R.validateAirportTemplate({ ...spain, frequencies: [{ ...spain.frequencies[0], rx: "118.00500" }] }, "ES"));
+  assert.throws(() => R.validateAirportTemplate(spain, "GB"));
+});
+test("all existing countries ship reproducible airport data bound to catalogue regions", () => {
+  for (const country of airportCountries) {
+    const file = R.validateAirportTemplate(country.airports, country.code), template = R.validateCountryTemplate(json(country.code), country.code);
+    const regions = new Set(template.regions.map(region => region.id));
+    assert(file.frequencies.length > 0, country.code);
+    assert(file.airports && Object.values(file.airports).every(airport => regions.has(airport.regionId)), country.code);
+    assert.equal(file.source, "https://davidmegginson.github.io/ourairports-data/airport-frequencies.csv");
+    assert.equal(file.airportsSource, "https://davidmegginson.github.io/ourairports-data/airports.csv");
+    assert.equal(file.rejected.total, Object.entries(file.rejected).filter(([key]) => key !== "total").reduce((sum, [, count]) => sum + count, 0));
+  }
+  const server = require("../server.cjs").ALLOWED_FILES;
+  for (const country of R.TEMPLATE_COUNTRIES) assert(server.includes(`data/channel-templates/${country.code}-airports.json`));
+});
+test("regional preview joins repeaters and airports, keeps v1 snapshots unchanged and puts PMR446 last, never for the USA", () => {
+  const file = buildTemplates([row], features)[0], airports = {
+    format: "bricohams-airport-template", version: 1, country: "ES", fetchedAt: "2026-01-01T00:00:00.000Z",
+    source: "s", airportsSource: "a", license: "Public Domain", coverage: "c",
+    airports: { LEXX: { id: 1, name: "Test Airfield", municipality: "Town", regionId: "ES-ONE", latitude: 0.5, longitude: 0.5 } },
+    frequencies: [{ id: 5, ident: "LEXX", type: "TWR", description: "", rx: "118.30000" }] };
+  assert.deepEqual(R.countryTemplateChannels(file, { region: "ES-ONE" }), R.countryTemplateChannels(file, { region: "ES-ONE", airports: null }));
+  const combined = R.countryTemplateChannels(file, { region: "ES-ONE", airports, pmr: true });
+  assert.deepEqual(combined.slice(0, 2).map(channel => channel.key), ["hearham:1", "ourairports:5"]);
+  assert(combined.slice(2).every(channel => channel.key.startsWith("pmr446:")) && combined.length === 18);
+  assert.equal(R.countryTemplateChannels(file, { query: "airfield", airports }).length, 1);
+  assert.throws(() => R.countryTemplateChannels(file, { airports: { ...airports, country: "GB" } }));
+  assert.throws(() => R.countryTemplateChannels(file, { airports: { ...airports, airports: { LEXX: { ...airports.airports.LEXX, regionId: "ES-NONE" } } } }));
+  const usa = buildTemplates([row], features).find(item => item.country === "US");
+  assert.throws(() => R.countryTemplateChannels(usa, { pmr: true }), /PMR446/);
+  assert(!airportCountries.find(country => country.code === "US").airports.frequencies.some(entry => entry.ident.startsWith("PMR")));
+});
+test("model profiles omit and count channels without a representable mode or safe TX lock; AT-D878 has no AM", () => {
+  const fm = { key: "a", name: "FM1", rx: "145.60000", tx: "145.00000", mode: 0, rxOnly: true, source: "s" };
+  const am = { key: "b", name: "AM1", rx: "118.30000", tx: "118.30000", mode: "AM", rxOnly: true, source: "s" };
+  const unsafe = [{ ...fm, key: "c", rxOnly: false }, { ...am, key: "d", tx: "118.40000" }, { ...fm, key: "e", mode: 1 },
+    { ...fm, key: "f", rx: "28.00000", tx: "28.00000" }];
+  const all = [fm, am, ...unsafe];
+  const d878 = R.prepareTemplateExport("d878", all);
+  assert.deepEqual(d878.accepted.map(channel => channel.key), ["a"]);
+  assert.equal(d878.omitted, 5);
+  assert.deepEqual(d878.reasons, { "modulation:AM": 2, txLock: 1, "modulation:DMR": 1, band: 1 });
+  assert.deepEqual(R.prepareTemplateExport("rt950pro", all).accepted.map(channel => channel.key), ["a", "b"]);
+  assert.deepEqual(R.prepareTemplateExport("uvk5v3", all).accepted.map(channel => channel.key), ["a", "b"]);
+  assert.deepEqual(R.prepareTemplateExport("radicodex", all).accepted.map(channel => channel.key), ["a", "b"]);
+  assert.deepEqual(R.prepareTemplateExport("ftx1", all).accepted.map(channel => channel.key), ["a", "b"]);
+  assert.throws(() => R.prepareTemplateExport("rt950pro", "x"));
+  assert.throws(() => R.templateExportFile("d878", [am]), /representable/);
+  assert.throws(() => R.templateExportFile("opengd77", [fm]));
+  const project = JSON.parse(R.templateExportFile("d878", all).content);
+  assert.equal(project.airband, false);
+  assert(project.channels.every(channel => channel.mode === "FM" && channel.rxOnly === true));
+  assert.equal(project.channels.length, 1);
+  assert.match(R.templateExportFile("ftx1", [fm]).content, /"RX_Only"/);
+  assert.match(R.templateExportFile("uvk5v3", [am, fm]).content, /"AM"[\s\S]*"FM"|"FM"[\s\S]*"AM"/);
+  assert.match(R.templateExportFile("rt950pro", [fm]).content, /"RX_Only"[\s\S]*"Yes"/);
+  assert.match(R.templateExportFile("radicodex", [{ ...fm, name: "=cmd" }]).content, /"'=cmd"/);
+  for (const id of Object.keys(R.TEMPLATE_PROFILES)) assert(!/script|cps/i.test(R.TEMPLATE_PROFILES[id].output));
+  const shipped = json("profiles");
+  assert.equal(shipped.format, "bricohams-template-profiles");
+  assert.deepEqual(shipped.profiles, JSON.parse(JSON.stringify(R.TEMPLATE_PROFILES)));
+});
+test("UV-K5 V3 loads template AM as RX-only extended memories and the import path rejects unsupported profiles", () => {
+  const es = airportCountries.find(country => country.code === "ES").airports;
+  const am = R.airportChannels(es).slice(0, 2);
+  const prepared = R.templateImportChannels("uvk5v3", [...am, { key: "x", name: "DMR", rx: "145.00000", tx: "145.00000", mode: 1, rxOnly: true }]);
+  assert.equal(prepared.accepted.length, 2);
+  assert.equal(prepared.omitted, 1);
+  assert(prepared.accepted.every(channel => channel.mode === 1 && channel.extended === true && channel.rxOnly === true));
+  const image = new Uint8Array(0xa180).fill(255);
+  image.fill(0, 0, 16);
+  R.view(image).setUint32(0, 14550000, true);
+  image.fill(0, 0x4000, 0x4010);
+  image.set(new TextEncoder().encode("BASE-FM"), 0x4000);
+  image.set([2, 25], 0x8000);
+  image.fill(0, 0xa160, 0xa170);
+  image.set(new TextEncoder().encode("v6.1.0"), 0xa160);
+  const decoded = R.readQuanshengChannels(R.appendQuanshengChannels(image, prepared.accepted, 1).image).slice(1);
+  assert.equal(decoded.length, 2);
+  assert(decoded.every(channel => channel.mode === 1 && channel.rxOnly && channel.rx === channel.tx));
+  assert.throws(() => R.appendQuanshengChannels(image, am, 1), /FM analogicos/);
+  assert.throws(() => R.templateImportChannels("d878", am));
+  const gd77 = R.templateImportChannels("opengd77", [...am, { key: "f", name: "F", rx: "145.60000", tx: "145.60000", mode: 0, rxOnly: true }]);
+  assert.equal(gd77.accepted.length, 1);
+  assert.equal(gd77.omitted, 2);
+});
+test("Android bundles the shared template datasets through Gradle and never from a copied directory", () => {
+  const gradle = read("android/app/build.gradle.kts");
+  assert.match(gradle, /syncChannelTemplates/);
+  assert.match(gradle, /data\/channel-templates/);
+  assert.match(gradle, /exclude\("\*-passes\.json", "satellites\.json"\)/);
+  assert(!fs.existsSync(path.join(root, "android/app/src/main/assets/channel-templates")));
+});
 test("schedule publishes only validated permitted data and explicitly deploys Pages after bot commits", () => {
   assert(read(".gitignore").includes("!data/channel-templates/*-passes.json"),
     "Public reference forecasts must not be excluded with private pass exports.");

@@ -1,0 +1,139 @@
+{
+  "format": "bricohams-template-profiles",
+  "version": 1,
+  "profiles": {
+    "radicodex": {
+      "label": "RadiCodex",
+      "modulations": [
+        "FM",
+        "AM"
+      ],
+      "bands": {
+        "FM": [
+          [
+            136,
+            174
+          ],
+          [
+            400,
+            470
+          ]
+        ],
+        "AM": [
+          [
+            118,
+            137
+          ]
+        ]
+      },
+      "txLock": "reference-column",
+      "output": "reference-csv",
+      "extension": "csv"
+    },
+    "rt950pro": {
+      "label": "Radtel RT-950 Pro",
+      "modulations": [
+        "FM",
+        "AM"
+      ],
+      "bands": {
+        "FM": [
+          [
+            136,
+            174
+          ],
+          [
+            400,
+            470
+          ]
+        ],
+        "AM": [
+          [
+            118,
+            137
+          ]
+        ]
+      },
+      "txLock": "reference-column",
+      "output": "reference-csv",
+      "extension": "csv"
+    },
+    "uvk5v3": {
+      "label": "Quansheng UV-K5 V3",
+      "modulations": [
+        "FM",
+        "AM"
+      ],
+      "bands": {
+        "FM": [
+          [
+            136,
+            174
+          ],
+          [
+            400,
+            470
+          ]
+        ],
+        "AM": [
+          [
+            118,
+            137
+          ]
+        ]
+      },
+      "txLock": "memory-bit",
+      "output": "chirp-csv",
+      "extension": "csv"
+    },
+    "d878": {
+      "label": "AnyTone AT-D878",
+      "modulations": [
+        "FM"
+      ],
+      "bands": {
+        "FM": [
+          [
+            136,
+            174
+          ],
+          [
+            400,
+            470
+          ]
+        ]
+      },
+      "txLock": "project-flag",
+      "output": "anytone-project",
+      "extension": "json"
+    },
+    "ftx1": {
+      "label": "Yaesu FTX-1",
+      "modulations": [
+        "FM",
+        "AM"
+      ],
+      "bands": {
+        "FM": [
+          [
+            136,
+            174
+          ],
+          [
+            400,
+            470
+          ]
+        ],
+        "AM": [
+          [
+            118,
+            137
+          ]
+        ]
+      },
+      "txLock": "reference-column",
+      "output": "reference-csv",
+      "extension": "csv"
+    }
+  }
+}

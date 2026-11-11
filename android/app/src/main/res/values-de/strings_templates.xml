@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="screen_templates">Regionale Vorlagen</string>
+    <string name="home_open_templates">Regionale Vorlagen offline (nur RX)</string>
+    <string name="template_country">Land</string>
+    <string name="template_zone">Zone</string>
+    <string name="template_model">Zielmodell</string>
+    <string name="template_all_zones">Alle Zonen</string>
+    <string name="template_airports">Flughäfen hinzufügen (AM nur RX, 118-136.975 MHz)</string>
+    <string name="template_pmr">PMR446 1-16 am Ende hinzufügen (nur RX)</string>
+    <string name="template_counts">Darstellbar: %1$d. Ausgelassen: %2$d.</string>
+    <string name="template_coverage">Relais: %1$s\nFlughäfen: %2$s</string>
+    <string name="template_rx_not_guaranteed">Dieses Format kann nur RX nicht garantieren: Prüfe und sperre TX in deiner Software vor der Nutzung. Es wird kein Schreibskript erzeugt.</string>
+    <string name="template_none_shown">Keine darstellbaren Kanäle.</string>
+    <string name="template_none_representable">Kein Kanal ist auf %1$s mit sicherem Modus und TX-Sperre darstellbar.</string>
+    <string name="template_export">Auswahl für das Modell exportieren</string>
+    <string name="template_exported">Exportiert: %1$d Kanäle, %2$d ausgelassen. Es wurde kein Funkgerät programmiert.</string>
+    <string name="template_cancelled">Export abgebrochen.</string>
+    <string name="template_load_error">Vorlage konnte nicht gelesen werden: %1$s</string>
+    <string name="template_error">Vorlagenfehler: %1$s</string>
+    <string name="template_anytone_capacity">AnyTone erlaubt 4000 Kanäle pro Projekt. Wähle eine Zone.</string>
+</resources>

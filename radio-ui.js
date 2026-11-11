@@ -1677,7 +1677,7 @@
       $("planning-panel").before(countryContainer);
     }
     countryTemplates = R.mountCountryTemplates({
-      container: countryContainer, action, download,
+      container: countryContainer, action, download, nativeProfile: page === "quansheng" ? "uvk5v3" : "opengd77",
       addChannels(channels) {
         return planning.addTemplateChannels(channels);
       },
