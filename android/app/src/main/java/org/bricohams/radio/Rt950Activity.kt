@@ -12,6 +12,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.widget.ArrayAdapter
+import android.widget.AdapterView
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -88,6 +89,18 @@ class Rt950Activity : LocalizedActivity() {
     private lateinit var zoneEdit: EditText
     private lateinit var slotEdit: EditText
     private lateinit var ctcssEdit: EditText
+    @Volatile private var variant = Rt950Variant.UNKNOWN
+    @Volatile private var backupManifest: File? = null
+    @Volatile private var failedZones: Set<Int> = emptySet()
+    private lateinit var zpCountry: Spinner
+    private lateinit var zpRegion: Spinner
+    private lateinit var zpAirports: CheckBox
+    private lateinit var zpPmr: CheckBox
+    private lateinit var zpCb: CheckBox
+    private lateinit var zpOverwrite: CheckBox
+    private lateinit var zpStatus: TextView
+    private var zpDataset: ChannelTemplates.Dataset? = null
+    private var zpRegions = listOf<ChannelTemplates.Region>()
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -131,6 +144,7 @@ class Rt950Activity : LocalizedActivity() {
         buildAprs(body)
         buildMessages(body)
         buildSatellite(body)
+        buildZonePlan(body)
         setContentView(scroll)
         mainHandler.post(ticker)
     }
@@ -184,18 +198,20 @@ class Rt950Activity : LocalizedActivity() {
         parent.addView(this)
     }
 
+    private fun themedAdapter(items: List<String>) = object : ArrayAdapter<String>(this@Rt950Activity, android.R.layout.simple_spinner_dropdown_item, items) {
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+            super.getView(position, convertView, parent).also { (it as? TextView)?.setTextColor(colors.text) }
+        override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View =
+            super.getDropDownView(position, convertView, parent).also {
+                (it as? TextView)?.setTextColor(colors.text)
+                it.setBackgroundColor(colors.surfaceHigh)
+            }
+    }
+
     private fun spinner(parent: LinearLayout, label: Int, items: List<String>): Spinner {
         note(parent, label)
         return Spinner(this).apply {
-            adapter = object : ArrayAdapter<String>(this@Rt950Activity, android.R.layout.simple_spinner_dropdown_item, items) {
-                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
-                    super.getView(position, convertView, parent).also { (it as? TextView)?.setTextColor(colors.text) }
-                override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View =
-                    super.getDropDownView(position, convertView, parent).also {
-                        (it as? TextView)?.setTextColor(colors.text)
-                        it.setBackgroundColor(colors.surfaceHigh)
-                    }
-            }
+            adapter = themedAdapter(items)
             contentDescription = getString(label)
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             parent.addView(this)
@@ -254,6 +270,8 @@ class Rt950Activity : LocalizedActivity() {
         stopScan?.invoke(); stopScan = null
         status.setText(R.string.rt950_connecting)
         backupDone = false
+        backupManifest = null
+        failedZones = emptySet()
         work {
             transport?.close()
             val link = BleRt950Transport(this, address)
@@ -279,10 +297,10 @@ class Rt950Activity : LocalizedActivity() {
     }
 
     /** One clone session: KISS delivery is paused meanwhile and may stay silent afterwards until the radio is power cycled. */
-    private fun <T> clone(block: (Rt950Session) -> T): T {
+    private fun <T> clone(chosen: Rt950Variant = variant, block: (Rt950Session) -> T): T {
         val link = transport ?: throw LocalizedStateException(UiText(R.string.err_rt950_not_connected))
         link.beginClone()
-        val session = Rt950Session(link)
+        val session = Rt950Session(link, variant = chosen)
         try {
             return block(session)
         } finally {
@@ -310,29 +328,13 @@ class Rt950Activity : LocalizedActivity() {
         val result = clone { session ->
             session.readAll { done, total -> runOnUiThread { backupStatus.text = getString(R.string.rt950_backup_progress, done, total) } }
         }
-        val hash = saveBackup(result)
-        backup = result
-        backupDone = true
-        runOnUiThread { backupStatus.text = getString(R.string.rt950_backup_saved, result.model, hash) }
-    }
-
-    private fun saveBackup(result: Rt950Backup): String {
-        val root = File(filesDir, "backups")
-        if (!root.isDirectory && !root.mkdirs()) throw LocalizedIOException(UiText(R.string.err_backup_folder))
         val stamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT).withZone(ZoneId.systemDefault()).format(Instant.now())
-        val image = result.image()
-        val hash = QuanshengBackups.sha256(image)
-        val bin = File(root, "rt950pro-$stamp.bin")
-        bin.writeBytes(image)
-        val parts = JSONArray()
-        for (part in result.parts) {
-            parts.put(JSONObject().put("name", part.name).put("cmd", part.cmd).put("address", part.address)
-                .put("length", part.data.size).put("sha256", QuanshengBackups.sha256(part.data)))
-        }
-        File(root, "rt950pro-$stamp.json").writeText(JSONObject().put("model", result.model).put("createdAt", stamp)
-            .put("size", image.size).put("sha256", hash).put("file", bin.name).put("parts", parts).toString(2))
-        if (QuanshengBackups.sha256(bin.readBytes()) != hash) throw LocalizedIOException(UiText(R.string.err_backup_copy_corrupt, bin.name))
-        return hash
+        // The in-memory copy is replaced by the one reloaded from disk, which proves every part against the manifest SHA-256.
+        val saved = Rt950BackupStore.write(File(filesDir, "backups"), result, stamp)
+        backup = saved.backup
+        backupManifest = saved.manifest
+        backupDone = true
+        runOnUiThread { backupStatus.text = getString(R.string.rt950_backup_saved, result.model, saved.hash) }
     }
 
     // (c) APRS configuration
@@ -547,5 +549,149 @@ class Rt950Activity : LocalizedActivity() {
                     runOnUiThread { satStatus.text = getString(R.string.rt950_sat_written, channels.size, count) }
                 }
             }.show()
+    }
+
+    // (f) Template zones written to the radio
+
+    private fun readAsset(name: String) = assets.open("channel-templates/$name").use { String(it.readBytes(), Charsets.UTF_8) }
+
+    private fun buildZonePlan(body: LinearLayout) = section(body, R.string.rt950_zp_section) { card ->
+        note(card, R.string.rt950_zp_help)
+        zpCountry = spinner(card, R.string.template_country, ChannelTemplates.countries.map { "${it.code} - ${it.name}" })
+        zpRegion = spinner(card, R.string.rt950_zp_region, listOf(getString(R.string.template_all_zones)))
+        zpAirports = check(card, R.string.template_airports, true)
+        zpPmr = check(card, R.string.template_pmr)
+        zpCb = check(card, R.string.template_cb)
+        val variantSpinner = spinner(card, R.string.rt950_zp_variant, listOf(R.string.rt950_zp_variant_unknown,
+            R.string.rt950_zp_variant_ch960, R.string.rt950_zp_variant_ch990).map { getString(it) })
+        variantSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { variant = Rt950Variant.values()[position] }
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+        }
+        note(card, R.string.rt950_zp_variant_warning)
+        zpOverwrite = check(card, R.string.rt950_zp_overwrite)
+        button(card, R.string.rt950_zp_preview) { previewZonePlan() }
+        button(card, R.string.rt950_zp_write, true) { confirmZonePlan() }
+        button(card, R.string.rt950_restore) { confirmRestore() }
+        zpStatus = live(Brand.text(this, 14f, colors.accent))
+        card.addView(zpStatus)
+        loadZpCountry()
+        zpCountry.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) { loadZpCountry() }
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+        }
+    }
+
+    private fun loadZpCountry() {
+        try {
+            val selected = ChannelTemplates.countries[zpCountry.selectedItemPosition]
+            val loaded = ChannelTemplates.dataset(selected, readAsset("${selected.code}.json"), readAsset("${selected.code}-airports.json"))
+            zpDataset = loaded
+            zpRegions = loaded.regions.sortedBy { it.name }
+            zpRegion.adapter = themedAdapter(listOf(getString(R.string.template_all_zones)) + zpRegions.map { it.name })
+            zpPmr.visibility = if (selected.pmr) View.VISIBLE else View.GONE
+            if (!selected.pmr) zpPmr.isChecked = false
+            zpCb.visibility = if (selected.code == "ES") View.VISIBLE else View.GONE
+            if (selected.code != "ES") zpCb.isChecked = false
+        } catch (error: Exception) {
+            zpDataset = null
+            zpStatus.text = getString(R.string.template_load_error, errorText(error))
+        }
+    }
+
+    /** Needs the in-session backup: occupancy is judged on the backup, never on a fresh read. */
+    private fun currentZonePlan(): Rt950ZoneWriter.Plan {
+        requireBackup()
+        val saved = backup ?: throw LocalizedStateException(UiText(R.string.err_rt950_need_backup))
+        val loaded = zpDataset ?: throw LocalizedStateException(UiText(R.string.err_rt950_plan_empty))
+        val chosen = variant
+        val region = zpRegions.getOrNull(zpRegion.selectedItemPosition - 1)?.id ?: ""
+        val channels = ChannelTemplates.select(loaded, region, zpAirports.isChecked, zpPmr.isChecked && loaded.country.pmr,
+            zpCb.isChecked && loaded.country.code == "ES")
+        val profile = ChannelTemplates.profiles(readAsset("profiles.json")).first { it.id == "rt950pro" }
+        val zonePlan = ChannelTemplates.zonePlan(profile, channels, variantConfirmed = chosen == Rt950Variant.CH990)
+        return Rt950ZoneWriter.plan(zonePlan, saved, chosen)
+    }
+
+    private fun previewZonePlan() {
+        try {
+            val plan = currentZonePlan()
+            val lines = plan.zones.map {
+                getString(R.string.rt950_zp_zone_line, it.zone, it.name, it.slots.size,
+                    if (it.occupied == 0) getString(R.string.rt950_zp_state_empty) else getString(R.string.rt950_zp_state_occupied, it.occupied))
+            } + getString(R.string.rt950_zp_omitted, plan.omitted)
+            zpStatus.text = lines.joinToString("\n")
+        } catch (error: IllegalArgumentException) {
+            notice.text = errorText(error)
+        } catch (error: IllegalStateException) {
+            notice.text = errorText(error)
+        }
+    }
+
+    private fun variantLabel(value: Rt950Variant) = getString(when (value) {
+        Rt950Variant.UNKNOWN -> R.string.rt950_zp_variant_unknown
+        Rt950Variant.CH960 -> R.string.rt950_zp_variant_ch960
+        Rt950Variant.CH990 -> R.string.rt950_zp_variant_ch990
+    })
+
+    private fun confirmZonePlan() {
+        try {
+            val plan = currentZonePlan()
+            val overwrite = zpOverwrite.isChecked
+            Rt950ZoneWriter.check(plan, plan.variant, overwrite)
+            val lines = plan.zones.joinToString("\n") {
+                getString(R.string.rt950_zp_confirm_line, it.zone, it.name, 1, it.slots.size, it.slots.size, it.replaced)
+            }
+            AlertDialog.Builder(this).setTitle(R.string.rt950_zp_confirm_title)
+                .setMessage(getString(R.string.rt950_zp_confirm_body, variantLabel(plan.variant), lines))
+                .setNegativeButton(R.string.action_cancel, null)
+                .setPositiveButton(R.string.rt950_zp_write) { _, _ -> writeZonePlan(plan, overwrite) }.show()
+        } catch (error: IllegalArgumentException) {
+            notice.text = errorText(error)
+        } catch (error: IllegalStateException) {
+            notice.text = errorText(error)
+        }
+    }
+
+    private fun writeZonePlan(plan: Rt950ZoneWriter.Plan, overwrite: Boolean) = work {
+        requireBackup()
+        val results = clone(plan.variant) { Rt950ZoneWriter.write(it, plan, overwrite) }
+        failedZones = Rt950ZoneWriter.affectedZones(results)
+        val text = results.joinToString("\n") {
+            when (it.status) {
+                Rt950ZoneWriter.Status.OK -> getString(R.string.rt950_zp_result_ok, it.zone)
+                Rt950ZoneWriter.Status.MISMATCH -> getString(R.string.rt950_zp_result_mismatch, it.zone, it.detail ?: "")
+                Rt950ZoneWriter.Status.ERROR -> getString(R.string.rt950_zp_result_error, it.zone, it.detail ?: "")
+                Rt950ZoneWriter.Status.NOT_ATTEMPTED -> getString(R.string.rt950_zp_result_skipped, it.zone)
+            }
+        } + if (failedZones.isEmpty()) "" else "\n" + getString(R.string.rt950_zp_failed_hint)
+        runOnUiThread { zpStatus.text = text }
+    }
+
+    private fun confirmRestore() {
+        try {
+            requireBackup()
+            val zones = failedZones
+            val scope = if (zones.isEmpty()) getString(R.string.rt950_restore_scope_all)
+                else getString(R.string.rt950_restore_scope_zones, zones.sorted().joinToString(", "))
+            val chosen = variant
+            AlertDialog.Builder(this).setTitle(R.string.rt950_restore_confirm_title)
+                .setMessage(getString(R.string.rt950_restore_confirm_body, scope))
+                .setNegativeButton(R.string.action_cancel, null)
+                .setPositiveButton(R.string.rt950_restore) { _, _ -> restoreBackup(zones, chosen) }.show()
+        } catch (error: IllegalStateException) {
+            notice.text = errorText(error)
+        }
+    }
+
+    private fun restoreBackup(zones: Set<Int>, chosen: Rt950Variant) = work {
+        requireBackup()
+        val manifest = backupManifest ?: throw LocalizedStateException(UiText(R.string.err_rt950_need_backup))
+        val saved = Rt950BackupStore.load(manifest)
+        val written = clone(chosen) { it.restoreChannels(saved, zones.ifEmpty { null }) }
+        failedZones = emptySet()
+        runOnUiThread {
+            zpStatus.text = if (written.isEmpty()) getString(R.string.rt950_restore_none) else getString(R.string.rt950_restore_done, written.size)
+        }
     }
 }
