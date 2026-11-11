@@ -147,7 +147,11 @@
     <string name="rt950_zp_failed_hint">Some zones failed or differ: tap \"Restore backup\" to return them to the backup state.</string>
     <string name="rt950_restore">Restore backup</string>
     <string name="rt950_restore_confirm_title">Restore the backup to the radio?</string>
-    <string name="rt950_restore_confirm_body">Only the channel blocks that differ will be rewritten from this session\'s verified backup (%1$s), within the range allowed for the chosen variant. They are then read back and checked.</string>
+    <string name="rt950_restore_confirm_body">Backup: %2$s\n\nOnly the channel blocks that differ will be rewritten (%1$s), within the range allowed for the chosen variant. They are then read back and checked.\n\n%3$s</string>
+    <string name="rt950_restore_pick_title">Backup to restore</string>
+    <string name="rt950_restore_pick_item">%1$s · SHA-256 %2$s</string>
+    <string name="rt950_restore_pick_next">Continue</string>
+    <string name="rt950_restore_diff">Zones that differ from the current radio: %1$s\nBlocks: %2$s</string>
     <string name="rt950_restore_scope_all">all zones</string>
     <string name="rt950_restore_scope_zones">zones %1$s</string>
     <string name="rt950_restore_done">Backup restored and verified: %1$d blocks rewritten</string>

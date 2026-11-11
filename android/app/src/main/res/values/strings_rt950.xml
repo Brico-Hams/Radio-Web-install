@@ -147,7 +147,11 @@
     <string name="rt950_zp_failed_hint">Hay zonas con error o diferencias: pulsa «Restaurar copia» para devolverlas al estado de la copia.</string>
     <string name="rt950_restore">Restaurar copia</string>
     <string name="rt950_restore_confirm_title">¿Restaurar la copia en la radio?</string>
-    <string name="rt950_restore_confirm_body">Se reescribirán, desde la copia verificada de esta sesión, solo los bloques de canales que difieran (%1$s), dentro del rango permitido para la variante elegida. Después se releerán y comprobarán.</string>
+    <string name="rt950_restore_confirm_body">Copia: %2$s\n\nSe reescribirán solo los bloques de canales que difieran (%1$s), dentro del rango permitido para la variante elegida. Después se releerán y comprobarán.\n\n%3$s</string>
+    <string name="rt950_restore_pick_title">Copia a restaurar</string>
+    <string name="rt950_restore_pick_item">%1$s · SHA-256 %2$s</string>
+    <string name="rt950_restore_pick_next">Continuar</string>
+    <string name="rt950_restore_diff">Zonas distintas de la radio actual: %1$s\nBloques: %2$s</string>
     <string name="rt950_restore_scope_all">todas las zonas</string>
     <string name="rt950_restore_scope_zones">zonas %1$s</string>
     <string name="rt950_restore_done">Copia restaurada y verificada: %1$d bloques reescritos</string>

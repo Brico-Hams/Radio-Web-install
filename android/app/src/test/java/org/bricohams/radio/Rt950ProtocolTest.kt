@@ -280,6 +280,21 @@ class Rt950ProtocolTest {
         assertTrue(radio.block(0x7800).contentEquals(backup.part("channels").data.copyOfRange(0x7800, 0x7880)))
     }
 
+    @Test fun restoreFromOlderBackupRevertsOnlyWrittenZone() {
+        val radio = Radio()
+        val older = backupOf(radio)
+        val live = session(radio, Rt950Variant.CH960)
+        live.writeChannels(1, mapOf(1 to Rt950Channel(145_800_000, null, name = "NEW")))
+        val newer = backupOf(radio)
+        radio.block(0x6F00)[0] = 0x55
+        assertEquals(emptyList<Int>(), session(radio, Rt950Variant.CH960).restoreChannels(newer, setOf(1)))
+        val diff = session(radio, Rt950Variant.CH960).channelDiff(older, setOf(1))
+        assertEquals(setOf(1), diff.zones)
+        assertEquals(listOf(0x0000), session(radio, Rt950Variant.CH960).restoreChannels(older, setOf(1)))
+        assertEquals(0x55, radio.block(0x6F00)[0].toInt())
+        assertTrue(radio.block(0x0000).contentEquals(older.part("channels").data.copyOfRange(0, 0x80)))
+    }
+
     @Test fun readAllSkipsUnknownRegions() {
         val radio = Radio()
         val backup = Rt950Session(radio, Random(2)) {}.readAll()

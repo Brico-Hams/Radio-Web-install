@@ -147,7 +147,11 @@
     <string name="rt950_zp_failed_hint">Des zones sont en erreur ou diffèrent : touchez « Restaurer la sauvegarde » pour les remettre dans l\'état de la sauvegarde.</string>
     <string name="rt950_restore">Restaurer la sauvegarde</string>
     <string name="rt950_restore_confirm_title">Restaurer la sauvegarde dans la radio ?</string>
-    <string name="rt950_restore_confirm_body">Seuls les blocs de canaux qui diffèrent seront réécrits depuis la sauvegarde vérifiée de cette session (%1$s), dans la plage autorisée pour la variante choisie. Ils sont ensuite relus et contrôlés.</string>
+    <string name="rt950_restore_confirm_body">Sauvegarde : %2$s\n\nSeuls les blocs de canaux qui diffèrent seront réécrits (%1$s), dans la plage autorisée pour la variante choisie. Ils sont ensuite relus et contrôlés.\n\n%3$s</string>
+    <string name="rt950_restore_pick_title">Copie à restaurer</string>
+    <string name="rt950_restore_pick_item">%1$s · SHA-256 %2$s</string>
+    <string name="rt950_restore_pick_next">Continuer</string>
+    <string name="rt950_restore_diff">Zones différentes de la radio actuelle : %1$s\nBlocs : %2$s</string>
     <string name="rt950_restore_scope_all">toutes les zones</string>
     <string name="rt950_restore_scope_zones">zones %1$s</string>
     <string name="rt950_restore_done">Sauvegarde restaurée et vérifiée : %1$d blocs réécrits</string>

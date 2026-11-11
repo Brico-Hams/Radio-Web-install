@@ -26,6 +26,19 @@ object Rt950BackupStore {
         return Saved(manifest, hash, load(manifest))
     }
 
+    class Entry(val manifest: File, val createdAt: String, val hash: String)
+
+    /** Every saved manifest in [root], newest first; unreadable manifests are skipped (they fail on [load] anyway). */
+    fun list(root: File): List<Entry> = (root.listFiles { f -> f.name.startsWith("rt950pro-") && f.name.endsWith(".json") } ?: emptyArray())
+        .mapNotNull { file ->
+            try {
+                val json = JSONObject(file.readText())
+                Entry(file, json.getString("createdAt"), json.getString("sha256"))
+            } catch (_: JSONException) {
+                null
+            }
+        }.sortedByDescending { it.createdAt }
+
     /** Throws [LocalizedIOException] when the image or any part does not match the manifest. */
     fun load(manifest: File): Rt950Backup {
         var name = manifest.name

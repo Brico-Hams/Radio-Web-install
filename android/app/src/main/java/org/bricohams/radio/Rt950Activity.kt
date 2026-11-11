@@ -91,6 +91,7 @@ class Rt950Activity : LocalizedActivity() {
     private lateinit var ctcssEdit: EditText
     @Volatile private var variant = Rt950Variant.UNKNOWN
     @Volatile private var backupManifest: File? = null
+    @Volatile private var preWriteManifest: File? = null
     @Volatile private var failedZones: Set<Int> = emptySet()
     private lateinit var zpCountry: Spinner
     private lateinit var zpRegion: Spinner
@@ -272,6 +273,7 @@ class Rt950Activity : LocalizedActivity() {
         status.setText(R.string.rt950_connecting)
         backupDone = false
         backupManifest = null
+        preWriteManifest = null
         failedZones = emptySet()
         work {
             transport?.close()
@@ -659,6 +661,7 @@ class Rt950Activity : LocalizedActivity() {
 
     private fun writeZonePlan(plan: Rt950ZoneWriter.Plan, overwrite: Boolean) = work {
         requireBackup()
+        preWriteManifest = backupManifest
         val results = clone(plan.variant) { Rt950ZoneWriter.write(it, plan, overwrite) }
         failedZones = Rt950ZoneWriter.affectedZones(results)
         val text = results.joinToString("\n") {
@@ -675,22 +678,43 @@ class Rt950Activity : LocalizedActivity() {
     private fun confirmRestore() {
         try {
             requireBackup()
-            val zones = failedZones
-            val scope = if (zones.isEmpty()) getString(R.string.rt950_restore_scope_all)
-                else getString(R.string.rt950_restore_scope_zones, zones.sorted().joinToString(", "))
-            val chosen = variant
-            AlertDialog.Builder(this).setTitle(R.string.rt950_restore_confirm_title)
-                .setMessage(getString(R.string.rt950_restore_confirm_body, scope))
+            val entries = Rt950BackupStore.list(File(filesDir, "backups"))
+            if (entries.isEmpty()) throw LocalizedStateException(UiText(R.string.err_rt950_need_backup))
+            val labels = entries.map { getString(R.string.rt950_restore_pick_item, it.createdAt, it.hash.take(8)) }.toTypedArray()
+            var index = entries.indexOfFirst { it.manifest == preWriteManifest }.takeIf { it >= 0 } ?: 0
+            AlertDialog.Builder(this).setTitle(R.string.rt950_restore_pick_title)
+                .setSingleChoiceItems(labels, index) { _, which -> index = which }
                 .setNegativeButton(R.string.action_cancel, null)
-                .setPositiveButton(R.string.rt950_restore) { _, _ -> restoreBackup(zones, chosen) }.show()
+                .setPositiveButton(R.string.rt950_restore_pick_next) { _, _ -> previewRestore(entries[index]) }.show()
         } catch (error: IllegalStateException) {
             notice.text = errorText(error)
         }
     }
 
-    private fun restoreBackup(zones: Set<Int>, chosen: Rt950Variant) = work {
+    private fun previewRestore(entry: Rt950BackupStore.Entry) = work {
+        val zones = failedZones
+        val chosen = variant
+        val saved = Rt950BackupStore.load(entry.manifest)
+        val diff = clone(chosen) { it.channelDiff(saved, zones.ifEmpty { null }) }
+        runOnUiThread {
+            if (diff.blocks.isEmpty()) {
+                zpStatus.setText(R.string.rt950_restore_none)
+                return@runOnUiThread
+            }
+            val scope = if (zones.isEmpty()) getString(R.string.rt950_restore_scope_all)
+                else getString(R.string.rt950_restore_scope_zones, zones.sorted().joinToString(", "))
+            val differing = getString(R.string.rt950_restore_diff, diff.zones.joinToString(", "),
+                diff.blocks.joinToString(", ") { Rt950Protocol.hex(it) })
+            AlertDialog.Builder(this).setTitle(R.string.rt950_restore_confirm_title)
+                .setMessage(getString(R.string.rt950_restore_confirm_body, scope,
+                    getString(R.string.rt950_restore_pick_item, entry.createdAt, entry.hash.take(8)), differing))
+                .setNegativeButton(R.string.action_cancel, null)
+                .setPositiveButton(R.string.rt950_restore) { _, _ -> restoreBackup(entry.manifest, zones, chosen) }.show()
+        }
+    }
+
+    private fun restoreBackup(manifest: File, zones: Set<Int>, chosen: Rt950Variant) = work {
         requireBackup()
-        val manifest = backupManifest ?: throw LocalizedStateException(UiText(R.string.err_rt950_need_backup))
         val saved = Rt950BackupStore.load(manifest)
         val written = clone(chosen) { it.restoreChannels(saved, zones.ifEmpty { null }) }
         failedZones = emptySet()

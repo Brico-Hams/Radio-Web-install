@@ -277,19 +277,29 @@ class Rt950Session(
      * keep their current content); null restores the whole channel table. Every written block is read back and compared.
      * Returns the addresses of the blocks that were written.
      */
-    fun restoreChannels(saved: Rt950Backup, zones: Set<Int>? = null): List<Int> {
+    fun restoreChannels(saved: Rt950Backup, zones: Set<Int>? = null): List<Int> =
+        restoreOrDiff(saved, zones, write = true).blocks
+
+    /** Reads the current channel blocks and reports the blocks and zones that [restoreChannels] would change; writes nothing. */
+    fun channelDiff(saved: Rt950Backup, zones: Set<Int>? = null): ChannelDiff = restoreOrDiff(saved, zones, write = false)
+
+    class ChannelDiff(val blocks: List<Int>, val zones: Set<Int>)
+
+    private fun restoreOrDiff(saved: Rt950Backup, zones: Set<Int>?, write: Boolean): ChannelDiff {
         requireUi(zones == null || zones.all { it in 1..Rt950Protocol.ZONES }) { UiText(R.string.err_rt950_slot) }
         val table = saved.part("channels").data
+        val zoneBytes = Rt950Protocol.ZONE_SLOTS * Rt950Protocol.CHANNEL_SIZE
         val ranges = if (zones == null) listOf(0 until table.size) else zones.sorted().map {
-            val first = (it - 1) * Rt950Protocol.ZONE_SLOTS * Rt950Protocol.CHANNEL_SIZE
-            first until first + Rt950Protocol.ZONE_SLOTS * Rt950Protocol.CHANNEL_SIZE
+            val first = (it - 1) * zoneBytes
+            first until first + zoneBytes
         }
         val addresses = ranges.flatMap { range ->
             (range.first / Rt950Protocol.BLOCK..range.last / Rt950Protocol.BLOCK).map { it * Rt950Protocol.BLOCK }
         }.distinct().sorted().filter { Rt950Protocol.isWritable(Rt950Protocol.CMD_WRITE, it, variant) && it + Rt950Protocol.BLOCK <= table.size }
-        if (addresses.isEmpty()) return emptyList()
+        if (addresses.isEmpty()) return ChannelDiff(emptyList(), emptySet())
         if (!open) handshake()
         val written = ArrayList<Int>()
+        val differing = sortedSetOf<Int>()
         for (address in addresses) {
             val current = readBlock(Rt950Protocol.CMD_READ, address)
             val target = current.copyOf()
@@ -299,11 +309,13 @@ class Rt950Session(
                 if (from < to) table.copyInto(target, from - address, from, to)
             }
             if (target.contentEquals(current)) continue
+            for (i in target.indices) if (target[i] != current[i]) differing += (address + i) / zoneBytes + 1
+            if (!write) { written += address; continue }
             writeBlock(Rt950Protocol.CMD_WRITE, address, target)
             verified(Rt950Protocol.CMD_READ, address, target)
             written += address
         }
-        return written
+        return ChannelDiff(written, differing)
     }
 
     /** A lost link after the commit surfaces as [Rt950AprsUnverifiedException]; it is never reported as success. */

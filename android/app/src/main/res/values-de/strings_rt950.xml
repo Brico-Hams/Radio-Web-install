@@ -147,7 +147,11 @@
     <string name="rt950_zp_failed_hint">Einige Zonen sind fehlerhaft oder weichen ab: „Sicherung wiederherstellen“ setzt sie auf den Stand der Sicherung zurück.</string>
     <string name="rt950_restore">Sicherung wiederherstellen</string>
     <string name="rt950_restore_confirm_title">Sicherung ins Funkgerät zurückschreiben?</string>
-    <string name="rt950_restore_confirm_body">Aus der geprüften Sicherung dieser Sitzung werden nur abweichende Kanalblöcke neu geschrieben (%1$s), innerhalb des für die gewählte Variante erlaubten Bereichs. Danach werden sie zurückgelesen und geprüft.</string>
+    <string name="rt950_restore_confirm_body">Sicherung: %2$s\n\nEs werden nur abweichende Kanalblöcke neu geschrieben (%1$s), innerhalb des für die gewählte Variante erlaubten Bereichs. Danach werden sie zurückgelesen und geprüft.\n\n%3$s</string>
+    <string name="rt950_restore_pick_title">Zu restaurierende Kopie</string>
+    <string name="rt950_restore_pick_item">%1$s · SHA-256 %2$s</string>
+    <string name="rt950_restore_pick_next">Weiter</string>
+    <string name="rt950_restore_diff">Abweichende Zonen gegenüber dem Gerät: %1$s\nBlöcke: %2$s</string>
     <string name="rt950_restore_scope_all">alle Zonen</string>
     <string name="rt950_restore_scope_zones">Zonen %1$s</string>
     <string name="rt950_restore_done">Sicherung wiederhergestellt und geprüft: %1$d Blöcke neu geschrieben</string>
