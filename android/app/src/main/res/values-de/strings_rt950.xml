@@ -115,7 +115,7 @@
     <string name="err_aprs_path">Ein Pfad erlaubt höchstens 8 Digipeater</string>
     <string name="err_aprs_text">Der Text muss 1 bis %1$d ASCII-Zeichen lang sein und darf { | ~ nicht enthalten</string>
     <string name="err_aprs_no_callsign">Gib vor dem Senden dein Rufzeichen ein</string>
-    <string name="err_rt950_variant_range">Kanäle 961-990 (Zone 10, Plätze 70-99) werden nur geschrieben, wenn du die Variante CH990 gewählt hast</string>
+    <string name="err_rt950_variant_range">Nur die Kanäle 1-896 (Zonen 1-9 und Zone 10, Plätze 1-5) können geschrieben werden: der Flash-Sektor 0x7000 wird ganz gelöscht</string>
     <string name="err_rt950_variant_changed">Die Variante wurde nach der Planung geändert: Plan neu erstellen</string>
     <string name="err_rt950_plan_empty">Der Plan enthält keinen beschreibbaren Kanal</string>
     <string name="err_rt950_zone_occupied">Zone %1$d „%2$s“ hat in der Sicherung bereits %3$d Kanäle. „Belegte Zonen überschreiben“ ankreuzen, um sie zu ersetzen.</string>
@@ -126,7 +126,7 @@
     <string name="rt950_zp_variant_unknown">Unbekannt (max. 960 Kanäle)</string>
     <string name="rt950_zp_variant_ch960">CH960 (960 Kanäle)</string>
     <string name="rt950_zp_variant_ch990">CH990 (990 Kanäle)</string>
-    <string name="rt950_zp_variant_warning">CH990 nur wählen, wenn du sicher bist, dass dein Gerät 990 Kanäle hat. Bei „Unbekannt“ oder „CH960“ werden die Kanäle 961-990 (Zone 10, Plätze 70-99) nie geschrieben.</string>
+    <string name="rt950_zp_variant_warning">CH990 nur wählen, wenn du sicher bist, dass dein Gerät 990 Kanäle hat. Jenseits von Kanal 896 wird vorerst mit keiner Variante geschrieben (Zone 10, ab Platz 6).</string>
     <string name="rt950_zp_first_zone">Erste Zone (1-10; leer = erste leere Zone der Sicherung)</string>
     <string name="err_rt950_first_zone_range">Die erste Zone muss zwischen 1 und %1$d liegen</string>
     <string name="err_rt950_first_zone_overflow">Mit erster Zone %1$d würde eine Planzone auf Zone %2$d landen, die letzte verfügbare ist aber %3$d (oder sie kollidiert mit der PMR/CB-Zone). Es wurde nichts geschrieben.</string>

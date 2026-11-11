@@ -115,7 +115,7 @@
     <string name="err_aprs_path">A path allows at most 8 digipeaters</string>
     <string name="err_aprs_text">The text must be 1 to %1$d ASCII characters and cannot contain { | ~</string>
     <string name="err_aprs_no_callsign">Enter your callsign before transmitting</string>
-    <string name="err_rt950_variant_range">Channels 961-990 (zone 10, slots 70-99) are only written if you chose the CH990 variant</string>
+    <string name="err_rt950_variant_range">Only channels 1-896 (zones 1-9 and zone 10, slots 1-5) can be written: the 0x7000 flash sector is erased as a whole</string>
     <string name="err_rt950_variant_changed">The variant changed after the plan was prepared: prepare it again</string>
     <string name="err_rt950_plan_empty">The plan contains no channel that can be written</string>
     <string name="err_rt950_zone_occupied">Zone %1$d \"%2$s\" already has %3$d channels in the backup. Tick \"Overwrite occupied zones\" to replace them.</string>
@@ -126,7 +126,7 @@
     <string name="rt950_zp_variant_unknown">Unknown (max. 960 channels)</string>
     <string name="rt950_zp_variant_ch960">CH960 (960 channels)</string>
     <string name="rt950_zp_variant_ch990">CH990 (990 channels)</string>
-    <string name="rt950_zp_variant_warning">Choose CH990 only if you are sure your radio has 990 channels. With \"Unknown\" or \"CH960\", channels 961-990 (zone 10, slots 70-99) are never written.</string>
+    <string name="rt950_zp_variant_warning">Choose CH990 only if you are sure your radio has 990 channels. For now nothing beyond channel 896 is written with any variant (zone 10, slot 6 onwards).</string>
     <string name="rt950_zp_first_zone">First zone (1-10; empty = first empty zone in the backup)</string>
     <string name="err_rt950_first_zone_range">The first zone must be between 1 and %1$d</string>
     <string name="err_rt950_first_zone_overflow">With first zone %1$d, a plan zone would land on zone %2$d, but the last available zone is %3$d (or it collides with the PMR/CB zone). Nothing was written.</string>

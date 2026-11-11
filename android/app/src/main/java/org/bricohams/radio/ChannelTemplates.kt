@@ -164,7 +164,7 @@ object ChannelTemplates {
         val prepared = prepare(profile, channels)
         val reasons = LinkedHashMap(prepared.reasons)
         fun overflow(count: Int) { if (count > 0) reasons["capacity"] = (reasons["capacity"] ?: 0) + count }
-        val reservedZone = if (variantConfirmed) null else layout.reservedZone
+        val reservedZone = layout.reservedZone
         var room = when (layout.kind) {
             "memories" -> layout.to!! - layout.from!! + 1
             "scanlists" -> QUANSHENG_MEMORIES
@@ -182,7 +182,13 @@ object ChannelTemplates {
             channel.regionId.isEmpty() || channel.key.startsWith("sat") -> satellite += channel
             else -> regional.getOrPut(channel.regionId) { ArrayList() } += channel
         }
-        val regularLimit = maxZones - if (pmr.isNotEmpty()) 1 else 0
+        // The PMR446/CB zone is the last zone whose capacity fits it (else the last zone with the largest capacity).
+        val pmrIndex = if (pmr.isNotEmpty() && fixedZones != null) {
+            val indexes = (fixedZones downTo 1).toList()
+            val best = indexes.maxOf { zoneCapacity(it) }
+            indexes.first { zoneCapacity(it) >= minOf(pmr.size, best) }
+        } else null
+        val regularLimit = if (pmrIndex != null) pmrIndex - 1 else maxZones - if (pmr.isNotEmpty()) 1 else 0
         class Draft(val index: Int, var name: String, val regions: MutableList<Region>, val items: MutableList<Channel>)
         val drafts = ArrayList<Draft>()
         fun take(items: List<Channel>): List<Channel> {
@@ -194,7 +200,7 @@ object ChannelTemplates {
             val made = ArrayList<Draft>()
             var rest = list
             while (rest.isNotEmpty()) {
-                val index = if (last && fixedZones != null) fixedZones else drafts.size + 1
+                val index = if (last && pmrIndex != null) pmrIndex else drafts.size + 1
                 if ((made.isNotEmpty() && last) || (!last && drafts.size >= regularLimit)) { overflow(rest.size); break }
                 val size = minOf(rest.size, zoneCapacity(index))
                 val items = take(rest.take(size))

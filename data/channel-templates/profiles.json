@@ -75,9 +75,9 @@
         "nameLength": 12,
         "reserved": {
           "zone": 10,
-          "fromSlot": 70,
+          "fromSlot": 6,
           "toSlot": 99,
-          "reason": "Channels 961-990 (0x7800-0x7BFF) are reserved until the firmware variant is identified; see docs/RADTEL-RT950-PRO.md"
+          "reason": "Channel 897 onwards lies in the 0x7000 flash sector (0x7000-0x7FFF), which is erased as a whole and contains areas the app cannot read; radiosmith@12a7dd9 rt950/write.py"
         }
       }
     },

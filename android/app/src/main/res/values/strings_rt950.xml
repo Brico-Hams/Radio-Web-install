@@ -115,7 +115,7 @@
     <string name="err_aprs_path">Una ruta admite como máximo 8 repetidores digitales</string>
     <string name="err_aprs_text">El texto debe tener entre 1 y %1$d caracteres ASCII y no puede contener { | ~</string>
     <string name="err_aprs_no_callsign">Indica tu indicativo antes de transmitir</string>
-    <string name="err_rt950_variant_range">Los canales 961-990 (zona 10, huecos 70-99) solo se escriben si has elegido la variante CH990</string>
+    <string name="err_rt950_variant_range">Solo se pueden escribir los canales 1-896 (zonas 1-9 y zona 10, huecos 1-5): el sector flash 0x7000 se borra entero</string>
     <string name="err_rt950_variant_changed">La variante cambió después de preparar el plan: vuelve a prepararlo</string>
     <string name="err_rt950_plan_empty">El plan no contiene ningún canal que se pueda escribir</string>
     <string name="err_rt950_zone_occupied">La zona %1$d «%2$s» ya tiene %3$d canales en la copia. Marca «Sobrescribir zonas ocupadas» para reemplazarlos.</string>
@@ -126,7 +126,7 @@
     <string name="rt950_zp_variant_unknown">Desconocida (máx. 960 canales)</string>
     <string name="rt950_zp_variant_ch960">CH960 (960 canales)</string>
     <string name="rt950_zp_variant_ch990">CH990 (990 canales)</string>
-    <string name="rt950_zp_variant_warning">Elige CH990 solo si estás seguro de que tu radio tiene 990 canales. Con «Desconocida» o «CH960» no se escribe en los canales 961-990 (zona 10, huecos 70-99).</string>
+    <string name="rt950_zp_variant_warning">Elige CH990 solo si estás seguro de que tu radio tiene 990 canales. Por ahora no se escribe más allá del canal 896 con ninguna variante (zona 10, hueco 6 en adelante).</string>
     <string name="rt950_zp_first_zone">Primera zona (1-10; vacío = primera zona libre de la copia)</string>
     <string name="err_rt950_first_zone_range">La primera zona debe estar entre 1 y %1$d</string>
     <string name="err_rt950_first_zone_overflow">Con la primera zona %1$d, una zona del plan caería en la zona %2$d, pero la última disponible es la %3$d (o choca con la zona PMR/CB). No se ha escrito nada.</string>

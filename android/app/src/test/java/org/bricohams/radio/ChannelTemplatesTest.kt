@@ -79,7 +79,7 @@ class ChannelTemplatesTest {
     @Test fun planKeepsRegionsTogetherInOrderWithPmrLast() {
         val plan = ChannelTemplates.zonePlan(profiles.getValue("rt950pro"), region("ES-A", 3, 2) + region("ES-B", 2, 1) + region("ES-C", 1) + pmr())
         assertEquals(listOf("Region ES-A - Region ES-C", "PMR446"), plan.zones.map { it.name })
-        assertEquals(listOf(1, 10), plan.zones.map { it.index })
+        assertEquals(listOf(1, 9), plan.zones.map { it.index })
         assertEquals(listOf("Region ES-A", "Region ES-B", "PMR446"),
             ChannelTemplates.zonePlan(profiles.getValue("radicodex"), region("ES-A", 3, 2) + region("ES-B", 2, 1) + pmr()).zones.map { it.name })
         assertEquals(listOf("ES-A", "ES-B", "ES-C"), plan.zones[0].regionIds)
@@ -87,24 +87,23 @@ class ChannelTemplatesTest {
         assertEquals(9, plan.zones[0].channels.last().slot)
     }
 
-    @Test fun rt950ProReservesZoneTenTailUntilConfirmedAndCountsOverflow() {
+    @Test fun rt950ProStopsAtChannel896ForEveryVariantAndPmrTakesTheLastZoneWithRoom() {
         val rt = profiles.getValue("rt950pro")
         val many = (0 until 12).flatMap { region("R$it", 90) } + pmr()
         val plan = ChannelTemplates.zonePlan(rt, many)
-        assertEquals((1..10).toList(), plan.zones.map { it.index })
-        assertEquals("PMR446", plan.zones[9].name)
-        assertEquals(270, plan.reasons["capacity"])
+        assertEquals((1..9).toList(), plan.zones.map { it.index })
+        assertEquals("PMR446", plan.zones[8].name)
+        assertEquals(360, plan.reasons["capacity"])
         assertTrue(plan.zones.all { it.channels.size <= 99 })
         val tight = (0 until 10).flatMap { region("T$it", 99) }
-        val locked = ChannelTemplates.zonePlan(rt, tight)
-        assertEquals(69, locked.zones[9].channels.maxOf { it.slot })
-        assertEquals(30, locked.reasons["capacity"])
-        val open = ChannelTemplates.zonePlan(rt, tight, variantConfirmed = true)
-        assertEquals(99, open.zones[9].channels.size)
-        assertNull(open.reasons["capacity"])
+        for (confirmed in listOf(false, true)) {
+            val locked = ChannelTemplates.zonePlan(rt, tight, variantConfirmed = confirmed)
+            assertEquals(5, locked.zones[9].channels.maxOf { it.slot })
+            assertEquals(94, locked.reasons["capacity"])
+        }
         val csv = ChannelTemplates.export(rt, tight).content
         assertTrue(csv.lines().first().endsWith("\"Zone\",\"Slot\",\"Channel_Number\""))
-        assertTrue(csv.contains("\"960\"") && !csv.contains("\"961\""))
+        assertTrue(csv.contains("\"896\"") && !csv.contains("\"897\""))
     }
 
     @Test fun regionLargerThanOneZoneIsSplit() {
@@ -136,7 +135,7 @@ class ChannelTemplatesTest {
         assertEquals(ChannelTemplates.Layout("memories", from = 1, to = 999), profiles.getValue("ftx1").layout)
         assertEquals(ChannelTemplates.Layout("zones", channelLimit = 4000), profiles.getValue("d878").layout)
         val rt = profiles.getValue("rt950pro").layout
-        assertEquals(listOf(10, 99, 12, 10, 70), listOf(rt.zones, rt.slotsPerZone, rt.nameLength, rt.reservedZone, rt.reservedFromSlot))
+        assertEquals(listOf(10, 99, 12, 10, 6), listOf(rt.zones, rt.slotsPerZone, rt.nameLength, rt.reservedZone, rt.reservedFromSlot))
     }
 
     @Test fun cbIsSpainOnlyRxOnlyAndSharesTheLastZoneWithPmrOnRadiosThatReceive27MHz() {

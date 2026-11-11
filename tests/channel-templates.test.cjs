@@ -341,7 +341,7 @@ test("a region filter keeps that region's repeaters and airports together and no
 test("zone plan keeps each region together in catalog order with airports after repeaters and PMR446 as the last zone", () => {
   const plan = R.templateZonePlan("rt950pro", [...zoneRegion("ES-A", 3, 2), ...zoneRegion("ES-B", 2, 1), ...zoneRegion("ES-C", 1), ...zonePmr()]);
   assert.deepEqual(plan.zones.map(zone => [zone.index, zone.name, zone.regionIds, zone.channels.length]),
-    [[1, "Region ES-A - Region ES-C", ["ES-A", "ES-B", "ES-C"], 9], [10, "PMR446", ["PMR446"], 16]]);
+    [[1, "Region ES-A - Region ES-C", ["ES-A", "ES-B", "ES-C"], 9], [9, "PMR446", ["PMR446"], 16]]);
   assert.deepEqual(R.templateZonePlan("radicodex", [...zoneRegion("ES-A", 3, 2), ...zoneRegion("ES-B", 2, 1), ...zonePmr()]).zones
     .map(zone => zone.name), ["Region ES-A", "Region ES-B", "PMR446"]);
   assert.deepEqual(plan.zones[0].channels.slice(0, 5).map(channel => channel.key.split(":")[0]), ["hearham", "hearham", "hearham", "ourairports", "ourairports"]);
@@ -364,22 +364,22 @@ test("zone plan keeps each region together in catalog order with airports after 
   }
   assert.equal(rt.zones.at(-1).name, "PMR446");
 });
-test("RT-950 Pro keeps 99 slots per zone, reserves zone 10 slots 70-99 until the variant is confirmed and counts overflow", () => {
+test("RT-950 Pro keeps 99 slots per zone, stops at channel 896 for every variant, puts PMR446 in the last zone with room and counts overflow", () => {
   const many = [...Array.from({ length: 12 }, (_, index) => zoneRegion(`R${index}`, 90)).flat(), ...zonePmr()];
   const plan = R.templateZonePlan("rt950pro", many);
-  assert.deepEqual(plan.zones.map(zone => zone.index), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-  assert.equal(plan.zones[9].name, "PMR446");
-  assert.equal(plan.reasons.capacity, 3 * 90);
+  assert.deepEqual(plan.zones.map(zone => zone.index), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  assert.equal(plan.zones[8].name, "PMR446");
+  assert.equal(plan.reasons.capacity, 4 * 90);
   assert(plan.zones.every(zone => zone.channels.length <= 99));
   const tight = Array.from({ length: 10 }, (_, index) => zoneRegion(`T${index}`, 99)).flat();
-  const locked = R.templateZonePlan("rt950pro", tight), open = R.templateZonePlan("rt950pro", tight, { variantConfirmed: true });
-  assert.equal(Math.max(...locked.zones[9].channels.map(channel => channel.slot)), 69);
-  assert.equal(locked.reasons.capacity, 30);
-  assert.equal(open.zones[9].channels.length, 99);
-  assert.equal(open.reasons.capacity, undefined);
+  for (const options of [{}, { variantConfirmed: true }]) {
+    const locked = R.templateZonePlan("rt950pro", tight, options);
+    assert.equal(Math.max(...locked.zones[9].channels.map(channel => channel.slot)), 5);
+    assert.equal(locked.reasons.capacity, 94);
+  }
   const csv = R.templateExportFile("rt950pro", tight).content;
   assert.match(csv.split("\r\n")[0], /"Zone","Slot","Channel_Number"$/);
-  assert(csv.includes('"960"') && !csv.includes('"961"'));
+  assert(csv.includes('"896"') && !csv.includes('"897"'));
 });
 test("a region larger than one zone is split into numbered parts", () => {
   const plan = R.templateZonePlan("rt950pro", zoneRegion("BIG", 250));
@@ -420,7 +420,7 @@ test("profiles.json layouts equal the JS PROFILES and only carry sourced values"
   assert.deepEqual(shipped, JSON.parse(JSON.stringify(R.TEMPLATE_PROFILES)));
   assert.deepEqual(R.TEMPLATE_PROFILES.uvk5v3.layout, { kind: "scanlists", lists: 24 });
   assert.deepEqual(R.TEMPLATE_PROFILES.ftx1.layout, { kind: "memories", from: 1, to: 999 });
-  assert.equal(R.TEMPLATE_PROFILES.rt950pro.layout.reserved.fromSlot, 70);
+  assert.equal(R.TEMPLATE_PROFILES.rt950pro.layout.reserved.fromSlot, 6);
 });
 
 test("zone plan keeps one zone per region on radios without a slot count, sharing only past the bank count", () => {

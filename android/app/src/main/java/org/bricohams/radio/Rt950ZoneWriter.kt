@@ -35,10 +35,11 @@ object Rt950ZoneWriter {
         if (value.signum() > 0 && value.stripTrailingZeros().scale() <= 0) value.toBigInteger().longValueExact() else null
     } catch (_: NumberFormatException) { null } catch (_: ArithmeticException) { null }
 
-    /** Slots of [zone] that hold a channel in [saved]; slots of the 961-990 area are ignored unless [variant] is CH990. */
+    /** Slots of [zone] that hold a channel in [saved]; slots beyond channel 896 (unwritable) are ignored. */
+    @Suppress("UNUSED_PARAMETER")
     fun occupiedSlots(saved: Rt950Backup, zone: Int, variant: Rt950Variant): List<Int> =
         (1..Rt950Protocol.ZONE_SLOTS).filter {
-            (variant == Rt950Variant.CH990 || !Rt950Protocol.isCh990Slot(zone, it)) && !Rt950Channels.isBlank(saved.channelRecord(zone, it))
+            Rt950Protocol.isWritableSlot(zone, it) && !Rt950Channels.isBlank(saved.channelRecord(zone, it))
         }
 
     /** First zone (1-10) with no channel at all in [saved]; 1 when every zone holds something. */
@@ -50,13 +51,13 @@ object Rt950ZoneWriter {
 
     /**
      * Regional/SAT zones are shifted so plan zone 1 lands on [firstZone] (n -> n + firstZone - 1); the PMR446/CB zone keeps its
-     * index. Throws before anything is written when a shifted zone passes the last available zone or hits the PMR/CB zone.
+     * index. Throws before anything is written when a shifted zone passes the zone before it or hits the PMR/CB zone.
      */
     fun plan(zonePlan: ChannelTemplates.ZonePlan, saved: Rt950Backup, variant: Rt950Variant, firstZone: Int = 1): Plan {
         requireUi(firstZone in 1..Rt950Protocol.ZONES) { UiText(R.string.err_rt950_first_zone_range, Rt950Protocol.ZONES) }
         val shift = firstZone - 1
         val pmrZone = zonePlan.zones.firstOrNull { isPmrZone(it) }
-        val last = if (pmrZone != null) Rt950Protocol.ZONES - 1 else Rt950Protocol.ZONES
+        val last = if (pmrZone != null) pmrZone.index - 1 else Rt950Protocol.ZONES
         var omitted = zonePlan.omitted
         val target = zonePlan.zones.map { zone -> zone to if (zone === pmrZone) zone.index else zone.index + shift }
         for ((zone, index) in target) {
@@ -76,13 +77,13 @@ object Rt950ZoneWriter {
         return Plan(variant, zones, omitted)
     }
 
-    /** Refuses 961-990 without CH990 and occupied zones without [overwrite]. Throws before anything is written. */
+    /** Refuses channels beyond 896 and occupied zones without [overwrite]. Throws before anything is written. */
     fun check(plan: Plan, variant: Rt950Variant, overwrite: Boolean) {
         requireUi(plan.zones.isNotEmpty()) { UiText(R.string.err_rt950_plan_empty) }
         requireUi(plan.variant == variant) { UiText(R.string.err_rt950_variant_changed) }
         for (zone in plan.zones) {
             requireUi(zone.zone in 1..Rt950Protocol.ZONES && zone.slots.keys.all { it in 1..Rt950Protocol.ZONE_SLOTS }) { UiText(R.string.err_rt950_slot) }
-            requireUi(variant == Rt950Variant.CH990 || zone.slots.keys.none { Rt950Protocol.isCh990Slot(zone.zone, it) }) {
+            requireUi(zone.slots.keys.all { Rt950Protocol.isWritableSlot(zone.zone, it) }) {
                 UiText(R.string.err_rt950_variant_range)
             }
             requireUi(overwrite || zone.occupied == 0) { UiText(R.string.err_rt950_zone_occupied, zone.zone, zone.name, zone.occupied) }

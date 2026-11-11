@@ -115,7 +115,7 @@
     <string name="err_aprs_path">Un chemin admet 8 digipeaters au maximum</string>
     <string name="err_aprs_text">Le texte doit comporter de 1 à %1$d caractères ASCII et ne peut pas contenir { | ~</string>
     <string name="err_aprs_no_callsign">Saisissez votre indicatif avant d\'émettre</string>
-    <string name="err_rt950_variant_range">Les canaux 961-990 (zone 10, emplacements 70-99) ne sont écrits que si vous avez choisi la variante CH990</string>
+    <string name="err_rt950_variant_range">Seuls les canaux 1-896 (zones 1-9 et zone 10, emplacements 1-5) peuvent être écrits : le secteur flash 0x7000 est effacé en entier</string>
     <string name="err_rt950_variant_changed">La variante a changé après la préparation du plan : préparez-le à nouveau</string>
     <string name="err_rt950_plan_empty">Le plan ne contient aucun canal inscriptible</string>
     <string name="err_rt950_zone_occupied">La zone %1$d « %2$s » contient déjà %3$d canaux dans la sauvegarde. Cochez « Écraser les zones occupées » pour les remplacer.</string>
@@ -126,7 +126,7 @@
     <string name="rt950_zp_variant_unknown">Inconnue (960 canaux max.)</string>
     <string name="rt950_zp_variant_ch960">CH960 (960 canaux)</string>
     <string name="rt950_zp_variant_ch990">CH990 (990 canaux)</string>
-    <string name="rt950_zp_variant_warning">Choisissez CH990 seulement si vous êtes sûr que votre radio a 990 canaux. Avec « Inconnue » ou « CH960 », les canaux 961-990 (zone 10, emplacements 70-99) ne sont jamais écrits.</string>
+    <string name="rt950_zp_variant_warning">Choisissez CH990 seulement si vous êtes sûr que votre radio a 990 canaux. Pour l\'instant, rien n\'est écrit au-delà du canal 896 quelle que soit la variante (zone 10, à partir de l\'emplacement 6).</string>
     <string name="rt950_zp_first_zone">Première zone (1-10 ; vide = première zone libre de la sauvegarde)</string>
     <string name="err_rt950_first_zone_range">La première zone doit être comprise entre 1 et %1$d</string>
     <string name="err_rt950_first_zone_overflow">Avec la première zone %1$d, une zone du plan tomberait sur la zone %2$d, mais la dernière disponible est la %3$d (ou elle entre en conflit avec la zone PMR/CB). Rien n\'a été écrit.</string>

@@ -14,6 +14,7 @@ class Rt950ProtocolTest {
         val writes = ArrayList<Int>()
         var key = ByteArray(4)
         var corruptWrites = false
+        var corruptAddress: Int? = null
         var dropAfterAprsWrite = false
         var ended = false
         private var dead = false
@@ -40,7 +41,14 @@ class Rt950ProtocolTest {
                     val address = (bytes[1].toInt() and 255 shl 8) or (bytes[2].toInt() and 255)
                     val plain = Rt950Protocol.crypt(bytes.copyOfRange(4, 132), key)
                     if (corruptWrites) plain[0] = (plain[0].toInt() xor 1).toByte()
-                    if (bytes[0].toInt() == 0x58) { aprs = plain; if (dropAfterAprsWrite) dead = true } else { main[address] = plain; writes.add(address) }
+                    if (address == corruptAddress) plain[5] = (plain[5].toInt() xor 1).toByte()
+                    if (bytes[0].toInt() == 0x58) { aprs = plain; if (dropAfterAprsWrite) dead = true } else {
+                        // Flash model: a W to the first block of a 4 KB sector erases the sector; every W only programs bits 1->0.
+                        if (address % 0x1000 == 0) for (i in 0 until 32) main[address + i * 0x80] = ByteArray(128) { 0xFF.toByte() }
+                        val old = block(address)
+                        main[address] = ByteArray(128) { (old[it].toInt() and plain[it].toInt()).toByte() }
+                        writes.add(address)
+                    }
                     reply(0x06)
                 }
                 else -> fail("unexpected request of ${bytes.size} bytes")
@@ -135,9 +143,11 @@ class Rt950ProtocolTest {
 
     @Test fun whitelistAllowsOnlyChannelsAndAprs() {
         assertTrue(Rt950Protocol.isWritable(0x57, 0x0000))
-        assertTrue(Rt950Protocol.isWritable(0x57, 0x7780))
-        assertFalse(Rt950Protocol.isWritable(0x57, 0x7B80))
-        assertTrue(Rt950Protocol.isWritable(0x57, 0x7B80, Rt950Variant.CH990))
+        assertTrue(Rt950Protocol.isWritable(0x57, 0x6F80))
+        for (address in listOf(0x7000, 0x7780, 0x7B80)) {
+            assertFalse(Rt950Protocol.isWritable(0x57, address))
+            assertFalse(Rt950Protocol.isWritable(0x57, address, Rt950Variant.CH990))
+        }
         assertTrue(Rt950Protocol.isWritable(0x58, 0x0000))
         for (address in listOf(0x7C00, 0x8000, 0x9000, 0xA000, 0xB000, 0xC000, 0xD000, 0xE000)) {
             assertFalse(Rt950Protocol.isWritable(0x57, address))
@@ -167,15 +177,10 @@ class Rt950ProtocolTest {
     private fun zonePlan(index: Int, name: String, channels: List<ChannelTemplates.Channel>) = ChannelTemplates.ZonePlan("rt950pro",
         listOf(ChannelTemplates.Zone(index, name, listOf("R"), channels)), emptyMap(), channels, 0, emptyList())
 
-    @Test fun isWritableRangeDependsOnVariant() {
+    @Test fun isWritableIsWholeSectorsBelow0x7000ForEveryVariant() {
         for (variant in Rt950Variant.values()) {
-            assertTrue(Rt950Protocol.isWritable(0x57, 0x77F0 / 0x80 * 0x80, variant))
-            assertFalse(Rt950Protocol.isWritable(0x57, 0x7C00, variant))
-        }
-        for (address in listOf(0x7800, 0x7880, 0x7B80)) {
-            assertFalse(Rt950Protocol.isWritable(0x57, address))
-            assertFalse(Rt950Protocol.isWritable(0x57, address, Rt950Variant.CH960))
-            assertTrue(Rt950Protocol.isWritable(0x57, address, Rt950Variant.CH990))
+            for (address in listOf(0x0000, 0x0F80, 0x6000, 0x6F80)) assertTrue(Rt950Protocol.isWritable(0x57, address, variant))
+            for (address in listOf(0x7000, 0x7780, 0x7800, 0x7880, 0x7B80, 0x7C00)) assertFalse(Rt950Protocol.isWritable(0x57, address, variant))
         }
     }
 
@@ -199,18 +204,19 @@ class Rt950ProtocolTest {
         assertEquals(am, Rt950Channels.decode(radio.block(0x0000).copyOfRange(0, 32)))
     }
 
-    @Test fun channels961To990NeedExplicitCh990() {
+    @Test fun channelsBeyond896AreRefusedForEveryVariant() {
         val channel = Rt950Channel(145_800_000, 145_800_000, name = "X")
-        for (variant in listOf(Rt950Variant.UNKNOWN, Rt950Variant.CH960)) {
+        for (variant in Rt950Variant.values()) {
             val radio = Radio()
+            assertThrows(IllegalArgumentException::class.java) { session(radio, variant).writeChannels(10, mapOf(6 to channel)) }
             assertThrows(IllegalArgumentException::class.java) { session(radio, variant).writeChannels(10, mapOf(70 to channel)) }
-            assertTrue(radio.main.isEmpty())
-            val plan = Rt950ZoneWriter.Plan(variant, listOf(Rt950ZoneWriter.ZoneWrite(10, "PMR", (1..70).associateWith { channel }, 0, 0)), 0)
+            assertTrue(radio.writes.isEmpty())
+            val plan = Rt950ZoneWriter.Plan(variant, listOf(Rt950ZoneWriter.ZoneWrite(10, "PMR", (1..6).associateWith { channel }, 0, 0)), 0)
             assertThrows(IllegalArgumentException::class.java) { Rt950ZoneWriter.check(plan, variant, true) }
         }
         val radio = Radio()
-        assertEquals(1, session(radio, Rt950Variant.CH990).writeChannels(10, mapOf(70 to channel)))
-        assertEquals(channel, Rt950Channels.decode(radio.block(0x7800).copyOfRange(0, 32)))
+        assertEquals(32, session(radio).writeChannels(10, mapOf(5 to channel)))
+        assertEquals(channel, Rt950Channels.decode(radio.block(0x6F80).copyOfRange(0x60, 0x80)))
     }
 
     @Test fun occupiedZonesNeedOverrideAndEmptyZonesDoNot() {
@@ -241,9 +247,9 @@ class Rt950ProtocolTest {
         val ch = listOf(template("A", "145.60000"))
         val withPmr = ChannelTemplates.ZonePlan("rt950pro", listOf(
             ChannelTemplates.Zone(1, "R1", listOf("R"), ch), ChannelTemplates.Zone(2, "R2", listOf("R2"), ch),
-            ChannelTemplates.Zone(10, "PMR446", listOf("PMR446"), ch)), emptyMap(), ch, 0, emptyList())
-        assertThrows(IllegalArgumentException::class.java) { Rt950ZoneWriter.plan(withPmr, backup, Rt950Variant.CH960, 9) }
-        assertEquals(listOf(8, 9, 10), Rt950ZoneWriter.plan(withPmr, backup, Rt950Variant.CH960, 8).zones.map { it.zone })
+            ChannelTemplates.Zone(9, "PMR446", listOf("PMR446"), ch)), emptyMap(), ch, 0, emptyList())
+        assertThrows(IllegalArgumentException::class.java) { Rt950ZoneWriter.plan(withPmr, backup, Rt950Variant.CH960, 8) }
+        assertEquals(listOf(7, 8, 9), Rt950ZoneWriter.plan(withPmr, backup, Rt950Variant.CH960, 7).zones.map { it.zone })
     }
 
     @Test fun verifyReportsMismatchAndAffectedZones() {
@@ -262,22 +268,25 @@ class Rt950ProtocolTest {
         assertEquals(listOf(1), Rt950ZoneWriter.verifyZone(live, goodPlan.zones.single()))
     }
 
-    @Test fun restoreWritesOnlyDifferingBlocksWithinVariantRange() {
+    private fun sector(start: Int) = (0 until 32).map { start + it * 0x80 }
+
+    @Test fun restoreWritesWholeSectorsOnlyBelow0x7000() {
         val radio = Radio()
         val backup = backupOf(radio)
         val channel = Rt950Channel(145_800_000, null, name = "NEW")
-        val live = session(radio, Rt950Variant.CH960)
+        val live = session(radio, Rt950Variant.CH990)
         live.writeChannels(1, mapOf(1 to channel))
         live.writeChannels(10, mapOf(1 to channel))
-        radio.block(0x7800)[0] = 0x12
+        radio.block(0x7000)[0] = 0x12
         radio.writes.clear()
-        assertEquals(listOf(0x0000), session(radio, Rt950Variant.CH960).restoreChannels(backup, setOf(1)))
-        assertEquals(listOf(0x6F00), session(radio, Rt950Variant.CH960).restoreChannels(backup))
-        assertEquals(listOf(0x0000, 0x6F00), radio.writes)
-        assertEquals(0x12, radio.block(0x7800)[0].toInt())
+        assertEquals(sector(0x0000), session(radio, Rt950Variant.CH960).restoreChannels(backup, setOf(1)))
+        assertEquals(sector(0x6000), session(radio, Rt950Variant.CH960).restoreChannels(backup))
+        assertEquals(sector(0x0000) + sector(0x6000), radio.writes)
+        assertEquals(0x12, radio.block(0x7000)[0].toInt())
         assertEquals(emptyList<Int>(), session(radio, Rt950Variant.CH960).restoreChannels(backup))
-        assertEquals(listOf(0x7800), session(radio, Rt950Variant.CH990).restoreChannels(backup))
-        assertTrue(radio.block(0x7800).contentEquals(backup.part("channels").data.copyOfRange(0x7800, 0x7880)))
+        // Restoring blank records over written channels only works because the whole sector is erased and rewritten.
+        assertTrue(radio.block(0x0000).all { it == 0xFF.toByte() })
+        assertTrue(radio.block(0x6F00).copyOfRange(0x60, 0x80).all { it == 0xFF.toByte() })
     }
 
     @Test fun restoreFromOlderBackupRevertsOnlyWrittenZone() {
@@ -290,7 +299,7 @@ class Rt950ProtocolTest {
         assertEquals(emptyList<Int>(), session(radio, Rt950Variant.CH960).restoreChannels(newer, setOf(1)))
         val diff = session(radio, Rt950Variant.CH960).channelDiff(older, setOf(1))
         assertEquals(setOf(1), diff.zones)
-        assertEquals(listOf(0x0000), session(radio, Rt950Variant.CH960).restoreChannels(older, setOf(1)))
+        assertEquals(sector(0x0000), session(radio, Rt950Variant.CH960).restoreChannels(older, setOf(1)))
         assertEquals(0x55, radio.block(0x6F00)[0].toInt())
         assertTrue(radio.block(0x0000).contentEquals(older.part("channels").data.copyOfRange(0, 0x80)))
     }
@@ -305,15 +314,22 @@ class Rt950ProtocolTest {
         assertEquals(128, backup.aprs.size)
     }
 
-    @Test fun writeChannelsReadsBackAndKeepsNeighbours() {
+    @Test fun writeChannelsRewritesWholeSectorAndKeepsNeighbours() {
         val radio = Radio()
+        val neighbour = Rt950Channel(433_500_000, null, name = "KEEP")
+        put(radio, 9, 1, neighbour)
+        put(radio, 10, 3, neighbour)
         val session = session(radio)
         val one = Rt950Channel(145_800_000, 145_800_000, name = "SO50 AOS")
         val two = Rt950Channel(436_795_000, null, name = "SO50 TCA", txEnabled = false)
-        assertEquals(2, session.writeChannels(10, mapOf(1 to one, 2 to two)))
+        assertEquals(32, session.writeChannels(10, mapOf(1 to one, 2 to two)))
+        assertEquals(sector(0x6000), radio.writes)
+        assertTrue(radio.writes.all { it < 0x7000 })
         assertEquals(one, Rt950Channels.decode(radio.block(0x6F00).copyOfRange(0x60, 0x80)))
         assertEquals(two, Rt950Channels.decode(radio.block(0x6F80).copyOfRange(0, 0x20)))
-        assertTrue(radio.block(0x6F00).copyOfRange(0, 0x60).all { it == 0xFF.toByte() })
+        assertEquals(neighbour, Rt950Channels.decode(radio.block(0x6F80).copyOfRange(0x20, 0x40)))
+        val zone9 = Rt950Channels.index(9, 1) * 32
+        assertEquals(neighbour, Rt950Channels.decode(radio.block(zone9 / 0x80 * 0x80).copyOfRange(zone9 % 0x80, zone9 % 0x80 + 32)))
         assertTrue(radio.reads.count { it == 0x6F00 } >= 2)
     }
 
@@ -322,6 +338,13 @@ class Rt950ProtocolTest {
         val session = session(radio)
         assertThrows(IllegalStateException::class.java) { session.writeChannels(1, mapOf(1 to Rt950Channel(145_800_000, null))) }
         assertThrows(IllegalStateException::class.java) { session.writeAprs(Rt950AprsSettings(callsign = "N0CALL")) }
+    }
+
+    @Test fun sectorVerifyCatchesMismatchInLaterBlock() {
+        val radio = Radio().apply { corruptAddress = 0x0F80 }
+        assertThrows(IllegalStateException::class.java) {
+            session(radio).writeChannels(1, mapOf(1 to Rt950Channel(145_800_000, null)))
+        }
     }
 
     @Test fun aprsWriteWithLostLinkIsNeverSuccess() {

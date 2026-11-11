@@ -124,7 +124,7 @@
     rt950pro: { label: "Radtel RT-950 Pro", modulations: ["FM", "AM"], bands: { FM: FM_BANDS, AM: [[118, 137]] },
       txLock: "reference-column", output: "reference-csv", extension: "csv",
       layout: { kind: "zones", zones: 10, slotsPerZone: 99, nameLength: 12,
-        reserved: { zone: 10, fromSlot: 70, toSlot: 99, reason: "Channels 961-990 (0x7800-0x7BFF) are reserved until the firmware variant is identified; see docs/RADTEL-RT950-PRO.md" } } },
+        reserved: { zone: 10, fromSlot: 6, toSlot: 99, reason: "Channel 897 onwards lies in the 0x7000 flash sector (0x7000-0x7FFF), which is erased as a whole and contains areas the app cannot read; radiosmith@12a7dd9 rt950/write.py" } } },
     uvk5v3: { label: "Quansheng UV-K5 V3", modulations: ["FM", "AM"], bands: { FM: FM_BANDS, AM: [[118, 137]] },
       txLock: "memory-bit", output: "chirp-csv", extension: "csv", layout: { kind: "scanlists", lists: 24 } },
     d878: { label: "AnyTone AT-D878", modulations: ["FM"], bands: { FM: FM_BANDS },
@@ -171,7 +171,8 @@
     const profile = PROFILES[profileId], layout = profile.layout, prepared = prepareTemplateExport(profileId, channels);
     const reasons = { ...prepared.reasons };
     const overflow = count => { if (count > 0) reasons.capacity = (reasons.capacity || 0) + count; };
-    const reserved = layout.reserved && !variantConfirmed ? layout.reserved : null;
+    // The reserved range is a flash-sector limit, so it applies whatever the variant (variantConfirmed is kept for callers).
+    const reserved = layout.reserved ?? null;
     let room = layout.kind === "memories" ? layout.to - layout.from + 1 : layout.kind === "scanlists" ? QUANSHENG_MEMORIES :
       layout.channelLimit ?? Infinity;
     const fullCapacity = layout.slotsPerZone ?? room;
@@ -184,7 +185,14 @@
       else if (!channel.regionId || String(channel.key).startsWith("sat")) satellite.push(channel);
       else regional.has(channel.regionId) ? regional.get(channel.regionId).push(channel) : regional.set(channel.regionId, [channel]);
     }
-    const regularLimit = maxZones - (pmr.length ? 1 : 0), zones = [];
+    // The PMR446/CB zone is the last zone whose capacity fits it (else the last zone with the largest capacity).
+    let pmrIndex = null;
+    if (pmr.length && layout.zones) {
+      const indexes = Array.from({ length: layout.zones }, (_, i) => layout.zones - i);
+      const best = Math.max(...indexes.map(zoneCapacity));
+      pmrIndex = indexes.find(i => zoneCapacity(i) >= Math.min(pmr.length, best));
+    }
+    const regularLimit = pmrIndex ? pmrIndex - 1 : maxZones - (pmr.length ? 1 : 0), zones = [];
     const take = items => {
       const kept = items.slice(0, Math.max(0, room));
       overflow(items.length - kept.length); room -= kept.length;
@@ -195,7 +203,7 @@
       const made = [];
       let rest = list;
       while (rest.length) {
-        const index = last && layout.zones ? layout.zones : zones.length + 1;
+        const index = last && pmrIndex ? pmrIndex : zones.length + 1;
         if (made.length && last || !last && zones.length >= regularLimit) { overflow(rest.length); break; }
         const size = Math.min(rest.length, zoneCapacity(index)), items = take(rest.slice(0, size));
         rest = rest.slice(size);
