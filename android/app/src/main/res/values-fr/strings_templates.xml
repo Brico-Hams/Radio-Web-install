@@ -19,4 +19,5 @@
     <string name="template_load_error">Impossible de lire le modèle : %1$s</string>
     <string name="template_error">Erreur de modèle : %1$s</string>
     <string name="template_anytone_capacity">AnyTone accepte 4000 canaux par projet. Sélectionnez une zone.</string>
+    <string name="template_zone_line">Zone %1$d : %2$s (%3$d canaux)</string>
 </resources>

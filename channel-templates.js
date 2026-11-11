@@ -55,13 +55,13 @@
     return file;
   }
   // AM RX-only entries: mode "AM" (never 0) so a legacy FM-only writer fails instead of storing them as FM.
-  function airportChannels(file) {
+  function airportChannels(file, regionNames = new Map()) {
     validateAirportTemplate(file, file.country);
     return file.frequencies.map(entry => {
       const airport = file.airports[entry.ident];
       return { key: `ourairports:${entry.id}`, name: R.asciiName(`${entry.ident} ${entry.type}`), callsign: entry.ident,
         ident: entry.ident, airport: airport.name, rx: entry.rx, tx: entry.rx, mode: "AM", rxOnly: true, txLocked: true,
-        narrow: false, country: file.country, regionId: airport.regionId, city: airport.municipality || "",
+        narrow: false, country: file.country, regionId: airport.regionId, region: regionNames.get(airport.regionId) || "", city: airport.municipality || "",
         zone: `${file.country} ${airport.regionId}`, latitude: airport.latitude, longitude: airport.longitude,
         source: `https://ourairports.com/airports/${encodeURIComponent(entry.ident)}/`, sourceId: entry.id,
         license: file.license, attribution: "OurAirports (public domain)",
@@ -76,7 +76,7 @@
     const pool = [...file.channels];
     if (airports) {
       R.assert(airports.country === file.country, "Los aeropuertos no pertenecen al pais de la plantilla.");
-      const extra = airportChannels(airports);
+      const extra = airportChannels(airports, new Map(file.regions.map(entry => [entry.id, entry.name])));
       R.assert(extra.every(entry => regions.has(entry.regionId)), "Aeropuerto en una region ausente del catalogo.");
       pool.push(...extra);
     }
@@ -103,16 +103,21 @@
   const FM_BANDS = [[136, 174], [400, 470]];
   const PROFILES = Object.freeze({
     radicodex: { label: "RadiCodex", modulations: ["FM", "AM"], bands: { FM: FM_BANDS, AM: [[118, 137]] },
-      txLock: "reference-column", output: "reference-csv", extension: "csv" },
+      txLock: "reference-column", output: "reference-csv", extension: "csv", layout: { kind: "reference" } },
     rt950pro: { label: "Radtel RT-950 Pro", modulations: ["FM", "AM"], bands: { FM: FM_BANDS, AM: [[118, 137]] },
-      txLock: "reference-column", output: "reference-csv", extension: "csv" },
+      txLock: "reference-column", output: "reference-csv", extension: "csv",
+      layout: { kind: "zones", zones: 10, slotsPerZone: 99, nameLength: 12,
+        reserved: { zone: 10, fromSlot: 70, toSlot: 99, reason: "Channels 961-990 (0x7800-0x7BFF) are reserved until the firmware variant is identified; see docs/RADTEL-RT950-PRO.md" } } },
     uvk5v3: { label: "Quansheng UV-K5 V3", modulations: ["FM", "AM"], bands: { FM: FM_BANDS, AM: [[118, 137]] },
-      txLock: "memory-bit", output: "chirp-csv", extension: "csv" },
+      txLock: "memory-bit", output: "chirp-csv", extension: "csv", layout: { kind: "scanlists", lists: 24 } },
     d878: { label: "AnyTone AT-D878", modulations: ["FM"], bands: { FM: FM_BANDS },
-      txLock: "project-flag", output: "anytone-project", extension: "json" },
+      txLock: "project-flag", output: "anytone-project", extension: "json", layout: { kind: "zones", channelLimit: 4000 } },
+    // memory groups: pendiente de fuente
     ftx1: { label: "Yaesu FTX-1", modulations: ["FM", "AM"], bands: { FM: FM_BANDS, AM: [[118, 137]] },
-      txLock: "reference-column", output: "reference-csv", extension: "csv" }
+      txLock: "reference-column", output: "reference-csv", extension: "csv", layout: { kind: "memories", from: 1, to: 999 } }
   });
+  // readQuanshengChannels / the importer address memories 1-1024; the scan list count comes from the layout.
+  const QUANSHENG_MEMORIES = 1024;
   // Native importers of the web pages that hold an editable local file; not offered as export models.
   const IMPORT_PROFILES = Object.freeze({
     opengd77: { label: "OpenGD77", modulations: ["FM"], bands: { FM: FM_BANDS }, txLock: "none", output: "local-file" }
@@ -142,10 +147,76 @@
     const warnings = profile.txLock === "none" ? ["rxOnlyNotGuaranteed"] : [];
     return { profile: profileId, accepted, omitted, reasons, warnings };
   }
+  // Groups the selected channels (catalog region order, PMR446 last) into the radio's zones/banks. Whole regions stay together,
+  // repeaters first then airports; only a region larger than one zone is split. What does not fit is counted in reasons.capacity.
+  function templateZonePlan(profileId, channels, { variantConfirmed = false } = {}) {
+    R.assert(Object.hasOwn(PROFILES, profileId), "Modelo de plantilla desconocido.");
+    const profile = PROFILES[profileId], layout = profile.layout, prepared = prepareTemplateExport(profileId, channels);
+    const reasons = { ...prepared.reasons };
+    const overflow = count => { if (count > 0) reasons.capacity = (reasons.capacity || 0) + count; };
+    const reserved = layout.reserved && !variantConfirmed ? layout.reserved : null;
+    let room = layout.kind === "memories" ? layout.to - layout.from + 1 : layout.kind === "scanlists" ? QUANSHENG_MEMORIES :
+      layout.channelLimit ?? Infinity;
+    const fullCapacity = layout.slotsPerZone ?? room;
+    const zoneCapacity = index => reserved?.zone === index ? Math.min(fullCapacity, reserved.fromSlot - 1) : fullCapacity;
+    const maxZones = layout.zones ?? layout.lists ?? Infinity;
+    const regional = new Map(), satellite = [], pmr = [];
+    const isAirport = channel => String(channel.key).startsWith("ourairports:");
+    for (const channel of prepared.accepted) {
+      if (channel.regionId === "PMR446") pmr.push(channel);
+      else if (!channel.regionId || String(channel.key).startsWith("sat")) satellite.push(channel);
+      else regional.has(channel.regionId) ? regional.get(channel.regionId).push(channel) : regional.set(channel.regionId, [channel]);
+    }
+    const regularLimit = maxZones - (pmr.length ? 1 : 0), zones = [];
+    const take = items => {
+      const kept = items.slice(0, Math.max(0, room));
+      overflow(items.length - kept.length); room -= kept.length;
+      return kept;
+    };
+    // Places a list in one zone, or in consecutive "n/N" parts when it exceeds the zone capacity.
+    const fill = (list, name, regions, last = false) => {
+      const made = [];
+      let rest = list;
+      while (rest.length) {
+        const index = last && layout.zones ? layout.zones : zones.length + 1;
+        if (made.length && last || !last && zones.length >= regularLimit) { overflow(rest.length); break; }
+        const size = Math.min(rest.length, zoneCapacity(index)), items = take(rest.slice(0, size));
+        rest = rest.slice(size);
+        if (!items.length) { overflow(rest.length); break; }
+        const zone = { index, name, regions, items };
+        zones.push(zone); made.push(zone);
+      }
+      if (made.length > 1) made.forEach((zone, part) => { zone.name = `${name} ${part + 1}/${made.length}`; });
+      return made;
+    };
+    const regionName = (id, list) => list[0].region || id;
+    // Without a per-zone slot count (zones/lists/memories), one zone per region; regions share a zone only when there are more regions than zones.
+    const perZone = layout.slotsPerZone ? Infinity :
+      Math.max(1, Math.ceil(regional.size / Math.max(1, regularLimit - (satellite.length ? 1 : 0))));
+    let current = null;
+    for (const [regionId, found] of regional) {
+      const list = [...found.filter(channel => !isAirport(channel)), ...found.filter(isAirport)];
+      const name = regionName(regionId, list);
+      if (current && current.regions.length < perZone && current.items.length + list.length <= zoneCapacity(current.index) && room >= list.length) {
+        current.items.push(...take(list)); current.regions.push({ id: regionId, name });
+        current.name = `${current.regions[0].name} - ${name}`;
+        continue;
+      }
+      const made = fill(list, name, [{ id: regionId, name }]);
+      current = made.length === 1 ? made[0] : null;
+    }
+    if (satellite.length) fill(satellite, "SAT", []);
+    if (pmr.length) fill(pmr, "PMR446", [{ id: "PMR446", name: "PMR446" }], true);
+    const planned = zones.map(zone => ({ index: zone.index, name: zone.name, regionIds: zone.regions.map(entry => entry.id),
+      channels: zone.items.map((channel, slot) => ({ ...channel, zone: zone.name, slot: slot + 1 })) }));
+    const accepted = planned.flatMap(zone => zone.channels);
+    return { profile: profileId, zones: planned, reasons, accepted, omitted: channels.length - accepted.length, warnings: prepared.warnings };
+  }
   // Native-importer shape: UV-K5 AM goes through the existing `extended` contract (mode 1, TX lock kept).
+  // For the UV-K5 the channel zone is the radio zone, so groupQuanshengChannels(..., "zone") gives one scan list per zone.
   function templateImportChannels(profileId, channels) {
     R.assert(profileId === "uvk5v3" || Object.hasOwn(IMPORT_PROFILES, profileId), "Este modelo no tiene importador en esta pagina.");
-    const prepared = prepareTemplateExport(profileId, channels);
+    const prepared = profileId === "uvk5v3" ? templateZonePlan(profileId, channels) : prepareTemplateExport(profileId, channels);
     prepared.accepted = prepared.accepted.map(channel => templateModulation(channel) === "AM"
       ? { ...channel, mode: 1, extended: true, narrow: false, rxOnly: true } : channel);
     return prepared;
@@ -154,13 +225,20 @@
     const rows = [["Location", "Name", "Frequency", "Duplex", "Offset", "Tone", "rToneFreq", "cToneFreq", "DtcsCode", "DtcsPolarity", "RxDtcsCode", "CrossMode", "Mode", "TStep", "Skip", "Comment"]];
     channels.forEach((channel, index) => rows.push([index, R.asciiName(channel.name, 10), channel.rx, "off", "0.000000",
       "", "88.5", "88.5", "023", "NN", "023", "Tone->Tone", templateModulation(channel) === "AM" ? "AM" : channel.narrow ? "NFM" : "FM", "5.00", "",
-      `RX ONLY. Zone: ${channel.regionId || "SAT"}. TX nominal ${channel.tx}; tono de proveedor ${channel.tone || "sin dato"}. ${channel.source || ""} ${channel.notes || ""} ${channel.attribution || ""} ${channel.license || ""}`]));
+      `RX ONLY. Zone: ${channel.zone}. TX nominal ${channel.tx}; tono de proveedor ${channel.tone || "sin dato"}. ${channel.source || ""} ${channel.notes || ""} ${channel.attribution || ""} ${channel.license || ""}`]));
     return rows.map(row => row.map(R.csvCell).join(",")).join("\r\n") + "\r\n";
   }
-  function referenceCSV(channels) {
-    const rows = [["Name", "RX_MHz", "TX_nominal_MHz", "Modulation", "RX_Only", "Country", "Region_ID", "Locality", "Identifier", "Key", "Source", "Notes"]];
-    for (const c of channels) rows.push([c.name, c.rx, c.tx, templateModulation(c), "Yes", c.country || "", c.regionId || "",
-      c.city || "", c.callsign || c.ident || "", c.key, c.source || "", c.notes || ""]);
+  function referenceCSV(plan, profile) {
+    const { layout } = profile;
+    const extra = profile === PROFILES.rt950pro ? ["Zone", "Slot", "Channel_Number"] : profile === PROFILES.ftx1 ? ["Memory", "Zone"] : ["Zone"];
+    const rows = [["Name", "RX_MHz", "TX_nominal_MHz", "Modulation", "RX_Only", "Country", "Region_ID", "Locality", "Identifier", "Key", "Source", "Notes", ...extra]];
+    let memory = layout.from;
+    for (const zone of plan.zones) for (const c of zone.channels) {
+      const numbers = profile === PROFILES.rt950pro ? [c.zone, c.slot, (zone.index - 1) * layout.slotsPerZone + c.slot] :
+        profile === PROFILES.ftx1 ? [memory++, c.zone] : [c.zone];
+      rows.push([c.name, c.rx, c.tx, templateModulation(c), "Yes", c.country || "", c.regionId || "",
+        c.city || "", c.callsign || c.ident || "", c.key, c.source || "", c.notes || "", ...numbers]);
+    }
     return rows.map(row => row.map(R.csvCell).join(",")).join("\r\n") + "\r\n";
   }
   function anytoneProject(channels) {
@@ -171,21 +249,21 @@
         notes: String(c.notes || "").slice(0, 1000) })) };
   }
   // Safe export in a format that already exists; omitted channels are counted, never silently dropped. Never a CPS or CAT script.
-  function templateExportFile(profileId, channels) {
+  function templateExportFile(profileId, channels, options = {}) {
     R.assert(Object.hasOwn(PROFILES, profileId), "Modelo de plantilla desconocido.");
-    const prepared = prepareTemplateExport(profileId, channels), profile = PROFILES[profileId];
+    const profile = PROFILES[profileId], prepared = prepareTemplateExport(profileId, channels);
     R.assert(prepared.accepted.length > 0, `Ningun canal es representable en ${profile.label} con modo y bloqueo de TX seguros.`);
+    if (profile.output === "anytone-project") R.assert(prepared.accepted.length <= profile.layout.channelLimit, "AnyTone admite 4000 canales por proyecto. Selecciona una zona.");
+    const plan = templateZonePlan(profileId, channels, options);
+    R.assert(plan.accepted.length > 0, `Ningun canal cabe en ${profile.label}.`);
     let content, mime;
-    if (profile.output === "anytone-project") {
-      R.assert(prepared.accepted.length <= 4000, "AnyTone admite 4000 canales por proyecto. Selecciona una zona.");
-      content = JSON.stringify(anytoneProject(prepared.accepted), null, 2); mime = "application/json";
-    }
+    if (profile.output === "anytone-project") { content = JSON.stringify(anytoneProject(plan.accepted), null, 2); mime = "application/json"; }
     else {
       mime = "text/csv;charset=utf-8";
-      content = profile.output === "reference-csv" ? referenceCSV(prepared.accepted) :
-        chirpAmCSV(prepared.accepted);
+      content = profile.output === "reference-csv" ? referenceCSV(plan, profile) : chirpAmCSV(plan.accepted);
     }
-    return { ...prepared, label: profile.label, extension: profile.extension, mime, content };
+    return { ...plan, label: profile.label, extension: profile.extension, mime, content,
+      summary: plan.zones.map(zone => ({ index: zone.index, name: zone.name, count: zone.channels.length })) };
   }
   function fmReceivable(transmitter) {
     return ["FM", "FMN"].includes(transmitter.mode) && Number.isFinite(transmitter.downlink) &&
@@ -244,7 +322,7 @@
     return passes.sort((a, b) => a.start - b.start);
   }
   Object.assign(R, { TEMPLATE_COUNTRIES: COUNTRIES, TEMPLATE_PROFILES: PROFILES, validateCountryTemplate, validateAirportTemplate, airportChannels,
-    countryTemplateChannels, prepareTemplateExport, templateImportChannels, templateExportFile, templateModulation,
+    countryTemplateChannels, prepareTemplateExport, templateZonePlan, templateImportChannels, templateExportFile, templateModulation,
     monthlyTemplatePasses, weeklyTemplatePasses });
   if (typeof module !== "undefined") module.exports = R;
 })(typeof globalThis !== "undefined" ? globalThis : this);

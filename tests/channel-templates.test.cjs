@@ -319,3 +319,120 @@ test("schedule publishes only validated permitted data and explicitly deploys Pa
   assert.match(workflow, /gh workflow run pages.yml --ref main/);
   assert.doesNotMatch(read("scripts/fetch-channel-templates.cjs"), /repeaterbook/i);
 });
+const zoneRepeater = (region, n) => ({ key: `hearham:${region}:${n}`, name: `${region}${n}`, rx: "145.60000", tx: "145.00000", mode: 0,
+  rxOnly: true, regionId: region, region: `Region ${region}`, country: "ES", city: "" });
+const zoneAirport = (region, n) => ({ key: `ourairports:${region}:${n}`, name: `A${region}${n}`, rx: "118.30000", tx: "118.30000", mode: "AM",
+  rxOnly: true, txLocked: true, regionId: region, region: `Region ${region}`, country: "ES", city: "" });
+const zonePmr = () => R.pmrChannels().map(channel => ({ ...channel, country: "ES", regionId: "PMR446", zone: "PMR446" }));
+const zoneRegion = (region, repeaters, airports = 0) => [
+  ...Array.from({ length: repeaters }, (_, n) => zoneRepeater(region, n)), ...Array.from({ length: airports }, (_, n) => zoneAirport(region, n))];
+const spain = R.validateCountryTemplate(json("ES"), "ES"), spainAirports = json("ES-airports");
+test("a region filter keeps that region's repeaters and airports together and nothing else", () => {
+  const regionId = spain.regions.map(region => region.id).find(id => spain.channels.some(channel => channel.regionId === id) &&
+    Object.values(spainAirports.airports).some(airport => airport.regionId === id));
+  const selected = R.countryTemplateChannels(spain, { region: regionId, airports: spainAirports });
+  assert(selected.every(channel => channel.regionId === regionId));
+  assert(selected.some(channel => channel.key.startsWith("hearham:")) && selected.some(channel => channel.key.startsWith("ourairports:")));
+  const expected = spain.channels.filter(channel => channel.regionId === regionId).length +
+    spainAirports.frequencies.filter(entry => spainAirports.airports[entry.ident].regionId === regionId).length;
+  assert.equal(selected.length, expected);
+  assert(selected.filter(channel => channel.key.startsWith("ourairports:")).every(channel => channel.region === spain.regions.find(region => region.id === regionId).name));
+});
+test("zone plan keeps each region together in catalog order with airports after repeaters and PMR446 as the last zone", () => {
+  const plan = R.templateZonePlan("rt950pro", [...zoneRegion("ES-A", 3, 2), ...zoneRegion("ES-B", 2, 1), ...zoneRegion("ES-C", 1), ...zonePmr()]);
+  assert.deepEqual(plan.zones.map(zone => [zone.index, zone.name, zone.regionIds, zone.channels.length]),
+    [[1, "Region ES-A - Region ES-C", ["ES-A", "ES-B", "ES-C"], 9], [10, "PMR446", ["PMR446"], 16]]);
+  assert.deepEqual(R.templateZonePlan("radicodex", [...zoneRegion("ES-A", 3, 2), ...zoneRegion("ES-B", 2, 1), ...zonePmr()]).zones
+    .map(zone => zone.name), ["Region ES-A", "Region ES-B", "PMR446"]);
+  assert.deepEqual(plan.zones[0].channels.slice(0, 5).map(channel => channel.key.split(":")[0]), ["hearham", "hearham", "hearham", "ourairports", "ourairports"]);
+  assert.equal(plan.zones[0].channels[8].slot, 9);
+  const real = R.countryTemplateChannels(spain, { airports: spainAirports, pmr: true });
+  const order = new Map(spain.regions.map((region, index) => [region.id, index]));
+  const result = R.templateZonePlan("radicodex", real, {});
+  assert.equal(result.zones.at(-1).name, "PMR446");
+  let previous = -1;
+  for (const zone of result.zones.slice(0, -1)) for (const channel of zone.channels) {
+    assert(order.get(channel.regionId) >= previous);
+    previous = order.get(channel.regionId);
+  }
+  const rt = R.templateZonePlan("rt950pro", real), seen = new Map();
+  for (const zone of rt.zones.slice(0, -1)) for (const channel of zone.channels)
+    seen.set(channel.regionId, new Set([...(seen.get(channel.regionId) || []), zone.index]));
+  for (const [regionId, zones] of seen) {
+    const size = real.filter(channel => channel.regionId === regionId).length;
+    if (size <= 99 && zones.size > 1) assert.fail(`${regionId} is split although it fits one zone`);
+  }
+  assert.equal(rt.zones.at(-1).name, "PMR446");
+});
+test("RT-950 Pro keeps 99 slots per zone, reserves zone 10 slots 70-99 until the variant is confirmed and counts overflow", () => {
+  const many = [...Array.from({ length: 12 }, (_, index) => zoneRegion(`R${index}`, 90)).flat(), ...zonePmr()];
+  const plan = R.templateZonePlan("rt950pro", many);
+  assert.deepEqual(plan.zones.map(zone => zone.index), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.equal(plan.zones[9].name, "PMR446");
+  assert.equal(plan.reasons.capacity, 3 * 90);
+  assert(plan.zones.every(zone => zone.channels.length <= 99));
+  const tight = Array.from({ length: 10 }, (_, index) => zoneRegion(`T${index}`, 99)).flat();
+  const locked = R.templateZonePlan("rt950pro", tight), open = R.templateZonePlan("rt950pro", tight, { variantConfirmed: true });
+  assert.equal(Math.max(...locked.zones[9].channels.map(channel => channel.slot)), 69);
+  assert.equal(locked.reasons.capacity, 30);
+  assert.equal(open.zones[9].channels.length, 99);
+  assert.equal(open.reasons.capacity, undefined);
+  const csv = R.templateExportFile("rt950pro", tight).content;
+  assert.match(csv.split("\r\n")[0], /"Zone","Slot","Channel_Number"$/);
+  assert(csv.includes('"960"') && !csv.includes('"961"'));
+});
+test("a region larger than one zone is split into numbered parts", () => {
+  const plan = R.templateZonePlan("rt950pro", zoneRegion("BIG", 250));
+  assert.deepEqual(plan.zones.map(zone => [zone.name, zone.channels.length]), [["Region BIG 1/3", 99], ["Region BIG 2/3", 99], ["Region BIG 3/3", 52]]);
+});
+test("every export keeps airports AM and RX only; AT-D878 omits them as modulation:AM", () => {
+  const channels = [...zoneRegion("ES-A", 2, 2), ...zonePmr()];
+  for (const id of ["rt950pro", "uvk5v3", "ftx1", "radicodex"]) {
+    const result = R.templateExportFile(id, channels);
+    const airports = result.accepted.filter(channel => channel.key.startsWith("ourairports:"));
+    assert.equal(airports.length, 2, id);
+    assert(airports.every(channel => channel.mode === "AM" && channel.rxOnly && channel.tx === channel.rx), id);
+    assert(result.content.includes('"AM"'), id);
+    assert.equal(result.summary.at(-1).name, "PMR446");
+  }
+  assert.match(R.templateExportFile("ftx1", channels).content.split("\r\n")[0], /"Memory","Zone"$/);
+  const d878 = R.templateExportFile("d878", channels);
+  assert.equal(d878.reasons["modulation:AM"], 2);
+  assert(JSON.parse(d878.content).channels.every(channel => channel.mode === "FM" && channel.zone));
+});
+test("UV-K5 import names the radio zone so grouping by zone gives one scan list per zone with PMR446 last", () => {
+  const prepared = R.templateImportChannels("uvk5v3", [...zoneRegion("ES-A", 2, 1), ...zoneRegion("ES-B", 1), ...zonePmr()]);
+  const image = new Uint8Array(0xa180).fill(255);
+  image.fill(0, 0, 16);
+  R.view(image).setUint32(0, 14550000, true);
+  image.fill(0, 0x4000, 0x4010);
+  image.set(new TextEncoder().encode("BASE-FM"), 0x4000);
+  image.set([2, 25], 0x8000);
+  image.fill(0, 0xa160, 0xa170);
+  image.set(new TextEncoder().encode("v6.1.0"), 0xa160);
+  const grouped = R.groupQuanshengChannels(image, prepared.accepted, "zone");
+  assert.deepEqual(grouped.groups.map(group => group.name), ["Region ES-A", "Region ES-B", "PMR446"]);
+  assert.equal(grouped.groups.at(-1).list, grouped.groups[0].list + 2);
+});
+test("profiles.json layouts equal the JS PROFILES and only carry sourced values", () => {
+  const shipped = json("profiles").profiles;
+  for (const id of Object.keys(R.TEMPLATE_PROFILES)) assert.deepEqual(shipped[id].layout, R.TEMPLATE_PROFILES[id].layout, id);
+  assert.deepEqual(shipped, JSON.parse(JSON.stringify(R.TEMPLATE_PROFILES)));
+  assert.deepEqual(R.TEMPLATE_PROFILES.uvk5v3.layout, { kind: "scanlists", lists: 24 });
+  assert.deepEqual(R.TEMPLATE_PROFILES.ftx1.layout, { kind: "memories", from: 1, to: 999 });
+  assert.equal(R.TEMPLATE_PROFILES.rt950pro.layout.reserved.fromSlot, 70);
+});
+
+test("zone plan keeps one zone per region on radios without a slot count, sharing only past the bank count", () => {
+  const regionIds = Array.from({ length: 30 }, (_, index) => `ES-R${index}`);
+  const channels = regionIds.map((regionId, index) => ({ key: `hearham:${index}`, name: `R${index}`, rx: "145.60000", tx: "145.00000",
+    mode: 0, rxOnly: true, country: "ES", regionId, region: `Region ${index}` }));
+  const d878 = R.templateZonePlan("d878", channels);
+  assert.equal(d878.zones.length, 30);
+  assert.equal(d878.zones[0].name, "Region 0");
+  const k5 = R.templateZonePlan("uvk5v3", [...channels, ...R.pmrChannels().map(c => ({ ...c, regionId: "PMR446", zone: "PMR446" }))]);
+  assert.ok(k5.zones.length <= 24);
+  assert.equal(k5.zones.at(-1).name, "PMR446");
+  assert.equal(k5.zones.flatMap(zone => zone.channels).length, 46);
+  assert.equal(k5.reasons.capacity, undefined);
+});

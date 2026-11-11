@@ -16,6 +16,7 @@
       <p>PMR446 no autoriza transmitir con un walkie de radioaficionado. Las memorias SAT no contienen horarios ni seguimiento Doppler. Los aeropuertos son frecuencias publicadas, no para navegacion.</p>
       <p id="template-coverage" role="status"></p>
       <p id="template-profile-note" role="status"></p>
+      <ul id="template-zones" role="status" aria-label="Zonas de la radio"></ul>
       <div class="operation-buttons"><button id="template-select" type="button" class="button secondary">Seleccionar resultados (max. 1024)</button><button id="template-clear" type="button" class="button secondary">Quitar seleccion</button></div>
       <div class="table-scroll template-preview"><table><thead><tr><th>Elegir</th><th>Nombre</th><th>RX MHz</th><th>Localidad</th></tr></thead><tbody id="template-preview"></tbody></table></div>
       <div class="operation-buttons"><button id="template-previous" type="button" class="button secondary">Anterior</button><span id="template-page" role="status"></span><button id="template-next" type="button" class="button secondary">Siguiente</button></div>
@@ -104,10 +105,16 @@
     };
     function count() {
       const profile = $("profile-template").value, chosenEntries = entries.filter(entry => selected.has(entry.key));
-      const prepared = R.prepareTemplateExport(profile, chosenEntries);
+      const exportable = Object.hasOwn(R.TEMPLATE_PROFILES, profile) && chosenEntries.length > 0;
+      const prepared = exportable ? R.templateZonePlan(profile, chosenEntries) : R.prepareTemplateExport(profile, chosenEntries);
       const reasons = Object.entries(prepared.reasons).map(([reason, total]) => `${reason} ${total}`).join(", ");
       text("template-count", `${selected.size} seleccionados / ${entries.length} resultados.`);
       text("template-profile-note", `${PROFILE_NOTES[profile]} ${chosenEntries.length ? `${prepared.accepted.length} representables; ${prepared.omitted} omitidos${reasons ? ` (${reasons})` : ""}.` : ""}`);
+      $("template-zones").replaceChildren(...(exportable ? prepared.zones : []).map(zone => {
+        const item = document.createElement("li");
+        item.textContent = `Zona ${zone.index}: ${zone.name} (${zone.channels.length} canales)`;
+        return item;
+      }));
       updateButtons();
     }
     async function preview() {
@@ -249,7 +256,7 @@
       const result = R.templateExportFile(profile, chosen());
       const zone = $("region-template").value || $("country-template").value;
       download(`template-${profile}-${zone}.${result.extension}`, result.content, result.mime);
-      text("template-status", `${result.accepted.length} canales exportados para ${result.label}; ${result.omitted} omitidos por modo, banda o bloqueo de TX. ${result.warnings.length ? "Este formato no garantiza solo RX; revisa TX antes de usarlo. " : ""}La radio no se modifica.`);
+      text("template-status", `${result.accepted.length} canales exportados para ${result.label}; ${result.omitted} omitidos por modo, banda, bloqueo de TX o capacidad. ${result.warnings.length ? "Este formato no garantiza solo RX; revisa TX antes de usarlo. " : ""}La radio no se modifica.`);
     });
     run("Cargar plantilla de pais", load);
     return { setBusy(value) { blocked = value; container.querySelectorAll("input,select,button").forEach(control => { control.disabled = value; }); $("pmr-template").disabled = value || $("country-template").value === "US"; $("airport-template").disabled = value || !airports; if (!value) { render(); renderPasses(); } updateButtons(); } };

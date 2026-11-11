@@ -59,4 +59,83 @@ class ChannelTemplatesTest {
         assertFalse(project.getBoolean("airband"))
         assertThrows(IllegalArgumentException::class.java) { ChannelTemplates.export(profiles.getValue("d878"), listOf(airport())) }
     }
+
+    private fun repeater(region: String, n: Int) = ChannelTemplates.Channel("hearham:$region:$n", "$region$n", "145.60000", "145.00000", "FM", false,
+        region, "", "", "", "", "ES", "", "", "", "Region $region")
+    private fun region(id: String, repeaters: Int, airports: Int = 0) = (0 until repeaters).map { repeater(id, it) } +
+        (0 until airports).map { airport().copy(key = "ourairports:$id:$it", regionId = id, region = "Region $id") }
+    private fun pmr() = ChannelTemplates.pmrChannels().map { it.copy(country = "ES") }
+
+    @Test fun regionFilterKeepsRepeatersAndAirportsOfThatRegionOnly() {
+        val data = spain()
+        val id = data.regions.map { it.id }.first { region -> data.channels.any { it.regionId == region } && data.airports.any { it.regionId == region } }
+        val selected = ChannelTemplates.select(data, id, true, false)
+        assertTrue(selected.all { it.regionId == id })
+        assertTrue(selected.any { it.key.startsWith("hearham:") } && selected.any { it.key.startsWith("ourairports:") })
+        assertEquals(data.channels.count { it.regionId == id } + data.airports.count { it.regionId == id }, selected.size)
+        assertTrue(selected.filter { it.key.startsWith("ourairports:") }.all { it.region == data.regions.first { region -> region.id == id }.name })
+    }
+
+    @Test fun planKeepsRegionsTogetherInOrderWithPmrLast() {
+        val plan = ChannelTemplates.zonePlan(profiles.getValue("rt950pro"), region("ES-A", 3, 2) + region("ES-B", 2, 1) + region("ES-C", 1) + pmr())
+        assertEquals(listOf("Region ES-A - Region ES-C", "PMR446"), plan.zones.map { it.name })
+        assertEquals(listOf(1, 10), plan.zones.map { it.index })
+        assertEquals(listOf("Region ES-A", "Region ES-B", "PMR446"),
+            ChannelTemplates.zonePlan(profiles.getValue("radicodex"), region("ES-A", 3, 2) + region("ES-B", 2, 1) + pmr()).zones.map { it.name })
+        assertEquals(listOf("ES-A", "ES-B", "ES-C"), plan.zones[0].regionIds)
+        assertEquals(listOf("hearham", "hearham", "hearham", "ourairports", "ourairports"), plan.zones[0].channels.take(5).map { it.key.substringBefore(":") })
+        assertEquals(9, plan.zones[0].channels.last().slot)
+    }
+
+    @Test fun rt950ProReservesZoneTenTailUntilConfirmedAndCountsOverflow() {
+        val rt = profiles.getValue("rt950pro")
+        val many = (0 until 12).flatMap { region("R$it", 90) } + pmr()
+        val plan = ChannelTemplates.zonePlan(rt, many)
+        assertEquals((1..10).toList(), plan.zones.map { it.index })
+        assertEquals("PMR446", plan.zones[9].name)
+        assertEquals(270, plan.reasons["capacity"])
+        assertTrue(plan.zones.all { it.channels.size <= 99 })
+        val tight = (0 until 10).flatMap { region("T$it", 99) }
+        val locked = ChannelTemplates.zonePlan(rt, tight)
+        assertEquals(69, locked.zones[9].channels.maxOf { it.slot })
+        assertEquals(30, locked.reasons["capacity"])
+        val open = ChannelTemplates.zonePlan(rt, tight, variantConfirmed = true)
+        assertEquals(99, open.zones[9].channels.size)
+        assertNull(open.reasons["capacity"])
+        val csv = ChannelTemplates.export(rt, tight).content
+        assertTrue(csv.lines().first().endsWith("\"Zone\",\"Slot\",\"Channel_Number\""))
+        assertTrue(csv.contains("\"960\"") && !csv.contains("\"961\""))
+    }
+
+    @Test fun regionLargerThanOneZoneIsSplit() {
+        val plan = ChannelTemplates.zonePlan(profiles.getValue("rt950pro"), region("BIG", 250))
+        assertEquals(listOf("Region BIG 1/3" to 99, "Region BIG 2/3" to 99, "Region BIG 3/3" to 52), plan.zones.map { it.name to it.channels.size })
+    }
+
+    @Test fun exportsKeepAirportsAmRxOnlyAndD878OmitsThem() {
+        val channels = region("ES-A", 2, 2) + pmr()
+        for (id in listOf("rt950pro", "uvk5v3", "ftx1", "radicodex")) {
+            val result = ChannelTemplates.export(profiles.getValue(id), channels)
+            val airports = result.plan.accepted.filter { it.key.startsWith("ourairports:") }
+            assertEquals(id, 2, airports.size)
+            assertTrue(id, airports.all { it.modulation == "AM" && it.tx == it.rx })
+            assertTrue(id, result.content.contains("\"AM\""))
+            assertEquals("PMR446", result.plan.zones.last().name)
+        }
+        assertTrue(ChannelTemplates.export(profiles.getValue("ftx1"), channels).content.lines().first().endsWith("\"Memory\",\"Zone\""))
+        val d878 = ChannelTemplates.export(profiles.getValue("d878"), channels)
+        assertEquals(2, d878.plan.reasons["modulation:AM"])
+        val items = org.json.JSONObject(d878.content).getJSONArray("channels")
+        assertTrue((0 until items.length()).all { items.getJSONObject(it).getString("mode") == "FM" && items.getJSONObject(it).getString("zone").isNotEmpty() })
+    }
+
+    @Test fun uvk5ZonesAreNamedSoEachGetsOneScanListAndLayoutsMatchProfiles() {
+        val plan = ChannelTemplates.zonePlan(profiles.getValue("uvk5v3"), region("ES-A", 2, 1) + region("ES-B", 1) + pmr())
+        assertEquals(listOf("Region ES-A", "Region ES-B", "PMR446"), plan.accepted.map { it.zone }.distinct())
+        assertEquals(ChannelTemplates.Layout("scanlists", lists = 24), profiles.getValue("uvk5v3").layout)
+        assertEquals(ChannelTemplates.Layout("memories", from = 1, to = 999), profiles.getValue("ftx1").layout)
+        assertEquals(ChannelTemplates.Layout("zones", channelLimit = 4000), profiles.getValue("d878").layout)
+        val rt = profiles.getValue("rt950pro").layout
+        assertEquals(listOf(10, 99, 12, 10, 70), listOf(rt.zones, rt.slotsPerZone, rt.nameLength, rt.reservedZone, rt.reservedFromSlot))
+    }
 }

@@ -19,4 +19,5 @@
     <string name="template_load_error">Vorlage konnte nicht gelesen werden: %1$s</string>
     <string name="template_error">Vorlagenfehler: %1$s</string>
     <string name="template_anytone_capacity">AnyTone erlaubt 4000 Kanäle pro Projekt. Wähle eine Zone.</string>
+    <string name="template_zone_line">Zone %1$d: %2$s (%3$d Kanäle)</string>
 </resources>

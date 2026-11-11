@@ -19,4 +19,5 @@
     <string name="template_load_error">No se pudo leer la plantilla: %1$s</string>
     <string name="template_error">Error de plantilla: %1$s</string>
     <string name="template_anytone_capacity">AnyTone admite 4000 canales por proyecto. Selecciona una zona.</string>
+    <string name="template_zone_line">Zona %1$d: %2$s (%3$d canales)</string>
 </resources>

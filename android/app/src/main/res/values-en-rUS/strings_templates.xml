@@ -19,4 +19,5 @@
     <string name="template_load_error">Could not read the template: %1$s</string>
     <string name="template_error">Template error: %1$s</string>
     <string name="template_anytone_capacity">AnyTone supports 4000 channels per project. Select a region.</string>
+    <string name="template_zone_line">Zone %1$d: %2$s (%3$d channels)</string>
 </resources>

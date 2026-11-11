@@ -28,7 +28,10 @@
       },
       "txLock": "reference-column",
       "output": "reference-csv",
-      "extension": "csv"
+      "extension": "csv",
+      "layout": {
+        "kind": "reference"
+      }
     },
     "rt950pro": {
       "label": "Radtel RT-950 Pro",
@@ -56,7 +59,19 @@
       },
       "txLock": "reference-column",
       "output": "reference-csv",
-      "extension": "csv"
+      "extension": "csv",
+      "layout": {
+        "kind": "zones",
+        "zones": 10,
+        "slotsPerZone": 99,
+        "nameLength": 12,
+        "reserved": {
+          "zone": 10,
+          "fromSlot": 70,
+          "toSlot": 99,
+          "reason": "Channels 961-990 (0x7800-0x7BFF) are reserved until the firmware variant is identified; see docs/RADTEL-RT950-PRO.md"
+        }
+      }
     },
     "uvk5v3": {
       "label": "Quansheng UV-K5 V3",
@@ -84,7 +99,11 @@
       },
       "txLock": "memory-bit",
       "output": "chirp-csv",
-      "extension": "csv"
+      "extension": "csv",
+      "layout": {
+        "kind": "scanlists",
+        "lists": 24
+      }
     },
     "d878": {
       "label": "AnyTone AT-D878",
@@ -105,7 +124,11 @@
       },
       "txLock": "project-flag",
       "output": "anytone-project",
-      "extension": "json"
+      "extension": "json",
+      "layout": {
+        "kind": "zones",
+        "channelLimit": 4000
+      }
     },
     "ftx1": {
       "label": "Yaesu FTX-1",
@@ -133,7 +156,12 @@
       },
       "txLock": "reference-column",
       "output": "reference-csv",
-      "extension": "csv"
+      "extension": "csv",
+      "layout": {
+        "kind": "memories",
+        "from": 1,
+        "to": 999
+      }
     }
   }
 }

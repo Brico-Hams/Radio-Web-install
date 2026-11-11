@@ -88,15 +88,16 @@ class TemplateActivity : LocalizedActivity() {
     private fun render() {
         val loaded = dataset ?: return
         val channels = current()
-        val prepared = ChannelTemplates.prepare(profiles[model.selectedItemPosition], channels)
-        val reasons = prepared.reasons.entries.joinToString(", ") { "${it.key}: ${it.value}" }
+        val plan = ChannelTemplates.zonePlan(profiles[model.selectedItemPosition], channels)
+        val reasons = plan.reasons.entries.joinToString(", ") { "${it.key}: ${it.value}" }
         info.text = buildString {
-            append(getString(R.string.template_counts, prepared.accepted.size, prepared.omitted))
+            append(getString(R.string.template_counts, plan.accepted.size, plan.omitted))
             if (reasons.isNotEmpty()) append(" (").append(reasons).append(")")
+            plan.zones.forEach { append("\n").append(getString(R.string.template_zone_line, it.index, it.name, it.channels.size)) }
             append("\n").append(getString(R.string.template_coverage, loaded.coverage, loaded.airportCoverage))
-            if ("rxOnlyNotGuaranteed" in prepared.warnings) append("\n").append(getString(R.string.template_rx_not_guaranteed))
+            if ("rxOnlyNotGuaranteed" in plan.warnings) append("\n").append(getString(R.string.template_rx_not_guaranteed))
         }
-        preview.text = prepared.accepted.take(PREVIEW_LIMIT).joinToString("\n") { "${it.regionId} · ${it.rx} ${it.modulation} ${it.name} ${it.city}".trim() }
+        preview.text = plan.accepted.take(PREVIEW_LIMIT).joinToString("\n") { "${it.zone} · ${it.rx} ${it.modulation} ${it.name} ${it.city}".trim() }
             .ifEmpty { getString(R.string.template_none_shown) }
     }
 
