@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_open_aprs_chat">APRS-Chat (KISS-Verbindung)</string>
+    <string name="aprs_chat_title">APRS-Chat</string>
+    <string name="aprs_chat_intro">APRS-Nachrichten über eine KISS-Verbindung. Angeboten werden nur Wege, die RadiCodex erreichen kann; ein Funkgerät ohne APRS/KISS wird nie simuliert. Senden erfordert eine Amateurfunklizenz.</string>
+    <string name="aprs_chat_help">Verbindung wählen, verbinden und das eigene Rufzeichen eingeben. Jedes Senden geht über HF und muss bestätigt werden.</string>
+    <string name="aprs_chat_link_section">Verbindung</string>
+    <string name="aprs_chat_link_rt950">RT-950 Pro (KISS über BLE)</string>
+    <string name="aprs_chat_link_tcp">KISS TCP (externer TNC)</string>
+    <string name="aprs_chat_tcp_help">EXTERNER TNC (z. B. Direwolf oder eine TNC-Brücke): RadiCodex spricht KISS nur über einen unverschlüsselten TCP-Socket zu Host und Port, die du angibst. Das Funkgerät wird von diesem TNC bedient, nicht von der App; nur in einem vertrauenswürdigen Netz verwenden.</string>
+    <string name="aprs_chat_host">TNC-Host (Name oder IP)</string>
+    <string name="aprs_chat_port">TCP-Port des TNC</string>
+    <string name="aprs_chat_connect">Verbinden</string>
+    <string name="aprs_chat_disconnected">Keine Verbindung</string>
+    <string name="aprs_chat_connected">Verbindung offen: %1$s</string>
+    <string name="aprs_chat_link_lost">Verbindung von der Gegenseite geschlossen</string>
+    <string name="aprs_chat_status_section">Status je Funkgerät</string>
+    <string name="aprs_chat_radio_row">%1$s\nWeg: %2$s · Status: %3$s\nQuelle: %4$s</string>
+    <string name="aprs_status_verified">am Funkgerät verifiziert</string>
+    <string name="aprs_status_pending">Funkgerätetest ausstehend</string>
+    <string name="aprs_status_unsupported">nicht unterstützt</string>
+    <string name="aprs_path_ble_kiss">KISS über BLE</string>
+    <string name="aprs_path_tcp_kiss">KISS über TCP (externer TNC)</string>
+    <string name="aprs_path_cat_only">kein APRS/KISS in RadiCodex (nur CAT)</string>
+    <string name="aprs_path_clone_only">kein APRS/KISS in RadiCodex (nur Klonen/Kanäle)</string>
+    <string name="aprs_path_tx_beacon_only">nur APRS-Bake senden, weder KISS noch Empfang</string>
+    <string name="aprs_tx_title">Über HF senden</string>
+    <string name="aprs_tx_body">Diese Nachricht wird per Hochfrequenz (HF) gesendet.\n\nVon: %1$s\nAn: %2$s\nText: %3$s\n\nOhne Bestätigung (Ack) wird sie bis zu 3-mal alle 30 s wiederholt.\n\n%4$s</string>
+    <string name="aprs_tx_confirm">Senden</string>
+    <string name="aprs_tx_note_rt950">RT-950 Pro: Ein erfolgreicher BLE-Schreibvorgang beweist NICHT, dass über HF gesendet wird; mit einem zweiten Empfänger prüfen. Laut README von lalmonte/radiochat-aprs@9c7b092 akzeptieren manche Firmwares den KISS-Schreibvorgang, ohne die PTT zu aktivieren; erkanz/radtel-RT950PRO@51c84d4 meldet funktionierendes Senden mit einer gepatchten v0.29.</string>
+    <string name="aprs_tx_note_tcp">Externer TNC: Was gesendet wird, hängt von diesem TNC und seinem Funkgerät ab; RadiCodex kann es nicht bestätigen.</string>
+    <string name="err_aprs_no_link">Keine KISS-Verbindung offen</string>
+    <string name="err_aprs_limits">Der Frame überschreitet die AX.25-Grenzen dieser Verbindung (max. %1$d AX.25-Bytes, %2$d Digipeater, %3$d Info-Bytes)</string>
+    <string name="err_aprs_tcp_host">TNC-Host angeben (ohne Leerzeichen)</string>
+    <string name="err_aprs_tcp_port">Der TCP-Port muss zwischen 1 und 65535 liegen</string>
+    <string name="err_aprs_tcp_connect">Verbindung zum TNC unter %1$s nicht möglich</string>
+    <string name="err_aprs_tcp_closed">Die TCP-Verbindung zum TNC ist geschlossen</string>
+</resources>
