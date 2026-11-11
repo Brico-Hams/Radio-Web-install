@@ -68,7 +68,21 @@
         notes: `${airport.name}${entry.description ? ` - ${entry.description}` : ""}. AM RX only, published frequency; not for navigation.` };
     });
   }
-  function countryTemplateChannels(file, { region = "", query = "", pmr = false, satellites = null, airports = null } = {}) {
+  // CEPT CB channels 1-40 (23-25 out of order by design); Orden ETU/1033/2017, also scripts/build-chirp-spain.py.
+  const CB_MHZ = [26.965, 26.975, 26.985, 27.005, 27.015, 27.025, 27.035, 27.055, 27.065, 27.075, 27.085, 27.105, 27.115,
+    27.125, 27.135, 27.155, 27.165, 27.175, 27.185, 27.205, 27.215, 27.225, 27.255, 27.235, 27.245, 27.265,
+    27.275, 27.285, 27.295, 27.305, 27.315, 27.325, 27.335, 27.345, 27.355, 27.365, 27.375, 27.385, 27.395, 27.405];
+  const CB_SOURCE = "https://www.fediea.org/legislacb/oetu10332017-cb.php";
+  // RX only: an amateur or airband radio is not a type-approved CB station. Only Spain has a sourced CB plan here.
+  function cbChannels(country) {
+    R.assert(country === "ES", "CB 27 MHz: solo hay fuente oficial para Espana (Orden ETU/1033/2017); otros paises pendiente de fuente.");
+    return CB_MHZ.flatMap((mhz, index) => ["AM", "FM"].map(mode => {
+      const n = String(index + 1).padStart(2, "0"), rx = mhz.toFixed(5);
+      return { key: `cb27:${index + 1}:${mode}`, name: `CB${n} ${mode}`, rx, tx: rx, mode, rxOnly: true, txLocked: true, narrow: false,
+        country, regionId: "CB27", zone: "CB27", source: CB_SOURCE, notes: `CB 27 MHz canal ${index + 1} ${mode} · solo RX.` };
+    }));
+  }
+  function countryTemplateChannels(file, { region = "", query = "", pmr = false, cb = false, satellites = null, airports = null } = {}) {
     validateCountryTemplate(file, file.country);
     R.assert(!region || file.regions.some(entry => entry.id === region), "Selecciona una region de la plantilla.");
     const search = String(query).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
@@ -96,13 +110,16 @@
       R.assert(COUNTRIES.find(country => country.code === file.country).pmr, "PMR446 no es una plantilla de Estados Unidos.");
       channels.push(...R.pmrChannels().map(channel => ({ ...channel, country: file.country, regionId: "PMR446", zone: "PMR446" })));
     }
+    if (cb) channels.push(...cbChannels(file.country));
     return [...new Map(channels.map(channel => [channel.key, channel])).values()];
   }
   // Single source of truth shared with data/channel-templates/profiles.json (Android reads that file).
   // No profile writes hardware: they only describe what a model can represent as modulation + TX lock.
   const FM_BANDS = [[136, 174], [400, 470]];
+  // 27 MHz only where the repo documents RX there: FTX-1 CAT accepts 30 kHz-470 MHz (ftx1-core.js); RadiCodex is the reference file.
+  const CB_BAND = [[26.965, 27.405]];
   const PROFILES = Object.freeze({
-    radicodex: { label: "RadiCodex", modulations: ["FM", "AM"], bands: { FM: FM_BANDS, AM: [[118, 137]] },
+    radicodex: { label: "RadiCodex", modulations: ["FM", "AM"], bands: { FM: [...CB_BAND, ...FM_BANDS], AM: [...CB_BAND, [118, 137]] },
       txLock: "reference-column", output: "reference-csv", extension: "csv", layout: { kind: "reference" } },
     rt950pro: { label: "Radtel RT-950 Pro", modulations: ["FM", "AM"], bands: { FM: FM_BANDS, AM: [[118, 137]] },
       txLock: "reference-column", output: "reference-csv", extension: "csv",
@@ -113,7 +130,7 @@
     d878: { label: "AnyTone AT-D878", modulations: ["FM"], bands: { FM: FM_BANDS },
       txLock: "project-flag", output: "anytone-project", extension: "json", layout: { kind: "zones", channelLimit: 4000 } },
     // memory groups: pendiente de fuente
-    ftx1: { label: "Yaesu FTX-1", modulations: ["FM", "AM"], bands: { FM: FM_BANDS, AM: [[118, 137]] },
+    ftx1: { label: "Yaesu FTX-1", modulations: ["FM", "AM"], bands: { FM: [...CB_BAND, ...FM_BANDS], AM: [...CB_BAND, [118, 137]] },
       txLock: "reference-column", output: "reference-csv", extension: "csv", layout: { kind: "memories", from: 1, to: 999 } }
   });
   // readQuanshengChannels / the importer address memories 1-1024; the scan list count comes from the layout.
@@ -163,7 +180,7 @@
     const regional = new Map(), satellite = [], pmr = [];
     const isAirport = channel => String(channel.key).startsWith("ourairports:");
     for (const channel of prepared.accepted) {
-      if (channel.regionId === "PMR446") pmr.push(channel);
+      if (channel.regionId === "PMR446" || channel.regionId === "CB27") pmr.push(channel);
       else if (!channel.regionId || String(channel.key).startsWith("sat")) satellite.push(channel);
       else regional.has(channel.regionId) ? regional.get(channel.regionId).push(channel) : regional.set(channel.regionId, [channel]);
     }
@@ -206,7 +223,10 @@
       current = made.length === 1 ? made[0] : null;
     }
     if (satellite.length) fill(satellite, "SAT", []);
-    if (pmr.length) fill(pmr, "PMR446", [{ id: "PMR446", name: "PMR446" }], true);
+    // PMR446 and CB share the last zone ("PMR446 + CB").
+    const services = [...new Set(pmr.map(channel => channel.regionId))];
+    const lastName = services.map(id => id === "CB27" ? "CB" : id).join(" + ");
+    if (pmr.length) fill(pmr, lastName, services.map(id => ({ id, name: id === "CB27" ? "CB" : id })), true);
     const planned = zones.map(zone => ({ index: zone.index, name: zone.name, regionIds: zone.regions.map(entry => entry.id),
       channels: zone.items.map((channel, slot) => ({ ...channel, zone: zone.name, slot: slot + 1 })) }));
     const accepted = planned.flatMap(zone => zone.channels);
@@ -321,7 +341,7 @@
     }
     return passes.sort((a, b) => a.start - b.start);
   }
-  Object.assign(R, { TEMPLATE_COUNTRIES: COUNTRIES, TEMPLATE_PROFILES: PROFILES, validateCountryTemplate, validateAirportTemplate, airportChannels,
+  Object.assign(R, { TEMPLATE_COUNTRIES: COUNTRIES, TEMPLATE_PROFILES: PROFILES, cbChannels, validateCountryTemplate, validateAirportTemplate, airportChannels,
     countryTemplateChannels, prepareTemplateExport, templateZonePlan, templateImportChannels, templateExportFile, templateModulation,
     monthlyTemplatePasses, weeklyTemplatePasses });
   if (typeof module !== "undefined") module.exports = R;

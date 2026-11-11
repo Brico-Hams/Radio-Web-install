@@ -138,4 +138,19 @@ class ChannelTemplatesTest {
         val rt = profiles.getValue("rt950pro").layout
         assertEquals(listOf(10, 99, 12, 10, 70), listOf(rt.zones, rt.slotsPerZone, rt.nameLength, rt.reservedZone, rt.reservedFromSlot))
     }
+
+    @Test fun cbIsSpainOnlyRxOnlyAndSharesTheLastZoneWithPmrOnRadiosThatReceive27MHz() {
+        val cb = ChannelTemplates.cbChannels("ES")
+        assertEquals(80, cb.size)
+        assertEquals(listOf("26.96500", "AM", "FM", "27.40500"), listOf(cb[0].rx, cb[0].modulation, cb[1].modulation, cb.last().rx))
+        assertTrue(cb.all { it.tx == it.rx && it.source == ChannelTemplates.CB_SOURCE })
+        val ftx1 = ChannelTemplates.zonePlan(profiles.getValue("ftx1"), region("ES-A", 1) + pmr() + cb)
+        assertEquals("PMR446 + CB", ftx1.zones.last().name)
+        assertEquals(96, ftx1.zones.last().channels.size)
+        for (id in listOf("rt950pro", "uvk5v3", "d878")) {
+            val plan = ChannelTemplates.zonePlan(profiles.getValue(id), region("ES-A", 1) + pmr() + cb)
+            assertTrue(id, plan.accepted.none { it.regionId == "CB27" })
+            assertEquals(id, "PMR446", plan.zones.last().name)
+        }
+    }
 }

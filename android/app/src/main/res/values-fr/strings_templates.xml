@@ -8,6 +8,7 @@
     <string name="template_all_zones">Toutes les zones</string>
     <string name="template_airports">Ajouter les aéroports (AM RX seul, 118-136.975 MHz)</string>
     <string name="template_pmr">Ajouter PMR446 1-16 à la fin (RX seul)</string>
+    <string name="template_cb">Ajouter CB 27 MHz 1-40 AM et FM dans la dernière zone (RX seul ; modèles recevant 27 MHz uniquement)</string>
     <string name="template_counts">Représentables : %1$d. Omis : %2$d.</string>
     <string name="template_coverage">Relais : %1$s\nAéroports : %2$s</string>
     <string name="template_rx_not_guaranteed">Ce format ne peut pas garantir le RX seul : vérifiez et verrouillez l\'émission dans votre logiciel avant usage. Aucun script d\'écriture n\'est généré.</string>
