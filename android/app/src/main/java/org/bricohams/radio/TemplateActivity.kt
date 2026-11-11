@@ -19,6 +19,7 @@ class TemplateActivity : LocalizedActivity() {
     private lateinit var model: Spinner
     private lateinit var airports: CheckBox
     private lateinit var pmr: CheckBox
+    private lateinit var cb: CheckBox
     private lateinit var info: TextView
     private lateinit var preview: TextView
     private lateinit var status: TextView
@@ -48,10 +49,11 @@ class TemplateActivity : LocalizedActivity() {
         model = picker(R.string.template_model, profiles.map { it.label })
         airports = CheckBox(this).apply { setText(R.string.template_airports); isChecked = true; setOnCheckedChangeListener { _, _ -> render() } }
         pmr = CheckBox(this).apply { setText(R.string.template_pmr); isChecked = false; setOnCheckedChangeListener { _, _ -> render() } }
+        cb = CheckBox(this).apply { setText(R.string.template_cb); isChecked = false; setOnCheckedChangeListener { _, _ -> render() } }
         info = Brand.text(this, 14f)
         preview = Brand.text(this, 13f).apply { typeface = android.graphics.Typeface.MONOSPACE; setTextIsSelectable(true) }
         status = Brand.text(this, 14f, bold = true).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
-        body.addView(airports); body.addView(pmr); body.addView(info)
+        body.addView(airports); body.addView(pmr); body.addView(cb); body.addView(info)
         body.addView(Brand.button(this, getString(R.string.template_export), true) { export() })
         body.addView(status); body.addView(preview)
         setContentView(ScrollView(this).apply { addView(body) })
@@ -71,6 +73,8 @@ class TemplateActivity : LocalizedActivity() {
             zone.onItemSelectedListener = country.onItemSelectedListener
             pmr.visibility = if (selected.pmr) View.VISIBLE else View.GONE
             pmr.isChecked = selected.pmr
+            cb.visibility = if (selected.code == "ES") View.VISIBLE else View.GONE
+            if (selected.code != "ES") cb.isChecked = false
             render()
         } catch (error: Exception) {
             dataset = null
@@ -82,7 +86,7 @@ class TemplateActivity : LocalizedActivity() {
     private fun current(): List<ChannelTemplates.Channel> {
         val loaded = dataset ?: return emptyList()
         val region = zones.getOrNull(zone.selectedItemPosition - 1)?.id ?: ""
-        return ChannelTemplates.select(loaded, region, airports.isChecked, pmr.isChecked && loaded.country.pmr)
+        return ChannelTemplates.select(loaded, region, airports.isChecked, pmr.isChecked && loaded.country.pmr, cb.isChecked && loaded.country.code == "ES")
     }
 
     private fun render() {

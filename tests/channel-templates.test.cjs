@@ -436,3 +436,23 @@ test("zone plan keeps one zone per region on radios without a slot count, sharin
   assert.equal(k5.zones.flatMap(zone => zone.channels).length, 46);
   assert.equal(k5.reasons.capacity, undefined);
 });
+
+test("CB 27 MHz: 40 sourced CEPT channels in AM and FM, RX only, Spain only, last zone with PMR446, only on radios that receive 27 MHz", () => {
+  const cb = R.cbChannels("ES");
+  assert.equal(cb.length, 80);
+  assert.deepEqual([cb[0].rx, cb[0].mode, cb[1].mode, cb.at(-1).rx], ["26.96500", "AM", "FM", "27.40500"]);
+  assert.deepEqual(cb.filter(c => c.mode === "AM").slice(22, 25).map(c => c.rx), ["27.25500", "27.23500", "27.24500"]);
+  assert(cb.every(c => c.rxOnly && c.tx === c.rx && c.source.includes("oetu10332017")));
+  assert.throws(() => R.cbChannels("FR"), /pendiente de fuente/);
+  const channels = R.countryTemplateChannels(spain, { region: spain.regions[0].id, airports: spainAirports, pmr: true, cb: true });
+  const ftx1 = R.templateZonePlan("ftx1", channels);
+  assert.equal(ftx1.zones.at(-1).name, "PMR446 + CB");
+  assert.equal(ftx1.zones.at(-1).channels.length, 96);
+  for (const id of ["rt950pro", "uvk5v3", "d878"]) {
+    const plan = R.templateZonePlan(id, channels);
+    assert(!plan.accepted.some(c => c.regionId === "CB27"), id);
+    assert(plan.zones.at(-1).name === "PMR446", id);
+  }
+  const csv = R.templateExportFile("ftx1", channels).content;
+  assert.match(csv, /"?CB01 AM"?,"?26\.96500"?,"?26\.96500"?,"?AM"?,"?Yes"?/);
+});
