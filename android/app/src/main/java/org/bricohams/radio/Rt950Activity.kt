@@ -44,22 +44,16 @@ class Rt950Activity : LocalizedActivity() {
         private const val PERMISSION_REQUEST = 95
         private const val PREFERENCES = "rt950"
         private const val SCAN_MS = 15_000L
-        private const val MAX_LOG = 30
     }
 
     private val colors by lazy { Brand.Palette(this) }
     private val worker = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val clock = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT).withZone(ZoneId.systemDefault())
-    private val decoder = KissDecoder()
-    private val messenger = AprsMessenger("", true) { frame ->
-        worker.execute {
-            try { transport?.write(Kiss.data(frame.encode()), 5000) }
-            catch (error: Exception) { runOnUiThread { notice.text = errorText(error) } }
-        }
-    }
+    private lateinit var chat: AprsChatPanel
     private lateinit var preferences: android.content.SharedPreferences
     @Volatile private var transport: BleRt950Transport? = null
+    @Volatile private var kissLink: Rt950BleKissLink? = null
     @Volatile private var backup: Rt950Backup? = null
     @Volatile private var backupDone = false
     private var stopScan: (() -> Unit)? = null
@@ -87,12 +81,6 @@ class Rt950Activity : LocalizedActivity() {
     private lateinit var route2Ssid: EditText
     private lateinit var sendCustom: CheckBox
     private lateinit var customMessage: EditText
-    private lateinit var myCall: EditText
-    private lateinit var autoAck: CheckBox
-    private lateinit var toEdit: EditText
-    private lateinit var textEdit: EditText
-    private lateinit var conversation: TextView
-    private lateinit var packetLog: TextView
     private lateinit var satStatus: TextView
     private var plan: SatellitePlan? = null
     private var transmitters: List<Transmitter> = emptyList()
@@ -103,9 +91,7 @@ class Rt950Activity : LocalizedActivity() {
 
     private val ticker = object : Runnable {
         override fun run() {
-            syncMessenger()
-            worker.execute { messenger.tick(System.currentTimeMillis()) }
-            renderMessages()
+            chat.tick()
             mainHandler.postDelayed(this, 1000)
         }
     }
@@ -113,6 +99,7 @@ class Rt950Activity : LocalizedActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         preferences = getSharedPreferences(PREFERENCES, MODE_PRIVATE)
+        chat = AprsChatPanel(this, preferences, colors, worker, { kissLink }) { notice.text = it }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val padding = Brand.dp(this@Rt950Activity, 16)
@@ -153,6 +140,7 @@ class Rt950Activity : LocalizedActivity() {
         stopScan?.invoke()
         val link = transport
         transport = null
+        kissLink = null
         worker.execute { link?.close() }
         worker.shutdown()
         super.onDestroy()
@@ -276,8 +264,8 @@ class Rt950Activity : LocalizedActivity() {
                 runOnUiThread { status.setText(R.string.rt950_disconnected) }
                 throw error
             }
-            link.onLost = { runOnUiThread { if (transport === link) { transport = null; status.setText(R.string.rt950_link_lost) } } }
-            link.kissListener = ::onKiss
+            link.onLost = { runOnUiThread { if (transport === link) { transport = null; kissLink = null; status.setText(R.string.rt950_link_lost) } } }
+            kissLink = Rt950BleKissLink.over(link).also { it.onFrame = chat::onFrame }
             transport = link
             runOnUiThread { status.setText(R.string.rt950_connected); notice.text = "" }
         }
@@ -286,6 +274,7 @@ class Rt950Activity : LocalizedActivity() {
     private fun disconnect() = work {
         transport?.close()
         transport = null
+        kissLink = null
         runOnUiThread { status.setText(R.string.rt950_disconnected) }
     }
 
@@ -299,7 +288,7 @@ class Rt950Activity : LocalizedActivity() {
         } finally {
             session.end()
             link.endClone()
-            decoder.reset()
+            kissLink?.resetDecoder()
             runOnUiThread { cloneNote.visibility = View.VISIBLE }
         }
     }
@@ -391,7 +380,7 @@ class Rt950Activity : LocalizedActivity() {
         route2Edit.setText(s.customRouting2); route2Ssid.setText(s.customRouting2Ssid.toString())
         sendCustom.isChecked = s.sendCustomMessage
         customMessage.setText(s.customMessage)
-        if (myCall.text.isNullOrBlank()) myCall.setText(s.callsign)
+        chat.suggestCallsign(s.callsign)
     }
 
     private fun num(edit: EditText) = edit.text.toString().trim().toInt()
@@ -445,63 +434,7 @@ class Rt950Activity : LocalizedActivity() {
     // (d) APRS messages
 
     private fun buildMessages(body: LinearLayout) = section(body, R.string.rt950_section_messages) { card ->
-        note(card, R.string.rt950_msg_help)
-        myCall = field(card, R.string.rt950_msg_callsign, preferences.getString("callsign", "") ?: "", callType)
-        autoAck = check(card, R.string.rt950_msg_auto_ack, preferences.getBoolean("auto-ack", true))
-        toEdit = field(card, R.string.rt950_msg_to, "", callType)
-        textEdit = field(card, R.string.rt950_msg_text)
-        button(card, R.string.rt950_msg_send, true) { sendMessage() }
-        card.addView(Brand.text(this, 15f, colors.accent, true).apply { setText(R.string.rt950_msg_conversations) })
-        conversation = live(Brand.text(this, 14f))
-        card.addView(conversation)
-        card.addView(Brand.text(this, 15f, colors.accent, true).apply { setText(R.string.rt950_msg_packets) })
-        packetLog = Brand.text(this, 12f, colors.muted)
-        card.addView(packetLog)
-    }
-
-    private fun syncMessenger() {
-        messenger.callsign = myCall.text.toString().trim().uppercase()
-        messenger.autoAck = autoAck.isChecked
-    }
-
-    private fun onKiss(bytes: ByteArray) {
-        decoder.feed(bytes).filter { it.type == 0 }.forEach { messenger.receive(it.payload, System.currentTimeMillis()) }
-        runOnUiThread { renderMessages() }
-    }
-
-    private fun sendMessage() {
-        try {
-            requireUi(transport != null) { UiText(R.string.err_rt950_not_connected) }
-            syncMessenger()
-            messenger.send(toEdit.text.toString(), textEdit.text.toString().trim(), System.currentTimeMillis())
-            preferences.edit().putString("callsign", messenger.callsign).putBoolean("auto-ack", messenger.autoAck).apply()
-            textEdit.setText("")
-            renderMessages()
-        } catch (error: IllegalArgumentException) {
-            notice.text = errorText(error)
-        }
-    }
-
-    private fun stateText(state: AprsMessenger.State) = getString(when (state) {
-        AprsMessenger.State.RECEIVED -> R.string.rt950_state_received
-        AprsMessenger.State.PENDING -> R.string.rt950_state_pending
-        AprsMessenger.State.ACKED -> R.string.rt950_state_acked
-        AprsMessenger.State.REJECTED -> R.string.rt950_state_rejected
-        AprsMessenger.State.FAILED -> R.string.rt950_state_failed
-    })
-
-    private fun renderMessages() {
-        val lines: List<String>
-        val packets: List<String>
-        synchronized(messenger) {
-            lines = messenger.entries.takeLast(MAX_LOG).map {
-                if (it.outgoing) getString(R.string.rt950_msg_out, it.peer, it.text, stateText(it.state), it.attempts)
-                else getString(R.string.rt950_msg_in, it.peer, it.text)
-            }
-            packets = messenger.log.takeLast(MAX_LOG).map { "${clock.format(Instant.ofEpochMilli(it.time))} ${it.source}>${it.path}: ${it.text}" }
-        }
-        conversation.text = if (lines.isEmpty()) getString(R.string.rt950_msg_none) else lines.joinToString("\n")
-        packetLog.text = packets.joinToString("\n")
+        chat.build(card, R.string.rt950_msg_help)
     }
 
     // (e) Satellites: Doppler channel plan
