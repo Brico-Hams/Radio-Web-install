@@ -198,7 +198,7 @@ class AprsMessenger(
         return entry
     }
 
-    /** Resends unacknowledged messages every 30 s, up to 3 retries, then marks them failed. */
+    /** Resends unacknowledged messages every 30 s, up to 3 retries, then marks them failed. A failed write stops all retries. */
     @Synchronized
     fun tick(now: Long) {
         for (entry in entries) {
@@ -206,8 +206,19 @@ class AprsMessenger(
             if (entry.attempts > AprsText.MAX_RETRIES) { entry.state = State.FAILED; continue }
             entry.attempts++
             entry.lastSent = now
-            sendFrame(frame(AprsText.message(entry.peer, entry.text, entry.id)))
+            try {
+                sendFrame(frame(AprsText.message(entry.peer, entry.text, entry.id)))
+            } catch (error: Exception) {
+                abortPending()
+                throw error
+            }
         }
+    }
+
+    /** Marks every pending outgoing message failed so no further resend happens (link closed or write failed). */
+    @Synchronized
+    fun abortPending() {
+        entries.filter { it.outgoing && it.state == State.PENDING }.forEach { it.state = State.FAILED }
     }
 
     @Synchronized

@@ -43,8 +43,8 @@ object AprsChatRadios {
     val ALL = listOf(
         // The app string calls RX verified, but no real-radio test of this build is recorded yet: pending until one is logged.
         ChatRadio("Radtel RT-950 Pro (recepción)", ChatPath.BLE_KISS, ChatStatus.PENDING_RADIO_TEST, "$RT950_RES; $RT950_BLE", ChatLink.RT950_BLE),
-        ChatRadio("Radtel RT-950 Pro (transmisión RF)", ChatPath.BLE_KISS, ChatStatus.PENDING_RADIO_TEST,
-            "$RT950_RES (TX inferida); lalmonte/radiochat-aprs@9c7b092; erkanz/radtel-RT950PRO@51c84d4", ChatLink.RT950_BLE),
+        ChatRadio("Radtel RT-950 Pro (transmisión RF: desactivado por defecto, bloqueo del firmware)", ChatPath.BLE_KISS, ChatStatus.PENDING_RADIO_TEST,
+            "$RT950_RES (TX inferida); lalmonte/radiochat-aprs@9c7b092; erkanz/radtel-RT950PRO@51c84d4; SP3ARK/Radtel-950-Pro-Bluetooth-Programmator@a8bb41a README.md:235-238; incidente 2026-11-12", ChatLink.RT950_BLE),
         ChatRadio("Cualquier radio + TNC KISS externo (Direwolf, puente TNC)", ChatPath.TCP_KISS, ChatStatus.PENDING_RADIO_TEST,
             "KissLink.kt (TcpKissLink)", ChatLink.KISS_TCP),
         ChatRadio("Quansheng UV-K5 / BricoHams Satellite", ChatPath.CLONE_ONLY, ChatStatus.UNSUPPORTED, "Diagnostics.kt:12"),

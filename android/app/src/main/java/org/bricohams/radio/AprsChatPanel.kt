@@ -31,7 +31,7 @@ class AprsChatPanel(
 
     private val clock = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT).withZone(ZoneId.systemDefault())
     private val variants = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private val messenger = AprsMessenger("", true) { frame ->
+    private val messenger: AprsMessenger = AprsMessenger("", true) { frame ->
         worker.execute {
             try {
                 val link = linkProvider() ?: throw LocalizedStateException(UiText(R.string.err_aprs_no_link))
@@ -40,16 +40,20 @@ class AprsChatPanel(
                 if (via != null && packet is AprsPacket.Message && packet.id != null) variants[packet.id] = via
                 link.send(link.limits.check(frame))
             } catch (error: Exception) {
+                messenger.abortPending()
                 activity.runOnUiThread { notice(activity.errorText(error)) }
             }
         }
     }
+    private val safety = activity.getSharedPreferences(Rt950Safety.PREFERENCES, Activity.MODE_PRIVATE)
     private lateinit var myCall: EditText
     private lateinit var autoAck: CheckBox
     private lateinit var toEdit: EditText
     private lateinit var textEdit: EditText
     private lateinit var conversation: TextView
     private lateinit var packetLog: TextView
+    private lateinit var linkNotice: TextView
+    private lateinit var powerCycleBox: LinearLayout
 
     private val callType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
 
@@ -71,6 +75,15 @@ class AprsChatPanel(
     /** Adds the message controls to [card]; [help] is the string resource shown above them. */
     fun build(card: LinearLayout, help: Int) {
         note(card, help)
+        linkNotice = Brand.text(activity, 13f, colors.accent, true).apply { visibility = View.GONE; setText(R.string.aprs_chat_rx_only) }
+        card.addView(linkNotice)
+        powerCycleBox = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        powerCycleBox.addView(Brand.text(activity, 15f, colors.accent, true).apply { setText(R.string.aprs_chat_power_cycle_banner) })
+        powerCycleBox.addView(Brand.button(activity, activity.getString(R.string.aprs_chat_power_cycle_confirm), false) {
+            Rt950Safety.recordPowerCycle(safety)
+            render()
+        })
+        card.addView(powerCycleBox)
         myCall = field(card, R.string.rt950_msg_callsign, preferences.getString("callsign", "") ?: "", callType)
         autoAck = CheckBox(activity).apply {
             setText(R.string.rt950_msg_auto_ack)
@@ -97,13 +110,18 @@ class AprsChatPanel(
     /** An automatic ack is also an RF transmission, so it needs a valid callsign too. */
     private fun sync() {
         messenger.callsign = myCall.text.toString().trim().uppercase()
-        messenger.autoAck = autoAck.isChecked && Ax25Address.isValid(messenger.callsign)
+        val allowed = linkProvider()?.txAllowed != false
+        messenger.autoAck = autoAck.isChecked && allowed && Ax25Address.isValid(messenger.callsign)
     }
 
     /** Call once per second on the UI thread: retries pending messages and refreshes the screen. */
     fun tick() {
         sync()
-        if (linkProvider() != null) worker.execute { messenger.tick(System.currentTimeMillis()) }
+        val link = linkProvider()
+        worker.execute {
+            if (link == null || !link.txAllowed) messenger.abortPending()
+            else try { messenger.tick(System.currentTimeMillis()) } catch (_: Exception) {}
+        }
         render()
     }
 
@@ -117,6 +135,7 @@ class AprsChatPanel(
         try {
             sync()
             val link = linkProvider() ?: throw LocalizedStateException(UiText(R.string.err_aprs_no_link))
+            if (!link.txAllowed) throw LocalizedStateException(UiText(R.string.err_aprs_rt950_tx_off))
             val call = messenger.callsign
             requireUi(call.isNotEmpty() && Ax25Address.isValid(call)) { UiText(R.string.err_aprs_no_callsign) }
             val to = Ax25Address.parse(toEdit.text.toString()).toString()
@@ -154,6 +173,9 @@ class AprsChatPanel(
     })
 
     fun render() {
+        val rt950 = linkProvider() as? Rt950BleKissLink
+        linkNotice.visibility = if (rt950 != null && !rt950.txAllowed) View.VISIBLE else View.GONE
+        powerCycleBox.visibility = if (Rt950Safety.needsPowerCycle(safety)) View.VISIBLE else View.GONE
         val lines: List<String>
         val packets: List<String>
         synchronized(messenger) {
