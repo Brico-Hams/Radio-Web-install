@@ -32,6 +32,11 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
     /** Where the arrow leads (the satellite, or AOS before the pass). */
     var target: SatelliteLook? = null
         set(value) { field = value; invalidate() }
+    /** Sun and moon (true azimuth, elevation); drawn only while above the horizon. */
+    var sun: PassSky.Horizontal? = null
+        set(value) { field = value; invalidate() }
+    var moon: PassSky.Horizontal? = null
+        set(value) { field = value; invalidate() }
     var onTarget = false
         set(value) { field = value; invalidate() }
     var headingLabel = ""
@@ -58,6 +63,7 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
     private val past = Path()
     private val future = Path()
     private val marker = Path()
+    private val arrow = Path()
     private var cx = 0f
     private var cy = 0f
     private var radius = 0f
@@ -163,14 +169,61 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
             mark(canvas, track.last(), Color.rgb(207, 34, 46), 5f, "LOS")
             mark(canvas, track.maxBy { it.elevation }, colors.accent, 4f, "MAX")
         }
-        SatellitePasses.at(track, now)?.let {
+        drawBody(canvas, sun, Color.rgb(255, 193, 7), false)
+        drawBody(canvas, moon, Color.rgb(200, 200, 210), true)
+        val current = SatellitePasses.at(track, now)
+        current?.let {
             val (x, y) = spot(it)
             fill.color = colors.text
             canvas.drawCircle(cx + x, cy + y, 7 * density, fill)
             canvas.drawCircle(cx + x, cy + y, 7 * density, ring)
         }
+        drawMotion(canvas, current)
         if (headingUp != null) drawPointing(canvas, up)
         drawTopMarker(canvas)
+    }
+
+    // Sun: disc with rays; moon: crescent made from two discs.
+    private fun drawBody(canvas: Canvas, body: PassSky.Horizontal?, color: Int, crescent: Boolean) {
+        if (body == null || body.elevation < 0) return
+        val (x, y) = PassGeometry.project(body.azimuth, body.elevation, radius, headingUp ?: 0.0)
+        val px = cx + x
+        val py = cy + y
+        fill.color = color
+        val size = 7 * density
+        canvas.drawCircle(px, py, size, fill)
+        if (crescent) {
+            fill.color = colors.surface
+            canvas.drawCircle(px + size * 0.45f, py - size * 0.2f, size * 0.85f, fill)
+        } else {
+            cross.color = color
+            for (step in 0 until 8) {
+                val angle = Math.toRadians(step * 45.0)
+                val ux = cos(angle).toFloat(); val uy = sin(angle).toFloat()
+                canvas.drawLine(px + ux * size * 1.3f, py + uy * size * 1.3f, px + ux * size * 1.8f, py + uy * size * 1.8f, cross)
+            }
+        }
+    }
+
+    // Triangle just ahead of the satellite pointing along its motion, so the direction on the red line is unambiguous.
+    private fun drawMotion(canvas: Canvas, current: SatelliteLook?) {
+        if (track.size < 2) return
+        val from = current ?: track.first()
+        val to = SatellitePasses.at(track, (from.time + 10_000).coerceAtMost(track.last().time)) ?: return
+        val (ax, ay) = spot(from)
+        val (bx, by) = spot(to)
+        val angle = PassSky.motionAngle(ax, ay, bx, by) ?: return
+        val size = 7 * density
+        val tipX = cx + ax + cos(angle).toFloat() * size * 2.6f
+        val tipY = cy + ay + sin(angle).toFloat() * size * 2.6f
+        arrow.reset()
+        arrow.moveTo(tipX + cos(angle).toFloat() * size, tipY + sin(angle).toFloat() * size)
+        for (side in listOf(2.5, -2.5)) {
+            arrow.lineTo(tipX + cos(angle + side).toFloat() * size, tipY + sin(angle + side).toFloat() * size)
+        }
+        arrow.close()
+        fill.color = colors.orange
+        canvas.drawPath(arrow, fill)
     }
 
     private fun drawPointing(canvas: Canvas, up: Double) {

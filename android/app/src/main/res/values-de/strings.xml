@@ -631,6 +631,17 @@
     <string name="live_tx_inverted_yes">Invertiert: ja</string>
     <string name="live_tx_inverted_no">Invertiert: nein</string>
     <string name="live_tx_nominal">(Nennfrequenzen)</string>
+    <string name="pass_summary">AOS %1$s · Max. Entfernung %2$.0f km · Max. Elev. %3$.1f° · Az %4$.0f° - %5$.0f°</string>
+    <string name="pass_share">Teilen</string>
+    <string name="pass_share_text">%1$s: nächster Überflug. Richtung (Az) %2$.1f°, Elevation (El) %3$.1f°. RX %4$.4f MHz.</string>
+    <string name="pass_save">Speichern</string>
+    <string name="pass_saved">Gespeichert</string>
+    <string name="pass_help_button">Wie orientiere ich mich?</string>
+    <string name="pass_help_text">Richte die Antenne nach den Werten Az (Richtung) und El (Elevation) aus. Der Punkt ist der Satellit jetzt: folge ihm entlang der roten Linie. Das Dreieck zeigt die Bewegungsrichtung. Das Fadenkreuz (Kreis mit Kreuz, im Zielmodus) zeigt, wohin deine Antenne zeigt: bringe es auf den Punkt. Die Radarmitte ist der Zenit; die Ringe markieren 30°, 60° und 90° Elevation; Sonne und Mond erscheinen an ihrer Position.</string>
+    <string name="pass_cardinals8">N,NO,O,SO,S,SW,W,NW</string>
+    <string name="pass_radar_direction">Bewegt sich nach %1$s</string>
+    <string name="pass_radar_sun">Sonne Az %1$.0f° El %2$.0f°</string>
+    <string name="pass_radar_moon">Mond Az %1$.0f° El %2$.0f°</string>
     <string name="satellite_map_description">Weltkarte mit gewählten Satelliten, Abdeckung und ausgewählter Flugbahn</string>
     <string name="satellite_map_no_pass">Kein Überflug in 24 h</string>
     <string name="satellite_map_hint">Satelliten antippen, um die Flugbahn zu sehen (45 min davor und danach). Grün: eigene Position. Aktualisierung alle 5 s.</string>

@@ -631,6 +631,17 @@
     <string name="live_tx_inverted_yes">Inverted: yes</string>
     <string name="live_tx_inverted_no">Inverted: no</string>
     <string name="live_tx_nominal">(nominal frequencies)</string>
+    <string name="pass_summary">AOS %1$s · Max range %2$.0f km · Max elev. %3$.1f° · Az %4$.0f° - %5$.0f°</string>
+    <string name="pass_share">Share</string>
+    <string name="pass_share_text">%1$s: next pass. Heading (Az) %2$.1f°, Elevation (El) %3$.1f°. RX %4$.4f MHz.</string>
+    <string name="pass_save">Save</string>
+    <string name="pass_saved">Saved</string>
+    <string name="pass_help_button">How to orient yourself?</string>
+    <string name="pass_help_text">Point the antenna using the Az (heading) and El (elevation) values. The dot is the satellite right now: follow it along the red line. The triangle shows the direction of motion. The crosshair (circle with a cross, in Aim mode) is where your antenna points: bring it onto the dot. The radar centre is the zenith; the rings mark 30°, 60° and 90° elevation; the sun and moon appear at their positions.</string>
+    <string name="pass_cardinals8">N,NE,E,SE,S,SW,W,NW</string>
+    <string name="pass_radar_direction">Moving towards %1$s</string>
+    <string name="pass_radar_sun">Sun Az %1$.0f° El %2$.0f°</string>
+    <string name="pass_radar_moon">Moon Az %1$.0f° El %2$.0f°</string>
     <string name="satellite_map_description">World map with selected satellites, coverage footprints and selected track</string>
     <string name="satellite_map_no_pass">No pass in 24 h</string>
     <string name="satellite_map_hint">Tap a satellite to view its track (45 min before and after). Green: your position. Updates every 5 s.</string>
