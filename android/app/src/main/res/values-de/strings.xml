@@ -642,6 +642,15 @@
     <string name="pass_radar_direction">Bewegt sich nach %1$s</string>
     <string name="pass_radar_sun">Sonne Az %1$.0f° El %2$.0f°</string>
     <string name="pass_radar_moon">Mond Az %1$.0f° El %2$.0f°</string>
+    <string name="pass_tab_transceivers">Transceiver</string>
+    <string name="pass_tab_sstv">SSTV</string>
+    <string name="pass_sstv_requirement">SSTV nutzt die Überflugaufnahme des CAT-Bildschirms: Nötig sind ein CAT-Funkgerät auf %1$.4f MHz (mit Doppler) und dessen Audio über das Handymikrofon. Aufnahmen dieses Satelliten werden unten dekodiert.</string>
+    <string name="pass_legend_sunlit">Satellit im Sonnenlicht</string>
+    <string name="pass_legend_shadow">Satellit im Erdschatten</string>
+    <string name="pass_aim_source_rotor">Fadenkreuz: Rotor</string>
+    <string name="pass_aim_source_phone">Fadenkreuz: Handysensoren</string>
+    <string name="pass_chat">Chat</string>
+    <string name="pass_chat_description">APRS-Chat mit dem Überflugtext öffnen, ohne zu senden</string>
     <string name="satellite_map_description">Weltkarte mit gewählten Satelliten, Abdeckung und ausgewählter Flugbahn</string>
     <string name="satellite_map_no_pass">Kein Überflug in 24 h</string>
     <string name="satellite_map_hint">Satelliten antippen, um die Flugbahn zu sehen (45 min davor und danach). Grün: eigene Position. Aktualisierung alle 5 s.</string>

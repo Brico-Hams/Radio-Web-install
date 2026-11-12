@@ -2,7 +2,9 @@ package org.bricohams.radio
 
 import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PassSkyTest {
@@ -44,6 +46,31 @@ class PassSkyTest {
         val template = "%1\$s: próximo pase. Rumbo (Az) %2\$.1f°, Elevación (El) %3\$.1f°. RX %4\$.4f MHz."
         assertEquals("JAS-2 (FO-29): próximo pase. Rumbo (Az) 157,2°, Elevación (El) 44,3°. RX 435,7897 MHz.",
             PassSky.shareText(template, "JAS-2 (FO-29)", 157.2, 44.3, 435_789_700.0, Locale("es", "ES")))
+    }
+
+    private val equator = ObserverPosition(0.0, 0.0, 0.0)
+
+    // Satellite 500 km straight above the observer: eclipsed with the sun at the nadir side, lit with the sun overhead or on the horizon.
+    @Test fun shadowOnKnownGeometry() {
+        val overhead = SatelliteLook(0, 0.0, 90.0, 500.0)
+        assertTrue(PassSky.eclipsed(overhead, equator, PassSky.Horizontal(0.0, -90.0)))
+        assertFalse(PassSky.eclipsed(overhead, equator, PassSky.Horizontal(0.0, 90.0)))
+        assertFalse(PassSky.eclipsed(overhead, equator, PassSky.Horizontal(0.0, 0.0)))
+        // Far to the side of the Earth-sun axis (8000 km > one Earth radius) the satellite is lit even with the sun below.
+        assertFalse(PassSky.eclipsed(SatelliteLook(0, 0.0, 0.0, 8000.0), equator, PassSky.Horizontal(0.0, -90.0)))
+    }
+
+    @Test fun crosshairPrefersRotorThenPhoneOnlyWhenAiming() {
+        val rotor = Pair(120.0, 35.0); val phone = Pair(10.0, 20.0)
+        assertEquals(PassSky.Crosshair(PassSky.AimSource.ROTOR, 120.0, 35.0), PassSky.crosshair(rotor, phone, true))
+        assertEquals(PassSky.AimSource.ROTOR, PassSky.crosshair(rotor, null, false)!!.source)
+        assertEquals(PassSky.Crosshair(PassSky.AimSource.PHONE, 10.0, 20.0), PassSky.crosshair(null, phone, true))
+        assertNull(PassSky.crosshair(null, phone, false))
+        assertNull(PassSky.crosshair(null, null, true))
+    }
+
+    @Test fun chatPrefillKeepsTheShareTextOnOneLine() {
+        assertEquals("ISS: next pass. Az 10", PassSky.chatPrefill("  ISS: next pass.\nAz 10 "))
     }
 
     @Test fun bookmarkToggleAddsThenRemoves() {

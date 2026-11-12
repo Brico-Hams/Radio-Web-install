@@ -641,6 +641,15 @@
     <string name="pass_radar_direction">Se déplace vers %1$s</string>
     <string name="pass_radar_sun">Soleil Az %1$.0f° El %2$.0f°</string>
     <string name="pass_radar_moon">Lune Az %1$.0f° El %2$.0f°</string>
+    <string name="pass_tab_transceivers">Émetteurs-récepteurs</string>
+    <string name="pass_tab_sstv">SSTV</string>
+    <string name="pass_sstv_requirement">La SSTV utilise l’enregistrement de passage de l’écran CAT : il faut une radio CAT accordée sur %1$.4f MHz (avec Doppler) et son audio entrant par le micro du téléphone. Les enregistrements de ce satellite sont décodés ci-dessous.</string>
+    <string name="pass_legend_sunlit">Satellite au soleil</string>
+    <string name="pass_legend_shadow">Satellite dans l’ombre de la Terre</string>
+    <string name="pass_aim_source_rotor">Réticule : rotor</string>
+    <string name="pass_aim_source_phone">Réticule : capteurs du téléphone</string>
+    <string name="pass_chat">Chat</string>
+    <string name="pass_chat_description">Ouvrir le chat APRS avec le texte du passage, sans l’envoyer</string>
     <string name="satellite_map_description">Carte mondiale des satellites choisis, zones de couverture et trajectoire sélectionnée</string>
     <string name="satellite_map_no_pass">Aucun passage en 24 h</string>
     <string name="satellite_map_hint">Touchez un satellite pour sa trajectoire (45 min avant et après). Vert : votre position. Actualisation toutes les 5 s.</string>

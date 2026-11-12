@@ -106,6 +106,41 @@ object PassSky {
 
     fun bookmarkKey(norad: Int, aosMs: Long) = "$norad:$aosMs"
 
+    private const val EARTH_RADIUS_KM = 6378.137
+
+    /**
+     * Cylindrical Earth-shadow test (Vallado, Fundamentals of Astrodynamics and Applications, algorithm 34): the satellite
+     * is eclipsed when it is on the night side of the Earth centre (negative projection on the sun direction) and closer
+     * to the Earth-sun axis than one Earth radius. Spherical Earth, sun parallax ignored. Works in the observer's
+     * east-north-up frame: the satellite is the look vector plus the observer's height above the Earth centre.
+     */
+    fun eclipsed(look: SatelliteLook, observer: ObserverPosition, sun: Horizontal): Boolean {
+        val az = rad(look.azimuth); val el = rad(look.elevation)
+        val x = look.rangeKm * sin(az) * cos(el)
+        val y = look.rangeKm * cos(az) * cos(el)
+        val z = look.rangeKm * sin(el) + EARTH_RADIUS_KM + observer.heightKm
+        val sunAz = rad(sun.azimuth); val sunEl = rad(sun.elevation)
+        val along = x * sin(sunAz) * cos(sunEl) + y * cos(sunAz) * cos(sunEl) + z * sin(sunEl)
+        if (along >= 0) return false
+        return x * x + y * y + z * z - along * along < EARTH_RADIUS_KM * EARTH_RADIUS_KM
+    }
+
+    fun eclipseFlags(track: List<SatelliteLook>, observer: ObserverPosition): List<Boolean> =
+        track.map { eclipsed(it, observer, sun(it.time, observer)) }
+
+    enum class AimSource { ROTOR, PHONE }
+    data class Crosshair(val source: AimSource, val azimuth: Double, val elevation: Double)
+
+    /** The rotor's reported direction wins whenever a rotor is connected; otherwise the phone sensors, only in Aim mode. */
+    fun crosshair(rotor: Pair<Double, Double>?, phone: Pair<Double, Double>?, aiming: Boolean): Crosshair? = when {
+        rotor != null -> Crosshair(AimSource.ROTOR, rotor.first, rotor.second)
+        aiming && phone != null -> Crosshair(AimSource.PHONE, phone.first, phone.second)
+        else -> null
+    }
+
+    /** Chat draft from the share text: one line, no addressee. */
+    fun chatPrefill(shareText: String) = shareText.trim().replace(Regex("\\s+"), " ")
+
     /** Toggles [key] in [saved] and returns the new set. */
     fun toggle(saved: Set<String>, key: String): Set<String> = if (key in saved) saved - key else saved + key
 }

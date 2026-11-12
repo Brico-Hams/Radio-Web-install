@@ -107,6 +107,12 @@ class AprsChatPanel(
         if (myCall.text.isNullOrBlank()) myCall.setText(call)
     }
 
+    /** Fills the draft only; nothing is sent until the user confirms as usual. */
+    fun prefill(to: String, text: String) {
+        toEdit.setText(to)
+        textEdit.setText(text)
+    }
+
     /** An automatic ack is also an RF transmission, so it needs a valid callsign too. */
     private fun sync() {
         messenger.callsign = myCall.text.toString().trim().uppercase()

@@ -173,6 +173,15 @@
     <string name="pass_radar_direction">Se mueve hacia el %1$s</string>
     <string name="pass_radar_sun">Sol Az %1$.0f° El %2$.0f°</string>
     <string name="pass_radar_moon">Luna Az %1$.0f° El %2$.0f°</string>
+    <string name="pass_tab_transceivers">Transceptores</string>
+    <string name="pass_tab_sstv">SSTV</string>
+    <string name="pass_sstv_requirement">SSTV usa la grabación del pase de la pantalla CAT: requiere una radio con CAT sintonizada a %1$.4f MHz (con Doppler) y su audio entrando por el micrófono del móvil. Las grabaciones de este satélite se decodifican abajo.</string>
+    <string name="pass_legend_sunlit">Satélite al sol</string>
+    <string name="pass_legend_shadow">Satélite en la sombra de la Tierra</string>
+    <string name="pass_aim_source_rotor">Mira: rotor</string>
+    <string name="pass_aim_source_phone">Mira: sensores del móvil</string>
+    <string name="pass_chat">Chat</string>
+    <string name="pass_chat_description">Abrir el chat APRS con el texto del pase sin enviarlo</string>
     <string name="satellite_map_description">Mapa mundial con satelites elegidos, huellas de cobertura y traza del seleccionado</string>
     <string name="satellite_map_info">%1$d - %2$s\nLat %3$.2f°  Lon %4$.2f°  Alt %5$.0f km\n%6$s</string>
     <string name="satellite_map_no_pass">Sin pase en 24 h</string>

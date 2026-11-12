@@ -37,6 +37,16 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
         set(value) { field = value; invalidate() }
     var moon: PassSky.Horizontal? = null
         set(value) { field = value; invalidate() }
+    /** Per track point: true while the satellite is in Earth's shadow (see [PassSky.eclipseFlags]); empty hides the shading. */
+    var eclipsed: List<Boolean> = emptyList()
+        set(value) { field = value; trace(); invalidate() }
+    var legendSunlit = ""
+        set(value) { field = value; invalidate() }
+    var legendShadow = ""
+        set(value) { field = value; invalidate() }
+    /** Names where the crosshair comes from (rotor or phone sensors); drawn top left. */
+    var sourceLabel = ""
+        set(value) { field = value; invalidate() }
     var onTarget = false
         set(value) { field = value; invalidate() }
     var headingLabel = ""
@@ -59,7 +69,9 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
     private val upcomingLine = stroke(colors.orange, 3f).apply { pathEffect = DashPathEffect(floatArrayOf(10 * density, 6 * density), 0f) }
     private val ring = stroke(colors.orange, 2.5f)
     private val cross = stroke(colors.text, 2f)
+    private val shadeLine = stroke(colors.muted, 11f).apply { alpha = 110 }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val shade = Path()
     private val past = Path()
     private val future = Path()
     private val marker = Path()
@@ -87,9 +99,17 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
 
     // Rebuilt only when time, heading or track change, so onDraw does not allocate.
     private fun trace() {
-        past.reset(); future.reset()
+        past.reset(); future.reset(); shade.reset()
         if (radius <= 0f) return
         pickLabelRadial()
+        if (eclipsed.size == track.size) {
+            for (index in 1 until track.size) {
+                if (!eclipsed[index - 1] || !eclipsed[index]) continue
+                val (ax, ay) = spot(track[index - 1])
+                val (bx, by) = spot(track[index])
+                shade.moveTo(cx + ax, cy + ay); shade.lineTo(cx + bx, cy + by)
+            }
+        }
         // The future path starts at the last past sample so the two colours join without a gap.
         val firstFuture = track.indexOfFirst { it.time > now }
         track.forEachIndexed { index, look ->
@@ -163,6 +183,7 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
         }
         label.color = colors.text
         if (track.size >= 2) {
+            canvas.drawPath(shade, shadeLine)
             canvas.drawPath(past, pastLine)
             canvas.drawPath(future, if (now < track.first().time) upcomingLine else futureLine)
             mark(canvas, track.first(), colors.positive, 5f, "AOS")
@@ -179,8 +200,26 @@ class PassRadarView @JvmOverloads constructor(context: Context, attrs: Attribute
             canvas.drawCircle(cx + x, cy + y, 7 * density, ring)
         }
         drawMotion(canvas, current)
-        if (headingUp != null) drawPointing(canvas, up)
+        if (device != null) drawPointing(canvas, up)
         drawTopMarker(canvas)
+        drawLegend(canvas)
+    }
+
+    private fun drawLegend(canvas: Canvas) {
+        small.textAlign = Paint.Align.LEFT
+        if (sourceLabel.isNotEmpty()) canvas.drawText(sourceLabel, 10 * density, 8 * density + small.textSize, small)
+        if (eclipsed.size == track.size && eclipsed.isNotEmpty()) {
+            val step = small.textSize + 4 * density
+            val sunY = height - 12 * density - step
+            val shadowY = height - 12 * density
+            val x0 = 10 * density
+            val x1 = x0 + 22 * density
+            canvas.drawLine(x0, sunY - small.textSize * 0.35f, x1, sunY - small.textSize * 0.35f, futureLine)
+            canvas.drawText(legendSunlit, x1 + 6 * density, sunY, small)
+            canvas.drawLine(x0, shadowY - small.textSize * 0.35f, x1, shadowY - small.textSize * 0.35f, shadeLine)
+            canvas.drawText(legendShadow, x1 + 6 * density, shadowY, small)
+        }
+        small.textAlign = Paint.Align.CENTER
     }
 
     // Sun: disc with rays; moon: crescent made from two discs.

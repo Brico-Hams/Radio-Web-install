@@ -26,10 +26,12 @@ import java.util.concurrent.Executors
  * APRS/KISS reachable from the app are not offered as sources; see [AprsChatRadios] and docs/APRS-CHAT-RADIOS.md.
  */
 class AprsChatActivity : LocalizedActivity() {
-    private companion object {
-        const val PERMISSION_REQUEST = 96
-        const val PREFERENCES = "aprs-chat"
-        const val SCAN_MS = 15_000L
+    companion object {
+        /** Draft text for the message field; the addressee stays empty. */
+        const val EXTRA_PREFILL = "prefill-text"
+        private const val PERMISSION_REQUEST = 96
+        private const val PREFERENCES = "aprs-chat"
+        private const val SCAN_MS = 15_000L
     }
 
     private val colors by lazy { Brand.Palette(this) }
@@ -107,6 +109,7 @@ class AprsChatActivity : LocalizedActivity() {
         body.addView(Brand.card(this).apply {
             addView(title(R.string.rt950_section_messages))
             chat.build(this, R.string.aprs_chat_help)
+            intent.getStringExtra(EXTRA_PREFILL)?.let { chat.prefill("", it) }
         })
         body.addView(Brand.card(this).apply {
             addView(title(R.string.aprs_chat_status_section))
