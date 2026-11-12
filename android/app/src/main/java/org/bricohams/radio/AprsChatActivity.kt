@@ -1,6 +1,7 @@
 package org.bricohams.radio
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -45,6 +46,7 @@ class AprsChatActivity : LocalizedActivity() {
     private lateinit var diagnostic: TextView
     private lateinit var targetGroup: RadioGroup
     private lateinit var rtx1Check: CheckBox
+    private lateinit var txCheck: CheckBox
     private lateinit var bleGroup: LinearLayout
     private lateinit var tcpGroup: LinearLayout
     private lateinit var devices: LinearLayout
@@ -200,6 +202,26 @@ class AprsChatActivity : LocalizedActivity() {
             minHeight = Brand.dp(this@AprsChatActivity, 48)
         }
         bleGroup.addView(rtx1Check)
+        txCheck = CheckBox(this).apply {
+            setText(R.string.aprs_chat_tx_experimental); setTextColor(colors.text)
+            isChecked = Rt950Safety.txEnabled(preferences)
+            minHeight = Brand.dp(this@AprsChatActivity, 48)
+            setOnCheckedChangeListener { box, on ->
+                if (on && !Rt950Safety.txEnabled(preferences)) {
+                    box.isChecked = false
+                    AlertDialog.Builder(this@AprsChatActivity).setTitle(R.string.aprs_chat_tx_warn_title)
+                        .setMessage(R.string.aprs_chat_tx_warn_body)
+                        .setNegativeButton(R.string.action_cancel, null)
+                        .setPositiveButton(R.string.aprs_chat_tx_warn_confirm) { _, _ ->
+                            preferences.edit().putBoolean(Rt950Safety.KEY_TX, true).apply()
+                            box.isChecked = true
+                        }.show()
+                } else if (!on) {
+                    preferences.edit().putBoolean(Rt950Safety.KEY_TX, false).apply()
+                }
+            }
+        }
+        bleGroup.addView(txCheck)
         button(bleGroup, R.string.rt950_scan, true) { startScan() }
         devices = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         bleGroup.addView(devices)
@@ -257,8 +279,8 @@ class AprsChatActivity : LocalizedActivity() {
                 runOnUiThread { status.setText(R.string.aprs_chat_disconnected) }
                 throw error
             }
-            val opened = Rt950BleKissLink.overKiss(transport, options)
-            transport.onLost = { opened.onClosed?.invoke() }
+            val opened = Rt950BleKissLink.overKiss(transport, options) { Rt950Safety.txEnabled(preferences) }
+            transport.onLost = { opened.linkLost() }
             attach(opened, address)
             runOnUiThread { diagnostic.text = getString(R.string.aprs_chat_gatt_diag, transport.diagnostics) }
         }

@@ -63,7 +63,7 @@ class AprsChatTest {
 
     @Test fun rt950LinkWritesTheSameKissFramesAsBefore() {
         val written = ArrayList<ByteArray>()
-        val link = Rt950BleKissLink({ written += it }, {})
+        val link = Rt950BleKissLink({ written += it }, {}, txEnabled = { true })
         val frame = ax25()
         link.send(link.limits.check(frame))
         assertArrayEquals(Kiss.data(frame.encode()), written.single())
@@ -77,7 +77,7 @@ class AprsChatTest {
 
     @Test fun kissModeWritesOneFramePerWriteAndNeverTheUnlock() {
         val written = ArrayList<ByteArray>()
-        val link = Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { 244 })
+        val link = Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { 244 }, { true })
         val frame = ax25(info = "x".repeat(100))
         repeat(2) { link.send(link.limits.check(frame)) }
         assertEquals(2, written.size)
@@ -89,8 +89,8 @@ class AprsChatTest {
     @Test fun rtx1PrefixOnlyWhenEnabled() {
         val written = ArrayList<ByteArray>()
         val kiss = Kiss.data(ax25().encode())
-        Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(KissWriteTarget.FFE1, false)).send(ax25().encode())
-        val prefixed = Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(KissWriteTarget.FFE1, true))
+        Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(KissWriteTarget.FFE1, false), txEnabled = { true }).send(ax25().encode())
+        val prefixed = Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(KissWriteTarget.FFE1, true), txEnabled = { true })
         prefixed.send(ax25().encode())
         assertArrayEquals(kiss, written[0])
         assertArrayEquals("RTX1".toByteArray() + kiss, written[1])
@@ -101,13 +101,49 @@ class AprsChatTest {
         val written = ArrayList<ByteArray>()
         val bytes = ax25(info = "x".repeat(100)).encode()
         val need = Kiss.data(bytes).size
-        val tight = Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { need - 1 })
+        val tight = Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { need - 1 }, { true })
         assertThrows(IllegalArgumentException::class.java) { tight.send(bytes) }
         assertTrue(written.isEmpty())
-        Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { need }).send(bytes)
+        Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { need }, { true }).send(bytes)
         assertEquals(1, written.size)
         // At the 23-byte fallback MTU (20 bytes per write) the same frame is refused as well.
-        assertThrows(IllegalArgumentException::class.java) { Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { 20 }).send(bytes) }
+        assertThrows(IllegalArgumentException::class.java) { Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { 20 }, { true }).send(bytes) }
+    }
+
+    @Test fun rt950LinkRefusesToSendUnlessExperimentalTxIsOn() {
+        val written = ArrayList<ByteArray>()
+        var on = false
+        val link = Rt950BleKissLink({ written += it }, {}, txEnabled = { on })
+        assertFalse(link.txAllowed)
+        assertThrows(IllegalStateException::class.java) { link.send(ax25().encode()) }
+        assertTrue(written.isEmpty())
+        assertFalse(Rt950BleKissLink({ written += it }, {}).txAllowed)
+        on = true
+        link.send(ax25().encode())
+        assertEquals(1, written.size)
+    }
+
+    @Test fun retriesStopWhenTheLinkReportsClosed() {
+        val sent = ArrayList<Ax25Frame>()
+        val link = Rt950BleKissLink({}, {}, txEnabled = { true })
+        var closedSignal = false
+        link.onClosed = { closedSignal = true }
+        val messenger = AprsMessenger("EA5KAO", false) { frame -> sent += frame; link.send(frame.encode()) }
+        messenger.send("EA5KAO", "hola", 0)
+        link.linkLost()
+        assertTrue(closedSignal)
+        assertFalse(link.txAllowed)
+        assertThrows(java.io.IOException::class.java) { messenger.tick(AprsText.RETRY_MS) }
+        assertEquals(AprsMessenger.State.FAILED, messenger.entries.single().state)
+        val before = sent.size
+        messenger.tick(AprsText.RETRY_MS * 3)
+        assertEquals(before, sent.size)
+    }
+
+    @Test fun needsPowerCycleOnlyWhenCloneIsNewerThanLastPowerCycle() {
+        assertFalse(Rt950Safety.needsPowerCycle(0, 0))
+        assertTrue(Rt950Safety.needsPowerCycle(100, 50))
+        assertFalse(Rt950Safety.needsPowerCycle(100, 150))
     }
 
     @Test fun rt950LimitsComeFromTheRecordedSource() {

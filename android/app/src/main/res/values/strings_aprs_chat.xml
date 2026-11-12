@@ -43,4 +43,13 @@
     <string name="aprs_chat_variant">" · vía %1$s"</string>
     <string name="aprs_chat_gatt_diag">GATT: %1$s</string>
     <string name="err_aprs_kiss_mtu">La trama KISS (%1$d bytes) no cabe en una escritura BLE (máx. %2$d bytes con el MTU negociado); no se divide</string>
+        <string name="aprs_chat_tx_experimental">TX experimental (riesgo de bloqueo del firmware)</string>
+        <string name="aprs_chat_tx_warn_title">TX experimental del RT-950 Pro</string>
+        <string name="aprs_chat_tx_warn_body">Incidente 2026-11-12: enviar un mensaje APRS desde RadiCodex por el KISS BLE congeló el firmware de un RT-950 Pro.\n\nSP3ARK/Radtel-950-Pro-Bluetooth-Programmator@a8bb41a (README) documenta un fallo: tras cualquier lectura o escritura Bluetooth la radio deja de enviar tramas APRS hasta reiniciarla.\n\nSi la radio se congela, apágala y enciéndela (ciclo de alimentación).</string>
+        <string name="aprs_chat_tx_warn_confirm">Activar TX experimental</string>
+        <string name="aprs_chat_rx_only">RT-950 Pro: solo recepción. El envío, la confirmación automática (ack) y los reenvíos están desactivados salvo que actives «TX experimental» en Avanzado.</string>
+        <string name="err_aprs_rt950_tx_off">El envío por el RT-950 Pro está desactivado (riesgo de bloqueo del firmware); actívalo en Avanzado bajo tu responsabilidad</string>
+        <string name="err_aprs_rt950_closed">El enlace BLE con el RT-950 Pro está cerrado</string>
+        <string name="aprs_chat_power_cycle_banner">La última sesión de clonado, copia o escritura es posterior al último reinicio de la radio. Apaga y enciende la radio antes de usar KISS.</string>
+        <string name="aprs_chat_power_cycle_confirm">He reiniciado la radio</string>
 </resources>

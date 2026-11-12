@@ -43,4 +43,13 @@
     <string name="aprs_chat_variant">" · über %1$s"</string>
     <string name="aprs_chat_gatt_diag">GATT: %1$s</string>
     <string name="err_aprs_kiss_mtu">Der KISS-Frame (%1$d Bytes) passt nicht in einen BLE-Schreibvorgang (max. %2$d Bytes bei ausgehandeltem MTU); er wird nicht geteilt</string>
+        <string name="aprs_chat_tx_experimental">Experimentelles Senden (Risiko eines Firmware-Absturzes)</string>
+        <string name="aprs_chat_tx_warn_title">Experimentelles Senden des RT-950 Pro</string>
+        <string name="aprs_chat_tx_warn_body">Vorfall 2026-11-12: Das Senden einer APRS-Nachricht aus RadiCodex über BLE-KISS hat die Firmware eines RT-950 Pro eingefroren.\n\nSP3ARK/Radtel-950-Pro-Bluetooth-Programmator@a8bb41a (README) dokumentiert einen Fehler: Nach jedem Bluetooth-Lese- oder -Schreibvorgang sendet das Funkgerät keine APRS-Frames mehr, bis es neu gestartet wird.\n\nFriert das Funkgerät ein, schalten Sie es aus und wieder ein (Power-Cycle).</string>
+        <string name="aprs_chat_tx_warn_confirm">Experimentelles Senden aktivieren</string>
+        <string name="aprs_chat_rx_only">RT-950 Pro: nur Empfang. Senden, automatische Quittungen (Ack) und Wiederholungen sind aus, solange Sie unter Erweitert nicht „Experimentelles Senden“ aktivieren.</string>
+        <string name="err_aprs_rt950_tx_off">Das Senden über den RT-950 Pro ist deaktiviert (Risiko eines Firmware-Absturzes); aktivieren Sie es unter Erweitert auf eigenes Risiko</string>
+        <string name="err_aprs_rt950_closed">Die BLE-Verbindung zum RT-950 Pro ist geschlossen</string>
+        <string name="aprs_chat_power_cycle_banner">Die letzte Klon-, Sicherungs- oder Schreibsitzung ist neuer als der letzte Neustart des Funkgeräts. Schalten Sie das Funkgerät aus und wieder ein, bevor Sie KISS nutzen.</string>
+        <string name="aprs_chat_power_cycle_confirm">Ich habe das Funkgerät neu gestartet</string>
 </resources>
