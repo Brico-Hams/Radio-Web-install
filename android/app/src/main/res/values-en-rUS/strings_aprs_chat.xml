@@ -35,4 +35,12 @@
     <string name="err_aprs_tcp_port">The TCP port must be between 1 and 65535</string>
     <string name="err_aprs_tcp_connect">Could not connect to the TNC at %1$s</string>
     <string name="err_aprs_tcp_closed">The TCP link to the TNC is closed</string>
+    <string name="aprs_chat_advanced">Advanced</string>
+    <string name="aprs_chat_advanced_help">BLE KISS mode: the ff31 unlock (CPS programming mode) is not sent and each frame goes in ONE write. Choose where it is written; if FF31 does not transmit, try FFE1.</string>
+    <string name="aprs_chat_target_ff31">Write to FF31 (like radiochat-aprs, default)</string>
+    <string name="aprs_chat_target_ffe1">Write to FFE1 (like the nicsure bridge)</string>
+    <string name="aprs_chat_rtx1">\"RTX1\" prefix (erkanz-patched firmware only; layout after it unverified)</string>
+    <string name="aprs_chat_variant">" · via %1$s"</string>
+    <string name="aprs_chat_gatt_diag">GATT: %1$s</string>
+    <string name="err_aprs_kiss_mtu">The KISS frame (%1$d bytes) does not fit in one BLE write (max %2$d bytes at the negotiated MTU); it is not split</string>
 </resources>

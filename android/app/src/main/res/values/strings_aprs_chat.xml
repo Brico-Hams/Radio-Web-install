@@ -35,4 +35,12 @@
     <string name="err_aprs_tcp_port">El puerto TCP debe estar entre 1 y 65535</string>
     <string name="err_aprs_tcp_connect">No se pudo conectar con el TNC en %1$s</string>
     <string name="err_aprs_tcp_closed">El enlace TCP con el TNC está cerrado</string>
+    <string name="aprs_chat_advanced">Avanzado</string>
+    <string name="aprs_chat_advanced_help">Modo KISS BLE: no se envía el desbloqueo ff31 (es del modo de programación CPS) y cada trama va en UNA sola escritura. Elige dónde se escribe; si FF31 no transmite, prueba FFE1.</string>
+    <string name="aprs_chat_target_ff31">Escribir en FF31 (como radiochat-aprs, por defecto)</string>
+    <string name="aprs_chat_target_ffe1">Escribir en FFE1 (como el puente de nicsure)</string>
+    <string name="aprs_chat_rtx1">Prefijo \"RTX1\" (solo firmware parcheado de erkanz; formato posterior sin verificar)</string>
+    <string name="aprs_chat_variant">" · vía %1$s"</string>
+    <string name="aprs_chat_gatt_diag">GATT: %1$s</string>
+    <string name="err_aprs_kiss_mtu">La trama KISS (%1$d bytes) no cabe en una escritura BLE (máx. %2$d bytes con el MTU negociado); no se divide</string>
 </resources>

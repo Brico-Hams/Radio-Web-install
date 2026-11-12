@@ -30,10 +30,14 @@ class AprsChatPanel(
     private companion object { const val MAX_LOG = 30 }
 
     private val clock = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT).withZone(ZoneId.systemDefault())
+    private val variants = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val messenger = AprsMessenger("", true) { frame ->
         worker.execute {
             try {
                 val link = linkProvider() ?: throw LocalizedStateException(UiText(R.string.err_aprs_no_link))
+                val via = link.variant
+                val packet = AprsText.parse(frame.info)
+                if (via != null && packet is AprsPacket.Message && packet.id != null) variants[packet.id] = via
                 link.send(link.limits.check(frame))
             } catch (error: Exception) {
                 activity.runOnUiThread { notice(activity.errorText(error)) }
@@ -154,7 +158,8 @@ class AprsChatPanel(
         val packets: List<String>
         synchronized(messenger) {
             lines = messenger.entries.takeLast(MAX_LOG).map {
-                if (it.outgoing) activity.getString(R.string.rt950_msg_out, it.peer, it.text, stateText(it.state), it.attempts)
+                if (it.outgoing) activity.getString(R.string.rt950_msg_out, it.peer, it.text, stateText(it.state), it.attempts) +
+                    (it.id?.let { id -> variants[id] }?.let { via -> activity.getString(R.string.aprs_chat_variant, via) } ?: "")
                 else activity.getString(R.string.rt950_msg_in, it.peer, it.text)
             }
             packets = messenger.log.takeLast(MAX_LOG).map { "${clock.format(Instant.ofEpochMilli(it.time))} ${it.source}>${it.path}: ${it.text}" }

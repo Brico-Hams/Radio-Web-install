@@ -75,6 +75,41 @@ class AprsChatTest {
         assertArrayEquals(frame.encode(), received.single())
     }
 
+    @Test fun kissModeWritesOneFramePerWriteAndNeverTheUnlock() {
+        val written = ArrayList<ByteArray>()
+        val link = Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { 244 })
+        val frame = ax25(info = "x".repeat(100))
+        repeat(2) { link.send(link.limits.check(frame)) }
+        assertEquals(2, written.size)
+        written.forEach { assertArrayEquals(Kiss.data(frame.encode()), it) }
+        assertTrue(written.none { it.contentEquals(BleRt950Transport.UNLOCK_BYTES) })
+        assertEquals("FF31", link.variant)
+    }
+
+    @Test fun rtx1PrefixOnlyWhenEnabled() {
+        val written = ArrayList<ByteArray>()
+        val kiss = Kiss.data(ax25().encode())
+        Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(KissWriteTarget.FFE1, false)).send(ax25().encode())
+        val prefixed = Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(KissWriteTarget.FFE1, true))
+        prefixed.send(ax25().encode())
+        assertArrayEquals(kiss, written[0])
+        assertArrayEquals("RTX1".toByteArray() + kiss, written[1])
+        assertEquals("FFE1+RTX1", prefixed.variant)
+    }
+
+    @Test fun frameLargerThanTheMtuFailsInsteadOfSplitting() {
+        val written = ArrayList<ByteArray>()
+        val bytes = ax25(info = "x".repeat(100)).encode()
+        val need = Kiss.data(bytes).size
+        val tight = Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { need - 1 })
+        assertThrows(IllegalArgumentException::class.java) { tight.send(bytes) }
+        assertTrue(written.isEmpty())
+        Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { need }).send(bytes)
+        assertEquals(1, written.size)
+        // At the 23-byte fallback MTU (20 bytes per write) the same frame is refused as well.
+        assertThrows(IllegalArgumentException::class.java) { Rt950BleKissLink({ written += it }, {}, Rt950KissOptions(), { 20 }).send(bytes) }
+    }
+
     @Test fun rt950LimitsComeFromTheRecordedSource() {
         val limits = Rt950BleKissLink({}, {}).limits
         assertEquals(Ax25Limits(182, 6, 127), limits)
