@@ -49,3 +49,9 @@ Enlaces disponibles:
 - Transmisión RF del RT-950 Pro con la opción «KISS TNC over BLE (TX)» en cada firmware.
 - Ruta KISS/APRS propia de FTX-1, IC-705, UV-K10 Pro, AnyTone D878 y TK-11.
 - Límites AX.25 de un TNC externo concreto.
+
+## Pruebas en radio
+
+| Fecha | Radio | Prueba | Resultado |
+|---|---|---|---|
+| 2026-11-12 07:30 | Radtel RT-950 Pro (firmware sin identificar), S20 FE, enlace KISS por BLE | Mensaje APRS de EA5KAO a EA5KAO, «RadiCodex prueba APRS 1», con 3 intentos a intervalos de 30 s. Segundo receptor: SDR BricoHams, receptor 3, 144,800 MHz, packet. | **No verificado en el aire.** La app escribió la trama por BLE, pero el SDR no la decodificó. La radio no se había apagado y encendido después de las sesiones de clonado del día anterior. |
