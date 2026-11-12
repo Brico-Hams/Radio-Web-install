@@ -2,6 +2,7 @@
 
 Guía de banco para reducir el riesgo de dejar la radio sin arrancar. Los hallazgos de ingeniería inversa se refieren a las unidades y versiones estudiadas. La causa del incidente previo sigue sin determinarse.
 
+Documentación detallada: docs/rt950-pro/README.md
 ## Qué se está programando
 
 | Operación | Alcance y precaución |
