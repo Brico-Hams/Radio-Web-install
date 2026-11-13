@@ -75,7 +75,8 @@ val syncChannelTemplates by tasks.registering(Sync::class) {
 android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/channelTemplates"))
 tasks.configureEach {
     if (name.startsWith("merge") && name.endsWith("Assets")) dependsOn(syncChannelTemplates)
-    if (name.startsWith("lintAnalyze") || name.startsWith("lintVitalAnalyze") || name.startsWith("generate") && name.endsWith("LintReportModel")) dependsOn(syncChannelTemplates)
+    // Every lint analysis/model task reads the generated assets folder (lint, lintVital, *LintReportModel, *LintVitalReportModel).
+    if (name.startsWith("lintAnalyze") || name.startsWith("lintVitalAnalyze") || name.startsWith("generate") && name.endsWith("ReportModel") && name.contains("Lint")) dependsOn(syncChannelTemplates)
 }
 dependencies {
     implementation("com.github.mik3y:usb-serial-for-android:3.9.0")
