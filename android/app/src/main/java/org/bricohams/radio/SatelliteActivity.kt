@@ -83,6 +83,11 @@ class SatelliteActivity : LocalizedActivity() {
     private var liveHeadingNote: TextView? = null
     private var livePoint: TextView? = null
     private var liveModes: LinearLayout? = null
+    private var liveSummary: TextView? = null
+    private var liveActions: LinearLayout? = null
+    private var liveHelp: TextView? = null
+    private var liveSstv: LinearLayout? = null
+    private var sstvTab = false
     private val liveTransmitters = ArrayList<Pair<Transmitter, TextView>>()
     private var pointer: PointingSensor? = null
     private var sensorsAvailable = false
@@ -374,6 +379,7 @@ class SatelliteActivity : LocalizedActivity() {
         opened = track
         liveTransmitters.clear()
         aiming = false; deviceAzimuth = null; deviceElevation = null
+        sstvTab = false
         sensorsAvailable = PointingSensor.supported(this)
         val tle = track.plan.tle
         page(Page.DETAIL) {
@@ -390,10 +396,25 @@ class SatelliteActivity : LocalizedActivity() {
             liveCountdown = Brand.text(this@SatelliteActivity, 34f, colors.accent, bold = true).also { addView(it) }
             liveValues = Brand.text(this@SatelliteActivity, 22f, bold = true).also { addView(it) }
             liveRange = Brand.text(this@SatelliteActivity, 15f, colors.muted).also { addView(it) }
+            liveSummary = Brand.text(this@SatelliteActivity, 13f, colors.muted).apply {
+                val pass = track.plan.pass
+                text = getString(R.string.pass_summary,
+                    DateTimeFormatter.ofPattern("dd/MM HH:mm:ss", Locale.ROOT).withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(pass.aos.time)),
+                    pass.maximum.rangeKm, pass.maximum.elevation, pass.aos.azimuth, pass.los.azimuth)
+            }.also { addView(it) }
+            liveActions = Brand.row(this@SatelliteActivity).also { addView(it) }
+            liveHelp = Brand.text(this@SatelliteActivity, 13f).apply {
+                setText(R.string.pass_help_text); visibility = View.GONE
+                setPadding(Brand.dp(this@SatelliteActivity, 8), Brand.dp(this@SatelliteActivity, 8), Brand.dp(this@SatelliteActivity, 8), Brand.dp(this@SatelliteActivity, 8))
+            }.also { addView(it) }
+            buildPassActions()
             val view = PassRadarView(this@SatelliteActivity).apply {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
                 cardinals = getString(R.string.live_cardinals).split(',').toTypedArray()
                 this.track = opened?.track.orEmpty()
+                eclipsed = opened?.let { PassSky.eclipseFlags(it.track, it.plan.observer) }.orEmpty()
+                legendSunlit = getString(R.string.pass_legend_sunlit)
+                legendShadow = getString(R.string.pass_legend_shadow)
                 layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                     .apply { topMargin = Brand.dp(this@SatelliteActivity, 8); bottomMargin = Brand.dp(this@SatelliteActivity, 8) }
             }
@@ -405,10 +426,32 @@ class SatelliteActivity : LocalizedActivity() {
             livePoint = Brand.text(this@SatelliteActivity, 18f, colors.accent, true).apply {
                 setPadding(0, Brand.dp(this@SatelliteActivity, 8), 0, Brand.dp(this@SatelliteActivity, 8))
             }.also { addView(it) }
+            val modeList = transmitters[tle.norad].orEmpty()
+            val transceivers = LinearLayout(this@SatelliteActivity).apply { orientation = LinearLayout.VERTICAL }
+            val sstvBox = LinearLayout(this@SatelliteActivity).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+            liveSstv = sstvBox
+            val tabs = Brand.row(this@SatelliteActivity)
+            fun showTabs() {
+                tabs.removeAllViews()
+                for (sstv in listOf(false, true)) {
+                    tabs.addView(Brand.chip(this@SatelliteActivity,
+                        getString(if (sstv) R.string.pass_tab_sstv else R.string.pass_tab_transceivers), sstv == sstvTab) {
+                        sstvTab = sstv
+                        transceivers.visibility = if (sstv) View.GONE else View.VISIBLE
+                        sstvBox.visibility = if (sstv) View.VISIBLE else View.GONE
+                        if (sstv) buildSstv(track, sstvBox)
+                        showTabs()
+                    })
+                }
+            }
+            showTabs()
+            addView(tabs)
+            addView(transceivers)
+            addView(sstvBox)
+            transceivers.apply {
             addView(Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply {
                 setText(R.string.live_transmitters)
             })
-            val modeList = transmitters[tle.norad].orEmpty()
             if (modeList.isEmpty()) addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.satellite_no_downlinks) })
             for (transmitter in modeList) {
                 val row = Brand.text(this@SatelliteActivity, 14f).apply { setPadding(0, Brand.dp(this@SatelliteActivity, 6), 0, Brand.dp(this@SatelliteActivity, 6)) }
@@ -505,6 +548,7 @@ class SatelliteActivity : LocalizedActivity() {
                     .putExtra(RotorActivity.EXTRA_PLAN, SatellitePlanJson.encode(track.plan.copy(downlinkHz = downlink))))
             })
             addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.rotor_hint) })
+            }
         }
         show(Page.DETAIL)
         if (track.track.isEmpty()) {
@@ -516,7 +560,7 @@ class SatelliteActivity : LocalizedActivity() {
                     runOnUiThread {
                         if (!isDestroyed && token == generation) {
                             passes = passes.map { if (it == track) sampled else it }
-                            if (opened == track) { opened = sampled; liveRadar?.track = sampled.track; tick() }
+                            if (opened == track) { opened = sampled; liveRadar?.track = sampled.track; liveRadar?.eclipsed = PassSky.eclipseFlags(sampled.track, sampled.plan.observer); tick() }
                         }
                     }
                 } catch (error: IllegalArgumentException) { report(error) }
@@ -908,6 +952,67 @@ class SatelliteActivity : LocalizedActivity() {
         if (page == Page.MAP && ++ticks % 5 == 0) refreshMap()
     }
 
+    private fun buildPassActions() {
+        val row = liveActions ?: return
+        val track = opened ?: return
+        val key = PassSky.bookmarkKey(track.plan.tle.norad, track.plan.pass.aos.time)
+        val saved = preferences.getStringSet("pass-bookmarks", emptySet()).orEmpty()
+        row.removeAllViews()
+        row.addView(Brand.chip(this, getString(R.string.pass_share), false) { sharePass() })
+        row.addView(Brand.chip(this, getString(R.string.pass_chat), false) { chatPass() }.apply {
+            contentDescription = getString(R.string.pass_chat_description)
+        })
+        row.addView(Brand.chip(this, getString(if (key in saved) R.string.pass_saved else R.string.pass_save), key in saved) {
+            preferences.edit().putStringSet("pass-bookmarks", PassSky.toggle(preferences.getStringSet("pass-bookmarks", emptySet()).orEmpty(), key)).apply()
+            buildPassActions()
+        })
+        row.addView(Brand.chip(this, getString(R.string.pass_help_button), liveHelp?.visibility == View.VISIBLE) {
+            liveHelp?.let { it.visibility = if (it.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+            buildPassActions()
+        })
+    }
+
+    private fun sharePassText(): String? {
+        val track = opened ?: return null
+        val look = SatellitePasses.at(track.track, System.currentTimeMillis()) ?: track.plan.pass.aos
+        return PassSky.shareText(getString(R.string.pass_share_text), track.plan.tle.name, look.azimuth, look.elevation,
+            track.plan.downlinkHz.toDouble(), Locale.getDefault())
+    }
+
+    private fun sharePass() {
+        val text = sharePassText() ?: return
+        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text),
+            getString(R.string.pass_share)))
+    }
+
+    /** Opens the APRS chat with the share text as an unsent draft; sending stays the user's decision there. */
+    private fun chatPass() {
+        val text = sharePassText() ?: return
+        startActivity(Intent(this, AprsChatActivity::class.java).putExtra(AprsChatActivity.EXTRA_PREFILL, PassSky.chatPrefill(text)))
+    }
+
+    /** Pass SSTV reuses the CAT screen recorder (microphone, until LOS) and the saved-recording decoder; no new audio path. */
+    private fun buildSstv(track: PassTrack, box: LinearLayout) {
+        box.removeAllViews()
+        val tle = track.plan.tle
+        box.addView(Brand.text(this, 13f, colors.muted).apply {
+            text = getString(R.string.pass_sstv_requirement, track.plan.downlinkHz / 1e6)
+        })
+        box.addView(Brand.button(this, getString(R.string.satellite_open_cat), true) {
+            try {
+                val downlink = track.plan.downlinkHz
+                requireUi(downlink % 10 == 0L && CatProtocol.inBand(downlink / 10)) { UiText(R.string.err_downlink_band) }
+                requireUi(System.currentTimeMillis() < track.plan.pass.los.time) { UiText(R.string.err_pass_ended) }
+                startActivity(Intent(this, CatActivity::class.java).putExtra("satellite-plan", SatellitePlanJson.encode(track.plan)))
+            } catch (error: IllegalArgumentException) { report(error) }
+        })
+        box.addView(Brand.text(this, 16f, colors.accent, true).apply { setText(R.string.satellite_recordings) })
+        val recordings = File(filesDir, "recordings").listFiles { f -> f.name.endsWith("-${tle.norad}.wav") }
+            .orEmpty().sortedByDescending { it.name }
+        if (recordings.isEmpty()) box.addView(Brand.text(this, 13f, colors.muted).apply { setText(R.string.satellite_no_recordings) })
+        recordings.forEach { box.addView(recordingCard(it)) }
+    }
+
     private fun buildModeChips() {
         val row = liveModes ?: return
         row.removeAllViews()
@@ -965,14 +1070,23 @@ class SatelliteActivity : LocalizedActivity() {
         liveValues?.text = getString(R.string.live_name_values, track.plan.tle.name, values)
         liveRange?.text = if (position == null) getString(R.string.live_aos_hint, pass.aos.azimuth)
             else getString(R.string.live_alt_range, PassGeometry.altitudeKm(position, track.plan.observer.heightKm), position.rangeKm)
-        val azimuth = if (aiming) deviceAzimuth else null
-        val elevation = if (aiming) deviceElevation else null
+        val rotor = RotorLink.pointing(now)
+        val cross = PassSky.crosshair(rotor, if (deviceAzimuth != null && deviceElevation != null) Pair(deviceAzimuth!!, deviceElevation!!) else null, aiming)
+        val phone = cross?.takeIf { it.source == PassSky.AimSource.PHONE }
+        val azimuth = phone?.azimuth
+        val elevation = phone?.elevation
         val target = position ?: pass.aos.takeIf { rising }
-        val aim = if (azimuth != null && elevation != null && target != null) PassPointing.aim(azimuth, elevation, target) else null
+        val aim = if (cross != null && target != null) PassPointing.aim(cross.azimuth, cross.elevation, target) else null
+        val sourceLabel = when (cross?.source) {
+            PassSky.AimSource.ROTOR -> getString(R.string.pass_aim_source_rotor)
+            PassSky.AimSource.PHONE -> getString(R.string.pass_aim_source_phone)
+            null -> ""
+        }
         liveRadar?.let {
             it.now = now
             it.headingUp = azimuth
-            it.device = if (azimuth != null && elevation != null) Pair(azimuth, elevation) else null
+            it.device = cross?.let { c -> Pair(c.azimuth, c.elevation) }
+            it.sourceLabel = sourceLabel
             it.target = target
             it.onTarget = aim?.onTarget == true
             it.headingLabel = azimuth?.let { value -> getString(R.string.live_heading, value) }.orEmpty()
@@ -990,13 +1104,24 @@ class SatelliteActivity : LocalizedActivity() {
             { getString(R.string.pass_aim_up, it) }, { getString(R.string.pass_aim_down, it) }, getString(R.string.pass_aim_on_target))
         val aimText = when {
             target == null -> ""
-            aim == null -> getString(R.string.live_point_abs, target.azimuth, target.elevation)
+            aim == null || phone == null -> getString(R.string.live_point_abs, target.azimuth, target.elevation)
             else -> PassPointing.instruction(aim, phrases)
         }
         livePoint?.text = aimText
         livePoint?.setTextColor(if (aim?.onTarget == true) colors.positive else colors.accent)
         livePoint?.visibility = if (aimText.isEmpty()) View.GONE else View.VISIBLE
-        liveRadar?.contentDescription = getString(R.string.satellite_radar_description, listOf(values, aimText).filter { it.isNotEmpty() }.joinToString(". "))
+        val bodies = track.plan.observer
+        val sun = PassSky.sun(now, bodies)
+        val moon = PassSky.moon(now, bodies)
+        liveRadar?.let { it.sun = sun; it.moon = moon }
+        val direction = track.track.takeIf { position != null && it.size >= 2 }?.let { points ->
+            PassSky.motionBearing(position!!, SatellitePasses.at(points, (now + 10_000).coerceAtMost(points.last().time)) ?: position)
+        }?.let { getString(R.string.pass_radar_direction, getString(R.string.pass_cardinals8).split(',')[PassSky.octant(it)]) }
+        liveRadar?.contentDescription = getString(R.string.satellite_radar_description,
+            listOf(values, aimText, sourceLabel, direction.orEmpty(),
+                if (sun.elevation >= 0) getString(R.string.pass_radar_sun, sun.azimuth, sun.elevation) else "",
+                if (moon.elevation >= 0) getString(R.string.pass_radar_moon, moon.azimuth, moon.elevation) else "")
+                .filter { it.isNotEmpty() }.joinToString(". "))
         val rate = if (position == null) null else PassGeometry.rangeRateKmS(track.track, now)
         val nominal = if (rate == null) " " + getString(R.string.live_tx_nominal) else ""
         for ((transmitter, row) in liveTransmitters) {

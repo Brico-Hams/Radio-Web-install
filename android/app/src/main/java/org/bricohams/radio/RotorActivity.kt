@@ -206,6 +206,7 @@ class RotorActivity : LocalizedActivity() {
     private fun closeClient() {
         try { client?.close() } catch (_: IOException) {}
         client = null; last = null
+        RotorLink.clear()
     }
 
     private fun blePermissions(): Boolean {
@@ -369,6 +370,7 @@ class RotorActivity : LocalizedActivity() {
         if (current.fault.isNotEmpty()) lines.add(getString(R.string.rotor_status_fault, current.fault))
         else if (current.trackingBlocker.isNotEmpty()) lines.add(getString(R.string.rotor_status_blocker, current.trackingBlocker))
         status.text = lines.joinToString("\n")
+        RotorLink.publish(current)
         renderPlan()
     }
 

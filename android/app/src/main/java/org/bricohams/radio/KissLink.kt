@@ -34,17 +34,75 @@ interface KissLink {
     val limits: Ax25Limits
     /** Extra transmission warning for this link (string resource), shown before every send. */
     val txNote: Int
+    /** Which write variant this link uses, shown next to each sent message; null when there is only one. */
+    val variant: String? get() = null
+    /** False when this link must only receive; the UI then blocks sends, automatic acks and resends. */
+    val txAllowed: Boolean get() = true
     fun send(ax25: ByteArray)
     fun close()
 }
 
-/** RT-950 Pro BLE KISS (ffe1): the writer and the notification feed come from [BleRt950Transport]. */
-class Rt950BleKissLink(private val write: (ByteArray) -> Unit, private val closeLink: () -> Unit) : KissLink {
+/** Shared preference flags that keep the RT-950 Pro BLE KISS link safe (firmware freeze incident, 2026-11-12). */
+object Rt950Safety {
+    const val PREFERENCES = "aprs-chat"
+    const val KEY_TX = "rt950-tx-experimental"
+    const val KEY_LAST_CLONE = "rt950-last-clone-at"
+    const val KEY_LAST_POWER_CYCLE = "rt950-last-power-cycle-at"
+
+    fun txEnabled(preferences: android.content.SharedPreferences) = preferences.getBoolean(KEY_TX, false)
+
+    fun needsPowerCycle(lastClone: Long, lastPowerCycle: Long) = lastClone > lastPowerCycle
+
+    fun needsPowerCycle(preferences: android.content.SharedPreferences) =
+        needsPowerCycle(preferences.getLong(KEY_LAST_CLONE, 0L), preferences.getLong(KEY_LAST_POWER_CYCLE, 0L))
+
+    fun recordClone(preferences: android.content.SharedPreferences, now: Long = System.currentTimeMillis()) =
+        preferences.edit().putLong(KEY_LAST_CLONE, now).apply()
+
+    fun recordPowerCycle(preferences: android.content.SharedPreferences, now: Long = System.currentTimeMillis()) =
+        preferences.edit().putLong(KEY_LAST_POWER_CYCLE, maxOf(now, preferences.getLong(KEY_LAST_CLONE, 0L) + 1)).apply()
+}
+
+/** Characteristic that receives KISS frames: FF31 as lalmonte/radiochat-aprs RadtelKissProfile.kt:44-61, FFE1 as nicsure BridgeService.kt:172-182. */
+enum class KissWriteTarget { FF31, FFE1 }
+
+/**
+ * BLE KISS options. [rtx1Prefix] puts the ASCII "RTX1" in front of every write, the marker erkanz-patched firmware needs to
+ * route a write to KISS (erkanz/radtel-RT950PRO docs/v1_1_patch_map.txt:24-25). The layout after the prefix is
+ * pendiente de fuente (unverified), so it is off by default and only meant for that firmware.
+ */
+data class Rt950KissOptions(val target: KissWriteTarget = KissWriteTarget.FF31, val rtx1Prefix: Boolean = false) {
+    /** Short label shown next to each sent message. */
+    val label get() = target.name + if (rtx1Prefix) "+RTX1" else ""
+}
+
+/**
+ * RT-950 Pro BLE KISS: the writer and the notification feed come from [BleRt950Transport]. [maxWrite] is the largest single
+ * write (mtu-3); a frame that does not fit fails instead of being split.
+ */
+class Rt950BleKissLink(
+    private val write: (ByteArray) -> Unit,
+    private val closeLink: () -> Unit,
+    val options: Rt950KissOptions = Rt950KissOptions(KissWriteTarget.FFE1),
+    private val maxWrite: () -> Int = { Int.MAX_VALUE },
+    /** The link is RX-only unless this returns true (the "TX experimental" switch). */
+    private val txEnabled: () -> Boolean = { false }
+) : KissLink {
     private val decoder = KissDecoder()
     @Volatile override var onFrame: ((ByteArray) -> Unit)? = null
     @Volatile override var onClosed: (() -> Unit)? = null
+    @Volatile var closed = false
+        private set
     override val limits = Ax25Limits.RT950
     override val txNote = R.string.aprs_tx_note_rt950
+    override val variant get() = options.label
+    override val txAllowed get() = txEnabled() && !closed
+
+    /** The BLE link dropped: further sends fail and [onClosed] fires. */
+    fun linkLost() {
+        closed = true
+        onClosed?.invoke()
+    }
 
     /** Feed raw ffe1 notification chunks. */
     fun onChunk(bytes: ByteArray) {
@@ -54,17 +112,36 @@ class Rt950BleKissLink(private val write: (ByteArray) -> Unit, private val close
     /** A clone session may leave a half frame behind. */
     fun resetDecoder() = decoder.reset()
 
-    override fun send(ax25: ByteArray) = write(Kiss.data(ax25))
+    override fun send(ax25: ByteArray) {
+        if (closed) throw LocalizedIOException(UiText(R.string.err_aprs_rt950_closed))
+        if (!txEnabled()) throw LocalizedStateException(UiText(R.string.err_aprs_rt950_tx_off))
+        val kiss = Kiss.data(ax25)
+        val payload = if (options.rtx1Prefix) RTX1 + kiss else kiss
+        val room = maxWrite()
+        requireUi(payload.size <= room) { UiText(R.string.err_aprs_kiss_mtu, payload.size, room) }
+        write(payload)
+    }
 
     override fun close() {
+        closed = true
         onFrame = null
         closeLink()
     }
 
     companion object {
-        fun over(transport: BleRt950Transport) = Rt950BleKissLink({ transport.write(it, 5000) }, { transport.close() }).also {
-            transport.kissListener = it::onChunk
-        }
+        val RTX1 = "RTX1".toByteArray(Charsets.US_ASCII)
+
+        /** Clone-mode link (ffe1, chunked writes), as before. */
+        fun over(transport: BleRt950Transport, txEnabled: () -> Boolean = { false }) =
+            Rt950BleKissLink({ transport.write(it, 5000) }, { transport.close() }, txEnabled = txEnabled).also {
+                transport.kissListener = it::onChunk
+            }
+
+        /** KISS-mode link: [transport] must have been opened with connectKiss. */
+        fun overKiss(transport: BleRt950Transport, options: Rt950KissOptions, txEnabled: () -> Boolean = { false }) =
+            Rt950BleKissLink({ transport.writeKiss(it) }, { transport.close() }, options, { transport.mtu - 3 }, txEnabled).also {
+                transport.kissListener = it::onChunk
+            }
     }
 }
 

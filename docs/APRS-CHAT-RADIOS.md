@@ -12,7 +12,7 @@ Enlaces disponibles:
 | radio | ruta APRS/KISS | estado | fuente |
 | --- | --- | --- | --- |
 | Radtel RT-950 Pro, recepción | KISS por BLE (`ffe1`), con las opciones «KISS TNC over BLE (RX)/(TX)» activadas en la radio | pendiente de prueba en radio | el texto `strings_rt950.xml:57` la da por verificada, pero no hay prueba registrada de esta versión en una radio; `Rt950Ble.kt:23-27`; `ACKNOWLEDGEMENTS.md:34` |
-| Radtel RT-950 Pro, transmisión RF | KISS por BLE | pendiente de prueba en radio | `strings_rt950.xml:57` (TX «INFERENCIA no verificada»); lalmonte/radiochat-aprs@9c7b092; erkanz/radtel-RT950PRO@51c84d4 |
+| Radtel RT-950 Pro, transmisión RF | KISS por BLE | **desactivado por defecto (bloqueo del firmware)**; solo con el interruptor «TX experimental» (Avanzado) | `strings_rt950.xml:57` (TX «INFERENCIA no verificada»); lalmonte/radiochat-aprs@9c7b092; erkanz/radtel-RT950PRO@51c84d4; SP3ARK/Radtel-950-Pro-Bluetooth-Programmator@a8bb41a `README.md:235-238`; incidente 2026-11-12 |
 | Cualquier radio + TNC KISS externo | KISS por TCP | pendiente de prueba en radio | `KissLink.kt` (`TcpKissLink`); prueba unitaria con `ServerSocket` en `AprsChatTest.kt` (no es prueba en radio) |
 | Quansheng UV-K5 / BricoHams Satellite | ninguna en RadiCodex (clonado/CAT) | no soportado | `Diagnostics.kt:12` |
 | Quansheng UV-K10 Pro | ninguna; APRS solo como plan de firmware, sin firmware | no soportado | `docs/UV-K10-PRO-VIABILIDAD.md:7,55` |
@@ -42,6 +42,8 @@ Enlaces disponibles:
 - Límites ya presentes en el repositorio: texto de 1 a 67 caracteres ASCII sin `{ | ~` (`AprsText`), ruta de hasta 8 repetidores (`Ax25Frame.encode`).
 - Límites del enlace RT-950 Pro, según el README de erkanz/radtel-RT950PRO@51c84d4 (no están en el repositorio): máximo 182 bytes AX.25, 6 repetidores y 127 bytes de información. Se aplican en `Rt950BleKissLink` (`Ax25Limits.RT950`). Para un TNC TCP genérico solo rige el límite de 8 repetidores; otros límites: **pendiente de fuente**.
 - Transmitir exige licencia de radioaficionado.
+- **RT-950 Pro, solo recepción por defecto:** `Rt950BleKissLink.send()` se niega a escribir salvo que esté activo el interruptor «TX experimental (riesgo de bloqueo del firmware)» (Avanzado, desactivado, con aviso). Sin él tampoco hay ack automático ni reenvíos. Los reenvíos se cancelan al instante si el enlace BLE se cierra o falla una escritura. El TNC KISS TCP no se ve afectado.
+- Tras cualquier sesión de clonado/copia/escritura (`Rt950Activity`) se pide apagar y encender la radio antes de usar KISS; el aviso también sale en el chat hasta que el usuario confirma «He reiniciado la radio».
 
 ## Pendiente de fuente
 
@@ -49,3 +51,17 @@ Enlaces disponibles:
 - Transmisión RF del RT-950 Pro con la opción «KISS TNC over BLE (TX)» en cada firmware.
 - Ruta KISS/APRS propia de FTX-1, IC-705, UV-K10 Pro, AnyTone D878 y TK-11.
 - Límites AX.25 de un TNC externo concreto.
+
+## Pruebas en radio
+
+| Fecha | Radio | Prueba | Resultado |
+|---|---|---|---|
+| 2026-11-12 07:30 | Radtel RT-950 Pro (firmware sin identificar), S20 FE, enlace KISS por BLE | Mensaje APRS de EA5KAO a EA5KAO, «RadiCodex prueba APRS 1», con 3 intentos a intervalos de 30 s. Segundo receptor: SDR BricoHams, receptor 3, 144,800 MHz, packet. | **No concluyente.** La app escribió la trama por BLE, pero el SDR de control estaba en 436,795 MHz NFM (perfil de satélites de 70 cm) y no en 144,800 MHz packet, así que no podía recibirla. |
+| 2026-11-12 07:50 | Radtel RT-950 Pro (firmware sin identificar), con el APRS de la radio en el canal A a 144,800 MHz | El mismo mensaje, «RadiCodex prueba APRS 2», con 3 intentos. | **No concluyente.** La trama se escribió por BLE, pero el SDR de control seguía en 436,795 MHz NFM y no en 144,800 MHz packet; repetir con el receptor en 144,800 packet. |
+| 2026-11-12 09:44 | Radtel RT-950 Pro, APRS en el canal A a 144,800 MHz | «RadiCodex prueba APRS 3», 4 intentos entre 09:44:10 y 09:45:40. Segundo receptor: SDR BricoHams, V3, perfil «144,800 MHz · APRS 2 m», NFM con decodificación packet secundaria; panel de paquetes vigilado desde el navegador. | **No recibido.** El panel no mostró ninguna trama en unos 5 minutos, ni de EA5KAO ni de otras estaciones. Así que tampoco está comprobada la cadena de decodificación del SDR (antena del V3 en 2 m y direwolf). Queda pendiente un control independiente: escuchar el audio del SDR durante la transmisión o mirar el LED de TX de la radio. |
+| 2026-11-12 10:13 | Radtel RT-950 Pro, nuevo modo KISS (commit 9064001): sin desbloqueo `ff31`, escritura en **FF31** | «RadiCodex prueba APRS 4», 4 intentos. GATT real: MTU 23 (rechaza 247), `ff31` solo escritura con respuesta, `ffe1` lectura, escritura con y sin respuesta, y notificación. | **No recibido** en el SDR (V3, 144,800, packet). |
+| 2026-11-12 10:21 | Igual, escritura en **FFE1** | «RadiCodex prueba APRS 5», 4 intentos. | **No recibido.** El SDR no ha decodificado ninguna trama APRS de nadie desde las 09:41: la cadena de recepción del SDR en 2 m sigue sin comprobar. |
+| 2026-11-12 10:24 | Radtel RT-950 Pro, sin RadiCodex: baliza lanzada desde el propio menú APRS de la radio, con el canal A a 144,800 MHz | Control de referencia. | **La radio no transmite:** el LED de TX no se enciende y el SDR no recibe nada. Con esta configuración o firmware, la TX APRS de la unidad no funciona ni desde su propio menú. Por eso las pruebas 1–5 no permiten valorar RadiCodex. |
+| 2026-11-12 (tarde) | Radtel RT-950 Pro, enviando desde RadiCodex por KISS BLE | Envío de un mensaje APRS desde el chat. | **Incidente: el firmware de la radio se congeló** (informe del usuario). Desde entonces el enlace RT-950 es solo de recepción por defecto. |
+
+**Conclusión (2026-11-12):** la TX APRS del RT-950 Pro de esta unidad queda **no soportada en su estado actual**. El fallo está en la radio (configuración o firmware sin identificar), no en RadiCodex. Antes de volver a probar el chat hay que conseguir que la baliza propia de la radio encienda el LED de TX y aparezca en un segundo receptor, por ejemplo identificando el firmware o probando el parche de erkanz para la v0.29. Desde RadiCodex hay que usar el modo KISS sin desbloqueo (commit 9064001).

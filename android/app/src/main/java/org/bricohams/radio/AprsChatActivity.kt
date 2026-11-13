@@ -1,6 +1,7 @@
 package org.bricohams.radio
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -10,8 +11,11 @@ import android.text.InputType
 import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import java.io.IOException
@@ -22,10 +26,12 @@ import java.util.concurrent.Executors
  * APRS/KISS reachable from the app are not offered as sources; see [AprsChatRadios] and docs/APRS-CHAT-RADIOS.md.
  */
 class AprsChatActivity : LocalizedActivity() {
-    private companion object {
-        const val PERMISSION_REQUEST = 96
-        const val PREFERENCES = "aprs-chat"
-        const val SCAN_MS = 15_000L
+    companion object {
+        /** Draft text for the message field; the addressee stays empty. */
+        const val EXTRA_PREFILL = "prefill-text"
+        private const val PERMISSION_REQUEST = 96
+        private const val PREFERENCES = "aprs-chat"
+        private const val SCAN_MS = 15_000L
     }
 
     private val colors by lazy { Brand.Palette(this) }
@@ -39,6 +45,10 @@ class AprsChatActivity : LocalizedActivity() {
 
     private lateinit var status: TextView
     private lateinit var notice: TextView
+    private lateinit var diagnostic: TextView
+    private lateinit var targetGroup: RadioGroup
+    private lateinit var rtx1Check: CheckBox
+    private lateinit var txCheck: CheckBox
     private lateinit var bleGroup: LinearLayout
     private lateinit var tcpGroup: LinearLayout
     private lateinit var devices: LinearLayout
@@ -79,6 +89,8 @@ class AprsChatActivity : LocalizedActivity() {
         body.addView(Brand.heading(this, getString(R.string.aprs_chat_title)))
         status = live(Brand.text(this, 15f)).apply { setText(R.string.aprs_chat_disconnected) }
         body.addView(Brand.card(this).apply { addView(status) })
+        diagnostic = live(Brand.text(this, 12f, colors.muted))
+        body.addView(diagnostic)
         notice = live(Brand.text(this, 14f, colors.accent))
         body.addView(notice)
         body.addView(note(R.string.aprs_chat_intro))
@@ -97,6 +109,7 @@ class AprsChatActivity : LocalizedActivity() {
         body.addView(Brand.card(this).apply {
             addView(title(R.string.rt950_section_messages))
             chat.build(this, R.string.aprs_chat_help)
+            intent.getStringExtra(EXTRA_PREFILL)?.let { chat.prefill("", it) }
         })
         body.addView(Brand.card(this).apply {
             addView(title(R.string.aprs_chat_status_section))
@@ -157,7 +170,7 @@ class AprsChatActivity : LocalizedActivity() {
         val open = link
         link = null
         open?.close()
-        runOnUiThread { status.setText(R.string.aprs_chat_disconnected) }
+        runOnUiThread { status.setText(R.string.aprs_chat_disconnected); diagnostic.text = "" }
     }
 
     private fun attach(opened: KissLink, label: String) {
@@ -171,10 +184,56 @@ class AprsChatActivity : LocalizedActivity() {
 
     private fun buildBle() {
         bleGroup.addView(note(R.string.rt950_msg_help))
+        bleGroup.addView(title(R.string.aprs_chat_advanced))
+        bleGroup.addView(note(R.string.aprs_chat_advanced_help))
+        val ffe1 = preferences.getString("ble-target", KissWriteTarget.FF31.name) == KissWriteTarget.FFE1.name
+        targetGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.VERTICAL
+            listOf(KissWriteTarget.FF31 to R.string.aprs_chat_target_ff31, KissWriteTarget.FFE1 to R.string.aprs_chat_target_ffe1).forEach { (target, label) ->
+                addView(RadioButton(this@AprsChatActivity).apply {
+                    id = View.generateViewId(); tag = target
+                    setText(label); setTextColor(colors.text)
+                    minHeight = Brand.dp(this@AprsChatActivity, 48)
+                    isChecked = (target == KissWriteTarget.FFE1) == ffe1
+                })
+            }
+        }
+        bleGroup.addView(targetGroup)
+        rtx1Check = CheckBox(this).apply {
+            setText(R.string.aprs_chat_rtx1); setTextColor(colors.text)
+            isChecked = preferences.getBoolean("ble-rtx1", false)
+            minHeight = Brand.dp(this@AprsChatActivity, 48)
+        }
+        bleGroup.addView(rtx1Check)
+        txCheck = CheckBox(this).apply {
+            setText(R.string.aprs_chat_tx_experimental); setTextColor(colors.text)
+            isChecked = Rt950Safety.txEnabled(preferences)
+            minHeight = Brand.dp(this@AprsChatActivity, 48)
+            setOnCheckedChangeListener { box, on ->
+                if (on && !Rt950Safety.txEnabled(preferences)) {
+                    box.isChecked = false
+                    AlertDialog.Builder(this@AprsChatActivity).setTitle(R.string.aprs_chat_tx_warn_title)
+                        .setMessage(R.string.aprs_chat_tx_warn_body)
+                        .setNegativeButton(R.string.action_cancel, null)
+                        .setPositiveButton(R.string.aprs_chat_tx_warn_confirm) { _, _ ->
+                            preferences.edit().putBoolean(Rt950Safety.KEY_TX, true).apply()
+                            box.isChecked = true
+                        }.show()
+                } else if (!on) {
+                    preferences.edit().putBoolean(Rt950Safety.KEY_TX, false).apply()
+                }
+            }
+        }
+        bleGroup.addView(txCheck)
         button(bleGroup, R.string.rt950_scan, true) { startScan() }
         devices = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         bleGroup.addView(devices)
         button(bleGroup, R.string.rt950_disconnect) { work { closeLink() } }
+    }
+
+    private fun kissOptions(): Rt950KissOptions {
+        val checked = targetGroup.findViewById<RadioButton>(targetGroup.checkedRadioButtonId)
+        return Rt950KissOptions(checked?.tag as? KissWriteTarget ?: KissWriteTarget.FF31, rtx1Check.isChecked)
     }
 
     private fun blePermissions(): Boolean {
@@ -211,19 +270,22 @@ class AprsChatActivity : LocalizedActivity() {
     private fun connectBle(address: String) {
         stopScan?.invoke(); stopScan = null
         status.setText(R.string.rt950_connecting)
+        val options = kissOptions()
+        preferences.edit().putString("ble-target", options.target.name).putBoolean("ble-rtx1", options.rtx1Prefix).apply()
         work {
             closeLink()
             val transport = BleRt950Transport(this, address)
             try {
-                transport.connect()
+                transport.connectKiss(options)
             } catch (error: Exception) {
                 transport.close()
                 runOnUiThread { status.setText(R.string.aprs_chat_disconnected) }
                 throw error
             }
-            val opened = Rt950BleKissLink.over(transport)
-            transport.onLost = { opened.onClosed?.invoke() }
+            val opened = Rt950BleKissLink.overKiss(transport, options) { Rt950Safety.txEnabled(preferences) }
+            transport.onLost = { opened.linkLost() }
             attach(opened, address)
+            runOnUiThread { diagnostic.text = getString(R.string.aprs_chat_gatt_diag, transport.diagnostics) }
         }
     }
 

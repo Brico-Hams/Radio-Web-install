@@ -32,6 +32,7 @@ class BleRt950Transport(context: Context, private val address: String) : RadioBy
         class Services(val status: Int) : Event()
         class Descriptor(val status: Int) : Event()
         class Written(val status: Int) : Event()
+        class Mtu(val mtu: Int, val status: Int) : Event()
     }
 
     private val context = context.applicationContext
@@ -43,6 +44,15 @@ class BleRt950Transport(context: Context, private val address: String) : RadioBy
     private var channel: BluetoothGattCharacteristic? = null
     @Volatile private var cloneActive = false
     @Volatile private var lost = false
+    private var kissMode = false
+    private var writeTarget: BluetoothGattCharacteristic? = null
+
+    /** Negotiated ATT MTU (23 until [connectKiss] gets an answer to requestMtu). */
+    @Volatile var mtu = DEFAULT_MTU
+        private set
+    /** Services/characteristics found on the radio with their properties, filled by [connectKiss]. */
+    @Volatile var diagnostics = ""
+        private set
 
     /** Receives raw ffe1 notification chunks while no clone session is open (feed them to a [KissDecoder]). */
     @Volatile var kissListener: ((ByteArray) -> Unit)? = null
@@ -61,6 +71,7 @@ class BleRt950Transport(context: Context, private val address: String) : RadioBy
                 if (first) onLost?.invoke()
             }
         }
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) { events.add(Event.Mtu(mtu, status)) }
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) { events.add(Event.Services(status)) }
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) { events.add(Event.Descriptor(status)) }
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) { events.add(Event.Written(status)) }
@@ -82,6 +93,7 @@ class BleRt950Transport(context: Context, private val address: String) : RadioBy
 
     /** Clone and KISS traffic must never be mixed: start of a clone session drops KISS delivery and stale bytes. */
     fun beginClone() {
+        check(!kissMode) { "clone session on a KISS-mode link" }
         data.clear(); pending = ByteArray(0)
         cloneActive = true
     }
@@ -110,8 +122,36 @@ class BleRt950Transport(context: Context, private val address: String) : RadioBy
         link.getService(UNLOCK_SERVICE)?.getCharacteristic(UNLOCK)
             ?: link.services.firstNotNullOfOrNull { it.getCharacteristic(UNLOCK) }
 
-    /** Connects, subscribes to ffe1 and sends the unlock to ff31. Blocks while connecting. */
+    /** Connects, subscribes to ffe1 and sends the unlock to ff31 (clone/backup mode). Blocks while connecting. */
     fun connect() {
+        val link = openGatt(false)
+        val unlock = findUnlock(link) ?: run { close(); throw LocalizedIOException(UiText(R.string.err_rt950_ble_not_found)) }
+        writeChunks(link, unlock, UNLOCK_BYTES)
+        Thread.sleep(500)
+    }
+
+    /**
+     * KISS mode: connect, request a bigger MTU, subscribe to ffe1 and pick the write characteristic. It never sends the
+     * ff31 unlock and never starts the clone handshake: lalmonte/radiochat-aprs RadtelKissProfile.kt:33-34 says the FF31
+     * unlock belongs to CPS programming mode and must NOT be sent in BLE KISS mode; the erkanz-patched firmware only
+     * routes a write to KISS while programming is inactive (erkanz/radtel-RT950PRO docs/v1_1_patch_map.txt:21-25).
+     * MTU request as in radiochat-aprs BleUartManager.kt:182; write target FF31 as RadtelKissProfile.kt:44-61, FFE1 as
+     * nicsure/RT950Pro-BTLE-TCP-Bridge BridgeService.kt:172-182.
+     */
+    fun connectKiss(options: Rt950KissOptions) {
+        val link = openGatt(true)
+        kissMode = true
+        val target = when (options.target) {
+            KissWriteTarget.FF31 -> findUnlock(link)
+            KissWriteTarget.FFE1 -> channel
+        } ?: run { close(); throw LocalizedIOException(UiText(R.string.err_rt950_ble_not_found)) }
+        writeTarget = target
+        val chosen = "${shortUuid(target.uuid)}(${describeProperties(target.properties)})"
+        diagnostics = "MTU $mtu; write $chosen; " + describeGatt(link)
+        android.util.Log.i(TAG, "KISS write characteristic $chosen, notify ${shortUuid(DATA)}; $diagnostics")
+    }
+
+    private fun openGatt(requestMtu: Boolean): BluetoothGatt {
         val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = manager?.adapter ?: throw LocalizedIOException(UiText(R.string.err_rt950_no_ble))
         if (!adapter.isEnabled) throw LocalizedIOException(UiText(R.string.err_rt950_ble_off))
@@ -120,6 +160,7 @@ class BleRt950Transport(context: Context, private val address: String) : RadioBy
         gatt = link
         val state = await<Event.State>(15000)
         if (state.status != BluetoothGatt.GATT_SUCCESS) { close(); fail() }
+        if (requestMtu) negotiateMtu(link)
         if (!link.discoverServices()) { close(); fail() }
         if (await<Event.Services>(15000).status != BluetoothGatt.GATT_SUCCESS) { close(); fail() }
         val notify = link.getService(SERVICE)?.getCharacteristic(DATA)
@@ -132,9 +173,35 @@ class BleRt950Transport(context: Context, private val address: String) : RadioBy
             else @Suppress("DEPRECATION") run { descriptor.value = enable; link.writeDescriptor(descriptor) }
         if (!started || await<Event.Descriptor>(15000).status != BluetoothGatt.GATT_SUCCESS) { close(); fail() }
         channel = notify
-        val unlock = findUnlock(link) ?: run { close(); throw LocalizedIOException(UiText(R.string.err_rt950_ble_not_found)) }
-        writeChunks(link, unlock, UNLOCK_BYTES)
-        Thread.sleep(500)
+        return link
+    }
+
+    /** Asks for [KISS_MTU]; any refusal or silence keeps the 23-byte default. */
+    private fun negotiateMtu(link: BluetoothGatt) {
+        mtu = DEFAULT_MTU
+        if (!link.requestMtu(KISS_MTU)) return
+        try {
+            val answer = await<Event.Mtu>(5000)
+            if (answer.status == BluetoothGatt.GATT_SUCCESS && answer.mtu >= DEFAULT_MTU) mtu = answer.mtu
+        } catch (error: LocalizedIOException) {
+            if (lost || gatt == null) throw error
+        }
+    }
+
+    /** One KISS frame = one GATT write. A frame that does not fit mtu-3 is rejected instead of being split. */
+    fun writeKiss(bytes: ByteArray) {
+        val link = gatt ?: throw LocalizedIOException(UiText(R.string.err_rt950_ble_lost))
+        val target = writeTarget ?: throw LocalizedIOException(UiText(R.string.err_rt950_ble_lost))
+        if (lost) throw LocalizedIOException(UiText(R.string.err_rt950_ble_lost))
+        val room = mtu - 3
+        if (bytes.size > room) throw LocalizedIOException(UiText(R.string.err_aprs_kiss_mtu, bytes.size, room))
+        val noResponse = target.properties and BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0
+        val type = if (noResponse) BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE else BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        events.removeIf { it is Event.Written }
+        val started = if (Build.VERSION.SDK_INT >= 33) link.writeCharacteristic(target, bytes, type) == BluetoothStatusCodes.SUCCESS
+            else @Suppress("DEPRECATION") run { target.writeType = type; target.value = bytes; link.writeCharacteristic(target) }
+        if (!started) fail()
+        if (!noResponse && await<Event.Written>(5000).status != BluetoothGatt.GATT_SUCCESS) fail()
     }
 
     private fun writeChunks(link: BluetoothGatt, characteristic: BluetoothGattCharacteristic, bytes: ByteArray) {
@@ -189,6 +256,31 @@ class BleRt950Transport(context: Context, private val address: String) : RadioBy
     companion object {
         const val DEVICE_NAME = "walkie-talkie"
         private const val CHUNK = 20
+        private const val TAG = "Rt950Ble"
+        private const val DEFAULT_MTU = 23
+        private const val KISS_MTU = 247
+
+        fun shortUuid(uuid: UUID): String {
+            val text = uuid.toString()
+            return if (text.startsWith("0000") && text.endsWith("-0000-1000-8000-00805f9b34fb")) text.substring(4, 8) else text
+        }
+
+        fun describeProperties(properties: Int): String {
+            val names = listOf(
+                BluetoothGattCharacteristic.PROPERTY_READ to "read",
+                BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE to "write-no-rsp",
+                BluetoothGattCharacteristic.PROPERTY_WRITE to "write",
+                BluetoothGattCharacteristic.PROPERTY_NOTIFY to "notify",
+                BluetoothGattCharacteristic.PROPERTY_INDICATE to "indicate"
+            )
+            return names.filter { properties and it.first != 0 }.joinToString("|") { it.second }
+        }
+
+        fun describeGatt(link: BluetoothGatt): String = link.services.joinToString("; ") { service ->
+            shortUuid(service.uuid) + "[" + service.characteristics.joinToString(", ") {
+                "${shortUuid(it.uuid)}(${describeProperties(it.properties)})"
+            } + "]"
+        }
         private const val PACING_MS = 30L
         val SERVICE: UUID = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
         val DATA: UUID = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")

@@ -65,7 +65,8 @@ class Rt950Activity : LocalizedActivity() {
     private lateinit var notice: TextView
     private lateinit var devices: LinearLayout
     private lateinit var backupStatus: TextView
-    private lateinit var cloneNote: TextView
+    private lateinit var cloneBox: LinearLayout
+    private val safety by lazy { getSharedPreferences(Rt950Safety.PREFERENCES, MODE_PRIVATE) }
     private lateinit var aprsOn: CheckBox
     private lateinit var callsignEdit: EditText
     private lateinit var ssidEdit: EditText
@@ -285,8 +286,8 @@ class Rt950Activity : LocalizedActivity() {
                 runOnUiThread { status.setText(R.string.rt950_disconnected) }
                 throw error
             }
-            link.onLost = { runOnUiThread { if (transport === link) { transport = null; kissLink = null; status.setText(R.string.rt950_link_lost) } } }
-            kissLink = Rt950BleKissLink.over(link).also { it.onFrame = chat::onFrame }
+            link.onLost = { runOnUiThread { if (transport === link) { transport = null; kissLink?.linkLost(); kissLink = null; status.setText(R.string.rt950_link_lost) } } }
+            kissLink = Rt950BleKissLink.over(link) { Rt950Safety.txEnabled(safety) }.also { it.onFrame = chat::onFrame }
             transport = link
             runOnUiThread { status.setText(R.string.rt950_connected); notice.text = "" }
         }
@@ -303,6 +304,7 @@ class Rt950Activity : LocalizedActivity() {
     private fun <T> clone(chosen: Rt950Variant = variant, block: (Rt950Session) -> T): T {
         val link = transport ?: throw LocalizedStateException(UiText(R.string.err_rt950_not_connected))
         link.beginClone()
+        Rt950Safety.recordClone(safety)
         val session = Rt950Session(link, variant = chosen)
         try {
             return block(session)
@@ -310,7 +312,8 @@ class Rt950Activity : LocalizedActivity() {
             session.end()
             link.endClone()
             kissLink?.resetDecoder()
-            runOnUiThread { cloneNote.visibility = View.VISIBLE }
+            Rt950Safety.recordClone(safety)
+            runOnUiThread { cloneBox.visibility = View.VISIBLE }
         }
     }
 
@@ -323,8 +326,16 @@ class Rt950Activity : LocalizedActivity() {
         button(card, R.string.rt950_backup_read, true) { readBackup() }
         backupStatus = live(Brand.text(this, 14f, colors.accent)).apply { setText(R.string.rt950_backup_required) }
         card.addView(backupStatus)
-        cloneNote = Brand.text(this, 13f, colors.muted).apply { setText(R.string.rt950_clone_note); visibility = View.GONE }
-        card.addView(cloneNote)
+        cloneBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (Rt950Safety.needsPowerCycle(safety)) View.VISIBLE else View.GONE
+            addView(Brand.text(this@Rt950Activity, 16f, colors.accent, true).apply { setText(R.string.rt950_clone_note) })
+            addView(Brand.button(this@Rt950Activity, getString(R.string.aprs_chat_power_cycle_confirm), false) {
+                Rt950Safety.recordPowerCycle(safety)
+                visibility = View.GONE
+            })
+        }
+        card.addView(cloneBox)
     }
 
     private fun readBackup() = work {
