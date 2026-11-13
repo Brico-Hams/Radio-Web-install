@@ -32,6 +32,18 @@ jobs:
       - run: node scripts/fetch-satellites.cjs --out dist/data/satellites.json --previous "$PAGES_ORIGIN/data/satellites.json"
         env:
           PAGES_ORIGIN: ${{ vars.PAGES_ORIGIN }}
+      - name: F-Droid repository (signed by fdroid.yml, optional)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release download fdroid-repo -R "$GITHUB_REPOSITORY" -p fdroid-repo.tar.gz -D "$RUNNER_TEMP" --clobber 2>/dev/null; then
+            mkdir -p dist/fdroid
+            tar -xzf "$RUNNER_TEMP/fdroid-repo.tar.gz" -C dist/fdroid
+            test -f dist/fdroid/repo/index-v1.jar
+          else
+            echo "::notice title=F-Droid::No fdroid-repo release yet; /fdroid is not published."
+          fi
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: dist

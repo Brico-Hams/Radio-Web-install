@@ -1,0 +1,107 @@
+name: F-Droid
+
+# Own F-Droid repository: signs an index of the GitHub-signed RadiCodex APKs and publishes it as the
+# fdroid-repo.tar.gz asset of the fixed "fdroid-repo" release; pages.yml (no secrets) serves it at
+# <PAGES_ORIGIN>/fdroid/repo. Also lints the recipe kept for the official fdroiddata merge request.
+on:
+  workflow_run:
+    workflows: ["Android"]
+    types: [completed]
+  push:
+    branches: ["**"]
+    paths:
+      - "fdroid/**"
+      - "fastlane/**"
+      - "scripts/build-fdroid-repo.sh"
+      - ".github/workflows/fdroid.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fdroid-repo
+  cancel-in-progress: false
+
+env:
+  FDROIDSERVER_VERSION: "2.3.5"
+
+jobs:
+  lint:
+    if: github.event_name != 'workflow_run'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: fdroid lint (recipe as it would sit in fdroiddata)
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/fdroid" && "$RUNNER_TEMP/fdroid/bin/pip" install -q "fdroidserver==$FDROIDSERVER_VERSION"
+          mkdir -p "$RUNNER_TEMP/fdroiddata/metadata"
+          cp fdroid/metadata/org.bricohams.radicodex.yml "$RUNNER_TEMP/fdroiddata/metadata/"
+          cd "$RUNNER_TEMP/fdroiddata"
+          "$RUNNER_TEMP/fdroid/bin/fdroid" lint org.bricohams.radicodex
+          "$RUNNER_TEMP/fdroid/bin/fdroid" readmeta
+
+  dry-run:
+    # Builds the repo with a throwaway key to validate the script; nothing is published.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build an unsigned-for-real (throwaway key) repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FDROID_DRY_RUN: "1"
+          FDROID_REPO_URL: ${{ vars.PAGES_ORIGIN }}/fdroid/repo
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/fdroid" && "$RUNNER_TEMP/fdroid/bin/pip" install -q "fdroidserver==$FDROIDSERVER_VERSION"
+          PATH="$RUNNER_TEMP/fdroid/bin:$PATH" bash scripts/build-fdroid-repo.sh "$RUNNER_TEMP/out"
+          ls -la "$RUNNER_TEMP/out/repo"
+
+  publish:
+    # After a successful Android tag build, or by hand on main; needs the repo key secrets.
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'android-v')) ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - name: Build and sign the repository
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FDROID_KEYSTORE_BASE64: ${{ secrets.FDROID_KEYSTORE_BASE64 }}
+          FDROID_KEYSTORE_PASS: ${{ secrets.FDROID_KEYSTORE_PASS }}
+          FDROID_KEY_PASS: ${{ secrets.FDROID_KEY_PASS }}
+          FDROID_KEY_ALIAS: ${{ secrets.FDROID_KEY_ALIAS }}
+          FDROID_REPO_URL: ${{ vars.PAGES_ORIGIN }}/fdroid/repo
+        run: |
+          set -euo pipefail
+          if [ -z "$FDROID_KEYSTORE_BASE64" ] || [ -z "$FDROID_KEYSTORE_PASS" ] || [ -z "$FDROID_KEY_PASS" ] || [ -z "$FDROID_KEY_ALIAS" ]; then
+            echo "::notice title=F-Droid::Repo key secrets missing (FDROID_KEYSTORE_BASE64, FDROID_KEYSTORE_PASS, FDROID_KEY_PASS, FDROID_KEY_ALIAS); nothing published."
+            echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          python3 -m venv "$RUNNER_TEMP/fdroid" && "$RUNNER_TEMP/fdroid/bin/pip" install -q "fdroidserver==$FDROIDSERVER_VERSION"
+          PATH="$RUNNER_TEMP/fdroid/bin:$PATH" bash scripts/build-fdroid-repo.sh "$RUNNER_TEMP/out"
+          tar -C "$RUNNER_TEMP/out" -czf "$RUNNER_TEMP/fdroid-repo.tar.gz" index.html repo
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - name: Publish on the fixed fdroid-repo release and redeploy Pages
+        if: steps.build.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view fdroid-repo -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create fdroid-repo -R "$GITHUB_REPOSITORY" --target main --latest=false \
+              --title "RadiCodex F-Droid repository" \
+              --notes "Signed F-Droid repo (index + APKs) served by Pages at /fdroid/repo. Updated by the F-Droid workflow."
+          fi
+          gh release upload fdroid-repo "$RUNNER_TEMP/fdroid-repo.tar.gz" --clobber -R "$GITHUB_REPOSITORY"
+          gh workflow run pages.yml --ref main -R "$GITHUB_REPOSITORY"

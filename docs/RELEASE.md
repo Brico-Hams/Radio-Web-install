@@ -11,7 +11,7 @@ Todos los secretos se leen de variables de entorno, prompts o rutas fuera del re
 4. **Manifiesto OTA firmado**: `node scripts/ota-manifest.cjs` (ver `android/OTA.md`; clave OTA distinta de la de firmware). Produce `radicodex-update.json`.
 5. **GitHub Release**: etiqueta `android-v<version>`; sube APK firmado, `radicodex-update.json`, `SHA256SUMS*` y las firmas.
 6. **Pages**: copia `radicodex-update.json`, `precompiled/*.sig` y `precompiled/SHA256SUMS*` a la rama principal; `pages.yml` publica `ota.html`. Requiere Pages activado y la variable `PAGES_SHARED_ORIGIN_ACCEPTED=true` (o repo `<org>.github.io`) y `PAGES_ORIGIN`. La app usa como respaldo el asset fijo `releases/download/radicodex-ota/radicodex-update.json` (no depende de «Latest»; lo sube `android.yml`). Las releases `android-v*` y `fw-*` se crean con `--latest=false`; solo `v*` es Latest.
-7. **F-Droid**: MR en fdroiddata segun `android/FDROID.md`.
+7. **F-Droid**: el repositorio propio se actualiza solo tras la etiqueta `android-v*` (`fdroid.yml`, requiere los secretos `FDROID_*`); la MR al F-Droid oficial se abre en fdroiddata segun `android/FDROID.md`.
 
 ## Refrescar el catalogo de firmware
 
