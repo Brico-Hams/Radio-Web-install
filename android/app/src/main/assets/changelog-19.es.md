@@ -1,0 +1,7 @@
+# Novedades 1.2.0
+
+- Yaesu FTX-1: S-meter MAIN en la pantalla CAT.
+- Anunciar por voz (opcional): frecuencia, modo y señal al cambiar, también para TalkBack.
+- Chat APRS por cualquier enlace KISS y Radtel RT-950 Pro por BLE (copia, APRS, plan Doppler).
+- Plantillas de zonas por región para la RT-950 Pro con verificación y restauración.
+- Vista de pase con triángulo de movimiento, Sol y Luna, pestaña SSTV y retícula del rotor.
