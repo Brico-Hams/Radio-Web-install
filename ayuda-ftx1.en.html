@@ -24,7 +24,7 @@
       <nav aria-label="Help"><a href="ayuda-referencias.en.html">Documentation and references</a> · <a href="ayuda-firmwares.en.html">Firmware library</a> · <a href="ayuda-atlas-uv-k5-v3.en.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=en-US">Quansheng</a> · <a href="opengd77.html?lang=en-US">OpenGD77</a></nav>
       <nav class="languages" aria-label="Language"><a href="ayuda-ftx1.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-ftx1.en.html" hreflang="en-US" lang="en-US" aria-current="page">English (US)</a> · <a href="ayuda-ftx1.de.html" hreflang="de" lang="de">Deutsch</a> · <a href="ayuda-ftx1.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-ftx1.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#requisitos-y-conexion">Requirements and connection</a></li><li><a href="#memorias">Memories</a></li><li><a href="#configuracion-del-equipo-menu">Radio settings (menu)</a></li><li><a href="#copia-simulacion-y-escritura">Backup, simulation and writing</a></li><li><a href="#limites">Limits</a></li></ul></nav>
+    <nav class="panel" aria-label="Contents of this guide"><h2>In this guide</h2><ul><li><a href="#requisitos-y-conexion">Requirements and connection</a></li><li><a href="#memorias">Memories</a></li><li><a href="#configuracion-del-equipo-menu">Radio settings (menu)</a></li><li><a href="#copia-simulacion-y-escritura">Backup, simulation and writing</a></li><li><a href="#control-remoto-cat">Remote control (CAT)</a></li><li><a href="#limites">Limits</a></li></ul></nav>
     <article class="panel"><h1 id="guia-yaesu-ftx-1-memorias-y-configuracion">Yaesu FTX-1 guide: memories and settings</h1>
 <p>The FTX-1 Beta web editor reads, edits, copies and writes the memories and the menu settings of the Yaesu FTX-1 from the browser, through the USB CAT port and Web Serial. It only uses the commands documented in Yaesu&#39;s official FTX-1 &quot;CAT Operation Reference Manual&quot;. It does not replace ADMS or Yaesu software, and it does not send data to any server.</p>
 <h2 id="requisitos-y-conexion">Requirements and connection</h2>
@@ -57,6 +57,22 @@
 <li>Press &quot;Simulate write&quot; and review the difference table.</li>
 </ol>
 <p>Only the changed channels or settings are sent. Each one is read back and compared with what was sent; if the radio answers <code>?;</code> or a different value, the write stops and names the channel or setting. To undo, load the JSON backup with &quot;Restore JSON backup&quot;, simulate and write again.</p>
+<h2 id="control-remoto-cat">Remote control (CAT)</h2>
+<p>The &quot;4. Remote control (CAT)&quot; panel only touches reception; it never sends a transmit command. Pick MAIN or SUB, press &quot;Read&quot; and change the controls: every change is sent, read back and compared. Out-of-range values are rejected before sending. The meters (<code>SM</code>, <code>RM</code>) can refresh every 1 s; polling stops on disconnect or on any error.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Command</th><th scope="col">Use</th></tr></thead><tbody>
+<tr><td><code>SM P1;</code></td><td>S-meter, 000-255 (read only)</td></tr>
+<tr><td><code>RM P1;</code></td><td>Meters 1 S(MAIN), 2 S(SUB), 3 COMP, 4 ALC, 5 PO, 6 SWR, 7 IDD, 8 VDD (read only)</td></tr>
+<tr><td><code>AG P1 P2P2P2;</code></td><td>AF gain, 000-255</td></tr>
+<tr><td><code>RG P1 P2P2P2;</code></td><td>RF gain, 000-255</td></tr>
+<tr><td><code>SQ P1 P2P2P2;</code></td><td>Squelch, 000-255</td></tr>
+<tr><td><code>SH P1 0 P3P3;</code></td><td>Width: index 00-23 of the manual&#39;s Table 5 (the Hz value depends on the mode; only the index is shown)</td></tr>
+<tr><td><code>IS P1 0 P3 P4P4P4P4;</code></td><td>IF shift, -1200..+1200 Hz in 20 Hz steps</td></tr>
+<tr><td><code>GT P1 P2;</code></td><td>AGC: 0 OFF, 1 FAST, 2 MID, 3 SLOW, 4 AUTO (reads distinguish AUTO-FAST/MID/SLOW)</td></tr>
+<tr><td><code>PA P1 P2;</code></td><td>Pre-amp: 0 HF/50 (IPO, AMP1, AMP2), 1 VHF and 2 UHF (OFF, ON)</td></tr>
+<tr><td><code>RA0 P2;</code></td><td>RF attenuator, 0 OFF, 1 ON</td></tr>
+<tr><td><code>PC P1 P2P2P2;</code></td><td>Power: 1 = FTX-1 field head (5-10 W), 2 = SPA-1 (5-100 W); the range comes from the radio&#39;s answer</td></tr>
+</tbody></table></div>
+<p>The feature list was inspired by cat-ftx1 (rzochowski, MIT licence per its author; the LICENSE file is still pending in that repository). No code was copied.</p>
 <h2 id="limites">Limits</h2>
 <ul>
 <li>Memory channels 1-999 only. PMS, 5 MHz, emergency channel and split memories (<code>MZ</code>) are not edited.</li>

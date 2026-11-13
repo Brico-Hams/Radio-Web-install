@@ -24,7 +24,7 @@
       <nav aria-label="Hilfe"><a href="ayuda-referencias.de.html">Dokumentation und Referenzen</a> · <a href="ayuda-firmwares.de.html">Firmware-Bibliothek</a> · <a href="ayuda-atlas-uv-k5-v3.de.html">Atlas UV-K5 V3</a> · <a href="quansheng.html?lang=de">Quansheng</a> · <a href="opengd77.html?lang=de">OpenGD77</a></nav>
       <nav class="languages" aria-label="Sprache"><a href="ayuda-ftx1.html" hreflang="es" lang="es">Español</a> · <a href="ayuda-ftx1.en.html" hreflang="en-US" lang="en-US">English (US)</a> · <a href="ayuda-ftx1.de.html" hreflang="de" lang="de" aria-current="page">Deutsch</a> · <a href="ayuda-ftx1.it.html" hreflang="it" lang="it">Italiano</a> · <a href="ayuda-ftx1.fr.html" hreflang="fr" lang="fr">Français</a></nav>
     </header>
-    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#requisitos-y-conexion">Voraussetzungen und Verbindung</a></li><li><a href="#memorias">Speicher</a></li><li><a href="#configuracion-del-equipo-menu">Geräteeinstellungen (Menü)</a></li><li><a href="#copia-simulacion-y-escritura">Sicherung, Simulation und Schreiben</a></li><li><a href="#limites">Grenzen</a></li></ul></nav>
+    <nav class="panel" aria-label="Inhalt dieser Anleitung"><h2>In dieser Anleitung</h2><ul><li><a href="#requisitos-y-conexion">Voraussetzungen und Verbindung</a></li><li><a href="#memorias">Speicher</a></li><li><a href="#configuracion-del-equipo-menu">Geräteeinstellungen (Menü)</a></li><li><a href="#copia-simulacion-y-escritura">Sicherung, Simulation und Schreiben</a></li><li><a href="#control-remoto-cat">Fernsteuerung (CAT)</a></li><li><a href="#limites">Grenzen</a></li></ul></nav>
     <article class="panel"><h1 id="guia-yaesu-ftx-1-memorias-y-configuracion">Anleitung Yaesu FTX-1: Speicher und Einstellungen</h1>
 <p>Der Web-Editor FTX-1 Beta liest, bearbeitet, kopiert und schreibt die Speicher und die Menüeinstellungen des Yaesu FTX-1 im Browser, über den USB-CAT-Port und Web Serial. Er verwendet nur die Befehle aus dem offiziellen Yaesu-Handbuch „CAT Operation Reference Manual“ des FTX-1. Er ersetzt weder ADMS noch die Yaesu-Software und sendet keine Daten an Server.</p>
 <h2 id="requisitos-y-conexion">Voraussetzungen und Verbindung</h2>
@@ -57,6 +57,22 @@
 <li>„Schreiben simulieren“ drücken und die Differenztabelle prüfen.</li>
 </ol>
 <p>Es werden nur geänderte Kanäle oder Einstellungen gesendet. Jeder Wert wird zurückgelesen und mit dem Gesendeten verglichen; antwortet das Gerät <code>?;</code> oder mit einem anderen Wert, stoppt das Schreiben und nennt Kanal oder Einstellung. Zum Rückgängigmachen lade die JSON-Sicherung mit „JSON-Sicherung wiederherstellen“, simuliere und schreibe erneut.</p>
+<h2 id="control-remoto-cat">Fernsteuerung (CAT)</h2>
+<p>Das Panel „4. Fernsteuerung (CAT)“ betrifft nur den Empfang; es sendet nie einen Sendebefehl. Wähle MAIN oder SUB, drücke „Lesen“ und ändere die Regler: Jede Änderung wird gesendet, zurückgelesen und verglichen. Werte außerhalb des Bereichs werden vor dem Senden abgelehnt. Die Messwerte (<code>SM</code>, <code>RM</code>) lassen sich jede Sekunde aktualisieren; die Abfrage stoppt beim Trennen oder bei einem Fehler.</p>
+<div class="table-scroll"><table><thead><tr><th scope="col">Befehl</th><th scope="col">Verwendung</th></tr></thead><tbody>
+<tr><td><code>SM P1;</code></td><td>S-Meter, 000-255 (nur lesen)</td></tr>
+<tr><td><code>RM P1;</code></td><td>Messwerte 1 S(MAIN), 2 S(SUB), 3 COMP, 4 ALC, 5 PO, 6 SWR, 7 IDD, 8 VDD (nur lesen)</td></tr>
+<tr><td><code>AG P1 P2P2P2;</code></td><td>AF-Verstärkung, 000-255</td></tr>
+<tr><td><code>RG P1 P2P2P2;</code></td><td>RF-Verstärkung, 000-255</td></tr>
+<tr><td><code>SQ P1 P2P2P2;</code></td><td>Squelch, 000-255</td></tr>
+<tr><td><code>SH P1 0 P3P3;</code></td><td>Bandbreite: Index 00-23 der Tabelle 5 des Handbuchs (der Hz-Wert hängt vom Modus ab; nur der Index wird angezeigt)</td></tr>
+<tr><td><code>IS P1 0 P3 P4P4P4P4;</code></td><td>IF-Shift, -1200..+1200 Hz in 20-Hz-Schritten</td></tr>
+<tr><td><code>GT P1 P2;</code></td><td>AGC: 0 OFF, 1 FAST, 2 MID, 3 SLOW, 4 AUTO (Lesen unterscheidet AUTO-FAST/MID/SLOW)</td></tr>
+<tr><td><code>PA P1 P2;</code></td><td>Vorverstärker: 0 HF/50 (IPO, AMP1, AMP2), 1 VHF und 2 UHF (OFF, ON)</td></tr>
+<tr><td><code>RA0 P2;</code></td><td>HF-Abschwächer, 0 OFF, 1 ON</td></tr>
+<tr><td><code>PC P1 P2P2P2;</code></td><td>Leistung: 1 = FTX-1-Bedienteil (5-10 W), 2 = SPA-1 (5-100 W); der Bereich stammt aus der Antwort des Funkgeräts</td></tr>
+</tbody></table></div>
+<p>Die Funktionsliste wurde von cat-ftx1 (rzochowski, MIT-Lizenz laut Autor; die LICENSE-Datei fehlt in diesem Repository noch) inspiriert. Es wurde kein Code kopiert.</p>
 <h2 id="limites">Grenzen</h2>
 <ul>
 <li>Nur Speicherkanäle 1-999. PMS, 5 MHz, Notrufkanal und Split-Speicher (<code>MZ</code>) werden nicht bearbeitet.</li>
