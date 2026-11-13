@@ -98,13 +98,32 @@ object ChannelTemplates {
     }
 
     /** Repeaters, then airports of the same region, then PMR446 last; PMR never for a country without it (US). */
-    fun select(dataset: Dataset, region: String, airports: Boolean, pmr: Boolean): List<Channel> {
+    fun select(dataset: Dataset, region: String, airports: Boolean, pmr: Boolean, cb: Boolean = false): List<Channel> {
         require(region.isEmpty() || dataset.regions.any { it.id == region })
         val byRegion = (dataset.channels + if (airports) dataset.airports else emptyList()).groupBy { it.regionId }
         val channels = dataset.regions.filter { region.isEmpty() || it.id == region }
             .flatMapTo(ArrayList()) { byRegion[it.id].orEmpty() }
         if (pmr && dataset.country.pmr) channels += pmrChannels().map { it.copy(country = dataset.country.code) }
+        if (cb && dataset.country.code == "ES") channels += cbChannels(dataset.country.code)
         return channels.distinctBy { it.key }
+    }
+
+    // CEPT CB channels 1-40 (23-25 out of order by design); Orden ETU/1033/2017. Same list as CB_MHZ in channel-templates.js.
+    private val CB_MHZ = listOf(26.965, 26.975, 26.985, 27.005, 27.015, 27.025, 27.035, 27.055, 27.065, 27.075, 27.085, 27.105, 27.115,
+        27.125, 27.135, 27.155, 27.165, 27.175, 27.185, 27.205, 27.215, 27.225, 27.255, 27.235, 27.245, 27.265,
+        27.275, 27.285, 27.295, 27.305, 27.315, 27.325, 27.335, 27.345, 27.355, 27.365, 27.375, 27.385, 27.395, 27.405)
+    const val CB_SOURCE = "https://www.fediea.org/legislacb/oetu10332017-cb.php"
+
+    /** RX only; only Spain has a sourced CB plan here. */
+    fun cbChannels(country: String): List<Channel> {
+        require(country == "ES")
+        return CB_MHZ.flatMapIndexed { index, mhz ->
+            listOf("AM", "FM").map { mode ->
+                val rx = "%.5f".format(java.util.Locale.ROOT, mhz)
+                Channel("cb27:${index + 1}:$mode", "CB%02d %s".format(java.util.Locale.ROOT, index + 1, mode), rx, rx, mode, false, "CB27", "", "",
+                    CB_SOURCE, "CB 27 MHz canal ${index + 1} $mode · solo RX.", country, "", "", "")
+            }
+        }
     }
 
     fun pmrChannels() = (0 until 16).map { index ->
@@ -145,7 +164,7 @@ object ChannelTemplates {
         val prepared = prepare(profile, channels)
         val reasons = LinkedHashMap(prepared.reasons)
         fun overflow(count: Int) { if (count > 0) reasons["capacity"] = (reasons["capacity"] ?: 0) + count }
-        val reservedZone = if (variantConfirmed) null else layout.reservedZone
+        val reservedZone = layout.reservedZone
         var room = when (layout.kind) {
             "memories" -> layout.to!! - layout.from!! + 1
             "scanlists" -> QUANSHENG_MEMORIES
@@ -159,11 +178,17 @@ object ChannelTemplates {
         val satellite = ArrayList<Channel>()
         val pmr = ArrayList<Channel>()
         for (channel in prepared.accepted) when {
-            channel.regionId == "PMR446" -> pmr += channel
+            channel.regionId == "PMR446" || channel.regionId == "CB27" -> pmr += channel
             channel.regionId.isEmpty() || channel.key.startsWith("sat") -> satellite += channel
             else -> regional.getOrPut(channel.regionId) { ArrayList() } += channel
         }
-        val regularLimit = maxZones - if (pmr.isNotEmpty()) 1 else 0
+        // The PMR446/CB zone is the last zone whose capacity fits it (else the last zone with the largest capacity).
+        val pmrIndex = if (pmr.isNotEmpty() && fixedZones != null) {
+            val indexes = (fixedZones downTo 1).toList()
+            val best = indexes.maxOf { zoneCapacity(it) }
+            indexes.first { zoneCapacity(it) >= minOf(pmr.size, best) }
+        } else null
+        val regularLimit = if (pmrIndex != null) pmrIndex - 1 else maxZones - if (pmr.isNotEmpty()) 1 else 0
         class Draft(val index: Int, var name: String, val regions: MutableList<Region>, val items: MutableList<Channel>)
         val drafts = ArrayList<Draft>()
         fun take(items: List<Channel>): List<Channel> {
@@ -175,7 +200,7 @@ object ChannelTemplates {
             val made = ArrayList<Draft>()
             var rest = list
             while (rest.isNotEmpty()) {
-                val index = if (last && fixedZones != null) fixedZones else drafts.size + 1
+                val index = if (last && pmrIndex != null) pmrIndex else drafts.size + 1
                 if ((made.isNotEmpty() && last) || (!last && drafts.size >= regularLimit)) { overflow(rest.size); break }
                 val size = minOf(rest.size, zoneCapacity(index))
                 val items = take(rest.take(size))
@@ -204,7 +229,10 @@ object ChannelTemplates {
             current = if (made.size == 1) made[0] else null
         }
         if (satellite.isNotEmpty()) fill(satellite, "SAT", mutableListOf())
-        if (pmr.isNotEmpty()) fill(pmr, "PMR446", mutableListOf(Region("PMR446", "PMR446")), true)
+        // PMR446 and CB share the last zone ("PMR446 + CB").
+        val services = pmr.map { it.regionId }.distinct()
+        fun label(id: String) = if (id == "CB27") "CB" else id
+        if (pmr.isNotEmpty()) fill(pmr, services.joinToString(" + ") { label(it) }, services.mapTo(ArrayList()) { Region(it, label(it)) }, true)
         val zones = drafts.map { draft ->
             Zone(draft.index, draft.name, draft.regions.map { it.id },
                 draft.items.mapIndexed { slot, channel -> channel.copy(zone = draft.name, slot = slot + 1) })

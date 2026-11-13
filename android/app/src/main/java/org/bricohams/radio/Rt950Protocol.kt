@@ -4,6 +4,9 @@ import java.io.IOException
 import java.nio.charset.Charset
 import java.util.Random
 
+/** Channel-table variant of the radio. Never auto-detected: only the user's explicit choice unlocks channels 961-990. */
+enum class Rt950Variant { UNKNOWN, CH960, CH990 }
+
 /**
  * Radtel RT-950 Pro clone protocol (identical over BLE and the programming cable). The XOR key table, the key selection
  * rule, the channel record and the APRS block layout are ported from pe1hvh/chirp_radtel_rt950pro (MIT); pacing and the
@@ -27,8 +30,12 @@ object Rt950Protocol {
     const val CHANNEL_COUNT = 990
     const val ZONES = 10
     const val ZONE_SLOTS = 99
-    /** Last block address of the channel table that may be written; 0x7C00 and above are unknown and never touched. */
-    const val LAST_WRITABLE_MAIN = 0x7B80
+    /** Flash erase unit: a W to the first block of a sector erases all 4 KB, other blocks are only programmed (1->0). */
+    const val SECTOR = 0x1000
+    const val BLOCKS_PER_SECTOR = SECTOR / BLOCK
+    /** End (exclusive) of the writable area: channels 1-896. Only sectors entirely below it may be written. */
+    const val WRITABLE_END = 0x7000
+    const val WRITABLE_CHANNELS = WRITABLE_END / CHANNEL_SIZE
     const val KEY_FRAME_SIZE = 25
 
     /** NeonPlug's fixed frame; selects key index 1. */
@@ -58,13 +65,21 @@ object Rt950Protocol {
         else -> false
     }
 
-    /** Only the channel table and the APRS block may ever be written. */
-    fun isWritable(cmd: Int, address: Int): Boolean = when (cmd) {
-        CMD_WRITE -> address % BLOCK == 0 && address in 0..LAST_WRITABLE_MAIN
+    /**
+     * Only whole sectors inside 0x0000-0x6FFF (channels 1-896) and the APRS block may be written, for every variant
+     * (radiosmith@12a7dd9 src/radiosmith/rt950/write.py:3-14 erase rule, :27 and :42 writable sectors, :89 write_sector).
+     * The CH990 variant selector is kept, but the 0x7000 sector also holds 0x7800-0x7FFF and 0x7C00-0x7FFF, which the app
+     * cannot read and so cannot preserve; channels beyond 896 stay refused until a source shows how to preserve it all.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun isWritable(cmd: Int, address: Int, variant: Rt950Variant = Rt950Variant.UNKNOWN): Boolean = when (cmd) {
+        CMD_WRITE -> address % BLOCK == 0 && address >= 0 && address - address % SECTOR + SECTOR <= WRITABLE_END
         CMD_WRITE_APRS -> address == 0
         else -> false
     }
 
+    /** True when the slot's record lies in a writable sector (channels 1-896). */
+    fun isWritableSlot(zone: Int, slot: Int) = Rt950Channels.index(zone, slot) < WRITABLE_CHANNELS
     fun header(cmd: Int, address: Int) = byteArrayOf(cmd.toByte(), (address shr 8).toByte(), address.toByte(), BLOCK.toByte())
 
     fun ackTimeoutMs(cmd: Int, address: Int): Long = when {
@@ -139,6 +154,7 @@ class Rt950Backup(val model: String, val parts: List<Part>) {
 class Rt950Session(
     private val io: RadioBytes,
     private val random: Random = Random(),
+    val variant: Rt950Variant = Rt950Variant.UNKNOWN,
     private val pause: (Long) -> Unit = { Thread.sleep(it) }
 ) {
     var model: String? = null
@@ -180,9 +196,15 @@ class Rt950Session(
         return Rt950Protocol.crypt(reply.copyOfRange(Rt950Protocol.HEADER, reply.size), xor)
     }
 
+    /** Single-block writes are for the APRS block only; channel blocks go through [writeSector] so no sector is ever half written. */
     fun writeBlock(cmd: Int, address: Int, data: ByteArray) {
+        requireUi(cmd != Rt950Protocol.CMD_WRITE) { UiText(R.string.err_rt950_region, Rt950Protocol.hex(address)) }
+        sendBlock(cmd, address, data)
+    }
+
+    private fun sendBlock(cmd: Int, address: Int, data: ByteArray) {
         val xor = sessionKey()
-        requireUi(Rt950Protocol.isWritable(cmd, address)) { UiText(R.string.err_rt950_region, Rt950Protocol.hex(address)) }
+        requireUi(Rt950Protocol.isWritable(cmd, address, variant)) { UiText(R.string.err_rt950_region, Rt950Protocol.hex(address)) }
         requireUi(data.size == Rt950Protocol.BLOCK) { UiText(R.string.err_rt950_block_size) }
         io.write(Rt950Protocol.header(cmd, address) + Rt950Protocol.crypt(data, xor), 10000)
         val ack = try {
@@ -236,25 +258,94 @@ class Rt950Session(
         checkUi(actual.contentEquals(expected)) { UiText(R.string.err_rt950_verify, Rt950Protocol.hex(address)) }
     }
 
-    /** Read-modify-write of whole blocks from a fresh read; every block is read back and compared. Returns the verified block count. */
+    /**
+     * Whole-sector read-modify-write in the current clone session: reads all 32 blocks of every sector in [sectors] fresh,
+     * lets [edit] change them, and (when the result differs) writes all 32 blocks from the sector's first block, then reads
+     * the whole sector back and compares. A W to the first block erases the sector, so a partial sector is never written.
+     * Returns the addresses of the blocks written; with [write] false nothing is sent and the would-be blocks are returned.
+     */
+    private fun rewriteSectors(sectors: Collection<Int>, write: Boolean, edit: (start: Int, data: ByteArray) -> Unit): List<Int> {
+        val blocks = ArrayList<Int>()
+        for (start in sectors.distinct().sorted()) {
+            requireUi(start % Rt950Protocol.SECTOR == 0 && Rt950Protocol.isWritable(Rt950Protocol.CMD_WRITE, start, variant)) {
+                UiText(R.string.err_rt950_region, Rt950Protocol.hex(start))
+            }
+            val addresses = (0 until Rt950Protocol.BLOCKS_PER_SECTOR).map { start + it * Rt950Protocol.BLOCK }
+            val current = ByteArray(Rt950Protocol.SECTOR)
+            addresses.forEachIndexed { i, address -> readBlock(Rt950Protocol.CMD_READ, address).copyInto(current, i * Rt950Protocol.BLOCK) }
+            val target = current.copyOf()
+            edit(start, target)
+            if (target.contentEquals(current)) continue
+            blocks += addresses
+            if (!write) continue
+            addresses.forEachIndexed { i, address ->
+                sendBlock(Rt950Protocol.CMD_WRITE, address, target.copyOfRange(i * Rt950Protocol.BLOCK, (i + 1) * Rt950Protocol.BLOCK))
+            }
+            addresses.forEachIndexed { i, address ->
+                verified(Rt950Protocol.CMD_READ, address, target.copyOfRange(i * Rt950Protocol.BLOCK, (i + 1) * Rt950Protocol.BLOCK))
+            }
+        }
+        return blocks
+    }
+
+    private fun sectorOf(offset: Int) = offset - offset % Rt950Protocol.SECTOR
+
+    /** Sets the given slots of one zone by whole-sector read-modify-write (neighbours keep their bytes). Returns the verified block count. */
     fun writeChannels(zone: Int, slots: Map<Int, Rt950Channel>): Int {
         requireUi(zone in 1..Rt950Protocol.ZONES && slots.isNotEmpty() && slots.keys.all { it in 1..Rt950Protocol.ZONE_SLOTS }) {
             UiText(R.string.err_rt950_slot)
         }
+        requireUi(slots.keys.all { Rt950Protocol.isWritableSlot(zone, it) }) { UiText(R.string.err_rt950_variant_range) }
         if (!open) handshake()
-        val byBlock = slots.entries.groupBy { (Rt950Channels.index(zone, it.key) * Rt950Protocol.CHANNEL_SIZE) / Rt950Protocol.BLOCK }
-        for ((block, entries) in byBlock.toSortedMap()) {
-            val address = block * Rt950Protocol.BLOCK
-            val fresh = readBlock(Rt950Protocol.CMD_READ, address)
-            for ((slot, channel) in entries) {
-                val start = Rt950Channels.index(zone, slot) * Rt950Protocol.CHANNEL_SIZE - address
-                val previous = fresh.copyOfRange(start, start + Rt950Protocol.CHANNEL_SIZE)
-                Rt950Channels.encode(channel, previous).copyInto(fresh, start)
+        val offsets = slots.mapKeys { Rt950Channels.index(zone, it.key) * Rt950Protocol.CHANNEL_SIZE }
+        val sectors = offsets.keys.map { sectorOf(it) }
+        return rewriteSectors(sectors, write = true) { start, data ->
+            for ((offset, channel) in offsets) {
+                if (sectorOf(offset) != start) continue
+                val at = offset - start
+                Rt950Channels.encode(channel, data.copyOfRange(at, at + Rt950Protocol.CHANNEL_SIZE)).copyInto(data, at)
             }
-            writeBlock(Rt950Protocol.CMD_WRITE, address, fresh)
-            verified(Rt950Protocol.CMD_READ, address, fresh)
+        }.size
+    }
+
+    /**
+     * Writes the channel bytes of [saved] back by whole-sector read-modify-write, only for sectors whose content differs
+     * and only for sectors inside 0x0000-0x6FFF. [zones] limits the bytes restored to those zones (neighbouring records
+     * in a shared sector keep their current content); null restores the whole writable table. Every written sector is
+     * read back and compared. Returns the addresses of the blocks that were written.
+     */
+    fun restoreChannels(saved: Rt950Backup, zones: Set<Int>? = null): List<Int> =
+        restoreOrDiff(saved, zones, write = true).blocks
+
+    /** Reads the current channel sectors and reports the blocks and zones that [restoreChannels] would change; writes nothing. */
+    fun channelDiff(saved: Rt950Backup, zones: Set<Int>? = null): ChannelDiff = restoreOrDiff(saved, zones, write = false)
+
+    class ChannelDiff(val blocks: List<Int>, val zones: Set<Int>)
+
+    private fun restoreOrDiff(saved: Rt950Backup, zones: Set<Int>?, write: Boolean): ChannelDiff {
+        requireUi(zones == null || zones.all { it in 1..Rt950Protocol.ZONES }) { UiText(R.string.err_rt950_slot) }
+        val table = saved.part("channels").data
+        val zoneBytes = Rt950Protocol.ZONE_SLOTS * Rt950Protocol.CHANNEL_SIZE
+        val limit = minOf(table.size, Rt950Protocol.WRITABLE_END)
+        val ranges = (if (zones == null) listOf(0 until limit) else zones.sorted().map {
+            val first = (it - 1) * zoneBytes
+            first until minOf(first + zoneBytes, limit)
+        }).filter { !it.isEmpty() }
+        val sectors = ranges.flatMap { sectorOf(it.first)..sectorOf(it.last) step Rt950Protocol.SECTOR }
+            .filter { Rt950Protocol.isWritable(Rt950Protocol.CMD_WRITE, it, variant) }
+        if (sectors.isEmpty()) return ChannelDiff(emptyList(), emptySet())
+        if (!open) handshake()
+        val differing = sortedSetOf<Int>()
+        val blocks = rewriteSectors(sectors, write) { start, target ->
+            val before = target.copyOf()
+            for (range in ranges) {
+                val from = maxOf(range.first, start)
+                val to = minOf(range.last + 1, start + Rt950Protocol.SECTOR)
+                if (from < to) table.copyInto(target, from - start, from, to)
+            }
+            for (i in target.indices) if (target[i] != before[i]) differing += (start + i) / zoneBytes + 1
         }
-        return byBlock.size
+        return ChannelDiff(blocks, differing)
     }
 
     /** A lost link after the commit surfaces as [Rt950AprsUnverifiedException]; it is never reported as success. */

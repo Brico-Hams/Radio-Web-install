@@ -14,6 +14,10 @@ Documentación detallada: docs/rt950-pro/README.md
 
 Fuentes: [mapa de memoria de NathanBarguss](https://github.com/NathanBarguss/Chirp_Radtel-RT-950-Pro/blob/254d2cd/docs/MemoryMap.md), [driver de pe1hvh](https://github.com/pe1hvh/chirp_radtel_rt950pro/blob/6060640/README.md), [Web Flasher y copia de almacenamiento](https://github.com/nicsure/RT-950-Pro-Web-Flasher/blob/818f37b/README.md) y [consola nicFW950](https://github.com/nicsure/nicFW950_BTLE_Console/blob/5bd0f22/README.md).
 
+## Escritura por sectores (borrado de flash)
+
+En el RT-950 Pro, un `W` al primer bloque de un sector flash de 4 KB borra el sector entero; el resto de bloques solo se programan (los bits pasan de 1 a 0, nunca al revés). Un bloque suelto en el inicio de un sector borra los demás canales del sector, y escribir sobre datos no vacíos sin borrar da basura (AND de ambos). Medido en una radio real (2026-11-11): restaurar registros en blanco sobre canales escritos fallaba la verificación y dejaba la radio igual. RadiCodex escribe por tanto sectores completos (los 32 bloques de `0x80`, desde el primero, tras leerlos de nuevo en la misma sesión) y los verifica leyéndolos, y solo en sectores totalmente dentro de `0x0000–0x6FFF` (canales 1–896: zonas 1–9 y zona 10, huecos 1–5). El sector `0x7000` incluye `0x7800–0x7FFF` y `0x7C00–0x7FFF`, que la app no puede leer ni conservar, así que no se escribe con ninguna variante (CH990 incluida). Fuente: toddbartholow/radiosmith@12a7dd9 `src/radiosmith/rt950/write.py` (MIT), líneas 3–14 (regla), 27 y 42 (sectores escribibles) y 89 (`write_sector`).
+
 ## Antes de escribir
 
 1. Registrar modelo exacto **RT-950 Pro**, revisión de placa si se conoce, versión actual, variante de canales, herramienta, cable y síntomas previos. Si falta un dato necesario para confirmar compatibilidad, detenerse.

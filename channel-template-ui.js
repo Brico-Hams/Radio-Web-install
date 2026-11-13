@@ -12,6 +12,7 @@
       <label for="search-template">Buscar indicativo o localidad</label><input id="search-template" type="search" maxlength="80">
       <label class="check"><input id="airport-template" type="checkbox" checked> Anadir aeropuertos (AM solo RX, 118-136.975 MHz)</label>
       <label class="check"><input id="pmr-template" type="checkbox" checked> Anadir PMR446 (16 canales solo RX)</label>
+      <label class="check"><input id="cb-template" type="checkbox"> Anadir CB 27 MHz (40 canales AM y FM, solo RX, ultima zona con PMR446; solo Espana y modelos que reciben 27 MHz)</label>
       <label class="check"><input id="sat-template" type="checkbox"> Anadir memorias de satelites FM (solo RX)</label>
       <p>PMR446 no autoriza transmitir con un walkie de radioaficionado. Las memorias SAT no contienen horarios ni seguimiento Doppler. Los aeropuertos son frecuencias publicadas, no para navegacion.</p>
       <p id="template-coverage" role="status"></p>
@@ -124,7 +125,7 @@
       if ($("sat-template").checked && !satellites) satellites = await json("satellites");
       if (current !== previewRequest || country !== file) return;
       entries = R.countryTemplateChannels(file, { region: $("region-template").value, query: $("search-template").value,
-        pmr: $("pmr-template").checked, satellites: $("sat-template").checked ? satellites : null,
+        pmr: $("pmr-template").checked, cb: $("cb-template").checked && $("country-template").value === "ES", satellites: $("sat-template").checked ? satellites : null,
         airports: $("airport-template").checked ? airports : null });
       selected.clear(); page = 0;
       render();
@@ -137,6 +138,7 @@
       $("template-pass-zone").replaceChildren(); render(); renderPasses();
       const pmr = R.TEMPLATE_COUNTRIES.find(country => country.code === code).pmr;
       $("pmr-template").disabled = !pmr; $("pmr-template").checked = pmr;
+      $("cb-template").disabled = code !== "ES"; if (code !== "ES") $("cb-template").checked = false;
       text("template-coverage", "Cargando plantilla...");
       const data = R.validateCountryTemplate(await json(code), code);
       let airportData = null, airportError = "";
@@ -231,7 +233,7 @@
       });
     }
     $("country-template").addEventListener("change", () => run("Cargar plantilla de pais", load));
-    for (const id of ["region-template", "pmr-template", "sat-template", "airport-template"]) $(id).addEventListener("change", () => run("Actualizar plantilla", preview));
+    for (const id of ["region-template", "pmr-template", "cb-template", "sat-template", "airport-template"]) $(id).addEventListener("change", () => run("Actualizar plantilla", preview));
     $("profile-template").addEventListener("change", count);
     $("search-template").addEventListener("input", () => run("Actualizar plantilla", preview));
     on("template-select", "Seleccionar resultados (max. 1024)", async () => {
@@ -259,7 +261,7 @@
       text("template-status", `${result.accepted.length} canales exportados para ${result.label}; ${result.omitted} omitidos por modo, banda, bloqueo de TX o capacidad. ${result.warnings.length ? "Este formato no garantiza solo RX; revisa TX antes de usarlo. " : ""}La radio no se modifica.`);
     });
     run("Cargar plantilla de pais", load);
-    return { setBusy(value) { blocked = value; container.querySelectorAll("input,select,button").forEach(control => { control.disabled = value; }); $("pmr-template").disabled = value || $("country-template").value === "US"; $("airport-template").disabled = value || !airports; if (!value) { render(); renderPasses(); } updateButtons(); } };
+    return { setBusy(value) { blocked = value; container.querySelectorAll("input,select,button").forEach(control => { control.disabled = value; }); $("pmr-template").disabled = value || $("country-template").value === "US"; $("cb-template").disabled = value || $("country-template").value !== "ES"; $("airport-template").disabled = value || !airports; if (!value) { render(); renderPasses(); } updateButtons(); } };
   }
   R.mountCountryTemplates = mountCountryTemplates;
 })(globalThis);

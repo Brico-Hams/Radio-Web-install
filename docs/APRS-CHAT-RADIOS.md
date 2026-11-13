@@ -1,0 +1,51 @@
+# Chat APRS en las radios que soporta RadiCodex
+
+Estado del chat APRS (pantalla **Chat APRS** del menú principal). El chat solo habla **KISS**: usa `Aprs.kt` (`Kiss`, `KissDecoder`, `Ax25Frame`, `AprsText`, `AprsMessenger`) sobre un `KissLink` (`KissLink.kt`). Una radio sin APRS/KISS alcanzable desde la app **no se simula** y no aparece como origen del chat. La misma tabla se muestra en la app (`AprsChatRadios.kt`).
+
+Enlaces disponibles:
+
+- **RT-950 Pro (KISS por BLE)**: `Rt950BleKissLink`, sobre `BleRt950Transport` (`ffe1`). Comportamiento de las tramas igual que antes de extraer el chat de `Rt950Activity`.
+- **KISS TCP (TNC externo)**: `TcpKissLink`, socket TCP sin cifrar a un host y puerto escritos por el usuario (Direwolf, un puente TNC). Es la ruta genérica para radios sin KISS nativo; la radio la gestiona ese TNC, no RadiCodex. Tiempo de conexión 5 s, lectura con tiempo de espera de 500 ms, socket cerrado al salir de la pantalla.
+
+## Estado por radio
+
+| radio | ruta APRS/KISS | estado | fuente |
+| --- | --- | --- | --- |
+| Radtel RT-950 Pro, recepción | KISS por BLE (`ffe1`), con las opciones «KISS TNC over BLE (RX)/(TX)» activadas en la radio | pendiente de prueba en radio | el texto `strings_rt950.xml:57` la da por verificada, pero no hay prueba registrada de esta versión en una radio; `Rt950Ble.kt:23-27`; `ACKNOWLEDGEMENTS.md:34` |
+| Radtel RT-950 Pro, transmisión RF | KISS por BLE | pendiente de prueba en radio | `strings_rt950.xml:57` (TX «INFERENCIA no verificada»); lalmonte/radiochat-aprs@9c7b092; erkanz/radtel-RT950PRO@51c84d4 |
+| Cualquier radio + TNC KISS externo | KISS por TCP | pendiente de prueba en radio | `KissLink.kt` (`TcpKissLink`); prueba unitaria con `ServerSocket` en `AprsChatTest.kt` (no es prueba en radio) |
+| Quansheng UV-K5 / BricoHams Satellite | ninguna en RadiCodex (clonado/CAT) | no soportado | `Diagnostics.kt:12` |
+| Quansheng UV-K10 Pro | ninguna; APRS solo como plan de firmware, sin firmware | no soportado | `docs/UV-K10-PRO-VIABILIDAD.md:7,55` |
+| Quansheng TK-11 | ninguna (clonado en la web) | no soportado | `docs/TK11-INGENIERIA.md` (sin APRS/KISS) |
+| OpenGD77 (GD-77, GD-77S, DM-1801, RD-5R, MD-9600, MD-UV380, MD-380, DM-1701, MD-2017, DM-32, UV008) | solo baliza APRS FM TX en el firmware; sin recepción AX.25 ni TNC | no soportado | `OpenGd77.kt:25-38`; `docs/AYUDA-OPENGD77.md:384-386` |
+| AnyTone D878 | ninguna; solo plantilla de canales | no soportado | `ChannelTemplates.kt:39,265`; `docs/AYUDA-ANYTONE.md` |
+| Yaesu FT-817/818/857/897 | solo CAT | no soportado | `RigCat.kt:15-18` |
+| Yaesu FTX-1 | solo CAT en RadiCodex | no soportado | `RigCat.kt:21`; `Diagnostics.kt:13` |
+| Icom IC-705 (CI-V) | solo CAT en RadiCodex | no soportado | `RigCat.kt:19` |
+| (tr)uSDX, QRP Labs QMX/QMX+ y QDX/QDX-M | solo CAT (HF) | no soportado | `RigCat.kt:23-26` |
+
+«No soportado» significa que RadiCodex no tiene hoy una ruta APRS/KISS para esa radio, no que el hardware carezca de APRS. Si el hardware ofrece un TNC KISS propio (por ejemplo por Bluetooth o USB), RadiCodex no lo alcanza: **pendiente de fuente**. Con un TNC externo en red se usa la ruta TCP.
+
+## RT-950 Pro: transmisión
+
+- Que la escritura BLE se confirme **no prueba** que la radio transmita por RF. La transmisión debe confirmarse con un **segundo receptor**.
+- Según el README de [lalmonte/radiochat-aprs@9c7b092](https://github.com/lalmonte/radiochat-aprs/tree/9c7b092), algunos firmwares aceptan la escritura KISS sin activar el PTT.
+- [erkanz/radtel-RT950PRO@51c84d4](https://github.com/erkanz/radtel-RT950PRO/tree/51c84d4) informa de TX funcionando con un v0.29 parcheado.
+- Ambos README se citan tal como los refirió el encargo; RadiCodex no ha comprobado su contenido ni sus licencias (**pendiente de fuente**; no se reutiliza código).
+- El chat no escribe en la memoria de la radio. Los canales 961–990 (`0x7800–0x7BFF`) siguen protegidos como indica `docs/RADTEL-RT950-PRO.md`.
+
+## Seguridad de transmisión
+
+- Antes de cada envío la app muestra un aviso de que el mensaje **se transmitirá por RF**, con origen, destinatario, texto y la nota del enlace, y exige confirmar.
+- El indicativo propio es obligatorio y se valida con `Ax25Address.isValid` (1–6 caracteres A–Z/0–9, SSID 0–15). La confirmación automática (ack) también se desactiva sin un indicativo válido.
+- Sin ack, `AprsMessenger` reenvía hasta 3 veces cada 30 s (`Aprs.kt`).
+- Límites ya presentes en el repositorio: texto de 1 a 67 caracteres ASCII sin `{ | ~` (`AprsText`), ruta de hasta 8 repetidores (`Ax25Frame.encode`).
+- Límites del enlace RT-950 Pro, según el README de erkanz/radtel-RT950PRO@51c84d4 (no están en el repositorio): máximo 182 bytes AX.25, 6 repetidores y 127 bytes de información. Se aplican en `Rt950BleKissLink` (`Ax25Limits.RT950`). Para un TNC TCP genérico solo rige el límite de 8 repetidores; otros límites: **pendiente de fuente**.
+- Transmitir exige licencia de radioaficionado.
+
+## Pendiente de fuente
+
+- Contenido y licencia de los README de lalmonte/radiochat-aprs@9c7b092 y erkanz/radtel-RT950PRO@51c84d4 (citados, no comprobados).
+- Transmisión RF del RT-950 Pro con la opción «KISS TNC over BLE (TX)» en cada firmware.
+- Ruta KISS/APRS propia de FTX-1, IC-705, UV-K10 Pro, AnyTone D878 y TK-11.
+- Límites AX.25 de un TNC externo concreto.

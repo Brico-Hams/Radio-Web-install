@@ -181,6 +181,10 @@ class AprsMessenger(
     private fun frame(info: String) =
         Ax25Frame(Ax25Address(AprsText.TOCALL), Ax25Address.parse(callsign), path, info.toByteArray(Charsets.ISO_8859_1))
 
+    /** The frame [send] would transmit (id placeholder), for validation without sending. */
+    fun draft(addressee: String, text: String): Ax25Frame =
+        frame(AprsText.message(Ax25Address.parse(addressee).toString(), text, "000"))
+
     @Synchronized
     fun send(addressee: String, text: String, now: Long): Entry {
         requireUi(callsign.isNotEmpty() && Ax25Address.isValid(callsign)) { UiText(R.string.err_aprs_no_callsign) }
