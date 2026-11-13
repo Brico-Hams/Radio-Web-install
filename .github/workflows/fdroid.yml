@@ -25,7 +25,7 @@ concurrency:
 
 env:
   FDROIDSERVER_VERSION: "2.3.5"
-  # androguard fails on the runner's default Python 3.14 (signing-block parser); /usr/bin/python3 is 3.12 on ubuntu-24.04.
+  # androguard fails on Python 3.14 (signing-block parser), the runner default: use the newest cached 3.12/3.13.
 
 jobs:
   lint:
@@ -36,12 +36,12 @@ jobs:
       - name: fdroid lint (recipe as it would sit in fdroiddata)
         run: |
           set -euo pipefail
-          /usr/bin/python3 -m venv "$RUNNER_TEMP/fdroid" && "$RUNNER_TEMP/fdroid/bin/pip" install -q "fdroidserver==$FDROIDSERVER_VERSION"
+          py=$(ls -d /opt/hostedtoolcache/Python/3.1[23].*/x64/bin/python3 | sort -V | tail -n 1); "$py" -m venv "$RUNNER_TEMP/fdroid" && "$RUNNER_TEMP/fdroid/bin/pip" install -q "fdroidserver==$FDROIDSERVER_VERSION"
+          # Lint against fdroiddata's own config (categories, icons), as the merge request will be.
+          git clone -q --depth 1 --filter=blob:none --sparse https://gitlab.com/fdroid/fdroiddata.git "$RUNNER_TEMP/fdroiddata"
+          git -C "$RUNNER_TEMP/fdroiddata" sparse-checkout set config
           mkdir -p "$RUNNER_TEMP/fdroiddata/metadata"
           cp fdroid/metadata/org.bricohams.radicodex.yml "$RUNNER_TEMP/fdroiddata/metadata/"
-          mkdir -p "$RUNNER_TEMP/fdroiddata/config"
-          # fdroid lint only accepts the categories defined by fdroiddata itself.
-          curl -fsSL https://gitlab.com/fdroid/fdroiddata/-/raw/master/config/categories.yml -o "$RUNNER_TEMP/fdroiddata/config/categories.yml"
           cd "$RUNNER_TEMP/fdroiddata"
           "$RUNNER_TEMP/fdroid/bin/fdroid" lint org.bricohams.radicodex
           "$RUNNER_TEMP/fdroid/bin/fdroid" readmeta
@@ -59,7 +59,7 @@ jobs:
           FDROID_REPO_URL: ${{ vars.PAGES_ORIGIN }}/fdroid/repo
         run: |
           set -euo pipefail
-          /usr/bin/python3 -m venv "$RUNNER_TEMP/fdroid" && "$RUNNER_TEMP/fdroid/bin/pip" install -q "fdroidserver==$FDROIDSERVER_VERSION"
+          py=$(ls -d /opt/hostedtoolcache/Python/3.1[23].*/x64/bin/python3 | sort -V | tail -n 1); "$py" -m venv "$RUNNER_TEMP/fdroid" && "$RUNNER_TEMP/fdroid/bin/pip" install -q "fdroidserver==$FDROIDSERVER_VERSION"
           PATH="$RUNNER_TEMP/fdroid/bin:$PATH" bash scripts/build-fdroid-repo.sh "$RUNNER_TEMP/out"
           ls -la "$RUNNER_TEMP/out/repo"
 
@@ -92,7 +92,7 @@ jobs:
             echo "::notice title=F-Droid::Repo key secrets missing (FDROID_KEYSTORE_BASE64, FDROID_KEYSTORE_PASS, FDROID_KEY_PASS, FDROID_KEY_ALIAS); nothing published."
             echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          /usr/bin/python3 -m venv "$RUNNER_TEMP/fdroid" && "$RUNNER_TEMP/fdroid/bin/pip" install -q "fdroidserver==$FDROIDSERVER_VERSION"
+          py=$(ls -d /opt/hostedtoolcache/Python/3.1[23].*/x64/bin/python3 | sort -V | tail -n 1); "$py" -m venv "$RUNNER_TEMP/fdroid" && "$RUNNER_TEMP/fdroid/bin/pip" install -q "fdroidserver==$FDROIDSERVER_VERSION"
           PATH="$RUNNER_TEMP/fdroid/bin:$PATH" bash scripts/build-fdroid-repo.sh "$RUNNER_TEMP/out"
           tar -C "$RUNNER_TEMP/out" -czf "$RUNNER_TEMP/fdroid-repo.tar.gz" index.html repo
           echo "ready=true" >> "$GITHUB_OUTPUT"
