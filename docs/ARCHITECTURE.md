@@ -122,6 +122,16 @@ Antes de cualquier escritura se relee la copia y se compara con los hashes del p
 - *Cambio:* se añade `android:usesCleartextTraffic="false"` al overlay.
 - *Sin pérdida de funcionalidad:* el manifiesto principal ya lo fija a `false` y define `networkSecurityConfig`; el resultado fusionado es idéntico. Comprobación: mismo informe de fusión; el comportamiento del rotor/radios no cambia.
 
+**kotlin:S2245 – Pseudorandom number generators (PRNGs) should not be used in security contexts** (MEDIUM) — `android/app/src/main/java/org/bricohams/radio/Rt950Protocol.kt:156`.
+- *Por qué era un fallo:* `Random()` no es un generador criptográficamente seguro; si un atacante conoce o adivina su estado interno puede predecir los siguientes valores (CWE-338, CWE-330, OWASP A2 Cryptographic Failures). El valor por defecto de `Rt950Session.random` usaba `Random()`.
+- *Cambio:* el valor por defecto pasa a `SecureRandom()` (`java.security.SecureRandom`, subclase de `java.util.Random`). El tipo del parámetro sigue siendo `Random`, así que los tests pueden inyectar una instancia con semilla.
+- *Sin pérdida de funcionalidad:* `buildKeyFrame` sigue usando los mismos rangos (`nextInt(2)+1`, `nextInt(5)`, `nextInt(KEYS.size)`), por lo que los bytes del protocolo RT-950 no cambian de formato. Comprobación: (`Rt950ProtocolTest`: `headersAndKeySelection`, `readAllSkipsUnknownRegions`).
+
+**kotlin:S2245 (MEDIUM)** — `android/app/src/test/java/org/bricohams/radio/Rt950ProtocolTest.kt:93` (y líneas 67, 175, 309). No modificado.
+- *Por qué lo marca Sonar:* mismo motivo que arriba (PRNG no criptográfico, CWE-338/CWE-330).
+- *Decisión:* es un test unitario que usa `Random(it.toLong())` con semilla fija para generar tramas de clave reproducibles; no es un contexto de seguridad (no genera secretos) y `SecureRandom` haría el test no determinista. Se deja sin cambios.
+- *Sin pérdida de funcionalidad:* no se toca nada. Comprobación: `Rt950ProtocolTest` sigue pasando; la clase de producción acepta cualquier `Random` inyectado.
+
 ### Not changed - requires decision
 
 - **javascript:S4036 (LOW, CWE-426/427)** — `scripts/build-platform-app.cjs:16,20,27,30`, `scripts/build-platform-resident.cjs:55,73,82,85,87,89`, `scripts/export-project.cjs:48,94,177,178,181,230`. Los scripts invocan `arm-none-eabi-*`, `git` y `zip` por nombre. No hay una ruta absoluta fija válida para todos los equipos (la toolchain ARM y git se instalan en ubicaciones distintas); inventarla o exigir una variable de entorno nueva cambiaría el uso. Decisión: aceptar el riesgo (herramientas de desarrollo ejecutadas por el propio desarrollador) o definir una variable de entorno para la ruta de la toolchain. (La invocación de `tar.exe` en línea 228 ya usa ruta absoluta.)
