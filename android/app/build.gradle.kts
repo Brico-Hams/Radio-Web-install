@@ -64,6 +64,19 @@ android {
         unitTests.isIncludeAndroidResources = true
     }
 }
+// The regional template datasets live once in data/channel-templates; they are copied at build time, never committed under assets.
+val syncChannelTemplates by tasks.registering(Sync::class) {
+    from(rootProject.projectDir.resolve("../data/channel-templates")) {
+        include("*.json")
+        exclude("*-passes.json", "satellites.json")
+    }
+    into(layout.buildDirectory.dir("generated/channelTemplates/channel-templates"))
+}
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/channelTemplates"))
+tasks.configureEach {
+    if (name.startsWith("merge") && name.endsWith("Assets")) dependsOn(syncChannelTemplates)
+    if (name.startsWith("lintVitalAnalyze") || name.startsWith("generate") && name.endsWith("LintReportModel")) dependsOn(syncChannelTemplates)
+}
 dependencies {
     implementation("com.github.mik3y:usb-serial-for-android:3.9.0")
     implementation("org.mozilla:rhino:1.7.15")

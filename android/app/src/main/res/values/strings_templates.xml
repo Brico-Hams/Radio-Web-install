@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="screen_templates">Plantillas regionales</string>
+    <string name="home_open_templates">Plantillas regionales sin conexión (solo RX)</string>
+    <string name="template_country">País</string>
+    <string name="template_zone">Zona</string>
+    <string name="template_model">Modelo de destino</string>
+    <string name="template_all_zones">Todas las zonas</string>
+    <string name="template_airports">Añadir aeropuertos (AM solo RX, 118-136.975 MHz)</string>
+    <string name="template_pmr">Añadir PMR446 1-16 al final (solo RX)</string>
+    <string name="template_counts">Representables: %1$d. Omitidos: %2$d.</string>
+    <string name="template_coverage">Repetidores: %1$s\nAeropuertos: %2$s</string>
+    <string name="template_rx_not_guaranteed">Este formato no puede garantizar solo RX: revisa y bloquea TX en tu software antes de usarlo. No se genera script de escritura.</string>
+    <string name="template_none_shown">Ningún canal representable.</string>
+    <string name="template_none_representable">Ningún canal es representable en %1$s con modo y bloqueo de TX seguros.</string>
+    <string name="template_export">Exportar selección para el modelo</string>
+    <string name="template_exported">Exportado: %1$d canales, %2$d omitidos. No se ha programado ninguna radio.</string>
+    <string name="template_cancelled">Exportación cancelada.</string>
+    <string name="template_load_error">No se pudo leer la plantilla: %1$s</string>
+    <string name="template_error">Error de plantilla: %1$s</string>
+    <string name="template_anytone_capacity">AnyTone admite 4000 canales por proyecto. Selecciona una zona.</string>
+    <string name="template_zone_line">Zona %1$d: %2$s (%3$d canales)</string>
+</resources>

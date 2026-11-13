@@ -1,0 +1,167 @@
+{
+  "format": "bricohams-template-profiles",
+  "version": 1,
+  "profiles": {
+    "radicodex": {
+      "label": "RadiCodex",
+      "modulations": [
+        "FM",
+        "AM"
+      ],
+      "bands": {
+        "FM": [
+          [
+            136,
+            174
+          ],
+          [
+            400,
+            470
+          ]
+        ],
+        "AM": [
+          [
+            118,
+            137
+          ]
+        ]
+      },
+      "txLock": "reference-column",
+      "output": "reference-csv",
+      "extension": "csv",
+      "layout": {
+        "kind": "reference"
+      }
+    },
+    "rt950pro": {
+      "label": "Radtel RT-950 Pro",
+      "modulations": [
+        "FM",
+        "AM"
+      ],
+      "bands": {
+        "FM": [
+          [
+            136,
+            174
+          ],
+          [
+            400,
+            470
+          ]
+        ],
+        "AM": [
+          [
+            118,
+            137
+          ]
+        ]
+      },
+      "txLock": "reference-column",
+      "output": "reference-csv",
+      "extension": "csv",
+      "layout": {
+        "kind": "zones",
+        "zones": 10,
+        "slotsPerZone": 99,
+        "nameLength": 12,
+        "reserved": {
+          "zone": 10,
+          "fromSlot": 70,
+          "toSlot": 99,
+          "reason": "Channels 961-990 (0x7800-0x7BFF) are reserved until the firmware variant is identified; see docs/RADTEL-RT950-PRO.md"
+        }
+      }
+    },
+    "uvk5v3": {
+      "label": "Quansheng UV-K5 V3",
+      "modulations": [
+        "FM",
+        "AM"
+      ],
+      "bands": {
+        "FM": [
+          [
+            136,
+            174
+          ],
+          [
+            400,
+            470
+          ]
+        ],
+        "AM": [
+          [
+            118,
+            137
+          ]
+        ]
+      },
+      "txLock": "memory-bit",
+      "output": "chirp-csv",
+      "extension": "csv",
+      "layout": {
+        "kind": "scanlists",
+        "lists": 24
+      }
+    },
+    "d878": {
+      "label": "AnyTone AT-D878",
+      "modulations": [
+        "FM"
+      ],
+      "bands": {
+        "FM": [
+          [
+            136,
+            174
+          ],
+          [
+            400,
+            470
+          ]
+        ]
+      },
+      "txLock": "project-flag",
+      "output": "anytone-project",
+      "extension": "json",
+      "layout": {
+        "kind": "zones",
+        "channelLimit": 4000
+      }
+    },
+    "ftx1": {
+      "label": "Yaesu FTX-1",
+      "modulations": [
+        "FM",
+        "AM"
+      ],
+      "bands": {
+        "FM": [
+          [
+            136,
+            174
+          ],
+          [
+            400,
+            470
+          ]
+        ],
+        "AM": [
+          [
+            118,
+            137
+          ]
+        ]
+      },
+      "txLock": "reference-column",
+      "output": "reference-csv",
+      "extension": "csv",
+      "layout": {
+        "kind": "memories",
+        "from": 1,
+        "to": 999
+      }
+    }
+  }
+}

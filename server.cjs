@@ -14,7 +14,7 @@ const BASE_FILES = [
   "channel-templates.js", "channel-template-ui.js", "channel-template-worker.js",
   "data/channel-templates/satellites.json", "data/firmware-catalog-fallback.json",
   ...["ES", "GB", "US", "DE", "FR", "HU", "IT"].flatMap(code =>
-    [`data/channel-templates/${code}.json`, `data/channel-templates/${code}-passes.json`]),
+    [`data/channel-templates/${code}.json`, `data/channel-templates/${code}-airports.json`, `data/channel-templates/${code}-passes.json`]),
   "anytone.html", "anytone-core.js", "anytone-ui.js",
   "ftx1.html", "ftx1-menu.js", "ftx1-core.js", "ftx1-ui.js",
   "precompiled-catalog.js", "firmware-signature.js", "quansheng-factory.js", "precompiled/catalog.json", "precompiled/LICENSE.txt",
