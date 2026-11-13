@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  FDROIDSERVER_VERSION: "2.3.5"
+  FDROIDSERVER_VERSION: "2.4.4"
   # androguard 4.1.4 turned APK._v2_blocks into a list and breaks fdroidserver's NoOverwriteDict workaround (fdroidserver#1128).
   ANDROGUARD_VERSION: "4.1.3"
   # androguard fails on Python 3.14 (signing-block parser), the runner default: use the newest cached 3.12/3.13.
