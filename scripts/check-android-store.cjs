@@ -24,7 +24,7 @@ function validateStore(root, { tag } = {}) {
   assert.ok(recipe.includes('UpdateCheckData: \'android/app/build.gradle.kts|versionCode\\s*=\\s*(\\d+)|.|versionName\\s*=\\s*"([^"]+)"\''),
     "UpdateCheckData must read both versions from the tagged Android Gradle file");
   assert.match(recipe, /^License: GPL-3\.0-or-later$/m);
-  assert.match(recipe, /^    subdir: android$/m);
+  assert.match(recipe, /^    subdir: android\/app$/m);
   assert.match(recipe, /^    gradle:\n      - yes$/m);
   const last = pattern => [...recipe.matchAll(pattern)].at(-1)?.[1];
   assert.equal(last(/^  - versionName: (.+)$/gm), versionName, "Recipe versionName is stale");

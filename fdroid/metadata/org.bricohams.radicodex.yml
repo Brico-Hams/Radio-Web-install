@@ -16,7 +16,7 @@ Builds:
   - versionName: 0.10.0-beta
     versionCode: 14
     commit: android-v0.10.0-beta
-    subdir: android
+    subdir: android/app
     gradle:
       - yes
     rm:
@@ -26,7 +26,7 @@ Builds:
   - versionName: 1.0.0
     versionCode: 15
     commit: android-v1.0.0
-    subdir: android
+    subdir: android/app
     gradle:
       - yes
     rm:
@@ -36,7 +36,7 @@ Builds:
   - versionName: 1.0.1
     versionCode: 16
     commit: android-v1.0.1
-    subdir: android
+    subdir: android/app
     gradle:
       - yes
     rm:
@@ -46,7 +46,7 @@ Builds:
   - versionName: 1.0.2
     versionCode: 17
     commit: android-v1.0.2
-    subdir: android
+    subdir: android/app
     gradle:
       - yes
     rm:
@@ -56,7 +56,7 @@ Builds:
   - versionName: 1.1.0
     versionCode: 18
     commit: android-v1.1.0
-    subdir: android
+    subdir: android/app
     gradle:
       - fdroid
     rm:
@@ -66,7 +66,7 @@ Builds:
   - versionName: 1.2.0
     versionCode: 19
     commit: android-v1.2.0
-    subdir: android
+    subdir: android/app
     gradle:
       - fdroid
     rm:
