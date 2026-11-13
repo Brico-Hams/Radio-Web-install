@@ -850,6 +850,10 @@
     <string name="rig_connect_first">Verbinde zuerst das Funkgerät.</string>
     <string name="rig_vfo_a">VFO A %1$s MHz %2$s</string>
     <string name="rig_vfo_b">VFO B %1$s MHz</string>
+    <string name="rig_smeter">S-Meter (MAIN) %1$d/255 %2$s</string>
+    <string name="rig_speak">Per Sprache ansagen</string>
+    <string name="rig_speak_mhz">Megahertz</string>
+    <string name="rig_speak_signal">Signal</string>
     <string name="rig_failed_closed">%1$s Die Verbindung wurde geschlossen.</string>
     <string name="rig_failed_release">%1$s Das Funkgerät konnte nicht sauber geschlossen werden: %2$s</string>
     <string name="rig_suspended">Verbindung beim Verlassen des Bildschirms geschlossen.</string>

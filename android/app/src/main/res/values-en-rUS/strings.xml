@@ -850,6 +850,10 @@
     <string name="rig_connect_first">Connect the radio first.</string>
     <string name="rig_vfo_a">VFO A %1$s MHz %2$s</string>
     <string name="rig_vfo_b">VFO B %1$s MHz</string>
+    <string name="rig_smeter">S-meter (MAIN) %1$d/255 %2$s</string>
+    <string name="rig_speak">Announce by voice</string>
+    <string name="rig_speak_mhz">megahertz</string>
+    <string name="rig_speak_signal">signal</string>
     <string name="rig_failed_closed">%1$s The connection was closed.</string>
     <string name="rig_failed_release">%1$s The radio could not be closed cleanly: %2$s</string>
     <string name="rig_suspended">Connection closed when leaving the screen.</string>

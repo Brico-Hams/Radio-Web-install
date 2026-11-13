@@ -471,6 +471,113 @@ object YaesuFtx1 {
         requireUi(txHz in 30_000L..470_000_000L) { UiText(R.string.err_rig_range, mhzText(txHz)) }
         return String.format(Locale.ROOT, "MZ%05d1%09d;", channel, txHz)
     }
+    private fun sideDigit(side: Int): Char {
+        requireUi(side in 0..1) { UiText(R.string.err_rig_reply_invalid) }
+        return '0' + side
+    }
+    private fun level(name: String, side: Int, value: Int): String {
+        requireUi(value in 0..255) { UiText(R.string.err_rig_range, value.toString()) }
+        return String.format(Locale.ROOT, "%s%c%03d;", name, sideDigit(side), value)
+    }
+    private fun parseLevel(reply: String, name: String, side: Int): Int {
+        if (!Regex("$name${sideDigit(side)}[0-9]{3};").matches(reply)) invalidReply()
+        return reply.substring(3, 6).toInt().also { if (it > 255) invalidReply() }
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "SM S-METER READING": SM P1; (P1 0 = MAIN, 1 = SUB), answer SM P1 P2P2P2; 000-255, read only
+    fun readSMeter(side: Int = 0): String = "SM" + sideDigit(side) + ";"
+    fun parseSMeter(reply: String, side: Int = 0): Int = parseLevel(reply, "SM", side)
+    // FTX-1 CAT Operation Reference Manual 2508-C "RM READ METER": P1 1 S(MAIN) 2 S(SUB) 3 COMP 4 ALC 5 PO 6 SWR 7 IDD 8 VDD, answer RM P1 P2P2P2 P3P3P3; read only
+    fun readMeter(meter: Int): String {
+        requireUi(meter in 1..8) { UiText(R.string.err_rig_reply_invalid) }
+        return "RM$meter;"
+    }
+    fun parseMeter(reply: String, meter: Int): Int {
+        if (!Regex("RM$meter[0-9]{6};").matches(reply)) invalidReply()
+        return reply.substring(3, 6).toInt().also { if (it > 255) invalidReply() }
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "AG AF GAIN": AG P1 P2P2P2; 000-255, read AG P1;
+    fun setAfGain(side: Int, value: Int): String = level("AG", side, value)
+    fun readAfGain(side: Int): String = "AG" + sideDigit(side) + ";"
+    fun parseAfGain(reply: String, side: Int): Int = parseLevel(reply, "AG", side)
+    // FTX-1 CAT Operation Reference Manual 2508-C "RG RF GAIN": RG P1 P2P2P2; 000-255, read RG P1;
+    fun setRfGain(side: Int, value: Int): String = level("RG", side, value)
+    fun readRfGain(side: Int): String = "RG" + sideDigit(side) + ";"
+    fun parseRfGain(reply: String, side: Int): Int = parseLevel(reply, "RG", side)
+    // FTX-1 CAT Operation Reference Manual 2508-C "SQ SQUELCH LEVEL": SQ P1 P2P2P2; 000-255, read SQ P1;
+    fun setSquelch(side: Int, value: Int): String = level("SQ", side, value)
+    fun readSquelch(side: Int): String = "SQ" + sideDigit(side) + ";"
+    fun parseSquelch(reply: String, side: Int): Int = parseLevel(reply, "SQ", side)
+    // FTX-1 CAT Operation Reference Manual 2508-C "SH WIDTH": SH P1 0 P3P3; P3 00-23 indexes "Table 5 (Bandwidth Chart)"; the Hz depends on the mode, so only the index is shown
+    fun setWidth(side: Int, index: Int): String {
+        requireUi(index in 0..23) { UiText(R.string.err_rig_range, index.toString()) }
+        return String.format(Locale.ROOT, "SH%c0%02d;", sideDigit(side), index)
+    }
+    fun readWidth(side: Int): String = "SH" + sideDigit(side) + ";"
+    fun parseWidth(reply: String, side: Int): Int {
+        if (!Regex("SH${sideDigit(side)}0[0-9]{2};").matches(reply)) invalidReply()
+        return reply.substring(4, 6).toInt().also { if (it > 23) invalidReply() }
+    }
+    fun widthText(index: Int): String = String.format(Locale.ROOT, "Tabla 5: %02d", index)
+    // FTX-1 CAT Operation Reference Manual 2508-C "IS IF SHIFT": IS P1 0 P3 P4P4P4P4; P3 '+'/'-', 0000-1200 Hz in 20 Hz steps, read IS P1;
+    fun setIfShift(side: Int, hz: Int): String {
+        requireUi(hz in -1200..1200 && hz % 20 == 0) { UiText(R.string.err_rig_range, hz.toString()) }
+        return String.format(Locale.ROOT, "IS%c0%c%04d;", sideDigit(side), if (hz < 0) '-' else '+', Math.abs(hz))
+    }
+    fun readIfShift(side: Int): String = "IS" + sideDigit(side) + ";"
+    fun parseIfShift(reply: String, side: Int): Int {
+        if (!Regex("IS${sideDigit(side)}0[+-][0-9]{4};").matches(reply)) invalidReply()
+        val hz = reply.substring(5, 9).toInt()
+        if (hz > 1200 || hz % 20 != 0) invalidReply()
+        return if (reply[4] == '-') -hz else hz
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "GT AGC FUNCTION": set P2 0 OFF 1 FAST 2 MID 3 SLOW 4 AUTO; read GT P1; answers GT P1 P3; P3 0 OFF 1 FAST 2 MID 3 SLOW 4 AUTO-FAST 5 AUTO-MID 6 AUTO-SLOW
+    fun setAgc(side: Int, mode: Int): String {
+        requireUi(mode in 0..4) { UiText(R.string.err_rig_range, mode.toString()) }
+        return "GT" + sideDigit(side) + mode + ";"
+    }
+    fun readAgc(side: Int): String = "GT" + sideDigit(side) + ";"
+    fun parseAgc(reply: String, side: Int): Int {
+        if (!Regex("GT${sideDigit(side)}[0-6];").matches(reply)) invalidReply()
+        return reply[3] - '0'
+    }
+    /** True when the GT answer [answer] is what the GT set [mode] should leave (AUTO may answer AUTO-FAST/MID/SLOW). */
+    fun agcMatches(mode: Int, answer: Int): Boolean = if (mode == 4) answer in 4..6 else answer == mode
+    // FTX-1 CAT Operation Reference Manual 2508-C "PA PRE-AMP (IPO)": P1 0 HF/50 (P2 0 IPO 1 AMP1 2 AMP2), 1 VHF (P2 0 OFF 1 ON), 2 UHF (P2 0 OFF 1 ON); read PA P1;
+    fun setPreamp(band: Int, value: Int): String {
+        requireUi(band in 0..2) { UiText(R.string.err_rig_range, band.toString()) }
+        requireUi(value in 0..(if (band == 0) 2 else 1)) { UiText(R.string.err_rig_range, value.toString()) }
+        return "PA$band$value;"
+    }
+    fun readPreamp(band: Int): String {
+        requireUi(band in 0..2) { UiText(R.string.err_rig_range, band.toString()) }
+        return "PA$band;"
+    }
+    fun parsePreamp(reply: String, band: Int): Int {
+        if (!Regex("PA$band[0-${if (band == 0) 2 else 1}];").matches(reply)) invalidReply()
+        return reply[3] - '0'
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "RA RF ATTENUATOR": RA 0 P2; P2 0 OFF 1 ON, read RA0;
+    fun setAttenuator(on: Boolean): String = if (on) "RA01;" else "RA00;"
+    fun readAttenuator(): String = "RA0;"
+    fun parseAttenuator(reply: String): Boolean {
+        if (!Regex("RA0[01];").matches(reply)) invalidReply()
+        return reply[3] == '1'
+    }
+    /** Watts the radio accepts for the PC head P1: 1 = FTX-1 field head 5-10 W, 2 = SPA-1 5-100 W. */
+    fun powerRange(head: Int): IntRange? = when (head) { 1 -> 5..10; 2 -> 5..100; else -> null }
+    // FTX-1 CAT Operation Reference Manual 2508-C "PC POWER CONTROL": PC P1 P2P2P2; read PC; answer PC P1 P2P2P2;
+    // [head] is the P1 the radio reported; a value outside that head's range is never sent.
+    fun setPower(head: Int, watts: Int): String {
+        val range = requireNotNullUi(powerRange(head)) { UiText(R.string.err_rig_reply_invalid) }
+        requireUi(watts in range) { UiText(R.string.err_rig_range, watts.toString()) }
+        return String.format(Locale.ROOT, "PC%d%03d;", head, watts)
+    }
+    fun readPower(): String = "PC;"
+    /** (head, watts) */
+    fun parsePower(reply: String): Pair<Int, Int> {
+        if (!Regex("PC[12][0-9]{3};").matches(reply)) invalidReply()
+        return (reply[2] - '0') to reply.substring(3, 6).toInt()
+    }
     // FTX-1 CAT Operation Reference Manual 2508-C, p.20 "MZ SPLIT MEMORY"
     fun readSplit(channel: Int): String {
         requireUi(channel in 1..999) { UiText(R.string.err_rig_channel, channel) }
@@ -510,6 +617,30 @@ class Ftx1Rig(transport: RadioBytes) : Rig {
     override fun status(): RigStatus =
         RigStatus(read(Vfo.A), YaesuFtx1.parseMode(link.request(YaesuFtx1.readMode(), "MD")))
     override fun frequency(vfo: Vfo): Long = read(vfo)
+    /** MAIN S-meter, raw 0-255 (SM0;). Read only. */
+    fun signal(): Int = YaesuFtx1.parseSMeter(link.request(YaesuFtx1.readSMeter(0), "SM"), 0)
+    fun meter(meter: Int): Int = YaesuFtx1.parseMeter(link.request(YaesuFtx1.readMeter(meter), "RM"), meter)
+    // Each setter validates before sending (a rejected value sends nothing) and reads the value back like the other sets.
+    private fun setLevel(set: String, read: String, expected: Int, parse: (String) -> Int) =
+        confirm(set, read) { parse(it) == expected }
+    fun setAfGain(side: Int, value: Int) = setLevel(YaesuFtx1.setAfGain(side, value), YaesuFtx1.readAfGain(side), value) { YaesuFtx1.parseAfGain(it, side) }
+    fun setRfGain(side: Int, value: Int) = setLevel(YaesuFtx1.setRfGain(side, value), YaesuFtx1.readRfGain(side), value) { YaesuFtx1.parseRfGain(it, side) }
+    fun setSquelch(side: Int, value: Int) = setLevel(YaesuFtx1.setSquelch(side, value), YaesuFtx1.readSquelch(side), value) { YaesuFtx1.parseSquelch(it, side) }
+    fun setWidth(side: Int, index: Int) = setLevel(YaesuFtx1.setWidth(side, index), YaesuFtx1.readWidth(side), index) { YaesuFtx1.parseWidth(it, side) }
+    fun setIfShift(side: Int, hz: Int) = setLevel(YaesuFtx1.setIfShift(side, hz), YaesuFtx1.readIfShift(side), hz) { YaesuFtx1.parseIfShift(it, side) }
+    fun setPreamp(band: Int, value: Int) = setLevel(YaesuFtx1.setPreamp(band, value), YaesuFtx1.readPreamp(band), value) { YaesuFtx1.parsePreamp(it, band) }
+    fun setAgc(side: Int, mode: Int) {
+        val set = YaesuFtx1.setAgc(side, mode)
+        confirm(set, YaesuFtx1.readAgc(side)) { YaesuFtx1.agcMatches(mode, YaesuFtx1.parseAgc(it, side)) }
+    }
+    fun setAttenuator(on: Boolean) =
+        confirm(YaesuFtx1.setAttenuator(on), YaesuFtx1.readAttenuator()) { YaesuFtx1.parseAttenuator(it) == on }
+    /** Output power, checked against the range of the head the radio reports with PC; (nothing is sent when it is out of range). */
+    fun setPower(watts: Int) = link.transaction {
+        val head = YaesuFtx1.parsePower(link.request(YaesuFtx1.readPower(), "PC")).first
+        val set = YaesuFtx1.setPower(head, watts)
+        confirm(set, YaesuFtx1.readPower()) { YaesuFtx1.parsePower(it) == head to watts }
+    }
     override fun setFrequency(vfo: Vfo, hz: Long) {
         checkRange(model, hz)
         link.transaction {

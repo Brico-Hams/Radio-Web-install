@@ -22,6 +22,8 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.speech.tts.TextToSpeech
 import android.text.InputFilter
 import android.text.InputType
 import android.view.View
@@ -30,6 +32,7 @@ import android.view.WindowInsets
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -63,6 +66,7 @@ class RigActivity : LocalizedActivity() {
         const val EXTRA_TRANSMITTERS = "rig-transmitters"
         private const val USB_PERMISSION = "org.bricohams.radio.RIG_USB_PERMISSION"
         internal const val PREFERENCES = "rig-cat"
+        private const val PREF_SPEAK = "speak"
         private const val PICK_IMAGE = 72
         private const val AUDIO_PERMISSION = 73
         private const val MAX_TX_MS = 110_000L
@@ -98,6 +102,12 @@ class RigActivity : LocalizedActivity() {
     private lateinit var digWarning: TextView
     private lateinit var setVfoB: Button
     private lateinit var memFrom: EditText
+    private lateinit var speakToggle: CheckBox
+    private var speech: TextToSpeech? = null
+    private var speechReady = false
+    private var speakRunnable = Runnable { }
+    private var announcedKey = ""
+    private var lastSpoken = Long.MIN_VALUE / 2
     private lateinit var memTo: EditText
     private lateinit var memoriesButton: Button
     private lateinit var newMemoryButton: Button
@@ -347,6 +357,45 @@ class RigActivity : LocalizedActivity() {
             operation(notice) { refresh(r); null }
         }
         button(card, R.string.rig_ptt_test) { pttTest() }
+        speakToggle = CheckBox(this).apply {
+            setText(R.string.rig_speak)
+            setTextColor(colors.text)
+            isChecked = preferences.getBoolean(PREF_SPEAK, false)
+            setOnCheckedChangeListener { _, on ->
+                preferences.edit().putBoolean(PREF_SPEAK, on).apply()
+                if (on) ensureSpeech() else { speech?.stop(); frequency.contentDescription = null }
+            }
+        }
+        card.addView(speakToggle)
+        if (speakToggle.isChecked) ensureSpeech()
+    }
+
+    private fun ensureSpeech() {
+        if (speech != null) return
+        speech = TextToSpeech(this) { code ->
+            speechReady = code == TextToSpeech.SUCCESS
+            if (speechReady) speech?.language = resources.configuration.locales.get(0)
+        }
+    }
+
+    /** UI thread: speaks and exposes to TalkBack the new frequency / mode (and S-meter), at most once every [RigSpeech.MIN_GAP_MS]. */
+    private fun announce(hz: Long, mode: String?, signal: Int?) {
+        if (!speakToggle.isChecked) return
+        val key = "$hz/$mode"
+        if (key == announcedKey) return
+        val text = RigSpeech.text(hz, mode, signal, resources.configuration.locales.get(0),
+            getString(R.string.rig_speak_mhz), getString(R.string.rig_speak_signal))
+        frequency.contentDescription = text
+        mainHandler.removeCallbacks(speakRunnable)
+        val wait = lastSpoken + RigSpeech.MIN_GAP_MS - SystemClock.elapsedRealtime()
+        speakRunnable = Runnable {
+            if (isDestroyed || !speakToggle.isChecked) return@Runnable
+            announcedKey = key
+            lastSpoken = SystemClock.elapsedRealtime()
+            frequency.announceForAccessibility(text)
+            if (speechReady) speech?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "rig-announce")
+        }
+        if (wait <= 0) speakRunnable.run() else mainHandler.postDelayed(speakRunnable, wait)
     }
 
     private val digitalModes = DigitalMode.values()
@@ -595,10 +644,18 @@ class RigActivity : LocalizedActivity() {
         if (r.supportsVfoB) {
             attempt<Unit>({ }) { lines.add(getString(R.string.rig_vfo_b, mhzText(r.frequency(Vfo.B)))) }
         }
+        // MAIN S-meter (SM0;) only for the FTX-1; a failed read just leaves it out.
+        var signal: Int? = null
+        if (r is Ftx1Rig) attempt<Unit>({ }) {
+            signal = r.signal()
+            lines.add(getString(R.string.rig_smeter, signal, RigSpeech.bar(signal!!)))
+        }
         val text = lines.joinToString("\n")
+        val spoken = signal
         runOnUiThread {
             if (!isDestroyed && rig === r) {
                 status.text = text
+                announce(current.frequencyHz, current.mode?.name, spoken)
                 if (!r.supportsMemories) memStatus.setText(R.string.rig_no_memories)
             }
         }
@@ -1334,6 +1391,9 @@ class RigActivity : LocalizedActivity() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
+        speech?.stop()
+        speech?.shutdown()
+        speech = null
         // Destroyed while the image picker kept the link open: release it before the worker stops.
         if (transport != null) worker.execute { try { closeRadio() } catch (_: IOException) { } }
         worker.shutdown()

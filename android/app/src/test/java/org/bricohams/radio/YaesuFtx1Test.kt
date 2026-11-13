@@ -184,4 +184,95 @@ class YaesuFtx1Test {
         assertEquals("MR00412145800000+000000410000;", "MR" + YaesuFtx1.writeMemory(412, 145_800_000, RigMode.FM).drop(2))
         assertEquals("ISS", YaesuFtx1.parseTag("MT00412ISS         ;"))
     }
+
+    // CAT Operation Reference Manual 2508-C: SM, RM, AG, RG, SQ, SH, IS, GT, PA, RA, PC (no TX command is involved)
+    @Test fun receiverCommandsAreByteExact() {
+        assertEquals("SM0;", YaesuFtx1.readSMeter())
+        assertEquals("RM6;", YaesuFtx1.readMeter(6))
+        assertEquals("AG0128;", YaesuFtx1.setAfGain(0, 128))
+        assertEquals("AG1;", YaesuFtx1.readAfGain(1))
+        assertEquals("RG0255;", YaesuFtx1.setRfGain(0, 255))
+        assertEquals("SQ1007;", YaesuFtx1.setSquelch(1, 7))
+        assertEquals("SH0012;", YaesuFtx1.setWidth(0, 12))
+        assertEquals("SH0;", YaesuFtx1.readWidth(0))
+        assertEquals("Tabla 5: 07", YaesuFtx1.widthText(7))
+        assertEquals("IS00+0400;", YaesuFtx1.setIfShift(0, 400))
+        assertEquals("IS00-1200;", YaesuFtx1.setIfShift(0, -1200))
+        assertEquals("IS00+0000;", YaesuFtx1.setIfShift(0, 0))
+        assertEquals("GT04;", YaesuFtx1.setAgc(0, 4))
+        assertEquals("GT0;", YaesuFtx1.readAgc(0))
+        assertEquals("PA02;", YaesuFtx1.setPreamp(0, 2))
+        assertEquals("PA11;", YaesuFtx1.setPreamp(1, 1))
+        assertEquals("PA2;", YaesuFtx1.readPreamp(2))
+        assertEquals("RA01;", YaesuFtx1.setAttenuator(true))
+        assertEquals("RA0;", YaesuFtx1.readAttenuator())
+        assertEquals("PC1010;", YaesuFtx1.setPower(1, 10))
+        assertEquals("PC2100;", YaesuFtx1.setPower(2, 100))
+        assertEquals("PC;", YaesuFtx1.readPower())
+    }
+    @Test fun receiverRepliesParse() {
+        assertEquals(120, YaesuFtx1.parseSMeter("SM0120;"))
+        assertEquals(200, YaesuFtx1.parseMeter("RM1200000;", 1))
+        assertEquals(64, YaesuFtx1.parseAfGain("AG0064;", 0))
+        assertEquals(255, YaesuFtx1.parseRfGain("RG0255;", 0))
+        assertEquals(3, YaesuFtx1.parseSquelch("SQ0003;", 0))
+        assertEquals(12, YaesuFtx1.parseWidth("SH0012;", 0))
+        assertEquals(-600, YaesuFtx1.parseIfShift("IS00-0600;", 0))
+        assertEquals(5, YaesuFtx1.parseAgc("GT05;", 0))
+        assertTrue(YaesuFtx1.agcMatches(4, 6))
+        assertFalse(YaesuFtx1.agcMatches(1, 2))
+        assertEquals(2, YaesuFtx1.parsePreamp("PA02;", 0))
+        assertTrue(YaesuFtx1.parseAttenuator("RA01;"))
+        assertEquals(2 to 50, YaesuFtx1.parsePower("PC2050;"))
+        assertThrows(IllegalArgumentException::class.java) { YaesuFtx1.parseSMeter("SM0300;") }
+        assertThrows(IllegalArgumentException::class.java) { YaesuFtx1.parseSMeter("SM1120;") }
+        assertThrows(IllegalArgumentException::class.java) { YaesuFtx1.parseAgc("GT07;", 0) }
+        assertThrows(IllegalArgumentException::class.java) { YaesuFtx1.parsePreamp("PA13;", 1) }
+        assertThrows(IllegalArgumentException::class.java) { YaesuFtx1.parseIfShift("IS00+1220;", 0) }
+    }
+    @Test fun outOfRangeValuesAreRejectedBeforeSending() {
+        val range = IllegalArgumentException::class.java
+        assertThrows(range) { YaesuFtx1.setAfGain(0, 256) }
+        assertThrows(range) { YaesuFtx1.setAfGain(0, -1) }
+        assertThrows(range) { YaesuFtx1.setAfGain(2, 10) }
+        assertThrows(range) { YaesuFtx1.setSquelch(0, 300) }
+        assertThrows(range) { YaesuFtx1.setWidth(0, 24) }
+        assertThrows(range) { YaesuFtx1.setIfShift(0, 1220) }
+        assertThrows(range) { YaesuFtx1.setIfShift(0, 30) }
+        assertThrows(range) { YaesuFtx1.setAgc(0, 5) }
+        assertThrows(range) { YaesuFtx1.setPreamp(0, 3) }
+        assertThrows(range) { YaesuFtx1.setPreamp(1, 2) }
+        assertThrows(range) { YaesuFtx1.setPreamp(3, 0) }
+        assertThrows(range) { YaesuFtx1.readMeter(9) }
+        assertThrows(range) { YaesuFtx1.setPower(1, 11) }
+        assertThrows(range) { YaesuFtx1.setPower(1, 4) }
+        assertThrows(range) { YaesuFtx1.setPower(2, 101) }
+        assertThrows(range) { YaesuFtx1.setPower(3, 10) }
+    }
+    @Test fun setsAreReadBackAndPowerNeverExceedsTheReportedHead() {
+        var gain = "AG0000;"
+        val radio = ScriptedRadio {
+            when (val text = String(it, Charsets.US_ASCII)) {
+                "AG0100;" -> { gain = text; ByteArray(0) }
+                "AG0;" -> ascii(gain)
+                "PC;" -> ascii("PC1005;")
+                "SM0;" -> ascii("SM0120;")
+                else -> ascii("?;")
+            }
+        }
+        val rig = Ftx1Rig(radio)
+        rig.setAfGain(0, 100)
+        assertEquals(120, rig.signal())
+        assertThrows(IllegalArgumentException::class.java) { rig.setPower(50) }
+        assertTrue(radio.writes.none { String(it, Charsets.US_ASCII).startsWith("PC") && it.size > 3 })
+        assertTrue(radio.writes.none { String(it, Charsets.US_ASCII).startsWith("TX") })
+    }
+    @Test fun speechTextAndBar() {
+        assertEquals("145,800 megahercios, FM, señal 120",
+            RigSpeech.text(145_800_000, "FM", 120, java.util.Locale("es", "ES"), "megahercios", "señal"))
+        assertEquals("14.250 megahertz", RigSpeech.text(14_250_000, null, null, java.util.Locale.US, "megahertz", "signal"))
+        assertEquals("----------", RigSpeech.bar(0))
+        assertEquals("#####-----", RigSpeech.bar(128))
+        assertEquals("##########", RigSpeech.bar(999))
+    }
 }
