@@ -114,6 +114,113 @@
     return `EX${item.p1}${item.p2}${item.p3}${validateMenuValue(item, value, previous)};`;
   }
 
+  // Remote control (FTX-1 CAT manual 2508-C). Receive-side controls only: nothing here keys the transmitter.
+  const AGC_SET = Object.freeze({ 0: "OFF", 1: "FAST", 2: "MID", 3: "SLOW", 4: "AUTO" });
+  const AGC_READ = Object.freeze({ 0: "OFF", 1: "FAST", 2: "MID", 3: "SLOW", 4: "AUTO-FAST", 5: "AUTO-MID", 6: "AUTO-SLOW" });
+  const PREAMP_BANDS = Object.freeze({ 0: "HF/50", 1: "VHF", 2: "UHF" });
+  const PREAMP_HF = Object.freeze({ 0: "IPO", 1: "AMP1", 2: "AMP2" });
+  const POWER_RANGES = Object.freeze({ 1: { name: "FTX-1", min: 5, max: 10 }, 2: { name: "SPA-1", min: 5, max: 100 } });
+  const METER_NAMES = Object.freeze({ 1: "smeterMain", 2: "smeterSub", 3: "comp", 4: "alc", 5: "po", 6: "swr", 7: "idd", 8: "vdd" });
+  const LEVEL_CODES = Object.freeze(["AG", "RG", "SQ"]);
+  const checkSide = side => {
+    R.assert(side === 0 || side === 1, "Lado no valido: 0 = MAIN, 1 = SUB.");
+    return side;
+  };
+  function checkInt(value, min, max, message) {
+    R.assert(Number.isInteger(value) && value >= min && value <= max, message);
+    return value;
+  }
+  const checkLevel = value => checkInt(value, 0, 255, "Nivel fuera de rango 0-255.");
+  function answerOf(code, answer, pattern) {
+    const match = new RegExp(`^${code}${pattern};$`).exec(String(answer));
+    R.assert(match, `Respuesta ${code} no valida.`);
+    return match;
+  }
+  const smeterReadCommand = side => `SM${checkSide(side)};`;
+  function parseSmeter(answer, side) {
+    const match = answerOf("SM", answer, "([01])(\\d{3})");
+    R.assert(Number(match[1]) === checkSide(side), "Respuesta SM de otro lado.");
+    return checkLevel(Number(match[2]));
+  }
+  function meterReadCommand(p1) {
+    return `RM${checkInt(p1, 1, 8, "Medidor RM fuera de rango 1-8.")};`;
+  }
+  function parseMeter(answer, p1) {
+    const match = answerOf("RM", answer, "([1-8])(\\d{3})(\\d{3})");
+    R.assert(Number(match[1]) === checkInt(p1, 1, 8, "Medidor RM fuera de rango 1-8."), "Respuesta RM de otro medidor.");
+    return checkLevel(Number(match[2]));
+  }
+  function checkLevelCode(code) {
+    R.assert(LEVEL_CODES.includes(code), "Control de nivel no valido (AG, RG, SQ).");
+    return code;
+  }
+  const levelReadCommand = (code, side) => `${checkLevelCode(code)}${checkSide(side)};`;
+  const levelWriteCommand = (code, side, value) => `${checkLevelCode(code)}${checkSide(side)}${pad(checkLevel(value), 3)};`;
+  function parseLevel(code, answer, side) {
+    const match = answerOf(checkLevelCode(code), answer, "([01])(\\d{3})");
+    R.assert(Number(match[1]) === checkSide(side), `Respuesta ${code} de otro lado.`);
+    return checkLevel(Number(match[2]));
+  }
+  const checkWidth = index => checkInt(index, 0, 23, "Indice de ancho fuera de rango 00-23 (Tabla 5 del manual).");
+  const widthReadCommand = side => `SH${checkSide(side)};`;
+  const widthWriteCommand = (side, index) => `SH${checkSide(side)}0${pad(checkWidth(index), 2)};`;
+  function parseWidth(answer, side) {
+    const match = answerOf("SH", answer, "([01])0(\\d{2})");
+    R.assert(Number(match[1]) === checkSide(side), "Respuesta SH de otro lado.");
+    return checkWidth(Number(match[2]));
+  }
+  const checkShift = hz => {
+    checkInt(hz, -1200, 1200, "Desplazamiento IF fuera de -1200..+1200 Hz.");
+    R.assert(hz % 20 === 0, "Desplazamiento IF: pasos de 20 Hz.");
+    return hz;
+  };
+  const ifShiftReadCommand = side => `IS${checkSide(side)};`;
+  const ifShiftWriteCommand = (side, hz) => `IS${checkSide(side)}0${checkShift(hz) < 0 ? "-" : "+"}${pad(Math.abs(hz), 4)};`;
+  function parseIfShift(answer, side) {
+    const match = answerOf("IS", answer, "([01])0([+-])(\\d{4})");
+    R.assert(Number(match[1]) === checkSide(side), "Respuesta IS de otro lado.");
+    return checkShift(Number(match[3]) * (match[2] === "-" ? -1 : 1) || 0);
+  }
+  const agcReadCommand = side => `GT${checkSide(side)};`;
+  function agcWriteCommand(side, mode) {
+    return `GT${checkSide(side)}${checkInt(mode, 0, 4, "AGC fuera de rango 0-4.")};`;
+  }
+  function parseAgc(answer, side) {
+    const match = answerOf("GT", answer, "([01])([0-6])");
+    R.assert(Number(match[1]) === checkSide(side), "Respuesta GT de otro lado.");
+    return Number(match[2]);
+  }
+  const checkBand = band => checkInt(band, 0, 2, "Banda de pre-amplificador no valida: 0 HF/50, 1 VHF, 2 UHF.");
+  const checkPreamp = (band, value) => checkInt(value, 0, checkBand(band) === 0 ? 2 : 1,
+    band === 0 ? "Pre-amplificador HF/50: 0 IPO, 1 AMP1, 2 AMP2." : "Pre-amplificador VHF/UHF: 0 OFF, 1 ON.");
+  const preampReadCommand = band => `PA${checkBand(band)};`;
+  const preampWriteCommand = (band, value) => `PA${checkBand(band)}${checkPreamp(band, value)};`;
+  function parsePreamp(answer, band) {
+    const match = answerOf("PA", answer, "([0-2])([0-2])");
+    R.assert(Number(match[1]) === checkBand(band), "Respuesta PA de otra banda.");
+    return checkPreamp(band, Number(match[2]));
+  }
+  const attReadCommand = () => "RA0;";
+  const attWriteCommand = on => {
+    R.assert(typeof on === "boolean", "Atenuador no valido.");
+    return `RA0${on ? 1 : 0};`;
+  };
+  const parseAtt = answer => answerOf("RA", answer, "0([01])")[1] === "1";
+  const powerReadCommand = () => "PC;";
+  function checkPower(head, watts) {
+    const range = POWER_RANGES[head];
+    R.assert(range, "Cabezal de potencia desconocido: 1 FTX-1, 2 SPA-1.");
+    R.assert(Number.isInteger(watts) && watts >= range.min && watts <= range.max,
+      `Potencia fuera de ${range.min}-${range.max} W para ${range.name}.`);
+    return watts;
+  }
+  const powerWriteCommand = (head, watts) => `PC${head}${pad(checkPower(head, watts), 3)};`;
+  function parsePower(answer) {
+    const match = answerOf("PC", answer, "([12])(\\d{3})");
+    const head = Number(match[1]);
+    return { head, watts: checkPower(head, Number(match[2])), min: POWER_RANGES[head].min, max: POWER_RANGES[head].max };
+  }
+
   const clone = value => JSON.parse(JSON.stringify(value));
   const FIELDS = ["frequencyHz", "mode", "toneMode", "shift", "clarDirection", "clarOffsetHz", "rxClar", "txClar"];
   function diffMemories(before, after) {
@@ -355,6 +462,72 @@
       }
       return values;
     }
+    async readMeters() {
+      const meters = {};
+      for (const [p1, name] of Object.entries(METER_NAMES)) meters[name] = parseMeter(await this.command(meterReadCommand(Number(p1))), Number(p1));
+      return meters;
+    }
+    async readControls(side) {
+      checkSide(side);
+      const read = async (command, parse) => parse(await this.command(command));
+      const preamp = {};
+      for (const band of [0, 1, 2]) preamp[band] = await read(preampReadCommand(band), answer => parsePreamp(answer, band));
+      return {
+        smeter: await read(smeterReadCommand(side), answer => parseSmeter(answer, side)),
+        af: await read(levelReadCommand("AG", side), answer => parseLevel("AG", answer, side)),
+        rf: await read(levelReadCommand("RG", side), answer => parseLevel("RG", answer, side)),
+        sql: await read(levelReadCommand("SQ", side), answer => parseLevel("SQ", answer, side)),
+        width: await read(widthReadCommand(side), answer => parseWidth(answer, side)),
+        ifShift: await read(ifShiftReadCommand(side), answer => parseIfShift(answer, side)),
+        agc: await read(agcReadCommand(side), answer => parseAgc(answer, side)),
+        preamp,
+        att: await read(attReadCommand(), parseAtt),
+        power: await read(powerReadCommand(), parsePower)
+      };
+    }
+    // value: number (af, rf, sql, width, ifShift, agc, power), boolean (att) or { band, value } (preamp).
+    async setControl(name, side, value) {
+      const verify = (back, expected, label) => R.assert(back === expected,
+        `Verificacion fallida en ${label}: la radio no coincide con lo escrito.`);
+      if (name === "af" || name === "rf" || name === "sql") {
+        const code = { af: "AG", rf: "RG", sql: "SQ" }[name];
+        const command = levelWriteCommand(code, side, value);
+        await this.command(command, false);
+        verify(parseLevel(code, await this.command(levelReadCommand(code, side)), side), value, code);
+      } else if (name === "width") {
+        const command = widthWriteCommand(side, value);
+        await this.command(command, false);
+        verify(parseWidth(await this.command(widthReadCommand(side)), side), value, "SH");
+      } else if (name === "ifShift") {
+        const command = ifShiftWriteCommand(side, value);
+        await this.command(command, false);
+        verify(parseIfShift(await this.command(ifShiftReadCommand(side)), side), value, "IS");
+      } else if (name === "agc") {
+        const command = agcWriteCommand(side, value);
+        await this.command(command, false);
+        const back = parseAgc(await this.command(agcReadCommand(side)), side);
+        // AUTO (4) is answered as AUTO-FAST/MID/SLOW (4-6).
+        R.assert(value === 4 ? back >= 4 : back === value, "Verificacion fallida en GT: la radio no coincide con lo escrito.");
+        return back;
+      } else if (name === "preamp") {
+        R.assert(value && typeof value === "object", "Pre-amplificador no valido.");
+        const command = preampWriteCommand(value.band, value.value);
+        await this.command(command, false);
+        verify(parsePreamp(await this.command(preampReadCommand(value.band)), value.band), value.value, "PA");
+      } else if (name === "att") {
+        const command = attWriteCommand(value);
+        await this.command(command, false);
+        verify(parseAtt(await this.command(attReadCommand())), value, "RA");
+      } else if (name === "power") {
+        const head = parsePower(await this.command(powerReadCommand())).head;
+        const command = powerWriteCommand(head, value);
+        await this.command(command, false);
+        const back = parsePower(await this.command(powerReadCommand()));
+        R.assert(back.head === head && back.watts === value, "Verificacion fallida en PC: la radio no coincide con lo escrito.");
+        return back.watts;
+      } else R.assert(false, "Control no reconocido.");
+      return value;
+    }
   }
 
   Object.assign(R, { FTX1_MODES: MODES, FTX1_UNDOCUMENTED_MODES: UNDOCUMENTED_MODES, ftx1ModeLabel: modeLabel,FTX1_TONE_MODES: TONE_MODES, FTX1_SHIFTS: SHIFTS, ftx1MenuKey: menuKey,
@@ -362,6 +535,17 @@
     ftx1TagWriteCommand: tagWriteCommand, ftx1MenuReadCommand: menuReadCommand, parseFtx1MenuAnswer: parseMenuAnswer,
     validateFtx1MenuValue: validateMenuValue, ftx1MenuWriteCommand: menuWriteCommand,
     diffFtx1Memories: diffMemories, diffFtx1Menu: diffMenu, ftx1Backup: backup, readFtx1Backup: readBackup,
-    ftx1MemoriesCSV: memoriesCSV, ftx1ImportCSV: importCSV, ftx1CopySlot: copySlot, Ftx1Cat });
+    ftx1MemoriesCSV: memoriesCSV, ftx1ImportCSV: importCSV, ftx1CopySlot: copySlot, Ftx1Cat,
+    FTX1_AGC_SET: AGC_SET, FTX1_AGC_READ: AGC_READ, FTX1_PREAMP_BANDS: PREAMP_BANDS, FTX1_PREAMP_HF: PREAMP_HF,
+    FTX1_POWER_RANGES: POWER_RANGES, FTX1_METERS: METER_NAMES,
+    ftx1SmeterReadCommand: smeterReadCommand, parseFtx1Smeter: parseSmeter,
+    ftx1MeterReadCommand: meterReadCommand, parseFtx1Meter: parseMeter,
+    ftx1LevelReadCommand: levelReadCommand, ftx1LevelWriteCommand: levelWriteCommand, parseFtx1Level: parseLevel,
+    ftx1WidthReadCommand: widthReadCommand, ftx1WidthWriteCommand: widthWriteCommand, parseFtx1Width: parseWidth,
+    ftx1IfShiftReadCommand: ifShiftReadCommand, ftx1IfShiftWriteCommand: ifShiftWriteCommand, parseFtx1IfShift: parseIfShift,
+    ftx1AgcReadCommand: agcReadCommand, ftx1AgcWriteCommand: agcWriteCommand, parseFtx1Agc: parseAgc,
+    ftx1PreampReadCommand: preampReadCommand, ftx1PreampWriteCommand: preampWriteCommand, parseFtx1Preamp: parsePreamp,
+    ftx1AttReadCommand: attReadCommand, ftx1AttWriteCommand: attWriteCommand, parseFtx1Att: parseAtt,
+    ftx1PowerReadCommand: powerReadCommand, ftx1PowerWriteCommand: powerWriteCommand, parseFtx1Power: parsePower });
   if (typeof module !== "undefined") module.exports = R;
 })(typeof globalThis !== "undefined" ? globalThis : this);

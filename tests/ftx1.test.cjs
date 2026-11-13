@@ -385,3 +385,136 @@ test("FTX-1 is included in the site and installers without unsafe rendering", ()
   assert.match(read("ftx1.html"), /data-page="ftx1"/);
   assert.doesNotMatch(read("ftx1-ui.js"), /innerHTML/);
 });
+
+test("remote control commands and answers are byte exact", () => {
+  assert.equal(R.ftx1SmeterReadCommand(1), "SM1;");
+  assert.equal(R.parseFtx1Smeter("SM0128;", 0), 128);
+  assert.throws(() => R.parseFtx1Smeter("SM1128;", 0), /otro lado/);
+  assert.throws(() => R.parseFtx1Smeter("SM0256;", 0), /0-255/);
+  assert.equal(R.ftx1MeterReadCommand(6), "RM6;");
+  assert.equal(R.parseFtx1Meter("RM6010000;", 6), 10);
+  assert.throws(() => R.ftx1MeterReadCommand(9), /1-8/);
+  assert.throws(() => R.parseFtx1Meter("RM5010000;", 6), /otro medidor/);
+  assert.equal(R.ftx1LevelReadCommand("AG", 0), "AG0;");
+  assert.equal(R.ftx1LevelWriteCommand("RG", 1, 7), "RG1007;");
+  assert.equal(R.ftx1LevelWriteCommand("SQ", 0, 255), "SQ0255;");
+  assert.equal(R.parseFtx1Level("SQ", "SQ1099;", 1), 99);
+  assert.throws(() => R.ftx1LevelWriteCommand("AG", 0, 256), /0-255/);
+  assert.throws(() => R.ftx1LevelWriteCommand("AG", 2, 1), /Lado/);
+  assert.throws(() => R.ftx1LevelWriteCommand("XX", 0, 1), /no valido/);
+  assert.equal(R.ftx1WidthReadCommand(0), "SH0;");
+  assert.equal(R.ftx1WidthWriteCommand(1, 5), "SH1005;");
+  assert.equal(R.parseFtx1Width("SH0023;", 0), 23);
+  assert.throws(() => R.ftx1WidthWriteCommand(0, 24), /Tabla 5/);
+  assert.equal(R.ftx1IfShiftReadCommand(0), "IS0;");
+  assert.equal(R.ftx1IfShiftWriteCommand(0, 200), "IS00+0200;");
+  assert.equal(R.ftx1IfShiftWriteCommand(1, -1200), "IS10-1200;");
+  assert.equal(R.ftx1IfShiftWriteCommand(0, 0), "IS00+0000;");
+  assert.equal(R.parseFtx1IfShift("IS00-0040;", 0), -40);
+  assert.equal(R.parseFtx1IfShift("IS00-0000;", 0), 0);
+  assert.throws(() => R.ftx1IfShiftWriteCommand(0, 30), /20 Hz/);
+  assert.throws(() => R.ftx1IfShiftWriteCommand(0, 1220), /-1200/);
+  assert.equal(R.ftx1AgcReadCommand(0), "GT0;");
+  assert.equal(R.ftx1AgcWriteCommand(1, 4), "GT14;");
+  assert.equal(R.parseFtx1Agc("GT06;", 0), 6);
+  assert.throws(() => R.ftx1AgcWriteCommand(0, 5), /0-4/);
+  assert.throws(() => R.parseFtx1Agc("GT07;", 0), /GT no valida/);
+  assert.equal(R.ftx1PreampReadCommand(2), "PA2;");
+  assert.equal(R.ftx1PreampWriteCommand(0, 2), "PA02;");
+  assert.equal(R.ftx1PreampWriteCommand(1, 1), "PA11;");
+  assert.equal(R.parseFtx1Preamp("PA01;", 0), 1);
+  assert.throws(() => R.ftx1PreampWriteCommand(1, 2), /VHF\/UHF/);
+  assert.throws(() => R.ftx1PreampWriteCommand(3, 0), /Banda/);
+  assert.equal(R.ftx1AttReadCommand(), "RA0;");
+  assert.equal(R.ftx1AttWriteCommand(true), "RA01;");
+  assert.equal(R.ftx1AttWriteCommand(false), "RA00;");
+  assert.equal(R.parseFtx1Att("RA01;"), true);
+  assert.equal(R.ftx1PowerReadCommand(), "PC;");
+  assert.equal(R.ftx1PowerWriteCommand(1, 10), "PC1010;");
+  assert.equal(R.ftx1PowerWriteCommand(2, 100), "PC2100;");
+  assert.deepEqual(R.parseFtx1Power("PC1005;"), { head: 1, watts: 5, min: 5, max: 10 });
+  assert.throws(() => R.ftx1PowerWriteCommand(1, 11), /5-10 W/);
+  assert.throws(() => R.ftx1PowerWriteCommand(2, 4), /5-100 W/);
+  assert.throws(() => R.parseFtx1Power("PC1050;"), /5-10 W/);
+});
+
+class RemotePort extends R.BufferedTransport {
+  constructor(state, { ignore = [] } = {}) {
+    super();
+    this.opened = true;
+    this.state = state;
+    this.ignore = ignore;
+    this.commands = [];
+  }
+  async write(bytes) {
+    const command = Buffer.from(bytes).toString("latin1");
+    this.commands.push(command);
+    const answer = this.handle(command);
+    if (answer !== null) this.push(new TextEncoder().encode(answer));
+  }
+  handle(command) {
+    const code = command.slice(0, 2);
+    const body = command.slice(2, -1);
+    const set = (key, value) => { if (!this.ignore.includes(code)) this.state[key] = value; };
+    if (code === "SM") return `SM${body}${this.state.sm};`;
+    if (code === "RM") return `RM${body}${this.state.rm}000;`;
+    if (code === "PC") {
+      if (body === "") return `PC${this.state.pcHead}${this.state.pc};`;
+      set("pc", body.slice(1));
+      return null;
+    }
+    if (code === "RA") {
+      if (body === "0") return `RA0${this.state.ra};`;
+      set("ra", body.slice(1));
+      return null;
+    }
+    if (code === "PA") {
+      if (body.length === 1) return `PA${body}${this.state[`pa${body}`]};`;
+      set(`pa${body[0]}`, body[1]);
+      return null;
+    }
+    const key = code.toLowerCase() + body[0];
+    if (body.length === 1) return `${code}${body}${this.state[key]};`;
+    set(key, body.slice(1));
+    return null;
+  }
+}
+const remoteState = () => ({ sm: "042", rm: "010", ag0: "128", rg0: "255", sq0: "000", sh0: "005", is0: "0+0200", gt0: "5",
+  pa0: "1", pa1: "0", pa2: "1", ra: "0", pc: "005", pcHead: 1 });
+
+test("readControls and readMeters read every documented command and setControl verifies by reading back", async () => {
+  const port = new RemotePort(remoteState());
+  const cat = new R.Ftx1Cat(port);
+  const controls = await cat.readControls(0);
+  assert.deepEqual(controls, { smeter: 42, af: 128, rf: 255, sql: 0, width: 5, ifShift: 200, agc: 5,
+    preamp: { 0: 1, 1: 0, 2: 1 }, att: false, power: { head: 1, watts: 5, min: 5, max: 10 } });
+  assert.deepEqual(port.commands, ["PA0;", "PA1;", "PA2;", "SM0;", "AG0;", "RG0;", "SQ0;", "SH0;", "IS0;", "GT0;", "RA0;", "PC;"]);
+  port.commands.length = 0;
+  assert.equal((await cat.readMeters()).vdd, 10);
+  assert.deepEqual(port.commands, ["RM1;", "RM2;", "RM3;", "RM4;", "RM5;", "RM6;", "RM7;", "RM8;"]);
+  port.commands.length = 0;
+  await cat.setControl("af", 0, 77);
+  assert.deepEqual(port.commands, ["AG0077;", "AG0;"]);
+  await cat.setControl("ifShift", 0, -20);
+  await cat.setControl("width", 0, 12);
+  await cat.setControl("preamp", 0, { band: 1, value: 1 });
+  await cat.setControl("att", 0, true);
+  assert.equal(await cat.setControl("agc", 0, 4), 4);
+  assert.equal(await cat.setControl("power", 0, 10), 10);
+  assert.equal(port.state.is0, "0-0020");
+  assert.ok(port.commands.includes("PC1010;"));
+});
+
+test("setControl rejects out of range values before sending and fails when the read back differs", async () => {
+  const port = new RemotePort(remoteState());
+  const cat = new R.Ftx1Cat(port);
+  await assert.rejects(cat.setControl("power", 0, 11), /5-10 W para FTX-1/);
+  await assert.rejects(cat.setControl("sql", 0, 300), /0-255/);
+  await assert.rejects(cat.setControl("width", 0, 24), /Tabla 5/);
+  await assert.rejects(cat.setControl("nope", 0, 1), /no reconocido/);
+  assert.ok(!port.commands.some(command => /^(SQ0300|SH0024|PC1011)/.test(command)));
+  const stuck = new RemotePort(remoteState(), { ignore: ["AG", "RA"] });
+  const stuckCat = new R.Ftx1Cat(stuck);
+  await assert.rejects(stuckCat.setControl("af", 0, 10), /Verificacion fallida en AG/);
+  await assert.rejects(stuckCat.setControl("att", 0, true), /Verificacion fallida en RA/);
+});

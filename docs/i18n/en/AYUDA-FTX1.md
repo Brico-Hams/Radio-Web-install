@@ -66,6 +66,31 @@ compared with what was sent; if the radio answers `?;` or a different value, the
 write stops and names the channel or setting. To undo, load the JSON backup with
 "Restore JSON backup", simulate and write again.
 
+## Remote control (CAT)
+
+The "4. Remote control (CAT)" panel only touches reception; it never sends a
+transmit command. Pick MAIN or SUB, press "Read" and change the controls: every
+change is sent, read back and compared. Out-of-range values are rejected before
+sending. The meters (`SM`, `RM`) can refresh every 1 s; polling stops on
+disconnect or on any error.
+
+| Command | Use |
+| --- | --- |
+| `SM P1;` | S-meter, 000-255 (read only) |
+| `RM P1;` | Meters 1 S(MAIN), 2 S(SUB), 3 COMP, 4 ALC, 5 PO, 6 SWR, 7 IDD, 8 VDD (read only) |
+| `AG P1 P2P2P2;` | AF gain, 000-255 |
+| `RG P1 P2P2P2;` | RF gain, 000-255 |
+| `SQ P1 P2P2P2;` | Squelch, 000-255 |
+| `SH P1 0 P3P3;` | Width: index 00-23 of the manual's Table 5 (the Hz value depends on the mode; only the index is shown) |
+| `IS P1 0 P3 P4P4P4P4;` | IF shift, -1200..+1200 Hz in 20 Hz steps |
+| `GT P1 P2;` | AGC: 0 OFF, 1 FAST, 2 MID, 3 SLOW, 4 AUTO (reads distinguish AUTO-FAST/MID/SLOW) |
+| `PA P1 P2;` | Pre-amp: 0 HF/50 (IPO, AMP1, AMP2), 1 VHF and 2 UHF (OFF, ON) |
+| `RA0 P2;` | RF attenuator, 0 OFF, 1 ON |
+| `PC P1 P2P2P2;` | Power: 1 = FTX-1 field head (5-10 W), 2 = SPA-1 (5-100 W); the range comes from the radio's answer |
+
+The feature list was inspired by cat-ftx1 (rzochowski, MIT licence per its
+author; the LICENSE file is still pending in that repository). No code was copied.
+
 ## Limits
 
 - Memory channels 1-999 only. PMS, 5 MHz, emergency channel and split memories

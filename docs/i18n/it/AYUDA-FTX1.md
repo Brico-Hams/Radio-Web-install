@@ -70,6 +70,33 @@ e confrontato con quanto inviato; se la radio risponde `?;` o un valore diverso,
 la scrittura si ferma e indica il canale o l'impostazione. Per annullare, carica
 la copia JSON con "Ripristina copia JSON", simula e scrivi di nuovo.
 
+## Controllo remoto (CAT)
+
+Il pannello «4. Controllo remoto (CAT)» agisce solo sulla ricezione; non invia
+mai comandi di trasmissione. Scegli MAIN o SUB, premi «Leggi» e modifica i
+controlli: ogni modifica viene inviata, riletta e confrontata. I valori fuori
+intervallo vengono rifiutati prima dell'invio. I misuratori (`SM`, `RM`) possono
+aggiornarsi ogni secondo; il polling si ferma alla disconnessione o in caso di
+errore.
+
+| Comando | Uso |
+| --- | --- |
+| `SM P1;` | S-meter, 000-255 (sola lettura) |
+| `RM P1;` | Misure 1 S(MAIN), 2 S(SUB), 3 COMP, 4 ALC, 5 PO, 6 SWR, 7 IDD, 8 VDD (sola lettura) |
+| `AG P1 P2P2P2;` | Guadagno AF, 000-255 |
+| `RG P1 P2P2P2;` | Guadagno RF, 000-255 |
+| `SQ P1 P2P2P2;` | Squelch, 000-255 |
+| `SH P1 0 P3P3;` | Larghezza: indice 00-23 della Tabella 5 del manuale (il valore in Hz dipende dal modo; si mostra solo l'indice) |
+| `IS P1 0 P3 P4P4P4P4;` | Shift IF, -1200..+1200 Hz a passi di 20 Hz |
+| `GT P1 P2;` | AGC: 0 OFF, 1 FAST, 2 MID, 3 SLOW, 4 AUTO (la lettura distingue AUTO-FAST/MID/SLOW) |
+| `PA P1 P2;` | Preamplificatore: 0 HF/50 (IPO, AMP1, AMP2), 1 VHF e 2 UHF (OFF, ON) |
+| `RA0 P2;` | Attenuatore RF, 0 OFF, 1 ON |
+| `PC P1 P2P2P2;` | Potenza: 1 = testa FTX-1 (5-10 W), 2 = SPA-1 (5-100 W); l'intervallo deriva dalla risposta della radio |
+
+L'elenco delle funzioni si ispira a cat-ftx1 (rzochowski, licenza MIT secondo il
+suo autore; il file LICENSE è ancora in sospeso in quel repository). Non è stato
+copiato codice.
+
 ## Limiti
 
 - Solo canali di memoria 1-999. PMS, 5 MHz, canale di emergenza e memorie split

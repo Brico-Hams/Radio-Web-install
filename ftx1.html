@@ -105,6 +105,36 @@
       <p id="ftx-menu-summary" role="status"></p>
       <div class="table-wrap"><table><thead><tr><th>Ajuste</th><th>Antes</th><th>Despues</th></tr></thead><tbody id="ftx-menu-diff"></tbody></table></div>
     </section>
+    <section class="panel">
+      <h2>4. Control remoto (CAT)</h2>
+      <p>Solo recepcion: no se envia ningun comando de transmision. Cada cambio se verifica volviendo a leer la radio.</p>
+      <div class="planning-filters">
+        <label>Lado <select id="ftx-ctl-side"><option value="0">MAIN</option><option value="1">SUB</option></select></label>
+        <button id="ftx-ctl-read" class="button primary" type="button" disabled>Leer</button>
+        <label><input id="ftx-ctl-poll" type="checkbox" disabled> Actualizar medidores cada 1 s</label>
+      </div>
+      <p id="ftx-ctl-meters" role="status" aria-live="polite">Medidores sin leer.</p>
+      <div class="planning-filters">
+        <label>Ganancia AF (0-255) <input id="ftx-ctl-af" type="number" min="0" max="255" step="1" disabled></label>
+        <label>Ganancia RF (0-255) <input id="ftx-ctl-rf" type="number" min="0" max="255" step="1" disabled></label>
+        <label>Squelch (0-255) <input id="ftx-ctl-sql" type="number" min="0" max="255" step="1" disabled></label>
+      </div>
+      <div class="planning-filters">
+        <label>Ancho de banda: indice 00-23 (Tabla 5 del manual) <input id="ftx-ctl-width" type="number" min="0" max="23" step="1" disabled></label>
+        <label>Desplazamiento IF (-1200 a +1200 Hz) <input id="ftx-ctl-ifshift" type="number" min="-1200" max="1200" step="20" disabled></label>
+        <label>AGC <select id="ftx-ctl-agc" disabled></select></label>
+      </div>
+      <div class="planning-filters">
+        <label>Pre-amplificador HF/50 <select id="ftx-ctl-pre0" disabled></select></label>
+        <label>Pre-amplificador VHF <select id="ftx-ctl-pre1" disabled></select></label>
+        <label>Pre-amplificador UHF <select id="ftx-ctl-pre2" disabled></select></label>
+        <label><input id="ftx-ctl-att" type="checkbox" disabled> Atenuador RF (ATT)</label>
+      </div>
+      <div class="planning-filters">
+        <label><span id="ftx-ctl-power-label">Potencia (W)</span> <input id="ftx-ctl-power" type="number" min="5" max="10" step="1" disabled></label>
+      </div>
+      <p>El ancho se muestra solo como indice: su valor en Hz depende del modo (Tabla 5 del manual).</p>
+    </section>
   </template>
   <noscript>Activa JavaScript para usar el editor web del FTX-1.</noscript>
 </body>

@@ -37,7 +37,7 @@
       } else td.textContent = text;
       return td;
     };
-    function refresh() {
+    let refresh = function () {
       const on = Boolean(cat);
       $("connect").disabled = on;
       $("baud").disabled = on;
@@ -49,7 +49,7 @@
       const haveMenu = Object.keys(menuOriginal).length > 0;
       for (const id of ["menu-backup", "menu-restore", "menu-simulate"]) $(id).disabled = !haveMenu;
       $("menu-write").disabled = !(on && haveMenu && menuBackup && menuChanged > 0 && menuSimulated === JSON.stringify(menuEdit));
-    }
+    };
     async function radioTask(action) {
       R.assert(!busy, "Hay otra operacion en curso.");
       R.assert(cat, "No hay conexion con la radio.");
@@ -397,6 +397,111 @@
         throw error;
       }
     });
+
+    // Remote control
+    let polling = null;
+    let ctlRead = false;
+    const CTL_INPUTS = ["af", "rf", "sql", "width", "ifshift", "agc", "pre0", "pre1", "pre2", "att", "power"];
+    const sideValue = () => Number($("ctl-side").value);
+    const sideName = () => sideValue() === 0 ? "MAIN" : "SUB";
+    function fillSelect(id, entries) {
+      $(id).replaceChildren(...entries.map(([key, text]) => {
+        const option = document.createElement("option");
+        option.value = key; option.textContent = text;
+        return option;
+      }));
+    }
+    fillSelect("ctl-agc", Object.entries(R.FTX1_AGC_READ));
+    fillSelect("ctl-pre0", Object.entries(R.FTX1_PREAMP_HF));
+    fillSelect("ctl-pre1", [["0", "OFF"], ["1", "ON"]]);
+    fillSelect("ctl-pre2", [["0", "OFF"], ["1", "ON"]]);
+    function stopPolling() {
+      if (polling !== null) { clearTimeout(polling); polling = null; }
+      $("ctl-poll").checked = false;
+    }
+    function showMeters(meters, smeter) {
+      const parts = [`S-meter ${sideName()}: ${smeter}`];
+      for (const [key, value] of Object.entries(meters)) parts.push(`${key}: ${value}`);
+      $("ctl-meters").textContent = parts.join(" | ");
+    }
+    async function pollMeters() {
+      polling = null;
+      if (!cat || !$("ctl-poll").checked) return;
+      try {
+        if (!busy) {
+          const side = sideValue();
+          const [meters, smeter] = await radioTask(async () => [await cat.readMeters(),
+            R.parseFtx1Smeter(await cat.command(R.ftx1SmeterReadCommand(side)), side)]);
+          showMeters(meters, smeter);
+        }
+      } catch (error) {
+        stopPolling();
+        status(`Error: ${error.message}`);
+        refresh();
+        return;
+      }
+      if (cat && $("ctl-poll").checked) polling = setTimeout(pollMeters, 1000);
+    }
+    function showControls(values) {
+      $("ctl-af").value = values.af;
+      $("ctl-rf").value = values.rf;
+      $("ctl-sql").value = values.sql;
+      $("ctl-width").value = values.width;
+      $("ctl-ifshift").value = values.ifShift;
+      $("ctl-agc").value = String(values.agc);
+      for (const band of [0, 1, 2]) $(`ctl-pre${band}`).value = String(values.preamp[band]);
+      $("ctl-att").checked = values.att;
+      const power = $("ctl-power");
+      power.min = values.power.min; power.max = values.power.max; power.value = values.power.watts;
+      $("ctl-power-label").textContent = `Potencia (W, ${values.power.min}-${values.power.max} segun ${R.FTX1_POWER_RANGES[values.power.head].name})`;
+    }
+    function bindControl(id, name, read) {
+      bind(`ctl-${id}`, "change", async () => {
+        const side = sideValue();
+        try {
+          await radioTask(() => cat.setControl(name, side, read()));
+          status(`Ajuste ${name} verificado.`);
+        } catch (error) {
+          try { showControls(await radioTask(() => cat.readControls(side))); } catch { /* the original error is the useful one */ }
+          throw error;
+        }
+      });
+    }
+    const intOf = id => {
+      const text = $(`ctl-${id}`).value.trim();
+      R.assert(/^[+-]?\d+$/.test(text), "Valor numerico no valido.");
+      return Number(text);
+    };
+    bindControl("af", "af", () => intOf("af"));
+    bindControl("rf", "rf", () => intOf("rf"));
+    bindControl("sql", "sql", () => intOf("sql"));
+    bindControl("width", "width", () => intOf("width"));
+    bindControl("ifshift", "ifShift", () => intOf("ifshift"));
+    bindControl("agc", "agc", () => Number($("ctl-agc").value));
+    bindControl("att", "att", () => $("ctl-att").checked);
+    bindControl("power", "power", () => intOf("power"));
+    for (const band of [0, 1, 2]) bindControl(`pre${band}`, "preamp", () => ({ band, value: Number($(`ctl-pre${band}`).value) }));
+    bind("ctl-read", "click", async () => {
+      status("Leyendo control remoto...");
+      const values = await radioTask(() => cat.readControls(sideValue()));
+      showControls(values);
+      ctlRead = true;
+      $("ctl-meters").textContent = `S-meter ${sideName()}: ${values.smeter}`;
+      status("Control remoto leido.");
+    });
+    bind("ctl-side", "change", () => { ctlRead = false; });
+    bind("ctl-poll", "change", () => {
+      if ($("ctl-poll").checked) pollMeters();
+      else stopPolling();
+    });
+    const baseRefresh = refresh;
+    refresh = function () {
+      baseRefresh();
+      if (!cat) { stopPolling(); ctlRead = false; }
+      $("ctl-read").disabled = !cat;
+      $("ctl-poll").disabled = !cat;
+      for (const id of CTL_INPUTS) $(`ctl-${id}`).disabled = !(cat && ctlRead);
+    };
     refresh();
   };
 })(globalThis);

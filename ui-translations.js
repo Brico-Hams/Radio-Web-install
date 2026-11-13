@@ -1250,6 +1250,20 @@ Escribir cambios en la radio|Write changes to the radio|Écrire les modification
 Para escribir: lee las memorias, descarga su copia y simula las diferencias actuales.|To write: read the memories, download their backup and simulate the current differences.|Pour écrire : lisez les mémoires, téléchargez leur sauvegarde et simulez les différences actuelles.|Zum Schreiben: Speicher lesen, deren Sicherung herunterladen und die aktuellen Unterschiede simulieren.
 Campo|Field|Champ|Feld
 3. Configuracion del equipo (menu)|3. Radio configuration (menu)|3. Configuration de l’appareil (menu)|3. Gerätekonfiguration (Menü)
+4. Control remoto (CAT)|4. Remote control (CAT)|4. Commande à distance (CAT)|4. Fernsteuerung (CAT)
+AGC|AGC|AGC|AGC
+Ancho de banda: indice 00-23 (Tabla 5 del manual)|Bandwidth: index 00-23 (manual Table 5)|Bande passante : indice 00-23 (tableau 5 du manuel)|Bandbreite: Index 00-23 (Tabelle 5 des Handbuchs)
+Desplazamiento IF (-1200 a +1200 Hz)|IF shift (-1200 to +1200 Hz)|Décalage FI (-1200 à +1200 Hz)|ZF-Verschiebung (-1200 bis +1200 Hz)
+Ganancia AF (0-255)|AF gain (0-255)|Gain BF (0-255)|NF-Verstärkung (0-255)
+Ganancia RF (0-255)|RF gain (0-255)|Gain HF (0-255)|HF-Verstärkung (0-255)
+Lado|Side|Côté|Seite
+Leer|Read|Lire|Lesen
+MAIN|MAIN|MAIN|MAIN
+SUB|SUB|SUB|SUB
+Pre-amplificador HF/50|HF/50 preamplifier|Préamplificateur HF/50|HF/50-Vorverstärker
+Pre-amplificador VHF|VHF preamplifier|Préamplificateur VHF|VHF-Vorverstärker
+Pre-amplificador UHF|UHF preamplifier|Préamplificateur UHF|UHF-Vorverstärker
+Squelch (0-255)|Squelch (0-255)|Squelch (0-255)|Squelch (0-255)
 Grupo del menu|Menu group|Groupe du menu|Menügruppe
 Leer configuracion|Read configuration|Lire la configuration|Konfiguration lesen
 Los elementos de solo lectura (por ejemplo CAT-1 RATE) nunca se escriben: pueden cortar el enlace CAT o son valores de calibracion.|Read-only items (for example CAT-1 RATE) are never written: they can cut the CAT link or are calibration values.|Les éléments en lecture seule (par exemple CAT-1 RATE) ne sont jamais écrits : ils peuvent couper la liaison CAT ou sont des valeurs d’étalonnage.|Schreibgeschützte Elemente (zum Beispiel CAT-1 RATE) werden nie geschrieben: Sie können die CAT-Verbindung trennen oder sind Kalibrierwerte.

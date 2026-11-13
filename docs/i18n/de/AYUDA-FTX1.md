@@ -75,6 +75,33 @@ mit einem anderen Wert, stoppt das Schreiben und nennt Kanal oder Einstellung.
 Zum Rückgängigmachen lade die JSON-Sicherung mit „JSON-Sicherung
 wiederherstellen“, simuliere und schreibe erneut.
 
+## Fernsteuerung (CAT)
+
+Das Panel „4. Fernsteuerung (CAT)“ betrifft nur den Empfang; es sendet nie einen
+Sendebefehl. Wähle MAIN oder SUB, drücke „Lesen“ und ändere die Regler: Jede
+Änderung wird gesendet, zurückgelesen und verglichen. Werte außerhalb des
+Bereichs werden vor dem Senden abgelehnt. Die Messwerte (`SM`, `RM`) lassen sich
+jede Sekunde aktualisieren; die Abfrage stoppt beim Trennen oder bei einem
+Fehler.
+
+| Befehl | Verwendung |
+| --- | --- |
+| `SM P1;` | S-Meter, 000-255 (nur lesen) |
+| `RM P1;` | Messwerte 1 S(MAIN), 2 S(SUB), 3 COMP, 4 ALC, 5 PO, 6 SWR, 7 IDD, 8 VDD (nur lesen) |
+| `AG P1 P2P2P2;` | AF-Verstärkung, 000-255 |
+| `RG P1 P2P2P2;` | RF-Verstärkung, 000-255 |
+| `SQ P1 P2P2P2;` | Squelch, 000-255 |
+| `SH P1 0 P3P3;` | Bandbreite: Index 00-23 der Tabelle 5 des Handbuchs (der Hz-Wert hängt vom Modus ab; nur der Index wird angezeigt) |
+| `IS P1 0 P3 P4P4P4P4;` | IF-Shift, -1200..+1200 Hz in 20-Hz-Schritten |
+| `GT P1 P2;` | AGC: 0 OFF, 1 FAST, 2 MID, 3 SLOW, 4 AUTO (Lesen unterscheidet AUTO-FAST/MID/SLOW) |
+| `PA P1 P2;` | Vorverstärker: 0 HF/50 (IPO, AMP1, AMP2), 1 VHF und 2 UHF (OFF, ON) |
+| `RA0 P2;` | HF-Abschwächer, 0 OFF, 1 ON |
+| `PC P1 P2P2P2;` | Leistung: 1 = FTX-1-Bedienteil (5-10 W), 2 = SPA-1 (5-100 W); der Bereich stammt aus der Antwort des Funkgeräts |
+
+Die Funktionsliste wurde von cat-ftx1 (rzochowski, MIT-Lizenz laut Autor; die
+LICENSE-Datei fehlt in diesem Repository noch) inspiriert. Es wurde kein Code
+kopiert.
+
 ## Grenzen
 
 - Nur Speicherkanäle 1-999. PMS, 5 MHz, Notrufkanal und Split-Speicher (`MZ`)
