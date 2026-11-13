@@ -32,7 +32,7 @@ object Rt950ZoneWriter {
 
     private fun hz(mhz: String): Long? = try {
         val value = BigDecimal(mhz.trim()).movePointRight(6)
-        if (value.signum() > 0 && value.stripTrailingZeros().scale() <= 0) value.toBigInteger().longValueExact() else null
+        if (value.signum() > 0 && value.stripTrailingZeros().scale() <= 0) value.longValueExact() else null
     } catch (_: NumberFormatException) { null } catch (_: ArithmeticException) { null }
 
     /** Slots of [zone] that hold a channel in [saved]; slots beyond channel 896 (unwritable) are ignored. */
