@@ -65,3 +65,15 @@ Enlaces disponibles:
 | 2026-11-12 (tarde) | Radtel RT-950 Pro, enviando desde RadiCodex por KISS BLE | Envío de un mensaje APRS desde el chat. | **Incidente: el firmware de la radio se congeló** (informe del usuario). Desde entonces el enlace RT-950 es solo de recepción por defecto. |
 
 **Conclusión (2026-11-12):** la TX APRS del RT-950 Pro de esta unidad queda **no soportada en su estado actual**. El fallo está en la radio (configuración o firmware sin identificar), no en RadiCodex. Antes de volver a probar el chat hay que conseguir que la baliza propia de la radio encienda el LED de TX y aparezca en un segundo receptor, por ejemplo identificando el firmware o probando el parche de erkanz para la v0.29. Desde RadiCodex hay que usar el modo KISS sin desbloqueo (commit 9064001).
+
+## Diagnóstico final RT-950 Pro (2026-11-14)
+
+Hecho según el manual oficial del fabricante ([radtel-950PRO_2.pdf](https://cdn.shopify.com/s/files/1/0564/8855/8800/files/radtel-950PRO_2.pdf?v=1756451146), tabla de menús: APRS Set → 1. APRS ON/OFF; 5. Advanced → 5. TNC Type OFF/KISS; User Key → PF2 → Beacon TX):
+
+| Comprobación | Resultado |
+|---|---|
+| APRS ON, TNC Type = KISS, Beacon Setup con indicativo y posición fija, PF2 = Beacon TX | Configurado en la radio |
+| PTT A en 145,500 MHz (voz) | **Transmite** (LED rojo) |
+| PF2 (Beacon TX) con el canal A en 144,800 MHz | **No transmite** (sin LED rojo); el SDR (V3, 144,800 MHz, packet) no recibe nada |
+
+**Conclusión:** la radio transmite en el canal A, pero no emite APRS, ni siquiera su propia baliza. Es un fallo de esta unidad o de su firmware (versión sin identificar), no de RadiCodex. En RadiCodex, la TX al RT-950 se queda desactivada por defecto, con el enlace KISS solo en recepción. Para volver a intentarlo hay que identificar el firmware y consultar a Radtel o probar un firmware que documente la TX APRS, como el parche de erkanz para la v0.29.
