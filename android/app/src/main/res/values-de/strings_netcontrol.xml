@@ -120,4 +120,11 @@
     <string name="net_err_times">Das Ende (UTC) darf nicht vor dem Start liegen.</string>
     <string name="net_err_field">Unbekannter Wert in der Net-Sitzung: %1$s.</string>
     <string name="net_err_session_missing">Die Net-Sitzung existiert nicht mehr.</string>
+    <string name="net_draft_restored">Entwurf wiederhergestellt</string>
+    <string name="net_draft_discard">Entwurf verwerfen</string>
+    <string name="net_leave_title">Check-in verlassen?</string>
+    <string name="net_leave_message">Es gibt einen nicht gespeicherten Check-in.</string>
+    <string name="net_leave_save">Check-in speichern</string>
+    <string name="net_leave_keep">Entwurf behalten und verlassen</string>
+    <string name="net_leave_discard">Verwerfen</string>
 </resources>

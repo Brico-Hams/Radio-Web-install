@@ -22,38 +22,30 @@ import java.time.temporal.ChronoUnit
 import java.util.Locale
 import java.util.UUID
 
+private typealias Draft = NetFormDraft
+
 /** Net Control logbook mode: the net control operator collects one voice check-in per station and exports the session. */
 class NetControlActivity : LocalizedActivity() {
-    /** Form state kept while chips re-render the screen, so typed text is never lost. */
-    private class Draft {
-        var editing: String? = null
-        val text = mutableMapOf<String, String>()
-        var type = NetStationType.MOBILE
-        var source = NetCheckIn.defaultPowerSource(NetStationType.MOBILE)
-        var sourceChosen = false
-        var rain: NetRain? = null
-        var wind: NetWind? = null
-        var sky: NetSky? = null
-        var readability: Int? = null
-        var priority = NetPriority.ROUTINE
-        var mode: String? = null
-    }
-
     private lateinit var store: RadioStore
+    private lateinit var drafts: NetDraftStore
     private lateinit var status: TextView
     private lateinit var content: LinearLayout
     private var sessions = listOf<NetSession>()
     private var currentId: String? = null
     private var draft = Draft()
+    private var baseline = ""
+    private var restored = false
     private var purpose = NetPurpose.EXERCISE
     private val fields = linkedMapOf<String, EditText>()
     private var modeSpinner: Spinner? = null
     private var pendingExport: String? = null
     private val clock = DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT).withZone(ZoneOffset.UTC)
+    private val autosave = Runnable { guarded { persist() } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = RadioStore(applicationContext)
+        drafts = NetDraftStore.of(applicationContext)
         status = Brand.text(this, 14f, bold = true).apply {
             text = getString(R.string.net_intro)
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -64,12 +56,87 @@ class NetControlActivity : LocalizedActivity() {
             addView(status); addView(content, LinearLayout.LayoutParams(-1, -2))
         }
         setContentView(ScrollView(this).apply { addView(body) })
-        guarded { sessions = store.netSessions(); render() }
+        guarded {
+            sessions = store.netSessions()
+            savedInstanceState?.getString(STATE_SESSION)?.let { id -> sessions.find { it.id == id }?.let { openSession(it) } }
+            render()
+            if (restored) message(getString(R.string.net_draft_restored))
+        }
+    }
+
+    override fun onPause() {
+        guarded { persist() }
+        super.onPause()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        guarded { persist() }
+        outState.putString(STATE_SESSION, currentId)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onDestroy() {
+        content.removeCallbacks(autosave)
         store.close()
         super.onDestroy()
+    }
+
+    @Deprecated("Platform callback")
+    override fun onBackPressed() { leaveSession { super.onBackPressed() } }
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (keyCode == android.view.KeyEvent.KEYCODE_ESCAPE) { onBackPressed(); return true }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    /** Opens [session], restoring its unsaved draft when one exists. */
+    private fun openSession(session: NetSession) {
+        currentId = session.id
+        baseline = newDraft(session).toJson().toString()
+        val saved = drafts.load(session.id)
+        restored = saved != null && saved.toJson().toString() != baseline
+        draft = if (restored) saved!! else newDraft(session)
+        if (!restored) drafts.clear(session.id)
+    }
+
+    private fun dirty(): Boolean {
+        capture()
+        return currentId != null && draft.toJson().toString() != baseline
+    }
+
+    /** Stores the form as the session draft, or removes the draft when the form is untouched. */
+    private fun persist() {
+        val id = currentId ?: return
+        if (dirty()) drafts.save(id, draft) else drafts.clear(id)
+    }
+
+    private fun scheduleAutosave() {
+        content.removeCallbacks(autosave)
+        content.postDelayed(autosave, 600)
+    }
+
+    private fun resetForm(session: NetSession, mode: String?) {
+        draft = newDraft(session).also { it.mode = mode }
+        baseline = draft.toJson().toString()
+        restored = false
+        drafts.clear(session.id)
+    }
+
+    /** Back/escape/"back to sessions": asks before abandoning an unsaved form, then runs [leave]. */
+    private fun leaveSession(leave: () -> Unit) {
+        val session = current
+        if (session == null) { leave(); return }
+        guarded {
+            if (!dirty()) { drafts.clear(session.id); leave(); return@guarded }
+            AlertDialog.Builder(this).setTitle(R.string.net_leave_title).setMessage(R.string.net_leave_message)
+                .setPositiveButton(R.string.net_leave_save) { _, _ -> guarded {
+                    saveCheckIn(session)
+                    leave()
+                } }
+                .setNeutralButton(R.string.net_leave_keep) { _, _ -> guarded { persist(); leave() } }
+                .setNegativeButton(R.string.net_leave_discard) { _, _ -> guarded { drafts.clear(session.id); leave() } }
+                .show()
+        }
     }
 
     private fun message(value: String) { status.text = value }
@@ -118,6 +185,11 @@ class NetControlActivity : LocalizedActivity() {
                 else -> InputType.TYPE_CLASS_TEXT
             }
             setText(initial)
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) { if (currentId != null) scheduleAutosave() }
+            })
         }
         title.labelFor = edit.id
         content.addView(edit)
@@ -129,7 +201,7 @@ class NetControlActivity : LocalizedActivity() {
         label(getString(caption))
         val row = Brand.row(this)
         options.forEachIndexed { index, (text, active) ->
-            row.addView(Brand.chip(this, text, active) { guarded { capture(); onPick(index); render() } }.apply {
+            row.addView(Brand.chip(this, text, active) { guarded { capture(); onPick(index); persist(); render() } }.apply {
                 contentDescription = getString(R.string.net_chip_description, getString(caption), text)
             })
         }
@@ -145,6 +217,7 @@ class NetControlActivity : LocalizedActivity() {
         val mode = session?.mode ?: "FM"
         this.mode = mode
         text["power"] = "25"
+        session?.let { text["freq"] = it.frequencyMHz }
         text["rstSent"] = if (mode == "CW" || mode == "RTTY") "599" else "59"
         text["rstReceived"] = text["rstSent"]!!
     }
@@ -175,7 +248,8 @@ class NetControlActivity : LocalizedActivity() {
             val summary = session.summary()
             button(getString(R.string.net_open_session, session.name, session.startUtc.truncatedTo(ChronoUnit.MINUTES).toString(),
                 summary.stations, summary.checkIns)) {
-                currentId = session.id; draft = newDraft(session); render()
+                openSession(session); render()
+                if (restored) message(getString(R.string.net_draft_restored))
             }
         }
         heading(getString(R.string.net_new_session))
@@ -195,7 +269,7 @@ class NetControlActivity : LocalizedActivity() {
             sessions = store.netSessions()
             currentId = session.id
             val mode = session.mode
-            draft = newDraft(session).also { it.mode = mode }
+            resetForm(session, mode)
             render()
             message(getString(R.string.net_started, session.name))
         }
@@ -222,11 +296,11 @@ class NetControlActivity : LocalizedActivity() {
                 .setMessage(R.string.net_delete_session_message)
                 .setNegativeButton(R.string.action_cancel, null)
                 .setPositiveButton(R.string.net_delete) { _, _ -> guarded {
-                    store.deleteNetSession(session.id)
+                    store.deleteNetSession(session.id); drafts.clear(session.id)
                     sessions = store.netSessions(); currentId = null; render(); message(getString(R.string.net_session_deleted))
                 } }.show()
         }
-        button(getString(R.string.net_back_to_sessions)) { currentId = null; render() }
+        button(getString(R.string.net_back_to_sessions)) { leaveSession { currentId = null; render() } }
     }
 
     private fun saveSession(session: NetSession) {
@@ -286,8 +360,12 @@ class NetControlActivity : LocalizedActivity() {
         }
         field("message", R.string.net_message, d.text["message"] ?: "")
         field("remarks", R.string.net_remarks, d.text["remarks"] ?: "")
+        if (restored) {
+            note(getString(R.string.net_draft_restored))
+            button(getString(R.string.net_draft_discard)) { resetForm(session, session.mode); render() }
+        }
         button(getString(if (d.editing == null) R.string.net_save_checkin else R.string.net_save_changes), primary = true) { saveCheckIn(session) }
-        button(getString(R.string.net_clear_form)) { capture(); draft = newDraft(session).also { it.mode = d.mode }; render() }
+        button(getString(R.string.net_clear_form)) { capture(); resetForm(session, d.mode); render() }
     }
 
     private fun repeatLast() {
@@ -329,7 +407,7 @@ class NetControlActivity : LocalizedActivity() {
         store.saveNetSession(updated)
         sessions = store.netSessions()
         val mode = d.mode
-        draft = newDraft(updated).also { it.mode = mode }
+        resetForm(updated, mode)
         render()
         message(getString(R.string.net_checkin_saved, saved.order, saved.call))
     }
@@ -349,7 +427,7 @@ class NetControlActivity : LocalizedActivity() {
                         if (c.message.isEmpty()) "" else ": ${c.message}"
             })
             card.addView(Brand.button(this, getString(R.string.net_edit, c.call)) { guarded {
-                capture(); loadDraft(c); render()
+                capture(); loadDraft(c); baseline = draft.toJson().toString(); restored = false; render()
             } }.apply { contentDescription = getString(R.string.net_edit_description, c.order, c.call) })
             card.addView(Brand.button(this, getString(R.string.net_delete_checkin, c.call)) { guarded {
                 AlertDialog.Builder(this).setTitle(getString(R.string.net_delete_title, c.call))
@@ -438,5 +516,6 @@ class NetControlActivity : LocalizedActivity() {
 
     private companion object {
         const val REQUEST_EXPORT = 51
+        const val STATE_SESSION = "net_session"
     }
 }

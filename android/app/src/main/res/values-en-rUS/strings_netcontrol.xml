@@ -120,4 +120,11 @@
     <string name="net_err_times">The end UTC cannot be before the start.</string>
     <string name="net_err_field">Unrecognised value in the net session: %1$s.</string>
     <string name="net_err_session_missing">The net session no longer exists.</string>
+    <string name="net_draft_restored">Draft recovered</string>
+    <string name="net_draft_discard">Discard draft</string>
+    <string name="net_leave_title">Leave check-in?</string>
+    <string name="net_leave_message">There is an unsaved check-in.</string>
+    <string name="net_leave_save">Save check-in</string>
+    <string name="net_leave_keep">Keep draft and leave</string>
+    <string name="net_leave_discard">Discard</string>
 </resources>

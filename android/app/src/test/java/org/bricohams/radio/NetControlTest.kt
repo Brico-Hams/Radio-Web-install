@@ -149,4 +149,28 @@ class NetControlTest {
             assertTrue(store.netSessions().isEmpty())
         }
     }
+
+    @Test fun draftsRoundTripRestoreAndStayOutOfSummaryAndExports() {
+        val store = NetDraftStore.of(context)
+        val s = session()
+        val draft = NetFormDraft().apply {
+            text["call"] = "EA1ZZZ"; text["town"] = "Vigo"; mode = "FM"; rain = NetRain.LIGHT; priority = NetPriority.PRIORITY
+        }
+        store.save(s.id, draft)
+        val back = NetDraftStore.of(context).load(s.id)!!
+        assertEquals(draft.toJson().toString(), back.toJson().toString())
+        assertEquals("EA1ZZZ", back.text["call"]); assertEquals(NetRain.LIGHT, back.rain)
+        assertNull(store.load("other"))
+
+        val before = s.summary()
+        assertEquals(before, s.summary())
+        listOf(NetExport.csv(s), NetExport.json(s), NetExport.adif(s)).forEach { assertFalse(it.contains("EA1ZZZ")) }
+        RadioStore(context).use { db ->
+            db.saveNetSession(s)
+            assertFalse(db.export().contains("EA1ZZZ"))
+        }
+
+        store.clear(s.id)
+        assertNull(store.load(s.id))
+    }
 }

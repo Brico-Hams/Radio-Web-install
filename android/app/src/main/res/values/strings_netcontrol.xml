@@ -120,4 +120,11 @@
     <string name="net_err_times">El fin UTC no puede ser anterior al inicio.</string>
     <string name="net_err_field">Valor no reconocido en la sesión de net: %1$s.</string>
     <string name="net_err_session_missing">La sesión de net ya no existe.</string>
+    <string name="net_draft_restored">Borrador recuperado</string>
+    <string name="net_draft_discard">Descartar borrador</string>
+    <string name="net_leave_title">¿Salir del check-in?</string>
+    <string name="net_leave_message">Hay un check-in sin guardar.</string>
+    <string name="net_leave_save">Guardar check-in</string>
+    <string name="net_leave_keep">Mantener borrador y salir</string>
+    <string name="net_leave_discard">Descartar</string>
 </resources>

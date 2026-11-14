@@ -259,6 +259,63 @@ private fun NetCheckIn.toJson(): JSONObject = JSONObject().apply {
     put("priority", priority.name); put("message", message); put("remarks", remarks)
 }
 
+/** Check-in form state, also persisted as an unsaved draft per session. */
+class NetFormDraft {
+    var editing: String? = null
+    val text = mutableMapOf<String, String>()
+    var type = NetStationType.MOBILE
+    var source = NetCheckIn.defaultPowerSource(NetStationType.MOBILE)
+    var sourceChosen = false
+    var rain: NetRain? = null
+    var wind: NetWind? = null
+    var sky: NetSky? = null
+    var readability: Int? = null
+    var priority = NetPriority.ROUTINE
+    var mode: String? = null
+
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("editing", editing ?: JSONObject.NULL)
+        put("text", JSONObject().apply { text.toSortedMap().forEach { (k, v) -> if (v.isNotEmpty()) put(k, v) } })
+        put("type", type.name); put("source", source.name); put("sourceChosen", sourceChosen)
+        put("rain", rain?.name ?: JSONObject.NULL); put("wind", wind?.name ?: JSONObject.NULL)
+        put("sky", sky?.name ?: JSONObject.NULL); put("readability", readability ?: JSONObject.NULL)
+        put("priority", priority.name); put("mode", mode ?: JSONObject.NULL)
+    }
+
+    companion object {
+        /** Returns null for unreadable data so a corrupt draft never blocks opening a session. */
+        fun fromJson(json: JSONObject): NetFormDraft? = try {
+            NetFormDraft().apply {
+                editing = if (json.isNull("editing")) null else json.getString("editing")
+                val values = json.getJSONObject("text")
+                values.keys().forEach { text[it] = values.getString(it) }
+                type = NetStationType.valueOf(json.getString("type")); source = NetPowerSource.valueOf(json.getString("source"))
+                sourceChosen = json.getBoolean("sourceChosen")
+                rain = if (json.isNull("rain")) null else NetRain.valueOf(json.getString("rain"))
+                wind = if (json.isNull("wind")) null else NetWind.valueOf(json.getString("wind"))
+                sky = if (json.isNull("sky")) null else NetSky.valueOf(json.getString("sky"))
+                readability = if (json.isNull("readability")) null else json.getInt("readability")
+                priority = NetPriority.valueOf(json.getString("priority"))
+                mode = if (json.isNull("mode")) null else json.getString("mode")
+            }
+        } catch (_: Exception) { null }
+    }
+}
+
+/** Unsaved check-in drafts, kept outside the net session data so they are never exported, summarised or backed up. */
+class NetDraftStore(private val prefs: android.content.SharedPreferences) {
+    fun save(sessionId: String, draft: NetFormDraft) { prefs.edit().putString(sessionId, draft.toJson().toString()).apply() }
+
+    fun load(sessionId: String): NetFormDraft? =
+        prefs.getString(sessionId, null)?.let { raw -> try { NetFormDraft.fromJson(JSONObject(raw)) } catch (_: Exception) { null } }
+
+    fun clear(sessionId: String) { prefs.edit().remove(sessionId).apply() }
+
+    companion object {
+        fun of(context: android.content.Context) = NetDraftStore(context.getSharedPreferences("net_drafts", android.content.Context.MODE_PRIVATE))
+    }
+}
+
 /** Net session exports: CSV and JSON carry every field; ADIF only standard ADIF 3 fields, the rest goes to COMMENT/NOTES. */
 object NetExport {
     private val date = DateTimeFormatter.ofPattern("yyyyMMdd", Locale.ROOT).withZone(ZoneOffset.UTC)

@@ -120,4 +120,11 @@
     <string name="net_err_times">La fin UTC ne peut pas précéder le début.</string>
     <string name="net_err_field">Valeur non reconnue dans la session de net : %1$s.</string>
     <string name="net_err_session_missing">La session de net n\'existe plus.</string>
+    <string name="net_draft_restored">Brouillon récupéré</string>
+    <string name="net_draft_discard">Abandonner le brouillon</string>
+    <string name="net_leave_title">Quitter le check-in ?</string>
+    <string name="net_leave_message">Un check-in n\'est pas enregistré.</string>
+    <string name="net_leave_save">Enregistrer le check-in</string>
+    <string name="net_leave_keep">Garder le brouillon et quitter</string>
+    <string name="net_leave_discard">Abandonner</string>
 </resources>
