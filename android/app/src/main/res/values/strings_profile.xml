@@ -40,4 +40,6 @@
     <string name="home_radio_tools">Herramientas de tu radio</string>
     <string name="home_open_logbook">Libro de guardia (log)</string>
     <string name="home_tool_unavailable">%1$s: no disponible con %2$s</string>
+    <string name="rig_profile_device">Dispositivo del perfil: %1$s</string>
+    <string name="rig_profile_device_missing">El dispositivo USB del perfil no está conectado. Elige otro dispositivo.</string>
 </resources>

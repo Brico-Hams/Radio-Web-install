@@ -40,4 +40,6 @@
     <string name="home_radio_tools">Outils de votre radio</string>
     <string name="home_open_logbook">Carnet de trafic (log)</string>
     <string name="home_tool_unavailable">%1$s : indisponible avec %2$s</string>
+    <string name="rig_profile_device">Périphérique du profil : %1$s</string>
+    <string name="rig_profile_device_missing">Le périphérique USB du profil n\'est pas branché. Choisis un autre périphérique.</string>
 </resources>

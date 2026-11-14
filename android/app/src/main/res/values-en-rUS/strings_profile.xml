@@ -40,4 +40,6 @@
     <string name="home_radio_tools">Tools for your radio</string>
     <string name="home_open_logbook">Station log (logbook)</string>
     <string name="home_tool_unavailable">%1$s: not available with %2$s</string>
+    <string name="rig_profile_device">Profile device: %1$s</string>
+    <string name="rig_profile_device_missing">The profile\'s USB device is not attached. Choose another device.</string>
 </resources>

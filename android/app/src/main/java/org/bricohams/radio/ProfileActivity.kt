@@ -350,6 +350,7 @@ class ProfileActivity : LocalizedActivity() {
                     OpenGd77Link(link).identify().let { "${it.model.name} ${it.firmware} ${it.build}" }
                 }
             }
+            ProfileStore.saveUsbDevice(this, UsbIdentity.of(device, 0))
             return getString(R.string.profile_test_ok, identity)
         } finally {
             try { link?.close() } catch (_: IOException) { }

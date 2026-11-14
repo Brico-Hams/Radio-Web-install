@@ -40,4 +40,6 @@
     <string name="home_radio_tools">Werkzeuge für dein Funkgerät</string>
     <string name="home_open_logbook">Stationslogbuch (Log)</string>
     <string name="home_tool_unavailable">%1$s: mit %2$s nicht verfügbar</string>
+    <string name="rig_profile_device">Profilgerät: %1$s</string>
+    <string name="rig_profile_device_missing">Das USB-Gerät des Profils ist nicht angeschlossen. Wähle ein anderes Gerät.</string>
 </resources>

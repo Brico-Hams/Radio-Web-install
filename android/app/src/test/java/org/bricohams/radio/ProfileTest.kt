@@ -23,6 +23,23 @@ class ProfileTest {
 
     private fun buttons(activity: MainActivity) = views(activity.window.decorView).filterIsInstance<Button>()
 
+    @Test fun profileUsbDeviceMatching() {
+        val stored = UsbIdentity(0x10C4, 0xEA70, "ABC", 0)
+        val other = UsbIdentity(0x10C4, 0xEA70, "XYZ", 0)
+        val exact = UsbIdentity(0x10C4, 0xEA70, "ABC", 0)
+        assertSame(exact, UsbIdentity.find(stored, listOf(other, exact)))
+        // Serial missing on the attached device or in the profile: falls back to vid/pid/port.
+        assertSame(other, UsbIdentity.find(stored, listOf(other)))
+        val noSerial = UsbIdentity(0x10C4, 0xEA70, null, 0)
+        assertSame(exact, UsbIdentity.find(noSerial, listOf(exact)))
+        // Different port or not attached.
+        assertNull(UsbIdentity.find(stored, listOf(UsbIdentity(0x10C4, 0xEA70, "ABC", 1))))
+        assertNull(UsbIdentity.find(stored, listOf(UsbIdentity(0x1A86, 0x7523, null, 0))))
+        assertNull(UsbIdentity.find(stored, emptyList()))
+        ProfileStore.saveUsbDevice(app, stored)
+        assertEquals(stored, ProfileStore.usbDevice(app))
+    }
+
     @Test fun profileRoundTripsAndKeepsLegacyRigSettingsInStep() {
         ProfileStore.save(app, StationProfile(ProfileRadio.IC705, "ea1abc", CatTransport.USB_SERIAL, 115200, "a4"))
         val loaded = ProfileStore.load(app)

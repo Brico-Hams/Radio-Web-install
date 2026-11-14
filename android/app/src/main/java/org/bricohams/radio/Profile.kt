@@ -107,6 +107,20 @@ data class StationProfile(
     fun validated(): StationProfile = validatedCat().copy(callsign = Callsign.normalize(callsign))
 }
 
+/** USB serial device (and port of multi-port adapters such as the CP2105) that passed the profile connection test. */
+data class UsbIdentity(val vendorId: Int, val productId: Int, val serial: String?, val port: Int) {
+    companion object {
+        /** Exact match (vid/pid/serial/port) first; otherwise vid/pid/port, which covers adapters whose serial is unreadable or missing. */
+        fun find(stored: UsbIdentity, attached: List<UsbIdentity>): UsbIdentity? {
+            val samePort = attached.filter { it.vendorId == stored.vendorId && it.productId == stored.productId && it.port == stored.port }
+            return samePort.firstOrNull { !stored.serial.isNullOrEmpty() && it.serial == stored.serial } ?: samePort.firstOrNull()
+        }
+
+        fun of(device: android.hardware.usb.UsbDevice, port: Int) = UsbIdentity(device.vendorId, device.productId,
+            try { device.serialNumber } catch (_: SecurityException) { null }, port)
+    }
+}
+
 /** The one place where the station profile (radio, callsign, CAT settings) is stored and read. */
 object ProfileStore {
     const val PREFERENCES = "profile"
@@ -146,6 +160,17 @@ object ProfileStore {
             context.getSharedPreferences(Rt950Safety.PREFERENCES, Context.MODE_PRIVATE).edit()
                 .putString("host", checked.host.trim()).putString("port", checked.port.trim()).apply()
         }
+    }
+
+    fun usbDevice(context: Context): UsbIdentity? {
+        val p = prefs(context)
+        if (!p.contains("usb_vid")) return null
+        return UsbIdentity(p.getInt("usb_vid", 0), p.getInt("usb_pid", 0), p.getString("usb_serial", null), p.getInt("usb_port", 0))
+    }
+
+    fun saveUsbDevice(context: Context, device: UsbIdentity) {
+        prefs(context).edit().putInt("usb_vid", device.vendorId).putInt("usb_pid", device.productId)
+            .putString("usb_serial", device.serial).putInt("usb_port", device.port).apply()
     }
 
     fun isConfigured(context: Context) = load(context).let { it.radio != null && it.callsign.isNotEmpty() }
