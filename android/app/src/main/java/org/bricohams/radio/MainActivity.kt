@@ -375,6 +375,7 @@ class MainActivity : LocalizedActivity() {
                     } }.show()
             }
         }
+        button(R.string.net_open_button) { startActivity(Intent(this, NetControlActivity::class.java)) }
         button(R.string.logbook_export_adif) { export("adif") }
         button(R.string.logbook_import_adif) {
             require(!adifImportBusy) { getString(R.string.adif_busy) }

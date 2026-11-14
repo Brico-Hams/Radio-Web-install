@@ -51,6 +51,10 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
             }
         }
     }
+    override fun onOpen(db: SQLiteDatabase) {
+        // Additive table: created lazily so existing v2 databases and old backups keep working without a schema version bump.
+        if (!db.isReadOnly) db.execSQL("CREATE TABLE IF NOT EXISTS net_sessions (id TEXT PRIMARY KEY, started TEXT NOT NULL, data TEXT NOT NULL)")
+    }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         checkUi(oldVersion == 1 && newVersion == 2) { UiText(R.string.err_migration_version, oldVersion, newVersion) }
         // SQLiteOpenHelper wraps this in one transaction: any failure leaves the v1 schema and rows intact.
@@ -125,6 +129,19 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
             ))
         }
     }
+    fun saveNetSession(session: NetSession) {
+        session.validated()
+        writableDatabase.insertWithOnConflict("net_sessions", null, ContentValues().apply {
+            put("id", session.id); put("started", orderedUtc.format(session.startUtc)); put("data", session.toJson().toString())
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+    fun deleteNetSession(id: String) {
+        checkUi(writableDatabase.delete("net_sessions", "id = ?", arrayOf(id)) == 1) { UiText(R.string.net_err_session_missing) }
+    }
+    fun netSessions(): List<NetSession> =
+        writableDatabase.rawQuery("SELECT data FROM net_sessions ORDER BY started DESC, rowid DESC", null).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(NetSession.fromJson(JSONObject(cursor.getString(0)))) }
+        }
     fun session(name: String): String {
         requireUi(name.isNotBlank() && name.length <= 120) { UiText(R.string.err_session_name_required) }
         val id = UUID.randomUUID().toString()
@@ -197,6 +214,7 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
                 put("exportedAt", Instant.now().toString())
                 put("warning", "Manual observations; phone positions are not beacon locations. Contains personal location data.")
                 put("logbooks", rows("logbooks")); put("contacts", rows("contacts")); put("sessions", rows("sessions")); put("observations", rows("observations"))
+                put("netSessions", JSONArray().apply { netSessions().forEach { put(it.toJson()) } })
             }.toString(2)
             db.setTransactionSuccessful()
             return result
@@ -299,6 +317,21 @@ class RadioStore(context: Context) : SQLiteOpenHelper(context, "bricohams.db", n
                         }
                     }
                 }
+            }
+            // Net Control sessions arrived after version 2 was defined: old backups simply lack the key.
+            val netRows = snapshot.optJSONArray("netSessions")
+            if (snapshot.has("netSessions")) requireUi(netRows != null && netRows.length() <= 5000) { UiText(R.string.err_too_many_rows, "netSessions") }
+            val seenNets = HashSet<String>()
+            for (index in 0 until (netRows?.length() ?: 0)) {
+                val session = NetSession.fromJson(netRows!!.getJSONObject(index))
+                requireUi(seenNets.add(session.id)) { UiText(R.string.err_row_id, "netSessions") }
+                val existing = db.rawQuery("SELECT data FROM net_sessions WHERE id = ?", arrayOf(session.id)).use { cursor ->
+                    if (cursor.moveToFirst()) NetSession.fromJson(JSONObject(cursor.getString(0))) else null
+                }
+                if (existing == null) {
+                    saveNetSession(session)
+                    inserted++
+                } else requireUi(existing == session) { UiText(R.string.err_row_conflict, "netSessions", session.id) }
             }
             db.setTransactionSuccessful()
             return inserted

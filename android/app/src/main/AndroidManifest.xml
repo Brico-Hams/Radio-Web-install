@@ -38,6 +38,8 @@
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|density" />
         <activity android:name=".TemplateActivity" android:exported="false"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|density" />
+        <activity android:name=".NetControlActivity" android:exported="false"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|density" />
         <activity android:name=".OpenGd77Activity" android:exported="false"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|keyboard|navigation|density" />
         <activity android:name=".ChannelActivity" android:exported="false" android:launchMode="singleTop"

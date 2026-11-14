@@ -19,13 +19,9 @@ data class Contact(
     val logbook: String = Logbook.GENERAL
 ) {
     fun validated(): Contact {
-        requireUi(call.matches(Regex("[A-Z0-9/]{3,20}")) && call.any(Char::isLetter) && call.any(Char::isDigit)) {
-            UiText(R.string.err_call_invalid)
-        }
-        val frequency = frequencyMHz.toBigDecimalOrNull()
-        requireUi(frequency != null && frequency >= BigDecimal("0.1") && frequency <= BigDecimal("1300") &&
-            frequency.scale() <= 6) { UiText(R.string.err_frequency_invalid) }
-        requireUi(mode in setOf("FM", "SSB", "CW", "AM", "RTTY", "SSTV", "DMR", "DIGITALVOICE")) { UiText(R.string.err_mode_unsupported) }
+        requireUi(validCall(call)) { UiText(R.string.err_call_invalid) }
+        requireUi(validFrequency(frequencyMHz)) { UiText(R.string.err_frequency_invalid) }
+        requireUi(mode in MODES) { UiText(R.string.err_mode_unsupported) }
         requireUi(sent.matches(Regex("[0-9+-]{1,8}")) && received.matches(Regex("[0-9+-]{1,8}"))) { UiText(R.string.err_reports_invalid) }
         requireUi(notes.length <= 2000) { UiText(R.string.err_notes_too_long) }
         requireUi(utc >= Instant.parse("1900-01-01T00:00:00Z") && utc < Instant.parse("2100-01-01T00:00:00Z")) {
@@ -33,6 +29,14 @@ data class Contact(
         }
         requireUi(logbook.matches(Regex("[A-Za-z0-9-]{1,64}"))) { UiText(R.string.err_logbook) }
         return this
+    }
+    companion object {
+        val MODES = listOf("FM", "SSB", "CW", "AM", "RTTY", "SSTV", "DMR", "DIGITALVOICE")
+        fun validCall(call: String) = call.matches(Regex("[A-Z0-9/]{3,20}")) && call.any(Char::isLetter) && call.any(Char::isDigit)
+        fun validFrequency(frequencyMHz: String): Boolean {
+            val frequency = frequencyMHz.toBigDecimalOrNull()
+            return frequency != null && frequency >= BigDecimal("0.1") && frequency <= BigDecimal("1300") && frequency.scale() <= 6
+        }
     }
 }
 
@@ -90,7 +94,7 @@ data class Fix(val latitude: Double, val longitude: Double, val accuracyMeters: 
 object Adif {
     private val date = DateTimeFormatter.ofPattern("yyyyMMdd", Locale.ROOT).withZone(ZoneOffset.UTC)
     private val time = DateTimeFormatter.ofPattern("HHmmss", Locale.ROOT).withZone(ZoneOffset.UTC)
-    private fun field(name: String, value: String): String {
+    internal fun field(name: String, value: String): String {
         requireUi(value.all { it.code in 32..126 }) {
             UiText(R.string.err_adif_export_ascii)
         }
