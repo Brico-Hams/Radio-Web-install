@@ -53,21 +53,13 @@ enable transmission or turn the CSV into an AnyTone format. Commercial
 channels require confirming capability in the JSON project and cannot be
 opened under a radio profile without that confirmation.
 
-## Repeaters and REMER
+## Repeaters
 
 Authorized local data from RadioID, URE, and RepeaterBook repeaters can be
 imported in the format expected by the editor. Analog tones are retained as a
 note for review; they are not inferred or programmed from the frequency. Check
 current status, offset, CC, TS, TG, contacts, receive lists, and model limits in
 the CPS.
-
-The REMER tab is available in compatible Quansheng and OpenGD77 planners. Its
-VHF table is a transcription of the reference supplied by the user, with no
-verifiable date; cross-check every item with REMER. CTCSS values are shown as
-notes and are not imported as settings. HF/SSB frequencies are excluded from
-FM memory imports. A parser reading a channel again only validates the file's
-structure: it does not demonstrate current status, RF reception, or visibility
-in the firmware after writing.
 
 ## Save and review
 

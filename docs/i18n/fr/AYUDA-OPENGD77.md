@@ -10,12 +10,6 @@ Dans un codeplug standard de 128 KiB, **Supprimer du fichier** libère la mémoi
 
 Cette procédure ne prend pas en charge les formats Scanner avec zones étendues. Elle opère sur une copie en mémoire : exporter le binaire modifié sous un autre nom et conserver l'original. En mode normal, une confirmation est demandée ; PRO l'omet pour cette session. Aucune écriture n'est effectuée dans la radio : l'écriture physique OpenGD77 reste bloquée tant que la sauvegarde MCU intégrale requise n'est pas disponible. Une radio Quansheng connectée ne permet pas de valider le matériel OpenGD77.
 
-## Importer des répéteurs REMER (fichier local uniquement)
-
-L'onglet REMER du planificateur propose les fréquences VHF/FM transcrites depuis la référence fournie par l'utilisateur. Sélectionner les mémoires nécessaires et les ajouter au codeplug ouvert ; l'application le relit avec le parseur OpenGD77 pour vérifier que le nom, les fréquences et le mode apparaissent dans la liste. Les mémoires sont préparées uniquement pour la réception. Les CTCSS publiés restent des notes de référence : les tonalités ne sont ni codées ni vérifiées en RF.
-
-La liste ne certifie pas qu'une fréquence, une tonalité, un emplacement ou un répéteur soit toujours en service. Confirmer les informations auprès de REMER et des autorités compétentes avant toute utilisation. Les fréquences HF/SSB de la même référence sont présentées à titre de contexte et ne sont pas importées comme canaux VHF. L'acceptation d'un canal par le parseur prouve uniquement que la structure standard du binaire est lisible ; elle ne prouve pas que le firmware l'affichera après écriture, qu'une réception RF est possible ni que la radio a été programmée. L'écriture physique reste bloquée.
-
 ## Importer des canaux CSV de CPS ou CHIRP
 
 Dans **Canaux préparés**, importer `Channels.csv` exporté depuis OpenGD77 CPS ou un CSV avec les en-têtes CHIRP standard (`Name`, `Frequency`, `Duplex`, `Offset`, `Mode`). Le parseur n'accepte que des canaux FM analogiques dans les bandes VHF 136-174 MHz et UHF 400-470 MHz. Pour CHIRP, il résout `+`, `-`, `split` et `off`, et rejette les fréquences, décalages ou modes qu'il ne peut pas valider. Les enregistrements sont convertis en canaux RX uniquement ; les tonalités de la source sont notées, mais non programmées. Vérifier le tableau des canaux préparés, choisir un modèle FM et enregistrer le binaire local pour l'inspecter avant de l'utiliser avec le CPS.

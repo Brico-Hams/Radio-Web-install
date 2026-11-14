@@ -52,21 +52,13 @@ no habilita transmision, ni transforma el CSV en formato AnyTone. Los canales
 comerciales requieren confirmar capacidad en el proyecto JSON y no se pueden
 abrir bajo un perfil de radio que no tenga esa confirmacion.
 
-## Repetidores y REMER
+## Repetidores
 
 Se pueden importar datos locales autorizados de repetidores RadioID, URE y
 RepeaterBook segun el formato esperado por el editor. Los tonos analogicos se
 conservan como nota para revision; no se infieren ni se programan a partir de
 la frecuencia. Comprueba vigencia, desplazamiento, CC, TS, TG, contactos,
 listas de recepcion y limites del modelo en el CPS.
-
-La pestaña REMER esta disponible en los planificadores compatibles de Quansheng
-y OpenGD77. Su tabla VHF es una transcripcion de la referencia aportada por el
-usuario, sin fecha verificable; contrasta cada dato con REMER. Los CTCSS se
-muestran como nota y no se importan como ajustes. Las frecuencias HF/SSB se
-excluyen de la importacion de memorias FM. Que un parser vuelva a leer un canal
-solo valida la estructura del archivo: no demuestra vigencia, recepcion RF ni
-visibilidad en el firmware tras una escritura.
 
 ## Guardar y revisar
 

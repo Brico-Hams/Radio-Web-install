@@ -10,12 +10,6 @@ In einem Standard-Codeplug mit 128 KiB gibt **Aus Datei löschen** den ausgewäh
 
 Dieses Verfahren unterstützt keine Scanner-Formate mit erweiterten Zonen. Es arbeitet mit einer Speicherkopie: Exportiere die bearbeitete Binärdatei unter einem anderen Namen und bewahre das Original auf. Im normalen Modus wird eine Bestätigung angefordert; PRO überspringt sie für diese Sitzung. Es wird nichts ins Funkgerät geschrieben: Das Schreiben auf ein OpenGD77-Gerät bleibt gesperrt, bis das erforderliche vollständige MCU-Backup verfügbar ist. Ein angeschlossenes Quansheng-Funkgerät ermöglicht keine Validierung der OpenGD77-Hardware.
 
-## REMER-Repeater importieren (nur lokale Datei)
-
-Die REMER-Registerkarte des Planers enthält die VHF/FM-Frequenzen, die aus der vom Benutzer bereitgestellten Referenz übernommen wurden. Wähle die benötigten Speicherplätze aus und füge sie dem geöffneten Codeplug hinzu; die Anwendung liest ihn mit dem OpenGD77-Parser erneut ein, um zu prüfen, ob Name, Frequenzen und Modus in der Liste erscheinen. Die Speicherplätze werden nur für den Empfang vorbereitet. Veröffentlichte CTCSS-Werte dienen als Referenzhinweis: Töne werden weder programmiert noch über Funk verifiziert.
-
-Die Liste belegt nicht, dass eine Frequenz, ein Ton, ein Standort oder ein Repeater noch aktuell ist. Prüfe die Angaben vor jeder Verwendung bei REMER und den zuständigen Behörden. HF/SSB-Frequenzen derselben Referenz werden als Kontext angezeigt und nicht als VHF-Kanäle importiert. Wenn der Parser einen Kanal akzeptiert, belegt das nur, dass die Standardstruktur der Binärdatei lesbar ist; es beweist nicht, dass die Firmware ihn nach dem Schreiben anzeigt, HF empfangen wird oder das Funkgerät programmiert wurde. Das Schreiben auf das Gerät bleibt gesperrt.
-
 ## CSV-Kanäle aus CPS oder CHIRP importieren
 
 Importiere unter **Vorbereitete Kanäle** `Channels.csv`, exportiert aus OpenGD77 CPS, oder eine CSV-Datei mit den Standard-CHIRP-Spaltenüberschriften (`Name`, `Frequency`, `Duplex`, `Offset`, `Mode`). Der Parser akzeptiert nur analoge FM-Kanäle innerhalb von VHF 136-174 MHz und UHF 400-470 MHz. Für CHIRP verarbeitet er `+`, `-`, `split` und `off` und weist Frequenzen, Offsets oder Modi zurück, die er nicht validieren kann. Die Datensätze werden in reine RX-Kanäle umgewandelt; Töne aus der Quelle werden vermerkt, aber nicht programmiert. Prüfe die Tabelle der vorbereiteten Kanäle, wähle eine FM-Vorlage und speichere die lokale Binärdatei, um sie vor der Verwendung der CPS zu prüfen.

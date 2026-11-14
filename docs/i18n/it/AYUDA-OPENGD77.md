@@ -21,23 +21,6 @@ sessione. Non scrive sulla radio: la scrittura fisica OpenGD77 resta bloccata fi
 non sarà disponibile il backup MCU completo richiesto. La radio Quansheng collegata non
 consente di validare l'hardware OpenGD77.
 
-## Importare ripetitori REMER (solo file locale)
-
-La scheda REMER del pianificatore propone le frequenze VHF/FM trascritte dalla
-fonte fornita dall'utente. Seleziona le memorie necessarie e
-aggiungile al codeplug aperto; l'applicazione lo rilegge con il parser
-OpenGD77 per verificare che nome, frequenze e modalità compaiano nell'elenco.
-Le memorie sono predisposte solo per la ricezione. I CTCSS pubblicati restano
-una nota di riferimento: i toni non vengono codificati né verificati in RF.
-
-L'elenco non certifica che una frequenza, un tono, una posizione o un ripetitore siano ancora
-attuali. Prima di qualsiasi uso, conferma le informazioni con REMER e le autorità competenti.
-Le frequenze HF/SSB della stessa fonte sono mostrate
-come contesto e non vengono importate come canali VHF. Il fatto che il parser accetti un canale
-attesta soltanto che la struttura standard del binario è leggibile; non dimostra che
-il firmware lo mostri dopo la scrittura, che si riceva RF o che la radio sia stata
-programmata. La scrittura fisica resta bloccata.
-
 ## Importare canali CSV da CPS o CHIRP
 
 In **Canali preparati**, importa `Channels.csv` esportato da OpenGD77 CPS

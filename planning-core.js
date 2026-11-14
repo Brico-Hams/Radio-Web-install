@@ -46,49 +46,6 @@
         mode: "WFM", rxOnly: true, source: "https://www.orm.es/donde-escucharnos/",
         notes: "Radiodifusion FM, no FM estrecha de comunicaciones. Usar receptor FM comercial. Sin coordenadas de transmisor verificadas; no usar como listado por proximidad." })) };
   }
-  const remerSource = "Referencia aportada por el usuario: tabla REMER nacional y repetidores de Murcia; fecha no visible, confirmar vigencia con REMER.";
-  const remerVHF = Object.freeze([
-    { repeater: "R4", channel: "14", rx: "146.70000", tx: "146.10000", tone: "88.5", site: "Lorca" },
-    { repeater: "R2", channel: "22", rx: "146.65000", tx: "146.05000", tone: "156.7", site: "Carrascoy" },
-    { repeater: "R3", channel: "23", rx: "146.67500", tx: "146.07500", tone: "91.5", site: "Ricote" },
-    { repeater: "R4", channel: "24", rx: "146.70000", tx: "146.10000", tone: "91.5", site: "Carche" },
-    { repeater: "R2", channel: "32", rx: "146.65000", tx: "146.05000", tone: "103.5", site: "Yecla" },
-    { repeater: "R3", channel: "33", rx: "146.67500", tx: "146.07500", tone: "118.8", site: "Espuña" },
-    { repeater: "R3", channel: "43", rx: "146.67500", tx: "146.07500", tone: "103.5", site: "Cabo Tinoso" },
-    { repeater: "R3", channel: "44", rx: "146.70000", tx: "146.10000", tone: "103.5", site: "San Julian" },
-    { repeater: "R1", channel: "", rx: "146.62500", tx: "146.02500", tone: "", site: "Sin ubicacion indicada" },
-    { repeater: "R5", channel: "", rx: "146.72500", tx: "146.12500", tone: "", site: "Sin ubicacion indicada" },
-    { repeater: "R6", channel: "", rx: "146.75000", tx: "146.15000", tone: "", site: "Sin ubicacion indicada" }
-  ]);
-  const remerHF = Object.freeze([
-    { band: "80 m", channel: "1", frequency: "3.8045" },
-    { band: "40 m", channel: "2", frequency: "6.9930" },
-    { band: "40 m", channel: "2.1", frequency: "7.3025" },
-    { band: "40 m", channel: "2.2", frequency: "7.5430" },
-    { band: "40 m", channel: "2.3", frequency: "7.5445" },
-    { band: "20 m", channel: "3", frequency: "13.9885" },
-    { band: "30 m", channel: "4", frequency: "10.1614" },
-    { band: "15 m", channel: "5", frequency: "21.8700" },
-    { band: "60 m", channel: "6", frequency: "5.3565" }
-  ]);
-  function remerVHFChannels() {
-    const shortSite = value => ({
-      Lorca: "LORC", Carrascoy: "CARR", Ricote: "RIC", Carche: "CARCH",
-      Yecla: "YECLA", Espuna: "ESP", "Cabo Tinoso": "CABO", "San Julian": "SANJ"
-    }[value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")] || value.normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, ""));
-    return remerVHF.map(entry => ({
-      key: `remer:${entry.repeater}:${entry.channel || entry.rx}`,
-      name: `${entry.site === "Sin ubicacion indicada" ? entry.repeater : shortSite(entry.site)}-${entry.repeater}${entry.channel ? `-${entry.channel}` : ""}`,
-      rx: entry.rx, tx: entry.tx, mode: 0, colorCode: 0, timeslot: 1, rxOnly: true,
-      country: "Spain", region: "Murcia", city: entry.site, tone: entry.tone,
-      source: remerSource, zone: "REMER Murcia",
-      notes: `${entry.site}. CTCSS publicado ${entry.tone ? `${entry.tone} Hz` : "no indicado"}; el editor conserva el dato como nota, no programa tonos.`
-    }));
-  }
-  function remerHFChannels() {
-    return remerHF.map(entry => ({ ...entry, mode: "SSB", source: remerSource }));
-  }
   function asciiName(value, length = 16) {
     const name = String(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\x20-\x7e]/g, "").trim().slice(0, length);
     R.assert(name.length > 0, "Nombre sin caracteres ASCII utilizables.");
@@ -534,6 +491,6 @@
     R.assert(entries.length > 0 && entries.length <= 1024, "Seleccion TG vacia o superior a 1024. Ajusta el prefijo.");
     return { provider: "BrandMeister", entries };
   }
-  Object.assign(R, { norm, asciiName, validMHz, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, predictMonthlyPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, remerVHFChannels, remerHFChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
+  Object.assign(R, { norm, asciiName, validMHz, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, predictMonthlyPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

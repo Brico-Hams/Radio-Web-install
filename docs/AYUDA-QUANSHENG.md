@@ -51,7 +51,7 @@ En **Canales**, las dos tablas se muestran una junto a otra en escritorio y apil
 en movil. En la propia pantalla **Canales**, selecciona el modelo compatible y
 autoriza la lectura. Pulsa **Conectar y leer canales (solo lectura)**:
 la columna izquierda muestra las memorias del banco activo sin permiso de escritura.
-En la derecha, elige PMR446, REMER VHF o repetidores Bricohams Murcia y pulsa
+En la derecha, elige PMR446 o repetidores Bricohams Murcia y pulsa
 **Preparar plantilla para arrastrar**. Tambien aparecen los canales preparados
 desde CSV y los otros catalogos. Arrastra una fila o una seleccion a la izquierda,
 o usa **Copiar seleccion** y **Pegar aqui**. Los canales de catalogo se insertan
@@ -549,7 +549,7 @@ Usa exclusivamente un transporte en memoria: no abre Web Serial, COM ni USB.
 Simula cuatro instalaciones con imagenes de prueba, respaldo completo y permiso
 por sesion, cabecera escrita al final y CRC de cada slot. Selecciona manualmente
 en el modelo bancos CFG distintos del numero de slot, para no confundir ambos.
-En cada banco importa 16 PMR, 11 REMER y un repetidor CSV ficticio; escribe,
+En cada banco importa 16 PMR y un repetidor CSV ficticio; escribe,
 relee, edita, cambia lista, borra y reutiliza la memoria. Comprueba aislamiento
 de bancos, Main, calibracion y ajustes protegidos. En Satelites simula CAT RX y
 STOP sin cambios persistentes. Rechaza AM, que este importador no convierte.
@@ -578,7 +578,7 @@ En **Canales** hay dos tablas:
   antes, o en la mitad inferior para colocarlas despues. Se conservan todos
   los bytes de memoria, incluidos tonos, DCS y atributos no editables.
 - **Canales para cargar**: los preparados en Canales y Satelites (repetidores,
-  REMER, PMR446, SAT y Doppler, aeropuertos, FM y CSV) mas las copias de
+  PMR446, SAT y Doppler, aeropuertos, FM y CSV) mas las copias de
   canales del walkie.
 
 **Pasar canales de una tabla a otra:**
@@ -664,8 +664,6 @@ comentarios. La vigencia no esta confirmada y el CTCSS no se programa.
   [Donde escucharnos](https://www.orm.es/donde-escucharnos/), consultada el
   26-10-2026. Es una seleccion de radiodifusion, no todas las cadenas comerciales.
   No hay coordenadas verificadas de transmisores ni filtrado por proximidad.
-- REMER: descarga de los 11 canales VHF ya disponibles, en CSV solo RX.
-  Seleccion y preparacion individual siguen en la pestana REMER.
 
 AM y radiodifusion WFM son plantillas de consulta/exportacion, no se convierten
 a FM de comunicaciones. El editor de memorias Quansheng actual no las instala;
@@ -682,7 +680,7 @@ listas existentes. Si falta el campo elegido o no hay listas libres, se
 rechaza el lote sin modificar la imagen. No se infiere una provincia por
 la frecuencia ni se usa geolocalizacion implicitamente.
 
-REMER incluye su zona; RepeaterBook conserva region/localidad. Un CSV puede
+RepeaterBook conserva region/localidad. Un CSV puede
 incluir columnas adicionales `Zone`, `Region`/`State`, `City` y `Country`.
 Sin ellas puedes usar lista unica o la zona generica del formato CSV.
 El informe indica el numero asignado a cada grupo nuevo: anotarlo antes de
@@ -748,7 +746,7 @@ documentada (F4HWN v6.0.0), el respaldo disponible sigue siendo parcial y la
 escritura fisica permanece bloqueada. Las nuevas funciones de editar, borrar
 y comprobar canales despues de importarlos son validaciones del archivo local,
 no una prueba de que el firmware los muestre en la pantalla ni de que el cambio
-haya llegado a un slot fisico. Consulta [REMER, aeropuertos y FM comercial](AYUDA-ANYTONE.md)
+haya llegado a un slot fisico. Consulta [Aeropuertos y FM comercial](AYUDA-ANYTONE.md)
 para las diferencias entre preparacion local, compatibilidad de parser y prueba RF.
 
 ## TK-11: ajustes, canales y copia de memoria

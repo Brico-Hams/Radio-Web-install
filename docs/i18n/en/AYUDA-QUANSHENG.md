@@ -50,8 +50,8 @@ their offline copy changes only when another version is installed.
 In **Channels**, the two tables appear side by side on desktop and stacked on mobile.
 Select the compatible model and authorize reading directly in **Channels**.
 Click **Connect and read channels (read-only)**: the left
-column shows the active bank without write permission. On the right, choose PMR446,
-REMER VHF, or Bricohams Murcia repeaters and click **Prepare template for dragging**.
+column shows the active bank without write permission. On the right, choose PMR446
+or Bricohams Murcia repeaters and click **Prepare template for dragging**.
 Channels prepared from CSV and other catalogs appear here too. Drag a row or selection
 to the left, or use **Copy selection** and **Paste here**. Catalog channels are inserted
 RX only using an existing FM memory as a template; AM and DMR are not converted.
@@ -542,8 +542,8 @@ It uses only an in-memory transport: it does not open Web Serial, COM, or USB.
 It simulates four installations using test images, a full backup and
 session-scoped permission, a header written last, and each slot's CRC. In the
 model, it manually selects CFG banks whose numbers differ from the slot number,
-so the two are not confused. Each bank imports 16 PMR channels, 11 REMER
-channels, and a fictitious repeater CSV; writes, reads back, edits, changes a
+so the two are not confused. Each bank imports 16 PMR channels
+and a fictitious repeater CSV; writes, reads back, edits, changes a
 list, deletes, and reuses a memory. It checks isolation between banks, Main,
 calibration, and protected settings. In Satellites it simulates CAT RX and STOP
 without persistent changes. AM is rejected because this importer does not
@@ -568,7 +568,7 @@ Drag a selected row to move the entire selection in its original order, or drag 
 
 **Add channel** asks for a memory number, name, RX, nominal TX, and scan list (0, 1-24, or 25). Leave the number empty to append, or use a free gap if memory 1024 is occupied. If the requested number is occupied, choose **Before**, **After**, or **Cancel**; cancellation leaves the file unchanged. New channels are RX only and use an existing FM template. Only **Write and reread channels** changes the radio, with a complete verified backup.
 
-Channels has two tables: **Radio channels**, read from the active bank or opened file, and **Channels to load**, prepared by repeaters, REMER, PMR446, SAT/Doppler, airports, FM/CSV or copied from the radio. Drag a row to reorder; intermediate rows shift. Drag from the load table into the radio to insert before the target, or append in an empty area. Copying from the radio preserves every byte, including DCS. Select rows and use Copy selection / Paste here, or Ctrl+C / Ctrl+V with the table focused. Radio paste inserts before the first selected row or appends if none is selected. Only contiguous memories up to the first gap shift; later memories remain unchanged. These are local edits, not USB writes.
+Channels has two tables: **Radio channels**, read from the active bank or opened file, and **Channels to load**, prepared by repeaters, PMR446, SAT/Doppler, airports, FM/CSV or copied from the radio. Drag a row to reorder; intermediate rows shift. Drag from the load table into the radio to insert before the target, or append in an empty area. Copying from the radio preserves every byte, including DCS. Select rows and use Copy selection / Paste here, or Ctrl+C / Ctrl+V with the table focused. Radio paste inserts before the first selected row or appends if none is selected. Only contiguous memories up to the first gap shift; later memories remain unchanged. These are local edits, not USB writes.
 
 ### Channel Backup and Restore buttons
 
@@ -629,8 +629,6 @@ is not programmed.
   [Where to listen](https://www.orm.es/donde-escucharnos/), consulted on
   26-10-2026. This is a broadcast selection, not every commercial station.
   Transmitter coordinates are not verified, and there is no proximity filter.
-- REMER: download the 11 available VHF channels as receive-only CSV.
-  Individual selection and preparation remain in the REMER tab.
 
 AM and WFM broadcast templates are for reference/export; they are not converted
 to communications FM. The current Quansheng memory editor does not install
@@ -647,7 +645,7 @@ field is missing or there are no free lists, the batch is rejected without
 changing the image. A province is not inferred from frequency, and geolocation
 is not used implicitly.
 
-REMER includes its zone; RepeaterBook retains region/locality. A CSV can include
+RepeaterBook retains region/locality. A CSV can include
 additional `Zone`, `Region`/`State`, `City`, and `Country` columns. Without them,
 you can use one list for all or the CSV format's generic zone. The report shows
 the number assigned to each new group; record it before closing. List names,
@@ -709,7 +707,7 @@ No new USB test was performed in this session. For the previously documented
 unit (F4HWN v6.0.0), the available backup remains partial and physical writing
 is still locked. The new edit, delete, and post-import channel checks validate
 the local file; they do not prove that firmware displays the channels or that
-the change reached a physical slot. See [REMER, airports, and commercial FM](AYUDA-ANYTONE.md)
+the change reached a physical slot. See [Airports and commercial FM](AYUDA-ANYTONE.md)
 for the differences between local preparation, parser compatibility, and RF testing.
 
 ## TK-11: settings, channels and memory backup

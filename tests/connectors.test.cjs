@@ -1261,15 +1261,14 @@ test("simulacion multiboot completa: cuatro slots, CFG independientes, CRUD, lis
       const repeaters = csv.channels;
       const groups = R.groupQuanshengChannels(original, [
         ...R.pmrChannels().map(channel => ({ ...channel, region: "PMR" })),
-        ...R.remerVHFChannels().map(channel => ({ ...channel, region: "REMER" })),
         ...repeaters.map(channel => ({ ...channel, region: "SIMULATION" }))
       ], "region");
       const imported = R.appendQuanshengChannels(original, groups.channels, 1);
-      assert.equal(imported.added, 28);
+      assert.equal(imported.added, 17);
       await connector.writeConfiguration(imported.image, original, permit);
       let readback = await connector.readConfiguration();
       assert.deepEqual(readback, imported.image);
-      assert.equal(R.readQuanshengChannels(readback).length, 29);
+      assert.equal(R.readQuanshengChannels(readback).length, 18);
       const selected = R.readQuanshengChannels(readback).find(channel => channel.name === "SIM-RPT");
       assert.ok(selected);
       const edited = R.updateQuanshengChannel(readback, {
@@ -1285,7 +1284,7 @@ test("simulacion multiboot completa: cuatro slots, CFG independientes, CRUD, lis
       const removed = R.deleteQuanshengChannel(readback, selected.number);
       await connector.writeConfiguration(removed, readback, permit);
       readback = await connector.readConfiguration();
-      assert.equal(R.readQuanshengChannels(readback).length, 28);
+      assert.equal(R.readQuanshengChannels(readback).length, 17);
       assert.equal(R.readQuanshengChannels(readback).some(channel => channel.number === selected.number), false);
       const restored = R.appendQuanshengChannels(readback, [{
         ...repeaters[0], name: `S${slot}-RPT`, scanList: 24
@@ -1294,7 +1293,7 @@ test("simulacion multiboot completa: cuatro slots, CFG independientes, CRUD, lis
       await connector.writeConfiguration(restored.image, readback, permit);
       readback = await connector.readConfiguration();
       const channels = R.readQuanshengChannels(readback);
-      assert.equal(channels.length, 29);
+      assert.equal(channels.length, 18);
       assert.ok(channels.slice(1).every(channel => channel.rxOnly && channel.scanList > 0));
       assert.equal(channels.filter(channel => channel.name.startsWith("PMR")).length, 16);
       assert.deepEqual(readback.subarray(0x8800), original.subarray(0x8800));

@@ -50,20 +50,12 @@ n’autorise pas l’émission et ne transforme pas le CSV en format AnyTone. Le
 commerciaux nécessitent de confirmer la capacité dans le projet JSON et ne peuvent pas être
 ouverts avec un profil radio qui n’a pas cette confirmation.
 
-## Relais et REMER
+## Relais
 
 Il est possible d’importer des données locales autorisées de relais RadioID, URE et
 RepeaterBook selon le format attendu par l’éditeur. Les tonalités analogiques sont
 conservées comme note à vérifier ; elles ne sont ni déduites ni programmées à partir de la fréquence. Vérifiez la validité, le décalage, le CC, le TS, le TG, les contacts,
 les listes de réception et les limites du modèle dans le CPS.
-
-L’onglet REMER est disponible dans les planificateurs compatibles Quansheng
-et OpenGD77. Son tableau VHF est une transcription de la référence fournie par
-l’utilisateur, sans date vérifiable ; recoupez chaque donnée avec REMER. Les CTCSS sont
-affichés sous forme de note et ne sont pas importés comme réglages. Les fréquences HF/SSB
-sont exclues de l’importation des mémoires FM. Le fait qu’un analyseur relise un canal
-valide uniquement la structure du fichier : cela ne démontre ni sa validité, ni la réception RF, ni
-sa visibilité dans le firmware après une écriture.
 
 ## Enregistrer et vérifier
 

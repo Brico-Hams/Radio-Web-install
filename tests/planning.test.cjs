@@ -281,9 +281,6 @@ test("plantillas regionales separan portadora, designador AM y radiodifusion FM"
   assert.equal(fm.results.find(row => row.city === "Murcia").frequencyMHz, "99.9");
   assert.throws(() => R.channelCSV(air.results), /solo canales FM/);
   assert.throws(() => R.channelCSV(fm.results), /solo canales FM/);
-  const remer = R.parseChannelCSV(R.channelCSV(R.remerVHFChannels()));
-  assert.equal(remer.channels.length, 11);
-  assert.ok(remer.channels.every(channel => channel.rxOnly));
 });
 test("Restore Quansheng copia solo canales, conserva ajustes y exige version identica", () => {
   const current = quanshengConfig();
@@ -443,12 +440,12 @@ test("Quansheng actualiza canales locales conservando bloqueo RX y datos no edit
   const original = quanshengConfig();
   const snapshot = original.slice();
   const updated = R.updateQuanshengChannel(original, {
-    number: 1, name: "LORCA-R4", rx: "146.70000", tx: "146.10000"
+    number: 1, name: "RPT-TEST", rx: "145.65000", tx: "145.05000"
   });
   const [channel] = R.readQuanshengChannels(updated);
-  assert.equal(channel.name, "LORCA-R4");
-  assert.equal(channel.rx, "146.70000");
-  assert.equal(channel.tx, "146.10000");
+  assert.equal(channel.name, "RPT-TEST");
+  assert.equal(channel.rx, "145.65000");
+  assert.equal(channel.tx, "145.05000");
   assert.equal(channel.rxOnly, true);
   assert.deepEqual(updated.subarray(0x8800), original.subarray(0x8800));
   assert.deepEqual(original, snapshot);
@@ -524,41 +521,6 @@ test("Quansheng rechaza formato incorrecto, DMR, frecuencias no soportadas y pla
   assert.throws(() => R.appendQuanshengChannels(original, [{ ...channel, rx: "27.00000" }], 1), /limita/);
   assert.throws(() => R.deleteQuanshengChannel(original, 0), /1-1024/);
   assert.throws(() => R.deleteQuanshengChannel(original, 1024), /vacio/);
-});
-test("REMER Murcia carga solo 2 m FM compatible y excluye sus frecuencias HF SSB", () => {
-  const remer = R.remerVHFChannels();
-  assert.equal(remer.length, 11);
-  assert.ok(remer.every(entry => entry.mode === 0 && entry.rxOnly && entry.source.includes("usuario")));
-  assert.deepEqual(remer.slice(0, 2).map(entry => [entry.name, entry.rx, entry.tx, entry.tone, entry.city]), [
-    ["LORC-R4-14", "146.70000", "146.10000", "88.5", "Lorca"],
-    ["CARR-R2-22", "146.65000", "146.05000", "156.7", "Carrascoy"]
-  ]);
-  assert.ok(remer.every(entry => Number(entry.rx) >= 136 && Number(entry.rx) <= 174));
-  const hf = R.remerHFChannels();
-  assert.equal(hf.length, 9);
-  assert.ok(hf.every(entry => entry.mode === "SSB" && (Number(entry.frequency) < 30)));
-  const quansheng = R.appendQuanshengChannels(quanshengConfig(), remer, 1);
-  const visible = R.readQuanshengChannels(quansheng.image);
-  assert.equal(visible.length, 12);
-  assert.ok(remer.every(entry => visible.some(channel => channel.name === entry.name.slice(0, 10) &&
-    channel.rx === entry.rx && channel.tx === entry.tx && channel.rxOnly)));
-  assert.throws(() => R.appendQuanshengChannels(quanshengConfig(), hf.map(entry => ({
-    name: `HF${entry.channel}`, rx: entry.frequency, tx: entry.frequency, mode: 0
-  })), 1), /analogicos|limita/);
-});
-test("OpenGD77 puede leer los repetidores REMER VHF anadidos al codeplug sin escribir la radio", () => {
-  const original = blankCodeplug();
-  const entries = R.remerVHFChannels();
-  const result = R.appendChannels(original, entries, 1);
-  const visible = R.readChannels(result.image).slice(1);
-  assert.equal(visible.length, entries.length);
-  assert.ok(visible.every(channel => channel.mode === 0 && channel.rxOnly));
-  assert.deepEqual(visible.map(channel => [channel.name, channel.rx, channel.tx]),
-    entries.map(channel => [channel.name, channel.rx, channel.tx]));
-  for (let index = 0; index < entries.length; index++) {
-    const offset = 0x3790 + (index + 1) * 56;
-    assert.ok(result.image.subarray(offset + 32, offset + 36).every(byte => byte === 255));
-  }
 });
 test("append channels clones explicit template, sets free bitmap, preserves all original records and forces RX-only", () => {
   const original = blankCodeplug();

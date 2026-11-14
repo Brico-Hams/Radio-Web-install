@@ -13,13 +13,12 @@
       <fieldset id="plan-controls" class="planning-controls">
       <details><summary>Plantillas Murcia: aeropuertos, frecuencias aereas y radiodifusion FM</summary>
         <p>Solo consulta y exportacion: no se convierten a FM VHF/UHF ni se escriben en el banco de canales. AM requiere receptor compatible; FM comercial requiere su receptor de radiodifusion. Las plantillas no prueban que tu firmware pueda programarlas. Verifica AIP/NOTAM y emisoras vigentes. Fuentes consultadas el 26-10-2026.</p>
-        <div class="operation-buttons"><button id="plan-airports-save" type="button" class="button secondary">Descargar aeropuertos y guardia AM (JSON)</button><button id="plan-broadcast-save" type="button" class="button secondary">Descargar FM Murcia (JSON)</button><button id="plan-remer-save" type="button" class="button secondary">Descargar REMER VHF solo RX (CHIRP CSV)</button></div>
+        <div class="operation-buttons"><button id="plan-airports-save" type="button" class="button secondary">Descargar aeropuertos y guardia AM (JSON)</button><button id="plan-broadcast-save" type="button" class="button secondary">Descargar FM Murcia (JSON)</button></div>
         <p>AM: Murcia LEMI, San Javier LELC, Alicante-Elche LEAL y guardia 121.500 MHz. Se muestra la portadora RF y, cuando procede, el designador 8.33 kHz por separado. FM Murcia: seleccion de Onda Regional y OR Musica; no es un catalogo exhaustivo de cadenas comerciales ni se filtra por ubicacion.</p>
         <div class="table-scroll"><table><thead><tr><th>Plantilla / servicio</th><th>RF MHz</th><th>Designador</th><th>Modo RX</th><th>Fuente</th></tr></thead><tbody id="plan-regional-templates"></tbody></table></div>
       </details>
       <div class="guide-tabs" role="group" aria-label="Tipo de datos">
         <button type="button" class="guide-tab" data-plan-tab="repeaters" aria-pressed="true">Repetidores</button>
-        <button type="button" class="guide-tab" data-plan-tab="remer" aria-pressed="false">REMER</button>
         <button type="button" class="guide-tab" data-plan-tab="contacts" aria-pressed="false" ${page === "quansheng" ? "disabled" : ""}>Contactos DMR</button>
         <button type="button" class="guide-tab" data-plan-tab="sat" aria-pressed="false">SAT / pases</button>
       </div>
@@ -52,16 +51,6 @@
         <p id="plan-rb-info" role="status">Sin consultas. El token individual se configura solo en el entorno del servidor.</p>
         <div class="operation-buttons"><button id="plan-rb-select" type="button" class="button secondary">Seleccionar visibles</button><button id="plan-rb-stage" type="button" class="button primary">Anadir seleccion a canales preparados</button></div>
         <div class="table-scroll"><table><thead><tr><th>Elegir</th><th>Nombre</th><th>RX / TX MHz</th><th>Zona</th><th>Modo / tono</th></tr></thead><tbody id="plan-rb-results"></tbody></table></div>
-      </div>
-      <div id="plan-remer" hidden>
-        <h3>REMER Murcia y repetidores nacionales</h3>
-        <p>Presets transcritos de la tabla que aportaste; la fecha y vigencia no constan. Selecciona solo los repetidores que quieras preparar. Todas las memorias se importan con TX bloqueada. El CTCSS publicado se conserva como nota: esta importacion no programa tonos ni confirma acceso a la red REMER.</p>
-        <p class="card-note">Validacion de formato: canales FM de 2 m (146 MHz), dentro del rango que interpretan F4HWN v6 y el codeplug OpenGD77 estandar. Esto no prueba cobertura RF ni compatibilidad de la variante concreta. La lista se relee tras incorporarla para comprobar que el editor vuelve a mostrar los canales. Para AnyTone se exporta un proyecto/CSV de intercambio, no un archivo CPS nativo.</p>
-        <div class="operation-buttons"><button id="plan-remer-select" type="button" class="button secondary">Seleccionar todos los VHF</button><button id="plan-remer-stage" type="button" class="button primary">Anadir REMER seleccionado a canales preparados</button></div>
-        <div class="table-scroll"><table><thead><tr><th>Elegir</th><th>REMER / canal</th><th>RX / TX MHz</th><th>CTCSS publicado</th><th>Ubicacion</th></tr></thead><tbody id="plan-remer-results"></tbody></table></div>
-        <h3>Frecuencias nacionales REMER en HF (referencia, no importables aquí)</h3>
-        <p>La hoja aportada las identifica para SSB (preferentemente USB). F4HWN de esta aplicacion y el codeplug FM/DMR OpenGD77 no implementan SSB ni validan estas bandas; por eso se muestran solo como referencia y se excluyen de la seleccion para evitar codeplugs ilegibles o radios incapaces de sintonizarlas.</p>
-        <div class="table-scroll"><table><thead><tr><th>Banda</th><th>Canal</th><th>Frecuencia MHz</th><th>Modulacion indicada</th><th>Disponible para importar</th></tr></thead><tbody id="plan-remer-hf"></tbody></table></div>
       </div>
       <div id="plan-contacts" hidden>
         <fieldset id="plan-dmr-auto"><legend>Descarga de contactos y grupos DMR</legend>
@@ -252,7 +241,6 @@
       });
     }
     const chosenRepeaters = new Set();
-    const chosenREMER = new Set();
     const chosenContacts = new Map();
     const staged = new Map();
     function notify(message) { $("plan-status").textContent = message; log(message); }
@@ -326,28 +314,6 @@
         $("plan-rb-results").append(row);
       }
       $("plan-rb-info").textContent = `${visibleRepeaters().length} visibles de ${repeaters.length}; ${rbRejected.length} excluidos. ${rbRejected.slice(0, 4).map(item => `#${item.index}: ${item.reason}`).join(" | ")} Data courtesy of RepeaterBook.com.`;
-    }
-    function renderREMER() {
-      $("plan-remer-results").replaceChildren();
-      for (const entry of R.remerVHFChannels()) {
-        const row = document.createElement("tr");
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = chosenREMER.has(entry.key);
-        checkbox.setAttribute("aria-label", `Elegir REMER ${entry.name} ${entry.rx}`);
-        checkbox.addEventListener("change", () => checkbox.checked ? chosenREMER.add(entry.key) : chosenREMER.delete(entry.key));
-        cell(row, "").append(checkbox);
-        cell(row, entry.name);
-        cell(row, `${entry.rx} / ${entry.tx}`);
-        cell(row, entry.tone ? `${entry.tone} Hz (nota; no se programa)` : "No indicado");
-        cell(row, entry.city);
-        $("plan-remer-results").append(row);
-      }
-      $("plan-remer-hf").replaceChildren(...R.remerHFChannels().map(entry => {
-        const row = document.createElement("tr");
-        for (const value of [entry.band, entry.channel, entry.frequency, "SSB (USB preferente)", "No: fuera de banda/modo soportados"]) cell(row, value);
-        return row;
-      }));
     }
     function visibleContacts() {
       // Country/state were applied by RadioID; local text never hides missing-state records by assumption.
@@ -428,8 +394,8 @@
     panel.querySelectorAll("[data-plan-tab]").forEach(button => button.addEventListener("click", () => {
       currentTab = button.dataset.planTab;
       if ($("plan-advanced") && currentTab === "sat") $("plan-advanced").open = true;
-      for (const tab of ["repeaters", "remer", "contacts", "sat"]) $(`plan-${tab}`).hidden = tab !== currentTab;
-      $("plan-geographic").hidden = currentTab === "sat" || currentTab === "remer";
+      for (const tab of ["repeaters", "contacts", "sat"]) $(`plan-${tab}`).hidden = tab !== currentTab;
+      $("plan-geographic").hidden = currentTab === "sat";
       panel.querySelectorAll("[data-plan-tab]").forEach(item => item.setAttribute("aria-pressed", item === button));
     }));
     $("plan-query").addEventListener("input", () => { renderRepeaters(); renderContacts(); });
@@ -479,10 +445,6 @@
       download("bricohams-fm-murcia-rx.json", JSON.stringify(R.murciaBroadcastTemplate(), null, 2), "application/json");
       notify("Descarga de plantilla de radiodifusion solicitada. Sin escritura en la radio; usar receptor FM comercial.");
     });
-    attach("plan-remer-save", "Descargar plantilla REMER", async () => {
-      download("bricohams-remer-vhf-rx.csv", R.channelCSV(R.remerVHFChannels()), "text/csv;charset=utf-8");
-      notify("Descarga REMER solicitada: 11 canales VHF solo RX; tonos no programados, verificar vigencia.");
-    });
     attach("plan-bricohams-download", "Descargar repetidores Bricohams Murcia", async () => {
       download("bricohams-repetidores-murcia-rx.csv", R.channelCSV(R.bricohamsRepeaterChannels()), "text/csv;charset=utf-8");
       notify("Descarga CSV solicitada; comprueba Descargas. Preset no verificado en RF, no escrito en la radio.");
@@ -524,13 +486,6 @@
     attach("plan-rb-stage", "Preparar repetidores seleccionados", async () => {
       requireRB();
       stage(visibleRepeaters().filter(entry => chosenRepeaters.has(entry.key)));
-    });
-    $("plan-remer-select").addEventListener("click", () => {
-      for (const entry of R.remerVHFChannels()) chosenREMER.add(entry.key);
-      renderREMER();
-    });
-    attach("plan-remer-stage", "Preparar canales REMER seleccionados", async () => {
-      stage(R.remerVHFChannels().filter(entry => chosenREMER.has(entry.key)));
     });
     async function loadContacts(pageNumber, fresh = false) {
       R.assert(page !== "quansheng", "Esta radio no admite contactos DMR.");
@@ -827,11 +782,10 @@
     })
       .catch(error => { $("plan-status").textContent = `ERROR: ${error.message}`; });
     model.addEventListener("change", () => {
-      staged.clear(); chosenRepeaters.clear(); chosenREMER.clear(); chosenContacts.clear();
+      staged.clear(); chosenRepeaters.clear(); chosenContacts.clear();
       renderStaged(); renderContacts(); refreshTemplates();
       notify("Destino cambiado: canales preparados y seleccion de contactos vaciados para no mezclar modelos.");
     });
-    renderREMER();
     return {
       setBusy(value) { busy = value; uiBusy = value; $("plan-controls").disabled = value || Boolean(tracker); },
       stagedEntries: () => [...staged.values()],

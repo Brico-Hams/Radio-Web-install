@@ -20,11 +20,9 @@ Prüfe vor dem Import von Sendern im genauen Handbuch, ob das Gerät kommerziell
 
 Die resultierenden Kanäle werden in der Austausch-CSV als `FM_Broadcast_RX` markiert, mit identischem nominalem RX und TX sowie gesperrtem TX im Editor. Diese Markierung schaltet keine Übertragung frei und macht die CSV nicht zum AnyTone-Format. Für kommerzielle Kanäle muss die Fähigkeit im JSON-Projekt bestätigt werden; sie lassen sich nicht mit einem Profil eines Funkgeräts öffnen, für das diese Bestätigung fehlt.
 
-## Repeater und REMER
+## Repeater
 
 Es lassen sich autorisierte lokale Daten von RadioID, URE und RepeaterBook gemäß dem vom Editor erwarteten Format importieren. Analoge Töne bleiben als Hinweis zur Prüfung erhalten; sie werden nicht aus der Frequenz abgeleitet oder programmiert. Prüfe im CPS Aktualität, Ablage, CC, TS, TG, Kontakte, Empfangslisten und Modellgrenzen.
-
-Der REMER-Tab ist in den kompatiblen Planern von Quansheng und OpenGD77 verfügbar. Seine VHF-Tabelle ist eine Abschrift der vom Benutzer bereitgestellten Referenz ohne überprüfbares Datum; gleiche jeden Eintrag mit REMER ab. CTCSS werden als Hinweis angezeigt und nicht als Einstellungen importiert. HF/SSB-Frequenzen sind vom Import in FM-Speicher ausgeschlossen. Wenn ein Parser einen Kanal erneut einliest, bestätigt das nur die Dateistruktur: Es belegt weder Aktualität noch RF-Empfang noch Sichtbarkeit in der Firmware nach einem Schreibvorgang.
 
 ## Speichern und prüfen
 

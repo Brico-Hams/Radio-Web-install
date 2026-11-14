@@ -1028,10 +1028,10 @@
           <section class="qs-table-box" aria-labelledby="qs-loadable-title"><h3 id="qs-loadable-title">Canales para cargar</h3>
             <div id="qs-country-templates"></div>
             <details class="qs-advanced"><summary>Importacion avanzada y arrastrar</summary>
-            <label for="qs-template-source">Plantillas de canales</label><select id="qs-template-source"><option value="pmr">PMR446 analogicos 1-16 (solo RX)</option><option value="remer">REMER VHF (solo RX)</option><option value="bricohams">Repetidores Bricohams Murcia (solo RX)</option></select>
+            <label for="qs-template-source">Plantillas de canales</label><select id="qs-template-source"><option value="pmr">PMR446 analogicos 1-16 (solo RX)</option><option value="bricohams">Repetidores Bricohams Murcia (solo RX)</option></select>
             <button id="qs-template-prepare" class="button secondary" type="button">Preparar plantilla para arrastrar</button>
             <label class="check"><input id="qs-loadable-select-all" type="checkbox"> Seleccionar todos los canales para cargar</label>
-            <p class="card-note">Los preparados en Canales y Satelites (repetidores, REMER, PMR446, SAT y Doppler, aeropuertos, FM, CSV) y los que copies del walkie.</p>
+            <p class="card-note">Los preparados en Canales y Satelites (repetidores, PMR446, SAT y Doppler, aeropuertos, FM, CSV) y los que copies del walkie.</p>
             <div class="operation-buttons"><button id="qs-loadable-copy" class="button secondary" type="button">Copiar seleccion</button><button id="qs-loadable-paste" class="button secondary" type="button">Pegar aqui</button><button id="qs-loadable-load" class="button secondary" type="button">Cargar seleccion al final del walkie</button></div>
             <div id="qs-loadable-zone" class="table-scroll qs-drop" tabindex="0" aria-label="Canales para cargar: arrastra o pega aqui"><table><thead><tr><th>Mover</th><th>Elegir</th><th>Nombre</th><th>RX MHz</th><th>TX MHz</th><th>Origen</th><th></th></tr></thead><tbody id="qs-loadable"></tbody></table></div>
             <p id="qs-loadable-count" role="status"></p></details></section>
@@ -1248,8 +1248,7 @@
       $("qs-template-prepare").addEventListener("click", () => {
         if (busy || catTracking) return;
         const source = $("qs-template-source").value;
-        if (source === "remer") $("plan-remer-select").click();
-        $({ pmr: "plan-pmr-stage", remer: "plan-remer-stage", bricohams: "plan-bricohams-load" }[source]).click();
+        $({ pmr: "plan-pmr-stage", bricohams: "plan-bricohams-load" }[source]).click();
       });
       $("qs-loadable-select-all").addEventListener("change", () => {
         document.querySelectorAll("[data-qs-loadable]").forEach(input => { input.checked = $("qs-loadable-select-all").checked; });

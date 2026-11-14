@@ -50,7 +50,7 @@ ihre Offline-Kopie ändert sich erst mit Installation einer neuen Version.
 Unter **Kanäle** stehen die beiden Tabellen am Desktop nebeneinander und mobil untereinander.
 Direkt unter **Kanäle** das kompatible Modell wählen und Lesen erlauben.
 Auf **Verbinden und Kanäle lesen (nur Lesen)** klicken: Links
-erscheint die aktive Bank ohne Schreibberechtigung. Rechts PMR446, REMER VHF oder
+erscheint die aktive Bank ohne Schreibberechtigung. Rechts PMR446 oder
 Bricohams-Murcia-Relais wählen und **Vorlage zum Ziehen vorbereiten** anklicken.
 Aus CSV und anderen Katalogen vorbereitete Kanäle erscheinen ebenfalls dort.
 Zeilen oder eine Auswahl nach links ziehen oder **Auswahl kopieren** und **Hier einfügen**
@@ -489,7 +489,7 @@ node --test --test-name-pattern="simulacion multiboot completa" tests\connectors
 ```
 
 Ausschließlich ein Transport im Arbeitsspeicher wird verwendet: kein Web Serial, COM oder USB wird geöffnet.
-Vier Installationen mit Test-Images, vollständiger Sicherung und sitzungsgebundener Berechtigung, zuletzt geschriebenem Header und CRC je Slot werden simuliert. Im Modell werden unterschiedliche CFG-Bänke manuell ausgewählt, damit sie nicht mit Slot-Nummern verwechselt werden. In jeder Bank werden 16 PMR, 11 REMER und ein fiktiver CSV-Repeater importiert; geschrieben, erneut gelesen, bearbeitet, Liste geändert, gelöscht und Speicher wiederverwendet. Isolation von Bänken, Main, Kalibrierung und geschützten Einstellungen wird geprüft. In Satellites werden CAT RX und STOP ohne dauerhafte Änderungen simuliert. AM wird abgelehnt, da dieser Importer es nicht umwandelt.
+Vier Installationen mit Test-Images, vollständiger Sicherung und sitzungsgebundener Berechtigung, zuletzt geschriebenem Header und CRC je Slot werden simuliert. Im Modell werden unterschiedliche CFG-Bänke manuell ausgewählt, damit sie nicht mit Slot-Nummern verwechselt werden. In jeder Bank werden 16 PMR und ein fiktiver CSV-Repeater importiert; geschrieben, erneut gelesen, bearbeitet, Liste geändert, gelöscht und Speicher wiederverwendet. Isolation von Bänken, Main, Kalibrierung und geschützten Einstellungen wird geprüft. In Satellites werden CAT RX und STOP ohne dauerhafte Änderungen simuliert. AM wird abgelehnt, da dieser Importer es nicht umwandelt.
 
 CSV-Dateien akzeptieren abschließende Dezimalnullen wie `145.600000` und Offset `0.600000`,
 ohne Werte mit mehr als fünf signifikanten Nachkommastellen zu runden.
@@ -510,7 +510,7 @@ Eine ausgewählte Zeile ziehen, um die gesamte Auswahl in ursprünglicher Reihen
 
 **Kanal hinzufügen** fragt Speichernummer, Name, RX, nominelle TX und Scanliste (0, 1-24 oder 25) ab. Ohne Nummer wird am Ende angefügt, oder eine freie Lücke verwendet, falls Speicher 1024 belegt ist. Bei belegter Nummer **Davor**, **Danach** oder **Abbrechen** wählen; Abbrechen ändert die Datei nicht. Neue Kanäle sind nur für RX und verwenden eine vorhandene FM-Vorlage. Nur **Schreiben und Kanäle erneut lesen** ändert das Funkgerät, mit vollständiger verifizierter Sicherung.
 
-Zwei Tabellen: **Funkgerätekanäle** aus der aktiven Bank oder Datei und **Zu ladende Kanäle** aus Repeatern, REMER, PMR446, SAT/Doppler, Flughäfen, FM/CSV oder Funkgerätkopien. Ziehen einer Zeile verschiebt die Zwischenzeilen. Aus der Ladetabelle ins Funkgerät wird vor dem Ziel eingefügt, in leerem Bereich angehängt. Kopien vom Funkgerät erhalten jedes Byte einschließlich DCS. Auswahl kopieren / Hier einfügen oder Ctrl+C / Ctrl+V bei fokussierter Tabelle verwenden. Einfügen ins Funkgerät erfolgt vor der ersten Auswahl, sonst am Ende. Nur zusammenhängende Speicher bis zur ersten Lücke werden verschoben, spätere bleiben unverändert. Lokale Bearbeitung, keine USB-Schreibvorgänge.
+Zwei Tabellen: **Funkgerätekanäle** aus der aktiven Bank oder Datei und **Zu ladende Kanäle** aus Repeatern, PMR446, SAT/Doppler, Flughäfen, FM/CSV oder Funkgerätkopien. Ziehen einer Zeile verschiebt die Zwischenzeilen. Aus der Ladetabelle ins Funkgerät wird vor dem Ziel eingefügt, in leerem Bereich angehängt. Kopien vom Funkgerät erhalten jedes Byte einschließlich DCS. Auswahl kopieren / Hier einfügen oder Ctrl+C / Ctrl+V bei fokussierter Tabelle verwenden. Einfügen ins Funkgerät erfolgt vor der ersten Auswahl, sonst am Ende. Nur zusammenhängende Speicher bis zur ersten Lücke werden verschoben, spätere bleiben unverändert. Lokale Bearbeitung, keine USB-Schreibvorgänge.
 
 ### Schaltflächen für Backup und Restore von Kanälen
 
@@ -564,8 +564,6 @@ Alles ist nur RX; die CSV verwendet Duplex off und nominales TX in Kommentaren. 
   [Donde escucharnos](https://www.orm.es/donde-escucharnos/), abgerufen am
   26-10-2026. Eine Auswahl an Rundfunksendern, nicht alle kommerziellen Sender.
   Es liegen keine geprüften Senderkoordinaten vor und es gibt keine Näherungsfilterung.
-- REMER: Download der 11 bereits verfügbaren VHF-Kanäle als CSV, nur RX.
-  Auswahl und einzelne Vorbereitung erfolgen weiterhin auf dem REMER-Tab.
 
 AM und WFM-Rundfunk sind Vorlagen zum Nachschlagen/Exportieren; sie werden nicht in Kommunikations-FM umgewandelt.
 Der aktuelle Quansheng-Speichereditor installiert sie nicht;
@@ -581,7 +579,7 @@ Listennummern, ohne vorhandene Listen zu ersetzen. Fehlt das gewählte Feld oder
 wird der Stapel ohne Änderung des Images abgelehnt. Eine Provinz wird nicht aus der
 Frequenz abgeleitet und Geolokalisierung nicht implizit verwendet.
 
-REMER enthält seine Zone; RepeaterBook erhält Region/Ort. Eine CSV kann zusätzliche Spalten
+RepeaterBook erhält Region/Ort. Eine CSV kann zusätzliche Spalten
 `Zone`, `Region`/`State`, `City` und `Country` enthalten.
 Ohne diese kannst du eine einzelne Liste oder die allgemeine Zone des CSV-Formats verwenden.
 Der Bericht nennt die jeder neuen Gruppe zugewiesene Nummer: vor dem Schließen notieren.
@@ -634,7 +632,7 @@ mit der Annahme, Speicher würden gemeinsam genutzt oder blieben unabhängig.
 In dieser Sitzung fand kein neuer USB-Test statt. Für das zuvor dokumentierte Gerät (F4HWN v6.0.0)
 ist die verfügbare Sicherung weiterhin partiell und physisches Schreiben gesperrt. Die neuen Funktionen zum Bearbeiten, Löschen
 und Prüfen importierter Kanäle validieren die lokale Datei; sie belegen weder, dass die Firmware sie auf dem Bildschirm anzeigt,
-noch dass die Änderung einen physischen Slot erreicht hat. Siehe [REMER, Flughäfen und kommerzielles FM](AYUDA-ANYTONE.md)
+noch dass die Änderung einen physischen Slot erreicht hat. Siehe [Flughäfen und kommerzielles FM](AYUDA-ANYTONE.md)
 zu den Unterschieden zwischen lokaler Vorbereitung, Parser-Kompatibilität und RF-Test.
 
 ## TK-11: Einstellungen, Kanäle und Speichersicherung

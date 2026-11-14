@@ -50,8 +50,8 @@ la copia offline cambia solo installando un'altra versione.
 In **Canali**, le due tabelle sono affiancate su desktop e impilate su mobile.
 Seleziona il modello compatibile e autorizza la lettura direttamente in **Canali**.
 Premi **Connetti e leggi canali (sola lettura)**: la colonna
-sinistra mostra il banco attivo senza permesso di scrittura. A destra scegli PMR446,
-REMER VHF o ripetitori Bricohams Murcia e prepara il modello da trascinare.
+sinistra mostra il banco attivo senza permesso di scrittura. A destra scegli PMR446
+o ripetitori Bricohams Murcia e prepara il modello da trascinare.
 Sono disponibili anche i canali preparati da CSV e dagli altri cataloghi.
 Trascina una riga o una selezione a sinistra, oppure usa copia e incolla.
 I canali del catalogo vengono inseriti solo RX usando una memoria FM esistente
@@ -545,7 +545,7 @@ Usa esclusivamente un trasporto in memoria: non apre Web Serial, COM né USB.
 Simula quattro installazioni con immagini di test, backup completo e autorizzazione
 per sessione, intestazione scritta per ultima e CRC di ogni slot. Seleziona
 manualmente nel modello banchi CFG distinti dal numero dello slot, per non confonderli.
-In ogni banco importa 16 PMR, 11 REMER e un ripetitore CSV fittizio; scrive,
+In ogni banco importa 16 PMR e un ripetitore CSV fittizio; scrive,
 rilegge, modifica, cambia elenco, cancella e riutilizza la memoria. Verifica
 l'isolamento dei banchi, Main, calibrazione e impostazioni protette. In Satellites
 simula CAT RX e STOP senza modifiche persistenti. Rifiuta AM, che questo importatore non converte.
@@ -569,7 +569,7 @@ Trascina una riga selezionata per spostare l'intera selezione nel suo ordine ori
 
 **Aggiungi canale** richiede numero memoria, nome, RX, TX nominale e lista di scansione (0, 1-24 o 25). Lascia il numero vuoto per aggiungere in fondo, oppure in uno spazio libero se la memoria 1024 è occupata. Per un numero occupato scegli **Prima**, **Dopo** o **Annulla**; annullare non modifica il file. I nuovi canali sono solo RX e usano un modello FM esistente. Solo **Scrivi e rileggi canali** modifica la radio, con backup completo verificato.
 
-Due tabelle: **Canali della radio**, letti dal banco attivo o dal file, e **Canali da caricare**, preparati da ripetitori, REMER, PMR446, SAT/Doppler, aeroporti, FM/CSV o copie dalla radio. Trascina una riga per spostarla e far scorrere le intermedie. Dalla tabella da caricare alla radio si inserisce prima della destinazione, o in fondo nell’area vuota. La copia dalla radio conserva ogni byte, DCS incluso. Usa Copia selezione / Incolla qui, o Ctrl+C / Ctrl+V con la tabella attiva. Incolla nella radio inserisce prima della prima selezione o in fondo senza selezione. Scorrono solo memorie contigue fino al primo spazio; le successive restano invariate. Modifiche locali, nessuna scrittura USB.
+Due tabelle: **Canali della radio**, letti dal banco attivo o dal file, e **Canali da caricare**, preparati da ripetitori, PMR446, SAT/Doppler, aeroporti, FM/CSV o copie dalla radio. Trascina una riga per spostarla e far scorrere le intermedie. Dalla tabella da caricare alla radio si inserisce prima della destinazione, o in fondo nell’area vuota. La copia dalla radio conserva ogni byte, DCS incluso. Usa Copia selezione / Incolla qui, o Ctrl+C / Ctrl+V con la tabella attiva. Incolla nella radio inserisce prima della prima selezione o in fondo senza selezione. Scorrono solo memorie contigue fino al primo spazio; le successive restano invariate. Modifiche locali, nessuna scrittura USB.
 
 ### Pulsanti Backup e Restore dei canali
 
@@ -627,8 +627,6 @@ commenti. La validità non è confermata e CTCSS non viene programmato.
   [Dove ascoltarci](https://www.orm.es/donde-escucharnos/), consultata il
   26-10-2026. È una selezione di radiodiffusione, non tutte le emittenti commerciali.
   Non ci sono coordinate verificate dei trasmettitori né filtri di prossimità.
-- REMER: download degli 11 canali VHF già disponibili, in CSV solo RX.
-  Selezione e preparazione individuale restano nella scheda REMER.
 
 AM e radiodiffusione WFM sono modelli per consultazione/esportazione, non vengono convertiti
 in FM di comunicazione. L'attuale editor delle memorie Quansheng non li installa;
@@ -645,7 +643,7 @@ quelli esistenti. Se manca il campo scelto o non ci sono elenchi liberi, il grup
 viene rifiutato senza modificare l'immagine. Non si deduce la provincia
 in base alla frequenza né si usa la geolocalizzazione implicitamente.
 
-REMER include la propria zona; RepeaterBook conserva regione/località. Un CSV può
+RepeaterBook conserva regione/località. Un CSV può
 includere colonne aggiuntive `Zone`, `Region`/`State`, `City` e `Country`.
 Senza di esse puoi usare un solo elenco o la zona generica del formato CSV.
 Il report indica il numero assegnato a ogni nuovo gruppo: annotalo prima di
@@ -710,7 +708,7 @@ In questa sessione non è stato eseguito un nuovo test USB. Per l'unità documen
 (F4HWN v6.0.0), il backup disponibile è ancora parziale e la scrittura fisica resta bloccata.
 Le nuove funzioni per modificare, cancellare e verificare canali dopo l'importazione
 sono convalide del file locale, non una prova che il firmware li mostri sul display né
-che la modifica sia stata trasferita a uno slot fisico. Consulta [REMER, aeroporti e FM commerciale](AYUDA-ANYTONE.md)
+che la modifica sia stata trasferita a uno slot fisico. Consulta [Aeroporti e FM commerciale](AYUDA-ANYTONE.md)
 per le differenze tra preparazione locale, compatibilità del parser e test RF.
 ## TK-11: impostazioni, canali e backup della memoria
 

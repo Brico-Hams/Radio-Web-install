@@ -21,23 +21,6 @@ It does not write to the radio: physical OpenGD77 writing remains blocked until
 the required complete MCU backup is available. The connected Quansheng radio does
 not allow validation of OpenGD77 hardware.
 
-## Import REMER repeaters (local file only)
-
-The planner's REMER tab offers the VHF/FM frequencies transcribed from the
-reference supplied by the user. Select the memories you need and
-add them to the open codeplug; the application rereads it with the
-OpenGD77 parser to check that the name, frequencies, and mode appear in the list.
-The memories are prepared for reception only. Published CTCSS values remain
-reference notes: tones are neither encoded nor verified over RF.
-
-The list does not certify that a frequency, tone, location, or repeater remains
-current. Confirm the information with REMER and the competent authorities before
-any use. HF/SSB frequencies in the same reference are shown for context and are not
-imported as VHF channels. Parser acceptance of a channel only confirms
-that the standard binary structure is readable; it does not prove that
-firmware displays it after writing, that RF can be received, or that the radio has
-been programmed. Physical writing remains blocked.
-
 ## Import CPS or CHIRP CSV channels
 
 Under **Prepared channels**, import `Channels.csv` exported from OpenGD77 CPS
