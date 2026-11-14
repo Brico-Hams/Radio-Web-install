@@ -46,7 +46,8 @@ class AprsChatPanel(
         }
     }
     private val safety = activity.getSharedPreferences(Rt950Safety.PREFERENCES, Activity.MODE_PRIVATE)
-    private lateinit var myCall: EditText
+    private lateinit var myCall: TextView
+    private lateinit var ssidEdit: EditText
     private lateinit var autoAck: CheckBox
     private lateinit var toEdit: EditText
     private lateinit var textEdit: EditText
@@ -84,7 +85,12 @@ class AprsChatPanel(
             render()
         })
         card.addView(powerCycleBox)
-        myCall = field(card, R.string.rt950_msg_callsign, preferences.getString("callsign", "") ?: "", callType)
+        myCall = Brand.text(activity, 15f, colors.text).apply {
+            text = ProfileStore.describeCallsign(activity)
+            contentDescription = text
+            card.addView(this)
+        }
+        ssidEdit = field(card, R.string.profile_aprs_ssid, preferences.getString("aprs-ssid", "") ?: "", InputType.TYPE_CLASS_NUMBER)
         autoAck = CheckBox(activity).apply {
             setText(R.string.rt950_msg_auto_ack)
             setTextColor(colors.text)
@@ -103,10 +109,6 @@ class AprsChatPanel(
         card.addView(packetLog)
     }
 
-    fun suggestCallsign(call: String) {
-        if (myCall.text.isNullOrBlank()) myCall.setText(call)
-    }
-
     /** Fills the draft only; nothing is sent until the user confirms as usual. */
     fun prefill(to: String, text: String) {
         toEdit.setText(to)
@@ -115,7 +117,8 @@ class AprsChatPanel(
 
     /** An automatic ack is also an RF transmission, so it needs a valid callsign too. */
     private fun sync() {
-        messenger.callsign = myCall.text.toString().trim().uppercase()
+        messenger.callsign = ProfileStore.aprsCall(activity, ssidEdit.text.toString())
+        myCall.text = ProfileStore.describeCallsign(activity)
         val allowed = linkProvider()?.txAllowed != false
         messenger.autoAck = autoAck.isChecked && allowed && Ax25Address.isValid(messenger.callsign)
     }
@@ -162,7 +165,7 @@ class AprsChatPanel(
         try {
             sync()
             messenger.send(to, text, System.currentTimeMillis())
-            preferences.edit().putString("callsign", messenger.callsign).putBoolean("auto-ack", autoAck.isChecked).apply()
+            preferences.edit().putString("aprs-ssid", ssidEdit.text.toString().trim()).putBoolean("auto-ack", autoAck.isChecked).apply()
             textEdit.setText("")
             render()
         } catch (error: IllegalArgumentException) {

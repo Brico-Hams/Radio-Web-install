@@ -117,7 +117,7 @@ class RigActivity : LocalizedActivity() {
     private lateinit var memStatus: TextView
     private lateinit var memList: LinearLayout
     private lateinit var satStatus: TextView
-    private lateinit var callsign: EditText
+    private lateinit var callsign: TextView
     private lateinit var sstvModeSpinner: Spinner
     private lateinit var sstvStatus: TextView
     private lateinit var picture: ImageView
@@ -131,6 +131,7 @@ class RigActivity : LocalizedActivity() {
     private var reconnectTo: Pair<Int, Int>? = null
     private var chosenPort = 0
     private var chosenLabel = ""
+    private var profileDeviceTried = false
     private var digShown = false
     private var digShownMode: DigitalMode? = null
     private var digShownModel: RigModel? = null
@@ -557,8 +558,7 @@ class RigActivity : LocalizedActivity() {
 
     private fun buildSstv(body: LinearLayout) = section(body, R.string.rig_section_sstv) { card ->
         card.addView(Brand.text(this, 13f, colors.muted).apply { setText(R.string.rig_sstv_help) })
-        callsign = field(R.string.cat_callsign_hint, preferences.getString("callsign", "") ?: "",
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS)
+        callsign = Brand.text(this, 15f).apply { text = ProfileStore.describeCallsign(this@RigActivity); contentDescription = text }
         card.addView(callsign)
         label(card, R.string.cat_sstv_mode)
         sstvModeSpinner = spinner(transmitModes.map { it.name })
@@ -675,20 +675,44 @@ class RigActivity : LocalizedActivity() {
 
     // USB
 
+    private fun usbEntries() = manager.deviceList.values.filter { SerialRadio.description(it) != null }.sortedBy { it.deviceName }
+        .flatMap { device -> (0 until SerialRadio.portCount(device).coerceAtLeast(1)).map { device to it } }
+
+    private fun entryLabel(device: UsbDevice, port: Int): String {
+        val description = SerialRadio.description(device) ?: ""
+        return if (SerialRadio.portCount(device) > 1)
+            getString(R.string.rig_device_entry_port, device.vendorId, device.productId, description, port)
+        else getString(R.string.rig_device_entry, device.vendorId, device.productId, description)
+    }
+
+    /** Once per screen: reuses the USB device that passed the profile connection test and connects to it. */
+    private fun useProfileDevice() {
+        profileDeviceTried = true
+        val stored = ProfileStore.usbDevice(this) ?: return
+        if (ProfileStore.load(this).radio?.rig == null || chosen != null || !idle) return
+        val entries = usbEntries()
+        val match = UsbIdentity.find(stored, entries.map { (device, port) -> UsbIdentity.of(device, port) })
+        val entry = match?.let { entries[entries.indexOfFirst { (d, p) -> UsbIdentity.of(d, p) == it }] }
+        if (entry == null) {
+            notice.setText(R.string.rig_profile_device_missing)
+            chooseDevice()
+            return
+        }
+        chosen = entry.first
+        chosenPort = entry.second
+        chosenLabel = entryLabel(entry.first, entry.second)
+        connectPressed()
+        notice.text = getString(R.string.rig_profile_device, chosenLabel)
+    }
+
     private fun chooseDevice() {
         if (!idle) return
-        val entries = manager.deviceList.values.filter { SerialRadio.description(it) != null }.sortedBy { it.deviceName }
-            .flatMap { device -> (0 until SerialRadio.portCount(device).coerceAtLeast(1)).map { device to it } }
+        val entries = usbEntries()
         if (entries.isEmpty()) {
             notice.setText(R.string.rig_no_devices)
             return
         }
-        val labels = entries.map { (device, port) ->
-            val description = SerialRadio.description(device) ?: ""
-            if (SerialRadio.portCount(device) > 1)
-                getString(R.string.rig_device_entry_port, device.vendorId, device.productId, description, port)
-            else getString(R.string.rig_device_entry, device.vendorId, device.productId, description)
-        }
+        val labels = entries.map { (device, port) -> entryLabel(device, port) }
         AlertDialog.Builder(this).setTitle(R.string.usb_select_device)
             .setItems(labels.toTypedArray()) { _, index ->
                 chosen = entries[index].first
@@ -855,7 +879,7 @@ class RigActivity : LocalizedActivity() {
 
     private fun pttTest() {
         val r = rig ?: run { notice.setText(R.string.rig_connect_first); return }
-        val call = try { Callsign.normalize(callsign.text.toString()) } catch (error: IllegalArgumentException) {
+        val call = try { ProfileStore.requireCallsign(this) } catch (error: IllegalArgumentException) {
             notice.text = errorText(error); return
         }
         AlertDialog.Builder(this).setTitle(R.string.rig_ptt_title)
@@ -1127,8 +1151,7 @@ class RigActivity : LocalizedActivity() {
     private fun chooseImage() {
         if (!idle || !foreground) return
         try {
-            val call = Callsign.normalize(callsign.text.toString())
-            preferences.edit().putString("callsign", call).apply()
+            ProfileStore.requireCallsign(this)
         } catch (error: IllegalArgumentException) {
             sstvStatus.text = errorText(error)
             return
@@ -1152,7 +1175,7 @@ class RigActivity : LocalizedActivity() {
         pickingImage = false
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null) { sstvStatus.setText(R.string.sstv_cancelled); return }
-        val call = try { Callsign.normalize(callsign.text.toString()) } catch (error: IllegalArgumentException) {
+        val call = try { ProfileStore.requireCallsign(this) } catch (error: IllegalArgumentException) {
             sstvStatus.text = errorText(error); return
         }
         val mode = transmitModes[sstvModeSpinner.selectedItemPosition.coerceIn(0, transmitModes.lastIndex)]
@@ -1365,6 +1388,7 @@ class RigActivity : LocalizedActivity() {
         registerUsbReceiver(attachReceiver, UsbManager.ACTION_USB_DEVICE_ATTACHED)
         registerUsbReceiver(permissionReceiver, USB_PERMISSION)
         consumePermission()
+        if (!profileDeviceTried) useProfileDevice()
         mainHandler.removeCallbacks(digitalTick)
         mainHandler.post(digitalTick)
     }

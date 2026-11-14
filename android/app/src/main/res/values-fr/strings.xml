@@ -119,7 +119,7 @@
     <string name="home_open_channels">Modifier les canaux Quansheng par USB (Bêta)</string>
     <string name="home_open_sstv">Ouvrir SSTV Robot36 depuis WAV</string>
     <string name="home_open_live">Recevoir Morse / Robot36 avec le microphone</string>
-    <string name="home_open_satellites">Ouvrir satellites SGP4 et passages</string>
+    <string name="home_open_satellites">Satellites</string>
     <string name="home_import_json">Importer une sauvegarde JSON Bricohams</string>
     <string name="import_json_title">Importer une sauvegarde locale</string>
     <string name="import_json_message">Les contacts, sessions et observations sont ajoutés. Rien n\'est supprimé ni écrasé : un ID en conflit annule toute l\'importation. N\'utilisez que des sauvegardes de confiance.</string>
@@ -953,7 +953,7 @@
     <string name="rig_dig_purpose_fst4w">LF/MF (balise)</string>
     <string name="rig_trusdx_credit">Prise en charge du (tr)uSDX co-écrite avec ses concepteurs, Guido PE1NNZ et Manuel DL2MAN (dl2man.de). Commandes CAT selon leur documentation.</string>
     <string name="screen_ftx">Modes numériques FT8 / FT4 / FT2</string>
-    <string name="home_open_ftx">Modes numériques FT8 / FT4 / FT2</string>
+    <string name="home_open_ftx">FT8 / modes numériques</string>
     <string name="rig_open_ftx">Décodeur et TX intégrés</string>
     <string name="ftx_intro">Décodeur et générateur propres à RadiCodex pour FT8, FT4 et FT2, dans cette application. Elle écoute l’entrée audio d’Android (micro ou audio USB) ou décode un WAV, et crée le signal : vous actionnez le PTT ou utilisez le VOX.</string>
     <string name="ftx_about">Implémentation propre à RadiCodex by BricoHams (code original GPL-3.0-or-later). FT2 est un candidat historique, validé uniquement face à un récepteur externe.</string>

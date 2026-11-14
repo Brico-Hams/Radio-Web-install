@@ -4,6 +4,16 @@ Version 1.1.0 (versionCode 18): Die APK heißt RadiCodex by BricoHams (Kennung `
 
 Schritt-für-Schritt-Anleitung: [Anleitungen zu RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 
+## Profil und Startseite
+
+Beim ersten Start öffnet sich der **Profil**-Assistent; später bearbeitest du es mit **Profil bearbeiten** auf der Startseite. Die Reihenfolge ist immer:
+
+1. **Funkgerät**: das Gerät, mit dem du dich verbindest (nur eines aktiv). Es werden nur Funkgeräte angezeigt, die die App bereits unterstützt.
+2. **Rufzeichen**: wird einmal geprüft und im APRS-Chat (die APRS-SSID ist optional), bei FT8 und digitalen Modi, im Logbuch, in den APRS-Einstellungen des RT-950, bei SSTV/CW und in Funkgerät-Ansagen wiederverwendet.
+3. **CAT-Steuerung**: Verbindungsart (USB seriell, USB CDC, Bluetooth LE oder Netzwerk, je nach Gerät), Baudrate und weitere Parameter mit den Standardwerten des jeweiligen Geräts sowie die Schaltfläche **Verbindung testen**, die den bereits vorhandenen Identifikationsweg des Geräts nutzt.
+
+Die Startseite zeigt zuerst **Satelliten**, **FT8 / digitale Modi** und **Stationslogbuch (Log)**, darunter die Werkzeuge für dein Funkgerät (Kanäle, Vorlagen, APRS-Chat, Live-Audio, Rotor, Diagnose...). Werkzeuge, die dein Funkgerät nicht nutzen kann, sind mit Erklärung für TalkBack deaktiviert; keine Funktion wird entfernt.
+
 ## Umfang der APK
 
 Die Startseite bietet **Systemsprache**, **Español**, **English (US)**, **Français**

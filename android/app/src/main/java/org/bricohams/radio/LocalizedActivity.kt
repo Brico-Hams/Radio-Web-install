@@ -48,6 +48,7 @@ open class LocalizedActivity : Activity() {
             is LiveAudioActivity -> R.string.screen_live
             is FtxActivity -> R.string.screen_ftx
             is TemplateActivity -> R.string.screen_templates
+            is NetControlActivity -> R.string.screen_net_control
             else -> null
         }
         if (title == null) {

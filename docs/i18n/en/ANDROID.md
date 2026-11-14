@@ -4,6 +4,16 @@ Version 1.1.0 (versionCode 18): the APK is called RadiCodex by BricoHams (packag
 
 Step-by-step guide: [RadiCodex by BricoHams tutorials](TUTORIALES-ANDROID.md).
 
+## Profile and home screen
+
+The first launch opens the **Profile** wizard; afterwards edit it with **Edit profile** on the home screen. The order is always:
+
+1. **Radio**: the radio you connect to (one active radio). Only radios the app already supports are listed.
+2. **Callsign**: validated once and reused by APRS chat (the APRS SSID is optional), FT8 and digital modes, the logbook, the RT-950 APRS settings, SSTV/CW and radio announcements.
+3. **CAT control**: connection type (USB serial, USB CDC, Bluetooth LE or network, as the radio supports), baud rate and other parameters with each radio's defaults, and the **Test connection** button, which runs the identify path that already exists for that radio.
+
+Home shows **Satellites**, **FT8 / digital modes** and **Station log (logbook)** first, then the tools for your radio (channels, templates, APRS chat, live audio, rotor, diagnostics...). Tools your radio cannot use are greyed out with an explanation for TalkBack; no feature is removed.
+
 ## APK scope
 
 The main screen offers **System language**, **Español**, **English (US)**, **Français**,

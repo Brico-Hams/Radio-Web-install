@@ -68,7 +68,7 @@ class Rt950Activity : LocalizedActivity() {
     private lateinit var cloneBox: LinearLayout
     private val safety by lazy { getSharedPreferences(Rt950Safety.PREFERENCES, MODE_PRIVATE) }
     private lateinit var aprsOn: CheckBox
-    private lateinit var callsignEdit: EditText
+    private lateinit var callsignEdit: TextView
     private lateinit var ssidEdit: EditText
     private lateinit var symbolSpinner: Spinner
     private lateinit var routingEdit: EditText
@@ -360,7 +360,11 @@ class Rt950Activity : LocalizedActivity() {
         note(card, R.string.rt950_aprs_help)
         button(card, R.string.rt950_aprs_read) { readAprs() }
         aprsOn = check(card, R.string.rt950_aprs_enabled)
-        callsignEdit = field(card, R.string.rt950_aprs_callsign, "", callType)
+        callsignEdit = Brand.text(this, 15f).apply {
+            text = ProfileStore.describeCallsign(this@Rt950Activity)
+            contentDescription = text
+            card.addView(this)
+        }
         ssidEdit = field(card, R.string.rt950_aprs_ssid, "0", numeric)
         symbolSpinner = spinner(card, R.string.rt950_aprs_symbol, symbols)
         routingEdit = field(card, R.string.rt950_aprs_routing, "0", numeric)
@@ -386,7 +390,7 @@ class Rt950Activity : LocalizedActivity() {
 
     private fun fillAprs(s: Rt950AprsSettings) {
         aprsOn.isChecked = s.aprsEnabled
-        callsignEdit.setText(s.callsign); ssidEdit.setText(s.ssid.toString())
+        callsignEdit.text = ProfileStore.describeCallsign(this); ssidEdit.setText(s.ssid.toString())
         symbolSpinner.setSelection(s.radioSymbol.coerceIn(0, 4))
         routingEdit.setText(s.routingSelect.toString()); positionEdit.setText(s.myPosition.toString())
         priorityEdit.setText(s.priority.toString()); delayEdit.setText(s.dataTxDelay.toString())
@@ -396,13 +400,12 @@ class Rt950Activity : LocalizedActivity() {
         route2Edit.setText(s.customRouting2); route2Ssid.setText(s.customRouting2Ssid.toString())
         sendCustom.isChecked = s.sendCustomMessage
         customMessage.setText(s.customMessage)
-        chat.suggestCallsign(s.callsign)
     }
 
     private fun num(edit: EditText) = edit.text.toString().trim().toInt()
 
     private fun collectAprs(base: Rt950AprsSettings) = base.copy(
-        aprsEnabled = aprsOn.isChecked, callsign = callsignEdit.text.toString().trim().uppercase(), ssid = num(ssidEdit),
+        aprsEnabled = aprsOn.isChecked, callsign = ProfileStore.callsign(this).uppercase(), ssid = num(ssidEdit),
         radioSymbol = symbolSpinner.selectedItemPosition, routingSelect = num(routingEdit), myPosition = num(positionEdit),
         priority = num(priorityEdit), dataTxDelay = num(delayEdit), beaconTxType = num(beaconTypeEdit),
         timedBeaconTime = intervalSpinner.selectedItemPosition,
