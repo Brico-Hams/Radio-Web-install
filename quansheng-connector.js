@@ -86,7 +86,7 @@
       (reset & 1) === 1 && reset >= 0x08002801 && reset < 0x08002800 + image.length,
     "Vectores de aplicacion PY32 no validos. No uses firmware UV-K5 V1 en V3/UV-K1.");
     const content = new TextDecoder("ascii").decode(image);
-    const version = content.match(/F4HWN[^\x00\r\n]{0,12}?v(6\.\d+\.\d+)(?![-\w.])/i);
+    const version = content.match(/F4HWN[^\0\r\n]{0,12}?v(6\.\d+\.\d+)(?![-\w.])/i);
     R.assert(version && !/dev|rolling/i.test(version[0]),
       "Solo se admiten imagenes F4HWN estables v6.x reconocibles. No Karina V1, stock, v5 ni desarrollo.");
     return { version: version[1], size: image.length };

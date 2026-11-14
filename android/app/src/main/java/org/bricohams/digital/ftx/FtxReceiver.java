@@ -750,7 +750,7 @@ public final class FtxReceiver {
         Hit finishWord(byte[] word, ApContext.Pattern pattern, Candidate c, double bestF, int bestT, int bestS) {
             byte[] payload = Arrays.copyOf(word, 77);
             int crc = 0;
-            for (int i = 77; i < 91; i++) crc = (crc << 1) | word[i];
+            for (int i = 77; i < 91; i++) crc = (crc << 1) | (word[i] & 0xff);
             if (Crc14.compute(payload) != crc) return null;
             if (p.scrambled) for (int i = 0; i < 77; i++) payload[i] ^= xor[i];
             if (pattern != null) {

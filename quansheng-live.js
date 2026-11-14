@@ -104,7 +104,7 @@
       this.stopping = false;
     }
     start() {
-      R.assert(!this.done, "El visor ya esta iniciado.");
+      R.assert(this.done == null, "El visor ya esta iniciado.");
       this.done = this.connector.run("Visor Quansheng", async () => {
         const transport = this.connector.transport;
         let nextPing = 0;
@@ -138,7 +138,7 @@
       return this.done;
     }
     async sendKey(code, longPress, permit) {
-      R.assert(this.done && !this.stopping && !this.keyPending &&
+      R.assert(this.done != null && !this.stopping && !this.keyPending &&
         this.connector.connected && !this.connector.transport.error, "Teclado no disponible: inicia el visor o espera la tecla anterior.");
       R.assert(Number.isInteger(code) && (code >= 0 && code <= 15 || code === 17 || code === 18) &&
         typeof longPress === "boolean", "Tecla o tipo de pulsacion no valido; PTT no permitido.");

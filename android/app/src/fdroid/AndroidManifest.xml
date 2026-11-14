@@ -3,7 +3,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" tools:node="remove" />
-    <application android:allowBackup="false" android:usesCleartextTraffic="false">
+    <application android:allowBackup="false" android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false">
         <activity android:name=".OtaActivity" tools:node="remove" />
         <receiver android:name=".OtaInstallReceiver" tools:node="remove" />
     </application>

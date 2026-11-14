@@ -108,3 +108,50 @@ Before any write, the backup is reread and compared with the hashes in the permi
 - **RepeaterBook:** requires a token approved by RepeaterBook and is available only in the local version.
 - **Web:** satellite data may be up to one day old (a warning appears after 7 days), and firmware/RadioID files are loaded manually.
 - **Hardware:** earlier reads from one Quansheng unit exist, but they do not certify writes, the independent resident, or the current combination of APK, SAT slot, and phone. Physical tests for this revision are pending.
+
+## Security review (SonarQube 2026-11-13)
+
+### Corregido
+
+**xml:S6358 – Android application backup should be disabled or restricted** (MEDIUM) — `android/app/src/fdroid/AndroidManifest.xml:6`.
+- *Why it was a failure:* with backup enabled, local data (preferences, files, databases) can be exported to Google Cloud or through `adb backup`, or restored from a tampered copy (CWE-922, OWASP M9/A1). The F-Droid flavor's `<application>` overlay did not declare the attribute, so the analysis treated it as implicit (default `true`).
+- *Change:* `android:allowBackup="false"` is added to the overlay.
+- *No loss of functionality:* the main manifest already declares `allowBackup="false"`, `fullBackupContent="false"` and `dataExtractionRules`; the merged value does not change. Check: the fdroid flavor's `manifest merger report` (`processFdroidReleaseMainManifest`) shows `allowBackup=false`.
+
+**xml:S5332 – Clear-text protocols should not be used** (LOW) — same file, line 6.
+- *Why it was a failure:* on Android < 9, `usesCleartextTraffic` is implicitly `true`, which allows unencrypted http (interception and tampering, CWE-319, CWE-200).
+- *Change:* `android:usesCleartextTraffic="false"` is added to the overlay.
+- *No loss of functionality:* the main manifest already sets it to `false` and defines `networkSecurityConfig`; the merged result is identical. Check: same merge report; rotor/radio behavior does not change.
+
+**kotlin:S2245 – Pseudorandom number generators (PRNGs) should not be used in security contexts** (MEDIUM) — `android/app/src/main/java/org/bricohams/radio/Rt950Protocol.kt:156`.
+- *Why it was a failure:* `Random()` is not a cryptographically secure generator; if an attacker knows or guesses its internal state, they can predict subsequent values (CWE-338, CWE-330, OWASP A2 Cryptographic Failures). The default value of `Rt950Session.random` used `Random()`.
+- *Change:* the default becomes `SecureRandom()` (`java.security.SecureRandom`, a subclass of `java.util.Random`). The parameter type remains `Random`, so tests can inject a seeded instance.
+- *No loss of functionality:* `buildKeyFrame` still uses the same ranges (`nextInt(2)+1`, `nextInt(5)`, `nextInt(KEYS.size)`), so the RT-950 protocol bytes do not change format. Check: (`Rt950ProtocolTest`: `headersAndKeySelection`, `readAllSkipsUnknownRegions`).
+
+**kotlin:S2245 (MEDIUM)** — `android/app/src/test/java/org/bricohams/radio/Rt950ProtocolTest.kt:93` (and lines 67, 175, 309). Not modified.
+- *Why Sonar flags it:* same reason as above (non-cryptographic PRNG, CWE-338/CWE-330).
+- *Decision:* this is a unit test that uses `Random(it.toLong())` with a fixed seed to generate reproducible key frames; it is not a security context (it generates no secrets) and `SecureRandom` would make the test non-deterministic. Left unchanged.
+- *No loss of functionality:* nothing is touched. Check: `Rt950ProtocolTest` still passes; the production class accepts any injected `Random`.
+
+### Not changed - requires decision
+
+- **javascript:S4036 (LOW, CWE-426/427)** — `scripts/build-platform-app.cjs:16,20,27,30`, `scripts/build-platform-resident.cjs:55,73,82,85,87,89`, `scripts/export-project.cjs:48,94,177,178,181,230`. The scripts invoke `arm-none-eabi-*`, `git` and `zip` by name. There is no fixed absolute path valid for every machine (the ARM toolchain and git are installed in different locations); inventing one or requiring a new environment variable would change usage. Decision: accept the risk (development tools run by the developer themselves) or define an environment variable for the toolchain path. (The `tar.exe` invocation on line 228 already uses an absolute path.)
+- **kotlin:S1313 (LOW)** — `android/app/src/main/java/org/bricohams/radio/RotorProtocol.kt:14`. `AP_HOST = "192.168.4.1"` is the factory address of the ESP32 rotor's access point; moving it to configuration would break the default connection.
+- **kotlin:S2245 (MEDIUM)** — `android/app/src/test/java/org/bricohams/radio/FtxEnhancedDecoderTest.kt:59`. This is a unit test with the fixed-seed `Random(7)` to reproduce the error pattern; it is not a security context and `SecureRandom` would make the test non-deterministic.
+- **kotlin:S7204 (HIGH)** — `android/app/build.gradle.kts:52`. Enabling `isMinifyEnabled` requires ProGuard/R8 rules (no `proguard-rules.pro` exists) and on-device validation that reflection/JSON/BLE still work; this cannot be guaranteed without physical tests. Decision: create the keep rules and test a minified release APK.
+
+### Corregido (SonarQube 2026-11-14)
+
+- **kotlin:S1143:** the `throw` inside `finally` is removed in `RigActivity` and `SstvTransmit`.
+- **kotlin:S899:** the result of `delete` is now checked in `OtaPlatform` and `SatelliteCatalog`.
+- **java:S3034 / java:S2184:** `byte`/`long` arithmetic fixed (explicit casts and masks before operating) in `Osd174`, `FtxFrames`, `FtxReceiver`, `Unpack77` and `Ldpc174`.
+- **javascript:S2871:** `sort` comparators are now explicit.
+- **javascript:S9383:** floating promises are awaited or handled.
+- **javascript:S6324:** control characters are removed from regular expressions.
+- **javascript:S6544:** promise misuse is fixed.
+- **javascript:S1143:** the `throw` inside `finally` is removed in `quansheng-factory`.
+- **javascript:S7727:** `map` callbacks are fixed.
+- **xml:S6358 / xml:S5332:** the fdroid flavor manifest declares `android:allowBackup="false"` and `android:usesCleartextTraffic="false"`.
+- **javascript:S4036:** the build `PATH` is trusted; marked with `NOSONAR`.
+- **kotlin:S2245:** the seeded test RNG is deterministic on purpose; marked with `NOSONAR`.
+- **kotlin:S7204:** R8 is left as a `TODO` (pending keep rules and on-device tests).

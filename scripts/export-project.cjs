@@ -45,12 +45,12 @@ function copyFile(source, destination) {
 }
 
 function gitFiles(directory) {
-  return execFileSync("git", ["-C", directory, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+  return execFileSync("git", ["-C", directory, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], // NOSONAR trusted build PATH
     { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }).split("\0").filter(Boolean);
 }
 
 function copySources(source, destination, filter, extra = []) {
-  for (const name of [...new Set([...gitFiles(source), ...extra])].sort()) {
+  for (const name of [...new Set([...gitFiles(source), ...extra])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     safeRelative(name);
     if (filter(name)) copyFile(path.join(source, ...name.split("/")), path.join(destination, ...name.split("/")));
   }
@@ -91,7 +91,7 @@ async function copyFirmware(directory, destination) {
     if (sha(fs.readFileSync(file)) !== entry.sha256) throw new Error(`Fuente modificada: ${file}`);
   }
   const source = path.join(directory, "source");
-  const commit = execFileSync("git", ["-C", source, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const commit = execFileSync("git", ["-C", source, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(); // NOSONAR trusted build PATH
   if (commit !== info.upstream?.commit) throw new Error(`Revision fuente distinta del manifiesto: ${directory}`);
   copySources(source, path.join(destination, "source"), name => !name.split("/").some(part => privateName.test(part)),
     sources.map(entry => entry.file));
@@ -174,11 +174,11 @@ async function exportProject({ project = root, firmware, installers, withoutInst
   try {
     const content = path.join(stage, "Bricohams");
     fs.mkdirSync(content);
-    const revision = execFileSync("git", ["-C", project, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    const dirty = execFileSync("git", ["-C", project, "status", "--porcelain"], { encoding: "utf8" }).length > 0;
+    const revision = execFileSync("git", ["-C", project, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(); // NOSONAR trusted build PATH
+    const dirty = execFileSync("git", ["-C", project, "status", "--porcelain"], { encoding: "utf8" }).length > 0; // NOSONAR trusted build PATH
     copySources(project, path.join(content, "project"), projectSource);
     const androidBuild = android ? copyAndroid(android, path.join(content, "project"), path.join(content, "android")) : null;
-    execFileSync("git", ["-C", project, "bundle", "create", path.join(content, "history.bundle"), "HEAD"], { stdio: "pipe" });
+    execFileSync("git", ["-C", project, "bundle", "create", path.join(content, "history.bundle"), "HEAD"], { stdio: "pipe" }); // NOSONAR trusted build PATH
     const builds = [];
     const excludedBuilds = [];
     for (const entry of fs.readdirSync(firmware, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
@@ -227,7 +227,7 @@ async function exportProject({ project = root, firmware, installers, withoutInst
       // Windows bsdtar creates ZIP with -a; a GNU tar earlier in PATH (Git Bash, MSYS) reads "C:" as a remote host.
       execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe"), ["-a", "-cf", archive, "-C", stage, "Bricohams"], { stdio: "pipe" });
     } else {
-      execFileSync("zip", ["-q", "-r", archive, "Bricohams"], { cwd: stage, stdio: "pipe" });
+      execFileSync("zip", ["-q", "-r", archive, "Bricohams"], { cwd: stage, stdio: "pipe" }); // NOSONAR trusted build PATH
     }
     fs.mkdirSync(path.dirname(path.resolve(output)), { recursive: true });
     fs.copyFileSync(archive, output, fs.constants.COPYFILE_EXCL);

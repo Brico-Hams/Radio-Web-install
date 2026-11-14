@@ -52,7 +52,7 @@ function build(output, vendor) {
   assert(fs.existsSync(apacheLicense) &&
     fs.readFileSync(apacheLicense, "utf8").includes("Apache License"), "Falta la licencia Apache-2.0 de CMSIS.");
   for (const directory of includes) assert(fs.existsSync(directory), `Falta ${directory}`);
-  const compiler = execFileSync("arm-none-eabi-gcc", ["--version"], { encoding: "utf8" }).split(/\r?\n/)[0];
+  const compiler = execFileSync("arm-none-eabi-gcc", ["--version"], { encoding: "utf8" }).split(/\r?\n/)[0]; // NOSONAR trusted build PATH; toolchain location is not fixed
   fs.mkdirSync(output, { recursive: true });
   const embedded = [];
   const packages = [];
@@ -70,7 +70,7 @@ function build(output, vendor) {
   const files = ["startup.S", "resident.c", "memory.c", "bh_shell.c", "bh_launcher.c",
     "bh_text.c", "bh_package.c", "resident_apps.c"];
   const elf = path.join(output, "bricohams-platform.elf");
-  execFileSync("arm-none-eabi-gcc", ["-mcpu=cortex-m0plus", "-mthumb", "-std=c11", "-Os",
+  execFileSync("arm-none-eabi-gcc", ["-mcpu=cortex-m0plus", "-mthumb", "-std=c11", "-Os", // NOSONAR trusted build PATH
     "-ffreestanding", "-fno-builtin", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
     "-ffunction-sections", "-fdata-sections", "-fstack-usage",
     "-Wall", "-Wextra", "-Wconversion", "-Werror", "-DPY32F071x8",
@@ -79,14 +79,14 @@ function build(output, vendor) {
     `-Wl,-T,${path.join(source, "resident.ld")}`,
     `-Wl,-Map,${path.join(output, "bricohams-platform.map")}`,
     ...files.map(file => path.join(source, file)), bundle, system, "-lgcc", "-o", elf], { stdio: "inherit" });
-  const unresolved = execFileSync("arm-none-eabi-nm", ["--undefined-only", elf], { encoding: "utf8" }).trim();
+  const unresolved = execFileSync("arm-none-eabi-nm", ["--undefined-only", elf], { encoding: "utf8" }).trim(); // NOSONAR trusted build PATH
   assert.equal(unresolved, "", "Hay simbolos sin resolver.");
   const binary = path.join(output, "bricohams-platform-experimental.bin");
-  execFileSync("arm-none-eabi-objcopy", ["-O", "binary", elf, binary]);
+  execFileSync("arm-none-eabi-objcopy", ["-O", "binary", elf, binary]); // NOSONAR trusted build PATH
   const bytes = fs.readFileSync(binary);
-  const symbols = execFileSync("arm-none-eabi-nm", ["--defined-only", elf], { encoding: "utf8" });
+  const symbols = execFileSync("arm-none-eabi-nm", ["--defined-only", elf], { encoding: "utf8" }); // NOSONAR trusted build PATH
   const inspected = inspectResident(bytes, symbols);
-  const size = execFileSync("arm-none-eabi-size", [elf], { encoding: "utf8" }).trim();
+  const size = execFileSync("arm-none-eabi-size", [elf], { encoding: "utf8" }).trim(); // NOSONAR trusted build PATH
   const sha256 = data => crypto.createHash("sha256").update(data).digest("hex");
   fs.writeFileSync(path.join(output, "build-info.json"), JSON.stringify({
     format: "bricohams-independent-resident-build", version: 1, compiler,

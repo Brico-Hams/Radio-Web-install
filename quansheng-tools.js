@@ -39,7 +39,7 @@
     R.assert(stack >= 0x20000000 && stack <= 0x20004000 && !(stack & 3) &&
       (reset & 1) && reset >= 0x08002801 && reset < 0x08002800 + image.length, "Vectores PY32 invalidos.");
     const text = new TextDecoder("ascii").decode(image);
-    const version = text.match(/F4HWN[^\x00\r\n]{0,12}?v([67]\.\d+\.\d+)(?![-\w.])/i);
+    const version = text.match(/F4HWN[^\0\r\n]{0,12}?v([67]\.\d+\.\d+)(?![-\w.])/i);
     R.assert(version && (version[1].startsWith("7.") ? packaged : !packaged),
       "Solo BIN v6 sin recursos o paquete v7 FWAT/FWA1 completo; version no reconocida.");
     R.assert(!/SA818/i.test(text), "Variante SA818 no admitida para esta radio.");

@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const assert = require("node:assert/strict");
 const root = path.join(__dirname, "..");
+const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const catalog = require("../f4hwn-options.js").F4HWN_OPTIONS;
 const localCatalog = require("../docs/bricohams-options-v6.1.0.json");
 const history = require("../docs/f4hwn-history-presets.json");
@@ -141,7 +142,7 @@ const slug = value => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
   .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 function optionNames() {
-  return [...new Set(Object.values(catalog.presets).flatMap(preset => Object.keys(preset.options)))].sort();
+  return [...new Set(Object.values(catalog.presets).flatMap(preset => Object.keys(preset.options)))].sort(byCodeUnit);
 }
 function checkOptionCoverage(text) {
   for (const name of allOptionNames()) assert(text.includes(`\`${name}\``), `Falta explicar ${name}`);
@@ -173,7 +174,7 @@ function resolvePresets(catalog) {
 function allOptionNames() {
   const historical = history.versions.filter(version => version.status === "verified")
     .flatMap(version => Object.values(resolvePresets(version.presets)).flatMap(options => Object.keys(options)));
-  return [...new Set([...optionNames(), ...historical])].sort();
+  return [...new Set([...optionNames(), ...historical])].sort(byCodeUnit);
 }
 const PRESET_TEXT = Object.freeze({
   es: { title: "F4HWN: valores de todas las opciones por preset", generated: "Documento generado por `npm run build:help`; no editar las filas a mano.",
@@ -302,7 +303,7 @@ function presetMarkdown(lang = "es") {
   for (const name of optionNames()) lines.push(`| \`${name}\` | ${columns.map(column => value(catalog.presets[column].options, name)).join(" | ")} |`);
   lines.push("", "## Bricohams local v6.1.0", "", `${t.localCommit}: \`${localCatalog.upstream.commit}\`.`, ...t.local, "",
     ...header(Object.keys(localCatalog.presets)));
-  const localNames = [...new Set(Object.values(localCatalog.presets).flatMap(preset => Object.keys(preset.options)))].sort();
+  const localNames = [...new Set(Object.values(localCatalog.presets).flatMap(preset => Object.keys(preset.options)))].sort(byCodeUnit);
   for (const name of localNames) lines.push(`| \`${name}\` | ${Object.values(localCatalog.presets).map(preset => value(preset.options, name)).join(" | ")} |`);
   lines.push("", `## ${t.historical}`, "", t.snapshot(history.inspectedAt, history.versions.length), ...t.history, "");
   for (const version of history.versions) {
@@ -314,7 +315,7 @@ function presetMarkdown(lang = "es") {
     }
     const resolved = resolvePresets(version.presets);
     const columns = Object.keys(resolved);
-    const names = [...new Set(Object.values(resolved).flatMap(options => Object.keys(options)))].sort();
+    const names = [...new Set(Object.values(resolved).flatMap(options => Object.keys(options)))].sort(byCodeUnit);
     lines.push(`${t.sha}: \`${version.sha256}\`.`, "", ...header(columns));
     for (const name of names) lines.push(`| \`${name}\` | ${columns.map(column => value(resolved[column], name)).join(" | ")} |`);
     lines.push("");
@@ -359,7 +360,7 @@ function inline(text, source, lang = "es") {
   const tokens = [];
   const protect = html => {
     tokens.push(html);
-    return `\u0000${tokens.length - 1}\u0000`;
+    return `\uE000${tokens.length - 1}\uE000`;
   };
   let value = text.replace(/`([^`]+)`/g, (_, code) => protect(`<code>${escape(code)}</code>`));
   value = value.replace(/<(https?:\/\/[^>\s]+)>/gi, (_, target) =>
@@ -370,7 +371,7 @@ function inline(text, source, lang = "es") {
     return protect(`<a href="${escape(href)}"${external ? ' target="_blank" rel="noopener noreferrer"' : ""}>${escape(label)}</a>`);
   });
   value = escape(value).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  return value.replace(/\u0000(\d+)\u0000/g, (_, index) => tokens[Number(index)]);
+  return value.replace(/\uE000(\d+)\uE000/g, (_, index) => tokens[Number(index)]);
 }
 // options.ids reuses the Spanish heading ids so anchors stay valid across languages.
 function render(markdown, source, { lang = "es", ids } = {}) {
@@ -567,7 +568,7 @@ function checkParity(esText, esFile, trText, trFile, lang) {
   if (es.code.length !== tr.code.length) problems.push(`bloques de codigo: ${es.code.length} frente a ${tr.code.length}`);
   else es.code.forEach((block, i) => { if (block !== tr.code[i]) problems.push(`bloque de codigo ${i + 1} modificado: ${block.split("\n")[1] ?? ""}`); });
   if (es.tableRows !== tr.tableRows) problems.push(`filas de tabla: ${es.tableRows} frente a ${tr.tableRows}`);
-  const bag = list => [...list].sort();
+  const bag = list => [...list].sort(byCodeUnit);
   const diff = (a, b) => {
     const rest = [...b];
     const missing = [];
@@ -687,7 +688,7 @@ if (require.main === module) build();
 function helpImages() {
   return [...new Set(Object.keys(pages).flatMap(source =>
     [...fs.readFileSync(path.join(root, "docs", source), "utf8").matchAll(/^!\[[^\]]+\]\(([^)\s]+)\)$/gm)]
-      .map(match => image(match[1], source))))].sort();
+      .map(match => image(match[1], source))))].sort(byCodeUnit);
 }
 module.exports = { build, render, pages, helpImages, optionNames, allOptionNames, resolvePresets, checkOptionCoverage, presetMarkdown,
   HELP_LANGS, helpCenterFile, renderHelpCenter, buildHelpCenters,

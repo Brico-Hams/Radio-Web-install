@@ -1284,7 +1284,7 @@
           const key = event.key.toLowerCase();
           if (key !== "c" && key !== "v") return;
           event.preventDefault();
-          action(key === "c" ? "Copiar canales" : "Pegar canales", async () => key === "c" ? copyFrom(target) : pasteInto(target));
+          void action(key === "c" ? "Copiar canales" : "Pegar canales", async () => key === "c" ? copyFrom(target) : pasteInto(target));
         });
         $(zone).addEventListener("dragstart", event => {
           const row = event.target.closest("tr[data-number], tr[data-key]");
@@ -1319,7 +1319,7 @@
           const drag = dragging;
           const row = event.target.closest("tr[data-number]");
           dragging = null;
-          action(target === "radio" ? "Soltar canales en el walkie" : "Soltar canales en la tabla para cargar", async () => {
+          void action(target === "radio" ? "Soltar canales en el walkie" : "Soltar canales en la tabla para cargar", async () => {
             if (target === "loadable") {
               R.assert(drag.source === "radio", "Esos canales ya estan en la tabla de canales para cargar.");
               addCopies(radioItems(drag.numbers));
@@ -1363,7 +1363,7 @@
       }
       $("qs-add-form").addEventListener("submit", event => {
         event.preventDefault();
-        action("Anadir canal Quansheng local", async () => {
+        void action("Anadir canal Quansheng local", async () => {
           R.assert(image, "Lee o abre primero los canales del walkie.");
           const rx = $("qs-add-rx").value.trim();
           const entry = { key: "nuevo", name: $("qs-add-name").value, rx, tx: $("qs-add-tx").value.trim() || rx, mode: 0 };
@@ -1476,7 +1476,7 @@
       });
       $("qs-channel-form").addEventListener("submit", event => {
         event.preventDefault();
-        action("Actualizar canal Quansheng local", async () => {
+        void action("Actualizar canal Quansheng local", async () => {
           R.assert(image && editNumber !== null, "Selecciona primero un canal Quansheng.");
           image = R.updateQuanshengChannel(image, {
             number: editNumber, name: $("qs-channel-name").value,
@@ -1612,7 +1612,7 @@
       }));
       $("channel-form").addEventListener("submit", event => {
         event.preventDefault();
-        action("Editar canal local", async () => {
+        void action("Editar canal local", async () => {
           image = R.updateChannel(image, {
             number: editNumber, name: $("channel-name").value, rx: $("channel-rx").value, tx: $("channel-tx").value,
             mode: Number($("channel-mode").value), colorCode: Number($("channel-color").value), timeslot: Number($("channel-slot").value),

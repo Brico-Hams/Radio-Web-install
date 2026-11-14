@@ -208,7 +208,7 @@ class SatelliteStore(private val directory: File) {
         val temporary = File(directory, target.name + ".tmp")
         temporary.writeText(text)
         if (!temporary.renameTo(target)) {
-            target.delete()
+            if (!target.delete() && target.exists()) throw IOException("No se pudo guardar ${target.name}.")
             if (!temporary.renameTo(target)) throw IOException("No se pudo guardar ${target.name}.")
         }
     }

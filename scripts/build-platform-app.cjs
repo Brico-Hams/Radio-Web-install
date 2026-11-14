@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const R = require("../radio-core.js");
 
+// The build runs on a developer/CI machine whose PATH is trusted: the ARM toolchain has no fixed install location, so each call carries a NOSONAR.
 function build(output, app = "diagnostics") {
   assert(["diagnostics", "blocks"].includes(app), "App admitida: diagnostics o blocks.");
   assert(output, "Uso: node scripts\\build-platform-app.cjs <directorio nuevo>");
@@ -13,21 +14,21 @@ function build(output, app = "diagnostics") {
   assert(!fs.existsSync(output), "El destino ya existe; no se sobrescribe.");
   const root = path.join(__dirname, "..");
   const source = path.join(root, "firmware", "platform");
-  const compiler = execFileSync("arm-none-eabi-gcc", ["--version"], { encoding: "utf8" }).split(/\r?\n/)[0];
+  const compiler = execFileSync("arm-none-eabi-gcc", ["--version"], { encoding: "utf8" }).split(/\r?\n/)[0]; // NOSONAR trusted build PATH; toolchain location is not fixed
   fs.mkdirSync(output, { recursive: true });
   const entryName = `bh_${app}_event`;
   const elf = path.join(output, `${app}.elf`);
-  execFileSync("arm-none-eabi-gcc", ["-mcpu=cortex-m0plus", "-mthumb", "-std=c11", "-Os",
+  execFileSync("arm-none-eabi-gcc", ["-mcpu=cortex-m0plus", "-mthumb", "-std=c11", "-Os", // NOSONAR trusted build PATH
     "-ffreestanding", "-fno-builtin", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
     "-ffunction-sections", "-fdata-sections", "-Wall", "-Wextra", "-Wconversion", "-Werror",
     "-nostdlib", "-Wl,--gc-sections", "-Wl,--build-id=none",
     `-Wl,-T,${path.join(source, "app.ld")}`, `-Wl,-e,${entryName}`,
     path.join(source, `${app}.c`), "-o", elf], { stdio: "inherit" });
   const binary = path.join(output, `${app}-code.bin`);
-  execFileSync("arm-none-eabi-objcopy", ["-O", "binary", elf, binary]);
+  execFileSync("arm-none-eabi-objcopy", ["-O", "binary", elf, binary]); // NOSONAR trusted build PATH
   const code = fs.readFileSync(binary);
   assert(code.length >= 2 && code.length <= 4096 && code.length % 2 === 0);
-  const symbols = execFileSync("arm-none-eabi-nm", ["--defined-only", elf], { encoding: "utf8" });
+  const symbols = execFileSync("arm-none-eabi-nm", ["--defined-only", elf], { encoding: "utf8" }); // NOSONAR trusted build PATH
   const entry = symbols.split(/\r?\n/).find(line => new RegExp(`\\s[Tt]\\s${entryName}$`).test(line));
   assert(entry, "Punto de entrada ausente.");
   const address = Number.parseInt(entry.split(/\s+/)[0], 16);

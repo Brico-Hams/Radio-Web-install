@@ -50,6 +50,7 @@ android {
     }
     buildTypes {
         getByName("release") {
+            // TODO: enable isMinifyEnabled once keep rules exist for the reflection/serialization paths (none in the project yet).
             vcsInfo.include = false
             if (releaseSigningReady) signingConfig = signingConfigs.getByName("release")
         }

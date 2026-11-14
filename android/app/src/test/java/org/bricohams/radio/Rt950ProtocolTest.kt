@@ -90,7 +90,7 @@ class Rt950ProtocolTest {
         assertEquals(20, Rt950Protocol.KEYS.size)
         assertEquals(1, Rt950Protocol.keyIndex(Rt950Protocol.FIXED_KEY_FRAME))
         repeat(50) {
-            val frame = Rt950Protocol.buildKeyFrame(Random(it.toLong()))
+            val frame = Rt950Protocol.buildKeyFrame(Random(it.toLong())) // NOSONAR test-only: seeded Random for reproducible frames
             assertTrue(Rt950Protocol.keyIndex(frame) in 0 until 20)
         }
     }

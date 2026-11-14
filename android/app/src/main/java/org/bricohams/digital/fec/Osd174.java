@@ -158,7 +158,7 @@ public final class Osd174 {
         if (errors > maxHardErrors) return null;
         byte[] payload = Arrays.copyOf(word, 77);
         int crc = 0;
-        for (int i = 77; i < K; i++) crc = (crc << 1) | word[i];
+        for (int i = 77; i < K; i++) crc = (crc << 1) | (word[i] & 0xff);
         if (Crc14.compute(payload) != crc) return null;
         if (!ldpc.checksPass(word)) return null;
         return new Result(word, bestDistance, errors);

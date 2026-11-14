@@ -37,5 +37,5 @@ async function refresh(file = output) {
   }
 }
 
-if (require.main === module) refresh();
+if (require.main === module) void refresh();
 module.exports = { snapshot, refresh };

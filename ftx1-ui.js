@@ -491,7 +491,7 @@
     });
     bind("ctl-side", "change", () => { ctlRead = false; });
     bind("ctl-poll", "change", () => {
-      if ($("ctl-poll").checked) pollMeters();
+      if ($("ctl-poll").checked) void pollMeters();
       else stopPolling();
     });
     const baseRefresh = refresh;

@@ -108,7 +108,7 @@ public final class Unpack77 {
 
     private static int get(byte[] bits, int start, int width) {
         int v = 0;
-        for (int i = 0; i < width; i++) v = (v << 1) | bits[start + i];
+        for (int i = 0; i < width; i++) v = (v << 1) | (bits[start + i] & 0xff);
         return v;
     }
 }

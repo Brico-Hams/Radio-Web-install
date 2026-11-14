@@ -56,7 +56,7 @@ class FtxEnhancedDecoderTest {
     @Test fun osdRecoversWordBeyondWhatHardDecisionsGive() {
         val word = codeword(Pack77.pack("CQ EA1ABC IN80"))
         val osd = Osd174(ldpc)
-        val random = Random(7)
+        val random = Random(7) // NOSONAR test-only: seeded Random for a reproducible flip pattern
         val flips = HashSet<Int>()
         while (flips.size < 8) flips.add(random.nextInt(174))
         // Flipped bits carry low confidence, as noisy symbols do.
