@@ -328,6 +328,12 @@ class NetControlActivity : LocalizedActivity() {
         field("power", R.string.net_power_w, d.text["power"] ?: "25", size = 22f, numeric = true)
         field("town", R.string.net_town, d.text["town"] ?: "")
         field("locator", R.string.net_locator, d.text["locator"] ?: "", caps = true)
+        field("zone", R.string.net_zone, d.text["zone"] ?: "")
+        val zoneOptions = (session.usedZones() + NetCheckIn.ZONE_SUGGESTIONS).distinctBy { it.lowercase() }
+        val currentZone = d.text["zone"].orEmpty().trim()
+        chips(R.string.net_zone_suggestions, zoneOptions.map { it to it.equals(currentZone, ignoreCase = true) }) {
+            d.text["zone"] = if (zoneOptions[it].equals(currentZone, ignoreCase = true)) "" else zoneOptions[it]
+        }
         chips(R.string.net_power_source, NetPowerSource.values().map { getString(it.label) to (it == d.source) }) {
             d.source = NetPowerSource.values()[it]; d.sourceChosen = true
         }
@@ -377,7 +383,7 @@ class NetControlActivity : LocalizedActivity() {
             return
         }
         draft.text.putAll(mapOf("name" to previous.name, "power" to previous.powerWatts.toString(), "town" to previous.town,
-            "locator" to previous.locator, "antenna" to previous.antenna, "equipment" to previous.equipment))
+            "locator" to previous.locator, "antenna" to previous.antenna, "equipment" to previous.equipment, "zone" to previous.zone))
         draft.type = previous.stationType; draft.source = previous.powerSource; draft.sourceChosen = true
         render()
         message(getString(R.string.net_repeated, call))
@@ -400,7 +406,7 @@ class NetControlActivity : LocalizedActivity() {
             windKmh = int("windKmh"), windDirection = s("windDir"), sky = d.sky, visibilityKm = decimal("vis"),
             rstSent = s("rstSent"), rstReceived = s("rstReceived"), readability = d.readability,
             antenna = s("antenna"), equipment = s("equipment"), priority = d.priority,
-            message = s("message"), remarks = s("remarks")
+            message = s("message"), remarks = s("remarks"), zone = s("zone")
         )
         val updated = session.withCheckIn(checkIn)
         val saved = updated.checkIns.first { it.id == checkIn.id }
@@ -423,6 +429,7 @@ class NetControlActivity : LocalizedActivity() {
             card.addView(Brand.text(this, 14f, Brand.Palette(this).muted).apply {
                 text = getString(R.string.net_item_detail, clock.format(c.utc), getString(c.stationType.label), c.powerWatts,
                     listOf(c.town, c.locator).filter { it.isNotEmpty() }.joinToString(" / "), getString(c.powerSource.label)) +
+                    (if (c.zone.isEmpty()) "" else "\n" + getString(R.string.net_zone_item, c.zone)) +
                     if (c.priority == NetPriority.ROUTINE) "" else "\n" + getString(c.priority.label) +
                         if (c.message.isEmpty()) "" else ": ${c.message}"
             })
@@ -450,7 +457,7 @@ class NetControlActivity : LocalizedActivity() {
                 "pressure" to (c.pressureHpa?.toString() ?: ""), "windKmh" to (c.windKmh?.toString() ?: ""),
                 "windDir" to c.windDirection, "vis" to (c.visibilityKm?.toString() ?: ""), "rstSent" to c.rstSent,
                 "rstReceived" to c.rstReceived, "antenna" to c.antenna, "equipment" to c.equipment,
-                "message" to c.message, "remarks" to c.remarks))
+                "message" to c.message, "remarks" to c.remarks, "zone" to c.zone))
         }
     }
 
@@ -464,7 +471,11 @@ class NetControlActivity : LocalizedActivity() {
                 getString(R.string.net_summary_power, summary.powerMin, String.format(Locale.ROOT, "%.1f", summary.powerAverage), summary.powerMax),
                 getString(R.string.net_summary_sources, summary.powerSources[NetPowerSource.AC], summary.powerSources[NetPowerSource.SOLAR_BATTERY],
                     summary.powerSources[NetPowerSource.BATTERY]),
-                getString(R.string.net_summary_traffic, summary.priority, summary.emergency)
+                getString(R.string.net_summary_traffic, summary.priority, summary.emergency),
+                getString(R.string.net_summary_zones) + if (summary.zones.isEmpty()) " " + getString(R.string.net_summary_zones_none) else
+                    summary.zones.joinToString("") { "\n- " + getString(R.string.net_summary_zone_row, it.zone, it.count,
+                        String.format(Locale.ROOT, "%.1f", it.percent)) } +
+                    if (summary.withoutZone > 0 && summary.zones.isNotEmpty()) "\n- " + getString(R.string.net_summary_zone_blank, summary.withoutZone) else ""
             ).joinToString("\n")
             contentDescription = text
         })

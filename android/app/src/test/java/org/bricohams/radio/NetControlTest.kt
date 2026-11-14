@@ -86,6 +86,32 @@ class NetControlTest {
         assertEquals(30.0, again.powerAverage!!, 1e-9); assertEquals(10, again.powerMin); assertEquals(50, again.powerMax)
     }
 
+    @Test fun zonesInSummaryAndExports() {
+        fun at(call: String, zone: String, min: Int) = checkIn(call, at = "2026-10-25T16:%02d:00Z".format(min)).copy(zone = zone)
+        val s = NetSession(id = "net-2", name = "Zonas", controlCall = "EA1ABC", frequencyMHz = "145.500", mode = "FM",
+            startUtc = Instant.parse("2026-10-25T16:00:00Z"))
+            .withCheckIn(at("EA1AAA", "Zona 1", 1)).withCheckIn(at("EA1BBB", " zona  1 ", 2))
+            .withCheckIn(at("EA1CCC", "GDI", 3)).withCheckIn(at("EA1DDD", "", 4))
+        val summary = s.summary()
+        assertEquals(listOf("Zona 1", "GDI"), summary.zones.map { it.zone })
+        assertEquals(listOf(2, 1), summary.zones.map { it.count })
+        assertEquals(listOf(50.0, 25.0), summary.zones.map { it.percent })
+        assertEquals(1, summary.withoutZone)
+        assertEquals(listOf("Zona 1", "GDI"), s.usedZones())
+        assertEquals(emptyList<NetZoneCount>(), session().summary().zones)
+
+        val csv = NetExport.csv(s).split("\r\n")
+        assertTrue(csv[0].endsWith(",remarks,zone"))
+        assertTrue(csv[1], csv[1].endsWith(",,Zona 1")); assertTrue(csv[4], csv[4].endsWith(",,"))
+        val rows = JSONObject(NetExport.json(s)).getJSONArray("checkIns")
+        assertEquals("GDI", rows.getJSONObject(2).getString("zone")); assertEquals("", rows.getJSONObject(3).getString("zone"))
+        val adif = NetExport.adif(s)
+        assertTrue(adif.contains("ZONE=Zona 1")); assertFalse(adif.contains("<ZONE"))
+        assertEquals(s, NetSession.fromJson(s.toJson()))
+        val old = s.toJson().apply { getJSONArray("checkIns").let { a -> for (i in 0 until a.length()) a.getJSONObject(i).remove("zone") } }
+        assertTrue(NetSession.fromJson(old).checkIns.all { it.zone.isEmpty() })
+    }
+
     @Test fun csvJsonAndAdifExports() {
         val s = session()
         val csv = NetExport.csv(s).split("\r\n")

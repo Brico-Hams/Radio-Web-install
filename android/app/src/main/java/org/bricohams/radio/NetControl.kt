@@ -61,10 +61,12 @@ data class NetCheckIn(
     val equipment: String = "",
     val priority: NetPriority = NetPriority.ROUTINE,
     val message: String = "",
-    val remarks: String = ""
+    val remarks: String = "",
+    val zone: String = ""
 ) {
     /** Uppercase call and canonical locator; leaves invalid values untouched so [validated] reports them. */
     fun normalized() = copy(call = call.trim().uppercase(), name = name.trim(), town = town.trim(),
+        zone = zone.trim().replace(Regex("\\s+"), " "),
         locator = locator.trim().let { if (Maidenhead.isValid(it)) Maidenhead.format(it) else it },
         windDirection = windDirection.trim().uppercase(), antenna = antenna.trim(), equipment = equipment.trim(),
         message = message.trim(), remarks = remarks.trim())
@@ -87,8 +89,8 @@ data class NetCheckIn(
         requireUi(windDirection.isEmpty() || windDirection in DIRECTIONS) { UiText(R.string.net_err_weather) }
         requireUi(listOf(rstSent, rstReceived).all { it.isEmpty() || it.matches(Regex("[0-9+-]{1,8}")) } &&
             (readability == null || readability in 1..5)) { UiText(R.string.net_err_signal) }
-        requireUi(listOf(name, town, antenna, equipment).all { it.length <= 80 } && message.length <= 200 &&
-            remarks.length <= 500 && listOf(name, town, antenna, equipment, message, remarks).none { it.any(Char::isISOControl) }) {
+        requireUi(listOf(name, town, antenna, equipment, zone).all { it.length <= 80 } && message.length <= 200 &&
+            remarks.length <= 500 && listOf(name, town, antenna, equipment, zone, message, remarks).none { it.any(Char::isISOControl) }) {
             UiText(R.string.net_err_text)
         }
         return this
@@ -98,17 +100,22 @@ data class NetCheckIn(
     fun repeating(order: Int, utc: Instant, frequencyMHz: String, mode: String) = NetCheckIn(
         order = order, call = call, name = name, utc = utc, frequencyMHz = frequencyMHz, mode = mode,
         stationType = stationType, powerWatts = powerWatts, town = town, locator = locator, powerSource = powerSource,
-        antenna = antenna, equipment = equipment
+        antenna = antenna, equipment = equipment, zone = zone
     )
 
     companion object {
         val POWER_RANGE = 5..50
         val POWER_STEPS = listOf(5, 10, 20, 25, 30, 40, 50)
+        /** Suggestions only; the zone is free text and is never derived from the callsign. */
+        val ZONE_SUGGESTIONS = listOf("Zona 1", "Zona 2", "GDI", "Otras provincias")
         val DIRECTIONS = listOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
         /** A mobile station runs from its vehicle/portable batteries; everything else defaults to mains. */
         fun defaultPowerSource(type: NetStationType) = if (type == NetStationType.MOBILE) NetPowerSource.BATTERY else NetPowerSource.AC
     }
 }
+
+/** Check-ins of one zone and their share (0-100) of all check-ins in the session. */
+data class NetZoneCount(val zone: String, val count: Int, val percent: Double)
 
 data class NetSummary(
     val checkIns: Int,
@@ -122,7 +129,9 @@ data class NetSummary(
     val powerAverage: Double?,
     val powerSources: Map<NetPowerSource, Int>,
     val priority: Int,
-    val emergency: Int
+    val emergency: Int,
+    val zones: List<NetZoneCount> = emptyList(),
+    val withoutZone: Int = 0
 )
 
 data class NetSession(
@@ -176,9 +185,21 @@ data class NetSession(
             powerAverage = if (powers.isEmpty()) null else powers.average(),
             powerSources = NetPowerSource.values().associateWith { source -> stations.count { it.powerSource == source } },
             priority = checkIns.count { it.priority == NetPriority.PRIORITY },
-            emergency = checkIns.count { it.priority == NetPriority.EMERGENCY }
+            emergency = checkIns.count { it.priority == NetPriority.EMERGENCY },
+            zones = zoneCounts(), withoutZone = checkIns.count { it.zone.isBlank() }
         )
     }
+
+    /** Zones in use (case-insensitive, first spelling wins), most check-ins first; blank zones are not counted. */
+    fun zoneCounts(): List<NetZoneCount> {
+        val named = checkIns.sortedBy { it.order }.filter { it.zone.isNotBlank() }
+        return named.groupBy { it.zone.lowercase() }.values
+            .map { rows -> NetZoneCount(rows.first().zone, rows.size, rows.size * 100.0 / checkIns.size) }
+            .sortedWith(compareByDescending<NetZoneCount> { it.count }.thenBy { it.zone.lowercase() })
+    }
+
+    /** Zones already used in this session, for suggestions. */
+    fun usedZones(): List<String> = zoneCounts().map { it.zone }
 
     fun toJson(): JSONObject = JSONObject().apply {
         val summary = summary()
@@ -188,6 +209,9 @@ data class NetSession(
         put("startUtc", startUtc.toString()); put("endUtc", endUtc?.toString() ?: JSONObject.NULL)
         put("purpose", purpose.name)
         put("stationCount", summary.stations); put("checkInCount", summary.checkIns)
+        put("zones", JSONArray().apply {
+            summary.zones.forEach { put(JSONObject().put("zone", it.zone).put("count", it.count).put("percent", Math.round(it.percent * 10) / 10.0)) }
+        })
         put("checkIns", JSONArray().apply { checkIns.sortedBy { it.order }.forEach { put(it.toJson()) } })
     }
 
@@ -233,7 +257,7 @@ data class NetSession(
                 readability = number("readability")?.toInt(),
                 antenna = row.optString("antenna"), equipment = row.optString("equipment"),
                 priority = enumOf(row.getString("priority")),
-                message = row.optString("message"), remarks = row.optString("remarks")
+                message = row.optString("message"), remarks = row.optString("remarks"), zone = row.optString("zone")
             )
         }
 
@@ -256,7 +280,7 @@ private fun NetCheckIn.toJson(): JSONObject = JSONObject().apply {
     put("sky", sky?.name ?: JSONObject.NULL); put("visibilityKm", visibilityKm ?: JSONObject.NULL)
     put("rstSent", rstSent); put("rstReceived", rstReceived); put("readability", readability ?: JSONObject.NULL)
     put("antenna", antenna); put("equipment", equipment)
-    put("priority", priority.name); put("message", message); put("remarks", remarks)
+    put("priority", priority.name); put("message", message); put("remarks", remarks); put("zone", zone)
 }
 
 /** Check-in form state, also persisted as an unsaved draft per session. */
@@ -324,7 +348,7 @@ object NetExport {
     val CSV_COLUMNS = listOf("net", "purpose", "net_control", "net_start_utc", "net_end_utc", "order", "call", "name", "utc",
         "frequency_mhz", "mode", "station_type", "power_w", "town", "locator", "power_source", "temperature_c", "pressure_hpa",
         "rain", "wind", "wind_kmh", "wind_direction", "sky", "visibility_km", "rst_sent", "rst_received", "readability",
-        "antenna", "equipment", "priority", "message", "remarks")
+        "antenna", "equipment", "priority", "message", "remarks", "zone")
 
     fun json(session: NetSession): String = session.validated().toJson().toString(2)
 
@@ -346,7 +370,7 @@ object NetExport {
                 c.wind?.name ?: "", c.windKmh?.toString() ?: "", c.windDirection, c.sky?.name ?: "",
                 c.visibilityKm?.toString() ?: "", c.rstSent, c.rstReceived, c.readability?.toString() ?: "",
                 csvCell(c.antenna, true), csvCell(c.equipment, true), c.priority.name, csvCell(c.message, true),
-                csvCell(c.remarks, true)
+                csvCell(c.remarks, true), csvCell(c.zone, true)
             )
             append(cells.joinToString(",")).append("\r\n")
         }
@@ -358,6 +382,7 @@ object NetExport {
     private fun comment(session: NetSession, c: NetCheckIn): String = buildList {
         add("Net ${ascii(session.name)} #${c.order} ${session.purpose.name}")
         add("TYPE=${c.stationType.name}"); add("SUPPLY=${c.powerSource.name}")
+        if (c.zone.isNotEmpty()) add("ZONE=${ascii(c.zone)}")
         c.temperatureC?.let { add("TEMP_C=$it") }
         c.pressureHpa?.let { add("PRESS_HPA=$it") }
         c.rain?.let { add("RAIN=${it.name}") }

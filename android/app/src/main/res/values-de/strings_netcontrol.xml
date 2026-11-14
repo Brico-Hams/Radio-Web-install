@@ -83,6 +83,13 @@
     <string name="net_summary_power">Leistung: min. %1$d W · Mittel %2$s W · max. %3$d W</string>
     <string name="net_summary_sources">Versorgung: Netz %1$d · Solar + Akkus %2$d · nur Akkus %3$d</string>
     <string name="net_summary_traffic">Priorität: %1$d · Notfall: %2$d</string>
+    <string name="net_zone">Zone (optional)</string>
+    <string name="net_zone_suggestions">Vorgeschlagene Zonen</string>
+    <string name="net_zone_item">Zone: %1$s</string>
+    <string name="net_summary_zones">Stationen je Zone:</string>
+    <string name="net_summary_zones_none">keine Zone angegeben.</string>
+    <string name="net_summary_zone_row">%1$s: %2$d (%3$s %%)</string>
+    <string name="net_summary_zone_blank">Ohne Zone: %1$d</string>
     <string name="net_type_mobile">Mobil</string>
     <string name="net_type_base">Feststation</string>
     <string name="net_type_portable">Portabel</string>
