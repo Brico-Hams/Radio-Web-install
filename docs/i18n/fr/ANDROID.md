@@ -4,6 +4,16 @@ Version 1.1.0 (versionCode 18) : l'APK s'appelle RadiCodex by BricoHams (identif
 
 Guide pas à pas : [Tutoriels de RadiCodex by BricoHams](TUTORIALES-ANDROID.md).
 
+## Profil et écran d'accueil
+
+Au premier lancement, l'assistant **Profil** s'ouvre ; ensuite, modifiez-le avec **Modifier le profil** sur l'accueil. L'ordre est toujours :
+
+1. **Radio** : la radio à laquelle vous vous connectez (une seule active). Seules les radios déjà prises en charge par l'application sont proposées.
+2. **Indicatif** : validé une seule fois et réutilisé par le chat APRS (le SSID APRS est facultatif), FT8 et les modes numériques, le carnet de trafic, les réglages APRS du RT-950, SSTV/CW et les annonces de la radio.
+3. **Contrôle CAT** : type de connexion (USB série, USB CDC, Bluetooth LE ou réseau, selon la radio), vitesse et autres paramètres avec les valeurs par défaut de chaque radio, et le bouton **Tester la connexion**, qui utilise l'identification déjà existante pour cette radio.
+
+L'accueil affiche d'abord **Satellites**, **FT8 / modes numériques** et **Carnet de trafic (log)**, puis les outils de votre radio (canaux, modèles, chat APRS, audio en direct, rotor, diagnostic...). Les outils que votre radio ne peut pas utiliser sont désactivés avec une explication pour TalkBack ; aucune fonction n'est supprimée.
+
 ## Périmètre de l’APK
 
 L'écran principal propose **Langue du système**, **Español**, **English (US)**,

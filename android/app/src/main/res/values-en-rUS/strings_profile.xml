@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="profile_title">Profile</string>
+    <string name="profile_step">Step %1$d of %2$d: %3$s</string>
+    <string name="profile_step_radio">Radio</string>
+    <string name="profile_step_callsign">Callsign</string>
+    <string name="profile_step_cat">CAT control</string>
+    <string name="profile_radio_help">Pick the radio you connect to. Only one radio is active; the tools on the home screen adapt to it.</string>
+    <string name="profile_radio_required">Pick a radio to continue.</string>
+    <string name="profile_radio_kiss_tnc">External KISS TNC over network (APRS)</string>
+    <string name="profile_callsign_label">Callsign</string>
+    <string name="profile_callsign_help">Validated once and used by APRS chat, FT8 and digital modes, the logbook, the RT-950 APRS settings, SSTV/CW and radio announcements.</string>
+    <string name="profile_callsign_from_profile">Profile callsign: %1$s</string>
+    <string name="profile_callsign_missing">Callsign missing: set it in Profile.</string>
+    <string name="profile_callsign_missing_short">no callsign</string>
+    <string name="profile_cat_help">Connection to the chosen radio. Defaults are the ones each radio already uses.</string>
+    <string name="profile_cat_none">This radio has no connection in the app (offline template export only).</string>
+    <string name="profile_transport_label">Connection type</string>
+    <string name="profile_transport_usb_serial">USB serial</string>
+    <string name="profile_transport_usb_cdc">USB CDC</string>
+    <string name="profile_transport_ble">Bluetooth LE</string>
+    <string name="profile_transport_network">Network (TCP)</string>
+    <string name="profile_transport_none">no connection</string>
+    <string name="profile_test">Test connection</string>
+    <string name="profile_test_running">Testing the connection…</string>
+    <string name="profile_test_ok">Connection OK: %1$s</string>
+    <string name="profile_test_no_usb">No compatible USB device is connected.</string>
+    <string name="profile_test_ble">Opening the radio\'s Bluetooth screen to scan and connect.</string>
+    <string name="profile_test_ble_help">The Bluetooth link is scanned and opened on the radio\'s own screen.</string>
+    <string name="profile_test_network_ok">TCP connection OK to %1$s</string>
+    <string name="profile_back">Back</string>
+    <string name="profile_next">Next</string>
+    <string name="profile_save">Save profile</string>
+    <string name="profile_edit">Edit profile</string>
+    <string name="profile_summary">Radio: %1$s\nCallsign: %2$s\nConnection: %3$s</string>
+    <string name="profile_summary_empty">No profile yet. Set it up to get started.</string>
+    <string name="profile_aprs_ssid">APRS SSID (optional, 0-15)</string>
+    <string name="home_main">Main sections</string>
+    <string name="home_profile_help">App order: Profile → Radio → Callsign → CAT. Below are the main sections and the tools your radio can use; the others are greyed out.</string>
+    <string name="home_radio_tools">Tools for your radio</string>
+    <string name="home_open_logbook">Station log (logbook)</string>
+    <string name="home_tool_unavailable">%1$s: not available with %2$s</string>
+</resources>

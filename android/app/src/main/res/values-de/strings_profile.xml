@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="profile_title">Profil</string>
+    <string name="profile_step">Schritt %1$d von %2$d: %3$s</string>
+    <string name="profile_step_radio">Funkgerät</string>
+    <string name="profile_step_callsign">Rufzeichen</string>
+    <string name="profile_step_cat">CAT-Steuerung</string>
+    <string name="profile_radio_help">Wähle das Funkgerät, mit dem du dich verbindest. Es ist nur ein Gerät aktiv; die Werkzeuge auf dem Startbildschirm passen sich daran an.</string>
+    <string name="profile_radio_required">Wähle ein Funkgerät, um fortzufahren.</string>
+    <string name="profile_radio_kiss_tnc">Externer KISS-TNC über Netzwerk (APRS)</string>
+    <string name="profile_callsign_label">Rufzeichen</string>
+    <string name="profile_callsign_help">Wird einmal geprüft und im APRS-Chat, bei FT8 und digitalen Modi, im Logbuch, in den APRS-Einstellungen des RT-950, bei SSTV/CW und in Funkgerät-Ansagen verwendet.</string>
+    <string name="profile_callsign_from_profile">Rufzeichen aus dem Profil: %1$s</string>
+    <string name="profile_callsign_missing">Rufzeichen fehlt: im Profil eintragen.</string>
+    <string name="profile_callsign_missing_short">kein Rufzeichen</string>
+    <string name="profile_cat_help">Verbindung zum gewählten Funkgerät. Die Standardwerte sind die des jeweiligen Geräts.</string>
+    <string name="profile_cat_none">Dieses Funkgerät hat in der App keine Verbindung (nur Offline-Export von Vorlagen).</string>
+    <string name="profile_transport_label">Verbindungsart</string>
+    <string name="profile_transport_usb_serial">USB seriell</string>
+    <string name="profile_transport_usb_cdc">USB CDC</string>
+    <string name="profile_transport_ble">Bluetooth LE</string>
+    <string name="profile_transport_network">Netzwerk (TCP)</string>
+    <string name="profile_transport_none">keine Verbindung</string>
+    <string name="profile_test">Verbindung testen</string>
+    <string name="profile_test_running">Verbindung wird getestet…</string>
+    <string name="profile_test_ok">Verbindung in Ordnung: %1$s</string>
+    <string name="profile_test_no_usb">Kein kompatibles USB-Gerät angeschlossen.</string>
+    <string name="profile_test_ble">Der Bluetooth-Bildschirm des Funkgeräts wird zum Suchen und Verbinden geöffnet.</string>
+    <string name="profile_test_ble_help">Die Bluetooth-Verbindung wird auf dem eigenen Bildschirm des Funkgeräts gesucht und geöffnet.</string>
+    <string name="profile_test_network_ok">TCP-Verbindung zu %1$s in Ordnung</string>
+    <string name="profile_back">Zurück</string>
+    <string name="profile_next">Weiter</string>
+    <string name="profile_save">Profil speichern</string>
+    <string name="profile_edit">Profil bearbeiten</string>
+    <string name="profile_summary">Funkgerät: %1$s\nRufzeichen: %2$s\nVerbindung: %3$s</string>
+    <string name="profile_summary_empty">Noch kein Profil. Richte es ein, um zu beginnen.</string>
+    <string name="profile_aprs_ssid">APRS-SSID (optional, 0-15)</string>
+    <string name="home_main">Hauptbereiche</string>
+    <string name="home_profile_help">Ablauf der App: Profil → Funkgerät → Rufzeichen → CAT. Darunter die Hauptbereiche und die Werkzeuge, die dein Funkgerät nutzen kann; die übrigen sind deaktiviert.</string>
+    <string name="home_radio_tools">Werkzeuge für dein Funkgerät</string>
+    <string name="home_open_logbook">Stationslogbuch (Log)</string>
+    <string name="home_tool_unavailable">%1$s: mit %2$s nicht verfügbar</string>
+</resources>

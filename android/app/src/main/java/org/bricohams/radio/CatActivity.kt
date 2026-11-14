@@ -47,7 +47,7 @@ class CatActivity : LocalizedActivity() {
     private val txWorker = Executors.newSingleThreadExecutor()
     private val audioWorker = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
-    private lateinit var callsign: EditText
+    private lateinit var callsign: TextView
     private lateinit var sstvStatus: TextView
     private lateinit var picture: ImageView
     private lateinit var sstvModeSpinner: Spinner
@@ -187,10 +187,9 @@ class CatActivity : LocalizedActivity() {
         }
         button(R.string.usb_disconnect) { operation { closeRadio(); null } }
         content.addView(TextView(this).apply { setText(R.string.cat_sstv_help) })
-        callsign = EditText(this).apply {
+        callsign = TextView(this).apply {
             id = R.id.cat_callsign
-            setHint(R.string.cat_callsign_hint)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+            text = ProfileStore.describeCallsign(this@CatActivity)
         }
         content.addView(callsign)
         content.addView(TextView(this).apply { setText(R.string.cat_sstv_mode) })
@@ -308,7 +307,7 @@ class CatActivity : LocalizedActivity() {
     private fun chooseImage() {
         if (busy || trackingRequested || !foreground) return
         try {
-            Callsign.normalize(callsign.text.toString())
+            ProfileStore.requireCallsign(this)
             requireNotNull(protocol) { getString(R.string.cat_connect_first) }
         } catch (error: IllegalArgumentException) {
             sstvStatus.text = errorText(error)
@@ -324,7 +323,7 @@ class CatActivity : LocalizedActivity() {
         if (requestCode != 70) return
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null) { sstvStatus.setText(R.string.sstv_cancelled); return }
-        val call = try { Callsign.normalize(callsign.text.toString()) } catch (error: IllegalArgumentException) {
+        val call = try { ProfileStore.requireCallsign(this) } catch (error: IllegalArgumentException) {
             sstvStatus.text = errorText(error); return
         }
         val mode = transmitModes[sstvModeSpinner.selectedItemPosition.coerceIn(0, transmitModes.lastIndex)]

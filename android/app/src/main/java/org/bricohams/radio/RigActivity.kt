@@ -117,7 +117,7 @@ class RigActivity : LocalizedActivity() {
     private lateinit var memStatus: TextView
     private lateinit var memList: LinearLayout
     private lateinit var satStatus: TextView
-    private lateinit var callsign: EditText
+    private lateinit var callsign: TextView
     private lateinit var sstvModeSpinner: Spinner
     private lateinit var sstvStatus: TextView
     private lateinit var picture: ImageView
@@ -557,8 +557,7 @@ class RigActivity : LocalizedActivity() {
 
     private fun buildSstv(body: LinearLayout) = section(body, R.string.rig_section_sstv) { card ->
         card.addView(Brand.text(this, 13f, colors.muted).apply { setText(R.string.rig_sstv_help) })
-        callsign = field(R.string.cat_callsign_hint, preferences.getString("callsign", "") ?: "",
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS)
+        callsign = Brand.text(this, 15f).apply { text = ProfileStore.describeCallsign(this@RigActivity); contentDescription = text }
         card.addView(callsign)
         label(card, R.string.cat_sstv_mode)
         sstvModeSpinner = spinner(transmitModes.map { it.name })
@@ -855,7 +854,7 @@ class RigActivity : LocalizedActivity() {
 
     private fun pttTest() {
         val r = rig ?: run { notice.setText(R.string.rig_connect_first); return }
-        val call = try { Callsign.normalize(callsign.text.toString()) } catch (error: IllegalArgumentException) {
+        val call = try { ProfileStore.requireCallsign(this) } catch (error: IllegalArgumentException) {
             notice.text = errorText(error); return
         }
         AlertDialog.Builder(this).setTitle(R.string.rig_ptt_title)
@@ -1127,8 +1126,7 @@ class RigActivity : LocalizedActivity() {
     private fun chooseImage() {
         if (!idle || !foreground) return
         try {
-            val call = Callsign.normalize(callsign.text.toString())
-            preferences.edit().putString("callsign", call).apply()
+            ProfileStore.requireCallsign(this)
         } catch (error: IllegalArgumentException) {
             sstvStatus.text = errorText(error)
             return
@@ -1152,7 +1150,7 @@ class RigActivity : LocalizedActivity() {
         pickingImage = false
         val uri = data?.data
         if (resultCode != RESULT_OK || uri == null) { sstvStatus.setText(R.string.sstv_cancelled); return }
-        val call = try { Callsign.normalize(callsign.text.toString()) } catch (error: IllegalArgumentException) {
+        val call = try { ProfileStore.requireCallsign(this) } catch (error: IllegalArgumentException) {
             sstvStatus.text = errorText(error); return
         }
         val mode = transmitModes[sstvModeSpinner.selectedItemPosition.coerceIn(0, transmitModes.lastIndex)]

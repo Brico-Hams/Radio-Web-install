@@ -119,7 +119,7 @@
     <string name="home_open_channels">Quansheng-Kanäle über USB bearbeiten (Beta)</string>
     <string name="home_open_sstv">SSTV Robot36 aus WAV öffnen</string>
     <string name="home_open_live">Morse / Robot36 mit Mikrofon empfangen</string>
-    <string name="home_open_satellites">SGP4-Satelliten und Überflüge öffnen</string>
+    <string name="home_open_satellites">Satelliten</string>
     <string name="home_import_json">Bricohams-JSON-Sicherung importieren</string>
     <string name="import_json_title">Lokale Sicherung importieren</string>
     <string name="import_json_message">Kontakte, Sitzungen und Beobachtungen werden hinzugefügt. Nichts wird gelöscht oder überschrieben: eine kollidierende ID bricht den gesamten Import ab. Nur vertrauenswürdige Sicherungen verwenden.</string>
@@ -954,7 +954,7 @@
     <string name="rig_dig_purpose_fst4w">LF/MF (Bake)</string>
     <string name="rig_trusdx_credit">(tr)uSDX-Unterstützung in Mitautorschaft mit seinen Entwicklern Guido PE1NNZ und Manuel DL2MAN (dl2man.de). CAT-Befehle nach ihrer Dokumentation.</string>
     <string name="screen_ftx">Digitale Modi FT8 / FT4 / FT2</string>
-    <string name="home_open_ftx">Digitale Modi FT8 / FT4 / FT2</string>
+    <string name="home_open_ftx">FT8 / digitale Modi</string>
     <string name="rig_open_ftx">Eigener Decoder und TX</string>
     <string name="ftx_intro">RadiCodex eigener Decoder und Generator für FT8, FT4 und FT2 direkt in dieser App. Sie hört den Android-Audioeingang (Mikrofon oder USB-Audio) ab oder dekodiert eine WAV-Datei und erzeugt das Signal; PTT oder VOX bedienst du selbst.</string>
     <string name="ftx_about">Eigene RadiCodex-by-BricoHams-Implementierung (Originalcode unter GPL-3.0-or-later). FT2 ist ein Legacy-Kandidat, nur gegen einen externen Empfänger validiert.</string>

@@ -88,24 +88,35 @@ class FtxActivityTest {
         assertTrue(texts(activity).any { it.contains("CQ EA1ABC IN80") })
     }
 
-    @Test fun invalidMessageShowsTranslatedReasonAndKeepsTxDisabled() = withActivity { activity ->
-        type(activity, R.id.ftx_call, "EA1ABC")
-        type(activity, R.id.ftx_message, "THIS MESSAGE IS FAR TOO LONG TO BE PACKED")
-        assertTrue(texts(activity).contains(activity.getString(R.string.err_ftx_message_invalid)))
-        assertFalse(button(activity, activity.getString(R.string.ftx_tx_next)).isEnabled)
-        assertFalse(button(activity, activity.getString(R.string.ftx_save_wav)).isEnabled)
+    private fun saveProfile(call: String) = ProfileStore.save(RuntimeEnvironment.getApplication(),
+        StationProfile(ProfileRadio.FT817, call, CatTransport.USB_SERIAL, 4800))
+
+    @Test fun invalidMessageShowsTranslatedReasonAndKeepsTxDisabled() {
+        saveProfile("EA1ABC")
+        withActivity { activity ->
+            type(activity, R.id.ftx_message, "THIS MESSAGE IS FAR TOO LONG TO BE PACKED")
+            assertTrue(texts(activity).contains(activity.getString(R.string.err_ftx_message_invalid)))
+            assertFalse(button(activity, activity.getString(R.string.ftx_tx_next)).isEnabled)
+            assertFalse(button(activity, activity.getString(R.string.ftx_save_wav)).isEnabled)
+        }
     }
 
-    @Test fun txIsDisabledWithoutCallsignAndEnabledWithIt() = withActivity { activity ->
-        type(activity, R.id.ftx_call, "")
-        type(activity, R.id.ftx_message, "CQ EA1ABC IN80")
-        val transmit = button(activity, activity.getString(R.string.ftx_tx_next))
-        assertFalse(transmit.isEnabled)
-        assertTrue(texts(activity).contains(activity.getString(R.string.ftx_need_call)))
-        type(activity, R.id.ftx_call, "EA1ABC")
-        assertTrue(transmit.isEnabled)
-        type(activity, R.id.ftx_message, "CQ EA2XYZ IN80")
-        assertFalse(transmit.isEnabled)
+    @Test fun txIsDisabledWithoutProfileCallsignAndEnabledWithIt() {
+        withActivity { activity ->
+            type(activity, R.id.ftx_message, "CQ EA1ABC IN80")
+            assertFalse(button(activity, activity.getString(R.string.ftx_tx_next)).isEnabled)
+            assertTrue(texts(activity).contains(activity.getString(R.string.ftx_need_call)))
+        }
+        saveProfile("EA1ABC")
+        withActivity { activity ->
+            assertEquals("EA1ABC", ProfileStore.callsign(activity))
+            assertTrue(texts(activity).contains(activity.getString(R.string.profile_callsign_from_profile, "EA1ABC")))
+            type(activity, R.id.ftx_message, "CQ EA1ABC IN80")
+            val transmit = button(activity, activity.getString(R.string.ftx_tx_next))
+            assertTrue(transmit.isEnabled)
+            type(activity, R.id.ftx_message, "CQ EA2XYZ IN80")
+            assertFalse(transmit.isEnabled)
+        }
     }
 
     @Test fun ft4AndFt2ReceiveAreAvailable() = withActivity { activity ->

@@ -100,6 +100,8 @@ class BrandUiTest {
 
     @Test fun mainNavigationKeepsSelectionAndAllToolsReachableWithLargeText() {
         RuntimeEnvironment.setFontScale(1.6f)
+        ProfileStore.save(RuntimeEnvironment.getApplication(),
+            StationProfile(ProfileRadio.UVK5, "EA1ABC", CatTransport.USB_SERIAL))
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
             val activity = controller.get()

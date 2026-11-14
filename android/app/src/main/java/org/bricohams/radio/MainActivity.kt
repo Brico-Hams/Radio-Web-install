@@ -173,6 +173,7 @@ class MainActivity : LocalizedActivity() {
         layout.addView(nav)
         setContentView(layout)
         render()
+        if (savedInstanceState == null && !ProfileStore.isConfigured(this)) startActivity(Intent(this, ProfileActivity::class.java))
         VersionTracker.check(VersionTracker.store(this), VersionTracker.running(this), VersionTracker.upgradedInPlace(this))
             ?.let { ReleaseNotices.showWhatsNew(this, it) }
         if (savedInstanceState == null) OtaAutoCheck.run(this) { message(getString(R.string.ota_available_banner, it.versionName)) }
@@ -255,19 +256,29 @@ class MainActivity : LocalizedActivity() {
                 build()
             } finally { content = parent }
         }
-        section(R.string.home_tools) {
-            button(R.string.home_open_cat) { startActivity(Intent(this, CatActivity::class.java)) }
-            button(R.string.home_open_rig_cat) { startActivity(Intent(this, RigActivity::class.java)) }
-            button(R.string.home_open_rt950) { startActivity(Intent(this, Rt950Activity::class.java)) }
-            button(R.string.home_open_aprs_chat) { startActivity(Intent(this, AprsChatActivity::class.java)) }
-            button(R.string.home_open_diagnostics) { startActivity(Intent(this, DiagnosticsActivity::class.java)) }
-            button(R.string.home_open_gd77) { startActivity(Intent(this, OpenGd77Activity::class.java)) }
-            button(R.string.home_open_channels) { startActivity(Intent(this, ChannelActivity::class.java)) }
-            button(R.string.home_open_templates) { startActivity(Intent(this, TemplateActivity::class.java)) }
-            button(R.string.home_open_sstv) { startActivity(Intent(this, SstvActivity::class.java)) }
-            button(R.string.home_open_ftx) { startActivity(Intent(this, FtxActivity::class.java)) }
-            button(R.string.home_open_live) { startActivity(Intent(this, LiveAudioActivity::class.java)) }
+        val profile = ProfileStore.load(this)
+        section(R.string.profile_title) {
+            text(ProfileStore.summary(this))
+            text(R.string.home_profile_help)
+            Brand.button(this, getString(R.string.profile_edit), true) {
+                startActivity(Intent(this, ProfileActivity::class.java))
+            }.also(content::addView)
+        }
+        section(R.string.home_main) {
             button(R.string.home_open_satellites) { startActivity(Intent(this, SatelliteActivity::class.java)) }
+            button(R.string.home_open_ftx) { startActivity(Intent(this, FtxActivity::class.java)) }
+            button(R.string.home_open_logbook) { tab = TAB_LOGBOOK; render() }
+        }
+        section(R.string.home_radio_tools) {
+            for (tool in Tool.values()) {
+                val label = getString(tool.label)
+                val entry = button(label) { startActivity(Intent(this, tool.activity)) }
+                if (!profile.radio.allows(tool)) {
+                    entry.isEnabled = false
+                    entry.alpha = 0.5f
+                    entry.contentDescription = getString(R.string.home_tool_unavailable, label, profile.radio!!.label(this))
+                }
+            }
         }
         section(R.string.home_data) {
             button(R.string.home_export_json) { export("json") }
@@ -392,7 +403,7 @@ class MainActivity : LocalizedActivity() {
         val bookName = input(R.string.logbook_name, R.id.logbook_name)
         val kind = spinner(R.id.logbook_kind, Logbook.KINDS, "GENERAL")
         val reference = input(R.string.logbook_reference, R.id.logbook_reference)
-        val station = input(R.string.logbook_station, R.id.logbook_station, current.stationCall)
+        val station = input(R.string.logbook_station, R.id.logbook_station, current.stationCall.ifEmpty { ProfileStore.callsign(this) })
         button(R.string.logbook_create) {
             val created = store.createLogbook(Logbook(name = bookName.text.toString().trim(), kind = kind.selectedItem.toString(),
                 reference = reference.text.toString().trim().uppercase(Locale.ROOT),
@@ -712,6 +723,11 @@ class MainActivity : LocalizedActivity() {
         outState.putString("logbook", logbookId); outState.putString("lastFrequency", lastFrequency); outState.putString("lastMode", lastMode)
         outState.putInt("tone", audioTone); outState.putInt("speed", audioSpeed); outState.putString("audioResult", audioResult)
         super.onSaveInstanceState(outState)
+    }
+    override fun onResume() {
+        super.onResume()
+        // The profile may have changed in ProfileActivity.
+        if (tab == TAB_HOME && content.childCount > 0) render()
     }
     override fun onStop() {
         super.onStop()

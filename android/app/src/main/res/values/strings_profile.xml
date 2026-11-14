@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="profile_title">Perfil</string>
+    <string name="profile_step">Paso %1$d de %2$d: %3$s</string>
+    <string name="profile_step_radio">Radio</string>
+    <string name="profile_step_callsign">Indicativo</string>
+    <string name="profile_step_cat">Control CAT</string>
+    <string name="profile_radio_help">Elige la radio a la que te conectas. Solo hay una radio activa; las herramientas de la pantalla de inicio se adaptan a ella.</string>
+    <string name="profile_radio_required">Elige una radio para continuar.</string>
+    <string name="profile_radio_kiss_tnc">TNC KISS externo por red (APRS)</string>
+    <string name="profile_callsign_label">Indicativo</string>
+    <string name="profile_callsign_help">Se valida una sola vez y se usa en el chat APRS, FT8 y modos digitales, el libro de guardia, los ajustes APRS del RT-950, SSTV/CW y los anuncios de la radio.</string>
+    <string name="profile_callsign_from_profile">Indicativo del Perfil: %1$s</string>
+    <string name="profile_callsign_missing">Falta el indicativo: configúralo en Perfil.</string>
+    <string name="profile_callsign_missing_short">sin indicativo</string>
+    <string name="profile_cat_help">Conexión con la radio elegida. Los valores por defecto son los de cada radio.</string>
+    <string name="profile_cat_none">Esta radio no tiene conexión en la app (solo exporta plantillas sin conexión).</string>
+    <string name="profile_transport_label">Tipo de conexión</string>
+    <string name="profile_transport_usb_serial">USB serie</string>
+    <string name="profile_transport_usb_cdc">USB CDC</string>
+    <string name="profile_transport_ble">Bluetooth LE</string>
+    <string name="profile_transport_network">Red (TCP)</string>
+    <string name="profile_transport_none">sin conexión</string>
+    <string name="profile_test">Probar conexión</string>
+    <string name="profile_test_running">Probando la conexión…</string>
+    <string name="profile_test_ok">Conexión correcta: %1$s</string>
+    <string name="profile_test_no_usb">No hay ningún dispositivo USB compatible conectado.</string>
+    <string name="profile_test_ble">Se abre la pantalla Bluetooth de la radio para buscarla y conectar.</string>
+    <string name="profile_test_ble_help">La conexión Bluetooth se busca y se abre en la pantalla de la radio.</string>
+    <string name="profile_test_network_ok">Conexión TCP correcta con %1$s</string>
+    <string name="profile_back">Atrás</string>
+    <string name="profile_next">Siguiente</string>
+    <string name="profile_save">Guardar perfil</string>
+    <string name="profile_edit">Editar perfil</string>
+    <string name="profile_summary">Radio: %1$s\nIndicativo: %2$s\nConexión: %3$s</string>
+    <string name="profile_summary_empty">Aún no hay perfil. Configúralo para empezar.</string>
+    <string name="profile_aprs_ssid">SSID APRS (opcional, 0-15)</string>
+    <string name="home_main">Secciones principales</string>
+    <string name="home_profile_help">Orden de la app: Perfil → Radio → Indicativo → CAT. Debajo, las secciones principales y las herramientas que tu radio puede usar; las demás aparecen desactivadas.</string>
+    <string name="home_radio_tools">Herramientas de tu radio</string>
+    <string name="home_open_logbook">Libro de guardia (log)</string>
+    <string name="home_tool_unavailable">%1$s: no disponible con %2$s</string>
+</resources>

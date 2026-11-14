@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="profile_title">Profil</string>
+    <string name="profile_step">Étape %1$d sur %2$d : %3$s</string>
+    <string name="profile_step_radio">Radio</string>
+    <string name="profile_step_callsign">Indicatif</string>
+    <string name="profile_step_cat">Contrôle CAT</string>
+    <string name="profile_radio_help">Choisissez la radio à laquelle vous vous connectez. Une seule radio est active ; les outils de l\'écran d\'accueil s\'y adaptent.</string>
+    <string name="profile_radio_required">Choisissez une radio pour continuer.</string>
+    <string name="profile_radio_kiss_tnc">TNC KISS externe par réseau (APRS)</string>
+    <string name="profile_callsign_label">Indicatif</string>
+    <string name="profile_callsign_help">Validé une seule fois et utilisé par le chat APRS, FT8 et les modes numériques, le carnet de trafic, les réglages APRS du RT-950, SSTV/CW et les annonces de la radio.</string>
+    <string name="profile_callsign_from_profile">Indicatif du profil : %1$s</string>
+    <string name="profile_callsign_missing">Indicatif manquant : saisissez-le dans Profil.</string>
+    <string name="profile_callsign_missing_short">sans indicatif</string>
+    <string name="profile_cat_help">Connexion à la radio choisie. Les valeurs par défaut sont celles de chaque radio.</string>
+    <string name="profile_cat_none">Cette radio n\'a pas de connexion dans l\'application (export de modèles hors ligne uniquement).</string>
+    <string name="profile_transport_label">Type de connexion</string>
+    <string name="profile_transport_usb_serial">USB série</string>
+    <string name="profile_transport_usb_cdc">USB CDC</string>
+    <string name="profile_transport_ble">Bluetooth LE</string>
+    <string name="profile_transport_network">Réseau (TCP)</string>
+    <string name="profile_transport_none">sans connexion</string>
+    <string name="profile_test">Tester la connexion</string>
+    <string name="profile_test_running">Test de la connexion…</string>
+    <string name="profile_test_ok">Connexion réussie : %1$s</string>
+    <string name="profile_test_no_usb">Aucun périphérique USB compatible n\'est branché.</string>
+    <string name="profile_test_ble">Ouverture de l\'écran Bluetooth de la radio pour la chercher et se connecter.</string>
+    <string name="profile_test_ble_help">La liaison Bluetooth est recherchée et ouverte sur l\'écran propre à la radio.</string>
+    <string name="profile_test_network_ok">Connexion TCP réussie vers %1$s</string>
+    <string name="profile_back">Retour</string>
+    <string name="profile_next">Suivant</string>
+    <string name="profile_save">Enregistrer le profil</string>
+    <string name="profile_edit">Modifier le profil</string>
+    <string name="profile_summary">Radio : %1$s\nIndicatif : %2$s\nConnexion : %3$s</string>
+    <string name="profile_summary_empty">Pas encore de profil. Configurez-le pour commencer.</string>
+    <string name="profile_aprs_ssid">SSID APRS (facultatif, 0-15)</string>
+    <string name="home_main">Sections principales</string>
+    <string name="home_profile_help">Ordre de l\'application : Profil → Radio → Indicatif → CAT. Dessous, les sections principales et les outils que votre radio peut utiliser ; les autres sont désactivés.</string>
+    <string name="home_radio_tools">Outils de votre radio</string>
+    <string name="home_open_logbook">Carnet de trafic (log)</string>
+    <string name="home_tool_unavailable">%1$s : indisponible avec %2$s</string>
+</resources>

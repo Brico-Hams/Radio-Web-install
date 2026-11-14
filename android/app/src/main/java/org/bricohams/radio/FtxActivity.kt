@@ -80,7 +80,7 @@ class FtxActivity : LocalizedActivity() {
     private lateinit var unavailable: TextView
     private lateinit var rxStatus: TextView
     private lateinit var resultRows: LinearLayout
-    private lateinit var callField: EditText
+    private lateinit var callField: TextView
     private lateinit var dxField: EditText
     private lateinit var messageField: EditText
     private lateinit var toneField: EditText
@@ -135,9 +135,11 @@ class FtxActivity : LocalizedActivity() {
         }
 
         card(body, R.string.ftx_tx_title) { card ->
-            callField = field(R.id.ftx_call, R.string.ftx_call_hint,
-                getSharedPreferences(RigActivity.PREFERENCES, MODE_PRIVATE).getString("callsign", "") ?: "",
-                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS)
+            callField = Brand.text(this, 15f).apply {
+                id = R.id.ftx_call
+                text = ProfileStore.describeCallsign(this@FtxActivity)
+                contentDescription = text
+            }
             card.addView(callField)
             dxField = field(R.id.ftx_dx_call, R.string.ftx_dx_call_hint,
                 getSharedPreferences(RigActivity.PREFERENCES, MODE_PRIVATE).getString(DX_CALL_PREFERENCE, "") ?: "",
@@ -235,7 +237,7 @@ class FtxActivity : LocalizedActivity() {
             getString(if (DigitalClock.isEvenSlot(now, mode.slotMs)) R.string.rig_dig_even else R.string.rig_dig_odd))
     }
 
-    private fun callOrNull(): String? = try { Callsign.normalize(callField.text.toString()) } catch (error: IllegalArgumentException) { null }
+    private fun callOrNull(): String? = try { ProfileStore.requireCallsign(this) } catch (error: IllegalArgumentException) { null }
 
     /** Why the frame cannot be built, or null: message and tone only (enough to save a WAV). */
     private fun frameProblem(): UiText? {
@@ -449,7 +451,7 @@ class FtxActivity : LocalizedActivity() {
             return
         }
         val call = checkNotNull(callOrNull())
-        getSharedPreferences(RigActivity.PREFERENCES, MODE_PRIVATE).edit().putString("callsign", call)
+        getSharedPreferences(RigActivity.PREFERENCES, MODE_PRIVATE).edit()
             .putString(DX_CALL_PREFERENCE, dxField.text.toString().trim().uppercase(Locale.ROOT)).apply()
         val selected = mode
         val message = FtxMessages.normalize(messageField.text.toString())
