@@ -666,10 +666,11 @@ class MainActivity : LocalizedActivity() {
         }
         message(getString(R.string.export_running))
         val book = logbookId
+        val grid = ProfileStore.locator(this)
         thread(name = "bricohams-export") {
             try {
                 val value = RadioStore(applicationContext).use { exportStore ->
-                    if (kind == "adif") Adif.export(exportStore.contacts(book), exportStore.logbooks().single { it.id == book })
+                    if (kind == "adif") Adif.export(exportStore.contacts(book), exportStore.logbooks().single { it.id == book }, grid)
                     else exportStore.export()
                 }
                 val stream = contentResolver.openOutputStream(uri, "wt") ?: throw IOException(getString(R.string.provider_no_stream))

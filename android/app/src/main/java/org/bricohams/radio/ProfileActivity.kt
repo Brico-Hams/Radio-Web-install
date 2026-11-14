@@ -12,7 +12,11 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.content.pm.PackageManager
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
+import java.util.Locale
 import android.view.View
 import android.view.WindowInsets
 import android.widget.EditText
@@ -25,14 +29,17 @@ import java.io.IOException
 import java.util.concurrent.Executors
 
 /**
- * Profile wizard, also used to edit the profile: Radio, then Callsign, then CAT control. Opened automatically on the first
- * launch (no profile yet) and from the home screen afterwards. "Probar conexión" runs the radio's existing identify path.
+ * Profile wizard, also used to edit the profile: Radio, Callsign, Location (GPS and Maidenhead locator), then CAT control. Opened
+ * automatically on the first launch (no profile yet) and from the home screen afterwards. "Probar conexión" runs the radio's
+ * existing identify path.
  */
 class ProfileActivity : LocalizedActivity() {
     companion object {
         private const val USB_PERMISSION = "org.bricohams.radio.PROFILE_USB_PERMISSION"
-        private const val STEPS = 3
-        private val STEP_NAMES = listOf(R.string.profile_step_radio, R.string.profile_step_callsign, R.string.profile_step_cat)
+        private const val LOCATION_REQUEST = 63
+        private const val STEPS = 4
+        private val STEP_NAMES = listOf(R.string.profile_step_radio, R.string.profile_step_callsign,
+            R.string.profile_step_location, R.string.profile_step_cat)
     }
 
     private val colors by lazy { Brand.Palette(this) }
@@ -49,7 +56,19 @@ class ProfileActivity : LocalizedActivity() {
     private var civ = StationProfile.DEFAULT_CIV
     private var host = ""
     private var port = ""
+    private var latitude = ""
+    private var longitude = ""
+    private var heightKm = ""
+    private var locator = ""
+    private var approximate = false
+    private var updating = false
+    private var phoneLocation: PhoneLocation? = null
     private var callEdit: EditText? = null
+    private var latEdit: EditText? = null
+    private var lonEdit: EditText? = null
+    private var heightEdit: EditText? = null
+    private var locEdit: EditText? = null
+    private var approxNote: TextView? = null
     private var baudEdit: EditText? = null
     private var civEdit: EditText? = null
     private var hostEdit: EditText? = null
@@ -72,6 +91,8 @@ class ProfileActivity : LocalizedActivity() {
         val saved = ProfileStore.load(this)
         radio = saved.radio; callsign = saved.callsign; transport = saved.transport
         baud = saved.baud.takeIf { it > 0 }?.toString() ?: ""; civ = saved.civAddress; host = saved.host; port = saved.port
+        latitude = saved.latitude; longitude = saved.longitude; heightKm = saved.heightKm; locator = saved.locator
+        approximate = saved.approximate
         if (savedInstanceState != null) {
             step = savedInstanceState.getInt("step", 0).coerceIn(0, STEPS - 1)
             radio = ProfileRadio.values().firstOrNull { it.name == savedInstanceState.getString("radio") } ?: radio
@@ -79,6 +100,9 @@ class ProfileActivity : LocalizedActivity() {
             transport = CatTransport.values().firstOrNull { it.name == savedInstanceState.getString("transport") } ?: transport
             baud = savedInstanceState.getString("baud", baud); civ = savedInstanceState.getString("civ", civ)
             host = savedInstanceState.getString("host", host); port = savedInstanceState.getString("port", port)
+            latitude = savedInstanceState.getString("latitude", latitude); longitude = savedInstanceState.getString("longitude", longitude)
+            heightKm = savedInstanceState.getString("height", heightKm); locator = savedInstanceState.getString("locator", locator)
+            approximate = savedInstanceState.getBoolean("approximate", approximate)
         }
         body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -114,6 +138,14 @@ class ProfileActivity : LocalizedActivity() {
         outState.putString("transport", transport?.name)
         outState.putString("baud", baud); outState.putString("civ", civ)
         outState.putString("host", host); outState.putString("port", port)
+        outState.putString("latitude", latitude); outState.putString("longitude", longitude)
+        outState.putString("height", heightKm); outState.putString("locator", locator)
+        outState.putBoolean("approximate", approximate)
+    }
+
+    override fun onPause() {
+        phoneLocation?.stop()
+        super.onPause()
     }
 
     override fun onStart() {
@@ -167,6 +199,7 @@ class ProfileActivity : LocalizedActivity() {
     private fun render() {
         body.removeAllViews()
         callEdit = null; baudEdit = null; civEdit = null; hostEdit = null; portEdit = null
+        latEdit = null; lonEdit = null; heightEdit = null; locEdit = null; approxNote = null
         body.addView(Brand.heading(this, getString(R.string.profile_title)))
         (status.parent as? LinearLayout)?.removeView(status)
         body.addView(status)
@@ -174,6 +207,7 @@ class ProfileActivity : LocalizedActivity() {
         when (step) {
             0 -> radioStep()
             1 -> callsignStep()
+            2 -> locationStep()
             else -> catStep()
         }
         if (step > 0) body.addView(Brand.button(this, getString(R.string.profile_back)) { collect(); step--; message(""); render() })
@@ -201,6 +235,115 @@ class ProfileActivity : LocalizedActivity() {
         callEdit = edit(R.string.profile_callsign_label, callsign,
             InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS,
             R.id.profile_callsign)
+    }
+
+    private fun locationStep() {
+        note(R.string.profile_location_help)
+        body.addView(Brand.button(this, getString(R.string.profile_gps_get)) { useGps() })
+        val decimal = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+        val lat = edit(R.string.profile_latitude, latitude, decimal, R.id.profile_latitude)
+        val lon = edit(R.string.profile_longitude, longitude, decimal, R.id.profile_longitude)
+        heightEdit = edit(R.string.profile_height, heightKm, decimal, R.id.profile_height)
+        val loc = edit(R.string.profile_locator_label, locator,
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS, R.id.profile_locator).apply { hint = "IM98ib" }
+        approxNote = Brand.text(this, 14f, colors.muted).apply {
+            setText(R.string.profile_position_approximate)
+            visibility = if (approximate) View.VISIBLE else View.GONE
+        }.also(body::addView)
+        latEdit = lat; lonEdit = lon; locEdit = loc
+        lat.addTextChangedListener(watcher { coordinatesTyped() })
+        lon.addTextChangedListener(watcher { coordinatesTyped() })
+        loc.addTextChangedListener(watcher { locatorTyped() })
+    }
+
+    private fun watcher(changed: () -> Unit) = object : TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        override fun afterTextChanged(s: Editable?) { if (!updating) changed() }
+    }
+
+    private fun setApproximate(value: Boolean) {
+        approximate = value
+        approxNote?.visibility = if (value) View.VISIBLE else View.GONE
+    }
+
+    private fun number(edit: EditText?) = edit?.text.toString().trim().replace(',', '.').toDoubleOrNull()
+
+    /** Typing coordinates recomputes the locator. */
+    private fun coordinatesTyped() {
+        setApproximate(false)
+        val lat = number(latEdit) ?: return
+        val lon = number(lonEdit) ?: return
+        try {
+            val grid = Maidenhead.fromLatLon(lat, lon)
+            updating = true
+            locEdit?.setText(grid)
+        } catch (_: IllegalArgumentException) {
+        } finally { updating = false }
+    }
+
+    /** Typing only a locator fills the centre coordinates, marked as approximate. */
+    private fun locatorTyped() {
+        val text = locEdit?.text.toString()
+        if (!Maidenhead.isValid(text)) return
+        val centre = Maidenhead.toLatLon(text)
+        updating = true
+        latEdit?.setText(String.format(Locale.ROOT, "%.5f", centre.latitude))
+        lonEdit?.setText(String.format(Locale.ROOT, "%.5f", centre.longitude))
+        updating = false
+        setApproximate(true)
+    }
+
+    /** Same permission and search flow as SatelliteActivity; a second tap ends the search with the best fix so far. */
+    private fun useGps() {
+        phoneLocation?.takeIf { it.running }?.let { it.finishNow(); return }
+        if (!PhoneLocation.hasPermission(this)) {
+            message(getString(R.string.satellite_gps_asking))
+            requestPermissions(PhoneLocation.PERMISSIONS, LOCATION_REQUEST)
+            return
+        }
+        if (!PhoneLocation.servicesEnabled(this)) {
+            message(getString(R.string.satellite_gps_off))
+            runCatching { startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+            return
+        }
+        message(getString(R.string.satellite_gps_searching, (PhoneLocation.TIMEOUT_MS / 1000).toInt()))
+        val search = PhoneLocation(this, { progress -> if (!isDestroyed) showProgress(progress) }) { fix, live ->
+            if (!isDestroyed) showFix(fix, live)
+        }
+        phoneLocation = search
+        search.start()
+    }
+
+    private fun showProgress(progress: SearchProgress) {
+        val seconds = ((progress.remainingMs + 999) / 1000).toInt()
+        message(getString(if (progress.haveFix) R.string.satellite_gps_refining else R.string.satellite_gps_searching, seconds))
+    }
+
+    private fun showFix(fix: PositionFix?, live: Boolean) {
+        if (fix == null) {
+            message(getString(if (live) R.string.satellite_gps_timeout else R.string.satellite_gps_none))
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (fix.ageMs(now) <= LocationSelector.FRESH_MS) PhoneLocation.saveLast(this, fix)
+        collect()
+        latitude = String.format(Locale.ROOT, "%.5f", fix.latitude)
+        longitude = String.format(Locale.ROOT, "%.5f", fix.longitude)
+        fix.altitudeM?.let { heightKm = String.format(Locale.ROOT, "%.3f", it / 1000) }
+        locator = Maidenhead.fromLatLon(fix.latitude, fix.longitude)
+        approximate = false
+        if (step == 2) render()
+        val accuracy = fix.accuracyM?.let { String.format(Locale.ROOT, "%.0f m", it) } ?: "?"
+        val note = if (PhoneLocation.precise(this)) "" else " " + getString(R.string.satellite_gps_approximate)
+        message(getString(R.string.satellite_gps_fix_detail, fix.source, accuracy, fix.ageMs(now) / 1000) + note)
+    }
+
+    @Deprecated("Platform callback")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != LOCATION_REQUEST) return
+        if (grantResults.any { it == PackageManager.PERMISSION_GRANTED }) useGps() else message(getString(R.string.satellite_gps_denied))
     }
 
     private fun catStep() {
@@ -237,9 +380,14 @@ class ProfileActivity : LocalizedActivity() {
         civEdit?.let { civ = it.text.toString() }
         hostEdit?.let { host = it.text.toString() }
         portEdit?.let { port = it.text.toString() }
+        latEdit?.let { latitude = it.text.toString() }
+        lonEdit?.let { longitude = it.text.toString() }
+        heightEdit?.let { heightKm = it.text.toString() }
+        locEdit?.let { locator = it.text.toString() }
     }
 
-    private fun draft() = StationProfile(radio, callsign, transport, baud.trim().toIntOrNull() ?: 0, civ, host, port)
+    private fun draft() = StationProfile(radio, callsign, transport, baud.trim().toIntOrNull() ?: 0, civ, host, port,
+        latitude, longitude, heightKm, locator, approximate)
 
     private fun next() {
         collect()
@@ -247,6 +395,10 @@ class ProfileActivity : LocalizedActivity() {
             when (step) {
                 0 -> requireNotNullUi(radio) { UiText(R.string.profile_radio_required) }
                 1 -> callsign = Callsign.normalize(callsign)
+                2 -> draft().validatedLocation().let {
+                    latitude = it.latitude; longitude = it.longitude; heightKm = it.heightKm
+                    locator = it.locator; approximate = it.approximate
+                }
                 else -> {
                     ProfileStore.save(this, draft())
                     setResult(RESULT_OK)

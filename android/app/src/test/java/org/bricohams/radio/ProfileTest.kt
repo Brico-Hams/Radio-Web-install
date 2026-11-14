@@ -93,6 +93,14 @@ class ProfileTest {
             click(R.string.profile_next)
             activity.findViewById<EditText>(R.id.profile_callsign).setText("ea1abc")
             click(R.string.profile_next)
+            // Step 3 of 4 is the location; a lone locator fills approximate centre coordinates.
+            assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.TextView>()
+                .any { it.text == activity.getString(R.string.profile_step, 3, 4, activity.getString(R.string.profile_step_location)) })
+            activity.findViewById<EditText>(R.id.profile_locator).setText("im98ib")
+            assertEquals("38.06250", activity.findViewById<EditText>(R.id.profile_latitude).text.toString())
+            click(R.string.profile_next)
+            assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.TextView>()
+                .any { it.text == activity.getString(R.string.profile_step, 4, 4, activity.getString(R.string.profile_step_cat)) })
             click(R.string.profile_test)
             assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.TextView>()
                 .any { it.text == activity.getString(R.string.profile_test_no_usb) })
@@ -101,7 +109,54 @@ class ProfileTest {
             assertEquals(ProfileRadio.FT857, saved.radio)
             assertEquals("EA1ABC", saved.callsign)
             assertEquals(4800, saved.baud)
+            assertEquals("IM98ib", saved.locator)
+            assertTrue(saved.approximate)
         } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun typingCoordinatesUpdatesTheLocator() {
+        ProfileStore.save(app, StationProfile(ProfileRadio.FT857, "EA1ABC", CatTransport.USB_SERIAL, 4800))
+        val controller = Robolectric.buildActivity(ProfileActivity::class.java).setup()
+        try {
+            val activity = controller.get()
+            fun click(label: Int) = views(activity.window.decorView).filterIsInstance<Button>()
+                .single { it.text == activity.getString(label) }.performClick()
+            click(R.string.profile_next); click(R.string.profile_next)
+            activity.findViewById<EditText>(R.id.profile_latitude).setText("41.714775")
+            activity.findViewById<EditText>(R.id.profile_longitude).setText("-72.72726")
+            assertEquals("FN31pr", activity.findViewById<EditText>(R.id.profile_locator).text.toString())
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun locationIsStoredSharedWithSatellitesAndShownInSummaryAndAdif() {
+        ProfileStore.save(app, StationProfile(ProfileRadio.UVK5, "EA1ABC", CatTransport.USB_SERIAL,
+            latitude = "38.0625", longitude = "-1,2917", heightKm = "0.2"))
+        val loaded = ProfileStore.load(app)
+        assertEquals("IM98ib", loaded.locator)
+        assertFalse(loaded.approximate)
+        assertEquals("-1.2917", loaded.longitude)
+        val observer = app.getSharedPreferences("satellite-observer", android.content.Context.MODE_PRIVATE)
+        assertEquals("38.0625", observer.getString("latitude", null))
+        assertEquals("-1.2917", observer.getString("longitude", null))
+        assertEquals("0.2", observer.getString("height", null))
+        assertTrue(ProfileStore.summary(app).endsWith("Locator: IM98ib"))
+        val contact = Contact(call = "EA1XYZ", utc = java.time.Instant.parse("2025-01-01T10:00:00Z"),
+            frequencyMHz = "145.500", mode = "FM", sent = "59", received = "59", notes = "")
+        assertTrue(Adif.export(listOf(contact), null, ProfileStore.locator(app)).contains("<MY_GRIDSQUARE:6>IM98ib"))
+        assertFalse(Adif.export(listOf(contact)).contains("MY_GRIDSQUARE"))
+    }
+
+    @Test fun locatorOnlyProfileGetsApproximateCentreAndInvalidLocationIsRejected() {
+        val checked = StationProfile(ProfileRadio.UVK5, "EA1ABC", CatTransport.USB_SERIAL, locator = "JN58").validated()
+        assertTrue(checked.approximate)
+        assertEquals("48.50000", checked.latitude)
+        assertEquals("JN58", checked.locator)
+        for (bad in listOf(StationProfile(ProfileRadio.UVK5, "EA1ABC", CatTransport.USB_SERIAL, locator = "ZZ99"),
+            StationProfile(ProfileRadio.UVK5, "EA1ABC", CatTransport.USB_SERIAL, latitude = "95", longitude = "0"),
+            StationProfile(ProfileRadio.UVK5, "EA1ABC", CatTransport.USB_SERIAL, latitude = "10"))) {
+            assertThrows(IllegalArgumentException::class.java) { ProfileStore.save(app, bad) }
+        }
+        assertFalse(ProfileStore.isConfigured(app))
     }
 
     @Test fun aprsAndRigScreensReadTheProfileCallsign() {

@@ -106,9 +106,10 @@ object Adif {
     fun band(frequencyMHz: String): String? = frequencyMHz.toBigDecimalOrNull()?.let { frequency ->
         bands.firstOrNull { frequency in it.second }?.first
     }
-    fun export(contacts: List<Contact>, logbook: Logbook? = null): String = buildString {
+    fun export(contacts: List<Contact>, logbook: Logbook? = null, myGrid: String = ""): String = buildString {
         append("RadiCodex by BricoHams\n<ADIF_VER:5>3.1.4<PROGRAMID:9>RadiCodex<EOH>\n")
         logbook?.validated()
+        val grid = if (myGrid.isBlank()) "" else Maidenhead.format(myGrid)
         for (contact in contacts) {
             contact.validated()
             requireUi(logbook == null || contact.logbook == logbook.id) { UiText(R.string.err_contact_other_book) }
@@ -122,6 +123,7 @@ object Adif {
             append(field("RST_RCVD", contact.received))
             if (contact.notes.isNotEmpty()) append(field("COMMENT", contact.notes))
             if (logbook != null && logbook.stationCall.isNotEmpty()) append(field("STATION_CALLSIGN", logbook.stationCall))
+            if (grid.isNotEmpty()) append(field("MY_GRIDSQUARE", grid))
             when (logbook?.kind) {
                 "POTA" -> append(field("MY_POTA_REF", logbook.reference))
                 "SOTA" -> append(field("MY_SOTA_REF", logbook.reference))

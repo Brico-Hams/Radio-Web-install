@@ -88,9 +88,42 @@ data class StationProfile(
     val baud: Int = 0,
     val civAddress: String = DEFAULT_CIV,
     val host: String = "",
-    val port: String = ""
+    val port: String = "",
+    val latitude: String = "",
+    val longitude: String = "",
+    val heightKm: String = "",
+    val locator: String = "",
+    /** True when the coordinates are only the centre of [locator] (the operator typed just the locator). */
+    val approximate: Boolean = false
 ) {
-    companion object { const val DEFAULT_CIV = "A4" }
+    companion object {
+        const val DEFAULT_CIV = "A4"
+        private fun number(text: String) = text.trim().replace(',', '.')
+    }
+
+    /** Blank location is allowed. Coordinates win and give the locator; a lone locator gives approximate centre coordinates. */
+    fun validatedLocation(): StationProfile {
+        val lat = number(latitude)
+        val lon = number(longitude)
+        if (lat.isEmpty() && lon.isEmpty()) {
+            if (locator.isBlank()) return copy(latitude = "", longitude = "", heightKm = "", locator = "", approximate = false)
+            val centre = Maidenhead.toLatLon(locator)
+            return copy(latitude = "%.5f".format(java.util.Locale.ROOT, centre.latitude),
+                longitude = "%.5f".format(java.util.Locale.ROOT, centre.longitude), heightKm = number(heightKm).ifEmpty { "0" },
+                locator = Maidenhead.format(locator), approximate = true).also { it.observer() }
+        }
+        val height = number(heightKm).ifEmpty { "0" }
+        val position = ObserverPosition(lat.toDoubleOrNull() ?: Double.NaN, lon.toDoubleOrNull() ?: Double.NaN,
+            height.toDoubleOrNull() ?: Double.NaN).validated()
+        val keepLocator = approximate && locator.isNotBlank()
+        return copy(latitude = lat, longitude = lon, heightKm = height, approximate = keepLocator,
+            locator = if (keepLocator) Maidenhead.format(locator) else Maidenhead.fromLatLon(position.latitude, position.longitude))
+    }
+
+    /** The profile position as the satellite observer, or null when no position is set. */
+    fun observer(): ObserverPosition? = if (latitude.isBlank() || longitude.isBlank()) null else
+        ObserverPosition(number(latitude).toDoubleOrNull() ?: Double.NaN, number(longitude).toDoubleOrNull() ?: Double.NaN,
+            number(heightKm).ifEmpty { "0" }.toDoubleOrNull() ?: Double.NaN).validated()
 
     /** Checks only the connection settings (what "Probar conexión" needs). */
     fun validatedCat(): StationProfile {
@@ -104,7 +137,7 @@ data class StationProfile(
     }
 
     /** The callsign is validated here once, for the whole app. */
-    fun validated(): StationProfile = validatedCat().copy(callsign = Callsign.normalize(callsign))
+    fun validated(): StationProfile = validatedCat().copy(callsign = Callsign.normalize(callsign)).validatedLocation()
 }
 
 /** USB serial device (and port of multi-port adapters such as the CP2105) that passed the profile connection test. */
@@ -134,7 +167,9 @@ object ProfileStore {
             ?.takeIf { radio != null && it in radio.transports } ?: radio?.transports?.firstOrNull()
         return StationProfile(radio, p.getString("callsign", null) ?: legacyCallsign(context), transport,
             p.getInt("baud", radio?.defaultBaud ?: 0), p.getString("civ", null) ?: StationProfile.DEFAULT_CIV,
-            p.getString("host", "") ?: "", p.getString("port", "") ?: "")
+            p.getString("host", "") ?: "", p.getString("port", "") ?: "", p.getString("latitude", "") ?: "",
+            p.getString("longitude", "") ?: "", p.getString("height_km", "") ?: "", p.getString("locator", "") ?: "",
+            p.getBoolean("approximate", false))
     }
 
     /** Callsign typed in the screens that used to hold their own copy. */
@@ -151,7 +186,15 @@ object ProfileStore {
         prefs(context).edit().putString("radio", radio.name).putString("callsign", checked.callsign)
             .putString("transport", checked.transport?.name).putInt("baud", checked.baud)
             .putString("civ", checked.civAddress).putString("host", checked.host.trim()).putString("port", checked.port.trim())
-            .apply()
+            .putString("latitude", checked.latitude).putString("longitude", checked.longitude)
+            .putString("height_km", checked.heightKm).putString("locator", checked.locator)
+            .putBoolean("approximate", checked.approximate).apply()
+        // Same keys SatelliteActivity reads, so passes use the profile position without asking again.
+        if (checked.observer() != null) {
+            context.getSharedPreferences("satellite-observer", Context.MODE_PRIVATE).edit()
+                .putString("latitude", checked.latitude).putString("longitude", checked.longitude)
+                .putString("height", checked.heightKm).apply()
+        }
         radio.rig?.let {
             context.getSharedPreferences(RigActivity.PREFERENCES, Context.MODE_PRIVATE).edit()
                 .putString("model", it.name).putInt("baud", checked.baud).putString("address", checked.civAddress).apply()
@@ -196,7 +239,10 @@ object ProfileStore {
         val profile = load(context)
         val radio = profile.radio ?: return context.getString(R.string.profile_summary_empty)
         val connection = profile.transport?.let { context.getString(it.label) } ?: context.getString(R.string.profile_transport_none)
-        return context.getString(R.string.profile_summary, radio.label(context),
+        val text = context.getString(R.string.profile_summary, radio.label(context),
             profile.callsign.ifEmpty { context.getString(R.string.profile_callsign_missing_short) }, connection)
+        return if (profile.locator.isEmpty()) text else text + "\n" + context.getString(R.string.profile_summary_locator, profile.locator)
     }
+
+    fun locator(context: Context) = load(context).locator
 }

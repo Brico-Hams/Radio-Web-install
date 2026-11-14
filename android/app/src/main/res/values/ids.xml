@@ -25,6 +25,10 @@
     <item name="cat_frequency" type="id" />
     <item name="cat_callsign" type="id" />
     <item name="profile_callsign" type="id" />
+    <item name="profile_latitude" type="id" />
+    <item name="profile_longitude" type="id" />
+    <item name="profile_height" type="id" />
+    <item name="profile_locator" type="id" />
     <item name="satellite_latitude" type="id" />
     <item name="satellite_longitude" type="id" />
     <item name="satellite_height" type="id" />
