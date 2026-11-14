@@ -17,6 +17,12 @@ function ConvertTo-PlainText([System.Security.SecureString]$Secure) {
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
 }
 
+$sdkHome = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
+if (-not (Test-Path -LiteralPath (Join-Path $sdkHome 'platforms'))) {
+    throw "No se encuentra el SDK de Android en $sdkHome (usuario: $env:USERNAME). Ejecuta el script como tu usuario normal, sin 'Ejecutar como administrador', o define ANDROID_HOME."
+}
+$env:ANDROID_HOME = $sdkHome
+
 $keystore = Read-Host "Ruta del keystore [$DefaultKeystore]"
 if ([string]::IsNullOrWhiteSpace($keystore)) { $keystore = $DefaultKeystore }
 if (-not (Test-Path -LiteralPath $keystore -PathType Leaf)) { throw "No existe el keystore: $keystore" }
