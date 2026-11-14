@@ -56,7 +56,8 @@ enum class ProfileRadio(
     QDX(RigModel.QDX, null, listOf(CatTransport.USB_CDC), setOf(Tool.RIG_CAT)),
     // CatProtocol (CatActivity), QuanshengChannels/QuanshengMemory (ChannelActivity), RadioKind.QUANSHENG (Diagnostics.kt),
     // template profiles "radicodex" and "uvk5v3"; SerialRadio.quanshengSettings(cdc) supports serial and CDC.
-    UVK5(null, "Quansheng UV-K5 (BricoHams Satellite)", listOf(CatTransport.USB_SERIAL, CatTransport.USB_CDC),
+    // The first transport is the default: the radio enumerates as USB CDC ACM (VID 36B7 PID FFFF), opened by CdcRadio.
+    UVK5(null, "Quansheng UV-K5 (BricoHams Satellite)", listOf(CatTransport.USB_CDC, CatTransport.USB_SERIAL),
         setOf(Tool.UVK5_CAT, Tool.CHANNELS, Tool.DIAGNOSTICS, Tool.TEMPLATES)),
     // OpenGd77Link (OpenGd77.kt) over CdcRadio.
     OPENGD77(null, "OpenGD77 (GD-77, DM-1801, RD-5R, MD-UV380, ...)", listOf(CatTransport.USB_CDC), setOf(Tool.GD77)),
