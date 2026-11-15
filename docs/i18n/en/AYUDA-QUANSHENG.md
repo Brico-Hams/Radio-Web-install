@@ -31,6 +31,19 @@ SAT adds nominal FM memories only, without Doppler.
 
 Per-radio repeater templates cover all of Europe (EU, EEA, UK, Switzerland, Balkans, Ukraine, Moldova, Belarus, microstates) and the Americas (US by state, Canada by province, Mexico, Central America, the Caribbean and South America). Russia and Turkey are not included. A country with no usable HearHam repeaters gets no file and is listed as "pendiente de fuente" in `data/channel-templates/coverage.json`; the UI hides or disables it. Ready-made files are in `templates/repeaters/<radio>/<CC>.<ext>` (index in `templates/repeaters/index.json` with channels, dropped and SHA-256). They stay RX only and respect each radio's bands, modes and capacity. Download or Apply ("Repeater templates" section on desktop/web and on the Android templates screen) use those files. Airports and satellite passes remain limited to the original seven countries. To regenerate: `npm run fetch:channel-templates`, then `npm run templates:build`.
 
+Airport channels (AM, RX only, TX locked, no transmission) use
+`data/channel-templates/ES-airband-guide.json` as the primary source, extracted from the
+third-party guide "101ATM AIRBAND Spain AD COM Guide v1.0" (page 1, which cites the ENAIRE
+AIP AIRAC 10/26); OurAirports (`ES-airports.json`) remains the secondary source and its
+entries with the same ICAO code and frequency are replaced by the guide's.
+The guide prints the 8.33 kHz channel name (for example 122.105), not the real
+frequency (122.100): the real frequency is always programmed. Unpublished frequencies
+or those outside 118-136.975 MHz do not become channels. The PDF is third-party
+material and is not in the repository: only the extracted frequencies are included, with
+citation. `npm run compare:airband` generates `docs/airband-es-comparison.md` with the
+discrepancies between both sources, which are not resolved automatically: check them
+against the ENAIRE AIP.
+
 Monthly passes cover the remaining days of the UTC month for 75 reference points:
 European cities and an approximate point in each of the 50 US states plus Washington
 DC. They are not valid throughout a country. Lists include coordinates, generation

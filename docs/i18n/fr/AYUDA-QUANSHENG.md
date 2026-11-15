@@ -31,6 +31,19 @@ SAT ajoute seulement des mémoires FM nominales, sans Doppler.
 
 Les modèles de relais par radio couvrent toute l'Europe (UE, EEE, Royaume-Uni, Suisse, Balkans, Ukraine, Moldavie, Biélorussie, micro-États) et les Amériques (États-Unis par État, Canada par province, Mexique, Amérique centrale, Caraïbes et Amérique du Sud). La Russie et la Turquie ne sont pas incluses. Un pays sans relais HearHam exploitable n'a aucun fichier et figure comme « pendiente de fuente » dans `data/channel-templates/coverage.json` ; l'interface le masque ou le désactive. Les fichiers prêts à l'emploi sont dans `templates/repeaters/<radio>/<CC>.<ext>` (index dans `templates/repeaters/index.json` avec canaux, écartés et SHA-256). Ils restent en RX seul et respectent bandes, modes et capacité de chaque radio. Télécharger ou Appliquer (section « Modèles de relais » sur bureau/web et sur l'écran des modèles Android) utilisent ces fichiers. Aéroports et passages de satellites restent limités aux sept pays d'origine. Pour régénérer : `npm run fetch:channel-templates`, puis `npm run templates:build`.
 
+Les canaux d'aéroport (AM, RX seulement, TX verrouillé, sans émission) utilisent
+`data/channel-templates/ES-airband-guide.json` comme source principale, extrait du guide
+tiers "101ATM AIRBAND Spain AD COM Guide v1.0" (page 1, qui cite l'AIP d'ENAIRE
+AIRAC 10/26) ; OurAirports (`ES-airports.json`) reste la source secondaire et ses
+entrées ayant le même code OACI et la même fréquence sont remplacées par celles du guide.
+Le guide imprime le nom de canal 8,33 kHz (par exemple 122.105), pas la fréquence
+réelle (122.100) : c'est toujours la fréquence réelle qui est programmée. Les fréquences
+non publiées ou hors de 118-136.975 MHz ne deviennent pas des canaux. Le PDF est un
+document tiers et n'est pas dans le dépôt : seules les fréquences extraites sont
+incluses, avec citation. `npm run compare:airband` génère `docs/airband-es-comparison.md`
+avec les écarts entre les deux sources, qui ne sont pas résolus automatiquement :
+vérifiez-les avec l'AIP d'ENAIRE.
+
 Les passages couvrent les jours restants du mois UTC pour 75 points de référence :
 villes européennes et un point approximatif dans chacun des 50 États américains et
 Washington DC. Ils ne sont pas valables pour tout un pays. Coordonnées, date, époque

@@ -80,8 +80,62 @@
     }
     return file;
   }
+  // Extracted frequencies of the third-party 101ATM AIRBAND Spain AD COM Guide (primary source for Spanish airports).
+  // mhz is the real carrier; icaoChannel is only the 8.33 kHz channel name and is never programmed.
+  function validateAirbandGuide(file) {
+    R.assert(file?.source && typeof file.source === "object" && typeof file.source.title === "string" && file.source.title &&
+      typeof file.source.version === "string" && Array.isArray(file.aerodromes) && file.aerodromes.length <= 10000,
+    "Guia aeronautica no valida.");
+    const icaos = new Set();
+    for (const aerodrome of file.aerodromes) {
+      R.assert(/^(LE|GC|GE)[A-Z]{2}$/.test(aerodrome?.icao) && !icaos.has(aerodrome.icao) &&
+        ["civil-atc", "civil-afis", "military"].includes(aerodrome.kind) && Array.isArray(aerodrome.channels),
+      `Guia aeronautica: aerodromo no valido (${aerodrome?.icao}).`);
+      icaos.add(aerodrome.icao);
+      for (const channel of aerodrome.channels) {
+        const where = `${aerodrome.icao} ${channel?.service}`;
+        R.assert(typeof channel?.service === "string" && channel.service.length > 0 && (/^\d{3}\.\d{3}$/.test(channel.icaoChannel) || (channel.icaoChannel === "xxx.xxx" && channel.mhz === null)) &&
+          (channel.mhz === null || Number.isFinite(channel.mhz)) && (channel.note === null || typeof channel.note === "string"),
+        `Guia aeronautica: canal no valido (${where}).`);
+        R.assert(channel.mhz !== null || channel.note !== null, `Guia aeronautica: frecuencia ausente sin nota (${where}).`);
+        if (channel.note === null) R.assert(airbandRx(channel.mhz.toFixed(5)), `Guia aeronautica: frecuencia fuera de banda o de rejilla (${where}).`);
+      }
+    }
+    return file;
+  }
+  const AIRPORT_KEY = /^(ourairports|airband-guide):/;
+  const GUIDE_SOURCE = "ENAIRE AIP via 101ATM AIRBAND Spain AD COM Guide v1.0, p.1";
+  const GUIDE_ATTRIBUTION = "101ATM AIRBAND Spain AD COM Guide v1.0 (extracted frequencies only; third-party document not redistributed)";
+  const khz = value => Math.round(Number(value) * 1000);
   // AM RX-only entries: mode "AM" (never 0) so a legacy FM-only writer fails instead of storing them as FM.
-  function airportChannels(file, regionNames = new Map()) {
+  // The guide, when given, is the primary source: its channels come first and replace OurAirports entries with the same ident and rx.
+  function airportChannels(file, regionNames = new Map(), guide = null) {
+    if (guide) R.assert(file.country === "ES", "La guia aeronautica solo aplica a Espana.");
+    const ours = ourAirportChannels(file, regionNames);
+    if (!guide) return ours;
+    validateAirbandGuide(guide);
+    const guided = guide.aerodromes.flatMap(aerodrome => {
+      const airport = file.airports[aerodrome.icao];
+      if (!airport) return [];
+      return aerodrome.channels.flatMap((channel, index) => {
+        if (channel.note !== null) return [];
+        const rx = channel.mhz.toFixed(5);
+        return [{ key: `airband-guide:${aerodrome.icao}:${index}`, name: R.asciiName(`${aerodrome.icao} ${channel.service}`),
+          callsign: aerodrome.icao, ident: aerodrome.icao, airport: airport.name, rx, tx: rx, mode: "AM", rxOnly: true, txLocked: true,
+          narrow: false, country: file.country, regionId: airport.regionId, region: regionNames.get(airport.regionId) || "",
+          city: airport.municipality || "", zone: `${file.country} ${airport.regionId}`, latitude: airport.latitude,
+          longitude: airport.longitude, source: GUIDE_SOURCE, license: guide.source.license_note || "", attribution: GUIDE_ATTRIBUTION,
+          notes: `${airport.name} - ${channel.service}. AM RX only; ICAO channel ${channel.icaoChannel}; not for navigation.` }];
+      });
+    });
+    const covered = new Set(guided.map(entry => `${entry.ident}:${khz(entry.rx)}`));
+    const groups = new Map();
+    for (const entry of [...guided, ...ours.filter(entry => !covered.has(`${entry.ident}:${khz(entry.rx)}`))]) {
+      groups.has(entry.ident) ? groups.get(entry.ident).push(entry) : groups.set(entry.ident, [entry]);
+    }
+    return [...groups.values()].flat();
+  }
+  function ourAirportChannels(file, regionNames) {
     validateAirportTemplate(file, file.country);
     return file.frequencies.map(entry => {
       const airport = file.airports[entry.ident];
@@ -108,7 +162,7 @@
         country, regionId: "CB27", zone: "CB27", source: CB_SOURCE, notes: `CB 27 MHz canal ${index + 1} ${mode} · solo RX.` };
     }));
   }
-  function countryTemplateChannels(file, { region = "", query = "", pmr = false, cb = false, satellites = null, airports = null } = {}) {
+  function countryTemplateChannels(file, { region = "", query = "", pmr = false, cb = false, satellites = null, airports = null, guide = null } = {}) {
     validateCountryTemplate(file, file.country);
     R.assert(!region || file.regions.some(entry => entry.id === region), "Selecciona una region de la plantilla.");
     const search = String(query).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
@@ -116,7 +170,7 @@
     const pool = [...file.channels];
     if (airports) {
       R.assert(airports.country === file.country, "Los aeropuertos no pertenecen al pais de la plantilla.");
-      const extra = airportChannels(airports, new Map(file.regions.map(entry => [entry.id, entry.name])));
+      const extra = airportChannels(airports, new Map(file.regions.map(entry => [entry.id, entry.name])), guide);
       R.assert(extra.every(entry => regions.has(entry.regionId)), "Aeropuerto en una region ausente del catalogo.");
       pool.push(...extra);
     }
@@ -205,7 +259,7 @@
     const zoneCapacity = index => reserved?.zone === index ? Math.min(fullCapacity, reserved.fromSlot - 1) : fullCapacity;
     const maxZones = layout.zones ?? layout.lists ?? Infinity;
     const regional = new Map(), satellite = [], pmr = [];
-    const isAirport = channel => String(channel.key).startsWith("ourairports:");
+    const isAirport = channel => AIRPORT_KEY.test(String(channel.key));
     for (const channel of prepared.accepted) {
       if (channel.regionId === "PMR446" || channel.regionId === "CB27") pmr.push(channel);
       else if (!channel.regionId || String(channel.key).startsWith("sat")) satellite.push(channel);
@@ -375,7 +429,7 @@
     }
     return passes.sort((a, b) => a.start - b.start);
   }
-  Object.assign(R, { TEMPLATE_COUNTRIES: COUNTRIES, TEMPLATE_PROFILES: PROFILES, templateGroup, cbChannels, validateCountryTemplate, validateAirportTemplate, airportChannels,
+  Object.assign(R, { TEMPLATE_COUNTRIES: COUNTRIES, TEMPLATE_PROFILES: PROFILES, templateGroup, cbChannels, validateCountryTemplate, validateAirportTemplate, validateAirbandGuide, airportChannels,
     countryTemplateChannels, prepareTemplateExport, templateZonePlan, templateImportChannels, templateExportFile, templateModulation,
     monthlyTemplatePasses, weeklyTemplatePasses });
   if (typeof module !== "undefined") module.exports = R;

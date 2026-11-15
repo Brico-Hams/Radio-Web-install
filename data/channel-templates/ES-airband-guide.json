@@ -1,0 +1,1842 @@
+{
+ "source": {
+  "title": "101ATM AIRBAND Spain AD COM Guide",
+  "version": "1.0",
+  "date": "2026-11-07",
+  "page": 1,
+  "upstream": "ENAIRE AIP España, AIRAC 10/26 & AMDT 412/26 (29-OCT-26)",
+  "license_note": "Third-party, educational use only; facts extracted, PDF not redistributed"
+ },
+ "aerodromes": [
+  {
+   "icao": "GCFV",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.475",
+     "mhz": 118.475,
+     "note": null
+    },
+    {
+     "service": "SEC",
+     "icaoChannel": "119.200",
+     "mhz": 119.2,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.700",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "118.650",
+     "mhz": 118.65,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "GCGM",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "AFIS",
+     "icaoChannel": "118.375",
+     "mhz": 118.375,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "GCHI",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "AFIS",
+     "icaoChannel": "118.075",
+     "mhz": 118.075,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "GCLA",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.900",
+     "mhz": 118.9,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.800",
+     "mhz": 121.8,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "118.250",
+     "mhz": 118.25,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "GCLP",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.300",
+     "mhz": 118.3,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.700",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "CLR",
+     "icaoChannel": "125.000",
+     "mhz": 125.0,
+     "note": null
+    },
+    {
+     "service": "BKP",
+     "icaoChannel": "121.175",
+     "mhz": 121.175,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "118.600",
+     "mhz": 118.6,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "GCRR",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "120.700",
+     "mhz": 120.7,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.800",
+     "mhz": 121.8,
+     "note": null
+    },
+    {
+     "service": "BKP",
+     "icaoChannel": "124.000",
+     "mhz": 124.0,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "118.625",
+     "mhz": 118.625,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "GCTS",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "119.000",
+     "mhz": 119.0,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.900",
+     "mhz": 121.9,
+     "note": null
+    },
+    {
+     "service": "CLR",
+     "icaoChannel": "121.750",
+     "mhz": 121.75,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "118.675",
+     "mhz": 118.675,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "127.700",
+     "mhz": 127.7,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "128.125",
+     "mhz": 128.125,
+     "note": null
+    },
+    {
+     "service": "BKP",
+     "icaoChannel": "120.300",
+     "mhz": 120.3,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "GCXO",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.700",
+     "mhz": 118.7,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.700",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "CLR",
+     "icaoChannel": "121.850",
+     "mhz": 121.85,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "118.575",
+     "mhz": 118.575,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "124.800",
+     "mhz": 124.8,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "128.850",
+     "mhz": 128.85,
+     "note": null
+    },
+    {
+     "service": "SEC",
+     "icaoChannel": "120.000",
+     "mhz": 120.0,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "120.775",
+     "mhz": 120.775,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "GECE",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "HLP",
+     "icaoChannel": "123.325",
+     "mhz": 123.325,
+     "note": null
+    },
+    {
+     "service": "AWS",
+     "icaoChannel": "122.500",
+     "mhz": 122.5,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "GEML",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "119.525",
+     "mhz": 119.525,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.775",
+     "mhz": 121.775,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.300",
+     "mhz": 139.3,
+     "note": "outside 118-137 MHz VHF airband"
+    }
+   ]
+  },
+  {
+   "icao": "LEAB",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "122.105",
+     "mhz": 122.1,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.805",
+     "mhz": 121.8,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.305",
+     "mhz": 139.305,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "118.730",
+     "mhz": 118.725,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEAG",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "HLP",
+     "icaoChannel": "123.325",
+     "mhz": 123.325,
+     "note": null
+    },
+    {
+     "service": "AWS",
+     "icaoChannel": "123.425",
+     "mhz": 123.425,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEAL",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.155",
+     "mhz": 118.15,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "130.655",
+     "mhz": 130.65,
+     "note": null
+    },
+    {
+     "service": "CLR",
+     "icaoChannel": "119.855",
+     "mhz": 119.85,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "120.080",
+     "mhz": 120.075,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEAM",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.350",
+     "mhz": 118.35,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "119.055",
+     "mhz": 119.05,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEAO",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "126.100",
+     "mhz": 126.1,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "129.375",
+     "mhz": 129.375,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.300",
+     "mhz": 139.3,
+     "note": "outside 118-137 MHz VHF airband"
+    }
+   ]
+  },
+  {
+   "icao": "LEAS",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.150",
+     "mhz": 118.15,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "xxx.xxx",
+     "mhz": null,
+     "note": "frequency not published in guide"
+    }
+   ]
+  },
+  {
+   "icao": "LEBA",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "AFIS",
+     "icaoChannel": "118.305",
+     "mhz": 118.3,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEBB",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.500",
+     "mhz": 118.5,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "127.450",
+     "mhz": 127.45,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "118.830",
+     "mhz": 118.825,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEBG",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "AFIS",
+     "icaoChannel": "125.430",
+     "mhz": 125.425,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEBL",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR ARR",
+     "icaoChannel": "118.105",
+     "mhz": 118.1,
+     "note": null
+    },
+    {
+     "service": "TWR DEP",
+     "icaoChannel": "118.330",
+     "mhz": 118.325,
+     "note": null
+    },
+    {
+     "service": "CLR",
+     "icaoChannel": "121.805",
+     "mhz": 121.8,
+     "note": null
+    },
+    {
+     "service": "GMC C",
+     "icaoChannel": "121.655",
+     "mhz": 121.65,
+     "note": null
+    },
+    {
+     "service": "GMC N",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "GMC S",
+     "icaoChannel": "122.230",
+     "mhz": 122.225,
+     "note": null
+    },
+    {
+     "service": "ATIS ARR",
+     "icaoChannel": "118.655",
+     "mhz": 118.65,
+     "note": null
+    },
+    {
+     "service": "ATIS DEP",
+     "icaoChannel": "121.980",
+     "mhz": 121.975,
+     "note": null
+    },
+    {
+     "service": "BKP",
+     "icaoChannel": "122.830",
+     "mhz": 122.825,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEBT",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "HLP",
+     "icaoChannel": "126.750",
+     "mhz": 126.75,
+     "note": null
+    },
+    {
+     "service": "HLP",
+     "icaoChannel": "129.375",
+     "mhz": 129.375,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEBZ",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "122.105",
+     "mhz": 122.1,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "130.155",
+     "mhz": 130.15,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.300",
+     "mhz": 139.3,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "120.505",
+     "mhz": 120.5,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LECH",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "120.680",
+     "mhz": 120.675,
+     "note": null
+    },
+    {
+     "service": "BKP",
+     "icaoChannel": "121.830",
+     "mhz": 121.825,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LECO",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.305",
+     "mhz": 118.3,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "129.005",
+     "mhz": 129.0,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LECU",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.705",
+     "mhz": 118.7,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.805",
+     "mhz": 121.8,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "137.525",
+     "mhz": 137.525,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "118.230",
+     "mhz": 118.225,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LECV",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "123.225",
+     "mhz": 123.225,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "339.200",
+     "mhz": 339.2,
+     "note": "outside 118-137 MHz VHF airband"
+    }
+   ]
+  },
+  {
+   "icao": "LEDA",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "121.330",
+     "mhz": 121.325,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.630",
+     "mhz": 121.625,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEEC",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "126.750",
+     "mhz": 126.75,
+     "note": null
+    },
+    {
+     "service": "TWR",
+     "icaoChannel": "129.375",
+     "mhz": 129.375,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEGA",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.700",
+     "mhz": 118.7,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.825",
+     "mhz": 121.825,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "122.100",
+     "mhz": 122.1,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEGE",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.505",
+     "mhz": 118.5,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "129.905",
+     "mhz": 129.9,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "128.755",
+     "mhz": 128.75,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEGR",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.855",
+     "mhz": 118.85,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.930",
+     "mhz": 121.925,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "120.630",
+     "mhz": 120.625,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEGT",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "129.930",
+     "mhz": 129.925,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.605",
+     "mhz": 121.6,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.305",
+     "mhz": 139.305,
+     "note": "outside 118-137 MHz VHF airband"
+    }
+   ]
+  },
+  {
+   "icao": "LEHC",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "AFIS",
+     "icaoChannel": "128.955",
+     "mhz": 128.95,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEIB",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.505",
+     "mhz": 118.5,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.930",
+     "mhz": 121.925,
+     "note": null
+    },
+    {
+     "service": "CLR",
+     "icaoChannel": "121.380",
+     "mhz": 121.375,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "119.805",
+     "mhz": 119.8,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEJR",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.555",
+     "mhz": 118.55,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "133.280",
+     "mhz": 133.275,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "125.655",
+     "mhz": 125.65,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LELC",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "124.425",
+     "mhz": 124.425,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.600",
+     "mhz": 121.6,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.300",
+     "mhz": 139.3,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "130.300",
+     "mhz": 130.3,
+     "note": null
+    },
+    {
+     "service": "BKP",
+     "icaoChannel": "125.025",
+     "mhz": 125.025,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "128.605",
+     "mhz": 128.6,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LELL",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "120.805",
+     "mhz": 120.8,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.605",
+     "mhz": 121.6,
+     "note": null
+    },
+    {
+     "service": "A/G",
+     "icaoChannel": "123.500",
+     "mhz": 123.5,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LELN",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "122.105",
+     "mhz": 122.1,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "121.280",
+     "mhz": 121.275,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.305",
+     "mhz": 139.305,
+     "note": "outside 118-137 MHz VHF airband"
+    }
+   ]
+  },
+  {
+   "icao": "LEMD",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR A18R/D36L",
+     "icaoChannel": "118.080",
+     "mhz": 118.075,
+     "note": null
+    },
+    {
+     "service": "TWR A32L/D14R",
+     "icaoChannel": "118.155",
+     "mhz": 118.15,
+     "note": null
+    },
+    {
+     "service": "TWR A18L/D36R",
+     "icaoChannel": "118.680",
+     "mhz": 118.675,
+     "note": null
+    },
+    {
+     "service": "TWR A32R/D14L",
+     "icaoChannel": "118.980",
+     "mhz": 118.975,
+     "note": null
+    },
+    {
+     "service": "GMC E-SUR",
+     "icaoChannel": "121.630",
+     "mhz": 121.625,
+     "note": null
+    },
+    {
+     "service": "GMC E-NOR",
+     "icaoChannel": "121.755",
+     "mhz": 121.75,
+     "note": null
+    },
+    {
+     "service": "GMC C-SUR",
+     "icaoChannel": "121.980",
+     "mhz": 121.975,
+     "note": null
+    },
+    {
+     "service": "GMC C-NOR",
+     "icaoChannel": "123.155",
+     "mhz": 123.15,
+     "note": null
+    },
+    {
+     "service": "SDP S-SUR",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "SDP S-NOR",
+     "icaoChannel": "121.855",
+     "mhz": 121.85,
+     "note": null
+    },
+    {
+     "service": "SDP W-SUR",
+     "icaoChannel": "123.005",
+     "mhz": 123.0,
+     "note": null
+    },
+    {
+     "service": "SDP W-NOR",
+     "icaoChannel": "123.255",
+     "mhz": 123.25,
+     "note": null
+    },
+    {
+     "service": "CLR EAST",
+     "icaoChannel": "130.080",
+     "mhz": 130.075,
+     "note": null
+    },
+    {
+     "service": "CLR WEST",
+     "icaoChannel": "130.355",
+     "mhz": 130.35,
+     "note": null
+    },
+    {
+     "service": "ATIS ARR",
+     "icaoChannel": "118.255",
+     "mhz": 118.25,
+     "note": null
+    },
+    {
+     "service": "ATIS DEP",
+     "icaoChannel": "130.855",
+     "mhz": 130.85,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEMG",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR RWY 13/31",
+     "icaoChannel": "118.155",
+     "mhz": 118.15,
+     "note": null
+    },
+    {
+     "service": "TWR RWY 12/30",
+     "icaoChannel": "118.780",
+     "mhz": 118.775,
+     "note": null
+    },
+    {
+     "service": "CLR",
+     "icaoChannel": "121.880",
+     "mhz": 121.875,
+     "note": null
+    },
+    {
+     "service": "ATIS ARR",
+     "icaoChannel": "120.380",
+     "mhz": 120.375,
+     "note": null
+    },
+    {
+     "service": "GMC-W",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "GMC-E",
+     "icaoChannel": "121.955",
+     "mhz": 121.95,
+     "note": null
+    },
+    {
+     "service": "BKP",
+     "icaoChannel": "124.780",
+     "mhz": 124.775,
+     "note": null
+    },
+    {
+     "service": "ATIS DEP",
+     "icaoChannel": "124.480",
+     "mhz": 124.475,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEMH",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.205",
+     "mhz": 118.2,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.755",
+     "mhz": 121.75,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "119.655",
+     "mhz": 119.65,
+     "note": null
+    },
+    {
+     "service": "A-A",
+     "icaoChannel": "119.655",
+     "mhz": 119.65,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "129.155",
+     "mhz": 129.15,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEMI",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "121.330",
+     "mhz": 121.325,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.755",
+     "mhz": 121.75,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEMO",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "122.100",
+     "mhz": 122.1,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "337.900",
+     "mhz": 337.9,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.300",
+     "mhz": 139.3,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "USA",
+     "icaoChannel": "396.850",
+     "mhz": 396.85,
+     "note": "outside 118-137 MHz VHF airband"
+    }
+   ]
+  },
+  {
+   "icao": "LEPA",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR ARR",
+     "icaoChannel": "118.305",
+     "mhz": 118.3,
+     "note": null
+    },
+    {
+     "service": "TWR DEP",
+     "icaoChannel": "118.455",
+     "mhz": 118.45,
+     "note": null
+    },
+    {
+     "service": "BKP",
+     "icaoChannel": "121.605",
+     "mhz": 121.6,
+     "note": null
+    },
+    {
+     "service": "OPS",
+     "icaoChannel": "130.250",
+     "mhz": 130.25,
+     "note": null
+    },
+    {
+     "service": "ATIS ARR",
+     "icaoChannel": "119.255",
+     "mhz": 119.25,
+     "note": null
+    },
+    {
+     "service": "GMC-SUR",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "GMC-NORT",
+     "icaoChannel": "121.905",
+     "mhz": 121.9,
+     "note": null
+    },
+    {
+     "service": "CLR",
+     "icaoChannel": "123.880",
+     "mhz": 123.875,
+     "note": null
+    },
+    {
+     "service": "INFO MIL",
+     "icaoChannel": "165.275",
+     "mhz": 165.275,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "ATIS DEP",
+     "icaoChannel": "121.780",
+     "mhz": 121.775,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEPP",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.200",
+     "mhz": 118.2,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LERI",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "139.075",
+     "mhz": 139.075,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "SEC",
+     "icaoChannel": "118.100",
+     "mhz": 118.1,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LERJ",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.580",
+     "mhz": 118.575,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "HLP",
+     "icaoChannel": "123.255",
+     "mhz": 123.25,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LERL",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "AFIS",
+     "icaoChannel": "118.055",
+     "mhz": 118.05,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LERS",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "128.880",
+     "mhz": 128.875,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "120.255",
+     "mhz": 120.25,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LERT",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "119.750",
+     "mhz": 119.75,
+     "note": null
+    },
+    {
+     "service": "TWR",
+     "icaoChannel": "122.100",
+     "mhz": 122.1,
+     "note": null
+    },
+    {
+     "service": "HLP",
+     "icaoChannel": "122.225",
+     "mhz": 122.225,
+     "note": null
+    },
+    {
+     "service": "GND",
+     "icaoChannel": "130.700",
+     "mhz": 130.7,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "282.025",
+     "mhz": 282.025,
+     "note": "outside 118-137 MHz VHF airband"
+    }
+   ]
+  },
+  {
+   "icao": "LESA",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.105",
+     "mhz": 118.1,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.855",
+     "mhz": 121.85,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.300",
+     "mhz": 139.3,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "124.405",
+     "mhz": 124.4,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "140.100",
+     "mhz": 140.1,
+     "note": "outside 118-137 MHz VHF airband"
+    }
+   ]
+  },
+  {
+   "icao": "LESB",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "A/G",
+     "icaoChannel": "122.705",
+     "mhz": 122.7,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LESO",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "119.855",
+     "mhz": 119.85,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "120.830",
+     "mhz": 120.825,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEST",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.755",
+     "mhz": 118.75,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "120.200",
+     "mhz": 120.2,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "118.200",
+     "mhz": 118.2,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "127.755",
+     "mhz": 127.75,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LESU",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "AFIS",
+     "icaoChannel": "122.205",
+     "mhz": 122.2,
+     "note": null
+    },
+    {
+     "service": "BKP",
+     "icaoChannel": "131.605",
+     "mhz": 131.6,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LETA",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "HLP",
+     "icaoChannel": "122.800",
+     "mhz": 122.8,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LETL",
+   "kind": "civil-afis",
+   "channels": [
+    {
+     "service": "A/A",
+     "icaoChannel": "122.680",
+     "mhz": 122.675,
+     "note": null
+    },
+    {
+     "service": "AWS",
+     "icaoChannel": "131.055",
+     "mhz": 131.05,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LETO",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "122.100",
+     "mhz": 122.1,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "118.300",
+     "mhz": 118.3,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.300",
+     "mhz": 139.3,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "119.950",
+     "mhz": 119.95,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEVC",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.555",
+     "mhz": 118.55,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.880",
+     "mhz": 121.875,
+     "note": null
+    },
+    {
+     "service": "CLR",
+     "icaoChannel": "123.580",
+     "mhz": 123.575,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "120.100",
+     "mhz": 120.1,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "124.750",
+     "mhz": 124.75,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "121.080",
+     "mhz": 121.075,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEVD",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "122.205",
+     "mhz": 122.2,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.700",
+     "mhz": 139.7,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.300",
+     "mhz": 139.3,
+     "note": "outside 118-137 MHz VHF airband"
+    }
+   ]
+  },
+  {
+   "icao": "LEVT",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.450",
+     "mhz": 118.45,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.805",
+     "mhz": 121.8,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "119.355",
+     "mhz": 119.35,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEVX",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.455",
+     "mhz": 118.45,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "BKP",
+     "icaoChannel": "118.955",
+     "mhz": 118.95,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "120.830",
+     "mhz": 120.825,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEXJ",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.105",
+     "mhz": 118.1,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "118.375",
+     "mhz": 118.375,
+     "note": null
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "127.530",
+     "mhz": 127.525,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEZG",
+   "kind": "military",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "122.105",
+     "mhz": 122.1,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "118.105",
+     "mhz": 118.1,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "139.300",
+     "mhz": 139.3,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "119.305",
+     "mhz": 119.3,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "127.055",
+     "mhz": 127.05,
+     "note": null
+    },
+    {
+     "service": "APP",
+     "icaoChannel": "125.055",
+     "mhz": 125.05,
+     "note": null
+    }
+   ]
+  },
+  {
+   "icao": "LEZL",
+   "kind": "civil-atc",
+   "channels": [
+    {
+     "service": "TWR",
+     "icaoChannel": "118.105",
+     "mhz": 118.1,
+     "note": null
+    },
+    {
+     "service": "GMC",
+     "icaoChannel": "121.705",
+     "mhz": 121.7,
+     "note": null
+    },
+    {
+     "service": "MIL",
+     "icaoChannel": "278.075",
+     "mhz": 278.075,
+     "note": "outside 118-137 MHz VHF airband"
+    },
+    {
+     "service": "ATIS",
+     "icaoChannel": "118.180",
+     "mhz": 118.175,
+     "note": null
+    }
+   ]
+  }
+ ]
+}

@@ -113,7 +113,7 @@ object ChannelTemplates {
             int(item, "from"), int(item, "to"))
     }
 
-    fun dataset(country: Country, countryJson: String, airportsJson: String?): Dataset {
+    fun dataset(country: Country, countryJson: String, airportsJson: String?, guideJson: String? = null): Dataset {
         val file = JSONObject(countryJson)
         require(file.getString("format") == "bricohams-country-template" && file.getInt("version") == 1 && file.getString("country") == country.code)
         val regions = file.getJSONArray("regions").objects().map { Region(it.getString("id"), it.getString("name")) }
@@ -145,8 +145,65 @@ object ChannelTemplates {
                         "AM RX only, published frequency; not for navigation.", country.code, "", "OurAirports (public domain)",
                     airportFile.getString("license"), names[airport.getString("regionId")].orEmpty())
             }
+            if (guideJson != null) {
+                require(country.code == "ES") { "The airband guide only applies to Spain." }
+                airportChannels = withGuide(airportChannels, airports, names, ids, country.code, JSONObject(guideJson))
+            }
         }
         return Dataset(country, regions, channels, airportChannels, file.getString("coverage"), airportCoverage)
+    }
+
+    private const val GUIDE_SOURCE = "ENAIRE AIP via 101ATM AIRBAND Spain AD COM Guide v1.0, p.1"
+    private const val GUIDE_ATTRIBUTION = "101ATM AIRBAND Spain AD COM Guide v1.0 (extracted frequencies only; third-party document not redistributed)"
+
+    private fun khz(value: String) = Math.round(value.toDouble() * 1000)
+
+    private fun isAirport(channel: Channel) = channel.key.startsWith("ourairports:") || channel.key.startsWith("airband-guide:")
+
+    /** Validates the third-party guide extract; mhz is the real carrier, icaoChannel is only the 8.33 kHz channel name. */
+    private fun validateGuide(guide: JSONObject) {
+        val source = guide.getJSONObject("source")
+        require(source.getString("title").isNotEmpty() && source.getString("version").isNotEmpty()) { "Airband guide: invalid source." }
+        val seen = HashSet<String>()
+        for (aerodrome in guide.getJSONArray("aerodromes").objects()) {
+            val icao = aerodrome.getString("icao")
+            require(Regex("^(LE|GC|GE)[A-Z]{2}$").matches(icao) && seen.add(icao) &&
+                aerodrome.getString("kind") in listOf("civil-atc", "civil-afis", "military")) { "Airband guide: invalid aerodrome $icao." }
+            for (channel in aerodrome.getJSONArray("channels").objects()) {
+                val where = "$icao ${channel.optString("service")}"
+                require(channel.getString("service").isNotEmpty() && (Regex("^\\d{3}\\.\\d{3}$").matches(channel.getString("icaoChannel")) || (channel.getString("icaoChannel") == "xxx.xxx" && channel.isNull("mhz")))) {
+                    "Airband guide: invalid channel ($where)."
+                }
+                val missing = channel.isNull("mhz")
+                require(!missing || !channel.isNull("note")) { "Airband guide: missing frequency without note ($where)." }
+                if (channel.isNull("note")) require(airband("%.5f".format(java.util.Locale.ROOT, channel.getDouble("mhz")))) {
+                    "Airband guide: frequency outside the band or grid ($where)."
+                }
+            }
+        }
+    }
+
+    /** Guide channels first; OurAirports entries with the same ident and rx (kHz) are dropped, the rest stay unchanged. */
+    private fun withGuide(ours: List<Channel>, airports: JSONObject, names: Map<String, String>, regionIds: Set<String>,
+        country: String, guide: JSONObject): List<Channel> {
+        validateGuide(guide)
+        val guided = guide.getJSONObject("source").let { source ->
+            guide.getJSONArray("aerodromes").objects().flatMap { aerodrome ->
+                val icao = aerodrome.getString("icao")
+                val airport = airports.optJSONObject(icao)
+                if (airport == null || airport.getString("regionId") !in regionIds) return@flatMap emptyList<Channel>()
+                aerodrome.getJSONArray("channels").objects().withIndex().mapNotNull { (index, channel) ->
+                    if (!channel.isNull("note")) return@mapNotNull null
+                    val rx = "%.5f".format(java.util.Locale.ROOT, channel.getDouble("mhz"))
+                    Channel("airband-guide:$icao:$index", asciiName("$icao ${channel.getString("service")}", 16), rx, rx, "AM", false,
+                        airport.getString("regionId"), airport.optString("municipality"), icao, GUIDE_SOURCE,
+                        "${airport.getString("name")} - ${channel.getString("service")}. AM RX only; ICAO channel ${channel.getString("icaoChannel")}; not for navigation.",
+                        country, "", GUIDE_ATTRIBUTION, source.optString("license_note"), names[airport.getString("regionId")].orEmpty())
+                }
+            }
+        }
+        val covered = guided.map { "${it.ident}:${khz(it.rx)}" }.toSet()
+        return (guided + ours.filter { "${it.ident}:${khz(it.rx)}" !in covered }).groupBy { it.ident }.values.flatten()
     }
 
     /** Repeaters, then airports of the same region, then PMR446 last; PMR never for a country without it (US). */
@@ -269,7 +326,7 @@ object ChannelTemplates {
             maxOf(1, Math.ceil(regional.size.toDouble() / maxOf(1, regularLimit - if (satellite.isNotEmpty()) 1 else 0)).toInt())
         var current: Draft? = null
         for ((regionId, found) in regional) {
-            val list = found.filter { !it.key.startsWith("ourairports:") } + found.filter { it.key.startsWith("ourairports:") }
+            val list = found.filter { !isAirport(it) } + found.filter { isAirport(it) }
             val name = list.first().region.ifEmpty { regionId }
             val open = current
             if (open != null && open.regions.size < perZone && open.items.size + list.size <= zoneCapacity(open.index) && room >= list.size) {

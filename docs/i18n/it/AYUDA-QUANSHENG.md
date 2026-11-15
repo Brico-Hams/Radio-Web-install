@@ -31,6 +31,18 @@ SAT aggiunge solo memorie FM nominali, senza Doppler.
 
 I modelli di ripetitori per radio coprono tutta l'Europa (UE, SEE, Regno Unito, Svizzera, Balcani, Ucraina, Moldavia, Bielorussia, microstati) e le Americhe (USA per stato, Canada per provincia, Messico, America centrale, Caraibi e America del Sud). Russia e Turchia non sono incluse. Un paese senza ripetitori HearHam utilizzabili non genera file ed è elencato come «pendiente de fuente» in `data/channel-templates/coverage.json`; l'interfaccia lo nasconde o lo disattiva. I file pronti sono in `templates/repeaters/<radio>/<CC>.<ext>` (indice in `templates/repeaters/index.json` con canali, scartati e SHA-256). Restano solo RX e rispettano bande, modi e capacità di ogni radio. Scarica o Applica (sezione «Modelli di ripetitori» su desktop/web e nella schermata modelli di Android) usano questi file. Aeroporti e passaggi satellitari restano limitati ai sette paesi originali. Per rigenerare: `npm run fetch:channel-templates`, poi `npm run templates:build`.
 
+I canali degli aeroporti (AM, solo RX, TX bloccato, nessuna trasmissione) usano
+`data/channel-templates/ES-airband-guide.json` come fonte primaria, estratto dalla guida
+di terzi "101ATM AIRBAND Spain AD COM Guide v1.0" (pagina 1, che cita l'AIP di ENAIRE
+AIRAC 10/26); OurAirports (`ES-airports.json`) resta la fonte secondaria e le sue voci
+con lo stesso codice ICAO e la stessa frequenza sono sostituite da quelle della guida.
+La guida stampa il nome del canale 8,33 kHz (per esempio 122.105), non la frequenza
+reale (122.100): si programma sempre la frequenza reale. Le frequenze non pubblicate
+o fuori da 118-136.975 MHz non diventano canali. Il PDF è materiale di terzi e non è
+nel repository: sono incluse solo le frequenze estratte, con citazione.
+`npm run compare:airband` genera `docs/airband-es-comparison.md` con le discrepanze tra
+le due fonti, che non vengono risolte automaticamente: verificale con l'AIP di ENAIRE.
+
 I passaggi coprono i giorni restanti del mese UTC per 75 punti di riferimento:
 città europee e un punto approssimativo in ciascuno dei 50 stati USA e Washington
 DC. Non valgono per tutto un paese. Sono inclusi coordinate, data, epoca TLE ed

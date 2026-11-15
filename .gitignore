@@ -33,3 +33,6 @@ android/local.properties
 
 # CHIRP CSVs built from third-party repeater listings without an open licence (scripts/build-chirp-spain.py --with-web)
 chirp/local/
+
+# Third-party reference documents (not redistributed)
+data/third-party/

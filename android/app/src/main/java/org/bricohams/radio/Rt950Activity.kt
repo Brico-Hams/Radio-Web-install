@@ -606,7 +606,8 @@ class Rt950Activity : LocalizedActivity() {
     private fun loadZpCountry() {
         try {
             val selected = zpCountries[zpCountry.selectedItemPosition]
-            val loaded = ChannelTemplates.dataset(selected, readAsset("${selected.code}.json"), readAssetOrNull("${selected.code}-airports.json"))
+            val loaded = ChannelTemplates.dataset(selected, readAsset("${selected.code}.json"), readAssetOrNull("${selected.code}-airports.json"),
+                if (selected.code == "ES") readAssetOrNull("ES-airband-guide.json") else null)
             zpDataset = loaded
             zpRegions = loaded.regions.sortedBy { it.name }
             zpRegion.adapter = themedAdapter(listOf(getString(R.string.template_all_zones)) + zpRegions.map { it.name })
