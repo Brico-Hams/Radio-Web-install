@@ -1,0 +1,3 @@
+# Neu in 1.4.0
+
+- Relais-Vorlagen für 40 Länder in Europa und Amerika, fertig für jedes Funkgerät (RadiCodex, RT-950 Pro, UV-K5 V3, AT-D878, FTX-1), mit Download und Übernahme; Länder ohne verlässliche Daten sind als „Quelle ausstehend“ markiert. Spanische Flughäfen: neue Primärquelle (101ATM-Leitfaden, ENAIRE-AIP) mit der echten 8,33-kHz-Frequenz, AM nur Empfang.
