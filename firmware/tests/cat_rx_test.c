@@ -1,4 +1,5 @@
 #include "cat_rx.h"
+#include "cat_tx.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
