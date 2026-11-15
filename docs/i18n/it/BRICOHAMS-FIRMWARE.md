@@ -583,7 +583,7 @@ I test dell'adattatore simulano le primitive RF: verificano segni,
 limiti, frequenza applicata, assenza di modifiche a TX/VFO e recupero
 dopo un errore. Non certificano ricezione, audio né ripristino fisico.
 La modalità è in ricezione, salvo la PTT CAT armata con 9 (vedi CAT TX); il resto del firmware mantiene il TX upstream.
-Non è un firmware globalmente bloccato per TX né un apparato full-duplex.
+Non è un firmware globalmente bloccato per TX né un apparato a duplex integrale; il funzionamento tra bande è semiduplex.
 
 #### CAT RX Bricohams v1 implementato
 
@@ -682,9 +682,22 @@ e mostra `CAT TX LIMIT`; occorre armare di nuovo con 9.
    stampa nell'immagine Robot36.
 
 Trasmette sulla frequenza TX del VFO d'ingresso (con il relativo offset), senza
-correzione Doppler di uplink. Il LED rosso si accende come per la PTT normale e
+correzione Doppler di uplink (CAT TX v1 non la calcola). Il LED rosso si accende come per la PTT normale e
 il display mostra `CAT TX ON AIR` e la frequenza TX. Durante la trasmissione,
 i comandi CAT RX vengono accettati ma applicati al ritorno in RX.
+Semiduplex con Doppler su entrambi i collegamenti: CAT RX v2 (stesso comando `0x7B00`,
+richiesta di 12 byte con versione 2 e uplink a passi di 10 Hz, risposta di 20 byte,
+capacità 31, flag 32 uplink valido, 64 TX armato e 128 in trasmissione) fa ricevere alla
+radio il downlink corretto e, premendo PTT (locale o CAT TX v1) con TX armato con 9 e un
+uplink valido (3000 ms), trasmettere sull'uplink corretto e tornare al downlink al
+rilascio. È semiduplex (half duplex): mai ricezione e trasmissione insieme, quindi il
+downlink non si sente mentre si trasmette. Se la lease dell'uplink scade, la PTT viene
+rifiutata (mai trasmissione su una frequenza scaduta o nominale); l'uplink deve stare
+nella banda TX consentita e restano validi il blocco TX, il limite di 120 s e
+l'interruzione con qualsiasi tasto. Esempio: uplink 145.925 MHz e downlink 436.888 MHz.
+Radio con Doppler su entrambi i collegamenti: Icom IC-705, Yaesu FT-817/818/857/897 e
+FTX-1 (app Android, split sul VFO B, mai toccato durante la trasmissione) e Quansheng
+UV-K5 con questo firmware. Un firmware senza v2 risponde con versione 1 e l'app resta solo RX.
 
 Contratto: comando privato `0x7B02`, risposta `0x7B03`, little-endian.
 

@@ -41,9 +41,14 @@ typedef struct {
     bool keyed;
     bool limit;
     bool holdoff;          /* A key on the radio aborted TX recently. */
+    bool local;            /* The radio's own PTT key is held (SAT RX, armed): same path as a host key request. */
 } bh_cat_tx;
 
 extern bh_cat_tx bh_cat_transmitter;
+
+/* Radio PTT key state, polled while SAT RX is armed: held = requested with a rolling lease, release = unkey.
+ * Ignored unless armed with key 9 (the persistent "CAT remoto" consent never enables local PTT keying). */
+void bh_cat_tx_local(bh_cat_tx *state, bool pressed, uint32_t now);
 
 void bh_cat_tx_arm(bh_cat_tx *state, bool armed);
 /* A key on the radio aborts TX: disarms and refuses the host for BH_CAT_TX_HOLDOFF_MS. */

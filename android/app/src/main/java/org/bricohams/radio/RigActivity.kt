@@ -937,8 +937,8 @@ class RigActivity : LocalizedActivity() {
         rig = null; transport = null
         val problems = ArrayList<Exception>()
         if (r != null) {
-            attempt<Unit>({ problems.add(it) }) { tracker?.stop() }
             if (pttHeld) attempt<Unit>({ problems.add(it) }) { releasePtt(r) }
+            attempt<Unit>({ problems.add(it) }) { tracker?.stop() }
         }
         disposeOrbit()
         try { link?.close() } catch (error: IOException) { problems.add(error) }
@@ -1194,7 +1194,7 @@ class RigActivity : LocalizedActivity() {
                     assets.open("satellite-6.0.1.js").bufferedReader().use { it.readText() },
                     assets.open("orbital-engine.js").bufferedReader().use { it.readText() })
                 orbit = engine
-                tracker = RigTracker(r, down, up, engine::rangeRateKmS, engine::look, step)
+                tracker = RigTracker(r, down, up, engine::rangeRateKmS, engine::look, step, pttOn = { pttHeld })
                 trackStep(mine, token, requireNotNull(tracker), plan)
             }
         }

@@ -50,6 +50,16 @@
     <string name="cat_stop_tracking">Arrêter le suivi et déconnecter l\'USB</string>
     <string name="cat_tracking_start">Vérification du passage actuel et de l\'état CAT. Réception temporaire uniquement, sans TX.</string>
     <string name="cat_tracking_status">Doppler RX confirmé %1$d Hz. Azimut %2$.1f, élévation %3$.1f degrés. Calcul SGP4, pas une mesure RF. Arrêter déconnecte l\'USB.</string>
+    <string name="cat_half_duplex_note">Semi-duplex : vous n\'entendez pas le downlink pendant l\'émission. Émission seulement si vous armez le TX sur la radio (touche 9).</string>
+    <string name="cat_uplink_hint">Uplink MHz (optionnel, ex. 145.925)</string>
+    <string name="cat_uplink_status">Uplink corrigé Doppler %1$d Hz.</string>
+    <string name="cat_uplink_sent">Uplink envoyé à la radio (TX armé).</string>
+    <string name="cat_uplink_v1">Firmware sans CAT RX v2 : RX seulement, sans uplink.</string>
+    <string name="cat_uplink_not_armed">TX non armé sur la radio : RX seulement.</string>
+    <string name="cat_uplink_keyed">Émission : fréquences maintenues jusqu\'au relâchement du PTT.</string>
+    <string name="err_uplink_band">Uplink hors de la bande TX autorisée (136-174 ou 400-470 MHz, pas de 10 Hz). Pas d\'émission.</string>
+    <string name="err_cat_uplink_unsupported">Ce firmware ne gère pas CAT RX v2 (uplink).</string>
+    <string name="err_cat_uplink_band">Liaison montante hors de la plage de la radio (136-174 ou 400-470 MHz) ; la radio applique aussi ses verrous TX.</string>
     <string name="sstv_intro">RadiCodex - SSTV depuis WAV (Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</string>
     <string name="sstv_limits">Uniquement WAV PCM mono 16 bits, 8000-48000 Hz, jusqu\'à 200 s et 24 Mio. Nécessite un en-tête VIS complet avec parité d\'un mode pris en charge ; tolère un décalage de tonalité de +-100 Hz, la dérive d\'horloge et les synchros manquées (lignes perdues en noir ou estimées). Une réception partielle renvoie les lignes décodées. N\'utilise ni microphone, ni audio USB, ni PTT. Gardez cet écran ouvert et exportez le PNG avant de quitter ou de pivoter.</string>
     <string name="sstv_open">Décoder un WAV SSTV</string>

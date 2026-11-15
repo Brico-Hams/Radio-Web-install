@@ -50,6 +50,16 @@
     <string name="cat_stop_tracking">Verfolgung stoppen und USB trennen</string>
     <string name="cat_tracking_start">Aktueller Überflug und CAT-Status werden geprüft. Nur vorübergehender Empfang, kein TX.</string>
     <string name="cat_tracking_status">Doppler RX bestätigt %1$d Hz. Azimut %2$.1f, Elevation %3$.1f Grad. SGP4-Berechnung, keine HF-Messung. Stoppen trennt USB.</string>
+    <string name="cat_half_duplex_note">Halbduplex: Beim Senden hörst du den Downlink nicht. Gesendet wird nur, wenn du TX am Gerät scharf schaltest (Taste 9).</string>
+    <string name="cat_uplink_hint">Uplink MHz (optional, z. B. 145.925)</string>
+    <string name="cat_uplink_status">Doppler-korrigierter Uplink %1$d Hz.</string>
+    <string name="cat_uplink_sent">Uplink an das Gerät gesendet (TX scharf).</string>
+    <string name="cat_uplink_v1">Firmware ohne CAT RX v2: nur RX, kein Uplink.</string>
+    <string name="cat_uplink_not_armed">TX am Gerät nicht scharf: nur RX.</string>
+    <string name="cat_uplink_keyed">Sendet: Frequenzen bleiben bis zum Loslassen von PTT fest.</string>
+    <string name="err_uplink_band">Uplink außerhalb des erlaubten TX-Bands (136-174 oder 400-470 MHz, 10-Hz-Schritte). Kein Senden.</string>
+    <string name="err_cat_uplink_unsupported">Diese Firmware unterstützt CAT RX v2 (Uplink) nicht.</string>
+    <string name="err_cat_uplink_band">Uplink außerhalb des Funkgerätebereichs (136-174 oder 400-470 MHz); das Gerät wendet zusätzlich seine TX-Sperren an.</string>
     <string name="sstv_intro">RadiCodex - SSTV aus WAV (Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</string>
     <string name="sstv_limits">Nur WAV PCM mono 16 Bit, 8000-48000 Hz, bis 200 s und 24 MiB. Erfordert einen vollständigen VIS-Header mit Parität eines unterstützten Modus; toleriert +-100 Hz Tonversatz, Taktdrift und verpasste Syncs (verlorene Zeilen werden schwarz oder geschätzt dargestellt). Bei Teilempfang werden die dekodierten Zeilen geliefert. Nutzt weder Mikrofon, USB-Audio noch PTT. Diesen Bildschirm geöffnet lassen und das PNG vor dem Verlassen oder Drehen exportieren.</string>
     <string name="sstv_open">SSTV-WAV dekodieren</string>

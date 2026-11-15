@@ -74,6 +74,7 @@ class CatActivity : LocalizedActivity() {
     @Volatile private var leaseFuture: ScheduledFuture<*>? = null
     private val controls = ArrayList<Button>()
     private var selectedPlan: SatellitePlan? = null
+    private var uplinkField: EditText? = null
     @Volatile private var trackingRequested = false
     @Volatile private var tracker: SatelliteTracking? = null
     private var orbit: SatelliteOrbit? = null
@@ -224,6 +225,12 @@ class CatActivity : LocalizedActivity() {
                         java.time.Instant.ofEpochMilli(plan.pass.los.time).toString(),
                         plan.downlinkHz.toString())
                 })
+                content.addView(TextView(this).apply { setText(R.string.cat_half_duplex_note) })
+                uplinkField = EditText(this).apply {
+                    hint = getString(R.string.cat_uplink_hint)
+                    inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+                }
+                content.addView(uplinkField)
                 button(R.string.cat_start_tracking) { startTracking() }
                 content.addView(Button(this).apply {
                     setText(R.string.pass_open_chart)
@@ -669,7 +676,15 @@ class CatActivity : LocalizedActivity() {
     }
     private fun startTracking() {
         if (busy || trackingRequested || transmitting || !foreground) return
-        val plan = selectedPlan ?: return
+        val chosen = selectedPlan ?: return
+        val uplinkText = uplinkField?.text?.toString()?.trim().orEmpty().replace(',', '.')
+        val uplinkHz = if (uplinkText.isEmpty()) 0L else uplinkText.toBigDecimalOrNull()?.movePointRight(6)?.stripTrailingZeros()
+            ?.takeIf { it.scale() <= 0 }?.toLong() ?: -1L
+        if (uplinkHz < 0 || (uplinkHz > 0 && !CatProtocol.inUplinkBand(uplinkHz / 10))) {
+            status.setText(R.string.err_uplink_band)
+            return
+        }
+        val plan = chosen.copy(uplinkHz = uplinkHz)
         cancelLease()
         val token = generation
         trackingRequested = true
@@ -683,7 +698,8 @@ class CatActivity : LocalizedActivity() {
                     assets.open("satellite-6.0.1.js").bufferedReader().use { it.readText() },
                     assets.open("orbital-engine.js").bufferedReader().use { it.readText() })
                 orbit = engine
-                tracker = SatelliteTracking({ engine.target(plan, it) }, { frequency, permit -> cat.tune(frequency, permit) })
+                tracker = SatelliteTracking({ engine.target(plan, it) }, { frequency, permit -> cat.tune(frequency, permit) },
+                    tuneWithUplink = { frequency, uplink, permit -> cat.tune(frequency, permit, uplink10Hz = uplink) })
                 trackingStep(token)
             } catch (error: IllegalArgumentException) { trackingError(token, error) }
             catch (error: IllegalStateException) { trackingError(token, error) }
@@ -697,8 +713,21 @@ class CatActivity : LocalizedActivity() {
             val next = current.step()
             if (next != null && token == generation && trackingRequested) {
                 runOnUiThread {
-                    if (!isDestroyed && token == generation && trackingRequested)
-                        status.text = getString(R.string.cat_tracking_status, next.frequency10Hz * 10, next.look.azimuth, next.look.elevation)
+                    if (!isDestroyed && token == generation && trackingRequested) {
+                        val base = getString(R.string.cat_tracking_status, next.frequency10Hz * 10, next.look.azimuth, next.look.elevation)
+                        val state = current.lastState
+                        status.text = if (next.uplink10Hz > 0 && state != null) {
+                            val reason = when (state.uplinkReason) {
+                                UplinkReason.SENT -> getString(R.string.cat_uplink_sent)
+                                UplinkReason.V1_FIRMWARE -> getString(R.string.cat_uplink_v1)
+                                UplinkReason.TX_NOT_ARMED -> getString(R.string.cat_uplink_not_armed)
+                                UplinkReason.KEYED -> getString(R.string.cat_uplink_keyed)
+                                UplinkReason.NONE -> ""
+                            }
+                            base + "\n" + getString(R.string.cat_uplink_status, next.uplink10Hz * 10) + " " + reason + "\n" +
+                                getString(R.string.cat_half_duplex_note)
+                        } else base
+                    }
                 }
                 worker.schedule({ trackingStep(token) }, 750, TimeUnit.MILLISECONDS)
             }

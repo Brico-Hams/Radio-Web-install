@@ -72,7 +72,13 @@ object QuanshengFrames {
  * a key was just pressed) are only meaningful with capabilities 15, as in quansheng-connector.js.
  */
 data class CatState(val active: Boolean, val remote: Boolean, val pending: Boolean, val frequency10Hz: Long,
-    val anyScreen: Boolean = false, val remoteEnabled: Boolean = false, val holdoff: Boolean = false)
+    val anyScreen: Boolean = false, val remoteEnabled: Boolean = false, val holdoff: Boolean = false,
+    /** CAT RX v2 only: Doppler-corrected uplink held by the radio (0 = none), TX armed with key 9, and PTT keyed right now. */
+    val uplink10Hz: Long = 0, val txArmed: Boolean = false, val keyed: Boolean = false, val v2: Boolean = false,
+    val uplinkReason: UplinkReason = UplinkReason.NONE)
+
+/** Why [CatProtocol.tune] did or did not send an uplink; the host shows it so the user knows what the radio will transmit on. */
+enum class UplinkReason { NONE, SENT, V1_FIRMWARE, TX_NOT_ARMED, KEYED }
 
 /**
  * The radio is not in SAT RX with CAT enabled (key 8), or on firmware that works on any screen, "CAT remoto" is off or in
@@ -157,19 +163,29 @@ class CatProtocol(
         requireUi(supportedFirmware(firmware)) { UiText(R.string.err_cat_firmware_unsupported, firmware) }
         return firmware
     }
-    @Synchronized private fun exchange(operation: Int, frequency: Long = 0): CatState {
+    @Synchronized private fun exchange(operation: Int, frequency: Long = 0, uplink: Long? = null): CatState {
         sequence = (sequence + 1) and 65535
         val expectedSequence = sequence
-        val payload = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
-            .put(1).put(operation.toByte()).putShort(sequence.toShort()).putInt(frequency.toInt()).array()
+        val v2 = uplink != null
+        val payload = ByteBuffer.allocate(if (v2) 12 else 8).order(ByteOrder.LITTLE_ENDIAN)
+            .put(if (v2) 2 else 1).put(operation.toByte()).putShort(sequence.toShort()).putInt(frequency.toInt()).also {
+                if (v2) it.putInt(uplink!!.toInt())
+            }.array()
         if (operation == 1) checkUi(allowTune()) { UiText(R.string.err_cat_tune_cancelled) }
-        val response = request(0x7b00, payload, 0x7b01) { it.size == 16 && sequenceOf(it) == expectedSequence }
-        requireUi(response[0].toInt() == 1) { UiText(R.string.err_cat_response_invalid) }
+        val response = request(0x7b00, payload, 0x7b01) {
+            (it.size == 16 || (v2 && it.size == 20)) && sequenceOf(it) == expectedSequence
+        }
+        if (v2 && response.size == 16) {
+            // Firmware without CAT RX v2 answers a version-2 request with a version-1 reply and does not apply anything.
+            uplinkSupported = false
+            throw RadioNotAvailableException(UiText(R.string.err_cat_uplink_unsupported))
+        }
+        requireUi(response[0].toInt() == if (v2) 2 else 1) { UiText(R.string.err_cat_response_invalid) }
         val view = ByteBuffer.wrap(response).order(ByteOrder.LITTLE_ENDIAN)
         val status = response[1].toInt() and 255
         val capabilities = view.getInt(4)
         val flags = view.getInt(12)
-        val anyScreen = capabilities == 15
+        val anyScreen = capabilities == 15 || capabilities == 31
         val remoteEnabled = anyScreen && flags and 8 != 0
         val holdoff = anyScreen && flags and 16 != 0
         if (status == 5) {
@@ -177,14 +193,19 @@ class CatProtocol(
             else CatNotArmedException(UiText(if (holdoff) R.string.err_cat_remote_holdoff else R.string.err_cat_remote_off))
         }
         requireUi(status == if (operation == 0) 0 else 1) { UiText(R.string.err_cat_rejected, status) }
-        requireUi((capabilities == 7 && flags in 0..7) || (capabilities == 15 && flags in 0..31)) {
+        requireUi((capabilities == 7 && flags in 0..7) || (capabilities == 15 && flags in 0..31) ||
+            (v2 && capabilities == 31 && flags in 0..255)) {
             UiText(R.string.err_cat_capabilities)
         }
         val applied = view.getInt(8).toLong() and 0xffffffffL
         requireUi(if (flags and 1 != 0) inBand(applied) else applied == 0L && flags and 7 == 0) {
             UiText(R.string.err_cat_state_inconsistent)
         }
-        return CatState(flags and 1 != 0, flags and 2 != 0, flags and 4 != 0, applied, anyScreen, remoteEnabled, holdoff)
+        if (v2) uplinkSupported = true
+        val granted = if (v2) view.getInt(16).toLong() and 0xffffffffL else 0L
+        requireUi(granted == 0L || inUplinkBand(granted)) { UiText(R.string.err_cat_state_inconsistent) }
+        return CatState(flags and 1 != 0, flags and 2 != 0, flags and 4 != 0, applied, anyScreen, remoteEnabled, holdoff,
+            uplink10Hz = granted, txArmed = v2 && flags and 64 != 0, keyed = v2 && flags and 128 != 0, v2 = v2)
     }
     @Synchronized private fun ptt(operation: Int, accepted: Set<Int>): PttState {
         sequence = (sequence + 1) and 65535
@@ -221,19 +242,39 @@ class CatProtocol(
     @Synchronized fun pttKey(): PttState = ptt(1, setOf(0, 1))
     @Synchronized fun pttRelease(): PttState = ptt(2, setOf(0, 1))
     @Synchronized fun query(): CatState = exchange(0)
+    /** null until probed; true when the radio answered a CAT RX v2 request, false when it answered with a v1 reply. */
+    @Volatile var uplinkSupported: Boolean? = null
+        private set
+    /** Sends a v2 status query once and caches whether the firmware supports the uplink; never changes radio state. */
+    @Synchronized fun probeUplink(): Boolean {
+        uplinkSupported?.let { return it }
+        try { exchange(0, 0, 0L) } catch (_: RadioNotAvailableException) { }
+        return uplinkSupported == true
+    }
     /**
      * Sets the RX frequency with a single SET. With [confirm] the SET reply is used when it is already applied and
      * otherwise the status is polled (the radio retunes in its RX loop); without it the queued reply is returned as is,
-     * which is enough for lease renewals.
+     * which is enough for lease renewals. With [uplink10Hz] the Doppler-corrected uplink is sent in the same SET (v2) but
+     * only when the firmware supports it, the radio reports TX armed and it is not keyed; nothing is changed while keyed
+     * (half duplex: no frequency changes while transmitting). Otherwise it is an RX-only v1 SET and the reason is in
+     * [CatState.uplinkReason].
      */
-    @Synchronized fun tune(frequency10Hz: Long, permit: () -> Boolean = { true }, confirm: Boolean = true): CatState {
+    @Synchronized fun tune(frequency10Hz: Long, permit: () -> Boolean = { true }, confirm: Boolean = true,
+        uplink10Hz: Long = 0): CatState {
         requireUi(inBand(frequency10Hz)) { UiText(R.string.err_cat_rx_band) }
-        return change(1, frequency10Hz, permit, confirm)
+        if (uplink10Hz <= 0) return change(1, frequency10Hz, permit, confirm)
+        requireUi(inUplinkBand(uplink10Hz)) { UiText(R.string.err_cat_uplink_band) }
+        if (!probeUplink()) return change(1, frequency10Hz, permit, confirm).copy(uplinkReason = UplinkReason.V1_FIRMWARE)
+        val status = exchange(0, 0, 0L)
+        if (!status.active) throw CatNotArmedException()
+        if (status.keyed) return status.copy(uplinkReason = UplinkReason.KEYED)
+        if (!status.txArmed) return change(1, frequency10Hz, permit, confirm).copy(uplinkReason = UplinkReason.TX_NOT_ARMED)
+        return change(1, frequency10Hz, permit, confirm, uplink10Hz).copy(uplinkReason = UplinkReason.SENT)
     }
     @Synchronized fun stop(): CatState = change(2, 0, { true }, true)
-    private fun change(operation: Int, frequency: Long, permit: () -> Boolean, confirm: Boolean): CatState {
+    private fun change(operation: Int, frequency: Long, permit: () -> Boolean, confirm: Boolean, uplink: Long? = null): CatState {
         checkUi(permit()) { UiText(R.string.err_cat_cancelled_before_set) }
-        var state = exchange(operation, frequency)
+        var state = exchange(operation, frequency, uplink)
         if (!state.active) throw CatNotArmedException()
         if (!confirm) return state
         repeat(POLLS + 1) { attempt ->
@@ -265,6 +306,8 @@ class CatProtocol(
          */
         const val MAX_DENIED_STATE = 255
         fun inBand(frequency10Hz: Long) = frequency10Hz in 13600000..17400000 || frequency10Hz in 40000000..47000000
+        /** The firmware validates the uplink with the same band table as RX; the radio's own TX gates still decide at PTT. */
+        fun inUplinkBand(frequency10Hz: Long) = inBand(frequency10Hz)
         /** BricoHams builds, or any build reporting a version >= 6 (the capability words of the CAT reply are checked later). */
         fun supportedFirmware(firmware: String): Boolean {
             val version = Regex("v(\\d+)", RegexOption.IGNORE_CASE).find(firmware)?.groupValues?.get(1)?.toIntOrNull()
@@ -278,7 +321,8 @@ class CatLease(
     private val cat: CatProtocol,
     val frequency10Hz: Long,
     private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
-    private val permit: () -> Boolean = { true }
+    private val permit: () -> Boolean = { true },
+    val uplink10Hz: Long = 0
 ) {
     enum class Result { WAITING, RENEWED, REVERTED, LEFT_SAT_RX, STILL_NOT_ARMED, RECOVERED, RETRY }
     private var renewedAt = clock()
@@ -296,9 +340,9 @@ class CatLease(
             failures = 0
             when {
                 !state.active -> notArmed()
-                !armed -> { armed = true; cat.tune(frequency10Hz, permit, confirm = false); Result.RECOVERED }
+                !armed -> { armed = true; cat.tune(frequency10Hz, permit, confirm = false, uplink10Hz = uplink10Hz); Result.RECOVERED }
                 !state.remote -> Result.REVERTED
-                else -> { cat.tune(frequency10Hz, permit, confirm = false); Result.RENEWED }
+                else -> { cat.tune(frequency10Hz, permit, confirm = false, uplink10Hz = uplink10Hz); Result.RENEWED }
             }
         } catch (_: CatNotArmedException) {
             renewedAt = clock()

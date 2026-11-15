@@ -206,12 +206,14 @@ class IcomCivTest {
         assertTrue(state.split)
         assertEquals(145_800_000L, state.vfo[0])
         assertEquals(435_200_000L, state.vfo[1])
-        val written = bodies(scripted).size
+        // Reading the TX status (1C 00, no data) is how the tracker holds VFO writes during TX; it is not a TX command.
+        val isTxRead = { b: ByteArray -> b.size == 2 && b[0].toInt() == 0x1C && b[1].toInt() == 0 }
+        val written = bodies(scripted).count { !isTxRead(it) }
         rate = 0.05 // below the 100 Hz step on both links: nothing is sent
         now = 1000
         val quiet = tracker.step()
         assertFalse(quiet.sentDownlink || quiet.sentUplink)
-        assertEquals(written, bodies(scripted).size)
+        assertEquals(written, bodies(scripted).count { !isTxRead(it) })
         rate = 3.0
         now = 2000
         val moved = tracker.step()
@@ -220,7 +222,7 @@ class IcomCivTest {
         assertTrue(state.vfo[0] < 145_800_000L && state.vfo[1] > 435_200_000L)
         tracker.stop()
         assertFalse(state.split)
-        assertTrue(bodies(scripted).none { it[0].toInt() == 0x1C })
+        assertTrue(bodies(scripted).none { it[0].toInt() == 0x1C && !isTxRead(it) })
         assertFalse(state.tx)
     }
     @Test fun receiveOnlySatelliteNeverTouchesVfoBSplitOrTx() {
@@ -230,7 +232,7 @@ class IcomCivTest {
         tracker.start()
         tracker.stop()
         val sent = bodies(scripted)
-        assertTrue(sent.none { it[0].toInt() == 0x0F || it[0].toInt() == 0x1C })
+        assertTrue(sent.none { it[0].toInt() == 0x0F || (it[0].toInt() == 0x1C && !(it.size == 2 && it[1].toInt() == 0)) })
         assertTrue(sent.none { it[0].toInt() == 0x25 && it[1].toInt() == 1 && it.size > 2 })
         assertEquals(435_200_000L, state.vfo[1])
     }

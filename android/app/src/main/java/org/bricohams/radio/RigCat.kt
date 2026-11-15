@@ -186,9 +186,15 @@ class RigTracker(
     private val rangeRate: (Long) -> Double,
     private val look: (Long) -> SatelliteLook,
     private val stepHz: Long,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    /** True while our own PTT is on; the radio's TX state is unknown on some rigs, so this alone must hold every write. */
+    private val pttOn: () -> Boolean = { false }
 ) {
-    data class Step(val downlinkHz: Long, val uplinkHz: Long?, val look: SatelliteLook, val sentDownlink: Boolean, val sentUplink: Boolean)
+    data class Step(
+        val downlinkHz: Long, val uplinkHz: Long?, val look: SatelliteLook, val sentDownlink: Boolean, val sentUplink: Boolean,
+        /** Half duplex: frequency and VFO writes are held while transmitting and resynchronised on the first step after unkey. */
+        val heldForTx: Boolean = false
+    )
     private var splitOn = false
     private var lastDownlink: Long? = null
     private var lastUplink: Long? = null
@@ -210,6 +216,7 @@ class RigTracker(
         val up = uplinkHz?.let { Doppler.uplink(it, rate) }
         checkRange(rig.model, down)
         if (up != null) checkRange(rig.model, up)
+        if (transmitting()) return Step(down, up, position, sentDownlink = false, sentUplink = false, heldForTx = true)
         val previousDown = lastDownlink
         val sentDown = previousDown == null || abs(down - previousDown) >= stepHz
         if (sentDown) {
@@ -231,10 +238,18 @@ class RigTracker(
         }
         return Step(down, up, position, sentDown, sentUp)
     }
-    fun stop() {
-        if (!splitOn) return
+    private fun transmitting(): Boolean {
+        if (pttOn()) return true
+        if (!rig.supportsTxStatus) return false
+        return try { rig.isTransmitting() } catch (_: IOException) { true } catch (_: LocalizedUnsupportedException) { false }
+    }
+    /** Turns split off; returns false (and keeps split on so a later call retries) while the radio is transmitting. */
+    fun stop(): Boolean {
+        if (!splitOn) return true
+        if (transmitting()) return false
         splitOn = false
         rig.setSplit(false)
+        return true
     }
     companion object {
         const val TOGGLE_INTERVAL_MS = 5000L

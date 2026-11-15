@@ -30,6 +30,14 @@ int main(void)
     CHECK(bh_doppler_calculate(13600000, 14500000, 12000000, &output) == BH_DOPPLER_INVALID);
     CHECK(bh_doppler_calculate(43500000, 0, 0, &output) == BH_DOPPLER_INVALID);
     CHECK(bh_doppler_calculate(43500000, 14500000, 0, NULL) == BH_DOPPLER_INVALID);
+    /* 145.925 MHz up / 436.888 MHz down at +/-7 km/s: receding lowers the downlink and raises the uplink. */
+    for (int32_t rate = -7000000; rate <= 7000000; rate += 14000000) {
+        CHECK(bh_doppler_calculate(43688800, 14592500, rate, &output) == BH_DOPPLER_OK);
+        const double f = 1.0 - (double)rate / 299792458000.0;
+        CHECK(fabs((double)output.receive_10hz - 43688800.0 * f) <= 0.50001);
+        CHECK(fabs((double)output.transmit_nominal_10hz - 14592500.0 / f) <= 0.50001);
+        CHECK((rate > 0) == (output.receive_10hz < 43688800 && output.transmit_nominal_10hz > 14592500));
+    }
     puts("Doppler tests passed: signs, rounding and RX-only output; no orbital or radio validation");
     return EXIT_SUCCESS;
 }

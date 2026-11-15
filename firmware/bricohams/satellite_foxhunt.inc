@@ -11,6 +11,7 @@ static int32_t bhSatRate;
 static bh_doppler_frequencies bhSatFrequencies;
 static bool bhSatError;
 static bool bhSatCatTimeout;
+static bool bhSatNoUplink;
 static bool bhSatPassView;
 static uint8_t bhSatPassFirst;
 static uint8_t bhSatPassUpcoming;
@@ -74,10 +75,25 @@ static void BH_CAT_DrawIndicator(const char *text)
 
 static void BH_SAT_Transmit(void)
 {
+    uint32_t uplink = 0;
+    const int choice = bh_cat_uplink_select(&bh_cat_receiver, SCHEDULER_GetTick10ms() * 10U, &uplink);
+    if (choice == BH_CAT_UPLINK_REFUSE) {
+        /* Uplink lease expired: never key on a stale or nominal frequency; the host must renew it. */
+        bh_cat_transmitter.requested = false;
+        bhSatNoUplink = true;
+        return;
+    }
+    bhSatNoUplink = false;
+    /* RAM-only, restored after the key-up: the radio's own TX gates and band locks judge the uplink. */
+    const uint32_t savedTx = gTxVfo->pTX->Frequency;
+    if (choice == BH_CAT_UPLINK_USE)
+        gTxVfo->pTX->Frequency = uplink;
     const VfoState_t state = FOXHUNT_TxState();
     bh_cat_tx_keyed(&bh_cat_transmitter, (uint8_t)state, SCHEDULER_GetTick10ms() * 10U);
-    if (state != VFO_STATE_NORMAL)
+    if (state != VFO_STATE_NORMAL) {
+        gTxVfo->pTX->Frequency = savedTx;
         return;
+    }
     AUDIO_AudioPathOff();
     gCurrentVfo = gTxVfo;
     BK4819_DisableDTMF(); /* Same TX audio filtering as FUNCTION_Transmit. */
@@ -95,6 +111,8 @@ static void BH_SAT_Transmit(void)
         UART_ServiceCommands();
 #endif
         const KEY_Code_t key = KEYBOARD_GetKey();
+        if (bh_cat_transmitter.local)
+            bh_cat_tx_local(&bh_cat_transmitter, key == KEY_PTT, SCHEDULER_GetTick10ms() * 10U);
         if (key != KEY_INVALID && key != held)
             bh_cat_tx_abort(&bh_cat_transmitter, SCHEDULER_GetTick10ms() * 10U); /* Any key aborts and disarms. */
         held = key;
@@ -106,6 +124,7 @@ static void BH_SAT_Transmit(void)
     BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
     RADIO_SetupRegisters(true);
     bh_cat_tx_unkeyed(&bh_cat_transmitter);
+    gTxVfo->pTX->Frequency = savedTx; /* Half duplex: back to the downlink below. */
     kbd.current = KEYBOARD_GetKey(); /* The abort key is not a new hunt key press. */
     if (bhCatOutside) {
         if (bh_cat_receiver.active && bh_cat_receiver.remote)
@@ -119,6 +138,8 @@ static void BH_SAT_Update(void)
 {
     if (foxLocked && bh_cat_transmitter.armed)
         bh_cat_tx_arm(&bh_cat_transmitter, false);
+    if (bh_cat_transmitter.armed && !bh_cat_transmitter.keyed)
+        bh_cat_tx_local(&bh_cat_transmitter, KEYBOARD_GetKey() == KEY_PTT, SCHEDULER_GetTick10ms() * 10U);
     if (bh_cat_tx_poll(&bh_cat_transmitter, SCHEDULER_GetTick10ms() * 10U) == BH_CAT_TX_KEY)
         BH_SAT_Transmit();
     if (foxLocked && bh_cat_receiver.active) {
@@ -238,6 +259,7 @@ static bool BH_SAT_Key(KEY_Code_t key)
     if (key == KEY_9) {
         /* Local confirmation: only the keypad arms CAT PTT, never the host. */
         bh_cat_tx_arm(&bh_cat_transmitter, !bh_cat_transmitter.armed && !bhSatError);
+        bhSatNoUplink = false;
         return true;
     }
     if (key == KEY_8 && gWasFKeyPressed) {
@@ -358,6 +380,8 @@ static void BH_SAT_Draw(void)
     }
     if (bh_cat_transmitter.limit)
         strcpy(line, "CAT TX LIMIT");
+    else if (bhSatNoUplink)
+        strcpy(line, "CAT NO UPLINK");
     else if (bh_cat_transmitter.denied_state != 0)
         strcpy(line, "CAT TX DENIED");
     else if (bh_cat_transmitter.armed)

@@ -568,7 +568,7 @@ Die Adaptertests simulieren RF-Primitiven und prüfen Vorzeichen,
 Grenzwerte, angewandte Frequenz, unveränderte TX/VFO-Werte sowie Wiederherstellung
 nach Fehlern. Sie zertifizieren weder Empfang noch Audio oder physische Wiederherstellung.
 Der Modus ist auf Empfang ausgelegt, außer wenn CAT-PTT mit 9 scharfgeschaltet wird (siehe CAT TX); die übrige Firmware behält die TX-Funktionalität des Upstreams.
-Die Firmware sperrt TX nicht global und das Gerät ist kein Vollduplexgerät.
+Die Firmware sperrt TX nicht global und das Gerät ist kein Vollduplexgerät; der Betrieb über Bandgrenzen ist Halbduplex.
 
 #### CAT RX Bricohams v1 implementiert
 
@@ -660,9 +660,21 @@ Sicherheitsmaßnahmen in Reihenfolge:
 6. **Rufzeichen erforderlich.** Die App sendet nicht ohne gültiges Rufzeichen und druckt es in das Robot36-Bild.
 
 Gesendet wird auf der TX-Frequenz des Eingangs-VFO (mit dessen Offset), ohne
-Uplink-Dopplerkorrektur. Die rote LED leuchtet wie bei normaler PTT und
+Uplink-Dopplerkorrektur (CAT TX v1 berechnet keine). Die rote LED leuchtet wie bei normaler PTT und
 der Bildschirm zeigt `CAT TX ON AIR` und die TX-Frequenz. Während der Aussendung werden
 CAT-RX-Befehle angenommen, aber erst bei Rückkehr zu RX angewandt.
+Halbduplex mit Doppler auf beiden Strecken: CAT RX v2 (derselbe Befehl `0x7B00`,
+12-Byte-Anfrage mit Version 2 und Uplink in 10-Hz-Schritten, 20-Byte-Antwort, Capabilities 31,
+Flags 32 Uplink gültig, 64 TX scharfgeschaltet und 128 sendet) lässt das Funkgerät den
+korrigierten Downlink empfangen und bei PTT (lokal oder CAT TX v1) mit per 9 scharfgeschaltetem
+TX und gültigem Uplink (3000 ms) auf dem korrigierten Uplink senden und beim Loslassen zum
+Downlink zurückkehren. Es ist Halbduplex: Empfang und Senden nie gleichzeitig, der Downlink
+ist beim Senden nicht zu hören. Läuft der Uplink-Lease ab, wird PTT abgewiesen (nie auf
+veralteter oder nomineller Frequenz); der Uplink muss im erlaubten TX-Band liegen, TX-Sperre,
+120-s-Limit und Abbruch durch jede Taste gelten weiter. Beispiel: Uplink 145.925 MHz und
+Downlink 436.888 MHz. Geräte mit Doppler auf beiden Strecken: Icom IC-705, Yaesu
+FT-817/818/857/897 und FTX-1 (Android-App, Split auf VFO B, beim Senden nie angefasst) sowie
+Quansheng UV-K5 mit dieser Firmware. Firmware ohne v2 antwortet mit Version 1, die App bleibt nur RX.
 
 Vertrag: privater Befehl `0x7B02`, Antwort `0x7B03`, little-endian.
 

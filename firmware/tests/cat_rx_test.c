@@ -190,6 +190,70 @@ int main(void)
     request[1] = 2; memset(&request[4], 0, 4);
     bh_cat_request(&s, request, sizeof(request), 20, reply);
     CHECK(bh_cat_global_tick(&s, true, false, true, 14500000, 30, &tune) && tune == 14500000 && s.applied == 14500000);
+    /* CAT RX v2: uplink under the same lease; v1 replies stay v1 (capabilities 15). */
+    {
+        bh_cat_rx u = {0};
+        uint8_t r2[BH_CAT_REPLY_V2_SIZE];
+        uint8_t q2[BH_CAT_REQUEST_V2_SIZE] = {2, 0, 0x78, 0x56, 0, 0, 0, 0, 0, 0, 0, 0};
+        uint32_t up = 0;
+        const uint32_t down = 43688800, uplink = 14592700; /* 436.888 / 145.927 MHz */
+        CHECK(bh_cat_start(&u, 43500000));
+        CHECK(bh_cat_request2(&u, q2, sizeof(q2), 0, r2) == BH_CAT_REPLY_V2_SIZE);
+        CHECK(r2[0] == 2 && r2[1] == 0 && r2[2] == 0x78 && r2[3] == 0x56 && r2[4] == 31 && r2[5] == 0);
+        CHECK(bh_cat_uplink_select(&u, 0, &up) == BH_CAT_UPLINK_NONE);
+        q2[1] = 1;
+        for (unsigned i = 0; i < 4; ++i) { q2[4 + i] = (uint8_t)(down >> (i * 8U)); q2[8 + i] = (uint8_t)(uplink >> (i * 8U)); }
+        CHECK(bh_cat_request2(&u, q2, sizeof(q2), 100, r2) == BH_CAT_REPLY_V2_SIZE && r2[1] == 1);
+        CHECK((r2[12] & BH_CAT_FLAG_UPLINK) && r2[16] == (uplink & 0xFF) && u.uplink == uplink && u.target == down);
+        CHECK(bh_cat_uplink_select(&u, 2000, &up) == BH_CAT_UPLINK_USE && up == uplink);
+        CHECK(bh_cat_uplink_select(&u, 3100, &up) == BH_CAT_UPLINK_REFUSE); /* Lease over, not yet expired by the loop. */
+        /* Out-of-band uplink is refused and nothing changes. */
+        bh_cat_rx before = u;
+        const uint32_t bad = 12000000;
+        for (unsigned i = 0; i < 4; ++i) q2[8 + i] = (uint8_t)(bad >> (i * 8U));
+        CHECK(bh_cat_request2(&u, q2, sizeof(q2), 200, r2) == BH_CAT_REPLY_V2_SIZE && r2[1] == 6);
+        CHECK(memcmp(&before, &u, sizeof(u)) == 0);
+        /* Expiry drops the uplink and refuses TX until renewed. */
+        CHECK(bh_cat_expire(&u, 3100) && u.uplink == 0 && u.uplink_lost);
+        CHECK(bh_cat_uplink_select(&u, 3200, &up) == BH_CAT_UPLINK_REFUSE);
+        bh_cat_applied(&u);
+        for (unsigned i = 0; i < 4; ++i) q2[8 + i] = (uint8_t)(uplink >> (i * 8U));
+        CHECK(bh_cat_request2(&u, q2, sizeof(q2), 4000, r2) == BH_CAT_REPLY_V2_SIZE && r2[1] == 1 && !u.uplink_lost);
+        /* RX-only v2 (uplink 0) and op 2 clear the uplink; v1 SET never carries one. */
+        memset(&q2[8], 0, 4);
+        bh_cat_request2(&u, q2, sizeof(q2), 4100, r2);
+        CHECK(u.uplink == 0 && bh_cat_uplink_select(&u, 4200, &up) == BH_CAT_UPLINK_NONE && !(r2[12] & BH_CAT_FLAG_UPLINK));
+        q2[1] = 2; memset(&q2[4], 0, 8);
+        q2[8] = 1;
+        bh_cat_request2(&u, q2, sizeof(q2), 4300, r2);
+        CHECK(r2[1] == 2); /* Stop with a payload is malformed. */
+        q2[8] = 0;
+        bh_cat_request2(&u, q2, sizeof(q2), 4300, r2);
+        CHECK(r2[1] == 1 && !u.remote && u.uplink == 0);
+        /* TX state is reported from the radio. */
+        bh_cat_tx_arm(&bh_cat_transmitter, true);
+        q2[1] = 0;
+        bh_cat_request2(&u, q2, sizeof(q2), 4400, r2);
+        CHECK(r2[12] & BH_CAT_FLAG_TX_ARMED);
+        bh_cat_tx_arm(&bh_cat_transmitter, false);
+        /* v1 frames through the dispatcher keep the 16-byte v1 reply; a v2 frame of the wrong length is v1 status 2. */
+        uint8_t r1[BH_CAT_REPLY_V2_SIZE];
+        uint8_t v1[BH_CAT_REQUEST_SIZE] = {1, 0, 1, 0, 0, 0, 0, 0};
+        CHECK(bh_cat_request2(&u, v1, sizeof(v1), 4500, r1) == BH_CAT_REPLY_SIZE && r1[0] == 1 && r1[4] == 15);
+        q2[0] = 3;
+        CHECK(bh_cat_request2(&u, q2, sizeof(q2), 4500, r1) == BH_CAT_REPLY_SIZE && r1[0] == 1 && r1[1] == 2);
+        q2[0] = 2;
+        CHECK(bh_cat_request2(&u, q2, 9, 4500, r1) == BH_CAT_REPLY_SIZE && r1[1] == 2);
+        /* A v1 SET after a v2 one drops the uplink. */
+        CHECK(bh_cat_start(&u, 43500000));
+        q2[1] = 1;
+        for (unsigned i = 0; i < 4; ++i) { q2[4 + i] = (uint8_t)(down >> (i * 8U)); q2[8 + i] = (uint8_t)(uplink >> (i * 8U)); }
+        bh_cat_request2(&u, q2, sizeof(q2), 10, r2);
+        v1[1] = 1;
+        for (unsigned i = 0; i < 4; ++i) v1[4 + i] = (uint8_t)(down >> (i * 8U));
+        bh_cat_request2(&u, v1, sizeof(v1), 20, r1);
+        CHECK(r1[1] == 1 && u.uplink == 0 && bh_cat_uplink_select(&u, 30, &up) == BH_CAT_UPLINK_NONE);
+    }
     puts("CAT RX protocol checks passed; no hardware validation");
     return EXIT_SUCCESS;
 }

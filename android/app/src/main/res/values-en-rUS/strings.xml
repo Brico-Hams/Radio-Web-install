@@ -50,6 +50,16 @@
     <string name="cat_stop_tracking">Stop tracking and disconnect USB</string>
     <string name="cat_tracking_start">Checking current pass and CAT state. Temporary reception only, no TX.</string>
     <string name="cat_tracking_status">Doppler RX confirmed %1$d Hz. Azimuth %2$.1f, elevation %3$.1f degrees. SGP4 calculation, not an RF measurement. Stopping disconnects USB.</string>
+    <string name="cat_half_duplex_note">Half duplex: you will not hear the downlink while transmitting. It only transmits if you arm TX on the radio (key 9).</string>
+    <string name="cat_uplink_hint">Uplink MHz (optional, e.g. 145.925)</string>
+    <string name="cat_uplink_status">Doppler-corrected uplink %1$d Hz.</string>
+    <string name="cat_uplink_sent">Uplink sent to the radio (TX armed).</string>
+    <string name="cat_uplink_v1">Firmware without CAT RX v2: RX only, no uplink.</string>
+    <string name="cat_uplink_not_armed">TX not armed on the radio: RX only.</string>
+    <string name="cat_uplink_keyed">Transmitting: frequencies held until PTT is released.</string>
+    <string name="err_uplink_band">Uplink outside the allowed TX band (136-174 or 400-470 MHz, 10 Hz steps). Not transmitting.</string>
+    <string name="err_cat_uplink_unsupported">This firmware does not support CAT RX v2 (uplink).</string>
+    <string name="err_cat_uplink_band">Uplink outside the radio range (136-174 or 400-470 MHz); the radio also applies its own TX locks.</string>
     <string name="sstv_intro">RadiCodex - SSTV from WAV (Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</string>
     <string name="sstv_limits">Only mono 16-bit PCM WAV, 8000-48000 Hz, up to 200 s and 24 MiB. Requires a complete VIS header with parity for a supported mode; tolerates +-100 Hz tone offset, clock drift and missed syncs (lost lines are shown black or estimated). A partial reception returns the decoded lines. Does not use the microphone, USB audio or PTT. Keep this screen open and export the PNG before leaving or rotating.</string>
     <string name="sstv_open">Decode SSTV WAV</string>

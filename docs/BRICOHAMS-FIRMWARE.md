@@ -598,7 +598,8 @@ Los tests del adaptador simulan las primitivas RF: comprueban signos,
 limites, frecuencia aplicada, ausencia de cambios TX/VFO y recuperacion
 tras error. No certifican recepcion, audio ni restauracion fisica.
 El modo es de recepcion salvo la PTT CAT armada con 9 (ver CAT TX); el resto del firmware conserva TX upstream.
-No es un firmware globalmente bloqueado para TX ni un equipo full-duplex.
+No es un firmware globalmente bloqueado para TX ni un equipo dúplex completo: el
+funcionamiento cruzado de bandas es semiduplex (half duplex).
 
 #### CAT RX Bricohams v1 implementado
 
@@ -699,9 +700,23 @@ Seguridad, por orden:
    imprime en la imagen Robot36.
 
 Emite en la frecuencia TX del VFO de entrada (con su desplazamiento), sin
-correccion Doppler de subida. El LED rojo se enciende como en la PTT normal y
-la pantalla muestra `CAT TX ON AIR` y la frecuencia TX. Mientras se emite, las
-ordenes CAT RX se aceptan pero se aplican al volver a RX.
+correccion Doppler de subida (CAT TX v1 no la calcula). El LED rojo se enciende
+como en la PTT normal y la pantalla muestra `CAT TX ON AIR` y la frecuencia TX.
+Mientras se emite, las ordenes CAT RX se aceptan pero se aplican al volver a RX.
+Semiduplex con Doppler en ambos enlaces: CAT RX v2 (mismo comando `0x7B00`,
+peticion de 12 bytes con version 2 y uplink en pasos de 10 Hz, respuesta de 20
+bytes, capacidades 31, banderas 32 uplink vigente, 64 TX armado y 128 emitiendo)
+hace que la radio reciba el downlink corregido y, al pulsar PTT (local o CAT TX
+v1) con TX armado con 9 y un uplink vigente (3000 ms), emita en el uplink
+corregido y vuelva al downlink al soltar. Es semiduplex (half duplex): nunca
+recibe y emite a la vez, asi que no se oye el downlink mientras se transmite. Si
+caduca el uplink la PTT se rechaza (no se emite en una frecuencia obsoleta ni
+nominal); el uplink debe estar en la banda TX permitida y siguen aplicando el TX
+lock, el limite de 120 s y el aborto con cualquier tecla. Ejemplo: uplink
+145.925 MHz y downlink 436.888 MHz. Radios con Doppler en ambos enlaces:
+Icom IC-705, Yaesu FT-817/818/857/897 y FTX-1 (app Android, split en el VFO B
+sin tocarlo durante la emision) y Quansheng UV-K5 con este firmware. Un
+firmware sin v2 responde con version 1 y la app queda solo en RX.
 
 Contrato: comando privado `0x7B02`, respuesta `0x7B03`, little-endian.
 

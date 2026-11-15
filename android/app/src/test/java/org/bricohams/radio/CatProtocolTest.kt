@@ -55,6 +55,95 @@ class CatProtocolTest {
         }
         override fun close() = Unit
     }
+    /** CAT RX v2 radio: 12-byte requests get a 20-byte reply; with v2Capable=false it answers them like old firmware (v1 reply). */
+    private class V2Radio(var v2Capable: Boolean = true, var txArmed: Boolean = true, var keyed: Boolean = false) : RadioBytes {
+        val buffer = ArrayDeque<Byte>()
+        val requests = ArrayList<ByteArray>()
+        var applied = 14580000L
+        var uplink = 0L
+        var remote = false
+        override fun write(bytes: ByteArray, timeoutMs: Int) {
+            val (_, request) = QuanshengFrames.decode(bytes)
+            requests.add(request)
+            val view = ByteBuffer.wrap(request).order(ByteOrder.LITTLE_ENDIAN)
+            val operation = request[1].toInt()
+            val v2Request = request.size == 12
+            val v2 = v2Request && v2Capable
+            if (operation == 1 && !(v2Request && !v2Capable)) {
+                applied = view.getInt(4).toLong(); remote = true
+                uplink = if (v2) view.getInt(8).toLong() else 0L
+            }
+            if (operation == 2) { applied = 14580000; remote = false; uplink = 0 }
+            val flags = 1 or (if (remote) 2 else 0) or 8 or
+                (if (v2 && uplink != 0L) 32 else 0) or (if (v2 && txArmed) 64 else 0) or (if (v2 && keyed) 128 else 0)
+            val reply = ByteBuffer.allocate(if (v2) 20 else 16).order(ByteOrder.LITTLE_ENDIAN)
+                .put(if (v2) 2 else 1).put(if (operation == 0) 0 else 1).putShort(view.getShort(2))
+                .putInt(if (v2) 31 else 15).putInt(applied.toInt()).putInt(flags)
+            if (v2) reply.putInt(uplink.toInt())
+            QuanshengFrames.encode(0x7b01, reply.array()).forEach(buffer::add)
+        }
+        override fun read(length: Int, timeoutMs: Int): ByteArray {
+            if (buffer.size < length) throw IOException("Mock timeout")
+            return ByteArray(length) { buffer.removeFirst() }
+        }
+        override fun close() = Unit
+    }
+    @Test fun v2FrameCarriesBothFrequenciesAndTheReplyReportsCapabilitiesAndTxState() {
+        val radio = V2Radio()
+        val cat = CatProtocol(radio, sleep = {})
+        assertTrue(cat.probeUplink())
+        assertEquals(12, radio.requests.last().size)
+        val state = cat.tune(43688800, uplink10Hz = 14592500)
+        val set = radio.requests.last { it[1].toInt() == 1 }
+        val view = ByteBuffer.wrap(set).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(12, set.size)
+        assertEquals(2, set[0].toInt())
+        assertEquals(43688800L, view.getInt(4).toLong())
+        assertEquals(14592500L, view.getInt(8).toLong())
+        assertEquals(UplinkReason.SENT, state.uplinkReason)
+        assertTrue(state.v2 && state.txArmed && !state.keyed)
+        assertEquals(14592500L, state.uplink10Hz)
+    }
+    @Test fun oldFirmwareFallsBackToRxOnlyV1AndReportsIt() {
+        val radio = V2Radio(v2Capable = false)
+        val cat = CatProtocol(radio, sleep = {})
+        assertFalse(cat.probeUplink())
+        val state = cat.tune(43688800, uplink10Hz = 14592500)
+        assertEquals(UplinkReason.V1_FIRMWARE, state.uplinkReason)
+        assertEquals(43688800L, state.frequency10Hz)
+        assertEquals(0L, radio.uplink)
+        val set = radio.requests.last { it[1].toInt() == 1 }
+        assertEquals(8, set.size)
+        assertEquals(1, set[0].toInt())
+        // Probed once: later steps do not repeat the v2 attempt.
+        val before = radio.requests.count { it.size == 12 }
+        cat.tune(43688900, uplink10Hz = 14592400)
+        assertEquals(before, radio.requests.count { it.size == 12 })
+    }
+    @Test fun noUplinkIsSentWhenTxIsNotArmedOrOutOfBand() {
+        val radio = V2Radio(txArmed = false)
+        val cat = CatProtocol(radio, sleep = {})
+        val state = cat.tune(43688800, uplink10Hz = 14592500)
+        assertEquals(UplinkReason.TX_NOT_ARMED, state.uplinkReason)
+        assertEquals(0L, radio.uplink)
+        assertTrue(radio.requests.filter { it[1].toInt() == 1 }.all { it.size == 8 })
+        assertThrows(IllegalArgumentException::class.java) { cat.tune(43688800, uplink10Hz = 2850000) }
+    }
+    @Test fun nothingIsChangedWhileTheRadioIsKeyed() {
+        val radio = V2Radio(keyed = true)
+        val cat = CatProtocol(radio, sleep = {})
+        val state = cat.tune(43688800, uplink10Hz = 14592500)
+        assertEquals(UplinkReason.KEYED, state.uplinkReason)
+        assertTrue(radio.requests.none { it[1].toInt() == 1 })
+    }
+    @Test fun satelliteExampleUplinkIsPreCompensatedOppositeToTheDownlink() {
+        for (rate in listOf(7.0, -7.0)) {
+            val down = Doppler.downlink(436_888_000, rate)
+            val up = Doppler.uplink(145_925_000, rate)
+            assertTrue((down < 436_888_000) == (up > 145_925_000))
+            assertTrue(CatProtocol.inBand(down / 10) && CatProtocol.inUplinkBand(up / 10))
+        }
+    }
     @Test fun framingRoundTripAndCrcVector() {
         assertEquals(0x31c3, QuanshengFrames.crc("123456789".toByteArray()))
         for (length in 0..508) {
