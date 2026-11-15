@@ -378,6 +378,10 @@
     <string name="cat_robot36_sent">Imagen %3$s enviada con %1$s (%2$.1f s). PTT liberada y confirmada por la radio; sin medida RF.</string>
     <string name="cat_state">CAT v1 reconocido. Activo=%1$s, remoto=%2$s, pendiente=%3$s, RX=%4$d Hz. Confirmacion de firmware, no medida RF.</string>
     <string name="cat_failed_closed">CAT detenido y USB cerrado: %1$s. El lease de firmware restaura RX nominal si la radio sigue ejecutando SAT RX.</string>
+    <string name="cat_connect_failed">CAT no conectó (%1$s, USB %2$s) en el paso «%3$s»: %4$s</string>
+    <string name="cat_step_open">abrir USB</string>
+    <string name="cat_step_identify">saludo con la radio</string>
+    <string name="cat_step_status">lectura de estado CAT</string>
     <string name="cat_failed_release">Error CAT: %1$s. Error al liberar USB: %2$s. Comprueba la radio.</string>
     <string name="cat_restore_unconfirmed">No se confirmo restauracion/cierre CAT: %1$s</string>
     <string name="cat_connect_before_tracking">Conecta USB antes de iniciar seguimiento.</string>

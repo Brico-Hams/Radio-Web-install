@@ -98,7 +98,10 @@ class CatActivity : LocalizedActivity() {
                 return
             }
             awaitingPermission = false
-            if (manager.hasPermission(device)) connect(device) else status.setText(R.string.cat_permission_denied)
+            if (manager.hasPermission(device)) connect(device) else {
+                CatLog.record(this@CatActivity, "CAT USB permission denied for ${CatLink.usbId(device.vendorId, device.productId)}")
+                status.setText(R.string.cat_permission_denied)
+            }
         }
     }
     private val reattachCheck = object : Runnable {
@@ -255,6 +258,16 @@ class CatActivity : LocalizedActivity() {
             status.setText(R.string.cat_no_devices)
             return
         }
+        // Profile first: the device that passed the profile test (or the BricoHams CDC radio) is used without asking.
+        val stored = ProfileStore.usbDevice(this)
+        val match = stored?.let { id ->
+            UsbIdentity.find(id, devices.map { UsbIdentity.of(it, 0) })?.let { found -> devices.firstOrNull { UsbIdentity.of(it, 0) == found } }
+        } ?: devices.singleOrNull { CatLink.isBricoHamsCdc(it.vendorId, it.productId) }
+        if (match != null) {
+            reattachWatch = false
+            requestUsbPermission(match)
+            return
+        }
         AlertDialog.Builder(this).setTitle(R.string.usb_select_device)
             .setItems(devices.map { "VID %04X PID %04X - %s - %s".format(it.vendorId, it.productId, SerialRadio.description(it), it.deviceName) }.toTypedArray()) { _, index ->
                 reattachWatch = false
@@ -294,14 +307,16 @@ class CatActivity : LocalizedActivity() {
         val token = generation
         lastRadio = device.vendorId to device.productId
         reattachWatch = false
+        val kind = if (CdcRadio.compatible(device)) CatTransport.USB_CDC else CatTransport.USB_SERIAL
         operation {
-            closeRadio()
-            val port = SerialRadio.open(manager, device, SerialRadio.quanshengSettings(device))
-            transport = port
-            val cat = CatProtocol(port, allowTune = { foreground && token == generation })
-            protocol = cat
-            cat.identify()
-            cat.query()
+            try { closeRadio() } catch (stale: IOException) {
+                // A dead previous link must not block a new connection; the failure is only logged.
+                CatLog.record(this, "CAT previous link close: ${stale.message}", stale)
+            }
+            CatLink.connect(kind, device.vendorId, device.productId,
+                open = { SerialRadio.open(manager, device, SerialRadio.quanshengSettings(device)) },
+                protocol = { CatProtocol(it, allowTune = { foreground && token == generation }) },
+                publish = { port, cat -> transport = port; protocol = cat })
         }
     }
     private fun chooseImage() {
@@ -537,6 +552,7 @@ class CatActivity : LocalizedActivity() {
         }
     }
     private fun fail(error: Exception): String {
+        CatLog.record(this, "CAT failed: ${errorText(error)}", error)
         cancelLease()
         val port = transport
         protocol = null; transport = null

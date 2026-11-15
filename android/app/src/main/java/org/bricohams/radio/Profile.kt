@@ -56,7 +56,7 @@ enum class ProfileRadio(
     QDX(RigModel.QDX, null, listOf(CatTransport.USB_CDC), setOf(Tool.RIG_CAT)),
     // CatProtocol (CatActivity), QuanshengChannels/QuanshengMemory (ChannelActivity), RadioKind.QUANSHENG (Diagnostics.kt),
     // template profiles "radicodex" and "uvk5v3"; SerialRadio.quanshengSettings(cdc) supports serial and CDC.
-    UVK5(null, "Quansheng UV-K5 (BricoHams Satellite)", listOf(CatTransport.USB_SERIAL, CatTransport.USB_CDC),
+    UVK5(null, "Quansheng UV-K5 (BricoHams Satellite)",     listOf(CatTransport.USB_CDC, CatTransport.USB_SERIAL),
         setOf(Tool.UVK5_CAT, Tool.CHANNELS, Tool.DIAGNOSTICS, Tool.TEMPLATES)),
     // OpenGd77Link (OpenGd77.kt) over CdcRadio.
     OPENGD77(null, "OpenGD77 (GD-77, DM-1801, RD-5R, MD-UV380, ...)", listOf(CatTransport.USB_CDC), setOf(Tool.GD77)),
@@ -163,8 +163,8 @@ object ProfileStore {
     fun load(context: Context): StationProfile {
         val p = prefs(context)
         val radio = ProfileRadio.values().firstOrNull { it.name == p.getString("radio", null) }
-        val transport = CatTransport.values().firstOrNull { it.name == p.getString("transport", null) }
-            ?.takeIf { radio != null && it in radio.transports } ?: radio?.transports?.firstOrNull()
+        val transport = CatLink.transportFor(CatTransport.values().firstOrNull { it.name == p.getString("transport", null) },
+            radio, usbDevice(context))
         return StationProfile(radio, p.getString("callsign", null) ?: legacyCallsign(context), transport,
             p.getInt("baud", radio?.defaultBaud ?: 0), p.getString("civ", null) ?: StationProfile.DEFAULT_CIV,
             p.getString("host", "") ?: "", p.getString("port", "") ?: "", p.getString("latitude", "") ?: "",

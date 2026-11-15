@@ -446,8 +446,12 @@ class ProfileActivity : LocalizedActivity() {
     }
 
     private fun usbCandidates(profile: StationProfile) = manager.deviceList.values.filter {
-        if (profile.transport == CatTransport.USB_CDC) CdcRadio.compatible(it)
-        else SerialRadio.description(it) != null && !CdcRadio.compatible(it)
+        when {
+            // The UV-K5 opens whatever the attached device is (CDC or adapter); the choice of transport follows the device.
+            profile.radio == ProfileRadio.UVK5 -> SerialRadio.description(it) != null
+            profile.transport == CatTransport.USB_CDC -> CdcRadio.compatible(it)
+            else -> SerialRadio.description(it) != null && !CdcRadio.compatible(it)
+        }
     }.sortedBy { it.deviceName }
 
     private fun chooseUsb(profile: StationProfile) {

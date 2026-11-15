@@ -259,7 +259,7 @@ object DiagnosticsReport {
     private fun hex(value: Int) = String.format(Locale.ROOT, "%04X", value)
 
     fun build(appVersion: String, device: String, whenText: String, devices: List<UsbEntry>, results: List<DiagResult>,
-        firmware: List<String> = emptyList()): String =
+        firmware: List<String> = emptyList(), catLog: List<String> = emptyList()): String =
         buildString {
             appendLine("RadiCodex by BricoHams - Puente / Diagnostico")
             appendLine("App: $appVersion")
@@ -268,6 +268,10 @@ object DiagnosticsReport {
             if (firmware.isNotEmpty()) {
                 appendLine("Firmware de las radios:")
                 for (line in firmware) appendLine("- $line")
+            }
+            if (catLog.isNotEmpty()) {
+                appendLine("Ultimos fallos CAT:")
+                for (line in catLog) appendLine("- $line")
             }
             appendLine()
             appendLine("Dispositivos USB serie: ${devices.size}")

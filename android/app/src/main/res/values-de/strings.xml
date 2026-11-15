@@ -248,6 +248,10 @@
     <string name="cat_robot36_sent">%3$s-Bild mit %1$s gesendet (%2$.1f s). PTT freigegeben und vom Funkgerät bestätigt; keine HF-Messung.</string>
     <string name="cat_state">CAT v1 erkannt. Aktiv=%1$s, ferngesteuert=%2$s, ausstehend=%3$s, RX=%4$d Hz. Firmware-Bestätigung, keine HF-Messung.</string>
     <string name="cat_failed_closed">CAT gestoppt und USB geschlossen: %1$s. Die Firmware-Lease stellt nominales RX wieder her, wenn das Funkgerät noch SAT RX ausführt.</string>
+    <string name="cat_connect_failed">CAT-Verbindung fehlgeschlagen (%1$s, USB %2$s) im Schritt „%3$s“: %4$s</string>
+    <string name="cat_step_open">USB öffnen</string>
+    <string name="cat_step_identify">Hello mit dem Funkgerät</string>
+    <string name="cat_step_status">CAT-Status lesen</string>
     <string name="cat_failed_release">CAT-Fehler: %1$s. Fehler beim Freigeben von USB: %2$s. Funkgerät prüfen.</string>
     <string name="cat_restore_unconfirmed">CAT-Wiederherstellung/-Schließen nicht bestätigt: %1$s</string>
     <string name="cat_connect_before_tracking">USB vor dem Start der Verfolgung verbinden.</string>

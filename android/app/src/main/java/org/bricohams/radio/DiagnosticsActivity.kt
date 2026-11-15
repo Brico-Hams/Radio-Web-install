@@ -354,7 +354,7 @@ class DiagnosticsActivity : LocalizedActivity() {
 
     private fun renderResults() {
         resultsBox.text = DiagnosticsReport.build(versionName(), "${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})",
-            DateFormat.getDateTimeInstance().format(Date()), entries.map { it.second }, results, firmwareLines.distinct())
+            DateFormat.getDateTimeInstance().format(Date()), entries.map { it.second }, results, firmwareLines.distinct(), CatLog.lines(this))
     }
 
     private fun versionName(): String = runCatching { VersionTracker.running(this).let { "${it.name} (codigo ${it.code})" } }.getOrNull() ?: "?"
