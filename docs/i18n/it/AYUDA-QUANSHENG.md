@@ -29,6 +29,18 @@ sono informativi; l'import blocca TX. PMR446 è facoltativo, solo RX, assente pe
 gli USA e non autorizza trasmissioni con apparati radioamatoriali.
 SAT aggiunge solo memorie FM nominali, senza Doppler.
 
+I canali degli aeroporti (AM, solo RX, TX bloccato, nessuna trasmissione) usano
+`data/channel-templates/ES-airband-guide.json` come fonte primaria, estratto dalla guida
+di terzi "101ATM AIRBAND Spain AD COM Guide v1.0" (pagina 1, che cita l'AIP di ENAIRE
+AIRAC 10/26); OurAirports (`ES-airports.json`) resta la fonte secondaria e le sue voci
+con lo stesso codice ICAO e la stessa frequenza sono sostituite da quelle della guida.
+La guida stampa il nome del canale 8,33 kHz (per esempio 122.105), non la frequenza
+reale (122.100): si programma sempre la frequenza reale. Le frequenze non pubblicate
+o fuori da 118-136.975 MHz non diventano canali. Il PDF è materiale di terzi e non è
+nel repository: sono incluse solo le frequenze estratte, con citazione.
+`npm run compare:airband` genera `docs/airband-es-comparison.md` con le discrepanze tra
+le due fonti, che non vengono risolte automaticamente: verificale con l'AIP di ENAIRE.
+
 I passaggi coprono i giorni restanti del mese UTC per 75 punti di riferimento:
 città europee e un punto approssimativo in ciascuno dei 50 stati USA e Washington
 DC. Non valgono per tutto un paese. Sono inclusi coordinate, data, epoca TLE ed

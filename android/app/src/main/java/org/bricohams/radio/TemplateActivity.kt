@@ -63,7 +63,8 @@ class TemplateActivity : LocalizedActivity() {
     private fun loadCountry() {
         try {
             val selected = ChannelTemplates.countries[country.selectedItemPosition]
-            val loaded = ChannelTemplates.dataset(selected, readAsset("${selected.code}.json"), readAsset("${selected.code}-airports.json"))
+            val loaded = ChannelTemplates.dataset(selected, readAsset("${selected.code}.json"), readAsset("${selected.code}-airports.json"),
+                if (selected.code == "ES") readAsset("ES-airband-guide.json") else null)
             dataset = loaded
             zones = loaded.regions.sortedBy { it.name }
             zone.onItemSelectedListener = null

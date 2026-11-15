@@ -29,6 +29,19 @@ actividad y permisos. Los tonos y TX nominal son informativos; importar bloquea 
 PMR446 es opcional, solo RX, no aparece para EE. UU. y no autoriza transmitir con
 un equipo de radioaficionado. SAT anade solo memorias FM nominales, sin Doppler.
 
+Los canales de aeropuertos (AM, solo RX, TX bloqueado, sin transmision) usan como
+fuente primaria `data/channel-templates/ES-airband-guide.json`, extraido de la guia
+de terceros "101ATM AIRBAND Spain AD COM Guide v1.0" (pagina 1, que cita el AIP de
+ENAIRE AIRAC 10/26); OurAirports (`ES-airports.json`) queda como fuente secundaria y
+sus entradas con el mismo OACI y la misma frecuencia se sustituyen por las de la guia.
+La guia imprime el nombre de canal 8.33 kHz (por ejemplo 122.105), no la frecuencia
+real (122.100): se programa siempre la frecuencia real. Las frecuencias sin publicar
+o fuera de 118-136.975 MHz no se convierten en canales. El PDF es material de
+terceros y no esta en el repositorio: solo se incluyen las frecuencias extraidas, con
+cita. `npm run compare:airband` genera `docs/airband-es-comparison.md` con las
+discrepancias entre ambas fuentes, que no se resuelven automaticamente: revisalas
+contra el AIP de ENAIRE.
+
 Pases del mes muestra los dias restantes del mes UTC para 75 puntos de referencia:
 ciudades en Europa y un punto aproximado por cada uno de los 50 estados y Washington
 DC. No son pases validos para todo un pais. Cada lista incluye coordenadas, fecha,

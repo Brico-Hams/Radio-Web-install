@@ -44,7 +44,7 @@
     if (nativeProfile === "opengd77") $("profile-template").add(new Option("OpenGD77 (archivo local abierto)", "opengd77"));
     for (const [id, profile] of Object.entries(R.TEMPLATE_PROFILES)) $("profile-template").add(new Option(profile.label, id));
     $("profile-template").value = nativeProfile || "radicodex";
-    let file = null, airports = null, forecast = null, satellites = null, entries = [], passRows = [], passSource = null;
+    let file = null, airports = null, guide = null, forecast = null, satellites = null, entries = [], passRows = [], passSource = null;
     let page = 0, passPage = 0, request = 0, previewRequest = 0, blocked = false, calculating = false;
     const selected = new Set(), cache = new Map();
     const text = (id, value) => { $(id).textContent = value; };
@@ -126,14 +126,14 @@
       if (current !== previewRequest || country !== file) return;
       entries = R.countryTemplateChannels(file, { region: $("region-template").value, query: $("search-template").value,
         pmr: $("pmr-template").checked, cb: $("cb-template").checked && $("country-template").value === "ES", satellites: $("sat-template").checked ? satellites : null,
-        airports: $("airport-template").checked ? airports : null });
+        airports: $("airport-template").checked ? airports : null, guide: $("airport-template").checked ? guide : null });
       selected.clear(); page = 0;
       render();
     }
     async function load() {
       const id = ++request, code = $("country-template").value;
       previewRequest++;
-      file = null; airports = null; forecast = null; passSource = null; entries = []; selected.clear(); passRows = [];
+      file = null; airports = null; guide = null; forecast = null; passSource = null; entries = []; selected.clear(); passRows = [];
       $("region-template").replaceChildren(new Option("Todas las regiones", ""));
       $("template-pass-zone").replaceChildren(); render(); renderPasses();
       const pmr = R.TEMPLATE_COUNTRIES.find(country => country.code === code).pmr;
@@ -141,11 +141,16 @@
       $("cb-template").disabled = code !== "ES"; if (code !== "ES") $("cb-template").checked = false;
       text("template-coverage", "Cargando plantilla...");
       const data = R.validateCountryTemplate(await json(code), code);
-      let airportData = null, airportError = "";
+      let airportData = null, airportError = "", guideData = null;
       try { airportData = R.validateAirportTemplate(await json(`${code}-airports`), code); }
       catch (error) { airportError = error.message; }
+      // Optional primary airport source (Spain only); a missing or invalid file falls back to OurAirports alone.
+      if (airportData && code === "ES") {
+        try { guideData = R.validateAirbandGuide(await json("ES-airband-guide")); }
+        catch { guideData = null; }
+      }
       if (id !== request) return;
-      file = data; airports = airportData;
+      file = data; airports = airportData; guide = guideData;
       $("airport-template").disabled = !airports;
       for (const region of file.regions) {
         const total = file.channels.filter(entry => entry.regionId === region.id).length +

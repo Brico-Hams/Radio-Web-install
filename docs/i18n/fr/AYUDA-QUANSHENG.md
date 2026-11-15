@@ -29,6 +29,19 @@ et TX nominal sont informatifs ; l'import bloque TX. PMR446 est facultatif, RX s
 absent pour les États-Unis et n'autorise pas l'émission avec un talkie radioamateur.
 SAT ajoute seulement des mémoires FM nominales, sans Doppler.
 
+Les canaux d'aéroport (AM, RX seulement, TX verrouillé, sans émission) utilisent
+`data/channel-templates/ES-airband-guide.json` comme source principale, extrait du guide
+tiers "101ATM AIRBAND Spain AD COM Guide v1.0" (page 1, qui cite l'AIP d'ENAIRE
+AIRAC 10/26) ; OurAirports (`ES-airports.json`) reste la source secondaire et ses
+entrées ayant le même code OACI et la même fréquence sont remplacées par celles du guide.
+Le guide imprime le nom de canal 8,33 kHz (par exemple 122.105), pas la fréquence
+réelle (122.100) : c'est toujours la fréquence réelle qui est programmée. Les fréquences
+non publiées ou hors de 118-136.975 MHz ne deviennent pas des canaux. Le PDF est un
+document tiers et n'est pas dans le dépôt : seules les fréquences extraites sont
+incluses, avec citation. `npm run compare:airband` génère `docs/airband-es-comparison.md`
+avec les écarts entre les deux sources, qui ne sont pas résolus automatiquement :
+vérifiez-les avec l'AIP d'ENAIRE.
+
 Les passages couvrent les jours restants du mois UTC pour 75 points de référence :
 villes européennes et un point approximatif dans chacun des 50 États américains et
 Washington DC. Ils ne sont pas valables pour tout un pays. Coordonnées, date, époque

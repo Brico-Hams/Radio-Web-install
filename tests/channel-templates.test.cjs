@@ -247,6 +247,41 @@ test("regional preview joins repeaters and airports, keeps v1 snapshots unchange
   assert.throws(() => R.countryTemplateChannels(usa, { pmr: true }), /PMR446/);
   assert(!airportCountries.find(country => country.code === "US").airports.frequencies.some(entry => entry.ident.startsWith("PMR")));
 });
+test("airband guide is the primary Spanish airport source: rx from mhz, dedupe by ident+kHz, skips unpublished/out-of-band/unknown aerodromes", () => {
+  const file = buildTemplates([row], features)[0];
+  const airports = {
+    format: "bricohams-airport-template", version: 1, country: "ES", fetchedAt: "2026-01-01T00:00:00.000Z",
+    source: "s", airportsSource: "a", license: "Public Domain", coverage: "c",
+    airports: { LECO: { id: 1, name: "A Coruna", municipality: "Town", regionId: "ES-ONE", latitude: 0.5, longitude: 0.5 } },
+    frequencies: [{ id: 5, ident: "LECO", type: "TWR", description: "", rx: "118.30000" },
+      { id: 6, ident: "LECO", type: "GND", description: "", rx: "121.70000" }] };
+  const channel = (service, icaoChannel, mhz, note = null) => ({ service, icaoChannel, mhz, note });
+  const guide = { source: { title: "101ATM AIRBAND Spain AD COM Guide", version: "1.0", license_note: "Third-party" }, aerodromes: [
+    { icao: "LECO", kind: "civil-atc", channels: [channel("TWR", "118.305", 118.3), channel("APP", "119.000", null, "xxx.xxx"),
+      channel("MIL", "250.000", 250, "UHF"), channel("ATIS", "127.050", 127.05)] },
+    { icao: "LEZZ", kind: "civil-afis", channels: [channel("AFIS", "118.000", 118)] }] };
+  const copy = value => JSON.parse(JSON.stringify(value));
+  const channels = R.airportChannels(airports, new Map([["ES-ONE", "Region"]]), guide);
+  assert.deepEqual(channels.map(entry => [entry.key, entry.rx]), [["airband-guide:LECO:0", "118.30000"],
+    ["airband-guide:LECO:3", "127.05000"], ["ourairports:6", "121.70000"]]);
+  assert.equal(channels[0].name, "LECO TWR");
+  assert.equal(channels[0].notes, "A Coruna - TWR. AM RX only; ICAO channel 118.305; not for navigation.");
+  assert.equal(channels[0].source, "ENAIRE AIP via 101ATM AIRBAND Spain AD COM Guide v1.0, p.1");
+  assert(channels.every(entry => entry.mode === "AM" && entry.rxOnly && entry.txLocked && entry.tx === entry.rx && entry.narrow === false));
+  assert.deepEqual(R.airportChannels(airports).map(entry => entry.key), ["ourairports:5", "ourairports:6"]);
+  const combined = R.countryTemplateChannels(file, { airports, guide });
+  assert.deepEqual(combined.filter(entry => entry.ident === "LECO").map(entry => entry.key), channels.map(entry => entry.key));
+  assert.throws(() => R.validateAirbandGuide({ ...guide, aerodromes: [{ icao: "XXXX", kind: "civil-atc", channels: [] }] }), /aerodromo/);
+  const badMhz = copy(guide); badMhz.aerodromes[0].channels[0].mhz = 118.101;
+  assert.throws(() => R.validateAirbandGuide(badMhz), /rejilla/);
+  const noNote = copy(guide); noNote.aerodromes[0].channels[1].note = null;
+  assert.throws(() => R.validateAirbandGuide(noNote));
+  const badName = copy(guide); badName.aerodromes[0].channels[0].icaoChannel = "118.3";
+  assert.throws(() => R.airportChannels(airports, new Map(), badName));
+  assert.throws(() => R.airportChannels({ ...airports, country: "GB" }, new Map(), guide), /Espana/);
+  const real = R.validateAirbandGuide(json("ES-airband-guide"));
+  assert(real.aerodromes.length > 0);
+});
 test("model profiles omit and count channels without a representable mode or safe TX lock; AT-D878 has no AM", () => {
   const fm = { key: "a", name: "FM1", rx: "145.60000", tx: "145.00000", mode: 0, rxOnly: true, source: "s" };
   const am = { key: "b", name: "AM1", rx: "118.30000", tx: "118.30000", mode: "AM", rxOnly: true, source: "s" };

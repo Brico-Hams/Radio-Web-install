@@ -27,6 +27,30 @@ class ChannelTemplatesTest {
         }
     }
 
+    @Test fun airbandGuideIsPrimaryAndOnlyInBandPublishedFrequenciesBecomeRxOnlyAm() {
+        val region = spain().regions.first().id
+        val airports = """{"format":"bricohams-airport-template","version":1,"country":"ES","coverage":"c","license":"Public Domain",
+            "airports":{"LECO":{"name":"A Coruna","municipality":"Town","regionId":"$region"}},
+            "frequencies":[{"id":5,"ident":"LECO","type":"TWR","description":"","rx":"118.30000"},
+            {"id":6,"ident":"LECO","type":"GND","description":"","rx":"121.70000"}]}"""
+        fun guide(extra: String = "") = """{"source":{"title":"Guide","version":"1.0","license_note":"Third-party"},"aerodromes":[
+            {"icao":"LECO","kind":"civil-atc","channels":[
+            {"service":"TWR","icaoChannel":"118.305","mhz":118.3,"note":null},
+            {"service":"APP","icaoChannel":"119.000","mhz":null,"note":"xxx.xxx"},
+            {"service":"MIL","icaoChannel":"250.000","mhz":250.0,"note":"UHF"}$extra]},
+            {"icao":"LEZZ","kind":"civil-afis","channels":[{"service":"AFIS","icaoChannel":"118.000","mhz":118.0,"note":null}]}]}"""
+        val spainCountry = ChannelTemplates.countries.first { it.code == "ES" }
+        val data = ChannelTemplates.dataset(spainCountry, text("ES.json"), airports, guide())
+        assertEquals(listOf("airband-guide:LECO:0" to "118.30000", "ourairports:6" to "121.70000"), data.airports.map { it.key to it.rx })
+        val first = data.airports.first()
+        assertEquals("LECO TWR", first.name)
+        assertEquals("A Coruna - TWR. AM RX only; ICAO channel 118.305; not for navigation.", first.notes)
+        assertTrue(data.airports.all { it.modulation == "AM" && it.tx == it.rx && !it.narrow })
+        assertEquals(listOf("ourairports:5", "ourairports:6"), ChannelTemplates.dataset(spainCountry, text("ES.json"), airports).airports.map { it.key })
+        val bad = guide(""",{"service":"X","icaoChannel":"118.3","mhz":118.3,"note":null}""")
+        assertThrows(IllegalArgumentException::class.java) { ChannelTemplates.dataset(spainCountry, text("ES.json"), airports, bad) }
+    }
+
     @Test fun zoneJoinsRepeatersAndAirportsAndPmrIsLastAndNeverUs() {
         val data = spain()
         val region = data.airports.first().regionId

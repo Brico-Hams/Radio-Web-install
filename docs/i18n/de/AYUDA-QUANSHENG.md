@@ -29,6 +29,19 @@ nominelles TX dienen nur zur Information; Import sperrt TX. PMR446 ist optional,
 nur RX, nicht für die USA verfügbar und erlaubt kein Senden mit Amateurfunkgeräten.
 SAT ergänzt nur nominelle FM-Speicher, ohne Doppler.
 
+Flughafenkanäle (AM, nur RX, TX gesperrt, kein Senden) verwenden
+`data/channel-templates/ES-airband-guide.json` als Primärquelle, extrahiert aus dem
+Drittanbieter-Leitfaden "101ATM AIRBAND Spain AD COM Guide v1.0" (Seite 1, die das AIP
+von ENAIRE AIRAC 10/26 zitiert); OurAirports (`ES-airports.json`) bleibt Sekundärquelle,
+und dessen Einträge mit gleichem ICAO-Code und gleicher Frequenz werden durch die des Leitfadens ersetzt.
+Der Leitfaden druckt den 8,33-kHz-Kanalnamen (zum Beispiel 122.105), nicht die echte
+Frequenz (122.100): programmiert wird immer die echte Frequenz. Unveröffentlichte
+Frequenzen oder solche außerhalb von 118-136.975 MHz werden keine Kanäle. Das PDF ist
+Material Dritter und nicht im Repository: enthalten sind nur die extrahierten Frequenzen
+mit Quellenangabe. `npm run compare:airband` erzeugt `docs/airband-es-comparison.md` mit
+den Abweichungen zwischen beiden Quellen, die nicht automatisch aufgelöst werden: prüfe
+sie anhand des AIP von ENAIRE.
+
 Monatsüberflüge umfassen die verbleibenden Tage des UTC-Monats für 75 Referenzpunkte:
 europäische Städte und je einen ungefähren Punkt in den 50 US-Bundesstaaten und
 Washington DC. Sie gelten nicht landesweit. Koordinaten, Datum, TLE-Epoche und
