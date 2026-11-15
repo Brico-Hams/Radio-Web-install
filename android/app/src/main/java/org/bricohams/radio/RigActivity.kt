@@ -248,7 +248,8 @@ class RigActivity : LocalizedActivity() {
                 insets
             }
         }
-        body.addView(Brand.heading(this, getString(R.string.rig_title)))
+        body.addView(BrandUi.sectionHeader(this, getString(R.string.rig_title), getString(R.string.screen_help_rig), large = true))
+        BrandUi.firstRunTip(this, "screen_rig", getString(R.string.screen_help_rig))?.let { body.addView(it) }
         status = live(Brand.text(this, 15f)).apply { setText(R.string.rig_disconnected) }
         body.addView(Brand.card(this).apply { addView(status) })
         notice = live(Brand.text(this, 14f, colors.accent))
@@ -272,10 +273,16 @@ class RigActivity : LocalizedActivity() {
 
     private fun section(body: LinearLayout, title: Int, build: (LinearLayout) -> Unit) {
         val card = Brand.card(this)
-        card.addView(Brand.text(this, 18f, colors.accent, true).apply {
-            setText(title)
-            if (Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
-        })
+        val help = when (title) {
+            R.string.rig_section_radio -> R.string.rig_help_radio
+            R.string.rig_section_frequency -> R.string.rig_help_frequency
+            R.string.rig_section_meter -> R.string.rig_help_meters
+            R.string.rig_dig_title -> R.string.rig_help_digital
+            R.string.rig_section_memories -> R.string.rig_help_memories
+            R.string.rig_section_satellite -> R.string.rig_help_satellite
+            else -> R.string.rig_help_sstv
+        }
+        card.addView(BrandUi.sectionHeader(this, getString(title), getString(help)))
         build(card)
         body.addView(card)
     }

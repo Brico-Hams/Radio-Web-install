@@ -24,7 +24,7 @@
     <string name="profile_test">Probar conexión</string>
     <string name="profile_test_running">Probando la conexión…</string>
     <string name="profile_test_ok">Conexión correcta: %1$s</string>
-    <string name="profile_test_no_usb">No hay ningún dispositivo USB compatible conectado.</string>
+    <string name="profile_test_no_usb">No hay ningún dispositivo USB compatible conectado. Conecta la radio por USB y pulsa Probar conexión.</string>
     <string name="profile_test_ble">Se abre la pantalla Bluetooth de la radio para buscarla y conectar.</string>
     <string name="profile_test_ble_help">La conexión Bluetooth se busca y se abre en la pantalla de la radio.</string>
     <string name="profile_test_network_ok">Conexión TCP correcta con %1$s</string>

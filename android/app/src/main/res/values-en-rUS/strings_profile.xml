@@ -24,7 +24,7 @@
     <string name="profile_test">Test connection</string>
     <string name="profile_test_running">Testing the connection…</string>
     <string name="profile_test_ok">Connection OK: %1$s</string>
-    <string name="profile_test_no_usb">No compatible USB device is connected.</string>
+    <string name="profile_test_no_usb">No compatible USB device is connected. Connect the radio over USB and tap Test connection.</string>
     <string name="profile_test_ble">Opening the radio\'s Bluetooth screen to scan and connect.</string>
     <string name="profile_test_ble_help">The Bluetooth link is scanned and opened on the radio\'s own screen.</string>
     <string name="profile_test_network_ok">TCP connection OK to %1$s</string>

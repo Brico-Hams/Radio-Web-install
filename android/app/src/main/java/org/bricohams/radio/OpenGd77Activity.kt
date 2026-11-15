@@ -60,7 +60,8 @@ class OpenGd77Activity : LocalizedActivity() {
             setPadding(padding, padding, padding, padding)
             setBackgroundColor(colors.background)
         }
-        content.addView(Brand.heading(this, getString(R.string.gd77_title)))
+        content.addView(BrandUi.sectionHeader(this, getString(R.string.gd77_title), getString(R.string.screen_help_gd77), "ayuda-opengd77", large = true))
+        BrandUi.firstRunTip(this, "screen_gd77", getString(R.string.screen_help_gd77))?.let { content.addView(it) }
         status = Brand.text(this).apply { setText(R.string.gd77_intro); accessibilityLiveRegion = android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE }
         content.addView(status)
         content.addView(Brand.text(this, 14f, colors.muted).apply { setText(R.string.gd77_help) })

@@ -151,12 +151,14 @@ class CatActivity : LocalizedActivity() {
             addView(Brand.text(this@CatActivity, 15f).apply { setText(R.string.cat_sat_steps) })
         })
         content.addView(TextView(this).apply { setText(R.string.cat_help) })
+        content.addView(BrandUi.sectionHeader(this, getString(R.string.cat_section_connect), getString(R.string.cat_help_connect), "ayuda-quansheng"))
         fun button(label: Int, action: () -> Unit) {
             val button = Button(this).apply { setText(label); setOnClickListener { action() } }
             controls.add(button); content.addView(button)
         }
         button(R.string.cat_choose_device) { chooseDevice() }
         button(R.string.cat_query) { operation { requireNotNull(protocol) { getString(R.string.cat_connect_first) }.query() } }
+        content.addView(BrandUi.sectionHeader(this, getString(R.string.cat_section_tune), getString(R.string.cat_help_tune), "ayuda-quansheng"))
         content.addView(TextView(this).apply { setText(R.string.cat_frequency_label) })
         val frequency = EditText(this).apply {
             id = R.id.cat_frequency
@@ -190,6 +192,7 @@ class CatActivity : LocalizedActivity() {
             }
         }
         button(R.string.usb_disconnect) { operation { closeRadio(); null } }
+        content.addView(BrandUi.sectionHeader(this, getString(R.string.cat_section_sstv), getString(R.string.cat_help_sstv), "ayuda-quansheng"))
         content.addView(TextView(this).apply { setText(R.string.cat_sstv_help) })
         callsign = TextView(this).apply {
             id = R.id.cat_callsign

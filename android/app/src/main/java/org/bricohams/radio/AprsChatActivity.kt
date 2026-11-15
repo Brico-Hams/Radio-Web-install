@@ -86,7 +86,8 @@ class AprsChatActivity : LocalizedActivity() {
                 insets
             }
         }
-        body.addView(Brand.heading(this, getString(R.string.aprs_chat_title)))
+        body.addView(BrandUi.sectionHeader(this, getString(R.string.aprs_chat_title), getString(R.string.screen_help_aprs), large = true))
+        BrandUi.firstRunTip(this, "screen_aprs", getString(R.string.screen_help_aprs))?.let { body.addView(it) }
         status = live(Brand.text(this, 15f)).apply { setText(R.string.aprs_chat_disconnected) }
         body.addView(Brand.card(this).apply { addView(status) })
         diagnostic = live(Brand.text(this, 12f, colors.muted))

@@ -14,4 +14,5 @@
     <color name="brand_focus">#FFC18F</color>
     <color name="brand_ripple">#33F26B1D</color>
     <color name="brand_positive">#8EDCA6</color>
+    <color name="brand_error">#FF8A80</color>
 </resources>
