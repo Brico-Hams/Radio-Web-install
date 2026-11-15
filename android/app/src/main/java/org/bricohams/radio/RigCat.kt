@@ -49,6 +49,24 @@ interface Rig {
     fun setMode(mode: RigMode)
     fun ptt(on: Boolean)
     fun setSplit(on: Boolean)
+    /** Optional extras; every default says "not supported" so rigs that do not implement them are unaffected. */
+    val supportsMeter: Boolean get() = false
+    /** S-meter level 0..255 (0 = S0, 255 = full scale of the radio's own scale). */
+    fun signalLevel(): Int = unsupported("S-meter")
+    val supportsRfPower: Boolean get() = false
+    /** Transmit power setting 0..255 (0 = minimum, 255 = maximum). */
+    fun rfPower(): Int = unsupported("RF power")
+    fun setRfPower(level: Int): Unit = unsupported("RF power")
+    val supportsTxStatus: Boolean get() = false
+    /** True while the radio is transmitting; read only, never keys the radio. */
+    fun isTransmitting(): Boolean = unsupported("TX status")
+    val supportsDataMode: Boolean get() = false
+    fun dataModeOn(): Boolean = unsupported("data mode")
+    fun setDataMode(on: Boolean): Unit = unsupported("data mode")
+    /** Mode of either VFO without selecting it. */
+    val supportsVfoMode: Boolean get() = false
+    fun vfoMode(vfo: Vfo): RigMode? = unsupported("VFO mode")
+    fun setVfoMode(vfo: Vfo, mode: RigMode): Unit = unsupported("VFO mode")
     /** Empty channels are skipped. */
     fun memories(channels: IntRange, keepGoing: () -> Boolean = { true }): List<RigMemory>
         /** Replaces the radio's channel and reads it back; throws LocalizedStateException(err_rig_unconfirmed) on a mismatch. */

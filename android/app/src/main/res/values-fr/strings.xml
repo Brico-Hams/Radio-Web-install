@@ -854,6 +854,15 @@
     <string name="rig_vfo_a">VFO A %1$s MHz %2$s</string>
     <string name="rig_vfo_b">VFO B %1$s MHz</string>
     <string name="rig_smeter">S-mètre (MAIN) %1$d/255 %2$s</string>
+    <string name="err_rig_value">La valeur %1$d est hors plage.</string>
+    <string name="rig_section_meter">Indicateur et émission</string>
+    <string name="rig_signal_label">Signal reçu (S)</string>
+    <string name="rig_signal_value">S-mètre %1$d/255</string>
+    <string name="rig_tx_rx">État : réception</string>
+    <string name="rig_tx_tx">État : émission</string>
+    <string name="rig_power_label">Puissance de sortie</string>
+    <string name="rig_power_value">Puissance de sortie : %1$d %%</string>
+    <string name="rig_data_mode">Mode DATA activé</string>
     <string name="rig_speak">Annoncer à voix haute</string>
     <string name="rig_speak_mhz">mégahertz</string>
     <string name="rig_speak_signal">signal</string>

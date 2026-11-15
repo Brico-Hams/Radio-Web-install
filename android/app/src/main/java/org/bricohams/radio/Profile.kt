@@ -45,7 +45,8 @@ enum class ProfileRadio(
     FT818(RigModel.FT818, null, listOf(CatTransport.USB_SERIAL), setOf(Tool.RIG_CAT)),
     FT857(RigModel.FT857, null, listOf(CatTransport.USB_SERIAL), setOf(Tool.RIG_CAT)),
     FT897(RigModel.FT897, null, listOf(CatTransport.USB_SERIAL), setOf(Tool.RIG_CAT)),
-    // IcomCivRig (RigProtocols.kt); no Diagnostics.kt RadioKind and no channel template profile.
+    // IcomCivRig (RigProtocols.kt); no Diagnostics.kt RadioKind and no channel template profile. Satellites are not a separate
+    // Tool: Doppler by CAT runs in RigActivity (RigTracker, VFO A downlink / VFO B uplink with split), covered by Tool.RIG_CAT.
     IC705(RigModel.IC705, null, listOf(CatTransport.USB_SERIAL), setOf(Tool.RIG_CAT)),
     // Ftx1Rig (RigProtocols.kt), RadioKind.FTX1 (Diagnostics.kt), template profile "ftx1" (ChannelTemplates.profileIds).
     FTX1(RigModel.FTX1, null, listOf(CatTransport.USB_SERIAL), setOf(Tool.RIG_CAT, Tool.DIAGNOSTICS, Tool.TEMPLATES)),

@@ -36,9 +36,11 @@ import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import org.json.JSONArray
@@ -58,7 +60,8 @@ import java.util.concurrent.TimeUnit
  * CAT screen for several radios (Yaesu FT-817/857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX), over USB. All radio I/O runs on
  * [worker] (commands, satellite tracking) or [txWorker] (SSTV transmission, so Stop TX never waits behind a command);
  * [audioWorker] receives. The UI thread only renders and the radio is never polled in the background except while a
- * satellite is tracked. The manifest declares configChanges so rotation does not drop the USB connection.
+ * satellite is tracked (the optional S-meter / TX status are read then, on Read and after connecting). The manifest declares
+ * configChanges so rotation does not drop the USB connection.
  */
 class RigActivity : LocalizedActivity() {
     companion object {
@@ -101,6 +104,15 @@ class RigActivity : LocalizedActivity() {
     private lateinit var digClock: TextView
     private lateinit var digWarning: TextView
     private lateinit var setVfoB: Button
+    private lateinit var meterCard: LinearLayout
+    private lateinit var meterBar: ProgressBar
+    private lateinit var meterText: TextView
+    private lateinit var txText: TextView
+    private lateinit var powerText: TextView
+    private lateinit var powerSeek: SeekBar
+    private lateinit var dataToggle: CheckBox
+    private var meterSync = false
+    private var powerTouch = false
     private lateinit var memFrom: EditText
     private lateinit var speakToggle: CheckBox
     private var speech: TextToSpeech? = null
@@ -247,6 +259,7 @@ class RigActivity : LocalizedActivity() {
         sstvStatus = live(Brand.text(this, 14f, colors.accent))
         buildRadio(body)
         buildFrequency(body)
+        buildMeters(body)
         buildDigital(body)
         buildMemories(body)
         buildSatellite(body)
@@ -369,6 +382,99 @@ class RigActivity : LocalizedActivity() {
         }
         card.addView(speakToggle)
         if (speakToggle.isChecked) ensureSpeech()
+    }
+
+    private fun buildMeters(body: LinearLayout) = section(body, R.string.rig_section_meter) { card ->
+        meterCard = card
+        meterText = live(Brand.text(this, 14f, colors.text))
+        meterBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 255
+            contentDescription = getString(R.string.rig_signal_label)
+        }
+        txText = live(Brand.text(this, 14f, colors.text))
+        powerText = Brand.text(this, 14f, colors.text)
+        powerSeek = SeekBar(this).apply {
+            max = 255
+            contentDescription = getString(R.string.rig_power_label)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                    powerText.text = getString(R.string.rig_power_value, progress * 100 / 255)
+                    if (fromUser && !powerTouch) applyPower(progress) // accessibility actions change the value without a touch
+                }
+                override fun onStartTrackingTouch(bar: SeekBar) { powerTouch = true }
+                override fun onStopTrackingTouch(bar: SeekBar) { powerTouch = false; applyPower(bar.progress) }
+            })
+        }
+        dataToggle = CheckBox(this).apply {
+            setText(R.string.rig_data_mode)
+            setTextColor(colors.text)
+            setOnCheckedChangeListener { _, on -> if (!meterSync) applyDataMode(on) }
+        }
+        card.addView(meterText)
+        card.addView(meterBar)
+        card.addView(txText)
+        card.addView(powerText)
+        card.addView(powerSeek)
+        card.addView(dataToggle)
+        card.visibility = View.GONE
+    }
+
+    private fun applyPower(level: Int) {
+        val r = rig ?: run { notice.setText(R.string.rig_connect_first); return }
+        operation(notice) { r.setRfPower(level); null }
+    }
+
+    private fun applyDataMode(on: Boolean) {
+        val r = rig ?: run { notice.setText(R.string.rig_connect_first); return }
+        operation(notice) { r.setDataMode(on); null }
+    }
+
+    /** Shows only what the connected radio supports. */
+    private fun updateMeterCard(r: Rig?) {
+        val any = r != null && (r.supportsMeter || r.supportsTxStatus || r.supportsRfPower || r.supportsDataMode)
+        meterCard.visibility = if (any) View.VISIBLE else View.GONE
+        val show = { on: Boolean? -> if (on == true) View.VISIBLE else View.GONE }
+        meterText.visibility = show(r?.supportsMeter)
+        meterBar.visibility = show(r?.supportsMeter)
+        txText.visibility = show(r?.supportsTxStatus)
+        powerText.visibility = show(r?.supportsRfPower)
+        powerSeek.visibility = show(r?.supportsRfPower)
+        dataToggle.visibility = show(r?.supportsDataMode)
+        powerSeek.isEnabled = idle
+        dataToggle.isEnabled = idle
+    }
+
+    /** Worker thread: reads the optional extras; a failed read leaves that value as it was. */
+    private fun readMeters(r: Rig, settings: Boolean) {
+        var signal: Int? = null
+        var tx: Boolean? = null
+        var power: Int? = null
+        var data: Boolean? = null
+        if (r.supportsMeter) attempt<Unit>({ }) { signal = r.signalLevel() }
+        if (r.supportsTxStatus) attempt<Unit>({ }) { tx = r.isTransmitting() }
+        if (settings && r.supportsRfPower) attempt<Unit>({ }) { power = r.rfPower() }
+        if (settings && r.supportsDataMode) attempt<Unit>({ }) { data = r.dataModeOn() }
+        val s = signal
+        val t = tx
+        val p = power
+        val d = data
+        runOnUiThread { if (!isDestroyed && rig === r) showMeters(s, t, p, d) }
+    }
+
+    private fun showMeters(signal: Int?, tx: Boolean?, power: Int?, data: Boolean?) {
+        signal?.let {
+            meterBar.progress = it
+            meterText.text = getString(R.string.rig_signal_value, it)
+            meterBar.contentDescription = meterText.text
+        }
+        tx?.let { txText.setText(if (it) R.string.rig_tx_tx else R.string.rig_tx_rx) }
+        meterSync = true
+        power?.let {
+            powerSeek.progress = it
+            powerText.text = getString(R.string.rig_power_value, it * 100 / 255)
+        }
+        data?.let { dataToggle.isChecked = it }
+        meterSync = false
     }
 
     private fun ensureSpeech() {
@@ -582,6 +688,7 @@ class RigActivity : LocalizedActivity() {
         stopMemories.isEnabled = busy
         stopTx.isEnabled = txActive
         stopReceive.isEnabled = rxActive
+        updateMeterCard(r)
     }
 
     /** Runs the same catch list as the rest of the CAT code; the callers turn the exception into text. */
@@ -655,10 +762,12 @@ class RigActivity : LocalizedActivity() {
         runOnUiThread {
             if (!isDestroyed && rig === r) {
                 status.text = text
+                updateMeterCard(r)
                 announce(current.frequencyHz, current.mode?.name, spoken)
                 if (!r.supportsMemories) memStatus.setText(R.string.rig_no_memories)
             }
         }
+        readMeters(r, true)
     }
 
     private fun parseMhz(text: String): Long? {
@@ -1114,6 +1223,7 @@ class RigActivity : LocalizedActivity() {
             else getString(R.string.rig_tracking_rx_tx, mhzText(step.downlinkHz), mhzText(step.uplinkHz), position.azimuth, position.elevation)
             val text = line + "\n" + getString(R.string.rig_tracking_sent, sent)
             runOnUiThread { if (!isDestroyed && session === mine) satStatus.text = text }
+            rig?.let { readMeters(it, false) }
             if (token == generation && session === mine) worker.schedule({ trackStep(mine, token, current, plan) }, 1000, TimeUnit.MILLISECONDS)
         }
     }
