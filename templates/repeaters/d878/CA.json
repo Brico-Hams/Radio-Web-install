@@ -4461,6 +4461,21 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
+      "name": "VE1CRA",
+      "rx": "146.67000",
+      "tx": "146.07000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/98",
+      "zone": "Prince Edward Island",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
       "name": "VY2CBC",
       "rx": "447.75000",
       "tx": "442.75000",

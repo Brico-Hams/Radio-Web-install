@@ -621,6 +621,21 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
+      "name": "MB7IBY",
+      "rx": "430.05000",
+      "tx": "430.05000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/9697",
+      "zone": "Barnsley",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
       "name": "GB3UB",
       "rx": "433.10000",
       "tx": "434.70000",
@@ -5328,6 +5343,21 @@
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/18382",
       "zone": "East Ayrshire",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "GB3KE",
+      "rx": "145.68750",
+      "tx": "145.08750",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/700",
+      "zone": "East Dunbartonshire",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
