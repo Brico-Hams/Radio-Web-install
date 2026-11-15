@@ -1,0 +1,4 @@
+"Name","RX_MHz","TX_nominal_MHz","Modulation","RX_Only","Country","Region_ID","Locality","Identifier","Key","Source","Notes","Zone"
+"YU0VBP","145.61250","145.01250","FM","Yes","RS","RS-22","Bela Palanka","YU0VBP","hearham:12678","https://hearham.com/repeaters/12678","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","Pirotski"
+"YU0VDG","145.60000","145.00000","FM","Yes","RS","RS-22","Dimitrovgrad","YU0VDG","hearham:12677","https://hearham.com/repeaters/12677","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","Pirotski"
+"YU0VPI","145.70000","145.10000","FM","Yes","RS","RS-22","Pirot, Crni Vrh","YU0VPI","hearham:12674","https://hearham.com/repeaters/12674","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","Pirotski"

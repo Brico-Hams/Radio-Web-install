@@ -65,6 +65,10 @@ test("los instalables incluyen el catalogo y todos los recursos web permitidos",
       assert(build.includes('"$root"/data/channel-templates/*.json'));
       continue;
     }
+    if (/^templates\/repeaters\/.+$/.test(file)) {
+      assert(build.includes('cp -R "$root/templates/repeaters"'));
+      continue;
+    }
     if (/^precompiled\/[^/]+\.(bin|json|txt)$/.test(file)) {
       assert(build.includes('"$root"/precompiled/*.bin "$root"/precompiled/*.json "$root"/precompiled/*.txt'));
     } else if (/^precompiled\/([^/]+\.sig|SHA256SUMS)$/.test(file)) {

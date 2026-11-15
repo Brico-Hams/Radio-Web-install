@@ -58,6 +58,10 @@ stage_app() {
   cp "$root"/precompiled/chirp/*.py "$root"/precompiled/chirp/*.json "$root"/precompiled/chirp/*.txt "$destination/precompiled/chirp/"
   mkdir -p "$destination/data/channel-templates"
   cp "$root"/data/channel-templates/*.json "$destination/data/channel-templates/"
+  if [ -d "$root/templates/repeaters" ]; then
+    mkdir -p "$destination/templates"
+    cp -R "$root/templates/repeaters" "$destination/templates/repeaters"
+  fi
   cp "$root/data/firmware-catalog-fallback.json" "$destination/data/firmware-catalog-fallback.json"
   mkdir -p "$destination/node_modules"
   cp -R "$root/node_modules/satellite.js" "$destination/node_modules/satellite.js"

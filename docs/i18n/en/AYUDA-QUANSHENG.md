@@ -29,6 +29,8 @@ TX are informational; importing blocks TX. PMR446 is optional, RX only, unavaila
 for the USA and does not authorize amateur-radio equipment to transmit.
 SAT adds nominal FM memories only, without Doppler.
 
+Per-radio repeater templates cover all of Europe (EU, EEA, UK, Switzerland, Balkans, Ukraine, Moldova, Belarus, microstates) and the Americas (US by state, Canada by province, Mexico, Central America, the Caribbean and South America). Russia and Turkey are not included. A country with no usable HearHam repeaters gets no file and is listed as "pendiente de fuente" in `data/channel-templates/coverage.json`; the UI hides or disables it. Ready-made files are in `templates/repeaters/<radio>/<CC>.<ext>` (index in `templates/repeaters/index.json` with channels, dropped and SHA-256). They stay RX only and respect each radio's bands, modes and capacity. Download or Apply ("Repeater templates" section on desktop/web and on the Android templates screen) use those files. Airports and satellite passes remain limited to the original seven countries. To regenerate: `npm run fetch:channel-templates`, then `npm run templates:build`.
+
 Monthly passes cover the remaining days of the UTC month for 75 reference points:
 European cities and an approximate point in each of the 50 US states plus Washington
 DC. They are not valid throughout a country. Lists include coordinates, generation

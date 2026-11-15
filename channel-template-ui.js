@@ -38,6 +38,15 @@
         <p id="template-pass-status" role="status"></p>
         <div class="table-scroll template-preview"><table><thead><tr><th>Satelite</th><th>Inicio UTC</th><th>Fin UTC</th><th>Elevacion max.</th><th>Provisional</th></tr></thead><tbody id="template-pass-rows"></tbody></table></div>
         <div class="operation-buttons"><button id="template-pass-previous" type="button" class="button secondary">Anterior</button><span id="template-pass-page"></span><button id="template-pass-next" type="button" class="button secondary">Siguiente</button></div>
+      </details>
+      <details class="template-repeater-panel"><summary>Plantillas de repetidores</summary>
+        <p>Archivos ya preparados para cada radio. Los repetidores se graban solo RX. Los paises marcados como pendiente de fuente no tienen datos y no se pueden descargar.</p>
+        <div class="template-filters">
+          <div><label for="repeater-radio">Radio</label><select id="repeater-radio"></select></div>
+          <div><label for="repeater-country">Pais o zona</label><select id="repeater-country"></select></div>
+        </div>
+        <div class="operation-buttons"><button id="repeater-download" type="button" class="button secondary">Descargar</button><button id="repeater-apply" type="button" class="button primary">Aplicar</button></div>
+        <p id="repeater-status" role="status"></p>
       </details><p id="template-status" role="status"></p>`;
     const $ = id => container.querySelector(`#${id}`);
     for (const country of R.TEMPLATE_COUNTRIES) $("country-template").add(new Option(country.name, country.code));
@@ -260,8 +269,69 @@
       download(`template-${profile}-${zone}.${result.extension}`, result.content, result.mime);
       text("template-status", `${result.accepted.length} canales exportados para ${result.label}; ${result.omitted} omitidos por modo, banda, bloqueo de TX o capacidad. ${result.warnings.length ? "Este formato no garantiza solo RX; revisa TX antes de usarlo. " : ""}La radio no se modifica.`);
     });
+    // Prebuilt per-radio repeater files listed in templates/repeaters/index.json.
+    let repeaterIndex = null;
+    const label = text => root.BricohamsUI?.translate?.(text) ?? text;
+    const PENDING = "pendiente de fuente";
+    function repeaterEntry() {
+      return repeaterIndex?.files.find(item => item.radio === $("repeater-radio").value && item.country === $("repeater-country").value);
+    }
+    function updateRepeaterButtons() {
+      const entry = repeaterEntry();
+      $("repeater-download").disabled = blocked || !entry;
+      $("repeater-apply").disabled = blocked || !entry || !nativeProfile || $("repeater-radio").value !== nativeProfile;
+    }
+    async function loadRepeaterIndex() {
+      const response = await fetch("templates/repeaters/index.json", { signal: AbortSignal.timeout(30000) });
+      if (!response.ok) { text("repeater-status", `Plantillas de repetidores no disponibles: HTTP ${response.status}.`); return; }
+      repeaterIndex = await response.json();
+      $("repeater-radio").replaceChildren(...repeaterIndex.radios.map(radio => new Option(radio.name, radio.id)));
+      if (repeaterIndex.radios.some(radio => radio.id === nativeProfile)) $("repeater-radio").value = nativeProfile;
+      const groups = { europa: document.createElement("optgroup"), america: document.createElement("optgroup") };
+      groups.europa.label = label("Europa"); groups.america.label = label("America");
+      for (const country of repeaterIndex.countries) {
+        const known = R.TEMPLATE_COUNTRIES.some(item => item.code === country.code);
+        const option = new Option(country.status === "ok" ? country.name : `${country.name} (${label(PENDING)})`, country.code);
+        option.disabled = country.status !== "ok";
+        groups[known ? R.templateGroup(country.code) : "europa"].append(option);
+      }
+      $("repeater-country").replaceChildren(groups.europa, groups.america);
+      const first = repeaterIndex.countries.find(country => country.status === "ok");
+      if (first) $("repeater-country").value = first.code;
+      updateRepeaterButtons();
+    }
+    for (const id of ["repeater-radio", "repeater-country"]) $(id).addEventListener("change", updateRepeaterButtons);
+    on("repeater-download", "Descargar plantilla de repetidores", async () => {
+      const entry = repeaterEntry();
+      R.assert(entry, "Esa combinacion de radio y pais no tiene archivo.");
+      const response = await fetch(`templates/repeaters/${entry.path}`, { signal: AbortSignal.timeout(60000) });
+      R.assert(response.ok, `Plantilla no disponible: HTTP ${response.status}.`);
+      download(`repeaters-${entry.radio}-${entry.country}${entry.path.slice(entry.path.lastIndexOf("."))}`, await response.text(),
+        entry.path.endsWith(".json") ? "application/json" : "text/csv");
+      text("repeater-status", `${entry.channels} canales (${entry.dropped} descartados por capacidad). Repetidores solo RX. La radio no se modifica.`);
+    });
+    on("repeater-apply", "Aplicar plantilla de repetidores", async () => {
+      const entry = repeaterEntry(), code = $("repeater-country").value;
+      R.assert(entry && nativeProfile && entry.radio === nativeProfile, "Esta radio no coincide con el archivo local abierto.");
+      const data = R.validateCountryTemplate(await json(code), code);
+      const prepared = R.templateImportChannels(nativeProfile, R.countryTemplateChannels(data, { pmr: false }));
+      R.assert(prepared.accepted.length > 0, "Ningun canal seleccionado es representable en el modelo con modo y bloqueo de TX seguros.");
+      const result = await addChannels(prepared.accepted);
+      text("repeater-status", `${result.added} canales anadidos; ${result.duplicates} duplicados omitidos; ${prepared.omitted} no representables en el modelo omitidos. La radio no se modifica.`);
+    });
+    loadRepeaterIndex().catch(error => text("repeater-status", `Plantillas de repetidores no disponibles: ${error.message}`));
+    // Countries without a source stay selectable only when their template file exists.
+    fetch("data/channel-templates/coverage.json", { signal: AbortSignal.timeout(30000) }).then(response => response.ok ? response.json() : null).then(coverage => {
+      for (const item of coverage?.countries || []) {
+        if (item.status !== PENDING) continue;
+        const option = [...$("country-template").options].find(candidate => candidate.value === item.code);
+        if (option) { option.disabled = true; option.textContent = `${option.textContent} (${label(PENDING)})`; }
+      }
+      const current = $("country-template").selectedOptions[0];
+      if (current?.disabled) { const ok = [...$("country-template").options].find(option => !option.disabled); if (ok) { $("country-template").value = ok.value; run("Cargar plantilla de pais", load); } }
+    }).catch(() => {});
     run("Cargar plantilla de pais", load);
-    return { setBusy(value) { blocked = value; container.querySelectorAll("input,select,button").forEach(control => { control.disabled = value; }); $("pmr-template").disabled = value || $("country-template").value === "US"; $("cb-template").disabled = value || $("country-template").value !== "ES"; $("airport-template").disabled = value || !airports; if (!value) { render(); renderPasses(); } updateButtons(); } };
+    return { setBusy(value) { blocked = value; container.querySelectorAll("input,select,button").forEach(control => { control.disabled = value; }); $("pmr-template").disabled = value || $("country-template").value === "US"; $("cb-template").disabled = value || $("country-template").value !== "ES"; $("airport-template").disabled = value || !airports; if (!value) { render(); renderPasses(); } updateButtons(); updateRepeaterButtons(); } };
   }
   R.mountCountryTemplates = mountCountryTemplates;
 })(globalThis);

@@ -1,0 +1,647 @@
+{
+  "format": "bricohams-template-coverage",
+  "version": 1,
+  "generatedAt": "2026-11-15T06:42:00.762Z",
+  "countries": [
+    {
+      "code": "ES",
+      "name": "España",
+      "status": "ok",
+      "channels": 125,
+      "regions": 52,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "GB",
+      "name": "UK",
+      "status": "ok",
+      "channels": 1268,
+      "regions": 232,
+      "rejected": 163,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "US",
+      "name": "Estados Unidos",
+      "status": "ok",
+      "channels": 8318,
+      "regions": 51,
+      "rejected": 1373,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "DE",
+      "name": "Alemania",
+      "status": "ok",
+      "channels": 41,
+      "regions": 16,
+      "rejected": 3,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "FR",
+      "name": "Francia",
+      "status": "ok",
+      "channels": 231,
+      "regions": 101,
+      "rejected": 14,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "HU",
+      "name": "Hungría",
+      "status": "ok",
+      "channels": 2,
+      "regions": 43,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "IT",
+      "name": "Italia",
+      "status": "ok",
+      "channels": 6,
+      "regions": 110,
+      "rejected": 1,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "AL",
+      "name": "Albania",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "AD",
+      "name": "Andorra",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "AT",
+      "name": "Austria",
+      "status": "ok",
+      "channels": 67,
+      "regions": 9,
+      "rejected": 11,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "BY",
+      "name": "Bielorrusia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "BE",
+      "name": "Bélgica",
+      "status": "ok",
+      "channels": 4,
+      "regions": 11,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "BA",
+      "name": "Bosnia y Herzegovina",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "BG",
+      "name": "Bulgaria",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "HR",
+      "name": "Croacia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "CY",
+      "name": "Chipre",
+      "status": "ok",
+      "channels": 6,
+      "regions": 5,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "CZ",
+      "name": "Chequia",
+      "status": "ok",
+      "channels": 1,
+      "regions": 14,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "DK",
+      "name": "Dinamarca",
+      "status": "ok",
+      "channels": 3,
+      "regions": 5,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "EE",
+      "name": "Estonia",
+      "status": "ok",
+      "channels": 2,
+      "regions": 15,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "FI",
+      "name": "Finlandia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "GR",
+      "name": "Grecia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "IE",
+      "name": "Irlanda",
+      "status": "ok",
+      "channels": 21,
+      "regions": 26,
+      "rejected": 3,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "IS",
+      "name": "Islandia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "XK",
+      "name": "Kosovo",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "LV",
+      "name": "Letonia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "LI",
+      "name": "Liechtenstein",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "LT",
+      "name": "Lituania",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "LU",
+      "name": "Luxemburgo",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "MT",
+      "name": "Malta",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "MD",
+      "name": "Moldavia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "MC",
+      "name": "Mónaco",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "ME",
+      "name": "Montenegro",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "NL",
+      "name": "Países Bajos",
+      "status": "ok",
+      "channels": 9,
+      "regions": 15,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "MK",
+      "name": "Macedonia del Norte",
+      "status": "ok",
+      "channels": 1,
+      "regions": 84,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "NO",
+      "name": "Noruega",
+      "status": "ok",
+      "channels": 1,
+      "regions": 21,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "PL",
+      "name": "Polonia",
+      "status": "ok",
+      "channels": 15,
+      "regions": 16,
+      "rejected": 2,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "PT",
+      "name": "Portugal",
+      "status": "ok",
+      "channels": 8,
+      "regions": 20,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "RO",
+      "name": "Rumanía",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "SM",
+      "name": "San Marino",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "RS",
+      "name": "Serbia",
+      "status": "ok",
+      "channels": 3,
+      "regions": 25,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "SK",
+      "name": "Eslovaquia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "SI",
+      "name": "Eslovenia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "SE",
+      "name": "Suecia",
+      "status": "ok",
+      "channels": 5,
+      "regions": 21,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "CH",
+      "name": "Suiza",
+      "status": "ok",
+      "channels": 6,
+      "regions": 26,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "UA",
+      "name": "Ucrania",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "VA",
+      "name": "Ciudad del Vaticano",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "CA",
+      "name": "Canadá",
+      "status": "ok",
+      "channels": 429,
+      "regions": 13,
+      "rejected": 18,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "MX",
+      "name": "México",
+      "status": "ok",
+      "channels": 93,
+      "regions": 33,
+      "rejected": 4,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "BZ",
+      "name": "Belice",
+      "status": "ok",
+      "channels": 1,
+      "regions": 6,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "CR",
+      "name": "Costa Rica",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "SV",
+      "name": "El Salvador",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "GT",
+      "name": "Guatemala",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "HN",
+      "name": "Honduras",
+      "status": "ok",
+      "channels": 1,
+      "regions": 18,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "NI",
+      "name": "Nicaragua",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "PA",
+      "name": "Panamá",
+      "status": "ok",
+      "channels": 1,
+      "regions": 12,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "AG",
+      "name": "Antigua y Barbuda",
+      "status": "ok",
+      "channels": 1,
+      "regions": 8,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "BS",
+      "name": "Bahamas",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "BB",
+      "name": "Barbados",
+      "status": "ok",
+      "channels": 1,
+      "regions": 11,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "CU",
+      "name": "Cuba",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "DM",
+      "name": "Dominica",
+      "status": "ok",
+      "channels": 1,
+      "regions": 10,
+      "rejected": 1,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "DO",
+      "name": "República Dominicana",
+      "status": "ok",
+      "channels": 3,
+      "regions": 32,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "GD",
+      "name": "Granada",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "HT",
+      "name": "Haití",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "JM",
+      "name": "Jamaica",
+      "status": "ok",
+      "channels": 2,
+      "regions": 14,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "KN",
+      "name": "San Cristóbal y Nieves",
+      "status": "ok",
+      "channels": 20,
+      "regions": 14,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "LC",
+      "name": "Santa Lucía",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "VC",
+      "name": "San Vicente y las Granadinas",
+      "status": "ok",
+      "channels": 1,
+      "regions": 6,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "TT",
+      "name": "Trinidad y Tobago",
+      "status": "ok",
+      "channels": 1,
+      "regions": 16,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "AR",
+      "name": "Argentina",
+      "status": "ok",
+      "channels": 30,
+      "regions": 24,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "BO",
+      "name": "Bolivia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "BR",
+      "name": "Brasil",
+      "status": "ok",
+      "channels": 2,
+      "regions": 27,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "CL",
+      "name": "Chile",
+      "status": "ok",
+      "channels": 7,
+      "regions": 16,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "CO",
+      "name": "Colombia",
+      "status": "ok",
+      "channels": 4,
+      "regions": 33,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "EC",
+      "name": "Ecuador",
+      "status": "ok",
+      "channels": 2,
+      "regions": 24,
+      "rejected": 0,
+      "source": "https://hearham.com/api/repeaters/v1",
+      "fetchedAt": "2026-11-15T06:41:59.420Z"
+    },
+    {
+      "code": "GY",
+      "name": "Guyana",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "PY",
+      "name": "Paraguay",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "PE",
+      "name": "Perú",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "SR",
+      "name": "Surinam",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "UY",
+      "name": "Uruguay",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "VE",
+      "name": "Venezuela",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    }
+  ]
+}

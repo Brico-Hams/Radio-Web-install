@@ -10,6 +10,8 @@ const BOUNDARIES = "https://raw.githubusercontent.com/nvkelso/natural-earth-vect
 const PERMISSION = "https://hearham.com/repeaters";
 const AIRPORTS = "https://davidmegginson.github.io/ourairports-data/airports.csv";
 const AIRPORT_FREQUENCIES = "https://davidmegginson.github.io/ourairports-data/airport-frequencies.csv";
+// Airports and satellite passes exist only for the first seven countries; every loader treats them as optional elsewhere.
+const AIRPORT_COUNTRIES = Object.freeze(["ES", "GB", "US", "DE", "FR", "HU", "IT"]);
 function insideRing(point, ring) {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -25,17 +27,17 @@ function geometryContains(point, geometry) {
 }
 function prepareRegions(features) {
   const countries = new Set(R.TEMPLATE_COUNTRIES.map(country => country.code));
-  return features.filter(feature => countries.has(feature.properties.iso_a2)).map(feature => {
+  return features.filter(feature => countries.has(feature.properties.iso_a2)).flatMap(feature => {
     const p = feature.properties;
-    R.assert(["Polygon", "MultiPolygon"].includes(feature.geometry.type) &&
-      typeof p.iso_3166_2 === "string" && Number.isFinite(p.latitude) && Number.isFinite(p.longitude),
-    "Geografia Natural Earth no reconocida.");
+    // Features without an ISO 3166-2 id of their own country or without a centre cannot be validated; they are skipped, never guessed.
+    if (!["Polygon", "MultiPolygon"].includes(feature.geometry?.type) || typeof p.iso_3166_2 !== "string" ||
+      !p.iso_3166_2.startsWith(`${p.iso_a2}-`) || !Number.isFinite(p.latitude) || !Number.isFinite(p.longitude)) return [];
     const coordinates = feature.geometry.coordinates.flat(feature.geometry.type === "Polygon" ? 1 : 2);
-    return { id: p.iso_3166_2, name: p.name, country: p.iso_a2, latitude: p.latitude, longitude: p.longitude,
+    return [{ id: p.iso_3166_2, name: p.name || p.name_en || p.iso_3166_2, country: p.iso_a2, latitude: p.latitude, longitude: p.longitude,
       geometry: feature.geometry, bbox: coordinates.reduce((box, [x, y]) =>
         [Math.min(box[0], x), Math.min(box[1], y), Math.max(box[2], x), Math.max(box[3], y)],
-      [Infinity, Infinity, -Infinity, -Infinity]) };
-  });
+      [Infinity, Infinity, -Infinity, -Infinity]) }];
+  }).filter((region, index, all) => all.findIndex(other => other.id === region.id) === index);
 }
 function buildTemplates(rows, features, now = Date.now()) {
   R.assert(Array.isArray(rows) && rows.length > 0 && rows.length <= 100000 && Array.isArray(features),
@@ -79,10 +81,26 @@ function buildTemplates(rows, features, now = Date.now()) {
   for (const file of output) {
     file.regions.sort((a, b) => a.name.localeCompare(b.name, "en"));
     file.channels.sort((a, b) => a.regionId.localeCompare(b.regionId) || a.name.localeCompare(b.name));
-    R.validateCountryTemplate(file, file.country);
-    R.assert(file.regions.length > 0, `Sin regiones: ${file.country}`);
+    // Countries without regions or repeaters are reported by coverageReport and never written.
+    if (file.channels.length) R.validateCountryTemplate(file, file.country);
   }
   return output;
+}
+// Splits the generated files into the ones to write and the coverage.json entries. A country with no usable
+// repeaters (or no regions to place them in) gets no template: its status is "pendiente de fuente".
+function coverageReport(files, now = Date.now()) {
+  const countries = [], writable = [];
+  for (const file of files) {
+    const base = { code: file.country, name: file.name };
+    if (!file.regions.length) countries.push({ ...base, status: "pendiente de fuente", reason: "Natural Earth no define regiones de primer nivel para este pais." });
+    else if (!file.channels.length) countries.push({ ...base, status: "pendiente de fuente", reason: "HearHam no publica repetidores FM operativos utilizables para este pais." });
+    else {
+      writable.push(file);
+      countries.push({ ...base, status: "ok", channels: file.channels.length, regions: file.regions.length, rejected: file.rejected,
+        source: file.source, fetchedAt: file.fetchedAt });
+    }
+  }
+  return { writable, coverage: { format: "bricohams-template-coverage", version: 1, generatedAt: new Date(now).toISOString(), countries } };
 }
 // RFC 4180 reader for the OurAirports CSV files (quoted fields, doubled quotes, embedded newlines).
 function parseCSV(text) {
@@ -121,7 +139,7 @@ function buildAirportTemplates(airportRows, frequencyRows, features, now = Date.
   R.assert(Array.isArray(airportRows) && Array.isArray(frequencyRows) && airportRows.length > 0 &&
     frequencyRows.length > 0 && Array.isArray(features), "Respuesta de OurAirports no valida.");
   const regions = prepareRegions(features);
-  const output = R.TEMPLATE_COUNTRIES.map(country => ({
+  const output = R.TEMPLATE_COUNTRIES.filter(country => AIRPORT_COUNTRIES.includes(country.code)).map(country => ({
     format: "bricohams-airport-template", version: 1, country: country.code, name: country.name,
     fetchedAt: new Date(now).toISOString(), source: AIRPORT_FREQUENCIES, airportsSource: AIRPORTS,
     attribution: "OurAirports (public domain); Natural Earth administrative boundaries (public domain).",
@@ -194,9 +212,18 @@ async function main() {
   const [boundaries, airports, frequencies, rows] = await Promise.all([fetchJSON(BOUNDARIES, 160 * 1024 * 1024),
     fetchBytes(AIRPORTS, 64 * 1024 * 1024), fetchBytes(AIRPORT_FREQUENCIES, 32 * 1024 * 1024),
     airportsOnly ? null : fetchJSON(REPEATERS, 32 * 1024 * 1024)]);
-  if (rows) for (const file of buildTemplates(rows, boundaries.features)) {
-    fs.writeFileSync(path.join(directory, `${file.country}.json`), JSON.stringify(file) + "\n");
-    console.log(`${file.country}: ${file.channels.length} FM; ${file.regions.length} regions; ${file.rejected} excluded`);
+  if (rows) {
+    const { writable, coverage } = coverageReport(buildTemplates(rows, boundaries.features));
+    for (const file of writable) {
+      fs.writeFileSync(path.join(directory, `${file.country}.json`), JSON.stringify(file) + "\n");
+      console.log(`${file.country}: ${file.channels.length} FM; ${file.regions.length} regions; ${file.rejected} excluded`);
+    }
+    for (const entry of coverage.countries.filter(item => item.status !== "ok")) {
+      // A stale template of a country that lost its source must not stay next to a "pendiente de fuente" status.
+      fs.rmSync(path.join(directory, `${entry.code}.json`), { force: true });
+      console.log(`${entry.code}: ${entry.status} (${entry.reason})`);
+    }
+    fs.writeFileSync(path.join(directory, "coverage.json"), JSON.stringify(coverage, null, 2) + "\n");
   }
   for (const file of buildAirportTemplates(parseCSV(airports), parseCSV(frequencies), boundaries.features)) {
     fs.writeFileSync(path.join(directory, `${file.country}-airports.json`), JSON.stringify(file) + "\n");
@@ -204,4 +231,4 @@ async function main() {
   }
 }
 if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { buildTemplates, buildAirportTemplates, parseCSV, airbandFrequency, geometryContains, fetchJSON };
+module.exports = { buildTemplates, coverageReport, buildAirportTemplates, parseCSV, airbandFrequency, geometryContains, fetchJSON, AIRPORT_COUNTRIES };

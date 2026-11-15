@@ -1,0 +1,2 @@
+"Location","Name","Frequency","Duplex","Offset","Tone","rToneFreq","cToneFreq","DtcsCode","DtcsPolarity","RxDtcsCode","CrossMode","Mode","TStep","Skip","Comment"
+"0","J88AZ","146.10000","off","0.000000","","88.5","88.5","023","NN","023","Tone->Tone","FM","5.00","","RX ONLY. Zone: Saint George. TX nominal 146.70000; tono de proveedor 100.0. https://hearham.com/repeaters/9321 RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.  "

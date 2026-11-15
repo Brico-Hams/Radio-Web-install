@@ -29,6 +29,8 @@ sono informativi; l'import blocca TX. PMR446 è facoltativo, solo RX, assente pe
 gli USA e non autorizza trasmissioni con apparati radioamatoriali.
 SAT aggiunge solo memorie FM nominali, senza Doppler.
 
+I modelli di ripetitori per radio coprono tutta l'Europa (UE, SEE, Regno Unito, Svizzera, Balcani, Ucraina, Moldavia, Bielorussia, microstati) e le Americhe (USA per stato, Canada per provincia, Messico, America centrale, Caraibi e America del Sud). Russia e Turchia non sono incluse. Un paese senza ripetitori HearHam utilizzabili non genera file ed è elencato come «pendiente de fuente» in `data/channel-templates/coverage.json`; l'interfaccia lo nasconde o lo disattiva. I file pronti sono in `templates/repeaters/<radio>/<CC>.<ext>` (indice in `templates/repeaters/index.json` con canali, scartati e SHA-256). Restano solo RX e rispettano bande, modi e capacità di ogni radio. Scarica o Applica (sezione «Modelli di ripetitori» su desktop/web e nella schermata modelli di Android) usano questi file. Aeroporti e passaggi satellitari restano limitati ai sette paesi originali. Per rigenerare: `npm run fetch:channel-templates`, poi `npm run templates:build`.
+
 I passaggi coprono i giorni restanti del mese UTC per 75 punti di riferimento:
 città europee e un punto approssimativo in ciascuno dei 50 stati USA e Washington
 DC. Non valgono per tutto un paese. Sono inclusi coordinate, data, epoca TLE ed

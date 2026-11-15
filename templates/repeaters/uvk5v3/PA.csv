@@ -1,0 +1,2 @@
+"Location","Name","Frequency","Duplex","Offset","Tone","rToneFreq","cToneFreq","DtcsCode","DtcsPolarity","RxDtcsCode","CrossMode","Mode","TStep","Skip","Comment"
+"0","HP1GRE","145.40000","off","0.000000","","88.5","88.5","023","NN","023","Tone->Tone","FM","5.00","","RX ONLY. Zone: Panama. TX nominal 145.40000; tono de proveedor 156.7. https://hearham.com/repeaters/25073 RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.  "

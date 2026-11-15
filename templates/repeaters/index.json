@@ -1,0 +1,2079 @@
+{
+  "generatedAt": "2026-11-15T06:42:15.519Z",
+  "sources": [
+    "https://hearham.com/api/repeaters/v1",
+    "https://hearham.com/repeaters",
+    "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_10m_admin_1_states_provinces.geojson"
+  ],
+  "radios": [
+    {
+      "id": "radicodex",
+      "name": "RadiCodex",
+      "ext": "csv"
+    },
+    {
+      "id": "rt950pro",
+      "name": "Radtel RT-950 Pro",
+      "ext": "csv"
+    },
+    {
+      "id": "uvk5v3",
+      "name": "Quansheng UV-K5 V3",
+      "ext": "csv"
+    },
+    {
+      "id": "d878",
+      "name": "AnyTone AT-D878",
+      "ext": "json"
+    },
+    {
+      "id": "ftx1",
+      "name": "Yaesu FTX-1",
+      "ext": "csv"
+    }
+  ],
+  "countries": [
+    {
+      "code": "ES",
+      "name": "España",
+      "status": "ok"
+    },
+    {
+      "code": "GB",
+      "name": "UK",
+      "status": "ok"
+    },
+    {
+      "code": "US",
+      "name": "Estados Unidos",
+      "status": "ok"
+    },
+    {
+      "code": "DE",
+      "name": "Alemania",
+      "status": "ok"
+    },
+    {
+      "code": "FR",
+      "name": "Francia",
+      "status": "ok"
+    },
+    {
+      "code": "HU",
+      "name": "Hungría",
+      "status": "ok"
+    },
+    {
+      "code": "IT",
+      "name": "Italia",
+      "status": "ok"
+    },
+    {
+      "code": "AL",
+      "name": "Albania",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "AD",
+      "name": "Andorra",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "AT",
+      "name": "Austria",
+      "status": "ok"
+    },
+    {
+      "code": "BY",
+      "name": "Bielorrusia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "BE",
+      "name": "Bélgica",
+      "status": "ok"
+    },
+    {
+      "code": "BA",
+      "name": "Bosnia y Herzegovina",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "BG",
+      "name": "Bulgaria",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "HR",
+      "name": "Croacia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "CY",
+      "name": "Chipre",
+      "status": "ok"
+    },
+    {
+      "code": "CZ",
+      "name": "Chequia",
+      "status": "ok"
+    },
+    {
+      "code": "DK",
+      "name": "Dinamarca",
+      "status": "ok"
+    },
+    {
+      "code": "EE",
+      "name": "Estonia",
+      "status": "ok"
+    },
+    {
+      "code": "FI",
+      "name": "Finlandia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "GR",
+      "name": "Grecia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "IE",
+      "name": "Irlanda",
+      "status": "ok"
+    },
+    {
+      "code": "IS",
+      "name": "Islandia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "XK",
+      "name": "Kosovo",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "LV",
+      "name": "Letonia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "LI",
+      "name": "Liechtenstein",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "LT",
+      "name": "Lituania",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "LU",
+      "name": "Luxemburgo",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "MT",
+      "name": "Malta",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "MD",
+      "name": "Moldavia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "MC",
+      "name": "Mónaco",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "ME",
+      "name": "Montenegro",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "NL",
+      "name": "Países Bajos",
+      "status": "ok"
+    },
+    {
+      "code": "MK",
+      "name": "Macedonia del Norte",
+      "status": "ok"
+    },
+    {
+      "code": "NO",
+      "name": "Noruega",
+      "status": "ok"
+    },
+    {
+      "code": "PL",
+      "name": "Polonia",
+      "status": "ok"
+    },
+    {
+      "code": "PT",
+      "name": "Portugal",
+      "status": "ok"
+    },
+    {
+      "code": "RO",
+      "name": "Rumanía",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "SM",
+      "name": "San Marino",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "RS",
+      "name": "Serbia",
+      "status": "ok"
+    },
+    {
+      "code": "SK",
+      "name": "Eslovaquia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "SI",
+      "name": "Eslovenia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "SE",
+      "name": "Suecia",
+      "status": "ok"
+    },
+    {
+      "code": "CH",
+      "name": "Suiza",
+      "status": "ok"
+    },
+    {
+      "code": "UA",
+      "name": "Ucrania",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "VA",
+      "name": "Ciudad del Vaticano",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "CA",
+      "name": "Canadá",
+      "status": "ok"
+    },
+    {
+      "code": "MX",
+      "name": "México",
+      "status": "ok"
+    },
+    {
+      "code": "BZ",
+      "name": "Belice",
+      "status": "ok"
+    },
+    {
+      "code": "CR",
+      "name": "Costa Rica",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "SV",
+      "name": "El Salvador",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "GT",
+      "name": "Guatemala",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "HN",
+      "name": "Honduras",
+      "status": "ok"
+    },
+    {
+      "code": "NI",
+      "name": "Nicaragua",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "PA",
+      "name": "Panamá",
+      "status": "ok"
+    },
+    {
+      "code": "AG",
+      "name": "Antigua y Barbuda",
+      "status": "ok"
+    },
+    {
+      "code": "BS",
+      "name": "Bahamas",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "BB",
+      "name": "Barbados",
+      "status": "ok"
+    },
+    {
+      "code": "CU",
+      "name": "Cuba",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "DM",
+      "name": "Dominica",
+      "status": "ok"
+    },
+    {
+      "code": "DO",
+      "name": "República Dominicana",
+      "status": "ok"
+    },
+    {
+      "code": "GD",
+      "name": "Granada",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "HT",
+      "name": "Haití",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "JM",
+      "name": "Jamaica",
+      "status": "ok"
+    },
+    {
+      "code": "KN",
+      "name": "San Cristóbal y Nieves",
+      "status": "ok"
+    },
+    {
+      "code": "LC",
+      "name": "Santa Lucía",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "VC",
+      "name": "San Vicente y las Granadinas",
+      "status": "ok"
+    },
+    {
+      "code": "TT",
+      "name": "Trinidad y Tobago",
+      "status": "ok"
+    },
+    {
+      "code": "AR",
+      "name": "Argentina",
+      "status": "ok"
+    },
+    {
+      "code": "BO",
+      "name": "Bolivia",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "BR",
+      "name": "Brasil",
+      "status": "ok"
+    },
+    {
+      "code": "CL",
+      "name": "Chile",
+      "status": "ok"
+    },
+    {
+      "code": "CO",
+      "name": "Colombia",
+      "status": "ok"
+    },
+    {
+      "code": "EC",
+      "name": "Ecuador",
+      "status": "ok"
+    },
+    {
+      "code": "GY",
+      "name": "Guyana",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "PY",
+      "name": "Paraguay",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "PE",
+      "name": "Perú",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "SR",
+      "name": "Surinam",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "UY",
+      "name": "Uruguay",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    },
+    {
+      "code": "VE",
+      "name": "Venezuela",
+      "status": "pendiente de fuente",
+      "reason": "HearHam no publica repetidores FM operativos utilizables para este pais."
+    }
+  ],
+  "files": [
+    {
+      "radio": "radicodex",
+      "country": "ES",
+      "path": "radicodex/ES.csv",
+      "channels": 125,
+      "dropped": 0,
+      "sha256": "fefd5718f048d0818cf3bf65ddcabe8f5fa3e2be25fa347009c283383f165fd3"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "ES",
+      "path": "rt950pro/ES.csv",
+      "channels": 125,
+      "dropped": 0,
+      "sha256": "44e89378aa6529d53ba1e57ce819e9a0f9cd78e4fecf1d8bd1a4643c715a35f0"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "ES",
+      "path": "uvk5v3/ES.csv",
+      "channels": 125,
+      "dropped": 0,
+      "sha256": "49e6dd0e2dddd9c804d32a7aafa2b49d736f87babe5c9235a8468eed2f419fea"
+    },
+    {
+      "radio": "d878",
+      "country": "ES",
+      "path": "d878/ES.json",
+      "channels": 125,
+      "dropped": 0,
+      "sha256": "b39f89ae8390159bedcd056569603cf7630e0b944e7c3157c3c9bf16a88d5167"
+    },
+    {
+      "radio": "ftx1",
+      "country": "ES",
+      "path": "ftx1/ES.csv",
+      "channels": 125,
+      "dropped": 0,
+      "sha256": "a2ce38284249d91ddefcefd463c7300c4f1472386aee7e32781f2b75177aa5a9"
+    },
+    {
+      "radio": "radicodex",
+      "country": "GB",
+      "path": "radicodex/GB.csv",
+      "channels": 1268,
+      "dropped": 0,
+      "sha256": "e296e7fdf88f1cd5c595fcfe8e63fe8df12b7262e70a95254f66a78cc14b919a"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "GB",
+      "path": "rt950pro/GB.csv",
+      "channels": 783,
+      "dropped": 485,
+      "sha256": "c35dc5beb757cbfbc31f281d26b4039513636893aa87d8a0aac3dea3d6832b6c"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "GB",
+      "path": "uvk5v3/GB.csv",
+      "channels": 1024,
+      "dropped": 244,
+      "sha256": "bb9284831f560f8f22858b0a63050788f891cbad9c0524a9bb8aca6db078b3a9"
+    },
+    {
+      "radio": "d878",
+      "country": "GB",
+      "path": "d878/GB.json",
+      "channels": 1268,
+      "dropped": 0,
+      "sha256": "df54b6019610c2ebd5b67b181c55261d60c139f1368b74a71ff9fbf77b02a937"
+    },
+    {
+      "radio": "ftx1",
+      "country": "GB",
+      "path": "ftx1/GB.csv",
+      "channels": 999,
+      "dropped": 269,
+      "sha256": "73ae70b7f3d4241221473e62c339546790a5656e9939983ec1969bfcc4bf3577"
+    },
+    {
+      "radio": "radicodex",
+      "country": "US",
+      "path": "radicodex/US.csv",
+      "channels": 8318,
+      "dropped": 0,
+      "sha256": "86d669c21139d9fa1d9e21fe1e405ccf2e34861a3df7fe2af1ad773cd0d3c9bb"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "US",
+      "path": "rt950pro/US.csv",
+      "channels": 726,
+      "dropped": 7592,
+      "sha256": "ee61ca2a10bed61a16656f677d84787457d3c3dade11ab1ecd36a7fcbf983424"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "US",
+      "path": "uvk5v3/US.csv",
+      "channels": 1024,
+      "dropped": 7294,
+      "sha256": "9ac26cf467a7cb67321352ec4bae60df67ded37f188ee71eebf93d3119d7f812"
+    },
+    {
+      "radio": "d878",
+      "country": "US",
+      "path": "d878/US.json",
+      "channels": 4000,
+      "dropped": 4318,
+      "sha256": "d4bd745be0394df62ad44c0ac5d97c834f67fc470c6f4f8607469f2fe3a278eb"
+    },
+    {
+      "radio": "ftx1",
+      "country": "US",
+      "path": "ftx1/US.csv",
+      "channels": 999,
+      "dropped": 7319,
+      "sha256": "503a5cc5530e99c2f465d0a7ef2c1f6b9453815cdf5d0d1dfa9da0845b740e22"
+    },
+    {
+      "radio": "radicodex",
+      "country": "DE",
+      "path": "radicodex/DE.csv",
+      "channels": 41,
+      "dropped": 0,
+      "sha256": "41675af8b8b8a0f1c2bb8be5d3f06371b58984f98a84e2b9fb623db48aae57da"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "DE",
+      "path": "rt950pro/DE.csv",
+      "channels": 41,
+      "dropped": 0,
+      "sha256": "55044cd2c18e7d49b25856d2fcf2f95f35bbfdc8712525d13df0d1c28d714768"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "DE",
+      "path": "uvk5v3/DE.csv",
+      "channels": 41,
+      "dropped": 0,
+      "sha256": "29a980c81e4cc3f512af8271e41162b29d43ebeeb779d041f05f5740e80c5e01"
+    },
+    {
+      "radio": "d878",
+      "country": "DE",
+      "path": "d878/DE.json",
+      "channels": 41,
+      "dropped": 0,
+      "sha256": "fd2706ea5241c1df79a4bac3c1c7e54273903eb58dfb3b2de656999c715b5cf0"
+    },
+    {
+      "radio": "ftx1",
+      "country": "DE",
+      "path": "ftx1/DE.csv",
+      "channels": 41,
+      "dropped": 0,
+      "sha256": "78bee305b24ffd1c5ff3e7cadaa9889e56ddce537803b8f3c7de3cd6f54e5122"
+    },
+    {
+      "radio": "radicodex",
+      "country": "FR",
+      "path": "radicodex/FR.csv",
+      "channels": 231,
+      "dropped": 0,
+      "sha256": "4d383b4b67a2c59c572766802347579d0a854d8f7033ae66391a87d1f0df39d2"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "FR",
+      "path": "rt950pro/FR.csv",
+      "channels": 231,
+      "dropped": 0,
+      "sha256": "4f7edd15f17e4a301444ea0717c2dc8220db20ca515f47891b58f7c2f37bd05f"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "FR",
+      "path": "uvk5v3/FR.csv",
+      "channels": 231,
+      "dropped": 0,
+      "sha256": "40bb2ccb14552cc13777ad7c3077a72a39a2fa60de070a581e200bd79ae87423"
+    },
+    {
+      "radio": "d878",
+      "country": "FR",
+      "path": "d878/FR.json",
+      "channels": 231,
+      "dropped": 0,
+      "sha256": "093d6d6e1341ed0178fbbd4ad1f610d3d2d268590597997565a979e27c44cf27"
+    },
+    {
+      "radio": "ftx1",
+      "country": "FR",
+      "path": "ftx1/FR.csv",
+      "channels": 231,
+      "dropped": 0,
+      "sha256": "51392beb3b469aa4a1ea5aaba3411c0582866a40a737b9bdca1b2a474b8b5303"
+    },
+    {
+      "radio": "radicodex",
+      "country": "HU",
+      "path": "radicodex/HU.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "e203fd5bc0c0c15b1bc0a9a9e9258953bb9620d59ec7010604607aa191ae5ecc"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "HU",
+      "path": "rt950pro/HU.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "0ed98380549f844cc34acfebe5dedd48cc328209611032724f87477ea73a4c1e"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "HU",
+      "path": "uvk5v3/HU.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "148d368c95fe997d1a080afccea9a884ba9af583b6a99cb1f246da210f1633cd"
+    },
+    {
+      "radio": "d878",
+      "country": "HU",
+      "path": "d878/HU.json",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "da755c4b23582a7659e30ae0e123ba31f0cc856babfd4b1d6e3f3cafe6f3e78f"
+    },
+    {
+      "radio": "ftx1",
+      "country": "HU",
+      "path": "ftx1/HU.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "fe49326e5f5299410b6921b2f6cde5e5e3609a98054040a79ca649abffe474df"
+    },
+    {
+      "radio": "radicodex",
+      "country": "IT",
+      "path": "radicodex/IT.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "c59a6ed2dabe2414a54a5c72eb422f3b7cefb7d167c7e533d613b5e22d17d925"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "IT",
+      "path": "rt950pro/IT.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "60682e49dfffcde18d15a9f0dd0625b44e3119aefdafa3afc40472936c5b45ce"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "IT",
+      "path": "uvk5v3/IT.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "0be1119dda652aa17d6a87073286aaff5488643af6c15589f36c0add182b7dc1"
+    },
+    {
+      "radio": "d878",
+      "country": "IT",
+      "path": "d878/IT.json",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "b2b1de94262940df453976676da83495e5fc116f4664ee551117b4ef92f7d3cb"
+    },
+    {
+      "radio": "ftx1",
+      "country": "IT",
+      "path": "ftx1/IT.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "45cd054aa894f412e7224be830ffa152c52bdabab15342e1d6be9fbef38f9d60"
+    },
+    {
+      "radio": "radicodex",
+      "country": "AT",
+      "path": "radicodex/AT.csv",
+      "channels": 67,
+      "dropped": 0,
+      "sha256": "b576912421617906978db3504100f843233e950bc5c523313188ea24784fc6b4"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "AT",
+      "path": "rt950pro/AT.csv",
+      "channels": 67,
+      "dropped": 0,
+      "sha256": "a4326daef52bccb6d36df555fc2733a5c43c9ba8ddb90176db1a6b277fb7b456"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "AT",
+      "path": "uvk5v3/AT.csv",
+      "channels": 67,
+      "dropped": 0,
+      "sha256": "b5616bcb83f51b0d050a5f0b31bea3303e4e3c356c568892533763c626cdadd7"
+    },
+    {
+      "radio": "d878",
+      "country": "AT",
+      "path": "d878/AT.json",
+      "channels": 67,
+      "dropped": 0,
+      "sha256": "b4898b830d5cefb2f8600f5b1d012626cc96d37bff679771e63ce60e380dd684"
+    },
+    {
+      "radio": "ftx1",
+      "country": "AT",
+      "path": "ftx1/AT.csv",
+      "channels": 67,
+      "dropped": 0,
+      "sha256": "092c75a93258d6d0ea5277fe27542ce39472186ec354f20d5f474826a3ddb9f1"
+    },
+    {
+      "radio": "radicodex",
+      "country": "BE",
+      "path": "radicodex/BE.csv",
+      "channels": 4,
+      "dropped": 0,
+      "sha256": "81e5aa4776d03b5ab654019d959dac3b0491ac4b7dfb2851243fe76ecd2a7daa"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "BE",
+      "path": "rt950pro/BE.csv",
+      "channels": 4,
+      "dropped": 0,
+      "sha256": "092fc111f0b828c5e854261b1846a95d03741e4c8d771eb9900ea4f67dab1caf"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "BE",
+      "path": "uvk5v3/BE.csv",
+      "channels": 4,
+      "dropped": 0,
+      "sha256": "44fafece61c7b063286bf97f667032e323ca5da960a02e8a624f5202981cfed1"
+    },
+    {
+      "radio": "d878",
+      "country": "BE",
+      "path": "d878/BE.json",
+      "channels": 4,
+      "dropped": 0,
+      "sha256": "0034b097f1891bcbf86528562bfe581775d3922eb34cce6cb85305b4c3e2dc54"
+    },
+    {
+      "radio": "ftx1",
+      "country": "BE",
+      "path": "ftx1/BE.csv",
+      "channels": 4,
+      "dropped": 0,
+      "sha256": "85b7ac847c2843ca995f287063433076c1fc440eab558d9f1f8248d4e233c657"
+    },
+    {
+      "radio": "radicodex",
+      "country": "CY",
+      "path": "radicodex/CY.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "d29078a8d39c130fe19c4453c8b065408388c17cfd20334bef037ce87cdc0b50"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "CY",
+      "path": "rt950pro/CY.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "d1c34d46bda881b801c49744a5778c2eca7547a879470f0a7bc62b7ab96c3a48"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "CY",
+      "path": "uvk5v3/CY.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "9a4ebe209edd877b3dfdeaff2e95b6a4c5d9af372d4d2937f6d7f5bef66572ad"
+    },
+    {
+      "radio": "d878",
+      "country": "CY",
+      "path": "d878/CY.json",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "50677d6d354bdd9317518b232273512211d402d4412957ac4230c9f46a1da7c8"
+    },
+    {
+      "radio": "ftx1",
+      "country": "CY",
+      "path": "ftx1/CY.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "545d8a53c1450c01bfd0c27d169216dcafa7f4316609e91e290e5f8e91e1c69c"
+    },
+    {
+      "radio": "radicodex",
+      "country": "CZ",
+      "path": "radicodex/CZ.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "d141d07af86f8d096f9f24d5d78c4f31315976c6da4af8caf69dce83243a1968"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "CZ",
+      "path": "rt950pro/CZ.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "b9e2bdd8ebfda03c56b2e2b552988dac5a78b1c123485cc2c7e447c2695d572a"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "CZ",
+      "path": "uvk5v3/CZ.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "e8cafeb580977b811738b486b1679959bf0b7a82991f4fd5045837e4fdf348ef"
+    },
+    {
+      "radio": "d878",
+      "country": "CZ",
+      "path": "d878/CZ.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "7855271a022ade3e14351ddda3f9587937048768e752fa751fb2389c0dd33230"
+    },
+    {
+      "radio": "ftx1",
+      "country": "CZ",
+      "path": "ftx1/CZ.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "0d55abaeacdc14b65044d86ef033c76afeaf520ea059e8bc7046f5390ad9d894"
+    },
+    {
+      "radio": "radicodex",
+      "country": "DK",
+      "path": "radicodex/DK.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "9a777d0ff6862f6ed9240d491279bb3fabe54777d165651544055c83b0a50f19"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "DK",
+      "path": "rt950pro/DK.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "69c080a15c9bd84a5816b65ba93d6918f4ca87e5454061c9941b33955361d091"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "DK",
+      "path": "uvk5v3/DK.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "55664d7f15af20a749ffc2ebac582b06409dd36d2a354aaeeb0e3218aecabd1e"
+    },
+    {
+      "radio": "d878",
+      "country": "DK",
+      "path": "d878/DK.json",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "bcf1e8e92aa416056bad648b12cb7fcc73e82765d0f1dbafbe0d20efc2584c96"
+    },
+    {
+      "radio": "ftx1",
+      "country": "DK",
+      "path": "ftx1/DK.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "92e3ea0722127034a948ccc57728d7cba837ea0f5825e0f6a8c9d68039b620c9"
+    },
+    {
+      "radio": "radicodex",
+      "country": "EE",
+      "path": "radicodex/EE.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "eb253fa7fc1b327f9517118697ebe4cf1e7517f45a4406bd4827357afdb7855f"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "EE",
+      "path": "rt950pro/EE.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "2d3f69a1a88d6981c41c667d6e87a251ff508537898f61c7f2b57e2f73e43bb3"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "EE",
+      "path": "uvk5v3/EE.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "fad2cbd101c80aaeb17ccef08bd48ee979cba8d80216f2f82a825d6844d0f653"
+    },
+    {
+      "radio": "d878",
+      "country": "EE",
+      "path": "d878/EE.json",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "14a8c6bfac54bb5646b1c86e22ceddd81d7c74dcb4a98112620a0df625250bab"
+    },
+    {
+      "radio": "ftx1",
+      "country": "EE",
+      "path": "ftx1/EE.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "8dc5e2354b0d811ce56bf0257b6c8c33fbc5f5831dca5e1cd8af75d7f7b611fd"
+    },
+    {
+      "radio": "radicodex",
+      "country": "IE",
+      "path": "radicodex/IE.csv",
+      "channels": 21,
+      "dropped": 0,
+      "sha256": "e793c09a9b43fc6cfe98aaa499809617a3aef405fa398da25d0f6dccfcd000f4"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "IE",
+      "path": "rt950pro/IE.csv",
+      "channels": 21,
+      "dropped": 0,
+      "sha256": "38a1c422f5d5a0fbf46f30d6a0f74da7fffe6c61c0621bd4159452b0515f865b"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "IE",
+      "path": "uvk5v3/IE.csv",
+      "channels": 21,
+      "dropped": 0,
+      "sha256": "c90c140755d5ee72894800b1f08abb3ca1e6b9b700943b951ff682a2bf58f340"
+    },
+    {
+      "radio": "d878",
+      "country": "IE",
+      "path": "d878/IE.json",
+      "channels": 21,
+      "dropped": 0,
+      "sha256": "816b17578af1bb441c01be5c10c7319894c06478526e238da838fe6fb19f8afb"
+    },
+    {
+      "radio": "ftx1",
+      "country": "IE",
+      "path": "ftx1/IE.csv",
+      "channels": 21,
+      "dropped": 0,
+      "sha256": "a7c357667a5be10a26f5a62c103ef86db0ce305be5666c34d91fa2ee5ef926d7"
+    },
+    {
+      "radio": "radicodex",
+      "country": "NL",
+      "path": "radicodex/NL.csv",
+      "channels": 9,
+      "dropped": 0,
+      "sha256": "af30c5adfa01f48e4f1854d036411d138a7930a45b2a2f01f3fef17c31dc21b7"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "NL",
+      "path": "rt950pro/NL.csv",
+      "channels": 9,
+      "dropped": 0,
+      "sha256": "c4cdc29150fa9a5488015964bf058c2fe6d0a95abfb20300a0ba56162a1d790c"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "NL",
+      "path": "uvk5v3/NL.csv",
+      "channels": 9,
+      "dropped": 0,
+      "sha256": "f718b19b271a9ce85ef9c81f21c659834fa09ab645d779f87bc94f56a8286b74"
+    },
+    {
+      "radio": "d878",
+      "country": "NL",
+      "path": "d878/NL.json",
+      "channels": 9,
+      "dropped": 0,
+      "sha256": "fd9b8905e7d0d39505256a52436f7d37f809f01c82e699224fb6f56ad397f13e"
+    },
+    {
+      "radio": "ftx1",
+      "country": "NL",
+      "path": "ftx1/NL.csv",
+      "channels": 9,
+      "dropped": 0,
+      "sha256": "6333b6d3fd3e62c053e1d37ac4b245516592bfee92b8491da7996c306dd81e5c"
+    },
+    {
+      "radio": "radicodex",
+      "country": "MK",
+      "path": "radicodex/MK.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "cd402732215a5f1224c83179dab9cf81cd68c829a1f28b7b625b40b2ee096700"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "MK",
+      "path": "rt950pro/MK.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "3b875bed1651b929241130710a9e2485956e70aa6fb12543cd1133442ac05690"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "MK",
+      "path": "uvk5v3/MK.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "c51037e30f9737d7a1e10f46725bac7a4ca165b9187f56bbcf55e42622ed54fc"
+    },
+    {
+      "radio": "d878",
+      "country": "MK",
+      "path": "d878/MK.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "53bdfb6cdb0ba744de44cf3af8993438235223ad588c2edd7ab4782be52a82a2"
+    },
+    {
+      "radio": "ftx1",
+      "country": "MK",
+      "path": "ftx1/MK.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "194c63cd5b0193ff5ec9228441228c25c1a1a01cae80e8aba6cc92104a9a3357"
+    },
+    {
+      "radio": "radicodex",
+      "country": "NO",
+      "path": "radicodex/NO.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "8f709356f2eff3a6d394994b3f5459a8837d4926dc86d4a23fd8cbe56beea652"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "NO",
+      "path": "rt950pro/NO.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "502831ba2b0aabaaa5e6f4b61ee4eeb398f1a73ed49867f2abe13262ce598294"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "NO",
+      "path": "uvk5v3/NO.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "5c0806b6bedcf8274e071cdd371504d60e424cb7c6236b0f7d416bd3c01d6cb8"
+    },
+    {
+      "radio": "d878",
+      "country": "NO",
+      "path": "d878/NO.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "03d5e88b4b4fb077667002cc33a56fcbbce580683d4e03105a410f5a503522dc"
+    },
+    {
+      "radio": "ftx1",
+      "country": "NO",
+      "path": "ftx1/NO.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "a7c836c10546f9caffe865104fb4352971c1a2c7ccceef80c9d5cea71bcaa6e8"
+    },
+    {
+      "radio": "radicodex",
+      "country": "PL",
+      "path": "radicodex/PL.csv",
+      "channels": 15,
+      "dropped": 0,
+      "sha256": "2378ef48981f7d2ff1299efad4727751632db036d1663cd2cd73d0b37612a3ac"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "PL",
+      "path": "rt950pro/PL.csv",
+      "channels": 15,
+      "dropped": 0,
+      "sha256": "eed9d1456141861324f48ef926b4af2598cb344e6fb13b7ff0b27f533098a707"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "PL",
+      "path": "uvk5v3/PL.csv",
+      "channels": 15,
+      "dropped": 0,
+      "sha256": "79bbd0be7364700c3740559bf46b3291053e638817b6288fa6eee86878eaabde"
+    },
+    {
+      "radio": "d878",
+      "country": "PL",
+      "path": "d878/PL.json",
+      "channels": 15,
+      "dropped": 0,
+      "sha256": "2ced023b5ed85b1c2ce2e7dea60e88157562252f7b736666026f69913a0c9292"
+    },
+    {
+      "radio": "ftx1",
+      "country": "PL",
+      "path": "ftx1/PL.csv",
+      "channels": 15,
+      "dropped": 0,
+      "sha256": "b608b3f86c87ea8fd47afbffd101e9af417ba36f9ad9cd62f7a407a5519431da"
+    },
+    {
+      "radio": "radicodex",
+      "country": "PT",
+      "path": "radicodex/PT.csv",
+      "channels": 8,
+      "dropped": 0,
+      "sha256": "7de7ac9645d9fb8215f39c92f1a16e393705436dda0df54b30b6ec05a8695c62"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "PT",
+      "path": "rt950pro/PT.csv",
+      "channels": 8,
+      "dropped": 0,
+      "sha256": "24a399894ec7f1b2bb6bc2638183a99e7b3838ab415c471d107eec677b441f2d"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "PT",
+      "path": "uvk5v3/PT.csv",
+      "channels": 8,
+      "dropped": 0,
+      "sha256": "bbd8cb791412d38abe34de4ce939d6809bc1b86f2db183b87549fdaa5306d41f"
+    },
+    {
+      "radio": "d878",
+      "country": "PT",
+      "path": "d878/PT.json",
+      "channels": 8,
+      "dropped": 0,
+      "sha256": "eed378229dca48c44b58f97d6a861d38818597c289551987643201b0893cf213"
+    },
+    {
+      "radio": "ftx1",
+      "country": "PT",
+      "path": "ftx1/PT.csv",
+      "channels": 8,
+      "dropped": 0,
+      "sha256": "e45b56574ed421d1f5e005709fe27ba5fdcb48ff30ebdc9b3ab2973deadbaed6"
+    },
+    {
+      "radio": "radicodex",
+      "country": "RS",
+      "path": "radicodex/RS.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "d366ca60eeefd9203079e66ac240dfedbd6031e1675741bf0b38a535d098fe24"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "RS",
+      "path": "rt950pro/RS.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "832bc650c4c3235001fed7eec10127f9de9867ffe8cb595e1bee0dd4e5078e82"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "RS",
+      "path": "uvk5v3/RS.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "1b4d228fc2296ce7c8fd71ceeac8d68a586bd52a91e3965e680b7ddee5109257"
+    },
+    {
+      "radio": "d878",
+      "country": "RS",
+      "path": "d878/RS.json",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "99655bf2a37946083dc4ef4d3345b9f6413502db380f9a29dd0828559ceb904e"
+    },
+    {
+      "radio": "ftx1",
+      "country": "RS",
+      "path": "ftx1/RS.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "57ab426c518381b24bbe2a192a26b86d80789988ca3b83ffb948177d9394c213"
+    },
+    {
+      "radio": "radicodex",
+      "country": "SE",
+      "path": "radicodex/SE.csv",
+      "channels": 5,
+      "dropped": 0,
+      "sha256": "b3a7f4c5bec0d2f974c4d9ebb86fef95bc06f269f07f8a2553d03efb01f6b523"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "SE",
+      "path": "rt950pro/SE.csv",
+      "channels": 5,
+      "dropped": 0,
+      "sha256": "db4e779e695571f04e2b9e9396d96068a79e72c34f65a124c483365c9efe765d"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "SE",
+      "path": "uvk5v3/SE.csv",
+      "channels": 5,
+      "dropped": 0,
+      "sha256": "3dd604aadbe0f48bd1954ac318012fe6b57800e51ec064e0b280a004f933d780"
+    },
+    {
+      "radio": "d878",
+      "country": "SE",
+      "path": "d878/SE.json",
+      "channels": 5,
+      "dropped": 0,
+      "sha256": "55011490657a2965de8019d4966b52094781bdeb71c437796d0f0f3fcae840cd"
+    },
+    {
+      "radio": "ftx1",
+      "country": "SE",
+      "path": "ftx1/SE.csv",
+      "channels": 5,
+      "dropped": 0,
+      "sha256": "e369b7de177b51a54363a342e08f799f45c802504e1279f43580002f218d4155"
+    },
+    {
+      "radio": "radicodex",
+      "country": "CH",
+      "path": "radicodex/CH.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "5b6ad505f063a92d1f9902c23ba6a53088154cfb72e40b5a287fa00878b2070d"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "CH",
+      "path": "rt950pro/CH.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "8dbf64cdbaa7ce8daf46e95d843661398febcbe11fcb4deb5e8fb8e39eb84acf"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "CH",
+      "path": "uvk5v3/CH.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "be84f94b1c6cfc50e5b1bf7fe5659d430caa59a04b698ba442b1db9efa46d786"
+    },
+    {
+      "radio": "d878",
+      "country": "CH",
+      "path": "d878/CH.json",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "419151ce52df9d542408bf43bddfd489708770c7ce700aec334dbb04293c7914"
+    },
+    {
+      "radio": "ftx1",
+      "country": "CH",
+      "path": "ftx1/CH.csv",
+      "channels": 6,
+      "dropped": 0,
+      "sha256": "a8e4b8aa8b31e06ab21dd822e844a9175d0fe66c0a6c70af3eca2804d0a6ea0c"
+    },
+    {
+      "radio": "radicodex",
+      "country": "CA",
+      "path": "radicodex/CA.csv",
+      "channels": 429,
+      "dropped": 0,
+      "sha256": "d3e73253d082c3ba6cd63e79b1776efb16c30333d5a61c2f333b8edfb45d79e8"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "CA",
+      "path": "rt950pro/CA.csv",
+      "channels": 429,
+      "dropped": 0,
+      "sha256": "8b609aa5abc33cafb3ed5484fbfcc15f5d739d73beb23f48bd84947a383e342f"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "CA",
+      "path": "uvk5v3/CA.csv",
+      "channels": 429,
+      "dropped": 0,
+      "sha256": "5d7634264708747a0e48d828aa6a249eda77ac4fa6733f65cf6230a3bf5ee534"
+    },
+    {
+      "radio": "d878",
+      "country": "CA",
+      "path": "d878/CA.json",
+      "channels": 429,
+      "dropped": 0,
+      "sha256": "c5f80f475579b7b9047f7707703d04420448d2dcf1fe2863cbea3857081c07b7"
+    },
+    {
+      "radio": "ftx1",
+      "country": "CA",
+      "path": "ftx1/CA.csv",
+      "channels": 429,
+      "dropped": 0,
+      "sha256": "155031a2016fef5c5bcd8036b298ba5c017791728add167b2b8430d5419fdeea"
+    },
+    {
+      "radio": "radicodex",
+      "country": "MX",
+      "path": "radicodex/MX.csv",
+      "channels": 93,
+      "dropped": 0,
+      "sha256": "ee421c2be17dad4979b5c35320c887947dd87770280ac9f25e5b7d85fdec43c4"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "MX",
+      "path": "rt950pro/MX.csv",
+      "channels": 93,
+      "dropped": 0,
+      "sha256": "37e641386c594f967b8d1e60e2f08501adec3789017f15cb4af5102abef49cb3"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "MX",
+      "path": "uvk5v3/MX.csv",
+      "channels": 93,
+      "dropped": 0,
+      "sha256": "1001b04d6585606d304f6784cd0385d51ee0b22babfd68567efc4f73422d6d01"
+    },
+    {
+      "radio": "d878",
+      "country": "MX",
+      "path": "d878/MX.json",
+      "channels": 93,
+      "dropped": 0,
+      "sha256": "a282b570ec75c4e0369e2d3add4055957792361ef652db9d691272da3309b075"
+    },
+    {
+      "radio": "ftx1",
+      "country": "MX",
+      "path": "ftx1/MX.csv",
+      "channels": 93,
+      "dropped": 0,
+      "sha256": "15a589457e30fbbc166d4bd3be1adaaf4a4096f8598b0fcec50c2831eb8155a4"
+    },
+    {
+      "radio": "radicodex",
+      "country": "BZ",
+      "path": "radicodex/BZ.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "00cdc74bc0828412cc4151c2be4abee3a3e0f6c33fdd20c91b88a28faffdea2a"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "BZ",
+      "path": "rt950pro/BZ.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "174f66c2082cfbcdc8dc9840ba60e7d911527e4494439b1c37341e2f60b07115"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "BZ",
+      "path": "uvk5v3/BZ.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "e43830e42a2a80a4b721f8fdeb871952774de2e3a700a07b847c3eafa719f52d"
+    },
+    {
+      "radio": "d878",
+      "country": "BZ",
+      "path": "d878/BZ.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "57a1ad0f89e97afcedc997d3f348d937855939acb7813218e8d54715fddecbbc"
+    },
+    {
+      "radio": "ftx1",
+      "country": "BZ",
+      "path": "ftx1/BZ.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "147cd6c9b6f37dea2c26098f4adc8c7da2a29e0f0c09839639a71b1d68317d6f"
+    },
+    {
+      "radio": "radicodex",
+      "country": "HN",
+      "path": "radicodex/HN.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "0c1f4e71ca5ec50a20e8ba5f8f890397fa44bf14bd9db19a2c1264225431f9fd"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "HN",
+      "path": "rt950pro/HN.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "bc5a06fe4ec2793a89bbffb0dc88e8be7d6fcc02701edcfd73ae75697dc6218c"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "HN",
+      "path": "uvk5v3/HN.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "536c07c6de8fd4e51d75012c522c5843630bcdc76fea89e41efe6af2ee4d06ea"
+    },
+    {
+      "radio": "d878",
+      "country": "HN",
+      "path": "d878/HN.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "8cbd954633c004acd53edfc5e2957e492e3f8df9a1827972341f11e067264ec3"
+    },
+    {
+      "radio": "ftx1",
+      "country": "HN",
+      "path": "ftx1/HN.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "4748e7886b6afa44145fe9785759363f5d25a98a7d3afe252e1485100fdce712"
+    },
+    {
+      "radio": "radicodex",
+      "country": "PA",
+      "path": "radicodex/PA.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "01bda4655f5c3cbc8411ba789f93558c39d0a667888ede1af9bbd18214cfae28"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "PA",
+      "path": "rt950pro/PA.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "87ed70a7086ed64041f089cdd235975cdbfdc92f25e04c239dee136861ca5108"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "PA",
+      "path": "uvk5v3/PA.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "4a9eca729165378adbbeefd27bf1ffde849bb041399c617c496a9d1336840200"
+    },
+    {
+      "radio": "d878",
+      "country": "PA",
+      "path": "d878/PA.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "ae91cba0881a2c8c05fd0812da51d5139490e71444efbf8dacb843510390ac10"
+    },
+    {
+      "radio": "ftx1",
+      "country": "PA",
+      "path": "ftx1/PA.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "0a67228e221839bad6f2cd3077f06bef34d1fcec32a6ad8e9a8742aabb548ccd"
+    },
+    {
+      "radio": "radicodex",
+      "country": "AG",
+      "path": "radicodex/AG.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "e09a55b8d8fecc39d5c49b0d2f4ae0fbbf72622b0d8da55518feefccada4c52a"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "AG",
+      "path": "rt950pro/AG.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "7de2da06aac4140710b8d31646929a26c193391a08aa0f278fae6b2bbe19d561"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "AG",
+      "path": "uvk5v3/AG.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "bf30481273a20e140276c9fd0e064ab7224ea240a811c687e2356e695ca508ad"
+    },
+    {
+      "radio": "d878",
+      "country": "AG",
+      "path": "d878/AG.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "7af2441f8ed999100dd70ee2bca76e461c571046cb4aad664466c6046d0d3ee6"
+    },
+    {
+      "radio": "ftx1",
+      "country": "AG",
+      "path": "ftx1/AG.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "70371720040096b41cefac57c19a1e2d5c13eb4c30f16f1ba25a0fec8d6f6226"
+    },
+    {
+      "radio": "radicodex",
+      "country": "BB",
+      "path": "radicodex/BB.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "ac07193e6163e3bf7d3da5ff9d16c4dd3bc2df3a46da8527335eae0f226a6fb1"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "BB",
+      "path": "rt950pro/BB.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "68771f3939002d982a1808130311c6bb7e7aee1a39d01c24b4d723414301262d"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "BB",
+      "path": "uvk5v3/BB.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "f711f1613f2429dff9c2a7ccf78173fcb6721831d436e207214b351db7ce2aff"
+    },
+    {
+      "radio": "d878",
+      "country": "BB",
+      "path": "d878/BB.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "9f6e9e09171726f10ae7f8c149d6b71a795dcc528f3cac2a294b687170938756"
+    },
+    {
+      "radio": "ftx1",
+      "country": "BB",
+      "path": "ftx1/BB.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "e8b99f743692830cba1af54f768fedecaed394b7500b2dacb6da762ba85f82ee"
+    },
+    {
+      "radio": "radicodex",
+      "country": "DM",
+      "path": "radicodex/DM.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "f900d2650cd60fba9ef402fb0ef1a154890d7397ec9c3c816995bc1fb0f4cb1a"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "DM",
+      "path": "rt950pro/DM.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "d299582cada39a334df049993517aec26536d2a2f1999d088f41e0dd375fed4e"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "DM",
+      "path": "uvk5v3/DM.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "c987c4b573a05cd21d92242e91ac0717b9470e81d9c141ccb117646759e0b98a"
+    },
+    {
+      "radio": "d878",
+      "country": "DM",
+      "path": "d878/DM.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "6b766e777a30673bd19abbfcf83caf40632db3882e76edcdaa77e26188460bda"
+    },
+    {
+      "radio": "ftx1",
+      "country": "DM",
+      "path": "ftx1/DM.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "8515174ec8f66ed7c626071d3f2350778ef447da4a987eb9d14e668f0f456f07"
+    },
+    {
+      "radio": "radicodex",
+      "country": "DO",
+      "path": "radicodex/DO.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "082ec6e97beaa3f7a13665258416fec948d7010789772d0ed3342d8867054a01"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "DO",
+      "path": "rt950pro/DO.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "fd5c97d22386ac3708464364fa1ad15541019d2b8f45f80c54116248e2685a26"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "DO",
+      "path": "uvk5v3/DO.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "a000944105409bf4c4ca8039d2214602825ff81aca0ecc6d4e989a23e620cf21"
+    },
+    {
+      "radio": "d878",
+      "country": "DO",
+      "path": "d878/DO.json",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "2ddd72e4b6f14474d881cedb69a1ad82a7c7c0fca66086b77b39e24833016933"
+    },
+    {
+      "radio": "ftx1",
+      "country": "DO",
+      "path": "ftx1/DO.csv",
+      "channels": 3,
+      "dropped": 0,
+      "sha256": "ae81a44b037f8f6cb784128f090f15b92da4fdfc7e0357ca1f1ae1797419842e"
+    },
+    {
+      "radio": "radicodex",
+      "country": "JM",
+      "path": "radicodex/JM.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "8f4f965e43c8258bd3dc7f0e312d0d502265d3f416a36d17c25c02f56ee888c6"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "JM",
+      "path": "rt950pro/JM.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "55ab17110a490631b16947459e86e3a93689e070670efe82f8f5455d3e89ba65"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "JM",
+      "path": "uvk5v3/JM.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "e2aee497708b99036aab88eeb02ef8fc9e4a151d6174bfd224ab463a30a38ca9"
+    },
+    {
+      "radio": "d878",
+      "country": "JM",
+      "path": "d878/JM.json",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "3e7900bc7a07d0ab42ebc5becc49082d86fc3e01d255b88252e293d694c7525a"
+    },
+    {
+      "radio": "ftx1",
+      "country": "JM",
+      "path": "ftx1/JM.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "d81e55181d4880b212eaac0e34bd0f00db7ec6d5442c9dea1c317c3257db9d3e"
+    },
+    {
+      "radio": "radicodex",
+      "country": "KN",
+      "path": "radicodex/KN.csv",
+      "channels": 20,
+      "dropped": 0,
+      "sha256": "1adacf80ad0c2fec0e9c404023042edcd61e49691cbc6fe968a036764f08d506"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "KN",
+      "path": "rt950pro/KN.csv",
+      "channels": 20,
+      "dropped": 0,
+      "sha256": "6f8dbb5278ea8c47fe8c63265520d71600479e784687d0720fd8bd754aebde2f"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "KN",
+      "path": "uvk5v3/KN.csv",
+      "channels": 20,
+      "dropped": 0,
+      "sha256": "7173cc0325006700799e780f502c1e6934085e29e6a3c61ba64feefbcdccfdc0"
+    },
+    {
+      "radio": "d878",
+      "country": "KN",
+      "path": "d878/KN.json",
+      "channels": 20,
+      "dropped": 0,
+      "sha256": "afcf86907720fafbf8e9255bbb256b2113411597d0fe8aa73e385bb018b0a298"
+    },
+    {
+      "radio": "ftx1",
+      "country": "KN",
+      "path": "ftx1/KN.csv",
+      "channels": 20,
+      "dropped": 0,
+      "sha256": "9779f1cc6df83cd37fa9add0ce49135d7c06db61084fc0d90a0a553708137472"
+    },
+    {
+      "radio": "radicodex",
+      "country": "VC",
+      "path": "radicodex/VC.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "37b79ae7f8565f027c4fe5e8886959576e2775337eddf43f734cac2f57050584"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "VC",
+      "path": "rt950pro/VC.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "7cfc1b39a5aa92a929892d99b0d5bdd20aa2e3bd220addfa1386715cc5dd2418"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "VC",
+      "path": "uvk5v3/VC.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "c9f6d4727338256c02e9365fbecf4573e5413542e85cd0aa1fdeab2d1848f211"
+    },
+    {
+      "radio": "d878",
+      "country": "VC",
+      "path": "d878/VC.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "6dadd07025486f536fb981a455a621c1caa2819259084034822a958f82206fcc"
+    },
+    {
+      "radio": "ftx1",
+      "country": "VC",
+      "path": "ftx1/VC.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "2d6c74e3351ea276006772df6da2d715529458a8e5bfa2b313bbc32c578ed866"
+    },
+    {
+      "radio": "radicodex",
+      "country": "TT",
+      "path": "radicodex/TT.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "f2a5500dc9b053fc9ec1232e2faea87ccba75a29f7920cf0276d3b9ebce65e24"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "TT",
+      "path": "rt950pro/TT.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "8db6faa1bcbd2344676874e6e824c31100b831e5e2943a414752291c3251f9c9"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "TT",
+      "path": "uvk5v3/TT.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "aba825dc185faaee0939725f8106c33d78be4e78ad48825d740bcf40a0b1eb47"
+    },
+    {
+      "radio": "d878",
+      "country": "TT",
+      "path": "d878/TT.json",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "70f7da4537f1dbe21b0dff94624bd6b54fa53e6cae033ee0454cc9589c1fb515"
+    },
+    {
+      "radio": "ftx1",
+      "country": "TT",
+      "path": "ftx1/TT.csv",
+      "channels": 1,
+      "dropped": 0,
+      "sha256": "888160eb6e6fede86c257422971ed19a1f2aabb1282936ad39849de04fac6276"
+    },
+    {
+      "radio": "radicodex",
+      "country": "AR",
+      "path": "radicodex/AR.csv",
+      "channels": 30,
+      "dropped": 0,
+      "sha256": "15c8ce91ded1033daa58f3a332c76ec04fa74413191de99731777e4daecd9b3a"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "AR",
+      "path": "rt950pro/AR.csv",
+      "channels": 30,
+      "dropped": 0,
+      "sha256": "1df53052ec413fef62c22c11c89fab4f6334384c2ecf23ec6c6651cbb15f0c94"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "AR",
+      "path": "uvk5v3/AR.csv",
+      "channels": 30,
+      "dropped": 0,
+      "sha256": "2bbb0a84d522dc447cdd60f3f539e964614888ee64436ed9072ba52313a770d6"
+    },
+    {
+      "radio": "d878",
+      "country": "AR",
+      "path": "d878/AR.json",
+      "channels": 30,
+      "dropped": 0,
+      "sha256": "eba3ce76f1fd5a76d88287df03a640adb8984c4e7fd04ea35192d91b32cf9860"
+    },
+    {
+      "radio": "ftx1",
+      "country": "AR",
+      "path": "ftx1/AR.csv",
+      "channels": 30,
+      "dropped": 0,
+      "sha256": "ca92d655ef4f8b4f03019d9b74ab90914b657a54de4cb92ff7f6e2255a3348d4"
+    },
+    {
+      "radio": "radicodex",
+      "country": "BR",
+      "path": "radicodex/BR.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "c6cb6d12f1afbbecbfd2346be9e52761f09643b6685d136cf4b06e598b7c3e66"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "BR",
+      "path": "rt950pro/BR.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "12f4416bb69bde0cfa654835f2cbdc73a4ddb5dc053663d993c2e30c3fa3a436"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "BR",
+      "path": "uvk5v3/BR.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "a7f506d3ef9daf4b5b4fe60493f0bfa009e29631b9e0b464a305f7abf6b197dd"
+    },
+    {
+      "radio": "d878",
+      "country": "BR",
+      "path": "d878/BR.json",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "9398b6f565a36f61efcdbbaad7c412f6a2ef658e80e1e518d0995bf17afede5e"
+    },
+    {
+      "radio": "ftx1",
+      "country": "BR",
+      "path": "ftx1/BR.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "db7d92360f70a3e9de5cac0d9a8a30b5b8f7c893e28ce9ea1c5639f6218c13ef"
+    },
+    {
+      "radio": "radicodex",
+      "country": "CL",
+      "path": "radicodex/CL.csv",
+      "channels": 7,
+      "dropped": 0,
+      "sha256": "0aa74c2770fa95089cf1c9d60df11cf6fbe739ccdc6fbd6b12bc735270dd1e6e"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "CL",
+      "path": "rt950pro/CL.csv",
+      "channels": 7,
+      "dropped": 0,
+      "sha256": "29bf898862ea9d90e3eae81945046e3979bcfb2853d311197b289ecc15a8bed8"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "CL",
+      "path": "uvk5v3/CL.csv",
+      "channels": 7,
+      "dropped": 0,
+      "sha256": "52df36298dcb94b55a79130a6a1ce3b8358cad14e8f0c698e701cc49fe4f7fa3"
+    },
+    {
+      "radio": "d878",
+      "country": "CL",
+      "path": "d878/CL.json",
+      "channels": 7,
+      "dropped": 0,
+      "sha256": "f0172d45be1a53b9ce69bb2ec543badb222cae851865ecd79fa49e62a5460417"
+    },
+    {
+      "radio": "ftx1",
+      "country": "CL",
+      "path": "ftx1/CL.csv",
+      "channels": 7,
+      "dropped": 0,
+      "sha256": "6d476307cc4f434444c0cedd96adc57381d6197cd903af9f7bf7091c6460c1b5"
+    },
+    {
+      "radio": "radicodex",
+      "country": "CO",
+      "path": "radicodex/CO.csv",
+      "channels": 4,
+      "dropped": 0,
+      "sha256": "259ffdc7ee94d9de11c584269dda3cb7881752a025b7220a2d8bb71cbace2267"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "CO",
+      "path": "rt950pro/CO.csv",
+      "channels": 4,
+      "dropped": 0,
+      "sha256": "656993b963fb61dd5e604dda0eafb7762a0e7d66c568efabbc3737a73b81cbe5"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "CO",
+      "path": "uvk5v3/CO.csv",
+      "channels": 4,
+      "dropped": 0,
+      "sha256": "fd41c4b99fab893ff65db435c03e204c5ee150e6d82ddf0af96599db7c5e2ac5"
+    },
+    {
+      "radio": "d878",
+      "country": "CO",
+      "path": "d878/CO.json",
+      "channels": 4,
+      "dropped": 0,
+      "sha256": "9acf93373f46396e6b9eb606a3db504c8d9cfa448cf746bfb70c997963e3ecef"
+    },
+    {
+      "radio": "ftx1",
+      "country": "CO",
+      "path": "ftx1/CO.csv",
+      "channels": 4,
+      "dropped": 0,
+      "sha256": "a4ea05b8cc0818181a369391c7cb4d3d237a6f3eee5c36706947f7943151e161"
+    },
+    {
+      "radio": "radicodex",
+      "country": "EC",
+      "path": "radicodex/EC.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "70d81bfda75b3079a74f98f9dbb1b48a3239a7a9481b297126d49d5a18a7a845"
+    },
+    {
+      "radio": "rt950pro",
+      "country": "EC",
+      "path": "rt950pro/EC.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "53f11e098b48b54fe19064e183233186c3e61bc5f6582374659b6d27acbb83a5"
+    },
+    {
+      "radio": "uvk5v3",
+      "country": "EC",
+      "path": "uvk5v3/EC.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "dc658a638f3ff9719aee542207956b08259435c2c21b0364478d7868f2d759e3"
+    },
+    {
+      "radio": "d878",
+      "country": "EC",
+      "path": "d878/EC.json",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "e0b56e64b4dcaf8e2b58b6871f84bd42058d73faf85dec211bf0acb4aad391aa"
+    },
+    {
+      "radio": "ftx1",
+      "country": "EC",
+      "path": "ftx1/EC.csv",
+      "channels": 2,
+      "dropped": 0,
+      "sha256": "e3eb1d7f4822d1b329cd1d1e94a5fc5a89fe19b250ff5adb576a25d652250f5f"
+    }
+  ]
+}

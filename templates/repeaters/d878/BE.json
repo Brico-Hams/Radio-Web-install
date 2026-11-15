@@ -1,0 +1,69 @@
+{
+  "format": "bricohams-anytone-project",
+  "version": 1,
+  "profile": "D878",
+  "airband": false,
+  "fmBroadcast": false,
+  "channels": [
+    {
+      "name": "ON0GBN",
+      "rx": "145.61250",
+      "tx": "145.01250",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/12742",
+      "zone": "East Flanders",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "ON0GBN",
+      "rx": "438.70000",
+      "tx": "431.10000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/12744",
+      "zone": "East Flanders",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "ON0LTV",
+      "rx": "145.68750",
+      "tx": "145.08750",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/22236",
+      "zone": "Luxembourg",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "ON0PHI",
+      "rx": "439.37500",
+      "tx": "431.77500",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/24038",
+      "zone": "Namur",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "format": "bricohams-anytone-project",
+  "version": 1,
+  "profile": "D878",
+  "airband": false,
+  "fmBroadcast": false,
+  "channels": [
+    {
+      "name": "PY2FTE",
+      "rx": "146.67000",
+      "tx": "146.67000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/22155",
+      "zone": "São Paulo",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "PY2KLM",
+      "rx": "146.00000",
+      "tx": "145.40000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/18297",
+      "zone": "São Paulo",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    }
+  ]
+}

@@ -19,12 +19,45 @@ class ChannelTemplatesTest {
         transmit, "AM", false, "ES-A", "", "LEXX", "https://ourairports.com/airports/LEXX/", "", "ES", "", "", "")
 
     @Test fun everyCountryLoadsWithRepeatersAirportsAndRegionBoundIdentifiers() {
-        for (country in ChannelTemplates.countries) {
-            val data = ChannelTemplates.dataset(country, text("${country.code}.json"), text("${country.code}-airports.json"))
+        // Countries without a generated file ("pendiente de fuente") and countries without airports are skipped; the legacy seven must exist.
+        for (country in ChannelTemplates.countries.filter { File(directory, "${it.code}.json").exists() }) {
+            val airportsFile = File(directory, "${country.code}-airports.json")
+            val data = ChannelTemplates.dataset(country, text("${country.code}.json"), if (airportsFile.exists()) airportsFile.readText() else null)
             val regions = data.regions.map { it.id }.toSet()
-            assertTrue(country.code, data.airports.isNotEmpty() && data.airports.all { it.regionId in regions && it.modulation == "AM" })
+            assertTrue(data.airports.all { it.regionId in regions && it.modulation == "AM" })
             assertTrue(data.airports.all { it.source.startsWith("https://ourairports.com/airports/") && it.license == "Public Domain" })
         }
+        for (code in listOf("ES", "GB", "US", "DE", "FR", "HU", "IT")) assertTrue(code, File(directory, "$code.json").exists())
+    }
+
+    @Test fun countryCatalogueHasUniqueCodesAndNoPmrInTheAmericas() {
+        val countries = ChannelTemplates.countries
+        assertEquals(countries.size, countries.map { it.code }.toSet().size)
+        assertEquals(listOf("ES", "GB", "US", "DE", "FR", "HU", "IT"), countries.take(7).map { it.code })
+        assertTrue(countries.filter { it.america }.map { it.code }.containsAll(listOf("US", "CA", "MX", "BR", "AR")))
+        assertTrue(countries.filter { it.america }.none { it.pmr })
+        assertTrue(countries.none { it.code == "RU" })
+    }
+
+    @Test fun coverageParsingExcludesCountriesPendingASource() {
+        val json = """{"format":"bricohams-template-coverage","version":1,"countries":[
+            {"code":"ES","name":"España","status":"ok"},{"code":"FR","name":"France","status":"pendiente de fuente","reason":"sin datos"},
+            {"code":"CA","name":"Canadá","status":"ok"}]}"""
+        val coverage = ChannelTemplates.coverage(json)
+        assertEquals(mapOf("ES" to "ok", "FR" to ChannelTemplates.PENDING, "CA" to "ok"), coverage)
+        assertEquals(listOf("ES", "CA"), ChannelTemplates.available(coverage).map { it.code })
+        assertEquals(listOf("ES", "GB", "US", "DE", "FR", "HU", "IT"), ChannelTemplates.available(ChannelTemplates.coverage(null)).map { it.code })
+    }
+
+    @Test fun repeaterIndexParsingOffersOnlyCountriesWithFiles() {
+        val json = """{"generatedAt":"2026-01-01T00:00:00.000Z","sources":[],
+            "radios":[{"id":"d878","name":"AT-D878","ext":"json"}],
+            "countries":[{"code":"ES","name":"España","status":"ok"},{"code":"FR","name":"France","status":"pendiente de fuente","reason":"x"}],
+            "files":[{"radio":"d878","country":"ES","path":"d878/ES.json","channels":3,"dropped":1,"sha256":"ab"}]}"""
+        val index = ChannelTemplates.repeaterIndex(json)
+        assertEquals(listOf("ES"), index.countriesWithFiles().map { it.code })
+        assertEquals("d878/ES.json", index.file("d878", "ES")?.path)
+        assertNull(index.file("d878", "FR"))
     }
 
     @Test fun zoneJoinsRepeatersAndAirportsAndPmrIsLastAndNeverUs() {

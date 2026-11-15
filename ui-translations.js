@@ -1480,6 +1480,18 @@ Se reemplazara el firmware de la ranura {0} por {1}. No apagues ni desconectes.|
 Se vaciara la ranura {0} ({1}). Se borra su firmware, no sus ajustes. Main no se modifica.|Slot {0} ({1}) will be emptied. Its firmware is erased, not its settings. Main is not modified.|L’emplacement {0} ({1}) sera vidé. Son firmware est effacé, pas ses réglages. Main n’est pas modifié.|Slot {0} ({1}) wird geleert. Seine Firmware wird gelöscht, nicht seine Einstellungen. Main wird nicht verändert.
 Se borrara el firmware de la ranura {0}, NO sus ajustes.|The firmware in slot {0} will be erased, NOT its settings.|Le firmware de l’emplacement {0} sera effacé, PAS ses réglages.|Die Firmware in Slot {0} wird gelöscht, NICHT ihre Einstellungen.
 `.trim().split("\n").map(line => line.split("|")));
+  // Prebuilt repeater templates per radio and country.
+  entries.push(...`
+Plantillas de repetidores|Repeater templates|Modèles de relais|Relais-Vorlagen
+Archivos ya preparados para cada radio. Los repetidores se graban solo RX. Los paises marcados como pendiente de fuente no tienen datos y no se pueden descargar.|Ready-made files for each radio. Repeaters are stored RX-only. Countries marked as pending source have no data and cannot be downloaded.|Fichiers prêts pour chaque radio. Les relais sont enregistrés en RX seul. Les pays marqués « pendiente de fuente » n’ont pas de données et ne peuvent pas être téléchargés.|Fertige Dateien für jedes Funkgerät. Relais werden nur RX gespeichert. Als „pendiente de fuente“ markierte Länder haben keine Daten und können nicht heruntergeladen werden.
+Radio|Radio|Radio|Funkgerät
+Pais o zona|Country or zone|Pays ou zone|Land oder Zone
+Descargar|Download|Télécharger|Herunterladen
+Aplicar|Apply|Appliquer|Anwenden
+Europa|Europe|Europe|Europa
+America|Americas|Amériques|Amerika
+pendiente de fuente|pending source|source en attente|Quelle ausstehend
+`.trim().split("\n").map(line => line.split("|")));
   root.BricohamsUITranslations = entries;
   if (typeof module === "object" && module.exports) module.exports = entries;
 })(typeof globalThis === "object" ? globalThis : this);

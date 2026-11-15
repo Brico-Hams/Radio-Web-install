@@ -29,6 +29,8 @@ nominelles TX dienen nur zur Information; Import sperrt TX. PMR446 ist optional,
 nur RX, nicht für die USA verfügbar und erlaubt kein Senden mit Amateurfunkgeräten.
 SAT ergänzt nur nominelle FM-Speicher, ohne Doppler.
 
+Die Relais-Vorlagen je Funkgerät decken ganz Europa (EU, EWR, Vereinigtes Königreich, Schweiz, Balkan, Ukraine, Moldau, Belarus, Kleinstaaten) und Amerika (USA nach Bundesstaat, Kanada nach Provinz, Mexiko, Mittelamerika, Karibik und Südamerika) ab. Russland und die Türkei sind nicht enthalten. Ein Land ohne nutzbare HearHam-Relais erhält keine Datei und steht als „pendiente de fuente“ in `data/channel-templates/coverage.json`; die Oberfläche blendet es aus oder deaktiviert es. Fertige Dateien liegen in `templates/repeaters/<radio>/<CC>.<ext>` (Index in `templates/repeaters/index.json` mit Kanälen, verworfenen Kanälen und SHA-256). Sie bleiben nur RX und beachten Bänder, Betriebsarten und Kapazität jedes Funkgeräts. Herunterladen oder Anwenden (Abschnitt „Relais-Vorlagen“ am Desktop/Web und im Android-Vorlagenbildschirm) nutzen diese Dateien. Flughäfen und Satellitenüberflüge bleiben auf die ursprünglichen sieben Länder beschränkt. Neu erzeugen: `npm run fetch:channel-templates`, danach `npm run templates:build`.
+
 Monatsüberflüge umfassen die verbleibenden Tage des UTC-Monats für 75 Referenzpunkte:
 europäische Städte und je einen ungefähren Punkt in den 50 US-Bundesstaaten und
 Washington DC. Sie gelten nicht landesweit. Koordinaten, Datum, TLE-Epoche und

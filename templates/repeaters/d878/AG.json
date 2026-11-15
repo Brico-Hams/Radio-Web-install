@@ -1,0 +1,24 @@
+{
+  "format": "bricohams-anytone-project",
+  "version": 1,
+  "profile": "D878",
+  "airband": false,
+  "fmBroadcast": false,
+  "channels": [
+    {
+      "name": "V21ARC",
+      "rx": "147.00000",
+      "tx": "147.60000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/884",
+      "zone": "Saint Mary",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    }
+  ]
+}

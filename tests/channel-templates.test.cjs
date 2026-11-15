@@ -13,6 +13,8 @@ const { buildForecast, referenceZones } = require("../scripts/fetch-template-pas
 const root = path.join(__dirname, "..");
 const read = file => fs.readFileSync(path.join(root, file), "utf8");
 const json = name => JSON.parse(read(`data/channel-templates/${name}.json`));
+// New countries only have data after the maintainer runs the fetch script; "pendiente de fuente" countries never have a file.
+const shippedCountries = R.TEMPLATE_COUNTRIES.filter(country => fs.existsSync(path.join(root, `data/channel-templates/${country.code}.json`)));
 const ring = [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]];
 const features = R.TEMPLATE_COUNTRIES.map((country, index) => ({
   properties: { iso_a2: country.code, iso_3166_2: `${country.code}-ONE`, name: "Test", latitude: 0.5, longitude: index * 2 + 0.5 },
@@ -33,7 +35,7 @@ test("country ingestion preserves offsets as nominal RX-only information and exc
     { ...row, id: 4, frequency: 900000000 }, { ...row, id: 5, latitude: NaN }, row,
     { ...row, id: 6, frequency: 145600001 }, { ...row, id: 7, offset: -600001 },
     { ...row, id: 8, offset: 290000000 }], features, 0);
-  assert.equal(output.length, 7);
+  assert.equal(output.length, R.TEMPLATE_COUNTRIES.length);
   const spain = output.find(file => file.country === "ES");
   assert.equal(spain.channels.length, 1);
   assert.equal(spain.rejected, 5);
@@ -64,7 +66,7 @@ test("regional preview, search and optional PMR do not select the whole country 
   assert.throws(() => R.countryTemplateChannels(usa, { pmr: true }), /PMR446/);
 });
 test("all shipped countries include source permission, coverage, valid regions and safe RX-only entries", () => {
-  for (const country of R.TEMPLATE_COUNTRIES) {
+  for (const country of shippedCountries) {
     const file = R.validateCountryTemplate(json(country.code), country.code);
     assert.equal(file.permission, "https://hearham.com/repeaters");
     assert(file.coverage.includes("not a complete"));
@@ -112,7 +114,7 @@ test("country forecast attaches explicit positions and the USA has a reference l
   assert.equal(forecast.operational, false);
   assert.equal(forecast.zones[0].latitude, observer.latitude);
   assert(forecast.zones[0].passes.length > 0);
-  for (const country of R.TEMPLATE_COUNTRIES) {
+  for (const country of shippedCountries.filter(item => fs.existsSync(path.join(root, `data/channel-templates/${item.code}-passes.json`)))) {
     const file = json(`${country.code}-passes`);
     assert.equal(file.format, "bricohams-monthly-passes");
     assert.equal(file.planningOnly, true);
@@ -181,7 +183,8 @@ test("weekly radio passes join 48 h predictPasses windows inside TLE validity fo
   assert.deepEqual(messages[0].result.passes, passes);
   assert.throws(() => R.weeklyTemplatePasses(satellites, murcia, now + 10 * 86400000), /TLE/);
 });
-const airportCountries = R.TEMPLATE_COUNTRIES.map(country => ({ ...country, airports: json(`${country.code}-airports`) }));
+const airportCountries = R.TEMPLATE_COUNTRIES.filter(country => fs.existsSync(path.join(root, `data/channel-templates/${country.code}-airports.json`)))
+  .map(country => ({ ...country, airports: json(`${country.code}-airports`) }));
 test("airport ingestion keeps only published AM carriers on the 25/8.33 kHz grid, with provenance and declared exclusions", () => {
   const { buildAirportTemplates, parseCSV, airbandFrequency } = require("../scripts/fetch-channel-templates.cjs");
   assert.deepEqual(airbandFrequency("118.00833"), { rx: "118.00833" });
@@ -228,7 +231,7 @@ test("all existing countries ship reproducible airport data bound to catalogue r
     assert.equal(file.rejected.total, Object.entries(file.rejected).filter(([key]) => key !== "total").reduce((sum, [, count]) => sum + count, 0));
   }
   const server = require("../server.cjs").ALLOWED_FILES;
-  for (const country of R.TEMPLATE_COUNTRIES) assert(server.includes(`data/channel-templates/${country.code}-airports.json`));
+  for (const country of airportCountries) assert(server.includes(`data/channel-templates/${country.code}-airports.json`));
 });
 test("regional preview joins repeaters and airports, keeps v1 snapshots unchanged and puts PMR446 last, never for the USA", () => {
   const file = buildTemplates([row], features)[0], airports = {

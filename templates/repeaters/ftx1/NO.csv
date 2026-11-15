@@ -1,0 +1,2 @@
+"Name","RX_MHz","TX_nominal_MHz","Modulation","RX_Only","Country","Region_ID","Locality","Identifier","Key","Source","Notes","Memory","Zone"
+"LA4LRR","145.63750","145.03750","FM","Yes","NO","NO-11","Stavanger","LA4LRR","hearham:13074","https://hearham.com/repeaters/13074","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","1","Rogaland"

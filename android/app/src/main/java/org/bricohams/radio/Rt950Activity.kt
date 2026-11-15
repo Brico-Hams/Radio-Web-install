@@ -571,10 +571,13 @@ class Rt950Activity : LocalizedActivity() {
     // (f) Template zones written to the radio
 
     private fun readAsset(name: String) = assets.open("channel-templates/$name").use { String(it.readBytes(), Charsets.UTF_8) }
+    // Airports and coverage exist only for some countries.
+    private fun readAssetOrNull(name: String) = try { readAsset(name) } catch (error: java.io.IOException) { null }
+    private val zpCountries by lazy { ChannelTemplates.available(ChannelTemplates.coverage(readAssetOrNull("coverage.json"))) }
 
     private fun buildZonePlan(body: LinearLayout) = section(body, R.string.rt950_zp_section) { card ->
         note(card, R.string.rt950_zp_help)
-        zpCountry = spinner(card, R.string.template_country, ChannelTemplates.countries.map { "${it.code} - ${it.name}" })
+        zpCountry = spinner(card, R.string.template_country, zpCountries.map { "${it.code} - ${it.name}" })
         zpRegion = spinner(card, R.string.rt950_zp_region, listOf(getString(R.string.template_all_zones)))
         zpAirports = check(card, R.string.template_airports, true)
         zpPmr = check(card, R.string.template_pmr)
@@ -602,8 +605,8 @@ class Rt950Activity : LocalizedActivity() {
 
     private fun loadZpCountry() {
         try {
-            val selected = ChannelTemplates.countries[zpCountry.selectedItemPosition]
-            val loaded = ChannelTemplates.dataset(selected, readAsset("${selected.code}.json"), readAsset("${selected.code}-airports.json"))
+            val selected = zpCountries[zpCountry.selectedItemPosition]
+            val loaded = ChannelTemplates.dataset(selected, readAsset("${selected.code}.json"), readAssetOrNull("${selected.code}-airports.json"))
             zpDataset = loaded
             zpRegions = loaded.regions.sortedBy { it.name }
             zpRegion.adapter = themedAdapter(listOf(getString(R.string.template_all_zones)) + zpRegions.map { it.name })

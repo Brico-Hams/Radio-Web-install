@@ -29,6 +29,19 @@ actividad y permisos. Los tonos y TX nominal son informativos; importar bloquea 
 PMR446 es opcional, solo RX, no aparece para EE. UU. y no autoriza transmitir con
 un equipo de radioaficionado. SAT anade solo memorias FM nominales, sin Doppler.
 
+Plantillas de repetidores por radio: cubren toda Europa (UE, EEE, Reino Unido, Suiza,
+Balcanes, Ucrania, Moldavia, Bielorrusia, microestados) y America (EE. UU. por estado,
+Canada por provincia, Mexico, Centroamerica, Caribe y Sudamerica). Rusia y Turquia
+no se incluyen. Los paises sin repetidores utilizables en HearHam no generan archivo
+y figuran como "pendiente de fuente" en `data/channel-templates/coverage.json`; la
+interfaz los oculta o desactiva. Los archivos ya preparados para cada radio estan en
+`templates/repeaters/<radio>/<CC>.<ext>` (indice en `templates/repeaters/index.json`,
+con canales, descartados y SHA-256). Siguen siendo solo RX y respetan bandas, modos y
+capacidad de cada radio. Descargar o Aplicar (seccion "Plantillas de repetidores" en
+el escritorio/web y en la pantalla de plantillas de Android) usan esos archivos.
+Aeropuertos y pases de satelite siguen limitados a los siete paises originales.
+Para regenerarlos: `npm run fetch:channel-templates` y despues `npm run templates:build`.
+
 Pases del mes muestra los dias restantes del mes UTC para 75 puntos de referencia:
 ciudades en Europa y un punto aproximado por cada uno de los 50 estados y Washington
 DC. No son pases validos para todo un pais. Cada lista incluye coordenadas, fecha,

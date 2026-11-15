@@ -1,0 +1,2 @@
+"Name","RX_MHz","TX_nominal_MHz","Modulation","RX_Only","Country","Region_ID","Locality","Identifier","Key","Source","Notes","Zone"
+"V31CP","147.80000","147.20000","FM","Yes","BZ","BZ-TOL","Big Falls","V31CP","hearham:12688","https://hearham.com/repeaters/12688","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","Toledo"

@@ -1,0 +1,2 @@
+"Name","RX_MHz","TX_nominal_MHz","Modulation","RX_Only","Country","Region_ID","Locality","Identifier","Key","Source","Notes","Zone","Slot","Channel_Number"
+"Z31MA","145.75000","145.15000","FM","Yes","MK","MK-09","Skopje, Macedonia","Z31MA","hearham:9202","https://hearham.com/repeaters/9202","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","Butel","1","1"

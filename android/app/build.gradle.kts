@@ -73,6 +73,15 @@ val syncChannelTemplates by tasks.registering(Sync::class) {
     into(layout.buildDirectory.dir("generated/channelTemplates/channel-templates"))
 }
 android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/channelTemplates"))
+// Prebuilt per-radio repeater files (templates/repeaters) are bundled the same way; README.md stays out of the APK.
+val syncRepeaterTemplates by tasks.registering(Sync::class) {
+    from(rootProject.projectDir.resolve("../templates/repeaters")) { exclude("README.md") }
+    into(layout.buildDirectory.dir("generated/channelTemplates/repeater-templates"))
+}
+tasks.configureEach {
+    if (name.startsWith("merge") && name.endsWith("Assets")) dependsOn(syncChannelTemplates, syncRepeaterTemplates)
+    if (name.startsWith("lintAnalyze") || name.startsWith("lintVitalAnalyze") || name.startsWith("generate") && name.endsWith("ReportModel") && name.contains("Lint")) dependsOn(syncRepeaterTemplates)
+}
 tasks.configureEach {
     if (name.startsWith("merge") && name.endsWith("Assets")) dependsOn(syncChannelTemplates)
     // Every lint analysis/model task reads the generated assets folder (lint, lintVital, *LintReportModel, *LintVitalReportModel).

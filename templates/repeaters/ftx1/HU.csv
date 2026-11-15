@@ -1,0 +1,3 @@
+"Name","RX_MHz","TX_nominal_MHz","Modulation","RX_Only","Country","Region_ID","Locality","Identifier","Key","Source","Notes","Memory","Zone"
+"HG0RUB","438.73750","431.14750","FM","Yes","HU","HU-BZ","Sátoraljaújhely","HG0RUB","hearham:16991","https://hearham.com/repeaters/16991","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","1","Borsod-Abaúj-Zemplén"
+"HG1RUC","439.12500","431.52500","FM","Yes","HU","HU-SH","Szombathely","HG1RUC","hearham:10768","https://hearham.com/repeaters/10768","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","2","Szombathely"

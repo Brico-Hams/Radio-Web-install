@@ -10,7 +10,7 @@ import java.text.Normalizer
  * never writes hardware and omits, with a count, whatever a model cannot represent with a safe mode and TX lock.
  */
 object ChannelTemplates {
-    data class Country(val code: String, val name: String, val pmr: Boolean)
+    data class Country(val code: String, val name: String, val pmr: Boolean, val america: Boolean = false)
     data class Region(val id: String, val name: String)
     data class Channel(val key: String, val name: String, val rx: String, val tx: String, val modulation: String,
         val narrow: Boolean, val regionId: String, val city: String, val ident: String, val source: String,
@@ -33,10 +33,62 @@ object ChannelTemplates {
     // The importer addresses memories 1-1024; same constant as QUANSHENG_MEMORIES in channel-templates.js.
     private const val QUANSHENG_MEMORIES = 1024
 
-    val countries = listOf(Country("ES", "España", true), Country("GB", "United Kingdom", true), Country("US", "United States", false),
-        Country("DE", "Deutschland", true), Country("FR", "France", true), Country("HU", "Magyarország", true), Country("IT", "Italia", true))
+    val countries = listOf(Country("ES", "España", true), Country("GB", "United Kingdom", true), Country("US", "United States", false, true),
+        Country("DE", "Deutschland", true), Country("FR", "France", true), Country("HU", "Magyarország", true), Country("IT", "Italia", true)) +
+        // Same codes, names and PMR446 flags as COUNTRIES in channel-templates.js (Europe first, then the Americas; no PMR446 there).
+        listOf("AL" to "Albania", "AD" to "Andorra", "AT" to "Austria", "BE" to "Bélgica", "BA" to "Bosnia y Herzegovina",
+            "BG" to "Bulgaria", "HR" to "Croacia", "CY" to "Chipre", "CZ" to "Chequia", "DK" to "Dinamarca", "EE" to "Estonia",
+            "FI" to "Finlandia", "GR" to "Grecia", "IE" to "Irlanda", "IS" to "Islandia", "XK" to "Kosovo", "LV" to "Letonia",
+            "LI" to "Liechtenstein", "LT" to "Lituania", "LU" to "Luxemburgo", "MT" to "Malta", "MD" to "Moldavia", "MC" to "Mónaco",
+            "ME" to "Montenegro", "NL" to "Países Bajos", "MK" to "Macedonia del Norte", "NO" to "Noruega", "PL" to "Polonia",
+            "PT" to "Portugal", "RO" to "Rumanía", "SM" to "San Marino", "RS" to "Serbia", "SK" to "Eslovaquia", "SI" to "Eslovenia",
+            "SE" to "Suecia", "CH" to "Suiza", "UA" to "Ucrania", "VA" to "Ciudad del Vaticano").map { Country(it.first, it.second, true) } +
+        Country("BY", "Bielorrusia", false) +
+        listOf("CA" to "Canadá", "MX" to "México", "BZ" to "Belice", "CR" to "Costa Rica", "SV" to "El Salvador", "GT" to "Guatemala",
+            "HN" to "Honduras", "NI" to "Nicaragua", "PA" to "Panamá", "AG" to "Antigua y Barbuda", "BS" to "Bahamas", "BB" to "Barbados",
+            "CU" to "Cuba", "DM" to "Dominica", "DO" to "República Dominicana", "GD" to "Granada", "HT" to "Haití", "JM" to "Jamaica",
+            "KN" to "San Cristóbal y Nieves", "LC" to "Santa Lucía", "VC" to "San Vicente y las Granadinas", "TT" to "Trinidad y Tobago",
+            "AR" to "Argentina", "BO" to "Bolivia", "BR" to "Brasil", "CL" to "Chile", "CO" to "Colombia", "EC" to "Ecuador",
+            "GY" to "Guyana", "PY" to "Paraguay", "PE" to "Perú", "SR" to "Surinam", "UY" to "Uruguay", "VE" to "Venezuela")
+            .map { Country(it.first, it.second, false, true) }
     // Same order and ids as the JS PROFILES table; the exporter model list.
     val profileIds = listOf("radicodex", "rt950pro", "uvk5v3", "d878", "ftx1")
+
+    const val PENDING = "pendiente de fuente"
+    // Countries that shipped before coverage.json existed; used when the coverage file is absent.
+    private val LEGACY_CODES = listOf("ES", "GB", "US", "DE", "FR", "HU", "IT")
+
+    /** code -> status from data/channel-templates/coverage.json; empty when the file is missing. */
+    fun coverage(json: String?): Map<String, String> {
+        if (json == null) return emptyMap()
+        val root = JSONObject(json)
+        require(root.getString("format") == "bricohams-template-coverage" && root.getInt("version") == 1)
+        return root.getJSONArray("countries").objects().associate { it.getString("code") to it.getString("status") }
+    }
+
+    /** Countries that can be loaded: status "ok"; countries marked "pendiente de fuente" are excluded. */
+    fun available(coverage: Map<String, String>): List<Country> =
+        if (coverage.isEmpty()) countries.filter { it.code in LEGACY_CODES } else countries.filter { coverage[it.code] == "ok" }
+
+    data class RepeaterFile(val radio: String, val country: String, val path: String, val channels: Int, val dropped: Int, val sha256: String)
+    data class RepeaterRadio(val id: String, val name: String)
+    data class RepeaterIndex(val radios: List<RepeaterRadio>, val countries: Map<String, String>, val files: List<RepeaterFile>) {
+        fun file(radio: String, country: String) = files.firstOrNull { it.radio == radio && it.country == country }
+        /** Countries with status "ok" that have at least one prebuilt file. */
+        fun countriesWithFiles(): List<Country> = ChannelTemplates.countries.filter { countries[it.code] == "ok" && files.any { f -> f.country == it.code } }
+    }
+
+    /** Parses templates/repeaters/index.json (written by scripts/build-repeater-templates.cjs). */
+    fun repeaterIndex(json: String): RepeaterIndex {
+        val root = JSONObject(json)
+        return RepeaterIndex(
+            root.getJSONArray("radios").objects().map { RepeaterRadio(it.getString("id"), it.getString("name")) },
+            root.getJSONArray("countries").objects().associate { it.getString("code") to it.getString("status") },
+            root.getJSONArray("files").objects().map {
+                RepeaterFile(it.getString("radio"), it.getString("country"), it.getString("path"), it.getInt("channels"),
+                    it.getInt("dropped"), it.getString("sha256"))
+            })
+    }
 
     fun profiles(json: String): List<Profile> {
         val root = JSONObject(json)

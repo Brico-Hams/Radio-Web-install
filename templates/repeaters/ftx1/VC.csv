@@ -1,0 +1,2 @@
+"Name","RX_MHz","TX_nominal_MHz","Modulation","RX_Only","Country","Region_ID","Locality","Identifier","Key","Source","Notes","Memory","Zone"
+"J88AZ","146.10000","146.70000","FM","Yes","VC","VC-04","Kingstown/Saint Vincent","J88AZ","hearham:9321","https://hearham.com/repeaters/9321","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","1","Saint George"

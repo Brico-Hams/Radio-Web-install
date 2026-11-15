@@ -1,0 +1,2 @@
+"Name","RX_MHz","TX_nominal_MHz","Modulation","RX_Only","Country","Region_ID","Locality","Identifier","Key","Source","Notes","Zone","Slot","Channel_Number"
+"V21ARC","147.00000","147.60000","FM","Yes","AG","AG-05","St. Johns, Antigua Antigua & Barbuda","V21ARC","hearham:884","https://hearham.com/repeaters/884","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","Saint Mary","1","1"

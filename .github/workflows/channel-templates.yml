@@ -28,7 +28,8 @@ jobs:
         run: |
           node scripts/fetch-channel-templates.cjs
           node scripts/fetch-template-passes.cjs
-          node --test tests/channel-templates.test.cjs
+          node scripts/build-repeater-templates.cjs
+          node --test tests/channel-templates.test.cjs tests/repeater-templates.test.cjs
       - name: Publish only validated data
         env:
           GH_TOKEN: ${{ github.token }}
@@ -36,7 +37,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/channel-templates
+          git add data/channel-templates templates/repeaters
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "Refresh country templates and monthly satellite forecasts" \
             -m "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"

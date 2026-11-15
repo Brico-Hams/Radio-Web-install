@@ -21,4 +21,16 @@
     <string name="template_error">Error de plantilla: %1$s</string>
     <string name="template_anytone_capacity">AnyTone admite 4000 canales por proyecto. Selecciona una zona.</string>
     <string name="template_zone_line">Zona %1$d: %2$s (%3$d canales)</string>
+    <string name="template_repeaters_title">Plantillas de repetidores</string>
+    <string name="template_repeaters_help">Archivos ya preparados para cada radio. Los repetidores se graban solo RX. Los países pendientes de fuente no tienen datos y no aparecen: %1$s.</string>
+    <string name="template_repeaters_radio">Radio</string>
+    <string name="template_repeaters_country">País o zona</string>
+    <string name="template_repeaters_download">Descargar</string>
+    <string name="template_repeaters_apply">Aplicar</string>
+    <string name="template_repeaters_group_europe">Europa</string>
+    <string name="template_repeaters_group_america">América</string>
+    <string name="template_repeaters_none">Sin plantillas de repetidores en esta versión.</string>
+    <string name="template_repeaters_saved">Guardados %1$d canales (%2$d descartados). Solo RX. No se ha programado ninguna radio.</string>
+    <string name="template_repeaters_applied">Selección cargada: %1$s para %2$s. Revisa la vista previa y exporta.</string>
+    <string name="template_repeaters_corrupt">El archivo de la plantilla no coincide con su SHA-256.</string>
 </resources>

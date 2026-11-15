@@ -47,7 +47,7 @@ async function main() {
     "Actualizacion incompleta de satelites: no se publica una prevision parcial.");
   fs.writeFileSync(path.join(directory, "satellites.json"), JSON.stringify(satellites) + "\n");
   const now = Date.now();
-  for (const country of R.TEMPLATE_COUNTRIES) {
+  for (const country of R.TEMPLATE_COUNTRIES.filter(item => cities[item.code] || item.code === "US")) {
     const template = R.validateCountryTemplate(JSON.parse(fs.readFileSync(path.join(directory, `${country.code}.json`), "utf8")), country.code);
     const forecast = buildForecast(satellites, referenceZones(template), now);
     fs.writeFileSync(path.join(directory, `${country.code}-passes.json`), JSON.stringify(forecast) + "\n");

@@ -1,0 +1,2 @@
+"Name","RX_MHz","TX_nominal_MHz","Modulation","RX_Only","Country","Region_ID","Locality","Identifier","Key","Source","Notes","Memory","Zone"
+"HQ2EEB","147.35000","147.95000","FM","Yes","HN","HN-YO","El Progreso Yoro","HQ2EEB","hearham:13400","https://hearham.com/repeaters/13400","RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence.","1","Yoro"

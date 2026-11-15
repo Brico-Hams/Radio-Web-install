@@ -1,0 +1,54 @@
+{
+  "format": "bricohams-anytone-project",
+  "version": 1,
+  "profile": "D878",
+  "airband": false,
+  "fmBroadcast": false,
+  "channels": [
+    {
+      "name": "OZ8ERA",
+      "rx": "145.30000",
+      "tx": "145.30000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/673",
+      "zone": "Hovedstaden",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "OZ1ARQ",
+      "rx": "433.25000",
+      "tx": "433.25000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/678",
+      "zone": "Sjaælland",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "5P1NALS/REP",
+      "rx": "145.60000",
+      "tx": "145.00000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/25037",
+      "zone": "Syddanmark",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    }
+  ]
+}

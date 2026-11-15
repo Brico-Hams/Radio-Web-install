@@ -3,8 +3,34 @@
   const R = root.RadioWorkspace;
   const COUNTRIES = Object.freeze([
     ["ES", "España", true], ["GB", "UK", true], ["US", "Estados Unidos", false],
-    ["DE", "Alemania", true], ["FR", "Francia", true], ["HU", "Hungría", true], ["IT", "Italia", true]
+    ["DE", "Alemania", true], ["FR", "Francia", true], ["HU", "Hungría", true], ["IT", "Italia", true],
+    // Europe (EU, EEA, UK, CH, Balkans, eastern neighbours, microstates). PMR446 is a CEPT harmonised service.
+    // Belarus is not a CEPT member, so it gets no PMR446 preset. TR and RU are not split into a European part and stay out.
+    ["AL", "Albania", true], ["AD", "Andorra", true], ["AT", "Austria", true], ["BY", "Bielorrusia", false], ["BE", "Bélgica", true],
+    ["BA", "Bosnia y Herzegovina", true], ["BG", "Bulgaria", true], ["HR", "Croacia", true], ["CY", "Chipre", true],
+    ["CZ", "Chequia", true], ["DK", "Dinamarca", true], ["EE", "Estonia", true], ["FI", "Finlandia", true], ["GR", "Grecia", true],
+    ["IE", "Irlanda", true], ["IS", "Islandia", true], ["XK", "Kosovo", true], ["LV", "Letonia", true], ["LI", "Liechtenstein", true],
+    ["LT", "Lituania", true], ["LU", "Luxemburgo", true], ["MT", "Malta", true], ["MD", "Moldavia", true], ["MC", "Mónaco", true],
+    ["ME", "Montenegro", true], ["NL", "Países Bajos", true], ["MK", "Macedonia del Norte", true], ["NO", "Noruega", true],
+    ["PL", "Polonia", true], ["PT", "Portugal", true], ["RO", "Rumanía", true], ["SM", "San Marino", true], ["RS", "Serbia", true],
+    ["SK", "Eslovaquia", true], ["SI", "Eslovenia", true], ["SE", "Suecia", true], ["CH", "Suiza", true], ["UA", "Ucrania", true],
+    ["VA", "Ciudad del Vaticano", true],
+    // Americas (US above): regions are states, provinces or the first-level divisions of Natural Earth. No PMR446 outside Europe.
+    ["CA", "Canadá", false], ["MX", "México", false],
+    ["BZ", "Belice", false], ["CR", "Costa Rica", false], ["SV", "El Salvador", false], ["GT", "Guatemala", false],
+    ["HN", "Honduras", false], ["NI", "Nicaragua", false], ["PA", "Panamá", false],
+    ["AG", "Antigua y Barbuda", false], ["BS", "Bahamas", false], ["BB", "Barbados", false], ["CU", "Cuba", false],
+    ["DM", "Dominica", false], ["DO", "República Dominicana", false], ["GD", "Granada", false], ["HT", "Haití", false],
+    ["JM", "Jamaica", false], ["KN", "San Cristóbal y Nieves", false], ["LC", "Santa Lucía", false],
+    ["VC", "San Vicente y las Granadinas", false], ["TT", "Trinidad y Tobago", false],
+    ["AR", "Argentina", false], ["BO", "Bolivia", false], ["BR", "Brasil", false], ["CL", "Chile", false], ["CO", "Colombia", false],
+    ["EC", "Ecuador", false], ["GY", "Guyana", false], ["PY", "Paraguay", false], ["PE", "Perú", false], ["SR", "Surinam", false],
+    ["UY", "Uruguay", false], ["VE", "Venezuela", false]
   ].map(([code, name, pmr]) => ({ code, name, pmr })));
+  const AMERICAN_CODES = Object.freeze(["US", "CA", "MX", "BZ", "CR", "SV", "GT", "HN", "NI", "PA", "AG", "BS", "BB", "CU", "DM", "DO", "GD",
+    "HT", "JM", "KN", "LC", "VC", "TT", "AR", "BO", "BR", "CL", "CO", "EC", "GY", "PY", "PE", "SR", "UY", "VE"]);
+  // "america" for the countries above, "europa" for the rest; the UI groups its selectors with it.
+  const templateGroup = code => AMERICAN_CODES.includes(code) ? "america" : "europa";
   function validateCountryTemplate(file, code) {
     R.assert(file?.format === "bricohams-country-template" && file.version === 1 &&
       file.country === code && COUNTRIES.some(country => country.code === code) &&
@@ -349,7 +375,7 @@
     }
     return passes.sort((a, b) => a.start - b.start);
   }
-  Object.assign(R, { TEMPLATE_COUNTRIES: COUNTRIES, TEMPLATE_PROFILES: PROFILES, cbChannels, validateCountryTemplate, validateAirportTemplate, airportChannels,
+  Object.assign(R, { TEMPLATE_COUNTRIES: COUNTRIES, TEMPLATE_PROFILES: PROFILES, templateGroup, cbChannels, validateCountryTemplate, validateAirportTemplate, airportChannels,
     countryTemplateChannels, prepareTemplateExport, templateZonePlan, templateImportChannels, templateExportFile, templateModulation,
     monthlyTemplatePasses, weeklyTemplatePasses });
   if (typeof module !== "undefined") module.exports = R;

@@ -29,6 +29,8 @@ et TX nominal sont informatifs ; l'import bloque TX. PMR446 est facultatif, RX s
 absent pour les États-Unis et n'autorise pas l'émission avec un talkie radioamateur.
 SAT ajoute seulement des mémoires FM nominales, sans Doppler.
 
+Les modèles de relais par radio couvrent toute l'Europe (UE, EEE, Royaume-Uni, Suisse, Balkans, Ukraine, Moldavie, Biélorussie, micro-États) et les Amériques (États-Unis par État, Canada par province, Mexique, Amérique centrale, Caraïbes et Amérique du Sud). La Russie et la Turquie ne sont pas incluses. Un pays sans relais HearHam exploitable n'a aucun fichier et figure comme « pendiente de fuente » dans `data/channel-templates/coverage.json` ; l'interface le masque ou le désactive. Les fichiers prêts à l'emploi sont dans `templates/repeaters/<radio>/<CC>.<ext>` (index dans `templates/repeaters/index.json` avec canaux, écartés et SHA-256). Ils restent en RX seul et respectent bandes, modes et capacité de chaque radio. Télécharger ou Appliquer (section « Modèles de relais » sur bureau/web et sur l'écran des modèles Android) utilisent ces fichiers. Aéroports et passages de satellites restent limités aux sept pays d'origine. Pour régénérer : `npm run fetch:channel-templates`, puis `npm run templates:build`.
+
 Les passages couvrent les jours restants du mois UTC pour 75 points de référence :
 villes européennes et un point approximatif dans chacun des 50 États américains et
 Washington DC. Ils ne sont pas valables pour tout un pays. Coordonnées, date, époque

@@ -21,4 +21,16 @@
     <string name="template_error">Template error: %1$s</string>
     <string name="template_anytone_capacity">AnyTone supports 4000 channels per project. Select a region.</string>
     <string name="template_zone_line">Zone %1$d: %2$s (%3$d channels)</string>
+    <string name="template_repeaters_title">Repeater templates</string>
+    <string name="template_repeaters_help">Ready-made files for each radio. Repeaters are stored RX-only. Countries pending a source have no data and are not listed: %1$s.</string>
+    <string name="template_repeaters_radio">Radio</string>
+    <string name="template_repeaters_country">Country or zone</string>
+    <string name="template_repeaters_download">Download</string>
+    <string name="template_repeaters_apply">Apply</string>
+    <string name="template_repeaters_group_europe">Europe</string>
+    <string name="template_repeaters_group_america">Americas</string>
+    <string name="template_repeaters_none">No repeater templates in this version.</string>
+    <string name="template_repeaters_saved">Saved %1$d channels (%2$d dropped). RX-only. No radio was programmed.</string>
+    <string name="template_repeaters_applied">Selection loaded: %1$s for %2$s. Review the preview and export.</string>
+    <string name="template_repeaters_corrupt">The template file does not match its SHA-256.</string>
 </resources>

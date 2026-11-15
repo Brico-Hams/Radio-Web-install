@@ -21,4 +21,16 @@
     <string name="template_error">Vorlagenfehler: %1$s</string>
     <string name="template_anytone_capacity">AnyTone erlaubt 4000 Kanäle pro Projekt. Wähle eine Zone.</string>
     <string name="template_zone_line">Zone %1$d: %2$s (%3$d Kanäle)</string>
+    <string name="template_repeaters_title">Relais-Vorlagen</string>
+    <string name="template_repeaters_help">Fertige Dateien für jedes Funkgerät. Relais werden nur RX gespeichert. Länder mit „pendiente de fuente“ haben keine Daten und werden nicht aufgelistet: %1$s.</string>
+    <string name="template_repeaters_radio">Funkgerät</string>
+    <string name="template_repeaters_country">Land oder Zone</string>
+    <string name="template_repeaters_download">Herunterladen</string>
+    <string name="template_repeaters_apply">Anwenden</string>
+    <string name="template_repeaters_group_europe">Europa</string>
+    <string name="template_repeaters_group_america">Amerika</string>
+    <string name="template_repeaters_none">Keine Relais-Vorlagen in dieser Version.</string>
+    <string name="template_repeaters_saved">%1$d Kanäle gespeichert (%2$d verworfen). Nur RX. Es wurde kein Funkgerät programmiert.</string>
+    <string name="template_repeaters_applied">Auswahl geladen: %1$s für %2$s. Vorschau prüfen und exportieren.</string>
+    <string name="template_repeaters_corrupt">Die Vorlagendatei stimmt nicht mit ihrem SHA-256 überein.</string>
 </resources>

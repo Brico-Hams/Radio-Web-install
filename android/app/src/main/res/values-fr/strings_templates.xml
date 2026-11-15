@@ -21,4 +21,16 @@
     <string name="template_error">Erreur de modèle : %1$s</string>
     <string name="template_anytone_capacity">AnyTone accepte 4000 canaux par projet. Sélectionnez une zone.</string>
     <string name="template_zone_line">Zone %1$d : %2$s (%3$d canaux)</string>
+    <string name="template_repeaters_title">Modèles de relais</string>
+    <string name="template_repeaters_help">Fichiers prêts pour chaque radio. Les relais sont enregistrés en RX seul. Les pays « pendiente de fuente » n\'ont pas de données et ne sont pas listés : %1$s.</string>
+    <string name="template_repeaters_radio">Radio</string>
+    <string name="template_repeaters_country">Pays ou zone</string>
+    <string name="template_repeaters_download">Télécharger</string>
+    <string name="template_repeaters_apply">Appliquer</string>
+    <string name="template_repeaters_group_europe">Europe</string>
+    <string name="template_repeaters_group_america">Amériques</string>
+    <string name="template_repeaters_none">Aucun modèle de relais dans cette version.</string>
+    <string name="template_repeaters_saved">%1$d canaux enregistrés (%2$d écartés). RX seul. Aucune radio n\'a été programmée.</string>
+    <string name="template_repeaters_applied">Sélection chargée : %1$s pour %2$s. Vérifiez l\'aperçu puis exportez.</string>
+    <string name="template_repeaters_corrupt">Le fichier du modèle ne correspond pas à son SHA-256.</string>
 </resources>
