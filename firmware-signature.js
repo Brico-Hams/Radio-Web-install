@@ -4,7 +4,7 @@
   // <name>.sig over the raw bytes, SHA256SUMS and SHA256SUMS.sig. Public key only; the private key never reaches the web.
   const FirmwareSignature = {
     // Raw 32-byte Ed25519 public key as 64 hex digits (`node scripts/sign-firmware.cjs keygen`). Empty = signatures not enforced yet.
-    PUBLIC_KEY_HEX: "f8129e54dc0e7d800efa6321c782dfff7482af10eb961c98f01eb127555bba8f",
+    PUBLIC_KEY_HEX: "1639849d1fae8c6e2c0cd9f78be554a282ac81c11d40dbc02a4ceb8484799fb1",
     VERIFIED: "Firma verificada",
   };
   const fail = message => { throw new Error(message); };
