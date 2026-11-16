@@ -284,3 +284,22 @@ body:not([data-advanced]) [data-advanced-only] { display: none !important; }
   .slots-actions .button { flex: 1 1 auto; }
 }
 @media (forced-colors: active) { .slot-badge { border-color: CanvasText; } }
+/* Readability layer: no meta text under 12px, 14px body copy in panels, readable line length, clear disabled state,
+   and 44px targets on touch screens (inline links inside sentences are exempt, WCAG 2.5.8). */
+.eyebrow, .tool-card .eyebrow, .detail-hero > p.eyebrow { font-size: 12px; letter-spacing: .08em; }
+.pill, .quansheng .pill, .mode-badge, .local-badge, .topbar-right > .pill, .brand-product, .slot-badge { font-size: 12px; letter-spacing: .03em; }
+.step-badge, .step-num, .bank-map span { font-size: 12px; }
+.card-note, footer, .file-picker span, .slots-divider, #radio-log, th, .table-scroll .button, td .guide-tab, .slots-actions .button, #backup-list button { font-size: 13px; }
+.sidebar nav a, .steps .step-view, .guide-tab, .back, #topbar-status, .ui-language, .appearance-control { font-size: 14px; }
+.panel > p, .connection > p, .connection > label:not(.check), .operations label, .model-help, .check, .guide-steps, .feature-list,
+.card-description, .steps-summary p, .notice p, .firmware-note, .slots-panel > p, .slots-progress p, #backup-list li > span { font-size: 14px; }
+.hero > p, .detail-hero > p { font-size: 16px; }
+.hero > p, .detail-hero > p, .panel > p, .connection > p, .notice p, .model-help { max-width: 72ch; }
+.button:disabled, .button.primary:disabled { opacity: 1; background: var(--surface-soft); border-color: var(--line); color: var(--muted); }
+@media (pointer: coarse) {
+  .guide-tab, .back, .table-scroll .button, td .guide-tab, .slots-actions .button, #backup-list button, .topbar-connect { min-height: 44px; }
+  footer a, .sources a { display: inline-block; padding: 11px 0; }
+  input[type=checkbox], input[type=radio] { width: 24px; height: 24px; }
+}
+/* Tables placed directly in a panel (TK-11) scroll inside it instead of widening the page on phones. */
+.panel > table { display: block; max-width: 100%; overflow-x: auto; }

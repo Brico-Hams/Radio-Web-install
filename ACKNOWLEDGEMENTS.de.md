@@ -21,6 +21,7 @@ Die nativen Werkzeuge für Viewer/Tastatur, Neustart, Wartung, DFU, App-Verwaltu
 | Handbücher von Yaesu (FT-817ND/818ND/857D/897D, FTX-1 CAT 2508-C) und Icom (IC-705 CI-V Rev. 6) | Multi-Radio-CAT der APK, nach diesen Dokumenten geschrieben | Herstellerdokumentation |
 | CAT-Handbücher von QRP Labs (QMX Firmware 1.04_003, QDX Rev. 1.06) | QMX/QMX+- und QDX/QDX-M-CAT der APK, nach diesen Dokumenten geschrieben | Herstellerdokumentation |
 | [FT8CN](https://github.com/N0BOY/FT8CN) (BG7YOZ) | Nur untersucht, um zu verstehen, wie es CAT, USB-Seriell und Audio unter Android löst; kein Code und keine Ressourcen übernommen | MIT |
+| [OscarWatch · magicbug/OscarWatch-Tracker](https://github.com/magicbug/OscarWatch-Tracker) (© 2026 Peter Goodhall, MM9SQL) | Nur Funktionsideen: Überflüge als `.ics`-Kalender exportieren, gemeinsame Überflüge mit einer DX-Station per Locator und Tag/Nacht-Grenze auf der Karte. Von Grund auf in Kotlin und JavaScript nach RFC 5545 und astronomischen Standardformeln neu implementiert; kein C#-Code, Text oder Asset wird kopiert oder übersetzt | AGPL-3.0-or-later |
 
 ## Abhängigkeiten
 

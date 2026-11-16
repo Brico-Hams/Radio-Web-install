@@ -44,6 +44,30 @@ object WorldMap {
         }
     }
     fun normalize(longitude: Double) = ((longitude + 540) % 360) - 180
+    /** Point on Earth where the sun is at the zenith: (latitude, longitude) in degrees. */
+    fun subsolar(time: Long): Pair<Double, Double> {
+        val jd = PassSky.julianDay(time)
+        val (ra, dec) = PassSky.sunEquatorial(jd)
+        val gmst = (280.46061837 + 360.98564736629 * (jd - 2451545.0)) % 360
+        return Pair(dec, normalize(ra - gmst))
+    }
+    /** Night side as a closed lon/lat polygon: the terminator west to east, then round the pole that is in darkness. */
+    fun night(time: Long, steps: Int = 180): List<Pair<Double, Double>> {
+        val (sunLat, sunLon) = subsolar(time)
+        val dec = if (abs(sunLat) < 0.01) (if (sunLat < 0) -0.01 else 0.01) else sunLat
+        val tanDec = Math.tan(Math.toRadians(dec))
+        val polygon = ArrayList<Pair<Double, Double>>()
+        for (i in 0..steps) {
+            val lon = -180.0 + 360.0 * i / steps
+            val lat = Math.toDegrees(Math.atan(-cos(Math.toRadians(lon - sunLon)) / tanDec))
+            polygon.add(Pair(lon, lat))
+        }
+        val pole = if (dec > 0) -90.0 else 90.0
+        polygon.add(Pair(180.0, pole))
+        polygon.add(Pair(-180.0, pole))
+        polygon.add(polygon.first())
+        return polygon
+    }
     /** Splits a lon/lat line where it wraps across the antimeridian, so it is not drawn across the whole map. */
     fun split(points: List<Pair<Double, Double>>): List<List<Pair<Double, Double>>> {
         val result = ArrayList<MutableList<Pair<Double, Double>>>()
@@ -65,8 +89,16 @@ class WorldMapView(context: Context) : View(context) {
         set(value) { field = value; rebuild(); invalidate() }
     var observer: ObserverPosition? = null
         set(value) { field = value; invalidate() }
+    var time: Long = System.currentTimeMillis()
+        set(value) { field = value; rebuild(); invalidate() }
     var onSelect: (Int) -> Unit = {}
     private val density = resources.displayMetrics.density
+    private val nightPath = Path()
+    private val shade = Paint().apply {
+        val dark = resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+        color = Color.argb(if (dark) 102 else 72, 0, 0, 0)
+    }
     private val landPath = Path()
     private val footprints = Path()
     private val selectedFootprint = Path()
@@ -102,8 +134,9 @@ class WorldMapView(context: Context) : View(context) {
         }
     }
     private fun rebuild() {
-        landPath.reset(); footprints.reset(); selectedFootprint.reset(); trackPath.reset()
+        landPath.reset(); footprints.reset(); selectedFootprint.reset(); trackPath.reset(); nightPath.reset()
         if (width == 0) return
+        trace(nightPath, WorldMap.night(time, 120), true)
         land.forEach { trace(landPath, it, true) }
         for (satellite in satellites) {
             // Beyond a dozen satellites the rings hide the map: only the selected one keeps its footprint.
@@ -118,6 +151,7 @@ class WorldMapView(context: Context) : View(context) {
         for (step in 1 until 12) canvas.drawLine(width * step / 12f, 0f, width * step / 12f, height.toFloat(), grid)
         for (step in 1 until 6) canvas.drawLine(0f, height * step / 6f, width.toFloat(), height * step / 6f, grid)
         canvas.drawPath(landPath, ground)
+        canvas.drawPath(nightPath, shade)
         canvas.drawPath(footprints, ring)
         canvas.drawPath(trackPath, track)
         canvas.drawPath(selectedFootprint, active)

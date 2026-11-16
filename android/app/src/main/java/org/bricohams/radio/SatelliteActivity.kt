@@ -34,6 +34,7 @@ import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import java.io.File
 import java.io.IOException
 import java.time.Instant
@@ -51,6 +52,7 @@ class SatelliteActivity : LocalizedActivity() {
         private const val DEFAULT_DOWNLINK = 145800000L
         private const val CATALOG_REFRESH_MS = 86400000L
         private const val RETRY_DELAY_MS = 900000L
+        private const val REQUEST_CALENDAR = 62
         const val EXTRA_OPEN_PLAN = "open-pass-plan"
     }
     private enum class Page { PASSES, MAP, SATELLITES, SETTINGS, DETAIL }
@@ -103,6 +105,13 @@ class SatelliteActivity : LocalizedActivity() {
     private lateinit var mapInfo: TextView
     private var mapSelected: Int? = null
     private var pendingExport: File? = null
+    private var pendingCalendar: List<PassTrack> = emptyList()
+    private var liveDx: TextView? = null
+    private var liveDxWindow: TextView? = null
+    private var dxStation: ObserverPosition? = null
+    private var dxLocator = ""
+    private var dxBusy = false
+    private var dxLastMs = 0L
     private var ticks = 0
     private var downloading = false
     private var refreshingMap = false
@@ -332,6 +341,13 @@ class SatelliteActivity : LocalizedActivity() {
                     setPadding(0, Brand.dp(this@SatelliteActivity, 24), 0, 0)
                 })
                 if (catalog.isEmpty()) addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_download), true) { download() })
+            } else {
+                addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_export_calendar)) {
+                    pendingCalendar = upcoming
+                    startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE); type = "text/calendar"; putExtra(Intent.EXTRA_TITLE, "radicodex-pases.ics")
+                    }, REQUEST_CALENDAR)
+                }.apply { contentDescription = getString(R.string.satellite_export_calendar_description) })
             }
             for (track in upcoming) {
                 val pass = track.plan.pass
@@ -402,6 +418,22 @@ class SatelliteActivity : LocalizedActivity() {
                     DateTimeFormatter.ofPattern("dd/MM HH:mm:ss", Locale.ROOT).withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(pass.aos.time)),
                     pass.maximum.rangeKm, pass.maximum.elevation, pass.aos.azimuth, pass.los.azimuth)
             }.also { addView(it) }
+            liveDx = null; liveDxWindow = null; dxStation = null; dxBusy = false; dxLastMs = 0L
+            dxLocator = preferences.getString("dx-locator", "").orEmpty()
+            if (Maidenhead.isValid(dxLocator)) {
+                val place = Maidenhead.toLatLon(dxLocator)
+                val station = try { ObserverPosition(place.latitude, place.longitude, 0.0).validated() } catch (error: IllegalArgumentException) { null }
+                if (station != null) {
+                    dxStation = station
+                    liveDx = Brand.text(this@SatelliteActivity, 15f, colors.accent, true).apply {
+                        visibility = View.GONE
+                    }.also { addView(it) }
+                    liveDxWindow = Brand.text(this@SatelliteActivity, 14f, colors.muted).apply {
+                        visibility = View.GONE
+                    }.also { addView(it) }
+                    computeMutualWindow(track, station)
+                }
+            }
             liveActions = Brand.row(this@SatelliteActivity).also { addView(it) }
             liveHelp = Brand.text(this@SatelliteActivity, 13f).apply {
                 setText(R.string.pass_help_text); visibility = View.GONE
@@ -620,6 +652,7 @@ class SatelliteActivity : LocalizedActivity() {
                     return@runOnUiThread
                 }
                 map.observer = observer
+                map.time = now
                 map.satellites = points
                 map.selected = focus
                 val chosenPoint = points.firstOrNull { it.norad == focus }
@@ -694,14 +727,15 @@ class SatelliteActivity : LocalizedActivity() {
                 setText(label); setPadding(0, Brand.dp(this@SatelliteActivity, 14), 0, Brand.dp(this@SatelliteActivity, 4))
             })
             val fields = LinkedHashMap<String, EditText>()
-            fun field(key: String, id: Int, label: Int, initial: String) {
+            fun field(key: String, id: Int, label: Int, initial: String, numeric: Boolean = true) {
                 addView(Brand.text(this@SatelliteActivity, 14f, colors.muted).apply { setText(label) })
                 val input = EditText(this@SatelliteActivity).apply {
                     this.id = id
                     setText(preferences.getString(key, initial))
                     setTextColor(colors.text)
                     setSingleLine(true)
-                    inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+                    inputType = if (numeric) InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+                        else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
                 }
                 fields[key] = input; addView(input)
             }
@@ -710,6 +744,8 @@ class SatelliteActivity : LocalizedActivity() {
             field("longitude", R.id.satellite_longitude, R.string.satellite_longitude, "")
             field("height", R.id.satellite_height, R.string.satellite_height, "0")
             field("minimum", R.id.satellite_minimum, R.string.satellite_minimum, "10")
+            field("dx-locator", View.generateViewId(), R.string.satellite_dx_locator, "", numeric = false)
+            val dxInput = fields.remove("dx-locator")!!.apply { contentDescription = getString(R.string.satellite_dx_locator_description) }
             addView(Brand.button(this@SatelliteActivity, getString(R.string.satellite_use_gps)) { useGps(fields) })
             gpsCancel = Brand.button(this@SatelliteActivity, getString(R.string.satellite_gps_cancel)) { phoneLocation?.finishNow() }
                 .apply { visibility = View.GONE }
@@ -732,6 +768,9 @@ class SatelliteActivity : LocalizedActivity() {
                     require(minimum.isFinite() && minimum in 0.0..60.0) { getString(R.string.satellite_minimum_invalid) }
                     val editor = preferences.edit()
                     fields.forEach { (key, input) -> editor.putString(key, input.text.toString().trim()) }
+                    val dx = dxInput.text.toString().trim()
+                    require(dx.isEmpty() || Maidenhead.isValid(dx)) { getString(R.string.profile_locator_invalid) }
+                    if (dx.isEmpty()) editor.remove("dx-locator") else editor.putString("dx-locator", Maidenhead.format(dx))
                     check(editor.commit()) { getString(R.string.satellite_preferences_error) }
                     dirty = true
                     show(Page.PASSES)
@@ -1054,9 +1093,50 @@ class SatelliteActivity : LocalizedActivity() {
         else -> R.string.pass_aim_acc_unreliable
     })
 
+    private fun computeMutualWindow(track: PassTrack, station: ObserverPosition) {
+        val pass = track.plan.pass
+        worker.execute {
+            val text = try {
+                val from = pass.aos.time - 30 * 60_000L
+                val to = pass.los.time + 30 * 60_000L
+                val dxPasses = orbit(track.plan.tle, station).predict(from, 2, 0.0).filter { it.los.time >= from && it.aos.time <= to }
+                val window = MutualPasses.intersect(listOf(pass), dxPasses).firstOrNull()
+                if (window == null) getString(R.string.satellite_dx_no_window) else {
+                    val clock = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT).withZone(ZoneId.systemDefault())
+                    getString(R.string.satellite_dx_window, clock.format(Instant.ofEpochMilli(window.start)),
+                        clock.format(Instant.ofEpochMilli(window.end)), window.maxHere, window.maxDx)
+                }
+            } catch (error: IllegalArgumentException) { null }
+            catch (error: IOException) { null }
+            runOnUiThread {
+                if (isDestroyed || opened !== track) return@runOnUiThread
+                liveDxWindow?.let { it.text = text.orEmpty(); it.visibility = if (text == null) View.GONE else View.VISIBLE }
+            }
+        }
+    }
+
+    private fun updateDx(track: PassTrack, now: Long) {
+        val station = dxStation ?: return
+        if (dxBusy || now - dxLastMs < 1000) return
+        dxBusy = true; dxLastMs = now
+        worker.execute {
+            val text = try {
+                val look = orbit(track.plan.tle, station).look(now)
+                getString(R.string.satellite_dx_look, dxLocator, look.azimuth, look.elevation)
+            } catch (error: IllegalArgumentException) { null }
+            catch (error: IOException) { null }
+            runOnUiThread {
+                dxBusy = false
+                if (isDestroyed || opened !== track) return@runOnUiThread
+                liveDx?.let { it.text = text.orEmpty(); it.visibility = if (text == null) View.GONE else View.VISIBLE }
+            }
+        }
+    }
+
     private fun renderLive(now: Long) {
         val track = opened ?: return
         liveTicks++
+        updateDx(track, now)
         val pass = track.plan.pass
         val position = SatellitePasses.at(track.track, now)
         val rising = now < pass.aos.time
@@ -1156,8 +1236,25 @@ class SatelliteActivity : LocalizedActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         val uri = data?.data
-        if (requestCode !in 60..61) return
+        if (requestCode !in 60..REQUEST_CALENDAR) return
         if (resultCode != RESULT_OK || uri == null) { status.setText(R.string.satellite_cancelled); return }
+        if (requestCode == REQUEST_CALENDAR) {
+            val exported = pendingCalendar
+            if (exported.isEmpty()) { status.setText(R.string.satellite_cancelled); return }
+            audioWorker.execute {
+                try {
+                    val text = PassCalendar.ics(exported, System.currentTimeMillis())
+                    val output = contentResolver.openOutputStream(uri, "wt") ?: throw IOException(getString(R.string.provider_no_stream))
+                    output.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                    runOnUiThread {
+                        if (!isDestroyed) Toast.makeText(this, R.string.satellite_calendar_saved, Toast.LENGTH_LONG).show()
+                    }
+                } catch (error: IOException) { report(error) }
+                catch (error: IllegalArgumentException) { report(error) }
+                catch (error: SecurityException) { report(error) }
+            }
+            return
+        }
         if (requestCode == 61) {
             val file = pendingExport ?: run { status.setText(R.string.satellite_cancelled); return }
             audioWorker.execute {

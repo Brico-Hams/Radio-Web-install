@@ -100,10 +100,14 @@
           <div><label for="plan-elevation">Elevacion minima (grados)</label><input id="plan-elevation" type="number" value="10" min="0" max="60"></div>
         </div>
         <label class="check"><input id="plan-location-consent" type="checkbox"><span>Autorizo usar mi posicion para calcular pases localmente. Si exporto el plan, incluira esa posicion.</span></label>
-        <div class="operation-buttons"><button id="plan-gps" type="button" class="button secondary">Usar mi ubicacion (pedir permiso)</button><button id="plan-predict" type="button" class="button primary">Calcular proximos pases</button><button id="plan-pass-save" type="button" class="button secondary">Guardar plan de pases JSON</button><button id="plan-tle-save" type="button" class="button secondary">Guardar TLE para herramienta compatible</button></div>
+        <div class="operation-buttons"><button id="plan-gps" type="button" class="button secondary">Usar mi ubicacion (pedir permiso)</button><button id="plan-predict" type="button" class="button primary">Calcular proximos pases</button><button id="plan-pass-save" type="button" class="button secondary">Guardar plan de pases JSON</button><button id="plan-pass-ics" type="button" class="button secondary">Exportar pases a calendario (.ics)</button><button id="plan-tle-save" type="button" class="button secondary">Guardar TLE para herramienta compatible</button></div>
         <label for="plan-pass-file">Reabrir plan de pases JSON guardado (incluye posicion; recalcula horarios actuales)</label><input id="plan-pass-file" type="file" accept=".json,application/json">
         <p id="plan-pass-info" role="status">TLE obligatorio con epoca de menos de 7 dias. Precision de muestreo 5 s; cruces refinados a 0,5 s. Sin relieve ni correccion atmosferica. No controla antenas; el Doppler se compensa con canales por tramos.</p>
         <div class="table-scroll"><table><thead><tr><th>Inicio UTC</th><th>Maximo UTC</th><th>Fin UTC</th><th>Elevacion max.</th><th>Azimut inicio / fin</th></tr></thead><tbody id="plan-pass-results"></tbody></table></div>
+        <label for="plan-dx-locator">Locator de la estacion DX (opcional, 4 a 8 caracteres)</label><input id="plan-dx-locator" type="text" maxlength="8" autocomplete="off" spellcheck="false">
+        <div class="operation-buttons"><button id="plan-mutual" type="button" class="button secondary">Buscar pases mutuos con la estacion DX</button></div>
+        <p id="plan-mutual-info" role="status"></p>
+        <div class="table-scroll"><table><thead><tr><th>Inicio comun UTC</th><th>Fin comun UTC</th><th>Elevacion max. aqui</th><th>Elevacion max. DX</th></tr></thead><tbody id="plan-mutual-results"></tbody></table></div>
         <div class="planning-filters">
           <div><label for="plan-doppler-pass">Pase para canales Doppler</label><select id="plan-doppler-pass"><option value="">Calcula los pases primero</option></select></div>
           <div><label for="plan-doppler-segments">Canales por pase (1 a 10)</label><input id="plan-doppler-segments" type="number" value="5" min="1" max="10"></div>
@@ -380,6 +384,7 @@
     function invalidatePrediction() {
       prediction = null;
       $("plan-pass-results").replaceChildren();
+      $("plan-mutual-results").replaceChildren();
       $("plan-doppler-pass").replaceChildren(new Option("Calcula los pases primero", ""));
       $("plan-pass-info").textContent = "Datos cambiados: vuelve a calcular los pases antes de exportar.";
     }
@@ -720,6 +725,29 @@
         warning: "Contiene tu posicion. Plan local, no formato de instalacion SAT nativo ni grabacion de audio." }, null, 2), "application/json");
       notify(result === "saved" ? "Plan de pases escrito y cerrado en el archivo elegido. Contiene tu posicion." :
         "Descarga del plan solicitada. Comprueba Descargas; el navegador no confirma que se haya guardado. Contiene tu posicion.");
+    });
+    attach("plan-pass-ics", "Exportar pases a calendario", async () => {
+      requireOrbit(); consentLocation();
+      R.assert(prediction, "Calcula primero los pases.");
+      const result = await saveFile(`sat-${orbital.norad}-passes.ics`, R.passesToIcs(orbital, prediction), "text/calendar");
+      notify(result === "saved" ? "Calendario de pases escrito en el archivo elegido. No incluye tu posicion." :
+        "Descarga del calendario solicitada. Comprueba Descargas. No incluye tu posicion.");
+    });
+    attach("plan-mutual", "Buscar pases mutuos", async () => {
+      requireOrbit(); consentLocation();
+      const numeric = id => { R.assert($(id).value.trim() !== "", "Introduce todas las coordenadas y parametros."); return Number($(id).value); };
+      const locator = $("plan-dx-locator").value.trim();
+      const dx = R.maidenheadToLatLon(locator);
+      const result = R.mutualPasses(orbital, { latitude: numeric("plan-lat"), longitude: numeric("plan-lon"), height: numeric("plan-alt") / 1000 },
+        { latitude: dx.latitude, longitude: dx.longitude, height: 0 }, { hours: numeric("plan-hours"), minimum: numeric("plan-elevation") });
+      $("plan-mutual-results").replaceChildren();
+      for (const pass of result.passes) {
+        const row = document.createElement("tr");
+        for (const value of [new Date(pass.start).toISOString(), new Date(pass.end).toISOString(),
+          `${pass.maxElevationA.toFixed(1)} grados`, `${pass.maxElevationB.toFixed(1)} grados`]) cell(row, value);
+        $("plan-mutual-results").append(row);
+      }
+      $("plan-mutual-info").textContent = `${result.passes.length} pases mutuos con ${locator.toUpperCase()} en ${result.hours} h. Horas UTC.`;
     });
     attach("plan-tle-save", "Guardar elementos orbitales", async () => {
       requireOrbit();

@@ -660,6 +660,14 @@
     <string name="satellite_decoded">%1$d Robot36 images (%2$s).</string>
     <string name="satellite_export">Export</string>
     <string name="satellite_exported">Recording exported.</string>
+    <string name="satellite_export_calendar">Export passes to calendar (.ics)</string>
+    <string name="satellite_export_calendar_description">Export the predicted passes to a calendar file</string>
+    <string name="satellite_calendar_saved">Calendar saved. It does not include your position.</string>
+    <string name="satellite_dx_locator">DX station locator (optional)</string>
+    <string name="satellite_dx_locator_description">Maidenhead locator of the DX station, optional</string>
+    <string name="satellite_dx_look">DX %1$s: az %2$.0f°, el %3$.0f°</string>
+    <string name="satellite_dx_window">Common window: %1$s–%2$s (max here %3$.0f°, DX %4$.0f°)</string>
+    <string name="satellite_dx_no_window">No common window with DX</string>
     <string name="satellite_delete">Delete</string>
     <string name="satellite_delete_title">Delete recording</string>
     <string name="satellite_delete_message">%1$s and its SSTV images will be deleted from the app. This cannot be undone.</string>

@@ -660,6 +660,14 @@
     <string name="satellite_decoded">%1$d Robot36-Bilder (%2$s).</string>
     <string name="satellite_export">Exportieren</string>
     <string name="satellite_exported">Aufnahme exportiert.</string>
+    <string name="satellite_export_calendar">Überflüge in Kalender exportieren (.ics)</string>
+    <string name="satellite_export_calendar_description">Die vorhergesagten Überflüge in eine Kalenderdatei exportieren</string>
+    <string name="satellite_calendar_saved">Kalender gespeichert. Er enthält deine Position nicht.</string>
+    <string name="satellite_dx_locator">Locator der DX-Station (optional)</string>
+    <string name="satellite_dx_locator_description">Maidenhead-Locator der DX-Station, optional</string>
+    <string name="satellite_dx_look">DX %1$s: Az %2$.0f°, El %3$.0f°</string>
+    <string name="satellite_dx_window">Gemeinsames Fenster: %1$s–%2$s (max. hier %3$.0f°, DX %4$.0f°)</string>
+    <string name="satellite_dx_no_window">Kein gemeinsames Fenster mit DX</string>
     <string name="satellite_delete">Löschen</string>
     <string name="satellite_delete_title">Aufnahme löschen</string>
     <string name="satellite_delete_message">%1$s und die zugehörigen SSTV-Bilder werden aus der App gelöscht. Dies ist nicht umkehrbar.</string>

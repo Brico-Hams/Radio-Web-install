@@ -21,6 +21,7 @@ The native viewer/keyboard, restart, maintenance, DFU, app management, and RF fi
 | Yaesu manuals (FT-817ND/818ND/857D/897D, FTX-1 CAT 2508-C) and Icom (IC-705 CI-V rev. 6) | The APK's multi-radio CAT, written from these documents | Manufacturer documentation |
 | QRP Labs CAT manuals (QMX firmware 1.04_003, QDX rev 1.06) | The APK's QMX/QMX+ and QDX/QDX-M CAT, written from these documents | Manufacturer documentation |
 | [FT8CN](https://github.com/N0BOY/FT8CN) (BG7YOZ) | Studied only to understand how it handles CAT, USB serial and audio on Android; no code or resources copied | MIT |
+| [OscarWatch · magicbug/OscarWatch-Tracker](https://github.com/magicbug/OscarWatch-Tracker) (© 2026 Peter Goodhall, MM9SQL) | Feature ideas only: exporting passes to an `.ics` calendar, mutual passes with a DX station by locator, and a day/night terminator on the map. Reimplemented from scratch in Kotlin and JavaScript from RFC 5545 and standard astronomical formulas; no C# code, text or assets are copied or translated | AGPL-3.0-or-later |
 
 ## Dependencies
 
