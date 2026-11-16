@@ -97,10 +97,103 @@ class KenwoodThd75Test {
         assertEquals(R.string.err_rig_range, error.text.id)
     }
 
-    @Test fun memoriesAndSplitAreUnsupported() {
+    private val channel5 = "0145500000,0,0,0,0,0,0,08,08,000,00600000,0,0,0,0,0,0,0,0"
+
+    private fun memoryRadio(initial: String?, onWrite: (String) -> Unit = {}): Pair<Th75Rig, ScriptedRadio> {
+        var fields = initial
+        var name = "OLD"
+        return radio {
+            when {
+                it == "ME 005\r" -> fields?.let { f -> "ME 005,$f\r" } ?: "N\r"
+                it.startsWith("ME 005,") -> { fields = it.removePrefix("ME 005,").trimEnd('\r'); onWrite(it); "" }
+                it == "MN 005\r" -> "MN 005,$name\r"
+                it.startsWith("MN 005,") -> { name = it.removePrefix("MN 005,").trimEnd('\r'); onWrite(it); "" }
+                else -> "?\r"
+            }
+        }
+    }
+
+    @Test fun memoriesParseFrequencyAndNameAndSkipEmptyChannels() {
+        val (rig, transport) = radio {
+            when (it) {
+                "ME 000\r" -> "ME 000,0145500000,0,0\r"
+                "ME 001\r" -> "N\r"
+                "ME 002\r" -> "ME 002,0433500000,0,0\r"
+                "MN 000\r" -> "MN 000,Calling\r"
+                else -> "N\r"
+            }
+        }
+        assertEquals(
+            listOf(RigMemory(0, 145_500_000L, null, "Calling"), RigMemory(2, 433_500_000L, null, "")),
+            rig.memories(0..2)
+        )
+        assertTrue(sent(transport).none { it.startsWith("ME 001,") || it.startsWith("MN 001") })
+    }
+
+    @Test fun writeMemoryChangesOnlyTheFrequencyAndName() {
+        val writes = ArrayList<String>()
+        val (rig, transport) = memoryRadio(channel5) { writes.add(it) }
+        rig.writeMemory(RigMemory(5, 433_500_000L, RigMode.FM, "Home"))
+        assertEquals(listOf("ME 005,0433500000,0,0,0,0,0,0,08,08,000,00600000,0,0,0,0,0,0,0,0\r", "MN 005,Home\r"), writes)
+        assertEquals(listOf("ME 005\r", "ME 005,0433500000,0,0,0,0,0,0,08,08,000,00600000,0,0,0,0,0,0,0,0\r", "MN 005,Home\r", "ME 005\r", "MN 005\r"),
+            sent(transport))
+    }
+
+    @Test fun writeMemoryRefusesEmptyChannelsWithoutWriting() {
+        val (rig, transport) = memoryRadio(null)
+        val error = assertThrows(LocalizedStateException::class.java) { rig.writeMemory(RigMemory(5, 433_500_000L, null, "Home")) }
+        assertEquals(R.string.err_rig_channel_empty, error.text.id)
+        assertEquals(listOf("ME 005\r"), sent(transport))
+    }
+
+    @Test fun writeMemoryReadBackMismatchIsNotConfirmed() {
+        val (rig, _) = radio {
+            when {
+                it == "ME 005\r" -> "ME 005,$channel5\r"
+                it == "MN 005\r" -> "MN 005,Home\r"
+                else -> ""
+            }
+        }
+        val error = assertThrows(LocalizedStateException::class.java) { rig.writeMemory(RigMemory(5, 433_500_000L, null, "Home")) }
+        assertEquals(R.string.err_rig_unconfirmed, error.text.id)
+    }
+
+    @Test fun writeMemoryRejectsBadNamesAndFrequenciesBeforeSending() {
+        val (rig, transport) = memoryRadio(channel5)
+        for (name in listOf("A".repeat(17), "Ñandú", "a,b")) {
+            val error = assertThrows(LocalizedArgumentException::class.java) { rig.writeMemory(RigMemory(5, 433_500_000L, null, name)) }
+            assertEquals(R.string.err_rig_memory_name, error.text.id)
+        }
+        assertThrows(LocalizedArgumentException::class.java) { rig.writeMemory(RigMemory(5, 900_000_000L, null, "")) }
+        assertThrows(LocalizedArgumentException::class.java) { rig.writeMemory(RigMemory(1000, 433_500_000L, null, "")) }
+        assertTrue(transport.writes.isEmpty())
+    }
+
+    @Test fun setModeOnVfoASendsFm() {
+        val (rig, transport) = radio { if (it == "MD 0\r") "MD 0,0\r" else "" }
+        rig.setMode(Vfo.A, RigMode.FM)
+        assertEquals(listOf("MD 0,0\r", "MD 0\r"), sent(transport))
+    }
+
+    @Test fun diagnosticsOnlyIssueReadCommands() {
+        val (rig, transport) = radio {
+            when (it) {
+                "ID\r" -> "ID TH-D75\r"
+                "FV 0\r" -> "FV 0,1.00\r"
+                else -> it.trim() + ",0\r"
+            }
+        }
+        val result = DiagnosticsRunner({ "" }).runTh75(rig)
+        assertTrue(result.passed)
+        assertEquals(Th75Rig.DIAGNOSTIC_QUERIES.size, result.steps.size)
+        assertEquals(Th75Rig.DIAGNOSTIC_QUERIES, sent(transport))
+        assertTrue(sent(transport).none { it.startsWith("TX") || it.contains(",") })
+        assertThrows(LocalizedArgumentException::class.java) { rig.diagnosticReply("TX\r") }
+    }
+
+    @Test fun splitIsUnsupported() {
         val rig = Th75Rig(ScriptedRadio())
-        assertThrows(LocalizedUnsupportedException::class.java) { rig.memories(1..2) }
-        assertThrows(LocalizedUnsupportedException::class.java) { rig.writeMemory(RigMemory(1, 145_500_000L, RigMode.FM, "")) }
         assertThrows(LocalizedUnsupportedException::class.java) { rig.setSplit(true) }
+        assertTrue(rig.supportsMemories && rig.supportsMemoryWrite && !rig.supportsSplit)
     }
 }

@@ -823,6 +823,8 @@
     <string name="err_rig_port">The adapter has no serial port number %1$d.</string>
     <string name="err_rig_timeout">The radio did not answer in time.</string>
     <string name="err_rig_mode">The radio cannot use the mode %1$s.</string>
+    <string name="err_rig_channel_empty">Memory channel %1$d is empty: this radio can only edit channels that are already programmed.</string>
+    <string name="err_rig_memory_name">The memory name allows up to %1$d printable ASCII characters, without commas.</string>
     <string name="err_rig_resolution">The frequency must be a multiple of %1$d Hz.</string>
     <string name="err_rig_channel">Memory channel %1$d is out of range.</string>
     <string name="err_rig_audio_length">The audio is too long (maximum %1$d seconds).</string>

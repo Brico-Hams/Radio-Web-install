@@ -822,6 +822,8 @@
     <string name="err_rig_port">L’adaptateur n’a pas de port série numéro %1$d.</string>
     <string name="err_rig_timeout">La radio n’a pas répondu à temps.</string>
     <string name="err_rig_mode">La radio ne peut pas utiliser le mode %1$s.</string>
+    <string name="err_rig_channel_empty">Le canal mémoire %1$d est vide : cette radio ne peut modifier que des canaux déjà programmés.</string>
+    <string name="err_rig_memory_name">Le nom de la mémoire accepte au plus %1$d caractères ASCII imprimables, sans virgule.</string>
     <string name="err_rig_resolution">La fréquence doit être un multiple de %1$d Hz.</string>
     <string name="err_rig_channel">Le canal mémoire %1$d est hors plage.</string>
     <string name="err_rig_audio_length">L’audio est trop long (%1$d secondes maximum).</string>

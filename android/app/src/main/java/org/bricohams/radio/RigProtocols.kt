@@ -1038,7 +1038,7 @@ class QrpLabsRig(transport: RadioBytes, override val model: RigModel) : Rig {
 
 /**
  * Kenwood TH-D75 over its USB virtual COM port. Commands and replies end in CR; "?" (unknown command) and "N" (not available
- * now) are rejections. VFO A = band 0 (144/220/430 MHz, FM/DV), VFO B = band 1 (0.1-524 MHz, all modes); no memory channels.
+ * now) are rejections. VFO A = band 0 (144/220/430 MHz, FM/DV), VFO B = band 1 (0.1-524 MHz, all modes); memory channels 0..999 (read, and edit of already programmed ones).
  */
 class Th75Rig(transport: RadioBytes) : Rig {
     private val link = AsciiLink(transport, terminator = '\r', rejections = setOf("?", "N"))
@@ -1046,9 +1046,6 @@ class Th75Rig(transport: RadioBytes) : Rig {
     override val supportsVfoB = true
     override val silentVfoB = true
     override val supportsSplit = false
-    override val supportsMemories = false
-    override val supportsMemoryWrite = false
-
     companion object {
         // Command set from the Kenwood TH-D74/TH-D75 PC command reference; verify on a real unit.
         const val ID = "ID\r"
@@ -1074,6 +1071,18 @@ class Th75Rig(transport: RadioBytes) : Rig {
         fun modeCommand(band: Int, code: Int) = "MD $band,$code\r"
         fun vfoModeQuery(band: Int) = "VM $band\r"
         fun vfoModeCommand(band: Int, mode: Int) = "VM $band,$mode\r"
+        val CHANNELS = 0..999
+        const val NAME_MAX = 16
+        // ME field index of the RX frequency (first field after the channel number), TH-D74/D75 PC command reference; verify on a real unit.
+        const val MEMORY_FREQUENCY_FIELD = 0
+        fun memoryQuery(channel: Int) = String.format(Locale.ROOT, "ME %03d\r", channel)
+        fun memoryCommand(channel: Int, fields: List<String>) = String.format(Locale.ROOT, "ME %03d,", channel) + fields.joinToString(",") + "\r"
+        fun nameQuery(channel: Int) = String.format(Locale.ROOT, "MN %03d\r", channel)
+        fun nameCommand(channel: Int, name: String) = String.format(Locale.ROOT, "MN %03d,", channel) + name + "\r"
+        /** Read-only commands of the diagnostics: never a SET, never TX. */
+        val DIAGNOSTIC_QUERIES = listOf(
+            ID, FIRMWARE, ACTIVE_BAND, vfoModeQuery(0), vfoModeQuery(1), frequencyQuery(0), frequencyQuery(1), modeQuery(0), modeQuery(1)
+        )
     }
 
     /** Numbers after the command word: "FQ 1,0131725000" -> [1, 131725000]. */
@@ -1151,6 +1160,66 @@ class Th75Rig(transport: RadioBytes) : Rig {
         }
     }
     override fun setSplit(on: Boolean) = unsupported("split")
-    override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> = unsupported("memories")
-    override fun writeMemory(memory: RigMemory) = unsupported("memory write")
+
+    /** Sends one of [DIAGNOSTIC_QUERIES] (all read-only) and returns the raw reply; anything else is refused. */
+    fun diagnosticReply(command: String): String {
+        requireUi(command in DIAGNOSTIC_QUERIES) { UiText(R.string.err_rig_unsupported, command.trim()) }
+        return link.request(command, command.trim().substringBefore(' '))
+    }
+
+    /** The comma-separated fields after the channel number of an "ME nnn,..." reply; an empty channel answers "N" (rejected). */
+    private fun readChannel(channel: Int): List<String> {
+        val parts = link.request(memoryQuery(channel), "ME").substringAfter(' ', "").split(',')
+        if (parts.size < 2 || parts[0].trim().toIntOrNull() != channel) invalidReply()
+        return parts.drop(1)
+    }
+    private fun channelHz(fields: List<String>): Long = fields[MEMORY_FREQUENCY_FIELD].trim().toLongOrNull() ?: invalidReply()
+    private fun readName(channel: Int): String = try {
+        val parts = link.request(nameQuery(channel), "MN").substringAfter(' ', "").split(',', limit = 2)
+        if (parts.size < 2 || parts[0].trim().toIntOrNull() != channel) invalidReply()
+        parts[1].trim()
+    } catch (error: LocalizedIOException) {
+        if (isRejected(error)) "" else throw error
+    }
+
+    override val supportsMemories = true
+    override val supportsMemoryWrite = true
+    override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> {
+        val list = ArrayList<RigMemory>()
+        for (channel in channels) {
+            if (!keepGoing()) break
+            val fields = try {
+                readChannel(channel)
+            } catch (error: LocalizedIOException) {
+                if (isRejected(error)) continue else throw error
+            }
+            // The mode field index is not confirmed, so the mode stays unknown and the offset/split fields are not decoded.
+            list.add(RigMemory(channel, channelHz(fields), null, readName(channel)))
+        }
+        return list
+    }
+    /** Read-modify-write: only the RX frequency and the name change; every other field is sent back exactly as read. */
+    override fun writeMemory(memory: RigMemory) {
+        val channel = memory.channel
+        requireUi(channel in CHANNELS) { UiText(R.string.err_rig_channel, channel) }
+        checkRange(model, memory.frequencyHz)
+        requireUi(memory.name.length <= NAME_MAX && memory.name.all { it in ' '..'~' && it != ',' }) {
+            UiText(R.string.err_rig_memory_name, NAME_MAX)
+        }
+        link.transaction {
+            val current = try {
+                readChannel(channel)
+            } catch (error: LocalizedIOException) {
+                if (isRejected(error)) throw LocalizedStateException(UiText(R.string.err_rig_channel_empty, channel)) else throw error
+            }
+            val updated = current.toMutableList()
+            updated[MEMORY_FREQUENCY_FIELD] = String.format(Locale.ROOT, "%010d", memory.frequencyHz)
+            link.send(memoryCommand(channel, updated))
+            link.send(nameCommand(channel, memory.name))
+            val stored = readChannel(channel)
+            checkUi(channelHz(stored) == memory.frequencyHz && stored.drop(1) == updated.drop(1) && readName(channel) == memory.name.trim()) {
+                UiText(R.string.err_rig_unconfirmed)
+            }
+        }
+    }
 }

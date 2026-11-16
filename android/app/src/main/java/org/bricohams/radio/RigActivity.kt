@@ -161,6 +161,7 @@ class RigActivity : LocalizedActivity() {
     private fun audioStream(r: Rig?): TruSdxRig? = (r as? TruSdxRig)?.takeIf { linkBaud >= 115200 }
     // Worker-thread state.
     private var tracker: RigTracker? = null
+    @Volatile private var trackingUplink = false
     private var trackingStarted = false
     private var orbit: SatelliteOrbit? = null
     @Volatile private var rig: Rig? = null
@@ -432,7 +433,7 @@ class RigActivity : LocalizedActivity() {
         button(card, R.string.rig_dig_tune, true) {
             val r = rig ?: run { notice.setText(R.string.rig_connect_first); return@button }
             val hz = digBands.getOrNull(digBand.selectedItemPosition) ?: return@button
-            operation(notice) { r.setFrequency(Vfo.A, hz); r.setMode(dataMode(r.model)); refresh(r); null }
+            operation(notice) { r.checkTunable(Vfo.A, hz); r.setFrequency(Vfo.A, hz); r.setMode(Vfo.A, dataMode(r.model)); refresh(r); null }
         }
         // Not a live region: it changes every 250 ms and would flood TalkBack.
         digClock = Brand.text(this, 14f, colors.accent)
@@ -1054,11 +1055,17 @@ class RigActivity : LocalizedActivity() {
             .setPositiveButton(R.string.action_transmit) { _, _ -> runPttTest(r) }.show()
     }
 
+    /** Right before keying: the TH-D75 keys PTT on its control band, so band A is selected unless satellite tracking already chose the uplink band. */
+    internal fun prepareTransmit(r: Rig) {
+        if (!trackingUplink) r.selectTxVfo(Vfo.A)
+    }
+
     private fun runPttTest(r: Rig) {
         val token = generation
         operation(notice, R.string.rig_ptt_running) {
             try {
                 pttHeld = true
+                prepareTransmit(r)
                 r.ptt(true)
                 var waited = 0
                 while (waited < 3000 && token == generation) { Thread.sleep(100); waited += 100 }
@@ -1074,6 +1081,7 @@ class RigActivity : LocalizedActivity() {
     private fun channelLimits(model: RigModel) = when (model) {
         RigModel.IC705 -> 0..99
         RigModel.FTX1 -> 1..999
+        RigModel.THD75 -> Th75Rig.CHANNELS
         else -> 1..99
     }
 
@@ -1257,6 +1265,7 @@ class RigActivity : LocalizedActivity() {
                     assets.open("orbital-engine.js").bufferedReader().use { it.readText() })
                 orbit = engine
                 tracker = RigTracker(r, down, up, engine::rangeRateKmS, engine::look, step)
+                trackingUplink = up != null
                 trackStep(mine, token, requireNotNull(tracker), plan)
             }
         }
@@ -1313,7 +1322,7 @@ class RigActivity : LocalizedActivity() {
 
     private fun disposeOrbit() {
         tracker = null
-        trackingStarted = false
+        trackingUplink = false
         orbit?.close()
         orbit = null
     }
@@ -1463,6 +1472,7 @@ class RigActivity : LocalizedActivity() {
         try {
             checkUi(sink.requestFocus()) { UiText(R.string.err_audio_focus) }
             pttHeld = true
+            prepareTransmit(r)
             r.ptt(true)
             sink.start()
             val begin = System.nanoTime() / 1_000_000

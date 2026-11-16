@@ -339,7 +339,7 @@ class DiagnosticsActivity : LocalizedActivity() {
             return if (kind == RadioKind.QUANSHENG) runner.runQuansheng(CatProtocol(link))
             else {
                 val rig = openRig(requireNotNull(kind.model), link)
-                val result = runner.runRig(rig, kind.label)
+                val result = if (rig is Th75Rig) runner.runTh75(rig, kind.label) else runner.runRig(rig, kind.label)
                 // Only when identification worked: asking a silent radio again would just repeat the failure.
                 if (result.steps.firstOrNull()?.ok == true) {
                     val version = try { rig.firmwareVersion() } catch (_: Exception) { null }
