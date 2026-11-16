@@ -299,6 +299,31 @@
     R.assert(start + hours * 3600000 - epoch <= 7 * 86400000, "La ventana supera la validez maxima de siete dias del TLE.");
     return calculatePassWindow(orbital, observer, { start, hours, minimum, record, epoch, sampleSeconds: 5 });
   }
+  function lookAt(orbital, observer, time) {
+    const { record } = validateTLE(orbital, time);
+    return lookFor(record, observer)(time);
+  }
+  function passTrack(orbital, observer, pass, points = 90) {
+    R.assert(Number.isInteger(points) && points >= 2 && points <= 1000, "Numero de puntos de trayectoria no valido.");
+    R.assert(pass && Number.isFinite(pass.aos?.time) && Number.isFinite(pass.los?.time) && pass.los.time > pass.aos.time, "Pase no valido.");
+    const { record } = validateTLE(orbital, pass.aos.time);
+    const look = lookFor(record, observer);
+    const span = pass.los.time - pass.aos.time;
+    return Array.from({ length: points }, (_, index) => {
+      const point = look(index === points - 1 ? pass.los.time : pass.aos.time + span * index / (points - 1));
+      return { time: point.time, azimuth: point.azimuth, elevation: point.elevation, rangeKm: point.rangeKm };
+    });
+  }
+  function subPoint(orbital, time) {
+    const { record } = validateTLE(orbital, time);
+    const date = new Date(time);
+    const state = S.propagate(record, date);
+    R.assert(state && state.position && record.error === 0, "Fallo SGP4: orbita no propagable.");
+    const geodetic = S.eciToGeodetic(state.position, S.gstime(date));
+    const latitude = S.degreesLat(geodetic.latitude), longitude = S.degreesLong(geodetic.longitude);
+    R.assert(Number.isFinite(latitude) && Number.isFinite(longitude), "Prediccion orbital no finita.");
+    return { latitude, longitude, altitudeKm: geodetic.height };
+  }
   function maidenheadToLatLon(locator) {
     const text = String(locator ?? "").trim();
     R.assert(/^[A-R]{2}\d{2}(?:[A-X]{2}(?:\d{2})?)?$/i.test(text), "Locator Maidenhead no valido.");
@@ -556,6 +581,6 @@
     R.assert(entries.length > 0 && entries.length <= 1024, "Seleccion TG vacia o superior a 1024. Ajusta el prefijo.");
     return { provider: "BrandMeister", entries };
   }
-  Object.assign(R, { norm, asciiName, validMHz, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, maidenheadToLatLon, passesToIcs, mutualPasses, predictMonthlyPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
+  Object.assign(R, { norm, asciiName, validMHz, normalizeRepeaters, filterRecords, channelCSV, parseChannelCSV, validateSatellitePlan, validateTLE, validateSatellitesFile, validateSatelliteEntry, pickSatellite, satelliteAgeWarning, predictPasses, passTrack, subPoint, lookAt, maidenheadToLatLon, passesToIcs, mutualPasses, predictMonthlyPasses, satelliteChannel, dopplerChannels, catPassTarget, CatPassTracker, csvCell, pmrChannels, bricohamsRepeaterChannels, murciaAirportTemplate, murciaBroadcastTemplate, normalizeTalkgroups });
   if (typeof module !== "undefined") module.exports = R;
 })(globalThis);

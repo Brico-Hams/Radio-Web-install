@@ -99,6 +99,7 @@ class SatelliteActivityTest {
             assertTrue(radar.contentDescription.toString().startsWith("Radar polar del pase."))
             assertTrue("track ${radar.track.size}", radar.track.size > 20) // 10 s samples over a ~4-10 min pass
             assertTrue(text(activity).contains("437.8000 MHz  FM  Repeater"))
+            click(activity, MORE_SHOW)
             click(activity, "Conectar CAT: Doppler, SSTV y grabacion")
             val intent = shadowOf(activity).nextStartedActivity
             assertEquals(CatActivity::class.java.name, intent.component?.className)
@@ -247,7 +248,7 @@ class SatelliteActivityTest {
             val activity = controller.get()
             idle(activity)
             assertEquals(1, all(activity).filterIsInstance<WorldMapView>().single().satellites.size)
-            click(activity, "Satelites")
+            click(activity, "Catalogo")
             click(activity, "Ninguno")
             click(activity, "Mapa")
             idle(activity)
@@ -293,7 +294,7 @@ class SatelliteActivityTest {
         try {
             val activity = controller.get()
             idle(activity)
-            click(activity, "Satelites")
+            click(activity, "Catalogo")
             val box = all(activity).filterIsInstance<CheckBox>().single()
             assertTrue(box.text.toString(), box.isChecked && box.text.startsWith("25544 - ISS"))
             activity.findViewById<EditText>(R.id.satellite_search).setText("nothing")
@@ -315,6 +316,70 @@ class SatelliteActivityTest {
             assertFalse(recording.exists())
             assertTrue(recording.parentFile!!.listFiles()!!.isEmpty())
             assertTrue(text(activity).contains("Sin grabaciones"))
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    private val MORE_SHOW = "Mostrar más datos del pase"
+    private val MORE_HIDE = "Ocultar más datos del pase"
+
+    private fun issFixture() {
+        observer()
+        val tle = freshTle()
+        SatelliteActivity.fetch = { url, _ ->
+            if (url == SatelliteSources.TLE_URL) "${tle.name}\n${tle.line1}\n${tle.line2}\n".toByteArray()
+            else """[{"norad_cat_id":25544,"alive":true,"status":"active","downlink_low":145800000,"uplink_low":145900000,"mode":"FM","description":"Voice"}]""".toByteArray()
+        }
+    }
+    private fun openFirstPass(activity: SatelliteActivity) {
+        idle(activity)
+        all(activity).first { it.isClickable && it.contentDescription?.startsWith("ISS (ZARYA) (25544)") == true }.performClick()
+        idle(activity)
+    }
+
+    @Test fun backFromDetailReturnsToThePassList() {
+        issFixture()
+        val controller = Robolectric.buildActivity(SatelliteActivity::class.java).setup()
+        try {
+            val activity = controller.get()
+            openFirstPass(activity)
+            assertEquals(1, all(activity).filterIsInstance<PassRadarView>().size)
+            @Suppress("DEPRECATION") activity.onBackPressed()
+            idle(activity)
+            assertTrue(all(activity).filterIsInstance<PassRadarView>().isEmpty())
+            assertTrue(all(activity).any { it.isShown && it.isClickable && it.contentDescription?.startsWith("ISS (ZARYA) (25544)") == true })
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun moreDataToggleShowsAndHidesTheSecondaryBlockAndRadioBlockStaysVisible() {
+        issFixture()
+        val controller = Robolectric.buildActivity(SatelliteActivity::class.java).setup()
+        try {
+            val activity = controller.get()
+            openFirstPass(activity)
+            val share = activity.getString(R.string.pass_share)
+            fun shareShown() = all(activity).filterIsInstance<TextView>().first { it.text.toString() == share }.isShown
+            assertFalse(shareShown())
+            assertTrue(all(activity).filterIsInstance<TextView>().first { it.text.contains("RX ↓") }.isShown)
+            click(activity, MORE_SHOW)
+            assertTrue(shareShown())
+            shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(2))
+            assertTrue("state survives the 1 s tick", shareShown())
+            click(activity, MORE_HIDE)
+            assertFalse(shareShown())
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun nextPassSummaryIsWrittenAfterRecompute() {
+        issFixture()
+        val controller = Robolectric.buildActivity(SatelliteActivity::class.java).setup()
+        try {
+            idle(controller.get())
+            val stored = RuntimeEnvironment.getApplication().getSharedPreferences("satellite-observer", Context.MODE_PRIVATE)
+                .getString("next-pass", null)
+            val summary = NextPassSummary.decode(stored)
+            assertNotNull(stored, summary)
+            assertEquals(25544, summary!!.norad)
+            assertTrue(summary.losMs > System.currentTimeMillis() - 1000)
         } finally { controller.pause().stop().destroy() }
     }
 }

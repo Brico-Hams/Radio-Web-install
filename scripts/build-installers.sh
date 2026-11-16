@@ -18,7 +18,7 @@ app_files=(
   LICENSE AUTHORS.md ACKNOWLEDGEMENTS.md SUPPORT.md SECURITY.md
   anytone.html anytone-core.js anytone-ui.js
   ftx1.html ftx1-menu.js ftx1-core.js ftx1-ui.js
-  index.html opengd77.html quansheng.html ayuda.html ayuda.en.html ayuda.fr.html ayuda.de.html bricohams-logo.png styles.css
+  index.html satelites.html radios.html satellite-ui.js satellites.css opengd77.html quansheng.html ayuda.html ayuda.en.html ayuda.fr.html ayuda.de.html bricohams-logo.png styles.css
   ayuda-firmwares.html ayuda-configuracion.html ayuda-quansheng.html help-docs.css
   ayuda-opciones-f4hwn.html ayuda-presets-f4hwn.html ayuda-ardf.html ayuda-manual-f4hwn.html
   ayuda-opengd77.html ayuda-opengd77-modelos.html ayuda-karina.html ayuda-bricohams.html
@@ -63,6 +63,7 @@ stage_app() {
     cp -R "$root/templates/repeaters" "$destination/templates/repeaters"
   fi
   cp "$root/data/firmware-catalog-fallback.json" "$destination/data/firmware-catalog-fallback.json"
+  cp "$root/data/world-land-110m.txt" "$destination/data/world-land-110m.txt"
   mkdir -p "$destination/node_modules"
   cp -R "$root/node_modules/satellite.js" "$destination/node_modules/satellite.js"
   node - "$destination" <<'NODE'

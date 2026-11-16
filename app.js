@@ -119,8 +119,8 @@ const ftx1Template = document.getElementById("ftx1-content");
 const external = 'target="_blank" rel="noopener noreferrer"';
 // Quansheng shows one view at a time (no in-page anchors); the other pages keep scrolling to the step.
 const steps = page === "quansheng"
-  ? [["Copias y conexión", "conexion"], ["Canales", "canales"], ["Satélites", "satelites"], ["Firmware", "firmware"], ["Herramientas", "herramientas"]]
-  : [["Copias y conexión", "#connection"], ["Codeplug", "#radio-operations"], ["Canales y contactos", "#planning-panel"], ["Satélites", "#planning-panel", "sat"], ["Firmware", ".firmware-panel"]];
+  ? [["Conexion y copias", "conexion"], ["Canales", "canales"], ["Firmware", "firmware"], ["Herramientas", "herramientas"], ["Seguimiento CAT de satelites", "satelites"]]
+  : [["Conexion y copias", "#connection"], ["Codeplug", "#radio-operations"], ["Canales y contactos", "#planning-panel"], ["Satelites", "#planning-panel", "sat"], ["Firmware", ".firmware-panel"]];
 // Blocks of each Quansheng view; [data-group] are the h2 sections of #radio-operations, grouped at start-up.
 const VIEWS = {
   conexion: [".detail-grid", ".backups-panel", "#log-panel", "#main > .notice", "#main > .sources"],
@@ -131,7 +131,35 @@ const VIEWS = {
 };
 const VIEW_TABS = { canales: "repeaters", satelites: "sat" };
 let currentView = null;
-const nav = (key, label, mark) => `<a href="${key === "home" ? "index" : key}.html" ${page === key ? 'aria-current="page"' : ""}><span class="nav-icon" aria-hidden="true">${mark}</span>${label}</a>`;
+const MODELS = [["opengd77", "OpenGD77"], ["quansheng", "Quansheng"], ["anytone", "AnyTone Beta"], ["ftx1", "Yaesu FTX-1"]];
+const isModel = MODELS.some(([key]) => key === page);
+const modelName = key => MODELS.find(([id]) => id === key)?.[1] ?? null;
+const STORAGE_LAST_RADIO = "bricohams.lastRadio";
+const STORAGE_STATION = "bricohams.station";
+// Task groups of each family that link to anchors existing at runtime (see setupViews/navigate for Quansheng).
+const RADIO_TASKS = {
+  opengd77: [["Conexion y copias", "opengd77.html#connection"], ["Codeplug", "opengd77.html#radio-operations"], ["Canales y contactos", "opengd77.html#planning-panel"]],
+  quansheng: [["Conexion y copias", "quansheng.html#connection"], ["Canales", "quansheng.html#radio-operations"], ["Herramientas", "quansheng.html#qs-native-menu"], ["Seguimiento CAT de satelites", "quansheng.html#plan-sat"]]
+};
+const navItem = (file, label, key, extra = "", children = "") =>
+  `<li><a href="${file}"${page === key ? ' aria-current="page"' : ""}${extra}>${label}</a>${children}</li>`;
+const nav = (key, label) => navItem(`${key}.html`, label, key);
+const sidebarNav = () => `<nav aria-label="Navegacion principal"><ul class="nav-list">${navItem("index.html", "Inicio", "home")}${navItem("satelites.html", "Satelites", "satelites")}${navItem("radios.html", "Radios", "radios", isModel ? ' class="nav-ancestor"' : "",
+  `<ul class="nav-sub" aria-label="Modelos de radio">${nav("opengd77", "OpenGD77")}${nav("quansheng", "Quansheng")}${nav("anytone", "AnyTone Beta")}${nav("ftx1", "Yaesu FTX-1")}</ul>`)}${navItem("ayuda.html", "Ayuda", "ayuda")}</ul></nav>`;
+
+function readStorage(key) {
+  try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
+}
+function storedStation() {
+  const station = readStorage(STORAGE_STATION);
+  const valid = station && Number.isFinite(station.latitude) && Math.abs(station.latitude) <= 90 &&
+    Number.isFinite(station.longitude) && Math.abs(station.longitude) <= 180 &&
+    Number.isFinite(station.heightM) && station.heightM >= -500 && station.heightM <= 9000;
+  return valid ? station : null;
+}
+if (isModel) {
+  try { localStorage.setItem(STORAGE_LAST_RADIO, page); } catch { /* storage unavailable */ }
+}
 
 function card(key, tool) {
   return `<article class="tool-card ${key}">
@@ -143,23 +171,44 @@ function card(key, tool) {
   </article>`;
 }
 
+const eyebrow = '<p class="eyebrow accent">RADIOAFICIÓN · HAZLO TÚ MISMO</p>';
+const anytoneCard = `<article class="tool-card anytone"><div class="card-top"><span class="device-icon" aria-hidden="true">AT</span><span class="pill">BETA</span></div><h2>AnyTone Beta</h2><p class="card-description">Prepara canales FM/DMR y AM aérea. Sin USB.</p><a class="button secondary" href="anytone.html">Entrar al editor AnyTone</a></article>`;
+const ftx1Card = `<article class="tool-card ftx1"><div class="card-top"><span class="device-icon" aria-hidden="true">FT</span><span class="pill">BETA</span></div><h2>Yaesu FTX-1</h2><p class="card-description">Lee, edita y copia memorias y menú por CAT USB.</p><a class="button secondary" href="ftx1.html">Entrar al editor FTX-1</a></article>`;
+
+function lastRadio() {
+  try {
+    const key = localStorage.getItem(STORAGE_LAST_RADIO);
+    return modelName(key) ? key : null;
+  } catch { return null; }
+}
+
+function taskList(key) {
+  return RADIO_TASKS[key] ? `<ul class="task-list" aria-label="Tareas de ${modelName(key)}">${RADIO_TASKS[key].map(([label, href]) => `<li><a href="${href}">${label}</a></li>`).join("")}</ul>` : "";
+}
+
+function radios() {
+  const families = [...Object.entries(tools).map(([key, tool]) => [key, card(key, tool)]), ["anytone", anytoneCard], ["ftx1", ftx1Card]];
+  return `<header class="page-head">${eyebrow}<h1>Radios</h1><p class="page-lead">Elige tu familia de radio y entra en la tarea que necesitas.</p></header>
+  <section id="families" class="cards radio-families" aria-label="Familias de radio">${families.map(([key, html]) => `<div class="radio-family">${html}${taskList(key)}</div>`).join("")}</section>`;
+}
+
 function home() {
-  return `<section class="hero"><span class="eyebrow accent">RADIOAFICIÓN · HAZLO TÚ MISMO</span>
-    <h1>Conecta tu radio.<br><span>Sin complicaciones.</span></h1>
-    <p>Pulsa el botón, elige tu familia y la web reconoce tu radio. Antes de escribir nada se guarda una copia.</p>
-    <a id="home-connect" class="button primary big" href="#families">Conectar radio</a>
-    <p class="card-note"><a href="ayuda.html">Primeros pasos y ayuda</a> &middot; <a href="ayuda-quansheng.html#puesta-en-marcha-de-0-a-100">Quansheng de 0 a 100 %</a> &middot; <a href="ayuda-atlas-uv-k5-v3.html">Atlas tecnico UV-K5 V3</a> &middot; <a href="ayuda-firmwares.html">Biblioteca de firmware</a></p>
-  </section>
-  <section id="families" class="cards" aria-label="Familias de radio" tabindex="-1">${Object.entries(tools).map(([key, tool]) => card(key, tool)).join("")}
-    <article class="tool-card anytone"><div class="card-top"><span class="device-icon" aria-hidden="true">AT</span><span class="pill">BETA</span></div><h2>AnyTone Beta</h2><p class="card-description">Prepara canales FM/DMR y AM aérea. Sin USB.</p><a class="button secondary" href="anytone.html">Entrar al editor AnyTone</a></article>
-    <article class="tool-card ftx1"><div class="card-top"><span class="device-icon" aria-hidden="true">FT</span><span class="pill">BETA</span></div><h2>Yaesu FTX-1</h2><p class="card-description">Lee, edita y copia memorias y menú por CAT USB.</p><a class="button secondary" href="ftx1.html">Entrar al editor FTX-1</a></article></section>
+  const last = lastRadio();
+  const yourRadio = last
+    ? `<div class="home-actions"><a class="button primary" href="${last}.html">Continuar con ${modelName(last)}</a><a class="button secondary" href="radios.html">Elegir otra radio</a></div>`
+    : `<p>Elige tu radio para ver sus herramientas</p><div class="home-actions"><a class="button primary" href="radios.html">Elegir radio</a></div>`;
+  return `<header class="page-head">${eyebrow}<h1>Inicio</h1></header>
+  <section id="home-next-pass" class="panel home-panel" aria-live="polite" aria-labelledby="home-next-pass-title"><h2 id="home-next-pass-title">Proximo pase</h2><div id="home-next-pass-body"></div></section>
+  <section id="home-your-radio" class="panel home-panel" aria-labelledby="home-your-radio-title"><h2 id="home-your-radio-title">Tu radio</h2>${yourRadio}</section>
   <aside class="notice"><span class="notice-icon" aria-hidden="true">!</span><div><h2>Parecidas por fuera. Diferentes por dentro.</h2><p>OpenGD77 y F4HWN no son firmware intercambiables. Confirma el modelo, la revision de hardware y el firmware antes de conectar o escribir.</p></div></aside>
-  <section class="steps-summary" aria-label="Como empezar"><div><span>01</span><h3>Conecta</h3><p>Elige tu familia y pulsa Conectar radio.</p></div><div><span>02</span><h3>Reconocemos tu radio</h3><p>Verás su nombre y su firmware.</p></div><div><span>03</span><h3>Elige una acción</h3><p>Sin copia verificada, no se escribe.</p></div></section>`;
+  <section class="steps-summary" aria-label="Como empezar"><div><span>01</span><h3>Conecta</h3><p>Elige tu familia y pulsa Conectar radio.</p></div><div><span>02</span><h3>Reconocemos tu radio</h3><p>Verás su nombre y su firmware.</p></div><div><span>03</span><h3>Elige una acción</h3>  <p>Sin copia verificada, no se escribe.</p></div></section>
+    <p class="card-note home-help"><a href="ayuda.html">Primeros pasos y ayuda</a> &middot; <a href="ayuda-quansheng.html#puesta-en-marcha-de-0-a-100">Quansheng de 0 a 100 %</a> &middot; <a href="ayuda-atlas-uv-k5-v3.html">Atlas tecnico UV-K5 V3</a> &middot; <a href="ayuda-firmwares.html">Biblioteca de firmware</a></p>`;
 }
 
 function detail(tool) {
   return `<a class="back" href="index.html">&larr; Todos los espacios</a>
     <section class="detail-hero"><p class="eyebrow accent">RADIOAFICIÓN · HAZLO TÚ MISMO <span class="pill">${tool.tag}</span></p><h1>${tool.name}<span>${tool.subtitle}</span></h1><p>${tool.description}</p><button id="advanced-toggle" class="button secondary" type="button" aria-pressed="false">Mostrar opciones avanzadas</button></section>
+       <p class="op-legend">Rojo: escribe en la radio. Azul: prepara datos locales. Discontinuo: edita datos locales. Sin marca: solo consulta.</p>
     <div class="detail-grid">
       <section id="connection" class="panel connection"><div class="section-heading"><span class="step-badge">01</span><h2>Conecta tu radio</h2></div>
         <p class="muted">Elige el modelo y pulsa Conectar radio. Antes de escribir se guarda una copia.</p>
@@ -218,16 +267,16 @@ function detail(tool) {
 document.getElementById("app").innerHTML = `
   <aside class="sidebar">
     <a class="brand" href="index.html" aria-label="Bricohams Radio Workspace: inicio"><img class="brand-logo" src="bricohams-logo.png" alt="Bricohams" width="1200" height="446"><span class="brand-product">${BRAND.product.toUpperCase()}</span></a>
-    <p class="nav-label">TU ESTACION</p><nav aria-label="Navegacion principal">${nav("home", "Vista general", "&#9638;")}${nav("opengd77", "OpenGD77", "GD")}${nav("quansheng", "Quansheng", "UV")}${nav("anytone", "AnyTone Beta", "AT")}${nav("ftx1", "Yaesu FTX-1", "FT")}${nav("ayuda", "Ayuda y soporte", "?")}</nav>
+    <p class="nav-label">TU ESTACION</p>${sidebarNav()}
     ${current ? `<p class="nav-label">PASOS</p><nav class="steps" aria-label="Pasos de este espacio">${steps.map(([label, target, tab], index) => page === "quansheng"
       ? `<button type="button" class="step-view" data-view="${target}"><span class="step-num" aria-hidden="true">${index}</span>${label}</button>`
       : `<a href="${target.startsWith("#") ? target : "#radio-operations"}" data-step="${target}"${tab ? ` data-tab="${tab}"` : ""}><span class="step-num" aria-hidden="true">${index}</span>${label}</a>`).join("")}</nav>` : ""}
     <div class="sidebar-bottom"><span class="local-dot"></span> USB / Serial local<p>Sin envio de datos a servidores.<br>Copias antes de escribir.</p></div>
   </aside>
   <div class="workspace"><header class="topbar">
-    <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : anytoneTemplate ? "AnyTone Beta" : ftx1Template ? "Yaesu FTX-1" : helpTemplate ? "Ayuda y soporte" : "Vista general"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
+    <div class="topbar-left"><span class="crumb">${BRAND.name} <span class="breadcrumb">/ ${current ? current.name : anytoneTemplate ? "AnyTone Beta" : ftx1Template ? "Yaesu FTX-1" : helpTemplate ? "Ayuda y soporte" : page === "satelites" ? "Satelites" : page === "radios" ? "Radios" : "Inicio"}</span></span>${current ? '<span class="topbar-status"><span class="status-dot" aria-hidden="true"></span><span id="topbar-status">Sin conexion.</span></span>' : ""}</div>
     <div class="topbar-right"><span class="pill">BETA - EN VALIDACION</span><span id="mode-badge" class="mode-badge"></span><span class="local-badge">SIN CUENTA &middot; SIN SUBIDAS</span>${current ? '<button id="topbar-connect" class="button primary topbar-connect" type="button" disabled><span aria-hidden="true">⌁</span> Conectar</button>' : ""}</div></header>
-  <main id="main">${current ? detail(current) : helpTemplate || anytoneTemplate || ftx1Template ? "" : home()}</main>
+  <main id="main">${current ? detail(current) : helpTemplate || anytoneTemplate || ftx1Template || page === "satelites" ? "" : page === "radios" ? radios() : home()}</main>
   <footer><span>&copy; 2026 ${BRAND.name} ${BRAND.product} <span class="muted">/ GPL-3.0-or-later / Sin garantia</span></span><span><a href="ayuda-referencias.html">Documentacion de referencia</a> &middot; <a href="ayuda.html#inicio">Instalar en local</a> &middot; <a href="ayuda.html">Ayuda y soporte</a> &middot; <a href="${BRAND.repository}" target="_blank" rel="noopener noreferrer">Codigo fuente</a> &middot; No afiliado a OpenGD77, grid.radio, F4HWN ni Quansheng.</span></footer></div>`;
 
 if (anytoneTemplate) {
@@ -363,6 +412,168 @@ if (current) {
   advancedToggle.addEventListener("click", () => setAdvanced(!document.body.hasAttribute("data-advanced")));
   pro.addEventListener("change", () => { if (pro.checked) setAdvanced(true); });
 }
+
+// Operation kinds by the first Spanish verb of the label: write > prepare > edit; anything else only consults.
+const OPERATION_KINDS = [
+  [/^(Escribir|Instalar|Restaurar|Borrar|Vaciar|Enviar|Grabar)/i, "write"],
+  [/^(Preparar|A[nñ]adir|Cargar|Importar|Generar)/i, "prepare"],
+  [/^(Editar|Mover|Copiar|Insertar)/i, "edit"]
+];
+function tagOperations(container) {
+  for (const button of container.querySelectorAll("button:not([data-op], .quick-action, .guide-tab, .step-view, [data-go])")) {
+    const kind = OPERATION_KINDS.find(([pattern]) => pattern.test(button.textContent.trim()));
+    if (kind) button.dataset.op = kind[1];
+  }
+}
+if (isModel) {
+  const main = document.getElementById("main");
+  tagOperations(main);
+  // Runs before the translation observer, so labels are still the Spanish source text.
+  new MutationObserver(() => tagOperations(main)).observe(main, { childList: true, subtree: true });
+}
+
+// Pages that scroll (no Quansheng views) honour in-page task links such as opengd77.html#connection.
+if (current && page !== "quansheng" && location.hash.length > 1) {
+  let anchor = null;
+  try { anchor = document.getElementById(decodeURIComponent(location.hash.slice(1))); } catch { /* malformed hash */ }
+  if (anchor) {
+    anchor.tabIndex = -1;
+    anchor.scrollIntoView({ block: "start" });
+    anchor.focus({ preventScroll: true });
+  }
+}
+
+function mountNextPass() {
+  const body = document.getElementById("home-next-pass-body");
+  if (!body) return;
+  const SOURCES = ["data/satellites.json", "data/channel-templates/satellites.json"];
+  const make = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+  const anchorTo = (href, label, kind) => {
+    const link = make("a", `button ${kind}`, label);
+    link.href = href;
+    return link;
+  };
+  const show = (...nodes) => body.replaceChildren(...nodes);
+  const actions = (...links) => { const row = make("div", "home-actions"); row.append(...links); return row; };
+  const message = (text, ...links) => show(make("p", "home-pass-message", text), actions(...links));
+  const toSatellites = () => anchorTo("satelites.html", "Ir a Satelites", "secondary");
+  const ageText = fetchedAt => {
+    const hours = Math.max(0, Math.floor((Date.now() - Date.parse(fetchedAt)) / 3600000));
+    return hours < 48 ? `${hours} h` : `${Math.floor(hours / 24)} d`;
+  };
+
+  const station = storedStation();
+  if (!station) {
+    message("Configura tu ubicacion para ver el proximo pase.", anchorTo("satelites.html#ubicacion", "Configurar ubicacion", "primary"));
+    return;
+  }
+  const R = globalThis.RadioWorkspace;
+  if (!R || typeof R.predictPasses !== "function") {
+    message("No se pudieron cargar los datos orbitales. Abre Satelites para ver mas detalles.", toSatellites());
+    return;
+  }
+  show(make("p", "home-pass-message", "Calculando el proximo pase..."));
+
+  const observer = { latitude: station.latitude, longitude: station.longitude, height: station.heightM / 1000 };
+  let file = null;
+  let timer = null;
+  const stop = () => { if (timer !== null) { clearInterval(timer); timer = null; } };
+
+  async function loadFile() {
+    for (const url of SOURCES) {
+      try {
+        const response = await fetch(url, { cache: "no-cache" });
+        if (response.ok) return R.validateSatellitesFile(await response.json());
+      } catch { /* try the next source */ }
+    }
+    return null;
+  }
+
+  function findNext(now) {
+    const start = Math.floor(now / 60000) * 60000 - 15 * 60000;
+    let usable = 0;
+    let best = null;
+    for (const sat of file.satellites) {
+      try {
+        R.validateSatelliteEntry(sat, now);
+        const { passes } = R.predictPasses(sat, observer, { start, hours: 24, minimum: 10 });
+        usable++;
+        for (const pass of passes) {
+          if (pass.los.time > now && (!best || pass.aos.time < best.aos)) best = { sat, aos: pass.aos.time, los: pass.los.time, max: pass.maximum.elevation };
+        }
+      } catch { /* expired or unpropagable orbital data: skipped */ }
+    }
+    return { usable, best };
+  }
+
+  function clock(ms) {
+    const total = Math.max(0, Math.ceil(ms / 1000));
+    const pad = value => String(value).padStart(2, "0");
+    return `${pad(Math.floor(total / 3600))}:${pad(Math.floor(total % 3600 / 60))}:${pad(total % 60)}`;
+  }
+
+  function refresh() {
+    stop();
+    const now = Date.now();
+    const { usable, best } = findNext(now);
+    if (!usable) {
+      message(`Los datos orbitales tienen ${ageText(file.fetchedAt)} de antiguedad y estan caducados. Actualiza la lista en Satelites.`, toSatellites());
+      return;
+    }
+    if (!best) {
+      message("No hay pases de 10 grados o mas en las proximas 24 horas.", toSatellites());
+      return;
+    }
+    const start = new Date(best.aos);
+    const today = start.toDateString() === new Date(now).toDateString();
+    const lang = document.documentElement.lang || "es";
+    const time = start.toLocaleString(lang, { ...(today ? {} : { weekday: "short", day: "numeric", month: "short" }), hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+    const fact = (label, value) => {
+      const row = make("div");
+      row.append(make("dt", "", label), value);
+      return row;
+    };
+    const value = (text, className) => make("dd", className, text);
+    const countdown = make("span", "tabular", clock(best.aos - now));
+    countdown.setAttribute("role", "timer");
+    const countdownValue = make("dd");
+    countdownValue.append(countdown);
+    const countdownRow = fact("Empieza en", countdownValue);
+    const label = countdownRow.firstChild;
+    const status = value("Proximo");
+    const facts = make("dl", "pass-facts");
+    facts.append(fact("Satelite", value(best.sat.name)), fact("Hora de inicio", value(time, "tabular")), countdownRow,
+      fact("Elevacion maxima", value(`${Math.round(best.max)}°`, "tabular")), fact("Estado", status));
+    show(facts, actions(anchorTo(`satelites.html#pase=${best.sat.norad}-${Math.round(best.aos)}`, "Ver el pase en Satelites", "secondary")));
+    let wasLive = false;
+    const tick = () => {
+      const current = Date.now();
+      if (current >= best.los) { refresh(); return; }
+      const live = current >= best.aos;
+      if (live !== wasLive) {
+        wasLive = live;
+        label.textContent = live ? "Termina en" : "Empieza en";
+        status.textContent = live ? "En curso" : "Proximo";
+      }
+      countdown.textContent = clock((live ? best.los : best.aos) - current);
+    };
+    timer = setInterval(tick, 1000);
+    tick();
+  }
+
+  setTimeout(async () => {
+    file = await loadFile();
+    if (!body.isConnected) return;
+    if (!file) { message("No se pudieron cargar los datos orbitales. Abre Satelites para ver mas detalles.", toSatellites()); return; }
+    refresh();
+  }, 0);
+}
+if (page === "home") mountNextPass();
 
 // Shows only the blocks of one view; everything else in <main> stays in the DOM but is not displayed.
 function applyView(name) {

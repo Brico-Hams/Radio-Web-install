@@ -1,0 +1,125 @@
+/* Satelites module. Colours come only from the CSS variables defined in styles.css. */
+.sat-page { display: grid; gap: 16px; max-width: 1600px; margin: 0 auto; }
+.sat-page [hidden] { display: none !important; }
+.sat-head h1 { margin: 0 0 4px; }
+.sat-lead, .sat-hint { margin: 0; color: var(--text-muted); }
+.sat-hint { font-size: .875rem; }
+.sat-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.sat-card, .sat-zone { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; min-width: 0; }
+.sat-card h2, .sat-zone h2 { margin: 0 0 10px; font-size: 1.125rem; }
+.sat-zone h3 { margin: 14px 0 6px; font-size: 1rem; }
+.sat-card:target, .sat-card:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+.sat-num, .sat-big, .sat-pass-time, .sat-pass-utc, .sat-doppler, .sat-live-box { font-variant-numeric: tabular-nums; }
+.sat-lbl { color: var(--text-muted); }
+.sat-msg { margin: 6px 0; min-height: 1.2em; }
+.sat-error { color: var(--error); font-weight: 600; }
+.sat-expired { margin: 6px 0 0; padding-left: 18px; }
+
+.sat-fields, .sat-filters { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.sat-field { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.sat-field label { font-weight: 600; font-size: .9rem; }
+.sat-field input, .sat-field select { min-height: 44px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); width: 100%; box-sizing: border-box; }
+.sat-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+.sat-check { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
+.sat-check input { width: 22px; height: 22px; margin: 0; flex: none; }
+.sat-sats { grid-column: 1 / -1; }
+.sat-sats summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; }
+.sat-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); max-height: 180px; overflow: auto; }
+
+.sat-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-weight: 600; text-decoration: none; cursor: pointer; box-sizing: border-box; text-align: center; }
+.sat-btn:hover { border-color: var(--brand-orange); }
+.sat-btn[aria-pressed="true"] { border-color: var(--brand-orange); border-width: 2px; background: var(--surface); text-decoration: underline; }
+.sat-btn-primary { background: var(--brand-orange); color: var(--on-accent); border-color: var(--brand-orange); }
+.sat-page a:not(.sat-btn) { color: var(--link); }
+.sat-page :is(button, a, input, select, summary):focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+.sat-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.sat-zone-list { order: 1; }
+.sat-zone-centre { order: 2; }
+.sat-zone-data { order: 3; }
+.sat-toggle { display: flex; gap: 8px; margin-bottom: 10px; position: sticky; top: 0; z-index: 2; padding: 6px 0; background: var(--surface); }
+.sat-toggle .sat-btn { flex: 1; }
+.sat-scroller { position: relative; overflow-y: auto; max-height: 50vh; margin-top: 8px; }
+.sat-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.sat-list li { margin: 0; }
+
+.sat-pass { display: grid; gap: 2px; width: 100%; min-height: 44px; padding: 8px 10px; text-align: left; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: 6px; cursor: pointer; box-sizing: border-box; }
+.sat-pass:hover { border-color: var(--brand-orange); }
+.sat-pass[aria-pressed="true"] { border-left: 4px solid var(--brand-orange); font-weight: 700; background: var(--surface-selected); }
+.sat-pass-head, .sat-pass-foot { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: space-between; align-items: baseline; }
+.sat-pass-name { font-weight: 700; overflow-wrap: anywhere; }
+.sat-pass-norad, .sat-pass-utc, .sat-pass-max { font-size: .8125rem; color: var(--text-muted); font-weight: 400; }
+.sat-pass-count { font-weight: inherit; }
+.sat-badge { display: inline-block; padding: 1px 8px; border: 2px solid var(--border); border-radius: 999px; font-size: .8125rem; font-weight: 700; background: var(--surface); color: var(--text); }
+.sat-badge.sat-live { border-color: var(--brand-orange); background: var(--brand-orange); color: var(--on-accent); }
+.sat-badge.sat-next { border-style: solid; border-color: var(--link); }
+.sat-badge.sat-done { border-style: dashed; color: var(--text-muted); }
+
+.sat-svg { display: block; width: 100%; height: auto; max-height: 75vh; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; }
+.sat-svg text { fill: var(--text); font-size: 13px; font-family: inherit; }
+.sat-ring, .sat-axis { fill: none; stroke: var(--border); stroke-width: 1.5; }
+.sat-ring-label { fill: var(--text-muted); font-size: 11px; }
+.sat-svg .sat-cardinal { font-weight: 700; font-size: 16px; dominant-baseline: central; }
+.sat-path, .sat-track { fill: none; stroke: var(--brand-orange); stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.sat-track-ext { fill: none; stroke: var(--brand-orange); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.sat-mark { fill: var(--bg); stroke: var(--text); stroke-width: 2; }
+.sat-mark-max { fill: var(--brand-orange); }
+.sat-live-dot { fill: var(--link); stroke: var(--text); stroke-width: 2; }
+.sat-live-dot.sat-off { display: none; }
+.sat-station { fill: var(--text); stroke: var(--bg); stroke-width: 1.5; }
+.sat-ocean { fill: var(--surface); }
+.sat-land { fill: var(--border); stroke: var(--text-muted); stroke-width: .4; }
+.sat-grat { stroke: var(--text-muted); stroke-width: .5; opacity: .45; }
+.sat-grat-main { opacity: .8; }
+#sat-map .sat-mark-text { font-size: 11px; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+
+.sat-d-name { margin: 0 0 6px; font-size: 1.125rem; }
+.sat-d-count { margin: 6px 0 12px; }
+.sat-big { display: block; font-size: 2.25rem; font-weight: 800; line-height: 1.1; }
+.sat-events { display: grid; gap: 8px; }
+.sat-event { display: grid; gap: 1px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.sat-event-label { font-weight: 700; }
+.sat-event-main { font-size: 1.0625rem; }
+.sat-event small, .sat-event-az { color: var(--text-muted); }
+.sat-live-box { margin-top: 12px; padding: 8px 10px; border: 2px solid var(--brand-orange); border-radius: 6px; }
+.sat-live-box h3 { margin-top: 0; }
+.sat-live-box p { margin: 2px 0; }
+.sat-tx { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sat-tx-item { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); overflow-wrap: anywhere; }
+.sat-tx-item p { margin: 2px 0; }
+.sat-doppler { font-weight: 600; }
+.sat-actions { display: grid; gap: 8px; }
+
+@media (min-width: 900px) {
+  .sat-layout { grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); grid-template-areas: "list centre" "list data"; }
+  .sat-zone-list { grid-area: list; }
+  .sat-zone-centre { grid-area: centre; }
+  .sat-zone-data { grid-area: data; }
+  .sat-toggle { position: static; padding: 0; background: none; }
+  .sat-toggle .sat-btn { flex: 0 0 auto; }
+  .sat-scroller { max-height: 70vh; }
+  .sat-filters { grid-template-columns: 1fr; }
+}
+@media (min-width: 1200px) {
+  .sat-layout { grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) minmax(280px, 360px); grid-template-areas: "list centre data"; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sat-page * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+@media (forced-colors: active) {
+  .sat-svg text { fill: CanvasText; }
+  .sat-ring, .sat-axis, .sat-grat, .sat-land, .sat-track-ext { stroke: CanvasText; }
+  .sat-ocean { fill: Canvas; }
+  .sat-land { fill: Canvas; }
+  .sat-path, .sat-track { stroke: Highlight; }
+  .sat-mark, .sat-live-dot, .sat-station { fill: CanvasText; stroke: CanvasText; }
+  .sat-pass[aria-pressed="true"] { border-left-color: Highlight; outline: 2px solid Highlight; }
+  .sat-badge { border-color: CanvasText; }
+}
+/* Station + orbital data collapse into one summary line once a station exists. */
+.sat-setup > summary { min-height: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; cursor: pointer; }
+.sat-setup-title { font-weight: 700; font-size: 1.125rem; }
+.sat-setup[open] > summary { margin-bottom: 10px; }
+.sat-setup > section + section { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }

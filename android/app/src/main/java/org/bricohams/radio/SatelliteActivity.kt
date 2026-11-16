@@ -54,8 +54,26 @@ class SatelliteActivity : LocalizedActivity() {
         private const val RETRY_DELAY_MS = 900000L
         private const val REQUEST_CALENDAR = 62
         const val EXTRA_OPEN_PLAN = "open-pass-plan"
+        const val EXTRA_OPEN_NEXT_NORAD = "open-next-norad"
+        const val EXTRA_OPEN_NEXT_AOS = "open-next-aos"
+        private const val PREF_NEXT_PASS = "next-pass"
+        private const val AOS_TOLERANCE_MS = 60_000L
+        private const val STATE_PAGE = "state-page"
+        private const val STATE_NORAD = "state-norad"
+        private const val STATE_AOS = "state-aos"
+        private const val STATE_SCROLL = "state-scroll"
+        private const val STATE_MORE = "state-more"
+
+        /** Encoded summary of the first pass that has not ended yet, or null when there is none. */
+        internal fun encodeNextPass(passes: List<PassTrack>, nowMs: Long): String? {
+            val next = passes.filter { it.plan.pass.los.time > nowMs }.minByOrNull { it.plan.pass.aos.time } ?: return null
+            return NextPassSummary(next.plan.tle.norad, next.plan.tle.name, next.plan.pass.aos.time, next.plan.pass.los.time,
+                next.plan.pass.maximum.elevation, nowMs).encode()
+        }
     }
     private enum class Page { PASSES, MAP, SATELLITES, SETTINGS, DETAIL }
+    /** Pass to open once the next recompute finishes (from Home, or restored after process recreation). */
+    private data class OpenRequest(val norad: Int, val aosMs: Long, val scroll: Int? = null, val expanded: Boolean = false)
     private data class OrbitKey(val tle: Tle, val observer: ObserverPosition)
     private class Card(val track: PassTrack, val countdown: TextView, val progress: ProgressBar)
 
@@ -79,6 +97,10 @@ class SatelliteActivity : LocalizedActivity() {
     private var dirty = true
     private var opened: PassTrack? = null
     private var liveRadar: PassRadarView? = null
+    private var liveStatus: TextView? = null
+    private var moreExpanded = false
+    private var pendingScroll: Int? = null
+    private var openRequest: OpenRequest? = null
     private var liveCountdown: TextView? = null
     private var liveValues: TextView? = null
     private var liveRange: TextView? = null
@@ -167,7 +189,7 @@ class SatelliteActivity : LocalizedActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
             background = Brand.rounded(this@SatelliteActivity, colors.surface, 20)
             setPadding(gutter, Brand.dp(this@SatelliteActivity, 10), gutter, Brand.dp(this@SatelliteActivity, 10))
-            countdown = Brand.text(this@SatelliteActivity, 34f, colors.accent, bold = true).apply { gravity = Gravity.CENTER }
+            countdown = Brand.text(this@SatelliteActivity, 34f, colors.accent, bold = true).apply { gravity = Gravity.CENTER; tabular() }
             countdownName = Brand.text(this@SatelliteActivity, 14f, colors.muted).apply { gravity = Gravity.CENTER }
             addView(countdown); addView(countdownName)
             isClickable = true; isFocusable = true
@@ -201,8 +223,65 @@ class SatelliteActivity : LocalizedActivity() {
         val requested = intent.getStringExtra(EXTRA_OPEN_PLAN)?.let {
             try { SatellitePlanJson.decode(it) } catch (error: IllegalArgumentException) { report(error); null }
         }
-        show(if (observer() == null && requested == null) Page.MAP else Page.PASSES)
+        val restoredPage = savedInstanceState?.getString(STATE_PAGE)?.let { runCatching { Page.valueOf(it) }.getOrNull() }
+        openRequest = when {
+            requested != null -> null
+            savedInstanceState != null -> if (restoredPage == Page.DETAIL && savedInstanceState.containsKey(STATE_NORAD))
+                OpenRequest(savedInstanceState.getInt(STATE_NORAD), savedInstanceState.getLong(STATE_AOS),
+                    savedInstanceState.getInt(STATE_SCROLL, 0), savedInstanceState.getBoolean(STATE_MORE)) else null
+            intent.hasExtra(EXTRA_OPEN_NEXT_NORAD) && intent.hasExtra(EXTRA_OPEN_NEXT_AOS) ->
+                OpenRequest(intent.getIntExtra(EXTRA_OPEN_NEXT_NORAD, 0), intent.getLongExtra(EXTRA_OPEN_NEXT_AOS, 0L))
+            else -> null
+        }
+        show(when {
+            observer() == null && requested == null -> Page.MAP
+            restoredPage != null && restoredPage != Page.DETAIL -> restoredPage
+            else -> Page.PASSES
+        })
         requested?.let { openPass(PassTrack(it, emptyList())) }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.hasExtra(EXTRA_OPEN_NEXT_NORAD) && intent.hasExtra(EXTRA_OPEN_NEXT_AOS)) {
+            openRequest = OpenRequest(intent.getIntExtra(EXTRA_OPEN_NEXT_NORAD, 0), intent.getLongExtra(EXTRA_OPEN_NEXT_AOS, 0L))
+            dirty = true
+            show(Page.PASSES)
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(STATE_PAGE, page.name)
+        outState.putBoolean(STATE_MORE, moreExpanded)
+        outState.putInt(STATE_SCROLL, if (page == Page.DETAIL) pendingScroll ?: 0 else pages[Page.PASSES]?.scrollY ?: 0)
+        opened?.takeIf { page == Page.DETAIL }?.let {
+            outState.putInt(STATE_NORAD, it.plan.tle.norad)
+            outState.putLong(STATE_AOS, it.plan.pass.aos.time)
+        }
+    }
+
+    @Deprecated("Platform callback")
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (page == Page.DETAIL) show(Page.PASSES) else super.onBackPressed()
+    }
+
+    /** Opens the requested pass if the fresh list still has it; otherwise stays on the list with a short note. */
+    private fun applyOpenRequest() {
+        val request = openRequest ?: return
+        openRequest = null
+        val match = passes.firstOrNull {
+            it.plan.tle.norad == request.norad && Math.abs(it.plan.pass.aos.time - request.aosMs) <= AOS_TOLERANCE_MS
+        }
+        if (match == null) status.setText(R.string.pass_gone)
+        else if (page == Page.PASSES) openPass(match, request.scroll, request.expanded)
+    }
+    private fun finishRecompute(list: List<PassTrack>) {
+        val encoded = encodeNextPass(list, System.currentTimeMillis())
+        preferences.edit().apply { if (encoded == null) remove(PREF_NEXT_PASS) else putString(PREF_NEXT_PASS, encoded) }.apply()
+        applyOpenRequest()
     }
 
     private fun page(key: Page, build: LinearLayout.() -> Unit) {
@@ -228,6 +307,11 @@ class SatelliteActivity : LocalizedActivity() {
         }
         content.removeAllViews()
         content.addView(pages.getValue(target))
+        if (target == Page.PASSES) pendingScroll?.let { y ->
+            pendingScroll = null
+            val list = pages.getValue(target)
+            list.post { list.scrollTo(0, y) }
+        }
         navigation.removeAllViews()
         for ((key, label) in listOf(Page.PASSES to R.string.satellite_tab_passes, Page.MAP to R.string.satellite_tab_map,
             Page.SATELLITES to R.string.satellite_tab_satellites, Page.SETTINGS to R.string.satellite_tab_settings)) {
@@ -282,10 +366,15 @@ class SatelliteActivity : LocalizedActivity() {
         val chosen = catalog.filter { it.norad in selected }
         val token = ++generation
         passes = emptyList()
+        fun noPasses(message: Int) {
+            preferences.edit().remove(PREF_NEXT_PASS).apply()
+            status.setText(message)
+            if (openRequest != null) { openRequest = null; status.setText(R.string.pass_gone) }
+        }
         when {
-            catalog.isEmpty() -> { status.setText(R.string.satellite_no_catalog); return }
-            observer == null -> { status.setText(R.string.satellite_no_observer); return }
-            chosen.isEmpty() -> { status.setText(R.string.satellite_none_selected); return }
+            catalog.isEmpty() -> { noPasses(R.string.satellite_no_catalog); return }
+            observer == null -> { noPasses(R.string.satellite_no_observer); return }
+            chosen.isEmpty() -> { noPasses(R.string.satellite_none_selected); return }
         }
         val position = requireNotNull(observer)
         val minimum = minimum()
@@ -314,6 +403,7 @@ class SatelliteActivity : LocalizedActivity() {
                             else getString(R.string.satellite_results, snapshot.size, chosen.size, errors.size,
                                 errors.firstOrNull() ?: "")
                         if (page == Page.PASSES) renderPasses()
+                        if (done == chosen.size) finishRecompute(snapshot)
                     }
                 }
             }
@@ -322,6 +412,9 @@ class SatelliteActivity : LocalizedActivity() {
     private fun defaultDownlink(norad: Int) = preferences.getLong("downlink-$norad", 0).takeIf { it > 0 }
         ?: transmitters[norad]?.firstOrNull { it.mode.startsWith("FM") }?.downlinkHz ?: transmitters[norad]?.firstOrNull()?.downlinkHz
         ?: DEFAULT_DOWNLINK
+
+    private fun TextView.tabular() { fontFeatureSettings = "tnum" }
+    private fun TextView.markHeading() { if (Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true }
 
     private fun nextPass(): PassTrack? = System.currentTimeMillis().let { now -> passes.firstOrNull { it.plan.pass.los.time > now } }
 
@@ -375,7 +468,7 @@ class SatelliteActivity : LocalizedActivity() {
                         pass.aos.azimuth, pass.los.azimuth)
                 })
                 val modes = transmitters[track.plan.tle.norad]?.map { it.mode }?.distinct()?.take(3)?.joinToString(" · ") ?: ""
-                val remaining = Brand.text(this@SatelliteActivity, 13f)
+                val remaining = Brand.text(this@SatelliteActivity, 13f).apply { tabular() }
                 card.addView(Brand.row(this@SatelliteActivity, remaining.apply {
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 }, Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { text = modes }))
@@ -391,7 +484,9 @@ class SatelliteActivity : LocalizedActivity() {
         tick()
     }
 
-    private fun openPass(track: PassTrack) {
+    private fun openPass(track: PassTrack, restoreScroll: Int? = null, expanded: Boolean = false) {
+        pendingScroll = restoreScroll ?: if (page == Page.PASSES) pages[Page.PASSES]?.scrollY else pendingScroll
+        moreExpanded = expanded
         opened = track
         liveTransmitters.clear()
         aiming = false; deviceAzimuth = null; deviceElevation = null
@@ -402,44 +497,15 @@ class SatelliteActivity : LocalizedActivity() {
             addView(Brand.row(this@SatelliteActivity,
                 Brand.chip(this@SatelliteActivity, getString(R.string.satellite_back), false) { show(Page.PASSES) },
                 Brand.text(this@SatelliteActivity, 17f, bold = true).apply {
-                    text = getString(R.string.satellite_detail_title, tle.norad, tle.name)
+                                    text = getString(R.string.pass_detail_header, tle.name, tle.norad)
                     setPadding(Brand.dp(this@SatelliteActivity, 10), 0, 0, 0)
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 3f)
                 }))
-            addView(Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply {
-                setText(R.string.live_title); setPadding(0, Brand.dp(this@SatelliteActivity, 8), 0, 0)
-            })
-            liveCountdown = Brand.text(this@SatelliteActivity, 34f, colors.accent, bold = true).also { addView(it) }
-            liveValues = Brand.text(this@SatelliteActivity, 22f, bold = true).also { addView(it) }
-            liveRange = Brand.text(this@SatelliteActivity, 15f, colors.muted).also { addView(it) }
-            liveSummary = Brand.text(this@SatelliteActivity, 13f, colors.muted).apply {
-                val pass = track.plan.pass
-                text = getString(R.string.pass_summary,
-                    DateTimeFormatter.ofPattern("dd/MM HH:mm:ss", Locale.ROOT).withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(pass.aos.time)),
-                    pass.maximum.rangeKm, pass.maximum.elevation, pass.aos.azimuth, pass.los.azimuth)
+            val modeList = transmitters[tle.norad].orEmpty()
+            liveStatus = Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply {
+                setPadding(0, Brand.dp(this@SatelliteActivity, 8), 0, 0); markHeading()
             }.also { addView(it) }
-            liveDx = null; liveDxWindow = null; dxStation = null; dxBusy = false; dxLastMs = 0L
-            dxLocator = preferences.getString("dx-locator", "").orEmpty()
-            if (Maidenhead.isValid(dxLocator)) {
-                val place = Maidenhead.toLatLon(dxLocator)
-                val station = try { ObserverPosition(place.latitude, place.longitude, 0.0).validated() } catch (error: IllegalArgumentException) { null }
-                if (station != null) {
-                    dxStation = station
-                    liveDx = Brand.text(this@SatelliteActivity, 15f, colors.accent, true).apply {
-                        visibility = View.GONE
-                    }.also { addView(it) }
-                    liveDxWindow = Brand.text(this@SatelliteActivity, 14f, colors.muted).apply {
-                        visibility = View.GONE
-                    }.also { addView(it) }
-                    computeMutualWindow(track, station)
-                }
-            }
-            liveActions = Brand.row(this@SatelliteActivity).also { addView(it) }
-            liveHelp = Brand.text(this@SatelliteActivity, 13f).apply {
-                setText(R.string.pass_help_text); visibility = View.GONE
-                setPadding(Brand.dp(this@SatelliteActivity, 8), Brand.dp(this@SatelliteActivity, 8), Brand.dp(this@SatelliteActivity, 8), Brand.dp(this@SatelliteActivity, 8))
-            }.also { addView(it) }
-            buildPassActions()
+            liveCountdown = Brand.text(this@SatelliteActivity, 34f, colors.accent, bold = true).apply { tabular() }.also { addView(it) }
             val view = PassRadarView(this@SatelliteActivity).apply {
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
                 cardinals = getString(R.string.live_cardinals).split(',').toTypedArray()
@@ -452,13 +518,67 @@ class SatelliteActivity : LocalizedActivity() {
             }
             liveRadar = view
             addView(view)
-            liveModes = Brand.row(this@SatelliteActivity).also { addView(it) }
+            liveValues = Brand.text(this@SatelliteActivity, 22f, bold = true).apply { tabular() }.also { addView(it) }
+            liveRange = Brand.text(this@SatelliteActivity, 15f, colors.muted).apply { tabular() }.also { addView(it) }
+            addView(Brand.card(this@SatelliteActivity).apply {
+                addView(Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply { setText(R.string.pass_radio_title); markHeading() })
+                if (modeList.isEmpty()) addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.satellite_no_downlinks) })
+                for (transmitter in modeList) {
+                    val row = Brand.text(this@SatelliteActivity, 14f).apply {
+                        setPadding(0, Brand.dp(this@SatelliteActivity, 6), 0, Brand.dp(this@SatelliteActivity, 6)); tabular()
+                    }
+                    liveTransmitters.add(Pair(transmitter, row))
+                    addView(row)
+                }
+            }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = Brand.dp(this@SatelliteActivity, 8) })
+            // No CAT/rig tracking session is started from this screen (SatelliteTracking runs inside CatActivity), so
+            // there is no status or "stop tracking" control to show here.
+            val more = LinearLayout(this@SatelliteActivity).apply { orientation = LinearLayout.VERTICAL }
+            val toggle = Brand.button(this@SatelliteActivity, "", false) {}
+            fun syncMore() {
+                more.visibility = if (moreExpanded) View.VISIBLE else View.GONE
+                val label = getString(if (moreExpanded) R.string.pass_more_hide else R.string.pass_more_show)
+                toggle.text = label
+                toggle.contentDescription = label
+            }
+            toggle.setOnClickListener { moreExpanded = !moreExpanded; syncMore() }
+            syncMore()
+            addView(toggle)
+            addView(more)
+            liveSummary = Brand.text(this@SatelliteActivity, 13f, colors.muted).apply {
+                val pass = track.plan.pass
+                text = getString(R.string.pass_summary,
+                    DateTimeFormatter.ofPattern("dd/MM HH:mm:ss", Locale.ROOT).withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(pass.aos.time)),
+                    pass.maximum.rangeKm, pass.maximum.elevation, pass.aos.azimuth, pass.los.azimuth)
+            }.also { more.addView(it) }
+            liveDx = null; liveDxWindow = null; dxStation = null; dxBusy = false; dxLastMs = 0L
+            dxLocator = preferences.getString("dx-locator", "").orEmpty()
+            if (Maidenhead.isValid(dxLocator)) {
+                val place = Maidenhead.toLatLon(dxLocator)
+                val station = try { ObserverPosition(place.latitude, place.longitude, 0.0).validated() } catch (error: IllegalArgumentException) { null }
+                if (station != null) {
+                    dxStation = station
+                    liveDx = Brand.text(this@SatelliteActivity, 15f, colors.accent, true).apply {
+                        visibility = View.GONE
+                    }.also { more.addView(it) }
+                    liveDxWindow = Brand.text(this@SatelliteActivity, 14f, colors.muted).apply {
+                        visibility = View.GONE
+                    }.also { more.addView(it) }
+                    computeMutualWindow(track, station)
+                }
+            }
+            liveActions = Brand.row(this@SatelliteActivity).also { more.addView(it) }
+            liveHelp = Brand.text(this@SatelliteActivity, 13f).apply {
+                setText(R.string.pass_help_text); visibility = View.GONE
+                setPadding(Brand.dp(this@SatelliteActivity, 8), Brand.dp(this@SatelliteActivity, 8), Brand.dp(this@SatelliteActivity, 8), Brand.dp(this@SatelliteActivity, 8))
+            }.also { more.addView(it) }
+            buildPassActions()
+            liveModes = Brand.row(this@SatelliteActivity).also { more.addView(it) }
             buildModeChips()
-            liveHeadingNote = Brand.text(this@SatelliteActivity, 13f, colors.muted).also { addView(it) }
+            liveHeadingNote = Brand.text(this@SatelliteActivity, 13f, colors.muted).also { more.addView(it) }
             livePoint = Brand.text(this@SatelliteActivity, 18f, colors.accent, true).apply {
                 setPadding(0, Brand.dp(this@SatelliteActivity, 8), 0, Brand.dp(this@SatelliteActivity, 8))
-            }.also { addView(it) }
-            val modeList = transmitters[tle.norad].orEmpty()
+            }.also { more.addView(it) }
             val transceivers = LinearLayout(this@SatelliteActivity).apply { orientation = LinearLayout.VERTICAL }
             val sstvBox = LinearLayout(this@SatelliteActivity).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
             liveSstv = sstvBox
@@ -477,22 +597,13 @@ class SatelliteActivity : LocalizedActivity() {
                 }
             }
             showTabs()
-            addView(tabs)
-            addView(transceivers)
-            addView(sstvBox)
+            more.addView(tabs)
+            more.addView(transceivers)
+            more.addView(sstvBox)
             transceivers.apply {
-            addView(Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply {
-                setText(R.string.live_transmitters)
-            })
-            if (modeList.isEmpty()) addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.satellite_no_downlinks) })
-            for (transmitter in modeList) {
-                val row = Brand.text(this@SatelliteActivity, 14f).apply { setPadding(0, Brand.dp(this@SatelliteActivity, 6), 0, Brand.dp(this@SatelliteActivity, 6)) }
-                liveTransmitters.add(Pair(transmitter, row))
-                addView(row)
-            }
             addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { text = SatellitePasses.detail(track, 0, this@SatelliteActivity).substringBeforeLast('\n') })
             addView(Brand.text(this@SatelliteActivity, 16f, colors.accent, true).apply {
-                setText(R.string.satellite_downlinks); setPadding(0, Brand.dp(this@SatelliteActivity, 12), 0, 0)
+                setText(R.string.satellite_downlinks); setPadding(0, Brand.dp(this@SatelliteActivity, 12), 0, 0); markHeading()
             })
             val manual = EditText(this@SatelliteActivity).apply {
                 id = R.id.satellite_downlink
@@ -1045,7 +1156,7 @@ class SatelliteActivity : LocalizedActivity() {
                 startActivity(Intent(this, CatActivity::class.java).putExtra("satellite-plan", SatellitePlanJson.encode(track.plan)))
             } catch (error: IllegalArgumentException) { report(error) }
         })
-        box.addView(Brand.text(this, 16f, colors.accent, true).apply { setText(R.string.satellite_recordings) })
+        box.addView(Brand.text(this, 16f, colors.accent, true).apply { setText(R.string.satellite_recordings); markHeading() })
         val recordings = File(filesDir, "recordings").listFiles { f -> f.name.endsWith("-${tle.norad}.wav") }
             .orEmpty().sortedByDescending { it.name }
         if (recordings.isEmpty()) box.addView(Brand.text(this, 13f, colors.muted).apply { setText(R.string.satellite_no_recordings) })
@@ -1141,6 +1252,11 @@ class SatelliteActivity : LocalizedActivity() {
         val position = SatellitePasses.at(track.track, now)
         val rising = now < pass.aos.time
         val left = (((if (rising) pass.aos.time else pass.los.time) - now) / 1000).coerceAtLeast(0)
+        liveStatus?.text = getString(R.string.pass_status_line, getString(when {
+            rising -> R.string.pass_state_next
+            now < pass.los.time -> R.string.pass_state_now
+            else -> R.string.pass_state_over
+        }))
         liveCountdown?.apply {
             text = if (now >= pass.los.time) getString(R.string.pass_finished)
                 else getString(if (rising) R.string.satellite_countdown_aos else R.string.satellite_countdown_los, left / 3600, left / 60 % 60, left % 60)
@@ -1198,7 +1314,8 @@ class SatelliteActivity : LocalizedActivity() {
             PassSky.motionBearing(position!!, SatellitePasses.at(points, (now + 10_000).coerceAtMost(points.last().time)) ?: position)
         }?.let { getString(R.string.pass_radar_direction, getString(R.string.pass_cardinals8).split(',')[PassSky.octant(it)]) }
         liveRadar?.contentDescription = getString(R.string.satellite_radar_description,
-            listOf(values, aimText, sourceLabel, direction.orEmpty(),
+            listOf(getString(R.string.pass_radar_summary, pass.aos.azimuth, pass.maximum.azimuth, pass.maximum.elevation, pass.los.azimuth),
+                values, aimText, sourceLabel, direction.orEmpty(),
                 if (sun.elevation >= 0) getString(R.string.pass_radar_sun, sun.azimuth, sun.elevation) else "",
                 if (moon.elevation >= 0) getString(R.string.pass_radar_moon, moon.azimuth, moon.elevation) else "")
                 .filter { it.isNotEmpty() }.joinToString(". "))
@@ -1207,9 +1324,9 @@ class SatelliteActivity : LocalizedActivity() {
         for ((transmitter, row) in liveTransmitters) {
             val down = transmitter.downlinkHz.let { if (rate == null) it.toDouble() else PassGeometry.dopplerHz(it, rate) }
             val up = transmitter.uplinkHz?.let {
-                getString(R.string.live_tx_up, (if (rate == null) it.toDouble() else PassGeometry.dopplerHz(it, rate, true)) / 1e6)
-            } ?: getString(R.string.live_tx_no_up)
-            row.text = getString(R.string.live_tx_row, transmitter.description, transmitter.mode, down / 1e6, up,
+                getString(R.string.pass_radio_tx_up, (if (rate == null) it.toDouble() else PassGeometry.dopplerHz(it, rate, true)) / 1e6)
+            } ?: getString(R.string.pass_radio_tx_none)
+            row.text = getString(R.string.pass_radio_row, transmitter.description, transmitter.mode, down / 1e6, up,
                 getString(if (transmitter.invert) R.string.live_tx_inverted_yes else R.string.live_tx_inverted_no)) + nominal
         }
     }

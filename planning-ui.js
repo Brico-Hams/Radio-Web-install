@@ -142,6 +142,23 @@
     }
     document.getElementById("radio-operations").before(panel);
     const $ = id => document.getElementById(id);
+    try {
+      const sat = new URLSearchParams(location.search).get("sat");
+      if (/^\d{1,5}$/.test(sat || "") && Number(sat) >= 1) {
+        $("plan-norad").value = String(Number(sat));
+        if ([...$("plan-sat-preset").options].some(option => option.value === String(Number(sat)))) $("plan-sat-preset").value = String(Number(sat));
+      }
+    } catch { /* invalid query string: keep defaults */ }
+    try {
+      const station = JSON.parse(localStorage.getItem("bricohams.station") || "null");
+      if (station && Number.isFinite(station.latitude) && Math.abs(station.latitude) <= 90 &&
+        Number.isFinite(station.longitude) && Math.abs(station.longitude) <= 180 &&
+        Number.isFinite(station.heightM) && station.heightM >= -500 && station.heightM <= 9000) {
+        $("plan-lat").value = station.latitude;
+        $("plan-lon").value = station.longitude;
+        $("plan-alt").value = station.heightM;
+      }
+    } catch { /* storage unavailable or corrupt: leave the form empty */ }
     let busy = false;
     let web = false;
     let currentTab = "repeaters";

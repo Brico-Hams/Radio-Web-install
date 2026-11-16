@@ -303,3 +303,57 @@ body:not([data-advanced]) [data-advanced-only] { display: none !important; }
 }
 /* Tables placed directly in a panel (TK-11) scroll inside it instead of widening the page on phones. */
 .panel > table { display: block; max-width: 100%; overflow-x: auto; }
+
+/* Task-ordered sidebar: Inicio, Satelites, Radios (with its models indented) and Ayuda. */
+.sidebar nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.sidebar nav li { margin: 0; min-width: 0; }
+.sidebar nav .nav-sub { margin: 6px 0 2px 18px; padding-left: 10px; border-left: 2px solid var(--line); }
+.sidebar nav .nav-sub a { font-size: 14px; }
+.sidebar nav a.nav-ancestor { color: var(--link); font-weight: 700; border-color: var(--line); }
+.sidebar nav a { overflow-wrap: anywhere; }
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Page heading shared by Home and Radios. */
+.page-head { margin-bottom: 24px; }
+.page-head h1 { font-size: clamp(30px, 3.4vw, 42px); letter-spacing: -1px; margin: 10px 0 12px; }
+.page-lead { color: var(--muted); font-size: 16px; max-width: 72ch; margin: 0; }
+
+/* Home panels. */
+.home-panel { margin-bottom: 20px; }
+.home-panel h2 { font-size: 18px; margin: 0 0 14px; }
+.home-pass-message { font-size: 14px; max-width: 72ch; margin: 0 0 14px; }
+.pass-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px 24px; margin: 0 0 18px; }
+.pass-facts > div { min-width: 0; }
+.pass-facts dt { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.pass-facts dd { margin: 0; font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+.home-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.home-actions .button { display: inline-flex; width: auto; min-height: 44px; max-width: 100%; text-align: center; }
+.home-help { font-size: 13px; margin-top: 24px; }
+.home-help a { display: inline-block; padding: 6px 0; }
+
+/* Radios page: family cards with their task groups underneath. */
+.radio-family { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.radio-family > .tool-card { flex: 1 1 auto; }
+.task-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.task-list a { display: flex; align-items: center; min-height: 44px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 14px; text-decoration: none; overflow-wrap: anywhere; }
+.task-list a:hover { background: var(--surface-soft); color: var(--text); }
+
+/* Operation kinds on model pages. The label already names the verb; the mark only adds a visual cue. */
+.op-legend { font-size: 14px; color: var(--muted); max-width: 72ch; margin: 16px 0 0; }
+#main [data-op=write] { border-left: 4px solid var(--error); }
+#main [data-op=write]::before { content: "\26A0\FE0E"; margin-right: 8px; }
+#main [data-op=prepare] { border-left: 4px solid var(--link); }
+#main [data-op=edit] { border: 1px dashed var(--text-muted); }
+
+@media (max-width: 760px) {
+  .sidebar nav ul { display: flex; flex-wrap: nowrap; gap: 6px; }
+  .sidebar nav li { display: flex; flex: 0 0 auto; gap: 6px; }
+  .sidebar nav .nav-sub { margin: 0; padding: 0; border: 0; }
+  .sidebar nav a { overflow-wrap: normal; }
+  .home-actions .button { flex: 1 1 100%; }
+}
+@media (forced-colors: active) {
+  .sidebar nav a.nav-ancestor, .task-list a { border: 1px solid CanvasText; }
+  #main [data-op=write] { border-left-color: CanvasText; }
+  #main [data-op=prepare] { border-left-color: LinkText; }
+}

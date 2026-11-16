@@ -104,7 +104,7 @@ class RadioStoreHostTest {
             ReflectionHelpers.setField(activity, "sessionId", first)
             fun all(view: View): List<View> = listOf(view) +
                 if (view is ViewGroup) (0 until view.childCount).flatMap { all(view.getChildAt(it)) } else emptyList()
-            all(activity.window.decorView).filterIsInstance<Button>().single { it.text == "ARDF" }.performClick()
+            all(activity.window.decorView).filterIsInstance<Button>().single { it.text == "Abrir ARDF" }.performClick()
             all(activity.window.decorView).filterIsInstance<Button>()
                 .single { it.text == "Estadisticas y observaciones de la sesion" }.performClick()
             val dialog = ShadowAlertDialog.getLatestAlertDialog()
@@ -181,7 +181,7 @@ class RadioStoreHostTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
             var activity = controller.get()
-            click(activity, "Guardia")
+            click(activity, "Cuaderno")
             activity.findViewById<EditText>(R.id.contact_search).setText("montana")
             click(activity, "Buscar contactos")
             fun edits() = views(controller.get().window.decorView).filterIsInstance<Button>()
@@ -205,7 +205,7 @@ class RadioStoreHostTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
             val activity = controller.get()
-            click(activity, "Guardia")
+            click(activity, "Cuaderno")
             fun await(condition: () -> Boolean) {
                 val deadline = System.nanoTime() + 10_000_000_000L
                 while (!condition() && System.nanoTime() < deadline) {
@@ -318,7 +318,7 @@ class RadioStoreHostTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
             var activity = controller.get()
-            click(activity, "Guardia")
+            click(activity, "Cuaderno")
             activity.findViewById<EditText>(R.id.logbook_name).setText("Parque")
             activity.findViewById<android.widget.Spinner>(R.id.logbook_kind).setSelection(1)
             activity.findViewById<EditText>(R.id.logbook_reference).setText("ea-0123")
@@ -375,7 +375,7 @@ class RadioStoreHostTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
             var activity = controller.get()
-            click(activity, "Guardia")
+            click(activity, "Cuaderno")
             activity.findViewById<EditText>(R.id.contact_call).setText("EA1ABC")
             activity.findViewById<EditText>(R.id.contact_frequency).setText("145.500")
             controller.recreate()

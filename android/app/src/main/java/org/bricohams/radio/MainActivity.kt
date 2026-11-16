@@ -42,6 +42,7 @@ class MainActivity : LocalizedActivity() {
     private lateinit var status: TextView
     private val navigation = linkedMapOf<String, Button>()
     private var tab = TAB_HOME
+    private var infoVisible = false
     private var sessionId: String? = null
     private var editingId: String? = null
     private var contactSearch = ""
@@ -86,7 +87,7 @@ class MainActivity : LocalizedActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = RadioStore(this)
-        tab = savedInstanceState?.getString("tab") ?: TAB_HOME
+        tab = savedInstanceState?.getString("tab")?.takeIf { it in TABS } ?: TAB_HOME
         sessionId = savedInstanceState?.getString("session")
         editingId = savedInstanceState?.getString("editing")
         contactSearch = savedInstanceState?.getString("contactSearch") ?: ""
@@ -140,15 +141,18 @@ class MainActivity : LocalizedActivity() {
             }
         })
         val nav = LinearLayout(this)
-        for ((name, label) in TABS) {
+        for ((name, label) in NAV) {
             nav.addView(Brand.button(this, getString(label)) {
-                if (name != tab) {
+                if (name == NAV_SATELLITES) {
+                    startActivity(Intent(this, SatelliteActivity::class.java))
+                } else if (name != tab) {
                     stopLocation()
                     fix = null
                     tab = name
                     render()
                 }
             }.also {
+                if (name == NAV_SATELLITES) it.contentDescription = getString(R.string.home_open_satellites)
                 navigation[name] = it
                 // One line per label: smaller text, tight padding, no min width; ellipsize as a last resort.
                 it.setSingleLine(true); it.ellipsize = android.text.TextUtils.TruncateAt.END
@@ -222,7 +226,8 @@ class MainActivity : LocalizedActivity() {
         content.removeAllViews()
         val colors = Brand.Palette(this)
         navigation.forEach { (name, button) ->
-            val active = name == tab
+            // ARDF and Morse are reached from Home, so Inicio stays selected while they are open.
+            val active = name == tab || (name == TAB_HOME && (tab == TAB_ARDF || tab == TAB_MORSE))
             button.isSelected = active
             button.setTextColor(if (active) colors.onAccent else colors.text)
             button.background = android.graphics.drawable.RippleDrawable(
@@ -230,13 +235,15 @@ class MainActivity : LocalizedActivity() {
                 // Brand manual: the active tab is a brand-orange fill with graphite text (colors.accent is the link/text tone).
                 Brand.rounded(this, if (active) Brand.ORANGE else colors.surfaceHigh, 16), null)
         }
-        content.background = if (tab == TAB_HOME) null else Brand.rounded(this, colors.surface, 20)
-        val padding = if (tab == TAB_HOME) 0 else dp(16)
+        val cards = tab == TAB_HOME || tab == TAB_RADIO
+        content.background = if (cards) null else Brand.rounded(this, colors.surface, 20)
+        val padding = if (cards) 0 else dp(16)
         content.setPadding(padding, padding, padding, padding)
-        if (tab != TAB_HOME) content.addView(Brand.heading(this, getString(TABS[tab] ?: R.string.tab_home)))
+        if (!cards) content.addView(Brand.heading(this, getString(TABS[tab] ?: R.string.tab_home)))
         message(getString(R.string.main_beta_banner))
         userAction {
             when (tab) {
+                TAB_RADIO -> radio()
                 TAB_LOGBOOK -> logbook()
                 TAB_ARDF -> ardf()
                 TAB_MORSE -> morse()
@@ -246,41 +253,32 @@ class MainActivity : LocalizedActivity() {
     }
     private fun home() {
         content.addView(Brand.heading(this, getString(R.string.home_workspace)))
-        fun section(title: Int, build: () -> Unit) {
-            val parent = content
-            val card = Brand.card(this)
-            parent.addView(card)
-            content = card
-            try {
-                content.addView(Brand.heading(this, getString(title)))
-                build()
-            } finally { content = parent }
-        }
         val profile = ProfileStore.load(this)
+        // The next pass comes first; the station summary follows (the profile help lives in the Radio tab).
+        section(R.string.home_next_pass_title) { nextPass() }
         section(R.string.profile_title) {
             text(ProfileStore.summary(this))
-            text(R.string.home_profile_help)
-            Brand.button(this, getString(R.string.profile_edit), true) {
+            Brand.button(this, getString(R.string.profile_edit)) {
                 startActivity(Intent(this, ProfileActivity::class.java))
             }.also(content::addView)
         }
-        section(R.string.home_main) {
+        section(R.string.home_tools_title) {
+            subHeading(R.string.home_cat_satellites)
             button(R.string.home_open_satellites) { startActivity(Intent(this, SatelliteActivity::class.java)) }
+            toolButton(Tool.ROTOR, profile.radio)
+            subHeading(R.string.home_cat_digital)
             button(R.string.home_open_ftx) { startActivity(Intent(this, FtxActivity::class.java)) }
+            toolButton(Tool.SSTV, profile.radio)
+            toolButton(Tool.APRS_CHAT, profile.radio)
+            toolButton(Tool.LIVE_AUDIO, profile.radio)
+            button(R.string.home_open_morse) { tab = TAB_MORSE; render() }
+            subHeading(R.string.home_cat_ardf)
+            button(R.string.home_open_ardf) { tab = TAB_ARDF; render() }
+            subHeading(R.string.home_cat_logbook)
             button(R.string.home_open_logbook) { tab = TAB_LOGBOOK; render() }
         }
-        section(R.string.home_radio_tools) {
-            for (tool in Tool.values()) {
-                val label = getString(tool.label)
-                val entry = button(label) { startActivity(Intent(this, tool.activity)) }
-                if (!profile.radio.allows(tool)) {
-                    entry.isEnabled = false
-                    entry.alpha = 0.5f
-                    entry.contentDescription = getString(R.string.home_tool_unavailable, label, profile.radio!!.label(this))
-                }
-            }
-        }
-        section(R.string.home_data) {
+        section(R.string.home_more_title) {
+            subHeading(R.string.home_data)
             button(R.string.home_export_json) { export("json") }
             button(R.string.home_import_json) {
                 AlertDialog.Builder(this).setTitle(R.string.import_json_title)
@@ -292,14 +290,120 @@ class MainActivity : LocalizedActivity() {
                         }, 40)
                     }.show()
             }
+            subHeading(R.string.home_info_title)
+            button(if (infoVisible) R.string.home_info_hide else R.string.home_info_show) {
+                infoVisible = !infoVisible
+                render()
+            }
+            if (infoVisible) {
+                text(getString(R.string.home_version_line, VersionTracker.running(this).name, VersionTracker.running(this).code))
+                text(R.string.home_offline)
+                text(R.string.home_features)
+                text(R.string.home_ardf_note)
+                text(R.string.home_privacy)
+            }
+            if (OtaConfig.enabled) {
+                subHeading(R.string.home_updates_title)
+                button(R.string.home_open_updates) { startActivity(Intent(this, OtaActivity::class.java)) }
+            }
         }
-        section(R.string.home_about) {
-            text(getString(R.string.home_version_line, VersionTracker.running(this).name, VersionTracker.running(this).code))
-            text(R.string.home_offline)
-            text(R.string.home_features)
-            text(R.string.home_ardf_note)
-            text(R.string.home_privacy)
-            if (OtaConfig.enabled) button(R.string.home_open_updates) { startActivity(Intent(this, OtaActivity::class.java)) }
+    }
+    private fun section(title: Int, build: () -> Unit) = section(getString(title), build)
+    private fun section(title: String, build: () -> Unit) {
+        val parent = content
+        val card = Brand.card(this)
+        parent.addView(card)
+        content = card
+        try {
+            content.addView(Brand.heading(this, title))
+            build()
+        } finally { content = parent }
+    }
+    private fun subHeading(title: Int) {
+        val colors = Brand.Palette(this)
+        content.addView(Brand.text(this, 17f, colors.accent, bold = true).apply {
+            setText(title)
+            setPadding(0, dp(14), 0, dp(4))
+            if (Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
+        })
+    }
+    /** Button for a [Tool]; disabled with an explanatory description when the radio cannot use it. */
+    private fun toolButton(tool: Tool, radio: ProfileRadio?): Button {
+        val label = getString(tool.label)
+        val entry = button(label) { startActivity(Intent(this, tool.activity)) }
+        if (!radio.allows(tool)) {
+            entry.isEnabled = false
+            entry.alpha = 0.5f
+            entry.contentDescription = getString(R.string.home_tool_unavailable, label, radio!!.label(this))
+        }
+        return entry
+    }
+    private fun nextPass() {
+        val observer = getSharedPreferences("satellite-observer", MODE_PRIVATE)
+        val hasLocation = !observer.getString("latitude", null).isNullOrBlank() &&
+            !observer.getString("longitude", null).isNullOrBlank()
+        if (!hasLocation) {
+            text(R.string.next_pass_need_location)
+            button(R.string.next_pass_set_location) { startActivity(Intent(this, ProfileActivity::class.java)) }
+            return
+        }
+        val pass = NextPassSummary.decode(observer.getString("next-pass", null))
+        val now = System.currentTimeMillis()
+        if (pass == null || pass.isOver(now)) {
+            text(R.string.next_pass_none)
+            button(R.string.next_pass_calculate) { startActivity(Intent(this, SatelliteActivity::class.java)) }
+            return
+        }
+        val aos = java.time.format.DateTimeFormatter.ofPattern("HH:mm")
+            .withZone(java.time.ZoneId.systemDefault()).format(Instant.ofEpochMilli(pass.aosMs))
+        text(getString(R.string.next_pass_name_aos, pass.name, aos))
+        text(if (pass.isInProgress(now)) getString(R.string.next_pass_in_progress)
+            else getString(R.string.next_pass_aos_in, pass.minutesToAos(now)))
+        text(getString(R.string.next_pass_max_elevation, Math.round(pass.maxElevationDeg).toInt()))
+        text(getString(R.string.next_pass_computed, pass.minutesSinceComputed(now)))
+        Brand.button(this, getString(R.string.next_pass_open), true) {
+            startActivity(Intent(this, SatelliteActivity::class.java)
+                .putExtra("open-next-norad", pass.norad).putExtra("open-next-aos", pass.aosMs))
+        }.also(content::addView)
+    }
+    private fun radio() {
+        val profile = ProfileStore.load(this)
+        val radio = profile.radio
+        content.addView(Brand.heading(this, radio?.label(this) ?: getString(R.string.radio_none)))
+        section(R.string.profile_title) {
+            text(ProfileStore.summary(this))
+            text(R.string.home_profile_help)
+            Brand.button(this, getString(if (radio == null) R.string.radio_configure else R.string.profile_edit), true) {
+                startActivity(Intent(this, ProfileActivity::class.java))
+            }.also(content::addView)
+        }
+        val groups = listOf(
+            R.string.radio_cat_title to listOf(Tool.RIG_CAT, Tool.UVK5_CAT, Tool.DIAGNOSTICS, Tool.GD77, Tool.RT950),
+            R.string.radio_channels_title to listOf(Tool.CHANNELS, Tool.TEMPLATES))
+        for ((title, tools) in groups) {
+            val available = tools.filter { radio.allows(it) }
+            if (available.isEmpty()) continue
+            section(title) { available.forEach { toolButton(it, radio) } }
+        }
+        val unavailable = groups.flatMap { it.second }.filterNot { radio.allows(it) }
+        if (radio != null && unavailable.isNotEmpty()) {
+            section(getString(R.string.radio_unavailable_title, radio.label(this))) {
+                unavailable.forEach {
+                    text(getString(R.string.home_tool_unavailable, getString(it.label), radio.label(this)))
+                    toolButton(it, radio)
+                }
+            }
+        }
+    }
+    override fun onBackPressed() {
+        if (tab != TAB_HOME) {
+            stopLocation()
+            fix = null
+            tab = TAB_HOME
+            render()
+        } else {
+            @Suppress("DEPRECATION")
+            super.onBackPressed()
         }
     }
     private fun spinner(identifier: Int, values: List<String>, selected: String) = Spinner(this).apply {
@@ -729,7 +833,7 @@ class MainActivity : LocalizedActivity() {
     override fun onResume() {
         super.onResume()
         // The profile may have changed in ProfileActivity.
-        if (tab == TAB_HOME && content.childCount > 0) render()
+        if ((tab == TAB_HOME || tab == TAB_RADIO) && content.childCount > 0) render()
     }
     override fun onStop() {
         super.onStop()
@@ -745,10 +849,15 @@ class MainActivity : LocalizedActivity() {
     companion object {
         // Stable tab identifiers persisted in the instance state; labels come from resources.
         private const val TAB_HOME = "Inicio"
+        private const val TAB_RADIO = "Radio"
         private const val TAB_LOGBOOK = "Guardia"
         private const val TAB_ARDF = "ARDF"
         private const val TAB_MORSE = "Morse"
-        private val TABS = linkedMapOf(TAB_HOME to R.string.tab_home, TAB_LOGBOOK to R.string.tab_logbook,
-            TAB_ARDF to R.string.tab_ardf, TAB_MORSE to R.string.tab_morse)
+        // The Satelites entry starts SatelliteActivity and never becomes the current tab.
+        private const val NAV_SATELLITES = "Satelites"
+        private val TABS = linkedMapOf(TAB_HOME to R.string.tab_home, TAB_RADIO to R.string.tab_radio,
+            TAB_LOGBOOK to R.string.tab_logbook, TAB_ARDF to R.string.tab_ardf, TAB_MORSE to R.string.tab_morse)
+        private val NAV = linkedMapOf(TAB_HOME to R.string.tab_home, NAV_SATELLITES to R.string.nav_satellites,
+            TAB_RADIO to R.string.tab_radio, TAB_LOGBOOK to R.string.tab_logbook)
     }
 }

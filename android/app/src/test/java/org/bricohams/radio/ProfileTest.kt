@@ -191,11 +191,13 @@ class ProfileTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
             val activity = controller.get()
+            assertTrue(buttons(activity).single { it.text == activity.getString(R.string.home_open_satellites) }.isEnabled)
+            // Radio tools live in the Radio tab since the task-based navigation.
+            assertTrue(buttons(activity).single { it.text == activity.getString(R.string.tab_radio) }.performClick())
             val channels = buttons(activity).single { it.text == activity.getString(R.string.home_open_channels) }
             assertFalse(channels.isEnabled)
             assertTrue(channels.contentDescription.toString().contains(ProfileRadio.FT817.label(activity)))
             assertTrue(buttons(activity).single { it.text == activity.getString(R.string.home_open_rig_cat) }.isEnabled)
-            assertTrue(buttons(activity).single { it.text == activity.getString(R.string.home_open_satellites) }.isEnabled)
         } finally { controller.pause().stop().destroy() }
     }
 }
