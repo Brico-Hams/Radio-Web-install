@@ -10,15 +10,17 @@ enum class RigMode { LSB, USB, CW, CW_R, AM, FM, FM_N, WFM, RTTY, RTTY_R, DATA_L
 enum class Vfo { A, B }
 
 enum class RigModel(
-    val label: String, val defaultBaud: Int, val stopBits: Int, val rangeHz: LongRange
+    val label: String, val defaultBaud: Int, val stopBits: Int, val rangeHz: LongRange,
+    /** True when the model receives the 118-137 MHz AM airband (its tuning range covers it). */
+    val airbandRx: Boolean = false
 ) {
     FT817("Yaesu FT-817 / FT-817ND", 4800, 2, 100_000L..470_000_000L),
     FT818("Yaesu FT-818ND", 4800, 2, 100_000L..470_000_000L),
     FT857("Yaesu FT-857 / FT-857D", 4800, 2, 100_000L..470_000_000L),
     FT897("Yaesu FT-897 / FT-897D", 4800, 2, 100_000L..470_000_000L),
-    IC705("Icom IC-705", 115200, 1, 30_000L..470_000_000L),
+    IC705("Icom IC-705", 115200, 1, 30_000L..470_000_000L, airbandRx = true),
     // CAT-1 default is 38400 8N1 on the units in the field (manual 2508-C lists 2 stop bits; the radio accepts 1 from the host).
-    FTX1("Yaesu FTX-1", 38400, 1, 30_000L..470_000_000L),
+    FTX1("Yaesu FTX-1", 38400, 1, 30_000L..470_000_000L, airbandRx = true),
     // Measured on a real unit: 115200 8N1 works, 38400 returns garbage; RigActivity retries 38400 as a fallback probe only.
     TRUSDX("(tr)uSDX", 115200, 1, 3_000_000L..30_000_000L),
     // USB CDC virtual COM port (USB 0483:A34C); measured CAT at 38400 with DTR/RTS low. QDX ignores the baud rate (manual 1.06).

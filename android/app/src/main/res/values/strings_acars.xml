@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="rig_section_acars">ACARS (VHF aviación, solo recepción)</string>
+    <string name="acars_help">Decodifica ACARS (ARINC 618, AM-MSK 2400 bit/s) por el audio de la radio. Solo recepción: transmitir en frecuencias aeronáuticas es ilegal para estaciones de aficionado y esta app nunca activa el PTT para ACARS. El WAV de prueba sirve solo para pruebas en bucle.</string>
+    <string name="acars_channel_label">Canal ACARS</string>
+    <string name="acars_region_europe">Europa</string>
+    <string name="acars_region_worldwide">Mundial</string>
+    <string name="acars_region_usa">EE. UU.</string>
+    <string name="acars_region_vdl">VDL2 — no decodificable como POA</string>
+    <string name="acars_channel_item">%1$s MHz — %2$s</string>
+    <string name="acars_tune">Sintonizar RX</string>
+    <string name="acars_start">Iniciar decodificación</string>
+    <string name="acars_stop">Detener decodificación</string>
+    <string name="acars_generate_wav">Generar WAV de prueba</string>
+    <string name="acars_listening">Escuchando ACARS…</string>
+    <string name="acars_stopped">Decodificación detenida.</string>
+    <string name="acars_tuned">Sintonizado a %1$s MHz en AM.</string>
+    <string name="acars_no_messages">Sin mensajes todavía.</string>
+    <string name="acars_entry">%1$s UTC  %2$s MHz  %3$s  %4$s  %5$s  [%7$s]\n%6$s</string>
+    <string name="acars_crc_ok">CRC correcto</string>
+    <string name="acars_crc_bad">CRC erróneo</string>
+    <string name="acars_vdl_not_decodable">Los canales VDL2 usan D8PSK y no se pueden decodificar como ACARS POA.</string>
+    <string name="acars_wav_saved">WAV de prueba guardado.</string>
+    <string name="acars_wav_error">No se pudo guardar el WAV: %1$s</string>
+    <string name="err_acars_no_airband">Esta radio no recibe la banda aeronáutica (118–137 MHz AM).</string>
+    <string name="err_acars_band">%1$s MHz está fuera de la banda aeronáutica de 118–137 MHz.</string>
+</resources>

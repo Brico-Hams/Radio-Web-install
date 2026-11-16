@@ -1,6 +1,7 @@
 package org.bricohams.digital;
 
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.bricohams.digital.fec.Ldpc174;
@@ -13,6 +14,8 @@ import org.bricohams.digital.ft2.LegacyFt2CandidateEncoder;
  */
 public final class CodecRegistry {
     public static final String FT2_PROFILE_ID = "ft2-legacy-candidate-v1";
+    /** Native VHF ACARS (receive-only), needs no external tables. */
+    public static final String ACARS_PROFILE_ID = AcarsCodec.PROFILE_ID;
     /** Label shown next to the codec until it has been validated on air. */
     public static final String FT2_LABEL = "beta";
 
@@ -30,13 +33,17 @@ public final class CodecRegistry {
     }
 
     public Codec require(String profileId) throws CodecException {
+        if (ACARS_PROFILE_ID.equals(profileId)) return new AcarsCodec();
         if (ldpc != null && FT2_PROFILE_ID.equals(profileId)) return new Ft2Codec(ldpc);
         throw new CodecException(CodecException.Reason.UNSUPPORTED_PROFILE,
                 "No supported codec for profile: " + profileId);
     }
 
     public Set<String> availableProfiles() {
-        return ldpc == null ? Collections.<String>emptySet() : Collections.singleton(FT2_PROFILE_ID);
+        Set<String> profiles = new LinkedHashSet<>();
+        profiles.add(ACARS_PROFILE_ID);
+        if (ldpc != null) profiles.add(FT2_PROFILE_ID);
+        return Collections.unmodifiableSet(profiles);
     }
 
     private static final class Ft2Codec implements Codec {

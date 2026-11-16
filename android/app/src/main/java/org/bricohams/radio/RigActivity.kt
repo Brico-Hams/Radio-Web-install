@@ -41,6 +41,10 @@ import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
+import org.bricohams.digital.AcarsCodec
+import org.bricohams.digital.CodecException
+import org.bricohams.digital.WavIo
+import org.bricohams.digital.WorkBudget
 import org.json.JSONArray
 import org.json.JSONException
 import java.io.IOException
@@ -69,6 +73,7 @@ class RigActivity : LocalizedActivity() {
         private const val PREF_SPEAK = "speak"
         private const val PICK_IMAGE = 72
         private const val AUDIO_PERMISSION = 73
+        private const val SAVE_ACARS_WAV = 74
         private const val MAX_TX_MS = 110_000L
         private const val STALL_MS = 2_000L
         private const val MAX_CHANNELS = 100
@@ -123,6 +128,13 @@ class RigActivity : LocalizedActivity() {
     private lateinit var picture: ImageView
     private lateinit var stopTx: Button
     private lateinit var stopReceive: Button
+    private lateinit var acarsSpinner: Spinner
+    private lateinit var acarsStatus: TextView
+    private lateinit var acarsMessages: TextView
+    private lateinit var acarsToggle: Button
+    private val acarsLog = AcarsLog()
+    @Volatile private var acarsActive = false
+    @Volatile private var acarsStop = false
     private var downEdit: EditText? = null
     private var upEdit: EditText? = null
     private var stepEdit: EditText? = null
@@ -251,6 +263,7 @@ class RigActivity : LocalizedActivity() {
         buildMemories(body)
         buildSatellite(body)
         buildSstv(body)
+        buildAcars(body)
         setContentView(scroll)
         updateControls()
     }
@@ -572,6 +585,158 @@ class RigActivity : LocalizedActivity() {
         card.addView(picture)
     }
 
+    /*
+     * ACARS is RECEIVE-ONLY. Transmitting on aeronautical frequencies is illegal for amateur stations, so nothing in this
+     * section may call Rig.ptt or play encoder audio to the radio; the encoder is only used for the "Generate test WAV" file.
+     */
+    private fun buildAcars(body: LinearLayout) = section(body, R.string.rig_section_acars) { card ->
+        card.addView(Brand.text(this, 13f, colors.muted).apply { setText(R.string.acars_help) })
+        label(card, R.string.acars_channel_label)
+        acarsSpinner = spinner(AcarsChannels.ALL.map { channel ->
+            getString(R.string.acars_channel_item, mhzText(channel.hz), getString(channel.region.labelRes))
+        }).apply { contentDescription = getString(R.string.acars_channel_label) }
+        card.addView(acarsSpinner)
+        acarsStatus = live(Brand.text(this, 14f, colors.accent))
+        button(card, R.string.acars_tune, true) { tuneAcars() }
+        acarsToggle = button(card, R.string.acars_start, tracked = false) { toggleAcars() }
+        button(card, R.string.acars_generate_wav) { generateAcarsWav() }
+        card.addView(acarsStatus)
+        acarsMessages = Brand.text(this, 12f).apply {
+            typeface = Typeface.MONOSPACE
+            setText(R.string.acars_no_messages)
+        }
+        card.addView(ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (240 * resources.displayMetrics.density).toInt())
+            isNestedScrollingEnabled = true
+            addView(acarsMessages)
+        })
+    }
+
+    private fun selectedAcarsChannel() =
+        AcarsChannels.ALL[acarsSpinner.selectedItemPosition.coerceIn(0, AcarsChannels.ALL.lastIndex)]
+
+    private fun tuneAcars() {
+        val r = rig ?: run { acarsStatus.setText(R.string.rig_connect_first); return }
+        val channel = selectedAcarsChannel()
+        operation(acarsStatus) {
+            AcarsChannels.tune(r, channel)
+            refresh(r)
+            getString(R.string.acars_tuned, mhzText(channel.hz))
+        }
+    }
+
+    private fun toggleAcars() {
+        if (acarsActive) { acarsStop = true; return }
+        if (!foreground || rxActive) return
+        val channel = selectedAcarsChannel()
+        if (!channel.decodable) { acarsStatus.setText(R.string.acars_vdl_not_decodable); return }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingAudio = { toggleAcars() }
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), AUDIO_PERMISSION)
+            return
+        }
+        val token = generation
+        acarsStop = false
+        acarsActive = true
+        acarsToggle.setText(R.string.acars_stop)
+        acarsStatus.setText(R.string.acars_listening)
+        audioWorker.execute {
+            val failure = try {
+                runAcars(channel, token)
+                null
+            } catch (error: CancellationException) {
+                null
+            } catch (error: CodecException) {
+                if (error.reason == CodecException.Reason.CANCELLED) null else FtxCodecs.errorText(error).resolve(this)
+            } catch (error: IOException) {
+                errorText(error)
+            } catch (error: IllegalStateException) {
+                errorText(error)
+            } catch (error: IllegalArgumentException) {
+                errorText(error)
+            }
+            runOnUiThread {
+                if (token == generation) acarsActive = false
+                if (!isDestroyed) {
+                    acarsToggle.setText(R.string.acars_start)
+                    acarsStatus.text = failure ?: getString(R.string.acars_stopped)
+                }
+            }
+        }
+    }
+
+    /** Audio worker: reads the microphone into a rolling buffer until stopped. Receive only. */
+    private fun runAcars(channel: AcarsChannel, token: Int) {
+        val rolling = AcarsRolling(LiveAudio.SAMPLE_RATE, channel.hz)
+        val budget = WorkBudget {
+            if (acarsStop || token != generation || Thread.currentThread().isInterrupted) {
+                throw CodecException(CodecException.Reason.CANCELLED, "ACARS decoding stopped")
+            }
+        }
+        MicrophoneSource(applicationContext).use { source ->
+            source.start()
+            try {
+                val buffer = ShortArray(4800)
+                val samples = FloatArray(buffer.size)
+                while (!acarsStop && token == generation && !Thread.currentThread().isInterrupted) {
+                    val count = source.read(buffer, buffer.size)
+                    if (count <= 0) {
+                        if (acarsStop) break
+                        throw LocalizedIOException(UiText(R.string.err_mic_no_pcm, count))
+                    }
+                    for (i in 0 until count) samples[i] = buffer[i] / 32768f
+                    val found = rolling.feed(samples, count, budget)
+                    if (found.isNotEmpty()) runOnUiThread { if (!isDestroyed) showAcars(found) }
+                }
+            } finally {
+                source.stop()
+            }
+        }
+    }
+
+    private fun showAcars(entries: List<AcarsEntry>) {
+        entries.forEach { acarsLog.add(it) }
+        val time = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT).withZone(ZoneId.of("UTC"))
+        acarsMessages.text = acarsLog.snapshot().asReversed().joinToString("\n\n") { entry ->
+            getString(R.string.acars_entry, time.format(Instant.ofEpochMilli(entry.timeMillis)), mhzText(entry.hz),
+                entry.registration, entry.label, entry.flight, entry.text,
+                getString(if (entry.crcOk) R.string.acars_crc_ok else R.string.acars_crc_bad))
+        }
+    }
+
+    /** Test WAV for loopback only; it is saved or shared as a file and never sent to the radio. */
+    private fun generateAcarsWav() {
+        if (!foreground) return
+        pickingImage = true
+        try {
+            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE); type = "audio/wav"
+                putExtra(Intent.EXTRA_TITLE, "bricohams-acars-test.wav")
+            }, SAVE_ACARS_WAV)
+        } catch (error: ActivityNotFoundException) {
+            pickingImage = false
+            acarsStatus.text = getString(R.string.acars_wav_error, errorText(error))
+        }
+    }
+
+    private fun saveAcarsWav(uri: android.net.Uri) {
+        audioWorker.execute {
+            val message = try {
+                val audio = AcarsCodec().encode("2|N12345|H1|1|RADICODEX ACARS TEST", 0.0)
+                val stream = contentResolver.openOutputStream(uri, "wt") ?: throw LocalizedIOException(UiText(R.string.err_ftx_no_write_stream))
+                stream.use { WavIo.write(audio, it) }
+                getString(R.string.acars_wav_saved)
+            } catch (error: IOException) {
+                getString(R.string.acars_wav_error, errorText(error))
+            } catch (error: SecurityException) {
+                getString(R.string.acars_wav_error, errorText(error))
+            } catch (error: CodecException) {
+                getString(R.string.acars_wav_error, FtxCodecs.errorText(error).resolve(this))
+            }
+            runOnUiThread { if (!isDestroyed) acarsStatus.text = message }
+        }
+    }
+
     private fun updateControls() {
         val ready = idle
         controls.forEach { it.isEnabled = ready }
@@ -858,7 +1023,8 @@ class RigActivity : LocalizedActivity() {
         session = null
         txCancel = true
         rxStop = true
-        memoryCancel = true
+        acarsStop = true
+        acarsActive = false
         capture?.cancel()
         pendingAudio = null
         pickingImage = false
@@ -1171,6 +1337,13 @@ class RigActivity : LocalizedActivity() {
     @Deprecated("Platform callback")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SAVE_ACARS_WAV) {
+            pickingImage = false
+            val target = data?.data
+            if (resultCode != RESULT_OK || target == null) acarsStatus.setText(R.string.sstv_cancelled)
+            else saveAcarsWav(target)
+            return
+        }
         if (requestCode != PICK_IMAGE) return
         pickingImage = false
         val uri = data?.data
@@ -1325,7 +1498,7 @@ class RigActivity : LocalizedActivity() {
     }
 
     private fun startReceive() {
-        if (!idle || !foreground) return
+        if (!idle || !foreground || acarsActive) return
         val trusdx = audioStream(rig)
         var recording: LiveAudio? = null
         if (trusdx == null) {
