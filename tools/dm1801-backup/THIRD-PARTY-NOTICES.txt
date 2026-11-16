@@ -1,0 +1,14 @@
+DM1801-Backup incluye dmrconfig (https://github.com/OpenRTX/dmrconfig, origen: sergev/dmrconfig).
+
+Copyright (C) 2018-2019, Serge Vakulenko KK6ABQ. All rights reserved.
+Licencia BSD 3-Clause; texto completo en vendor\dmrconfig\LICENSE (se distribuye junto al ejecutable).
+
+Redistribución en binario: se reproduce el aviso de copyright, las condiciones y el descargo de responsabilidad
+de la licencia. El nombre del autor no se usa para promocionar este producto. Este programa NO está respaldado
+por el autor de dmrconfig, por OpenRTX ni por Baofeng.
+
+dmrconfig.exe incluido: compilado con Zig a partir del código de vendor\dmrconfig\source.
+SHA256 del binario vendorizado: 15BB0B11C2BFC7735BFAF6E05151B65AABA11D485BEED9EA44F37CBB674515FA
+Nota: la copia de origen se tomó de un árbol local sin metadatos git (commit upstream no registrado).
+
+Otros componentes: Python y tkinter (PSF License), PyInstaller (GPL-2.0 con excepción de arranque para ejecutables).
