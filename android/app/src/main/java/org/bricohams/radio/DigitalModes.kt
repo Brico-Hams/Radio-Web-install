@@ -57,4 +57,5 @@ object DigitalClock {
 fun dataMode(model: RigModel): RigMode = when (model) {
     RigModel.FT817, RigModel.FT818, RigModel.FT857, RigModel.FT897, RigModel.FTX1 -> RigMode.DATA_U
     RigModel.IC705, RigModel.TRUSDX, RigModel.QMX, RigModel.QDX -> RigMode.USB
+    RigModel.THD75 -> RigMode.FM
 }

@@ -12,7 +12,9 @@ enum class Vfo { A, B }
 enum class RigModel(
     val label: String, val defaultBaud: Int, val stopBits: Int, val rangeHz: LongRange,
     /** True when the model receives the 118-137 MHz AM airband (its tuning range covers it). */
-    val airbandRx: Boolean = false
+    val airbandRx: Boolean = false,
+    /** VFO that receives the airband when [airbandRx] is set. */
+    val airbandVfo: Vfo = Vfo.A
 ) {
     FT817("Yaesu FT-817 / FT-817ND", 4800, 2, 100_000L..470_000_000L),
     FT818("Yaesu FT-818ND", 4800, 2, 100_000L..470_000_000L),
@@ -25,7 +27,10 @@ enum class RigModel(
     TRUSDX("(tr)uSDX", 115200, 1, 3_000_000L..30_000_000L),
     // USB CDC virtual COM port (USB 0483:A34C); measured CAT at 38400 with DTR/RTS low. QDX ignores the baud rate (manual 1.06).
     QMX("QRP Labs QMX / QMX+", 38400, 1, 1_800_000L..54_000_000L),
-    QDX("QRP Labs QDX / QDX-M", 9600, 1, 3_500_000L..30_000_000L)
+    QDX("QRP Labs QDX / QDX-M", 9600, 1, 3_500_000L..30_000_000L),
+    // USB CDC virtual COM port (baud ignored). Band A only covers the 144/220/430 MHz amateur bands (FM/DV); band B receives
+    // 0.1-524 MHz including the AM airband.
+    THD75("Kenwood TH-D75", 9600, 1, 100_000L..524_000_000L, airbandRx = true, airbandVfo = Vfo.B)
 }
 
 data class RigMemory(val channel: Int, val frequencyHz: Long, val mode: RigMode?, val name: String, val txHz: Long? = null)
@@ -49,6 +54,8 @@ interface Rig {
     /** Sets and then reads back; throws LocalizedIOException(err_rig_unconfirmed) if the read-back differs. */
     fun setFrequency(vfo: Vfo, hz: Long)
     fun setMode(mode: RigMode)
+    /** Mode of a given VFO; rigs that cannot address VFO B by mode only support VFO A. */
+    fun setMode(vfo: Vfo, mode: RigMode) { if (vfo == Vfo.A) setMode(mode) else unsupported("mode on VFO B") }
     fun ptt(on: Boolean)
     fun setSplit(on: Boolean)
     /** Empty channels are skipped. */
@@ -63,6 +70,7 @@ fun openRig(model: RigModel, transport: RadioBytes, civAddress: Int = 0xA4): Rig
     RigModel.FTX1 -> Ftx1Rig(transport)
     RigModel.TRUSDX -> TruSdxRig(transport)
     RigModel.QMX, RigModel.QDX -> QrpLabsRig(transport, model)
+    RigModel.THD75 -> Th75Rig(transport)
 }
 
 /**
@@ -86,14 +94,17 @@ internal fun isRejected(error: LocalizedIOException) = error.text.id == R.string
 internal fun invalidReply(): Nothing = throw LocalizedArgumentException(UiText(R.string.err_rig_reply_invalid))
 
 /**
- * Text CAT (Yaesu FTX-1, Kenwood-style subsets): commands end in ';', a reply "?;" is a rejection. Every exchange is
+ * Text CAT (Yaesu FTX-1, Kenwood-style subsets): replies end in [terminator] (';', or CR for the Kenwood TH-D75) and a reply in
+ * [rejections] ("?;" by default) is a rejection. Every exchange is
  * serialised (one command in flight, a minimum gap between commands) so threads sharing a rig cannot interleave a SET with
  * somebody else's read; use [transaction] to keep a SET and its read-back together.
  */
 internal class AsciiLink(
     private val transport: RadioBytes,
     private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
-    private val sleep: (Long) -> Unit = Thread::sleep
+    private val sleep: (Long) -> Unit = Thread::sleep,
+    private val terminator: Char = ';',
+    private val rejections: Set<String> = setOf("?;")
 ) {
     private var lastIo = Long.MIN_VALUE / 2
     @Synchronized fun <T> transaction(block: () -> T): T = block()
@@ -110,7 +121,7 @@ internal class AsciiLink(
             val deadline = clock() + ATTEMPT_MS
             while (true) {
                 val reply = readReply(deadline) ?: break
-                if (reply == "?;") throw LocalizedIOException(UiText(R.string.err_rig_rejected, command))
+                if (reply in rejections) throw LocalizedIOException(UiText(R.string.err_rig_rejected, command))
                 if (reply.startsWith(prefix)) { lastIo = clock(); return reply }
             }
         }
@@ -139,7 +150,7 @@ internal class AsciiLink(
                 return null
             }
             text.append(byte.toChar())
-            if (byte == ';'.code) return text.toString().trim()
+            if (byte == terminator.code) return text.toString().trim()
             if (text.length > MAX_REPLY) invalidReply()
         }
     }

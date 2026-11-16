@@ -47,13 +47,13 @@ object AcarsChannels {
     const val AIRBAND_MIN_HZ = 118_000_000L
     const val AIRBAND_MAX_HZ = 137_000_000L
 
-    /** Tunes VFO A to the channel in AM. Receive only: this never touches [Rig.ptt]. */
+    /** Tunes the model's airband VFO to the channel in AM. Receive only: this never touches [Rig.ptt]. */
     fun tune(rig: Rig, channel: AcarsChannel) {
         requireUi(rig.model.airbandRx) { UiText(R.string.err_acars_no_airband) }
         requireUi(channel.hz in AIRBAND_MIN_HZ..AIRBAND_MAX_HZ) { UiText(R.string.err_acars_band, mhzText(channel.hz)) }
         checkRange(rig.model, channel.hz)
-        rig.setFrequency(Vfo.A, channel.hz)
-        rig.setMode(RigMode.AM)
+        rig.setFrequency(rig.model.airbandVfo, channel.hz)
+        rig.setMode(rig.model.airbandVfo, RigMode.AM)
     }
 }
 

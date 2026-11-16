@@ -38,6 +38,9 @@ class AcarsCatTest {
         override fun frequency(vfo: Vfo) = 0L
         override fun setFrequency(vfo: Vfo, hz: Long) { calls.add("${vfo.name}:$hz") }
         override fun setMode(mode: RigMode) { calls.add("mode:${mode.name}") }
+        override fun setMode(vfo: Vfo, mode: RigMode) {
+            if (vfo == Vfo.A) setMode(mode) else calls.add("mode:${vfo.name}:${mode.name}")
+        }
         override fun ptt(on: Boolean) { pttCalls++ }
         override fun setSplit(on: Boolean) { calls.add("split:$on") }
         override fun memories(channels: IntRange, keepGoing: () -> Boolean) = emptyList<RigMemory>()
@@ -75,6 +78,13 @@ class AcarsCatTest {
         val rig = FakeRig(RigModel.FTX1)
         AcarsChannels.tune(rig, AcarsChannels.ALL[1])
         assertEquals(listOf("A:131525000", "mode:AM"), rig.calls)
+        assertEquals(0, rig.pttCalls)
+    }
+
+    @Test fun thd75TunesBandBInAmAndNeverKeysPtt() {
+        val rig = FakeRig(RigModel.THD75)
+        AcarsChannels.tune(rig, AcarsChannels.ALL[2])
+        assertEquals(listOf("B:131725000", "mode:B:AM"), rig.calls)
         assertEquals(0, rig.pttCalls)
     }
 

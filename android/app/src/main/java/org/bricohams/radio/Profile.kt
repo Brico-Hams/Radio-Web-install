@@ -54,6 +54,8 @@ enum class ProfileRadio(
     // QrpLabsRig (RigProtocols.kt), USB CDC (RigCat.kt comment); RadioKind.QMX (Diagnostics.kt). QDX has no RadioKind.
     QMX(RigModel.QMX, null, listOf(CatTransport.USB_CDC), setOf(Tool.RIG_CAT, Tool.DIAGNOSTICS)),
     QDX(RigModel.QDX, null, listOf(CatTransport.USB_CDC), setOf(Tool.RIG_CAT)),
+    // Th75Rig (RigProtocols.kt), USB CDC; no Diagnostics.kt RadioKind.
+    THD75(RigModel.THD75, null, listOf(CatTransport.USB_CDC), setOf(Tool.RIG_CAT)),
     // CatProtocol (CatActivity), QuanshengChannels/QuanshengMemory (ChannelActivity), RadioKind.QUANSHENG (Diagnostics.kt),
     // template profiles "radicodex" and "uvk5v3"; SerialRadio.quanshengSettings(cdc) supports serial and CDC.
     UVK5(null, "Quansheng UV-K5 (BricoHams Satellite)", listOf(CatTransport.USB_SERIAL, CatTransport.USB_CDC),

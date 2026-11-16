@@ -825,11 +825,11 @@
     <string name="err_rig_resolution">La fréquence doit être un multiple de %1$d Hz.</string>
     <string name="err_rig_channel">Le canal mémoire %1$d est hors plage.</string>
     <string name="err_rig_audio_length">L’audio est trop long (%1$d secondes maximum).</string>
-    <string name="home_open_rig_cat">CAT multi-radio (FT-817, FT-857, IC-705, FTX-1, (tr)uSDX, QMX/QMX+, Quansheng (F4HWN))</string>
+    <string name="home_open_rig_cat">CAT multi-radio (FT-817, FT-857, IC-705, FTX-1, (tr)uSDX, QMX/QMX+, TH-D75, Quansheng (F4HWN))</string>
     <string name="satellite_open_rig_cat">Ouvrir dans CAT multi-radio</string>
     <string name="rig_title">Bricohams CAT multi-radio</string>
     <string name="rig_disconnected">Aucune radio connectée.</string>
-    <string name="rig_intro">Pilote en USB les Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX et QRP Labs QMX/QDX : fréquence, mode, mémoires, suivi de satellites et SSTV.</string>
+    <string name="rig_intro">Pilote en USB les Yaesu FT-817/818, FT-857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX, QRP Labs QMX/QDX et Kenwood TH-D75 : fréquence, mode, mémoires, suivi de satellites et SSTV.</string>
     <string name="rig_section_radio">Radio</string>
     <string name="rig_model_label">Modèle de radio</string>
     <string name="rig_baud_hint">Vitesse (bauds)</string>

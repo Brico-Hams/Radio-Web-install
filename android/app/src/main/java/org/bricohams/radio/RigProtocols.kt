@@ -1035,3 +1035,112 @@ class QrpLabsRig(transport: RadioBytes, override val model: RigModel) : Rig {
     override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> = unsupported("memories")
     override fun writeMemory(memory: RigMemory) = unsupported("memory write")
 }
+
+/**
+ * Kenwood TH-D75 over its USB virtual COM port. Commands and replies end in CR; "?" (unknown command) and "N" (not available
+ * now) are rejections. VFO A = band 0 (144/220/430 MHz, FM/DV), VFO B = band 1 (0.1-524 MHz, all modes); no memory channels.
+ */
+class Th75Rig(transport: RadioBytes) : Rig {
+    private val link = AsciiLink(transport, terminator = '\r', rejections = setOf("?", "N"))
+    override val model = RigModel.THD75
+    override val supportsVfoB = true
+    override val silentVfoB = true
+    override val supportsSplit = false
+    override val supportsMemories = false
+    override val supportsMemoryWrite = false
+
+    companion object {
+        // Command set from the Kenwood TH-D74/TH-D75 PC command reference; verify on a real unit.
+        const val ID = "ID\r"
+        const val FIRMWARE = "FV 0\r"
+        const val ACTIVE_BAND = "BC\r"
+        const val TX = "TX\r"
+        const val RX = "RX\r"
+        const val ID_REPLY = "ID TH-D75"
+        const val VFO_MODE = 0
+        // Mode digit <-> RigMode; the DR (7) mode reads as DV.
+        val MODES = mapOf(
+            RigMode.FM to 0, RigMode.DV to 1, RigMode.AM to 2, RigMode.LSB to 3, RigMode.USB to 4, RigMode.CW to 5,
+            RigMode.FM_N to 6, RigMode.WFM to 8, RigMode.CW_R to 9
+        )
+        const val DR_MODE = 7
+        // Band A only tunes the amateur 144, 220 and 430 MHz bands, in FM/NFM/DV.
+        val BAND_A_RANGES = listOf(136_000_000L..174_000_000L, 216_000_000L..260_000_000L, 410_000_000L..470_000_000L)
+        val BAND_A_MODES = setOf(RigMode.FM, RigMode.FM_N, RigMode.DV)
+        fun band(vfo: Vfo) = if (vfo == Vfo.A) 0 else 1
+        fun frequencyQuery(band: Int) = "FQ $band\r"
+        fun frequencyCommand(band: Int, hz: Long) = String.format(Locale.ROOT, "FQ %d,%010d\r", band, hz)
+        fun modeQuery(band: Int) = "MD $band\r"
+        fun modeCommand(band: Int, code: Int) = "MD $band,$code\r"
+        fun vfoModeQuery(band: Int) = "VM $band\r"
+        fun vfoModeCommand(band: Int, mode: Int) = "VM $band,$mode\r"
+    }
+
+    /** Numbers after the command word: "FQ 1,0131725000" -> [1, 131725000]. */
+    private fun fields(reply: String): List<Long> =
+        reply.substringAfter(' ', "").split(',').map { it.trim().toLongOrNull() ?: invalidReply() }
+    private fun bandFields(reply: String, band: Int): List<Long> {
+        val values = fields(reply)
+        if (values.size != 2 || values[0] != band.toLong()) invalidReply()
+        return values
+    }
+    private fun activeBand(): Int {
+        val values = fields(link.request(ACTIVE_BAND, "BC"))
+        if (values.size != 1 || values[0] !in 0L..1L) invalidReply()
+        return values[0].toInt()
+    }
+    private fun readHz(band: Int): Long = bandFields(link.request(frequencyQuery(band), "FQ"), band)[1]
+    private fun readBandMode(band: Int): RigMode? {
+        val code = bandFields(link.request(modeQuery(band), "MD"), band)[1].toInt()
+        return if (code == DR_MODE) RigMode.DV else MODES.entries.firstOrNull { it.value == code }?.key
+    }
+    private fun vfoOf(band: Int) = if (band == 0) Vfo.A else Vfo.B
+
+    override fun identify(): String {
+        val reply = link.request(ID, "ID")
+        if (!reply.startsWith(ID_REPLY)) invalidReply()
+        return reply.removePrefix("ID ")
+    }
+    override fun firmwareVersion(): String? = try {
+        link.request(FIRMWARE, "FV").substringAfter(',', "").ifEmpty { null }
+    } catch (error: LocalizedIOException) { null }
+    override fun status(): RigStatus = link.transaction {
+        val band = activeBand()
+        RigStatus(readHz(band), readBandMode(band))
+    }
+    override fun frequency(vfo: Vfo): Long = readHz(band(vfo))
+    override fun setFrequency(vfo: Vfo, hz: Long) {
+        checkRange(model, hz)
+        if (vfo == Vfo.A) requireUi(BAND_A_RANGES.any { hz in it }) { UiText(R.string.err_rig_range, mhzText(hz)) }
+        val band = band(vfo)
+        link.transaction {
+            // A frequency can only be set in VFO mode.
+            if (bandFields(link.request(vfoModeQuery(band), "VM"), band)[1] != VFO_MODE.toLong()) link.send(vfoModeCommand(band, VFO_MODE))
+            link.send(frequencyCommand(band, hz))
+            link.confirm(hz) { readHz(band) }
+        }
+    }
+    override fun setMode(mode: RigMode) = setMode(vfoOf(activeBand()), mode)
+    override fun setMode(vfo: Vfo, mode: RigMode) {
+        val code = MODES[mode] ?: unsupported("mode " + mode.name)
+        if (vfo == Vfo.A && mode !in BAND_A_MODES) unsupported("mode " + mode.name + " on VFO A")
+        val band = band(vfo)
+        link.transaction {
+            link.send(modeCommand(band, code))
+            checkUi(readBandMode(band) == mode) { UiText(R.string.err_rig_unconfirmed) }
+        }
+    }
+    // TX / RX act on the active band.
+    override fun ptt(on: Boolean) {
+        try {
+            link.request(if (on) TX else RX, if (on) "TX" else "RX")
+        } catch (error: Exception) {
+            // never leave the radio transmitting
+            if (on) runCatching { link.send(RX) }
+            throw error
+        }
+    }
+    override fun setSplit(on: Boolean) = unsupported("split")
+    override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> = unsupported("memories")
+    override fun writeMemory(memory: RigMemory) = unsupported("memory write")
+}

@@ -953,7 +953,7 @@ class RigActivity : LocalizedActivity() {
                         runOnUiThread { baud.setText(other.toString()) }
                     }
                     // Not needed by the QMX (answers with DTR low); harmless fallback for CDC radios that need DTR high.
-                    (model == RigModel.QMX || model == RigModel.QDX) && silent -> {
+                    (model == RigModel.QMX || model == RigModel.QDX || model == RigModel.THD75) && silent -> {
                         closeRadio()
                         open(device, model, rate, port, civ, dtr = true)
                     }
