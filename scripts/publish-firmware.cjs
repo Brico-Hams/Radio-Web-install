@@ -35,23 +35,22 @@ async function publishApps() {
   }, null, 2) + "\n");
   console.log(`Catalogo apps publicado: ${entries.length} apps con SHA-256 y FAP1 verificados.`);
 }
+// v0.6.0: CI ci-20261116 (Arm GNU 13.3.rel1), fast VFO retune keeps RX audio, BETA mark dropped; boot not hardware-tested.
 const builds = [
-  ["bricohams-ardf", "ardf", "BH ARDF",   "d5033d07759d3f0eb631cfd41664999b699e954f5da7015d2fdfdfa223613a14", "ci-20261109", "v0.5.9"],
-  // v0.5.7: CAT remoto outside SAT RX (bench-verified on a UV-K5 V3 on 2026-11-03).
-    // CI rebuild, structurally verified on a UV-K5 V3 slot (write + CRC) on 2026-11-09, boot not yet tested.
-    ["bricohams-satellite", "satellite", "BH Satellite", "bb4627012464cdbde3303714320979bcefa82eec27c88a9005c8aed6de451860", "ci-20261109", "v0.5.9"],
-    ["bricohams-spectrum", "spectrum", "BH Spectrum", "784a2d902f61d628e7dc58cc62124bc1c33fcac3d254d629b894fc6e06a3f06d", "ci-20261109", "v0.5.9"],
-  ["bricohams-labs", "labs", "BH Labs", "938a7cd80b489c9c1746b710c7ae4533526674b13e5f97083f6bea850721140a"],
-  ["bricohams-fusion", "fusion", "BH Fusion", "e053c1d3671a33bb2361d91ec5555404763bd69e4f0d2548549e6b2a68d86356"],
-  ["f4hwn-fusion", "f4hwn-fusion", "BH F4 Fusion", "1009c0f54b29b8d4ea0d81b2fffcfabe09056bccd336dabcba4c102b3a810503"],
-  ["f4hwn-fieldops", "f4hwn-fieldops", "BH F4 FieldOps", "cbf556ed40c6bdbb684ef6cf651960f87ca77014c32422b0e5bdb11553413d7f"],
-  ["f4hwn-labs", "f4hwn-labs", "BH F4 Labs", "f851dde8532aaba66c9110279b5891f332a25823a0e63e0f6c308ffe44d1a794"],
-  ["f4hwn-transfer", "f4hwn-transfer", "BH F4 Transfer", "1584bfd010fa171c1ddc5b48fa31ed07409d585c23147f9a644d426661b8fea2"]
+  ["bricohams-ardf", "ardf", "BH ARDF", "f01293f94f3834723b8964b0b7ce96a07b68412b8e1919e85835ebd7fa9b8e3a"],
+  ["bricohams-satellite", "satellite", "BH Satellite", "1fb4a0f1633f60c18ebedece9cab885a1effb0e46b5740df1b146aa1383b40ae"],
+  ["bricohams-spectrum", "spectrum", "BH Spectrum", "eb67643d803ae29b40cbb639676283d9e7f0cc976bd24259521ad501d03b3e58"],
+  ["bricohams-labs", "labs", "BH Labs", "286e55cd52d2ebc13072d97137ee0a8ad3f0d51254ff34bb9376bb5ae137a6d2"],
+  ["bricohams-fusion", "fusion", "BH Fusion", "6c2114f26bf0deef4b4a0221e2f502c5e4d05ae8f3d13b52ecb8a146bfb18cc4"],
+  ["f4hwn-fusion", "f4hwn-fusion", "BH F4 Fusion", "6003cb7501378a21fcc8c29ac79c78494b51bcd3a5022703c99e5fda617af478"],
+  ["f4hwn-fieldops", "f4hwn-fieldops", "BH F4 FieldOps", "ee774e3347a7dfc2624aa78829960856448d4109b0f70df57ada830f07adee88"],
+  ["f4hwn-labs", "f4hwn-labs", "BH F4 Labs", "23d35ab92f5d37638ad5746e04cbae3d326de2efb7117cc1010a5af816148d74"],
+  ["f4hwn-transfer", "f4hwn-transfer", "BH F4 Transfer", "511aecd064d91b7baeb90b3caffb3b891ac87ef67ff69b0aeed137ab487cc8b1"]
 ];
 async function publish() {
   const entries = [];
   const files = [];
-  for (const [id, folder, edition, expected, batch = "backup-read-20261031", distribution = "v0.5.6"] of builds) {
+  for (const [id, folder, edition, expected, batch = "ci-20261116", distribution = "v0.6.0"] of builds) {
     const directory = path.join(root, "firmware-builds", batch, folder, "artifacts");
     const artifacts = await Promise.all((await fs.readdir(directory)).map(async name =>
       ({ name, bytes: new Uint8Array(await fs.readFile(path.join(directory, name))) })));
@@ -61,6 +60,8 @@ async function publish() {
       checked.info.backupReadIntegration?.crc === true &&
       checked.info.backupReadIntegration?.persistentWritesAdded === false,
       `Integracion de respaldo de solo lectura ausente: ${id}.`);
+    R.assert(checked.info.fastRetuneIntegration?.audioPathKeptOnFrequencyStep === true,
+      `Integracion de retune rapido ausente: ${id}.`);
     R.inspectQuanshengSlotImage(checked.firmware.bytes);
     const name = `${id}.bin`;
     files.push([name, checked.firmware.bytes]);
@@ -68,13 +69,13 @@ async function publish() {
       id, name, edition, publisher: "Bricohams", version: "v6.1.0",
       distributionVersion: distribution,
       size: checked.firmware.bytes.length, sha256: expected, path: `precompiled/${name}`,
-      targets: ["UV-K1", "UV-K5-V3"], stability: "beta", hardwareBootTested: false,
+      targets: ["UV-K1", "UV-K5-V3"], stability: "stable", hardwareBootTested: false,
       license: "GPL-3.0-or-later AND Apache-2.0",
       source: "https://github.com/Brico-Hams/Radio-Web-install",
       upstream: checked.info.upstream, build: checked.info
     });
   }
-  const notices = path.join(root, "firmware-builds", "backup-read-20261031", "ardf", "artifacts");
+  const notices = path.join(root, "firmware-builds", "ci-20261116", "ardf", "artifacts");
   files.push(["LICENSE.txt", await fs.readFile(path.join(root, "LICENSE"))],
     ["APACHE-2.0.txt", await fs.readFile(path.join(notices, "LICENSE"))],
     ["NOTICE.txt", await fs.readFile(path.join(notices, "NOTICE"))],

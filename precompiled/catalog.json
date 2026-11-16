@@ -10,15 +10,15 @@
       "edition": "BH ARDF",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.9",
-      "size": 114336,
-      "sha256": "d5033d07759d3f0eb631cfd41664999b699e954f5da7015d2fdfdfa223613a14",
+      "distributionVersion": "v0.6.0",
+      "size": 114504,
+      "sha256": "f01293f94f3834723b8964b0b7ce96a07b68412b8e1919e85835ebd7fa9b8e3a",
       "path": "precompiled/bricohams-ardf.bin",
       "targets": [
         "UV-K1",
         "UV-K5-V3"
       ],
-      "stability": "beta",
+      "stability": "stable",
       "hardwareBootTested": false,
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
@@ -136,14 +136,14 @@
           "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 114336,
+        "imageBytes": 114504,
         "memory": {
-          "ramUsedBytes": 12576,
+          "ramUsedBytes": 12608,
           "ramCapacityBytes": 16384,
-          "ramFreeBytes": 3808,
-          "imageBytes": 114336,
+          "ramFreeBytes": 3776,
+          "imageBytes": 114504,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 6496
+          "slotFreeBytes": 6328
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -188,7 +188,7 @@
         "brandingSources": [
           {
             "file": "App/ui/welcome.c",
-            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+            "sha256": "38b9703c971f8c998b92c3f9158b14d0269cfb3c98e26991c4eb4ce6a0e6361c"
           },
           {
             "file": "App/bricohams/bootlogo.h",
@@ -219,6 +219,30 @@
             }
           ]
         },
+        "fastRetuneIntegration": {
+          "version": 1,
+          "audioPathKeptOnFrequencyStep": true,
+          "fullSetupOnBandModeOrTx": true,
+          "hardwareValidated": false,
+          "sources": [
+            {
+              "file": "App/radio.c",
+              "sha256": "0582d9f6c076e8b1134a7046167f6b7bea47c6948ec712e42fd7fb854f2b4e6d"
+            },
+            {
+              "file": "App/radio.h",
+              "sha256": "cbd2cdc762b07c667fe1577ac41912d476792845af88c7d637a41be89877d2c7"
+            },
+            {
+              "file": "App/app/main.c",
+              "sha256": "e4efa4225921279a9b4ebce3a76650de14a231d5a0ed8107efd5fe0702fa7276"
+            },
+            {
+              "file": "App/app/app.c",
+              "sha256": "925ec77cce0825910a80068e214b94c1701c1c3f5fe6d42e085d9f6335f8e9e8"
+            }
+          ]
+        },
         "integrationTestedOnHardware": false,
         "ardfStatistics": {
           "version": 1,
@@ -229,7 +253,7 @@
           "persistentWrites": false,
           "hardwareValidated": false
         },
-        "stability": "beta",
+        "stability": "stable",
         "validation": "Structural checks only; physical validation pending"
       }
     },
@@ -239,15 +263,15 @@
       "edition": "BH Satellite",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.9",
-      "size": 118496,
-      "sha256": "bb4627012464cdbde3303714320979bcefa82eec27c88a9005c8aed6de451860",
+      "distributionVersion": "v0.6.0",
+      "size": 118664,
+      "sha256": "1fb4a0f1633f60c18ebedece9cab885a1effb0e46b5740df1b146aa1383b40ae",
       "path": "precompiled/bricohams-satellite.bin",
       "targets": [
         "UV-K1",
         "UV-K5-V3"
       ],
-      "stability": "beta",
+      "stability": "stable",
       "hardwareBootTested": false,
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
@@ -365,14 +389,14 @@
           "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 118496,
+        "imageBytes": 118664,
         "memory": {
-          "ramUsedBytes": 12416,
+          "ramUsedBytes": 12448,
           "ramCapacityBytes": 16384,
-          "ramFreeBytes": 3968,
-          "imageBytes": 118496,
+          "ramFreeBytes": 3936,
+          "imageBytes": 118664,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 2336
+          "slotFreeBytes": 2168
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -447,13 +471,13 @@
           },
           {
             "file": "App/app/app.c",
-            "sha256": "60e66e8a7d0f29b7224832652c1b5c1c8997ff2ccfe0ca64f3dac0c11afbf36c"
+            "sha256": "ae8891fcb1c20ec270c954fac2e69de0a6cc57a5637cd6a3f658bf4464d44ca2"
           }
         ],
         "brandingSources": [
           {
             "file": "App/ui/welcome.c",
-            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+            "sha256": "38b9703c971f8c998b92c3f9158b14d0269cfb3c98e26991c4eb4ce6a0e6361c"
           },
           {
             "file": "App/bricohams/bootlogo.h",
@@ -481,6 +505,30 @@
             {
               "file": "App/driver/mb_flash.c",
               "sha256": "d1de804164c54bd985f36513f5ae26efa297781ec703240a073fe5148442abfa"
+            }
+          ]
+        },
+        "fastRetuneIntegration": {
+          "version": 1,
+          "audioPathKeptOnFrequencyStep": true,
+          "fullSetupOnBandModeOrTx": true,
+          "hardwareValidated": false,
+          "sources": [
+            {
+              "file": "App/radio.c",
+              "sha256": "0582d9f6c076e8b1134a7046167f6b7bea47c6948ec712e42fd7fb854f2b4e6d"
+            },
+            {
+              "file": "App/radio.h",
+              "sha256": "cbd2cdc762b07c667fe1577ac41912d476792845af88c7d637a41be89877d2c7"
+            },
+            {
+              "file": "App/app/main.c",
+              "sha256": "e4efa4225921279a9b4ebce3a76650de14a231d5a0ed8107efd5fe0702fa7276"
+            },
+            {
+              "file": "App/app/app.c",
+              "sha256": "ae8891fcb1c20ec270c954fac2e69de0a6cc57a5637cd6a3f658bf4464d44ca2"
             }
           ]
         },
@@ -521,7 +569,7 @@
           "calibrationUntouched": true,
           "hardwareValidated": false
         },
-        "stability": "beta",
+        "stability": "stable",
         "validation": "Structural checks only; physical validation pending"
       }
     },
@@ -531,15 +579,15 @@
       "edition": "BH Spectrum",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.9",
-      "size": 119464,
-      "sha256": "784a2d902f61d628e7dc58cc62124bc1c33fcac3d254d629b894fc6e06a3f06d",
+      "distributionVersion": "v0.6.0",
+      "size": 119632,
+      "sha256": "eb67643d803ae29b40cbb639676283d9e7f0cc976bd24259521ad501d03b3e58",
       "path": "precompiled/bricohams-spectrum.bin",
       "targets": [
         "UV-K1",
         "UV-K5-V3"
       ],
-      "stability": "beta",
+      "stability": "stable",
       "hardwareBootTested": false,
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
@@ -657,14 +705,14 @@
           "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 119464,
+        "imageBytes": 119632,
         "memory": {
-          "ramUsedBytes": 13600,
+          "ramUsedBytes": 13632,
           "ramCapacityBytes": 16384,
-          "ramFreeBytes": 2784,
-          "imageBytes": 119464,
+          "ramFreeBytes": 2752,
+          "imageBytes": 119632,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 1368
+          "slotFreeBytes": 1200
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -733,7 +781,7 @@
         "brandingSources": [
           {
             "file": "App/ui/welcome.c",
-            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+            "sha256": "38b9703c971f8c998b92c3f9158b14d0269cfb3c98e26991c4eb4ce6a0e6361c"
           },
           {
             "file": "App/bricohams/bootlogo.h",
@@ -764,6 +812,30 @@
             }
           ]
         },
+        "fastRetuneIntegration": {
+          "version": 1,
+          "audioPathKeptOnFrequencyStep": true,
+          "fullSetupOnBandModeOrTx": true,
+          "hardwareValidated": false,
+          "sources": [
+            {
+              "file": "App/radio.c",
+              "sha256": "0582d9f6c076e8b1134a7046167f6b7bea47c6948ec712e42fd7fb854f2b4e6d"
+            },
+            {
+              "file": "App/radio.h",
+              "sha256": "cbd2cdc762b07c667fe1577ac41912d476792845af88c7d637a41be89877d2c7"
+            },
+            {
+              "file": "App/app/main.c",
+              "sha256": "e4efa4225921279a9b4ebce3a76650de14a231d5a0ed8107efd5fe0702fa7276"
+            },
+            {
+              "file": "App/app/app.c",
+              "sha256": "925ec77cce0825910a80068e214b94c1701c1c3f5fe6d42e085d9f6335f8e9e8"
+            }
+          ]
+        },
         "integrationTestedOnHardware": false,
         "spectrumPresets": {
           "version": 1,
@@ -775,7 +847,7 @@
           "persistentWrites": false,
           "hardwareValidated": false
         },
-        "stability": "beta",
+        "stability": "stable",
         "validation": "Structural checks only; physical validation pending"
       }
     },
@@ -785,15 +857,15 @@
       "edition": "BH Labs",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.6",
-      "size": 114896,
-      "sha256": "938a7cd80b489c9c1746b710c7ae4533526674b13e5f97083f6bea850721140a",
+      "distributionVersion": "v0.6.0",
+      "size": 115056,
+      "sha256": "286e55cd52d2ebc13072d97137ee0a8ad3f0d51254ff34bb9376bb5ae137a6d2",
       "path": "precompiled/bricohams-labs.bin",
       "targets": [
         "UV-K1",
         "UV-K5-V3"
       ],
-      "stability": "beta",
+      "stability": "stable",
       "hardwareBootTested": false,
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
@@ -909,17 +981,17 @@
         "sourceDateEpoch": 1791342406,
         "toolchain": {
           "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 114896,
+        "imageBytes": 115056,
         "memory": {
-          "ramUsedBytes": 12544,
+          "ramUsedBytes": 12576,
           "ramCapacityBytes": 16384,
-          "ramFreeBytes": 3840,
-          "imageBytes": 114896,
+          "ramFreeBytes": 3808,
+          "imageBytes": 115056,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 5936
+          "slotFreeBytes": 5776
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -929,11 +1001,11 @@
         "brandingSources": [
           {
             "file": "App/ui/welcome.c",
-            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+            "sha256": "38b9703c971f8c998b92c3f9158b14d0269cfb3c98e26991c4eb4ce6a0e6361c"
           },
           {
             "file": "App/bricohams/bootlogo.h",
-            "sha256": "162e185cc924680a68ba4e83e6b0fb46a863d0996a1501ff68b1008132fbba01"
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
           }
         ],
         "backupReadIntegration": {
@@ -960,8 +1032,32 @@
             }
           ]
         },
+        "fastRetuneIntegration": {
+          "version": 1,
+          "audioPathKeptOnFrequencyStep": true,
+          "fullSetupOnBandModeOrTx": true,
+          "hardwareValidated": false,
+          "sources": [
+            {
+              "file": "App/radio.c",
+              "sha256": "0582d9f6c076e8b1134a7046167f6b7bea47c6948ec712e42fd7fb854f2b4e6d"
+            },
+            {
+              "file": "App/radio.h",
+              "sha256": "cbd2cdc762b07c667fe1577ac41912d476792845af88c7d637a41be89877d2c7"
+            },
+            {
+              "file": "App/app/main.c",
+              "sha256": "e4efa4225921279a9b4ebce3a76650de14a231d5a0ed8107efd5fe0702fa7276"
+            },
+            {
+              "file": "App/app/app.c",
+              "sha256": "925ec77cce0825910a80068e214b94c1701c1c3f5fe6d42e085d9f6335f8e9e8"
+            }
+          ]
+        },
         "integrationTestedOnHardware": false,
-        "stability": "beta",
+        "stability": "stable",
         "validation": "Structural checks only; physical validation pending"
       }
     },
@@ -971,15 +1067,15 @@
       "edition": "BH Fusion",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.6",
-      "size": 107940,
-      "sha256": "e053c1d3671a33bb2361d91ec5555404763bd69e4f0d2548549e6b2a68d86356",
+      "distributionVersion": "v0.6.0",
+      "size": 108112,
+      "sha256": "6c2114f26bf0deef4b4a0221e2f502c5e4d05ae8f3d13b52ecb8a146bfb18cc4",
       "path": "precompiled/bricohams-fusion.bin",
       "targets": [
         "UV-K1",
         "UV-K5-V3"
       ],
-      "stability": "beta",
+      "stability": "stable",
       "hardwareBootTested": false,
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
@@ -1093,17 +1189,17 @@
         "sourceDateEpoch": 1791342406,
         "toolchain": {
           "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 107940,
+        "imageBytes": 108112,
         "memory": {
           "ramUsedBytes": 12160,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 4224,
-          "imageBytes": 107940,
+          "imageBytes": 108112,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 12892
+          "slotFreeBytes": 12720
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -1113,11 +1209,11 @@
         "brandingSources": [
           {
             "file": "App/ui/welcome.c",
-            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+            "sha256": "38b9703c971f8c998b92c3f9158b14d0269cfb3c98e26991c4eb4ce6a0e6361c"
           },
           {
             "file": "App/bricohams/bootlogo.h",
-            "sha256": "162e185cc924680a68ba4e83e6b0fb46a863d0996a1501ff68b1008132fbba01"
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
           }
         ],
         "backupReadIntegration": {
@@ -1144,8 +1240,32 @@
             }
           ]
         },
+        "fastRetuneIntegration": {
+          "version": 1,
+          "audioPathKeptOnFrequencyStep": true,
+          "fullSetupOnBandModeOrTx": true,
+          "hardwareValidated": false,
+          "sources": [
+            {
+              "file": "App/radio.c",
+              "sha256": "0582d9f6c076e8b1134a7046167f6b7bea47c6948ec712e42fd7fb854f2b4e6d"
+            },
+            {
+              "file": "App/radio.h",
+              "sha256": "cbd2cdc762b07c667fe1577ac41912d476792845af88c7d637a41be89877d2c7"
+            },
+            {
+              "file": "App/app/main.c",
+              "sha256": "e4efa4225921279a9b4ebce3a76650de14a231d5a0ed8107efd5fe0702fa7276"
+            },
+            {
+              "file": "App/app/app.c",
+              "sha256": "925ec77cce0825910a80068e214b94c1701c1c3f5fe6d42e085d9f6335f8e9e8"
+            }
+          ]
+        },
         "integrationTestedOnHardware": false,
-        "stability": "beta",
+        "stability": "stable",
         "validation": "Structural checks only; physical validation pending"
       }
     },
@@ -1155,15 +1275,15 @@
       "edition": "BH F4 Fusion",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.6",
-      "size": 108784,
-      "sha256": "1009c0f54b29b8d4ea0d81b2fffcfabe09056bccd336dabcba4c102b3a810503",
+      "distributionVersion": "v0.6.0",
+      "size": 108956,
+      "sha256": "6003cb7501378a21fcc8c29ac79c78494b51bcd3a5022703c99e5fda617af478",
       "path": "precompiled/f4hwn-fusion.bin",
       "targets": [
         "UV-K1",
         "UV-K5-V3"
       ],
-      "stability": "beta",
+      "stability": "stable",
       "hardwareBootTested": false,
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
@@ -1275,17 +1395,17 @@
         "sourceDateEpoch": 1791342406,
         "toolchain": {
           "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 108784,
+        "imageBytes": 108956,
         "memory": {
           "ramUsedBytes": 12160,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 4224,
-          "imageBytes": 108784,
+          "imageBytes": 108956,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 12048
+          "slotFreeBytes": 11876
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -1295,11 +1415,11 @@
         "brandingSources": [
           {
             "file": "App/ui/welcome.c",
-            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+            "sha256": "38b9703c971f8c998b92c3f9158b14d0269cfb3c98e26991c4eb4ce6a0e6361c"
           },
           {
             "file": "App/bricohams/bootlogo.h",
-            "sha256": "162e185cc924680a68ba4e83e6b0fb46a863d0996a1501ff68b1008132fbba01"
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
           }
         ],
         "backupReadIntegration": {
@@ -1326,8 +1446,32 @@
             }
           ]
         },
+        "fastRetuneIntegration": {
+          "version": 1,
+          "audioPathKeptOnFrequencyStep": true,
+          "fullSetupOnBandModeOrTx": true,
+          "hardwareValidated": false,
+          "sources": [
+            {
+              "file": "App/radio.c",
+              "sha256": "0582d9f6c076e8b1134a7046167f6b7bea47c6948ec712e42fd7fb854f2b4e6d"
+            },
+            {
+              "file": "App/radio.h",
+              "sha256": "cbd2cdc762b07c667fe1577ac41912d476792845af88c7d637a41be89877d2c7"
+            },
+            {
+              "file": "App/app/main.c",
+              "sha256": "e4efa4225921279a9b4ebce3a76650de14a231d5a0ed8107efd5fe0702fa7276"
+            },
+            {
+              "file": "App/app/app.c",
+              "sha256": "925ec77cce0825910a80068e214b94c1701c1c3f5fe6d42e085d9f6335f8e9e8"
+            }
+          ]
+        },
         "integrationTestedOnHardware": false,
-        "stability": "beta",
+        "stability": "stable",
         "validation": "Structural checks only; physical validation pending"
       }
     },
@@ -1337,15 +1481,15 @@
       "edition": "BH F4 FieldOps",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.6",
-      "size": 114916,
-      "sha256": "cbf556ed40c6bdbb684ef6cf651960f87ca77014c32422b0e5bdb11553413d7f",
+      "distributionVersion": "v0.6.0",
+      "size": 115088,
+      "sha256": "ee774e3347a7dfc2624aa78829960856448d4109b0f70df57ada830f07adee88",
       "path": "precompiled/f4hwn-fieldops.bin",
       "targets": [
         "UV-K1",
         "UV-K5-V3"
       ],
-      "stability": "beta",
+      "stability": "stable",
       "hardwareBootTested": false,
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
@@ -1457,17 +1601,17 @@
         "sourceDateEpoch": 1791342406,
         "toolchain": {
           "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 114916,
+        "imageBytes": 115088,
         "memory": {
           "ramUsedBytes": 12384,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 4000,
-          "imageBytes": 114916,
+          "imageBytes": 115088,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 5916
+          "slotFreeBytes": 5744
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -1477,11 +1621,11 @@
         "brandingSources": [
           {
             "file": "App/ui/welcome.c",
-            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+            "sha256": "38b9703c971f8c998b92c3f9158b14d0269cfb3c98e26991c4eb4ce6a0e6361c"
           },
           {
             "file": "App/bricohams/bootlogo.h",
-            "sha256": "162e185cc924680a68ba4e83e6b0fb46a863d0996a1501ff68b1008132fbba01"
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
           }
         ],
         "backupReadIntegration": {
@@ -1508,8 +1652,32 @@
             }
           ]
         },
+        "fastRetuneIntegration": {
+          "version": 1,
+          "audioPathKeptOnFrequencyStep": true,
+          "fullSetupOnBandModeOrTx": true,
+          "hardwareValidated": false,
+          "sources": [
+            {
+              "file": "App/radio.c",
+              "sha256": "0582d9f6c076e8b1134a7046167f6b7bea47c6948ec712e42fd7fb854f2b4e6d"
+            },
+            {
+              "file": "App/radio.h",
+              "sha256": "cbd2cdc762b07c667fe1577ac41912d476792845af88c7d637a41be89877d2c7"
+            },
+            {
+              "file": "App/app/main.c",
+              "sha256": "e4efa4225921279a9b4ebce3a76650de14a231d5a0ed8107efd5fe0702fa7276"
+            },
+            {
+              "file": "App/app/app.c",
+              "sha256": "925ec77cce0825910a80068e214b94c1701c1c3f5fe6d42e085d9f6335f8e9e8"
+            }
+          ]
+        },
         "integrationTestedOnHardware": false,
-        "stability": "beta",
+        "stability": "stable",
         "validation": "Structural checks only; physical validation pending"
       }
     },
@@ -1519,15 +1687,15 @@
       "edition": "BH F4 Labs",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.6",
-      "size": 115704,
-      "sha256": "f851dde8532aaba66c9110279b5891f332a25823a0e63e0f6c308ffe44d1a794",
+      "distributionVersion": "v0.6.0",
+      "size": 115864,
+      "sha256": "23d35ab92f5d37638ad5746e04cbae3d326de2efb7117cc1010a5af816148d74",
       "path": "precompiled/f4hwn-labs.bin",
       "targets": [
         "UV-K1",
         "UV-K5-V3"
       ],
-      "stability": "beta",
+      "stability": "stable",
       "hardwareBootTested": false,
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
@@ -1641,17 +1809,17 @@
         "sourceDateEpoch": 1791342406,
         "toolchain": {
           "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 115704,
+        "imageBytes": 115864,
         "memory": {
-          "ramUsedBytes": 12544,
+          "ramUsedBytes": 12576,
           "ramCapacityBytes": 16384,
-          "ramFreeBytes": 3840,
-          "imageBytes": 115704,
+          "ramFreeBytes": 3808,
+          "imageBytes": 115864,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 5128
+          "slotFreeBytes": 4968
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -1661,11 +1829,11 @@
         "brandingSources": [
           {
             "file": "App/ui/welcome.c",
-            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+            "sha256": "38b9703c971f8c998b92c3f9158b14d0269cfb3c98e26991c4eb4ce6a0e6361c"
           },
           {
             "file": "App/bricohams/bootlogo.h",
-            "sha256": "162e185cc924680a68ba4e83e6b0fb46a863d0996a1501ff68b1008132fbba01"
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
           }
         ],
         "backupReadIntegration": {
@@ -1692,8 +1860,32 @@
             }
           ]
         },
+        "fastRetuneIntegration": {
+          "version": 1,
+          "audioPathKeptOnFrequencyStep": true,
+          "fullSetupOnBandModeOrTx": true,
+          "hardwareValidated": false,
+          "sources": [
+            {
+              "file": "App/radio.c",
+              "sha256": "0582d9f6c076e8b1134a7046167f6b7bea47c6948ec712e42fd7fb854f2b4e6d"
+            },
+            {
+              "file": "App/radio.h",
+              "sha256": "cbd2cdc762b07c667fe1577ac41912d476792845af88c7d637a41be89877d2c7"
+            },
+            {
+              "file": "App/app/main.c",
+              "sha256": "e4efa4225921279a9b4ebce3a76650de14a231d5a0ed8107efd5fe0702fa7276"
+            },
+            {
+              "file": "App/app/app.c",
+              "sha256": "925ec77cce0825910a80068e214b94c1701c1c3f5fe6d42e085d9f6335f8e9e8"
+            }
+          ]
+        },
         "integrationTestedOnHardware": false,
-        "stability": "beta",
+        "stability": "stable",
         "validation": "Structural checks only; physical validation pending"
       }
     },
@@ -1703,15 +1895,15 @@
       "edition": "BH F4 Transfer",
       "publisher": "Bricohams",
       "version": "v6.1.0",
-      "distributionVersion": "v0.5.6",
-      "size": 116852,
-      "sha256": "1584bfd010fa171c1ddc5b48fa31ed07409d585c23147f9a644d426661b8fea2",
+      "distributionVersion": "v0.6.0",
+      "size": 117024,
+      "sha256": "511aecd064d91b7baeb90b3caffb3b891ac87ef67ff69b0aeed137ab487cc8b1",
       "path": "precompiled/f4hwn-transfer.bin",
       "targets": [
         "UV-K1",
         "UV-K5-V3"
       ],
-      "stability": "beta",
+      "stability": "stable",
       "hardwareBootTested": false,
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
@@ -1823,17 +2015,17 @@
         "sourceDateEpoch": 1791342406,
         "toolchain": {
           "compiler": "arm-none-eabi-gcc (Arm GNU Toolchain 13.3.Rel1 (Build arm-13.24)) 13.3.1 20240614\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.",
-          "cmake": "cmake version 4.3.4\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
+          "cmake": "cmake version 4.4.5\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).",
           "ninja": "1.13.2"
         },
-        "imageBytes": 116852,
+        "imageBytes": 117024,
         "memory": {
           "ramUsedBytes": 12800,
           "ramCapacityBytes": 16384,
           "ramFreeBytes": 3584,
-          "imageBytes": 116852,
+          "imageBytes": 117024,
           "slotCapacityBytes": 120832,
-          "slotFreeBytes": 3980
+          "slotFreeBytes": 3808
         },
         "sourceChangesIncluded": false,
         "hardwareTested": false,
@@ -1843,11 +2035,11 @@
         "brandingSources": [
           {
             "file": "App/ui/welcome.c",
-            "sha256": "bfe7a6e46b8a7f50f4fe411ac8b1cefa10ec6e54965094d93a1ad889f4ea3721"
+            "sha256": "38b9703c971f8c998b92c3f9158b14d0269cfb3c98e26991c4eb4ce6a0e6361c"
           },
           {
             "file": "App/bricohams/bootlogo.h",
-            "sha256": "162e185cc924680a68ba4e83e6b0fb46a863d0996a1501ff68b1008132fbba01"
+            "sha256": "3da2548dab20c4653793454d7098743a5c13343f1af0db66355ae9f2bda6b1d0"
           }
         ],
         "backupReadIntegration": {
@@ -1874,8 +2066,32 @@
             }
           ]
         },
+        "fastRetuneIntegration": {
+          "version": 1,
+          "audioPathKeptOnFrequencyStep": true,
+          "fullSetupOnBandModeOrTx": true,
+          "hardwareValidated": false,
+          "sources": [
+            {
+              "file": "App/radio.c",
+              "sha256": "0582d9f6c076e8b1134a7046167f6b7bea47c6948ec712e42fd7fb854f2b4e6d"
+            },
+            {
+              "file": "App/radio.h",
+              "sha256": "cbd2cdc762b07c667fe1577ac41912d476792845af88c7d637a41be89877d2c7"
+            },
+            {
+              "file": "App/app/main.c",
+              "sha256": "e4efa4225921279a9b4ebce3a76650de14a231d5a0ed8107efd5fe0702fa7276"
+            },
+            {
+              "file": "App/app/app.c",
+              "sha256": "925ec77cce0825910a80068e214b94c1701c1c3f5fe6d42e085d9f6335f8e9e8"
+            }
+          ]
+        },
         "integrationTestedOnHardware": false,
-        "stability": "beta",
+        "stability": "stable",
         "validation": "Structural checks only; physical validation pending"
       }
     }
