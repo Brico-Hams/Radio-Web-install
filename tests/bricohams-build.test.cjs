@@ -7,6 +7,36 @@ const { inspectResident } = require("../scripts/build-platform-resident.cjs");
 const { OP, STATE, encodeRequest, decodeReply, uploadPackage } = require("../scripts/platform-transfer.cjs");
 const { crc32 } = require("../radio-core.js");
 const { patchBackupReadSource, integrateBackupRead } = require("../scripts/firmware-backup-read.cjs");
+const { patchFastRetuneSource, integrateFastRetune } = require("../scripts/firmware-fast-retune.cjs");
+
+function fastRetuneSources() {
+  return {
+    "App/radio.c": [
+      "#include <string.h>",
+      "void RADIO_SetupRegisters(bool switchToForeground)\n{",
+      "    BK4819_FilterBandwidth_t Bandwidth = gRxVfo->CHANNEL_BANDWIDTH;",
+      "    AUDIO_AudioPathOff();\n\n    gEnableSpeaker = false;\n\n    BK4819_ToggleGpioOut(BK4819_GPIO6_PIN2_GREEN, false);",
+      "    BK4819_SetupSquelch();",
+      "}",
+      "void RADIO_SetTxParameters(void)\n{",
+      "    BK4819_FilterBandwidth_t Bandwidth = gCurrentVfo->CHANNEL_BANDWIDTH;",
+      "    AUDIO_AudioPathOff();",
+      "    BK4819_SetFrequency(gCurrentVfo->pTX->Frequency);",
+      "}"
+    ].join("\n"),
+    "App/radio.h": "void     RADIO_ConfigureSquelchAndOutputPower(VFO_Info_t *pInfo);\nvoid     RADIO_SetupRegisters(bool switchToForeground);\nvoid     RADIO_SetTxParameters(void);",
+    "App/app/main.c": [
+      "            else {",
+      "                gTxVfo->freq_config_RX.Frequency = frequency;",
+      "                BK4819_SetFrequency(frequency);",
+      "                BK4819_RX_TurnOn();",
+      "                gRequestSaveChannel = 1;",
+      "                return;",
+      "            }"
+    ].join("\n"),
+    "App/app/app.c": "    if (gVfoConfigureMode != VFO_CONFIGURE_NONE) {\n        RADIO_SetupRegisters(true);\n        if (gMonitor)\n            ACTION_Monitor();   // 1of11\n    }"
+  };
+}
 
 function backupSources() {
   const guard = "#if defined(ENABLE_FEAT_F4HWN_EXT_FLASH_RW) || defined(ENABLE_AIRCOPY_FLASH)";
@@ -118,6 +148,61 @@ test("backup integration records final hashes including prior module edits and s
     assert.equal(item.sha256, createHash("sha256").update(bytes).digest("hex"));
   }
   assert.match(fs.readFileSync(path.join(work, "App/app/uart.c"), "utf8"), /Existing module integration: 0x7B20/);
+});
+
+test("fast retune patch places the frequency-only path before the audio shutdown and resets after TX", () => {
+  const source = fastRetuneSources();
+  const radio = patchFastRetuneSource("App/radio.c", source["App/radio.c"]);
+  const fast = radio.indexOf("BK4819_PickRXFilterPathBasedOnFrequency(bhRetune);");
+  const setupOff = radio.indexOf("    AUDIO_AudioPathOff();\n\n    gEnableSpeaker = false;");
+  assert.ok(fast > 0 && fast < setupOff);
+  assert.ok(radio.indexOf("uint32_t gBhRetuneFrequency;") < radio.indexOf("void RADIO_SetupRegisters"));
+  assert.match(radio, /void RADIO_SetTxParameters\(void\)\n\{\n    gBhRetuneFrequency = 0;/);
+  assert.match(radio, /^\/\* BRICOHAMS_FAST_RETUNE:/);
+  const main = patchFastRetuneSource("App/app/main.c", source["App/app/main.c"]);
+  assert.match(main, /gBhRetuneFrequency = frequency; \/\/ BRICOHAMS_FAST_RETUNE\n {16}gRequestSaveChannel = 1;/);
+  assert.match(patchFastRetuneSource("App/radio.h", source["App/radio.h"]),
+    /RADIO_SetupRegisters\(bool switchToForeground\);\nextern uint32_t gBhRetuneFrequency;/);
+  assert.match(patchFastRetuneSource("App/app/app.c", source["App/app/app.c"]),
+    /if \(gMonitor && gCurrentFunction != FUNCTION_MONITOR\)/);
+});
+
+test("fast retune patch rejects changed, duplicated, already-patched or unknown sources and normalizes CRLF", () => {
+  for (const [file, source] of Object.entries(fastRetuneSources())) {
+    const result = patchFastRetuneSource(file, source);
+    assert.equal(patchFastRetuneSource(file, source.replace(/\n/g, "\r\n")), result);
+    assert.throws(() => patchFastRetuneSource(file, result), /ya aplicada/);
+    assert.throws(() => patchFastRetuneSource(file, `${source}\n${source}`), /ambiguo/);
+    assert.throws(() => patchFastRetuneSource(file, "changed upstream"), /ausente/);
+  }
+  assert.throws(() => patchFastRetuneSource("unknown.c", ""), /no admitida/);
+});
+
+test("fast retune integration writes all files with matching hashes and stages before writes", t => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const { createHash } = require("node:crypto");
+  const work = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "bh-fast-retune-"));
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  const source = fastRetuneSources();
+  for (const [file, text] of Object.entries(source)) {
+    fs.mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
+    fs.writeFileSync(path.join(work, file), text);
+  }
+  fs.writeFileSync(path.join(work, "App/app/app.c"), "unexpected upstream");
+  assert.throws(() => integrateFastRetune(work), /ausente/);
+  for (const file of ["App/radio.c", "App/radio.h", "App/app/main.c"])
+    assert.equal(fs.readFileSync(path.join(work, file), "utf8"), source[file]);
+  fs.writeFileSync(path.join(work, "App/app/app.c"), source["App/app/app.c"]);
+  const info = integrateFastRetune(work);
+  assert.equal(info.audioPathKeptOnFrequencyStep, true);
+  assert.equal(info.hardwareValidated, false);
+  assert.equal(info.sources.length, 4);
+  for (const item of info.sources) {
+    const bytes = fs.readFileSync(path.join(work, item.file));
+    assert.match(bytes.toString("utf8"), /^\/\* BRICOHAMS_FAST_RETUNE:/);
+    assert.equal(item.sha256, createHash("sha256").update(bytes).digest("hex"));
+  }
 });
 
 test("informe de memoria incluye reservas, huecos y solapamiento del restaurador sin contarlo dos veces", () => {

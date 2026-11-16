@@ -20,6 +20,28 @@ Artefakte und `build-info.json` liegen unter
 dem Schreiben des lokalen Katalogs, ohne Firmware-Download oder App-Neuveröffentlichung.
 Ältere Messungen und Distributionen weiter unten sind historisch.
 
+## Durchgehendes Audio beim Frequenzwechsel (16.11.2026)
+
+Symptom: Bei offenem Squelch verursachte jeder VFO-Frequenzschritt (z. B.
+1 kHz) eine hoerbare Audioluecke.
+Ursache: Der VFO-Schritt stimmt den BK4819 bereits ab und fordert das Speichern
+des Kanals an; das Speichern fuehrt das vollstaendige `RADIO_SetupRegisters` aus,
+das `AUDIO_AudioPathOff()` aufruft, den Lautsprecher stummschaltet, den
+Empfaenger neu programmiert und mit `FUNCTION_Select(FUNCTION_FOREGROUND)`
+endet, sodass das Audio stumm bleibt, bis der Squelch erneut erkannt wird.
+Korrektur: Hat sich nur die vom VFO-Schritt bereits eingestellte Frequenz
+geaendert, wird nur der RX-Filterpfad neu gewaehlt; Audio, Lautsprecher und
+Register bleiben erhalten.
+Die vollstaendige Neukonfiguration erfolgt weiterhin bei Wechsel von VFO,
+Modulation, Bandbreite, Squelch-/Bandschwellen, CTCSS/DCS-Ton, Compander, NOAA
+oder nach TX. Das kurze `BK4819_RX_TurnOn` des Schritts bleibt fuer die
+VCO-Kalibrierung erhalten.
+Wo: `scripts/firmware-fast-retune.cjs`; `build-info.json` ->
+`fastRetuneIntegration`. F4HWN ist Apache-2.0; LICENSE/NOTICE bleiben erhalten.
+Status: In dieser Validierung NICHT kompiliert und nicht am Funkgeraet getestet.
+Vor der Nutzung RX mit offenem Squelch, 1-kHz-Schritte, Bandwechsel, Monitor und
+TX testen.
+
 ## Identität und Geltungsbereich
 
 **BETA, in Validierung und Erprobung.** Neue Builds geben

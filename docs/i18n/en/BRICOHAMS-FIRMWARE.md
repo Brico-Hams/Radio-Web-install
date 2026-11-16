@@ -20,6 +20,25 @@ SHA-256 verification do not prove hardware boot. Reproducible artifacts and
 before writing the local catalog; it does not download firmware or republish apps.
 Earlier measurements and distributions below are historical.
 
+## Continuous audio when changing frequency (2026-11-16)
+
+Symptom: with the squelch open, every VFO frequency step (for example 1 kHz)
+caused an audible audio gap.
+Cause: the VFO step already tunes the BK4819 and asks to save the channel; the save
+runs the full `RADIO_SetupRegisters`, which calls `AUDIO_AudioPathOff()`,
+mutes the speaker, reprograms the receiver and ends with
+`FUNCTION_Select(FUNCTION_FOREGROUND)`, so audio stays muted until squelch is
+detected again.
+Fix: if only the frequency already tuned by the VFO step changed, only the RX
+filter path is picked again; audio, speaker and registers are kept.
+Full reconfiguration still happens on a change of VFO, modulation, bandwidth,
+squelch/band thresholds, CTCSS/DCS tone, compander, NOAA or after TX.
+The short `BK4819_RX_TurnOn` of the step is kept for VCO calibration.
+Where: `scripts/firmware-fast-retune.cjs`; `build-info.json` ->
+`fastRetuneIntegration`. F4HWN is Apache-2.0 and its LICENSE/NOTICE are kept.
+Status: NOT compiled in this validation nor tested on a radio. Before using it,
+test RX with squelch open, 1 kHz steps, band change, monitor and TX.
+
 ## Identity and Scope
 
 **BETA, undergoing validation and testing.** New builds declare

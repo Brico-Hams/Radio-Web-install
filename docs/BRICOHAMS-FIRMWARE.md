@@ -20,6 +20,25 @@ Los artefactos reproducibles y `build-info.json` estan bajo
 antes de escribir el catalogo local; no descarga firmware ni republica apps.
 Las mediciones y distribuciones anteriores que siguen son historicas.
 
+## Audio continuo al cambiar de frecuencia (16-11-2026)
+
+Sintoma: con el squelch abierto, cada paso de frecuencia del VFO (por ejemplo
+1 kHz) producia un corte de audio audible.
+Causa: el paso VFO ya sintoniza el BK4819 y pide guardar el canal; el guardado
+ejecuta `RADIO_SetupRegisters` completo, que llama a `AUDIO_AudioPathOff()`,
+silencia el altavoz, reprograma el receptor y termina con
+`FUNCTION_Select(FUNCTION_FOREGROUND)`, por lo que el audio queda mudo hasta
+detectar squelch otra vez.
+Correccion: si solo cambio la frecuencia que el paso VFO ya sintonizo, solo se
+vuelve a elegir la ruta de filtro RX y se conserva audio, altavoz y registros.
+La reconfiguracion completa sigue ante cambio de VFO, modulacion, ancho de
+banda, umbrales de squelch/banda, tono CTCSS/DCS, compander, NOAA o tras TX.
+El `BK4819_RX_TurnOn` breve del paso se mantiene para calibrar el VCO.
+Donde: `scripts/firmware-fast-retune.cjs`; `build-info.json` ->
+`fastRetuneIntegration`. F4HWN es Apache-2.0 y se conservan su LICENSE/NOTICE.
+Estado: NO compilado en esta validacion ni probado en radio. Antes de usarlo,
+probar RX con squelch abierto, pasos de 1 kHz, cambio de banda, monitor y TX.
+
 ## Identidad y alcance
 
 **BETA, en validacion y pruebas.** Las nuevas compilaciones declaran
