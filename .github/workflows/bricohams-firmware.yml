@@ -26,7 +26,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The documented Beta images (docs/BRICOHAMS-FIRMWARE.md).
+          # The published images (docs/BRICOHAMS-FIRMWARE.md, precompiled/catalog.json).
           - variant: fusion
             args: --preset Fusion --option ENABLE_VOX=OFF
           - variant: labs
@@ -37,6 +37,14 @@ jobs:
             args: --preset FieldOps --option ENABLE_FEAT_F4HWN_BEACON=OFF --option ENABLE_VOX=OFF --module satellite
           - variant: spectrum
             args: --preset FieldOps --option ENABLE_FEAT_F4HWN_BEACON=OFF --option ENABLE_VOX=OFF --module spectrum
+          - variant: f4hwn-fusion
+            args: --preset Fusion
+          - variant: f4hwn-fieldops
+            args: --preset FieldOps
+          - variant: f4hwn-labs
+            args: --preset Labs
+          - variant: f4hwn-transfer
+            args: --preset Transfer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -82,7 +90,8 @@ jobs:
           const assert = require("node:assert/strict");
           const { createHash } = require("node:crypto");
           const catalog = require("./precompiled/catalog.json");
-          const entry = catalog.entries.find(item => item.id === `bricohams-${process.env.VARIANT}`);
+          const id = process.env.VARIANT.startsWith("f4hwn-") ? process.env.VARIANT : `bricohams-${process.env.VARIANT}`;
+          const entry = catalog.entries.find(item => item.id === id);
           assert(entry, "Missing published firmware entry");
           const directory = path.join(process.env.RUNNER_TEMP, "out/artifacts");
           const info = JSON.parse(fs.readFileSync(path.join(directory, "build-info.json"), "utf8"));

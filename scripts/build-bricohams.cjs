@@ -105,10 +105,8 @@ function brandWelcome(text) {
   result = replaceOnce(result,
     '                strcpy(WelcomeString0, "WELCOME");',
     '                strcpy(WelcomeString0, "Bricohams");', file);
-  result = replaceOnce(result, 'strcpy(WelcomeString1, "BIENVENUE");',
-    'strcpy(WelcomeString1, "RADIO BETA");', file);
-  return replaceOnce(result, 'sprintf(WelcomeString3, "%s Edition", Edition);',
-    'sprintf(WelcomeString3, "%s BETA", Edition);', file);
+  return replaceOnce(result, 'strcpy(WelcomeString1, "BIENVENUE");',
+    'strcpy(WelcomeString1, "RADIO");', file);
 }
 
 function brandLogo(text) {
@@ -116,7 +114,7 @@ function brandLogo(text) {
     '#include "ui/welcome.h"\n#include "bricohams/bootlogo.h"', "App/ui/welcome.c");
   result = replaceOnce(result,
     "    PY25Q16_ReadBuffer(LOGO_BITMAP_ADDR, gStatusLine, sizeof(gStatusLine));\n    PY25Q16_ReadBuffer(LOGO_BITMAP_ADDR + sizeof(gStatusLine), gFrameBuffer, sizeof(gFrameBuffer));",
-    '    UI_StatusClear();\n    UI_DisplayClear();\n    memcpy(gFrameBuffer, BH_BOOTLOGO, sizeof(BH_BOOTLOGO));\n    UI_PrintStringSmallNormal("Bricohams BETA", 0, 127, 6);', "App/ui/welcome.c");
+    '    UI_StatusClear();\n    UI_DisplayClear();\n    memcpy(gFrameBuffer, BH_BOOTLOGO, sizeof(BH_BOOTLOGO));\n    UI_PrintStringSmallNormal("Bricohams", 0, 127, 6);', "App/ui/welcome.c");
   return replaceOnce(result,
     "    // Skip 8-byte header, then read 128x64 bitmap (1024 B):\n    // page 0 -> gStatusLine, pages 1..7 -> gFrameBuffer.",
     "    // Embedded branding leaves the external-flash custom logo untouched.", "App/ui/welcome.c");
@@ -196,7 +194,7 @@ function build(args) {
     ...(modules.includes("ardf") ? { ardfStatistics: { version: 1, command: 0x7b20,
       reply: 0x7b21, snapshotBytes: 140, manualObservationKey: "8",
       persistentWrites: false, hardwareValidated: false } } : {}),
-    stability: "beta", validation: "Structural checks only; physical validation pending"
+    stability: "stable", validation: "Structural checks only; physical validation pending"
   };
   fs.mkdirSync(artifacts);
   fs.writeFileSync(path.join(artifacts, firmware), bytes);

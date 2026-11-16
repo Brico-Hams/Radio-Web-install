@@ -630,7 +630,7 @@ Firmware a medida|Custom firmware|Firmware personnalisé|Angepasste Firmware
 Firmware a la carta|Firmware à la carte|Firmware à la carte|Firmware nach Wunsch
 Alternativa local: el repositorio web incluye|Local alternative: the web repository includes|Solution locale : le dépôt web inclut|Lokale Alternative: Das Web-Repository enthält
 para crear Bricohams V3 sobre F4HWN v6.1.0 con opciones|to build Bricohams V3 on F4HWN v6.1.0 with options|pour créer Bricohams V3 sur F4HWN v6.1.0 avec les options|zum Erstellen von Bricohams V3 auf F4HWN v6.1.0 mit Optionen
-Bricohams BETA:|Bricohams BETA:|Bricohams BÊTA :|Bricohams BETA:
+Bricohams:|Bricohams:|Bricohams :|Bricohams:
 Edicion base|Base edition|Édition de base|Basisausgabe
 Filtrar opciones|Filter options|Filtrer les options|Optionen filtern
 Activa|Enabled|Activée|Aktiv

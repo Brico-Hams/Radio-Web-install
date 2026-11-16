@@ -339,8 +339,9 @@ test("branding de bienvenida conserva mensajes, logo y modos del usuario; falla 
   ].join("\n");
   const branded = brandWelcome(source.replace(/\n/g, "\r\n"));
   assert.equal(branded.match(/strcpy\(WelcomeString0, "Bricohams"\)/g).length, 2);
-  assert(branded.includes('"RADIO BETA"'));
-  assert(branded.includes('"%s BETA", Edition'));
+  assert(branded.includes('"RADIO"'));
+  assert(branded.includes('"%s Edition", Edition'));
+  assert(!/BETA/.test(branded));
   for (const line of source.split("\n").slice(0, 3)) assert(branded.includes(line));
   assert.throws(() => brandWelcome(source.replace("BIENVENUE", "changed")), /ausente/);
   assert.throws(() => brandWelcome(`${source}\n${source}`), /ambiguo/);
@@ -363,7 +364,7 @@ test("bootlogo embebido usa 768 bytes originales sin leer ni escribir el logo ex
   ].join("\n");
   const result = brandLogo(source);
   assert(result.includes("memcpy(gFrameBuffer, BH_BOOTLOGO, sizeof(BH_BOOTLOGO));"));
-  assert(result.includes('UI_PrintStringSmallNormal("Bricohams BETA", 0, 127, 6);'));
+  assert(result.includes('UI_PrintStringSmallNormal("Bricohams", 0, 127, 6);'));
   assert(!result.includes("PY25Q16_"));
   assert.throws(() => brandLogo(source.replace("LOGO_BITMAP_ADDR,", "changed,")), /ausente/);
   assert.throws(() => brandLogo(`${source}\n${source}`), /ambiguo/);
