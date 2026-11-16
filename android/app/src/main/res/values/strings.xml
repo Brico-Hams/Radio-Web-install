@@ -925,6 +925,7 @@
     <string name="rig_invalid_step">El paso Doppler debe estar entre 1 y 5000 Hz.</string>
     <string name="rig_sat_range">%1$s no puede sintonizar %2$s MHz (rango %3$s a %4$s MHz).</string>
     <string name="rig_pass_over">El paso ya ha terminado.</string>
+    <string name="rig_tracking_ctcss_note">Ajusta en la radio el tono CTCSS de subida si el satélite lo necesita (p. ej. SO-50: 67,0 Hz).</string>
     <string name="rig_tracking_start">Iniciando seguimiento…</string>
     <string name="rig_tracking_rx">RX %1$s MHz  Az %2$.0f°  El %3$.0f°</string>
     <string name="rig_tracking_rx_tx">RX %1$s MHz  TX %2$s MHz  Az %3$.0f°  El %4$.0f°</string>

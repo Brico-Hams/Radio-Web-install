@@ -1109,9 +1109,19 @@ class Th75Rig(transport: RadioBytes) : Rig {
         RigStatus(readHz(band), readBandMode(band))
     }
     override fun frequency(vfo: Vfo): Long = readHz(band(vfo))
-    override fun setFrequency(vfo: Vfo, hz: Long) {
+    override fun checkTunable(vfo: Vfo, hz: Long) {
         checkRange(model, hz)
         if (vfo == Vfo.A) requireUi(BAND_A_RANGES.any { hz in it }) { UiText(R.string.err_rig_range, mhzText(hz)) }
+    }
+    override fun selectTxVfo(vfo: Vfo) {
+        val band = band(vfo)
+        link.transaction {
+            link.send("BC $band\r")
+            checkUi(activeBand() == band) { UiText(R.string.err_rig_unconfirmed) }
+        }
+    }
+    override fun setFrequency(vfo: Vfo, hz: Long) {
+        checkTunable(vfo, hz)
         val band = band(vfo)
         link.transaction {
             // A frequency can only be set in VFO mode.

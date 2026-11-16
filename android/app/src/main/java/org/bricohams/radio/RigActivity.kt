@@ -1231,10 +1231,15 @@ class RigActivity : LocalizedActivity() {
         if (down == null || (upText.isNotEmpty() && up == null)) { satStatus.setText(R.string.rig_invalid_sat_frequency); return }
         val step = stepEdit?.text?.toString()?.trim()?.toLongOrNull()
         if (step == null || step !in 1L..5000L) { satStatus.setText(R.string.rig_invalid_step); return }
-        for (hz in listOfNotNull(down, up)) {
-            if (hz !in r.model.rangeHz) {
-                satStatus.text = getString(R.string.rig_sat_range, r.model.label, mhzText(hz),
-                    mhzText(r.model.rangeHz.first), mhzText(r.model.rangeHz.last))
+        val downVfo = r.model.satDownlinkVfo
+        for ((vfo, hz) in listOfNotNull(downVfo to down, up?.let { downVfo.other() to it })) {
+            try {
+                r.checkTunable(vfo, hz)
+            } catch (_: LocalizedArgumentException) {
+                val bandA = r.model == RigModel.THD75 && vfo == Vfo.A
+                val first = if (bandA) Th75Rig.BAND_A_RANGES.first().first else r.model.rangeHz.first
+                val last = if (bandA) Th75Rig.BAND_A_RANGES.last().last else r.model.rangeHz.last
+                satStatus.text = getString(R.string.rig_sat_range, r.model.label, mhzText(hz), mhzText(first), mhzText(last))
                 return
             }
         }
@@ -1278,7 +1283,8 @@ class RigActivity : LocalizedActivity() {
             val line = if (step.uplinkHz == null)
                 getString(R.string.rig_tracking_rx, mhzText(step.downlinkHz), position.azimuth, position.elevation)
             else getString(R.string.rig_tracking_rx_tx, mhzText(step.downlinkHz), mhzText(step.uplinkHz), position.azimuth, position.elevation)
-            val text = line + "\n" + getString(R.string.rig_tracking_sent, sent)
+            val note = if (rig?.model == RigModel.THD75 && step.uplinkHz != null) "\n" + getString(R.string.rig_tracking_ctcss_note) else ""
+            val text = line + "\n" + getString(R.string.rig_tracking_sent, sent) + note
             runOnUiThread { if (!isDestroyed && session === mine) satStatus.text = text }
             if (token == generation && session === mine) worker.schedule({ trackStep(mine, token, current, plan) }, 1000, TimeUnit.MILLISECONDS)
         }

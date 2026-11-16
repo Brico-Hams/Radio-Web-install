@@ -7,14 +7,16 @@ import kotlin.math.roundToLong
 
 enum class RigMode { LSB, USB, CW, CW_R, AM, FM, FM_N, WFM, RTTY, RTTY_R, DATA_L, DATA_U, DATA_FM, DV }
 
-enum class Vfo { A, B }
+enum class Vfo { A, B; fun other() = if (this == A) B else A }
 
 enum class RigModel(
     val label: String, val defaultBaud: Int, val stopBits: Int, val rangeHz: LongRange,
     /** True when the model receives the 118-137 MHz AM airband (its tuning range covers it). */
     val airbandRx: Boolean = false,
     /** VFO that receives the airband when [airbandRx] is set. */
-    val airbandVfo: Vfo = Vfo.A
+    val airbandVfo: Vfo = Vfo.A,
+    /** VFO that receives the satellite downlink; the uplink is the other VFO (TH-D75: band A is the TX band, band B receives widely). */
+    val satDownlinkVfo: Vfo = Vfo.A
 ) {
     FT817("Yaesu FT-817 / FT-817ND", 4800, 2, 100_000L..470_000_000L),
     FT818("Yaesu FT-818ND", 4800, 2, 100_000L..470_000_000L),
@@ -30,7 +32,7 @@ enum class RigModel(
     QDX("QRP Labs QDX / QDX-M", 9600, 1, 3_500_000L..30_000_000L),
     // USB CDC virtual COM port (baud ignored). Band A only covers the 144/220/430 MHz amateur bands (FM/DV); band B receives
     // 0.1-524 MHz including the AM airband.
-    THD75("Kenwood TH-D75", 9600, 1, 100_000L..524_000_000L, airbandRx = true, airbandVfo = Vfo.B)
+    THD75("Kenwood TH-D75", 9600, 1, 100_000L..524_000_000L, airbandRx = true, airbandVfo = Vfo.B, satDownlinkVfo = Vfo.B)
 }
 
 data class RigMemory(val channel: Int, val frequencyHz: Long, val mode: RigMode?, val name: String, val txHz: Long? = null)
@@ -56,6 +58,10 @@ interface Rig {
     fun setMode(mode: RigMode)
     /** Mode of a given VFO; rigs that cannot address VFO B by mode only support VFO A. */
     fun setMode(vfo: Vfo, mode: RigMode) { if (vfo == Vfo.A) setMode(mode) else unsupported("mode on VFO B") }
+    /** Throws when [hz] cannot be tuned on [vfo]; by default every VFO accepts the model's whole range. */
+    fun checkTunable(vfo: Vfo, hz: Long) = checkRange(model, hz)
+    /** Selects the VFO that PTT keys, for rigs without split (TH-D75 control band); no-op elsewhere. */
+    fun selectTxVfo(vfo: Vfo) {}
     fun ptt(on: Boolean)
     fun setSplit(on: Boolean)
     /** Empty channels are skipped. */
@@ -188,12 +194,15 @@ class RigTracker(
     private var lastDownlink: Long? = null
     private var lastUplink: Long? = null
     private var lastUplinkAt: Long? = null
+    private val downVfo = rig.model.satDownlinkVfo
+    private val upVfo = downVfo.other()
 
     fun start(): Step {
         if (uplinkHz != null && rig.supportsSplit) {
             rig.setSplit(true)
             splitOn = true
         }
+        if (uplinkHz != null) rig.selectTxVfo(upVfo)
         return step()
     }
     fun step(): Step {
@@ -203,12 +212,12 @@ class RigTracker(
         val rate = rangeRate(now)
         val down = Doppler.downlink(downlinkHz, rate)
         val up = uplinkHz?.let { Doppler.uplink(it, rate) }
-        checkRange(rig.model, down)
-        if (up != null) checkRange(rig.model, up)
+        rig.checkTunable(downVfo, down)
+        if (up != null) rig.checkTunable(upVfo, up)
         val previousDown = lastDownlink
         val sentDown = previousDown == null || abs(down - previousDown) >= stepHz
         if (sentDown) {
-            rig.setFrequency(Vfo.A, down)
+            rig.setFrequency(downVfo, down)
             lastDownlink = down
         }
         var sentUp = false
@@ -218,7 +227,7 @@ class RigTracker(
             val due = previousUp == null || abs(up - previousUp) >= stepHz
             val allowed = rig.silentVfoB || previousAt == null || now - previousAt >= TOGGLE_INTERVAL_MS
             if (due && allowed) {
-                rig.setFrequency(Vfo.B, up)
+                rig.setFrequency(upVfo, up)
                 lastUplink = up
                 lastUplinkAt = now
                 sentUp = true

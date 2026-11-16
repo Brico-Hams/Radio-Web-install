@@ -79,6 +79,24 @@ class KenwoodThd75Test {
         assertEquals(listOf("TX\r", "RX\r"), sent(transport))
     }
 
+    @Test fun selectTxVfoSetsTheControlBandAndConfirms() {
+        val (rig, transport) = radio { if (it == "BC\r") "BC 0\r" else "" }
+        rig.selectTxVfo(Vfo.A)
+        assertEquals(listOf("BC 0\r", "BC\r"), sent(transport))
+        val (stuck, _) = radio { if (it == "BC\r") "BC 1\r" else "" }
+        assertThrows(LocalizedStateException::class.java) { stuck.selectTxVfo(Vfo.A) }
+    }
+
+    @Test fun tunabilityIsCheckedPerVfo() {
+        val rig = Th75Rig(ScriptedRadio())
+        rig.checkTunable(Vfo.A, 145_850_000)
+        rig.checkTunable(Vfo.A, 436_795_000)
+        rig.checkTunable(Vfo.A, 137_100_000)
+        rig.checkTunable(Vfo.B, 100_000_000)
+        val error = assertThrows(LocalizedArgumentException::class.java) { rig.checkTunable(Vfo.A, 100_000_000) }
+        assertEquals(R.string.err_rig_range, error.text.id)
+    }
+
     @Test fun memoriesAndSplitAreUnsupported() {
         val rig = Th75Rig(ScriptedRadio())
         assertThrows(LocalizedUnsupportedException::class.java) { rig.memories(1..2) }
