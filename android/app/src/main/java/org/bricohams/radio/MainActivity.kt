@@ -378,7 +378,7 @@ class MainActivity : LocalizedActivity() {
             }.also(content::addView)
         }
         val groups = listOf(
-            R.string.radio_cat_title to listOf(Tool.RIG_CAT, Tool.UVK5_CAT, Tool.DIAGNOSTICS, Tool.GD77, Tool.RT950),
+            R.string.radio_cat_title to listOf(Tool.RIG_CAT, Tool.UVK5_CAT, Tool.DIAGNOSTICS, Tool.GD77, Tool.RT950, Tool.RTS10),
             R.string.radio_channels_title to listOf(Tool.CHANNELS, Tool.TEMPLATES))
         for ((title, tools) in groups) {
             val available = tools.filter { radio.allows(it) }

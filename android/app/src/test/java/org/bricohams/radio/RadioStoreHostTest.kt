@@ -383,7 +383,9 @@ class RadioStoreHostTest {
             assertEquals("EA1ABC", activity.findViewById<EditText>(R.id.contact_call).text.toString())
             click(activity, "Guardar nuevo contacto")
             RadioStore(context).use { assertEquals("EA1ABC", it.contacts().single().call) }
-            click(activity, "ARDF")
+            // ARDF and Morse are reached from the Home tools since the task-based navigation.
+            click(activity, "Inicio")
+            click(activity, "Abrir ARDF")
             activity.findViewById<EditText>(R.id.session_name).setText("Prueba")
             click(activity, "Crear sesion ARDF")
             click(activity, "Guardar observacion manual")
@@ -392,6 +394,7 @@ class RadioStoreHostTest {
                 assertTrue(observation.isNull("latitude"))
                 assertEquals(1, observation.getInt("fox"))
             }
+            click(activity, "Inicio")
             click(activity, "Morse")
             click(activity, "Interpretar texto Morse")
         } finally {

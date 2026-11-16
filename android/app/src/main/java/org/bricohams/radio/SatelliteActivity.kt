@@ -530,6 +530,9 @@ class SatelliteActivity : LocalizedActivity() {
                     liveTransmitters.add(Pair(transmitter, row))
                     addView(row)
                 }
+                if (ProfileStore.load(this@SatelliteActivity).radio == ProfileRadio.RTS10) {
+                    addView(Brand.text(this@SatelliteActivity, 13f, colors.muted).apply { setText(R.string.pass_radio_rts10_note) })
+                }
             }.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = Brand.dp(this@SatelliteActivity, 8) })
             // No CAT/rig tracking session is started from this screen (SatelliteTracking runs inside CatActivity), so
             // there is no status or "stop tracking" control to show here.
