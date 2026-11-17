@@ -453,7 +453,13 @@
     const rangeRate = look(time + 500).rangeKm - look(time - 500).rangeKm;
     return downlinkHz * (1 - rangeRate / LIGHT_KM_S);
   }
-  function catPassTarget(orbital, transmitter, pass, observer, time = Date.now()) {
+  // Doppler-corrected uplink: the satellite receives f_up * (1 - rr/c), so the ground station sends f_up / (1 - rr/c).
+  function uplinkDopplerHz(look, uplinkHz, time) {
+    const rangeRate = look(time + 500).rangeKm - look(time - 500).rangeKm;
+    return uplinkHz / (1 - rangeRate / LIGHT_KM_S);
+  }
+  const inCatBand = value => (value >= 13600000 && value <= 17400000) || (value >= 40000000 && value <= 47000000);
+  function catPassTarget(orbital, transmitter, pass, observer, time = Date.now(), uplinkHz = 0) {
     R.assert(Number.isFinite(time) && pass && Number.isFinite(pass.aos?.time) &&
       Number.isFinite(pass.los?.time) && pass.los.time > pass.aos.time &&
       pass.los.time - pass.aos.time <= 2 * 3600000, "Pase CAT no valido.");
@@ -470,7 +476,14 @@
     R.assert(Number.isInteger(frequency10Hz) &&
       ((frequency10Hz >= 13600000 && frequency10Hz <= 17400000) ||
       (frequency10Hz >= 40000000 && frequency10Hz <= 47000000)), "Doppler CAT fuera de banda RX.");
-    return { frequency10Hz, elevation: position.elevation, azimuth: position.azimuth, time };
+    // Half duplex cross-band: RX on the downlink, TX on this uplink only while PTT is keyed on the radio.
+    let uplink10Hz = 0;
+    if (Number.isFinite(uplinkHz) && uplinkHz > 0) {
+      uplink10Hz = Math.round(uplinkDopplerHz(look, uplinkHz, time) / 10);
+      R.assert(Number.isInteger(uplink10Hz) && inCatBand(uplink10Hz),
+        "Uplink Doppler fuera de la banda TX permitida de la radio (136-174 / 400-470 MHz); no se transmite.");
+    }
+    return { frequency10Hz, uplink10Hz, elevation: position.elevation, azimuth: position.azimuth, time };
   }
   class CatPassTracker {
     constructor(connector, plan, clock = () => Date.now()) {
@@ -486,7 +499,7 @@
     async start() {
       R.assert(!this.started && !this.stopPromise, "Crea una sesion CAT nueva para cada inicio.");
       this.started = true;
-      catPassTarget(this.plan.orbital, this.plan.transmitter, this.plan.pass, this.plan.observer, this.clock());
+      catPassTarget(this.plan.orbital, this.plan.transmitter, this.plan.pass, this.plan.observer, this.clock(), this.plan.uplinkHz);
       this.active = true;
       return this.step();
     }
@@ -496,9 +509,11 @@
         const time = this.clock();
         R.assert(this.lastTime === null || time > this.lastTime && time - this.lastTime <= 2000,
           "Reloj o intervalo CAT discontinuo; reinicia el seguimiento.");
-        const target = catPassTarget(this.plan.orbital, this.plan.transmitter, this.plan.pass, this.plan.observer, time);
+        const target = catPassTarget(this.plan.orbital, this.plan.transmitter, this.plan.pass, this.plan.observer, time,
+                  this.plan.uplinkHz);
         this.lastTime = time;
-        const state = await this.connector.setCatReceive(target.frequency10Hz);
+        const state = target.uplink10Hz ? await this.connector.setCatReceive(target.frequency10Hz, target.uplink10Hz) :
+          await this.connector.setCatReceive(target.frequency10Hz);
         if (!this.active) return null;
         R.assert(this.clock() - time >= 0 && this.clock() - time < 2000,
           "Confirmacion CAT demasiado tardia; reinicia el seguimiento.");

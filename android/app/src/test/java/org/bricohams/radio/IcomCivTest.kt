@@ -97,4 +97,155 @@ class IcomCivTest {
         }
         assertEquals(listOf(1), IcomCivRig(transport).memories(0..1).map { it.channel })
     }
+
+    /** Minimal IC-705 behind CI-V: VFO A selected (25 00), VFO B unselected (25 01). */
+    private class Ic705 {
+        val vfo = longArrayOf(145_800_000, 435_200_000)
+        val modes = intArrayOf(0x01, 0x01)
+        var signal = 120
+        var power = 100
+        var data = false
+        var tx = false
+        var split = false
+        fun answer(body: ByteArray): ByteArray {
+            val set = body.size > 2
+            return when (body[0].toInt() and 255) {
+                0x03 -> bytes(0x03) + IcomCiv.encodeFrequency(vfo[0])
+                0x04 -> bytes(0x04, modes[0], 0x01)
+                0x0F -> { split = body[1].toInt() == 1; bytes(0xFB) }
+                0x14 -> if (set) { power = IcomCiv.decodeLevel(body, 2); bytes(0xFB) } else body.copyOf(2) + IcomCiv.encodeLevel(power)
+                0x15 -> body.copyOf(2) + IcomCiv.encodeLevel(signal)
+                0x19 -> bytes(0x19, 0x00, 0xA4)
+                0x1A -> if (body[1].toInt() != 6) bytes(0xFA)
+                    else if (set) { data = body[2].toInt() == 1; bytes(0xFB) }
+                    else body.copyOf(2) + bytes(if (data) 1 else 0, if (data) 1 else 0)
+                0x1C -> if (set) { tx = body[2].toInt() == 1; bytes(0xFB) } else body.copyOf(2) + bytes(if (tx) 1 else 0)
+                0x25 -> if (set) { vfo[body[1].toInt()] = IcomCiv.decodeFrequency(body, 2); bytes(0xFB) }
+                    else body.copyOf(2) + IcomCiv.encodeFrequency(vfo[body[1].toInt()])
+                0x26 -> if (set) { modes[body[1].toInt()] = body[2].toInt(); bytes(0xFB) }
+                    else body.copyOf(2) + bytes(modes[body[1].toInt()], 0x00, 0x01)
+                else -> bytes(0xFA)
+            }
+        }
+    }
+    private fun bodies(radio: ScriptedRadio) = radio.writes.map { it.copyOfRange(4, it.size - 1) }
+
+    @Test fun newCommandFramesMatchTheGuide() {
+        val to = 0xA4
+        assertArrayEquals(bytes(0xFE, 0xFE, 0xA4, 0xE0, 0x15, 0x02, 0xFD), IcomCiv.frame(to, IcomCiv.readSMeter()))
+        assertArrayEquals(bytes(0xFE, 0xFE, 0xA4, 0xE0, 0x14, 0x0A, 0xFD), IcomCiv.frame(to, IcomCiv.readRfPower()))
+        assertArrayEquals(bytes(0xFE, 0xFE, 0xA4, 0xE0, 0x14, 0x0A, 0x01, 0x28, 0xFD), IcomCiv.frame(to, IcomCiv.setRfPower(128)))
+        assertArrayEquals(bytes(0x14, 0x0A, 0x00, 0x00), IcomCiv.setRfPower(0))
+        assertArrayEquals(bytes(0x14, 0x0A, 0x02, 0x55), IcomCiv.setRfPower(255))
+        assertThrows(IllegalArgumentException::class.java) { IcomCiv.setRfPower(256) }
+        assertThrows(IllegalArgumentException::class.java) { IcomCiv.setRfPower(-1) }
+        assertArrayEquals(bytes(0xFE, 0xFE, 0xA4, 0xE0, 0x1C, 0x00, 0xFD), IcomCiv.frame(to, IcomCiv.readTxStatus()))
+        assertArrayEquals(bytes(0xFE, 0xFE, 0xA4, 0xE0, 0x19, 0x00, 0xFD), IcomCiv.frame(to, IcomCiv.readId()))
+        assertArrayEquals(bytes(0x1A, 0x06), IcomCiv.readDataMode())
+        assertArrayEquals(bytes(0x1A, 0x06, 0x01, 0x01), IcomCiv.setDataMode(true))
+        assertArrayEquals(bytes(0x1A, 0x06, 0x01, 0x03), IcomCiv.setDataMode(true, 3))
+        assertArrayEquals(bytes(0x1A, 0x06, 0x00, 0x00), IcomCiv.setDataMode(false))
+        assertThrows(IllegalArgumentException::class.java) { IcomCiv.setDataMode(true, 4) }
+        assertArrayEquals(bytes(0x26, 0x01), IcomCiv.readVfoMode(Vfo.B))
+        assertArrayEquals(bytes(0x26, 0x01, 0x05), IcomCiv.setVfoMode(Vfo.B, RigMode.FM))
+        assertThrows(IllegalArgumentException::class.java) { IcomCiv.setVfoMode(Vfo.B, RigMode.DATA_U) }
+    }
+    @Test fun levelsAreFourBcdDigits() {
+        assertEquals(120, IcomCiv.decodeLevel(bytes(0x15, 0x02, 0x01, 0x20), 2))
+        assertEquals(241, IcomCiv.decodeLevel(bytes(0x02, 0x41)))
+        assertEquals(0, IcomCiv.decodeLevel(bytes(0x00, 0x00)))
+        assertThrows(IllegalArgumentException::class.java) { IcomCiv.decodeLevel(bytes(0x02, 0x56)) }
+        assertThrows(IllegalArgumentException::class.java) { IcomCiv.decodeLevel(bytes(0x00, 0x0A)) }
+        assertThrows(IllegalArgumentException::class.java) { IcomCiv.decodeLevel(bytes(0x01)) }
+    }
+    @Test fun extrasAreReadAndSet() {
+        val radio = Ic705()
+        val rig = IcomCivRig(civ(radio::answer))
+        assertTrue(rig.supportsMeter && rig.supportsRfPower && rig.supportsTxStatus && rig.supportsDataMode && rig.supportsVfoMode)
+        assertEquals("IC-705 @A4h ID A4h", rig.identify())
+        assertEquals(120, rig.signalLevel())
+        assertFalse(rig.isTransmitting())
+        radio.tx = true
+        assertTrue(rig.isTransmitting())
+        rig.setRfPower(200)
+        assertEquals(200, radio.power)
+        assertEquals(200, rig.rfPower())
+        rig.setDataMode(true)
+        assertTrue(radio.data && rig.dataModeOn())
+        rig.setDataMode(false)
+        assertFalse(rig.dataModeOn())
+        rig.setVfoMode(Vfo.B, RigMode.FM)
+        assertEquals(RigMode.FM, rig.vfoMode(Vfo.B))
+        assertEquals(0x05, radio.modes[1])
+        assertEquals(0x01, radio.modes[0])
+    }
+    @Test fun ngAndBadRepliesAreReported() {
+        val rejecting = IcomCivRig(civ { bytes(0xFA) })
+        assertTrue(assertThrows(IOException::class.java) { rejecting.signalLevel() } is LocalizedError)
+        assertThrows(IOException::class.java) { rejecting.rfPower() }
+        assertThrows(IOException::class.java) { rejecting.setRfPower(10) }
+        assertThrows(IOException::class.java) { rejecting.isTransmitting() }
+        assertThrows(IOException::class.java) { rejecting.setDataMode(true) }
+        assertThrows(IOException::class.java) { rejecting.vfoMode(Vfo.B) }
+        assertThrows(IOException::class.java) { rejecting.identify() }
+        val garbled = IcomCivRig(civ { body -> body.copyOf(2) + bytes(0x02, 0x00) })
+        assertThrows(IllegalArgumentException::class.java) { garbled.isTransmitting() }
+        assertThrows(IllegalArgumentException::class.java) { garbled.dataModeOn() }
+        val unconfirmed = IcomCivRig(civ { body -> if (body.size > 2) bytes(0xFB) else body.copyOf(2) + IcomCiv.encodeLevel(7) })
+        assertThrows(IllegalStateException::class.java) { unconfirmed.setRfPower(10) }
+    }
+    @Test fun satelliteUsesSplitWithDownlinkOnAAndUplinkOnB() {
+        val state = Ic705()
+        val scripted = civ(state::answer)
+        val rig = IcomCivRig(scripted)
+        var now = 0L
+        var rate = 0.0
+        val tracker = RigTracker(rig, 145_800_000, 435_200_000, { rate }, { SatelliteLook(it, 0.0, 30.0, 1000.0) }, 100, { now })
+        val first = tracker.start()
+        assertTrue(first.sentDownlink && first.sentUplink)
+        assertTrue(state.split)
+        assertEquals(145_800_000L, state.vfo[0])
+        assertEquals(435_200_000L, state.vfo[1])
+        // Reading the TX status (1C 00, no data) is how the tracker holds VFO writes during TX; it is not a TX command.
+        val isTxRead = { b: ByteArray -> b.size == 2 && b[0].toInt() == 0x1C && b[1].toInt() == 0 }
+        val written = bodies(scripted).count { !isTxRead(it) }
+        rate = 0.05 // below the 100 Hz step on both links: nothing is sent
+        now = 1000
+        val quiet = tracker.step()
+        assertFalse(quiet.sentDownlink || quiet.sentUplink)
+        assertEquals(written, bodies(scripted).count { !isTxRead(it) })
+        rate = 3.0
+        now = 2000
+        val moved = tracker.step()
+        assertEquals(moved.downlinkHz, state.vfo[0])
+        assertEquals(requireNotNull(moved.uplinkHz), state.vfo[1])
+        assertTrue(state.vfo[0] < 145_800_000L && state.vfo[1] > 435_200_000L)
+        tracker.stop()
+        assertFalse(state.split)
+        assertTrue(bodies(scripted).none { it[0].toInt() == 0x1C && !isTxRead(it) })
+        assertFalse(state.tx)
+    }
+    @Test fun receiveOnlySatelliteNeverTouchesVfoBSplitOrTx() {
+        val state = Ic705()
+        val scripted = civ(state::answer)
+        val tracker = RigTracker(IcomCivRig(scripted), 145_800_000, null, { 3.0 }, { SatelliteLook(it, 0.0, 30.0, 1000.0) }, 100, { 0L })
+        tracker.start()
+        tracker.stop()
+        val sent = bodies(scripted)
+        assertTrue(sent.none { it[0].toInt() == 0x0F || (it[0].toInt() == 0x1C && !(it.size == 2 && it[1].toInt() == 0)) })
+        assertTrue(sent.none { it[0].toInt() == 0x25 && it[1].toInt() == 1 && it.size > 2 })
+        assertEquals(435_200_000L, state.vfo[1])
+    }
+    @Test fun otherRigsReportTheExtrasAsUnsupported() {
+        val rigs = listOf(YaesuFiveByteRig(ScriptedRadio(), RigModel.FT857), Ftx1Rig(ScriptedRadio()),
+            TruSdxRig(ScriptedRadio()), QrpLabsRig(ScriptedRadio(), RigModel.QMX))
+        for (rig in rigs) {
+            assertFalse(rig.supportsMeter || rig.supportsRfPower || rig.supportsTxStatus || rig.supportsDataMode || rig.supportsVfoMode)
+            assertThrows(UnsupportedOperationException::class.java) { rig.signalLevel() }
+            assertThrows(UnsupportedOperationException::class.java) { rig.setRfPower(10) }
+            assertThrows(UnsupportedOperationException::class.java) { rig.isTransmitting() }
+            assertThrows(UnsupportedOperationException::class.java) { rig.setDataMode(true) }
+            assertThrows(UnsupportedOperationException::class.java) { rig.vfoMode(Vfo.B) }
+        }
+    }
 }

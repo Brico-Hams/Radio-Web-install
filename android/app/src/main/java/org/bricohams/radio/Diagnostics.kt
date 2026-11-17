@@ -13,6 +13,8 @@ enum class RadioKind(val label: String, val model: RigModel?, val probeable: Boo
     FTX1("Yaesu FTX-1", RigModel.FTX1),
     TRUSDX("(tr)uSDX", RigModel.TRUSDX),
     QMX("QRP Labs QMX / QMX+", RigModel.QMX),
+    /** Kenwood TH-D75 (USB CDC); the USB ids are not known, so it is only reachable through its read-only [DiagnosticsRunner.runTh75]. */
+    THD75("Kenwood TH-D75", RigModel.THD75),
     /** Yaesu HRI interface (Windows: "YAESU HRI USB I/F"); it does not speak Kenwood CAT, so it is listed but never probed. */
     YAESU_HRI("Yaesu HRI USB I/F", null, probeable = false),
     UNKNOWN("?", null, probeable = false)
@@ -126,6 +128,15 @@ class DiagnosticsRunner(
         // The original frequency is restored even when the test frequency was refused or not confirmed.
         steps.run(label(R.string.diag_step_restore)) {
             rig.setFrequency(Vfo.A, original); Unit to mhzText(original) + " MHz"
+        }
+        return DiagResult(kind, steps.list)
+    }
+
+    /** TH-D75: only the read-only queries of [Th75Rig.DIAGNOSTIC_QUERIES], each reported with the raw reply; no SET, never TX. */
+    fun runTh75(rig: Th75Rig, kind: String = rig.model.label): DiagResult {
+        val steps = Steps(describe)
+        for (command in Th75Rig.DIAGNOSTIC_QUERIES) {
+            steps.run(command.trim()) { Unit to rig.diagnosticReply(command) }
         }
         return DiagResult(kind, steps.list)
     }
@@ -259,7 +270,7 @@ object DiagnosticsReport {
     private fun hex(value: Int) = String.format(Locale.ROOT, "%04X", value)
 
     fun build(appVersion: String, device: String, whenText: String, devices: List<UsbEntry>, results: List<DiagResult>,
-        firmware: List<String> = emptyList()): String =
+        firmware: List<String> = emptyList(), catLog: List<String> = emptyList()): String =
         buildString {
             appendLine("RadiCodex by BricoHams - Puente / Diagnostico")
             appendLine("App: $appVersion")
@@ -268,6 +279,10 @@ object DiagnosticsReport {
             if (firmware.isNotEmpty()) {
                 appendLine("Firmware de las radios:")
                 for (line in firmware) appendLine("- $line")
+            }
+            if (catLog.isNotEmpty()) {
+                appendLine("Ultimos fallos CAT:")
+                for (line in catLog) appendLine("- $line")
             }
             appendLine()
             appendLine("Dispositivos USB serie: ${devices.size}")

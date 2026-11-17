@@ -117,6 +117,26 @@ test("CAT de pase calcula Doppler RX con rango SGP4 y valida limites de tiempo/p
   assert.throws(() => R.catPassTarget(orbital, plan.transmitter, plan.pass, { ...observer, height: 10 }, time), /Posicion/);
   assert.throws(() => R.catPassTarget(orbital, { ...plan.transmitter, mode: "USB" }, plan.pass, observer, time), /puntuales/);
 });
+test("CAT semidúplex: downlink 436.888 e uplink 145.925 con Doppler opuesto y el uplink viaja con el SET", async () => {
+  const fixture = catFixture();
+  fixture.plan.transmitter.downlink = 436888000;
+  fixture.plan.uplinkHz = 145925000;
+  const target = R.catPassTarget(orbital, fixture.plan.transmitter, fixture.plan.pass, observer, fixture.clock(), 145925000);
+  const down = target.frequency10Hz * 10 / 436888000, up = target.uplink10Hz * 10 / 145925000;
+  assert(Math.abs(down * up - 1) < 1e-6);
+  assert((down < 1) === (up > 1) && down !== 1);
+  assert(target.uplink10Hz > 14500000 && target.uplink10Hz < 14700000);
+  // Without an uplink the target is RX only.
+  assert.equal(R.catPassTarget(orbital, fixture.plan.transmitter, fixture.plan.pass, observer, fixture.clock()).uplink10Hz, 0);
+  // An uplink outside the radio's TX band is refused.
+  assert.throws(() => R.catPassTarget(orbital, fixture.plan.transmitter, fixture.plan.pass, observer, fixture.clock(), 28500000), /fuera de la banda TX/);
+  const sent = [];
+  fixture.connector.setCatReceive = async (frequency10Hz, uplink10Hz) => { sent.push([frequency10Hz, uplink10Hz]); return {}; };
+  const tracker = new R.CatPassTracker(fixture.connector, fixture.plan, fixture.clock);
+  await tracker.start();
+  assert.deepEqual(sent, [[target.frequency10Hz, target.uplink10Hz]]);
+  await tracker.stop();
+});
 test("seguimiento CAT renueva aunque no cambie frecuencia y stop es idempotente", async () => {
   const fixture = catFixture();
   const tracker = new R.CatPassTracker(fixture.connector, fixture.plan, fixture.clock);

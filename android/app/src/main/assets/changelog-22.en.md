@@ -1,0 +1,3 @@
+# What's new in 1.5.0
+
+- Native VHF ACARS decoding (receive only) with CAT tuning. Kenwood TH-D75 over USB: CAT control, satellite tracking (downlink on band B, uplink on band A), memories 0-999, diagnostics and safe transmit band.

@@ -117,6 +117,10 @@ serie; anota cuál responde al CAT.
 | I1 ★ | Echo Back ON y OFF: ambas funcionan | |
 | I2 | Transceive ON: girar el dial no rompe la sesión | |
 | I3 | Nombre de memoria leído completo (16 caracteres) | |
+| I4 | Tarjeta "Medidor y transmisión": la barra S sigue a la señal y el estado pasa a "transmitiendo" con la prueba PTT | |
+| I5 | Potencia de salida: el deslizador cambia la potencia de la banda activa y se confirma | |
+| I6 | "Modo DATA activado" coincide con el indicador DATA de la radio | |
+| I7 | Satélite con subida: VFO A = bajada y VFO B = subida con split, sin mover la pantalla; sin subida no se toca el VFO B | |
 
 Firmware: ______  Puerto que responde: ______  Firma: ______
 

@@ -104,7 +104,7 @@ class RadioStoreHostTest {
             ReflectionHelpers.setField(activity, "sessionId", first)
             fun all(view: View): List<View> = listOf(view) +
                 if (view is ViewGroup) (0 until view.childCount).flatMap { all(view.getChildAt(it)) } else emptyList()
-            all(activity.window.decorView).filterIsInstance<Button>().single { it.text == "Abrir ARDF" }.performClick()
+            all(activity.window.decorView).filterIsInstance<Button>().single { it.text == "ARDF" }.performClick()
             all(activity.window.decorView).filterIsInstance<Button>()
                 .single { it.text == "Estadisticas y observaciones de la sesion" }.performClick()
             val dialog = ShadowAlertDialog.getLatestAlertDialog()
@@ -383,9 +383,7 @@ class RadioStoreHostTest {
             assertEquals("EA1ABC", activity.findViewById<EditText>(R.id.contact_call).text.toString())
             click(activity, "Guardar nuevo contacto")
             RadioStore(context).use { assertEquals("EA1ABC", it.contacts().single().call) }
-            // ARDF and Morse are reached from the Home tools since the task-based navigation.
-            click(activity, "Inicio")
-            click(activity, "Abrir ARDF")
+            click(activity, "ARDF")
             activity.findViewById<EditText>(R.id.session_name).setText("Prueba")
             click(activity, "Crear sesion ARDF")
             click(activity, "Guardar observacion manual")
@@ -394,7 +392,6 @@ class RadioStoreHostTest {
                 assertTrue(observation.isNull("latitude"))
                 assertEquals(1, observation.getInt("fox"))
             }
-            click(activity, "Inicio")
             click(activity, "Morse")
             click(activity, "Interpretar texto Morse")
         } finally {

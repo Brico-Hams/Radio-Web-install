@@ -175,7 +175,10 @@
     let uiBusy = false;
     if (cat) {
       const controls = document.createElement("div");
-      controls.innerHTML = `<button id="plan-cat-stop" type="button" class="button secondary" disabled>Detener seguimiento CAT</button>
+      controls.innerHTML = `<p class="card-note">Uplink nominal MHz (opcional, ej. 145.925):
+        <input id="plan-cat-uplink" type="text" inputmode="decimal" placeholder="145.925" aria-label="Uplink MHz"></p>
+        <p class="card-note">Semidúplex (half duplex): la radio escucha el downlink y solo transmite en el uplink con Doppler mientras pulsas PTT; no oyes el downlink mientras transmites. Requiere firmware BricoHams con CAT RX v2 y TX armado en la radio (tecla 9); si no, solo RX.</p>
+        <button id="plan-cat-stop" type="button" class="button secondary" disabled>Detener seguimiento CAT</button>
         <p id="plan-cat-status" role="status">Seguimiento CAT detenido. El firmware caduca las ordenes tras 3 s sin renovacion.</p>`;
       panel.append(controls);
       const catStatus = text => { $("plan-cat-status").textContent = text; };
@@ -223,7 +226,8 @@
           const startedAt = Date.now();
           const result = await (first ? current.start() : current.step());
           if (tracker !== current || catStopping || !result) return;
-          catStatus(`${prediction.name}: RX ${(result.frequency10Hz / 100000).toFixed(5)} MHz; elevacion ${result.elevation.toFixed(1)} grados; ${new Date(result.time).toISOString()}. Solo RX, confirmacion software.`);
+          const up = result.uplink10Hz ? ` / TX ${(result.uplink10Hz / 100000).toFixed(5)} MHz (${result.state && result.state.uplinkSent ? "enviado" : result.state && result.state.uplinkReason === "tx-not-armed" ? "TX no armado: pulsa 9 en la radio" : result.state && result.state.uplinkReason === "v1-firmware" ? "firmware sin CAT v2: solo RX" : "no enviado"}), semidúplex: no oyes el downlink al transmitir` : "";
+          catStatus(`${prediction.name}: RX ${(result.frequency10Hz / 100000).toFixed(5)} MHz${up}; elevacion ${result.elevation.toFixed(1)} grados; ${new Date(result.time).toISOString()}. Confirmacion software.`);
           catTimer = setTimeout(() => tickCat(), Math.max(0, 750 - (Date.now() - startedAt)));
         } catch (error) { await stopTracking("Seguimiento interrumpido", error); }
       }
@@ -237,8 +241,11 @@
           R.assert($("plan-doppler-pass").value !== "", "Selecciona un pase.");
           const pass = prediction.passes[Number($("plan-doppler-pass").value)];
           const transmitter = transmitters.find(item => item.id === $("plan-tx").value);
-          const plan = { orbital, transmitter, pass, observer: prediction.observer };
-          R.catPassTarget(orbital, transmitter, pass, prediction.observer);
+          const uplinkText = $("plan-cat-uplink").value.trim().replace(",", ".");
+          const uplinkMHz = uplinkText === "" ? 0 : Number(uplinkText);
+          R.assert(Number.isFinite(uplinkMHz) && uplinkMHz >= 0, "Uplink no valido.");
+          const plan = { orbital, transmitter, pass, observer: prediction.observer, uplinkHz: Math.round(uplinkMHz * 1e6) };
+          R.catPassTarget(orbital, transmitter, pass, prediction.observer, Date.now(), plan.uplinkHz);
           tracker = new R.CatPassTracker(cat.connector(), plan);
           cat.setTracking(true);
           $("plan-controls").disabled = true;

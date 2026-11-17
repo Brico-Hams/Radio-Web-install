@@ -107,23 +107,17 @@ class BrandUiTest {
             val activity = controller.get()
             val all = views(activity.window.decorView)
             val buttons = all.filterIsInstance<Button>()
-            fun click(label: Int, target: Class<*>) {
-                val button = views(activity.window.decorView).filterIsInstance<Button>()
-                    .single { it.text == activity.getString(label) }
-                button.performClick()
+            for ((tag, target) in listOf(
+                "tool_UVK5_CAT" to CatActivity::class.java,
+                "tool_CHANNELS" to ChannelActivity::class.java,
+                "tool_SSTV" to SstvActivity::class.java,
+                "tool_LIVE_AUDIO" to LiveAudioActivity::class.java,
+                "tool_satellites" to SatelliteActivity::class.java)) {
+                all.single { it.tag == tag }.performClick()
                 assertEquals(target.name, org.robolectric.Shadows.shadowOf(activity).nextStartedActivity.component?.className)
             }
-            click(R.string.home_open_satellites, SatelliteActivity::class.java)
-            val radioNav = buttons.single { it.text == activity.getString(R.string.tab_radio) }
-            assertTrue(radioNav.performClick())
-            assertTrue(radioNav.isSelected)
-            click(R.string.home_open_cat, CatActivity::class.java)
-            click(R.string.home_open_channels, ChannelActivity::class.java)
             val homeNav = buttons.single { it.text == activity.getString(R.string.tab_home) }
-            assertTrue(homeNav.performClick())
             assertTrue(homeNav.isSelected)
-            click(R.string.home_open_sstv, SstvActivity::class.java)
-            click(R.string.home_open_live, LiveAudioActivity::class.java)
             val nav = buttons.single { it.text == activity.getString(R.string.tab_logbook) }
             assertTrue(nav.performClick())
             assertTrue(nav.isSelected)
@@ -133,7 +127,6 @@ class BrandUiTest {
                 View.MeasureSpec.makeMeasureSpec(640, View.MeasureSpec.EXACTLY))
             root.layout(0, 0, 320, 640)
             assertTrue(nav.height >= Brand.dp(activity, 48))
-            assertTrue(radioNav.height >= Brand.dp(activity, 48))
             assertTrue(homeNav.height >= Brand.dp(activity, 48))
         } finally {
             controller.pause().stop().destroy()

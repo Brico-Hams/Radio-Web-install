@@ -178,6 +178,28 @@ int main(void)
     bh_cat_tx_request(&g, request, sizeof(request), now + 30010, reply);
     CHECK(reply[1] == BH_CAT_TX_DENIED && !g.requested && !g.keyed);
     bh_cat_remote_enabled = false;
+    /* Local PTT (half duplex SAT): only when armed on the keypad, held = key request, release = unkey. */
+    bh_cat_tx lp = {0};
+    bh_cat_tx_local(&lp, true, 0);
+    CHECK(!lp.requested && !lp.local && bh_cat_tx_poll(&lp, 0) == BH_CAT_TX_NONE);
+    bh_cat_remote_enabled = true; /* The persistent consent does not enable local keying. */
+    bh_cat_tx_local(&lp, true, 0);
+    CHECK(!lp.requested);
+    bh_cat_remote_enabled = false;
+    bh_cat_tx_arm(&lp, true);
+    bh_cat_tx_local(&lp, true, 10);
+    CHECK(lp.local && lp.requested && bh_cat_tx_poll(&lp, 10) == BH_CAT_TX_KEY);
+    bh_cat_tx_keyed(&lp, 0, 10);
+    bh_cat_tx_local(&lp, true, 1400);
+    CHECK(bh_cat_tx_poll(&lp, 2000) == BH_CAT_TX_NONE); /* Lease renewed while the key is held. */
+    bh_cat_tx_local(&lp, false, 2100);
+    CHECK(!lp.requested && bh_cat_tx_poll(&lp, 2100) == BH_CAT_TX_UNKEY);
+    bh_cat_tx_unkeyed(&lp);
+    bh_cat_tx_arm(&lp, true);
+    bh_cat_tx_local(&lp, true, 3000);
+    bh_cat_tx_arm(&lp, false); /* Disarming drops a local request too. */
+    CHECK(!lp.local && !lp.requested);
+
     puts("cat_tx ok");
     return EXIT_SUCCESS;
 }

@@ -2,6 +2,7 @@ package org.bricohams.radio
 
 import java.io.IOException
 import java.nio.charset.Charset
+import java.security.SecureRandom
 import java.util.Random
 
 /** Channel-table variant of the radio. Never auto-detected: only the user's explicit choice unlocks channels 961-990. */
@@ -153,7 +154,7 @@ class Rt950Backup(val model: String, val parts: List<Part>) {
 
 class Rt950Session(
     private val io: RadioBytes,
-    private val random: Random = Random(),
+    private val random: Random = SecureRandom(),
     val variant: Rt950Variant = Rt950Variant.UNKNOWN,
     private val pause: (Long) -> Unit = { Thread.sleep(it) }
 ) {

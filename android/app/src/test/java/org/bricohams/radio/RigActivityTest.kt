@@ -33,7 +33,7 @@ class RigActivityTest {
             assertTrue(text(activity).contains(activity.getString(R.string.rig_title)))
             val spinner = views(activity.window.decorView).filterIsInstance<Spinner>().first()
             assertEquals(RigModel.values().size, spinner.adapter.count)
-            assertEquals(9, spinner.adapter.count)
+            assertEquals(10, spinner.adapter.count)
             assertEquals(RigModel.values().map { it.label }, (0 until spinner.adapter.count).map { spinner.adapter.getItem(it).toString() })
         } finally { controller.pause().stop().destroy() }
     }
@@ -84,5 +84,45 @@ class RigActivityTest {
             assertTrue(shown, shown.contains(activity.getString(R.string.rig_section_satellite)))
             assertTrue(shown, shown.contains("145.800000") && shown.contains("437.800000"))
         } finally { controller.pause().stop().destroy() }
+    }
+
+    private class PttRecordingRig(override val model: RigModel) : Rig {
+        override val supportsVfoB = true
+        override val silentVfoB = false
+        override val supportsSplit = false
+        override val supportsMemories = false
+        override val supportsMemoryWrite = false
+        val calls = ArrayList<String>()
+        override fun identify() = "fake"
+        override fun status() = RigStatus(0, null)
+        override fun frequency(vfo: Vfo) = 0L
+        override fun setFrequency(vfo: Vfo, hz: Long) = Unit
+        override fun setMode(mode: RigMode) = Unit
+        // Like Rig's default, only the TH-D75 acts on it.
+        override fun selectTxVfo(vfo: Vfo) { if (model == RigModel.THD75) calls.add("select:${vfo.name}") }
+        override fun ptt(on: Boolean) { calls.add("ptt:$on") }
+        override fun setSplit(on: Boolean) = Unit
+        override fun memories(channels: IntRange, keepGoing: () -> Boolean) = emptyList<RigMemory>()
+        override fun writeMemory(memory: RigMemory) = unsupported("memory write")
+    }
+
+    private fun pttTestCalls(model: RigModel): List<String> {
+        val controller = Robolectric.buildActivity(RigActivity::class.java).setup()
+        try {
+            val activity = controller.get()
+            val rig = PttRecordingRig(model)
+            ReflectionHelpers.setField(activity, "rig", rig)
+            ReflectionHelpers.callInstanceMethod<Any>(activity, "runPttTest", ReflectionHelpers.ClassParameter.from(Rig::class.java, rig))
+            ReflectionHelpers.getField<ExecutorService>(activity, "worker").submit {}.get(10, TimeUnit.SECONDS)
+            return rig.calls.toList()
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun pttTestSelectsBandAFirstOnTheThd75() {
+        assertEquals(listOf("select:A", "ptt:true", "ptt:false"), pttTestCalls(RigModel.THD75))
+    }
+
+    @Test fun pttTestKeepsWorkingTheSameWayOnTheFtx1() {
+        assertEquals(listOf("ptt:true", "ptt:false"), pttTestCalls(RigModel.FTX1))
     }
 }

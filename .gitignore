@@ -36,3 +36,9 @@ chirp/local/
 
 # Third-party reference documents (not redistributed)
 data/third-party/
+
+# Local-only: generated graphs, browser logs, third-party multiboot repos, Python caches
+graphify-out/
+.playwright-mcp/
+Multiboot/
+__pycache__/

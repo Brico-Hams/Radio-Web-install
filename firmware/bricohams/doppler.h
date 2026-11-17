@@ -16,7 +16,9 @@ typedef struct {
     bool receive_only;
 } bh_doppler_frequencies;
 
-/* Positive range rate means the satellite is receding. No TX enable is returned. */
+/* Positive range rate means the satellite is receding. No TX enable is returned. receive_10hz is the
+ * Doppler-corrected downlink; transmit_nominal_10hz is the Doppler-corrected UPLINK (raised when receding),
+ * despite its historic name. Both links are half duplex on the radio: RX on the downlink, TX only on PTT. */
 bh_doppler_result bh_doppler_calculate(uint32_t downlink_10hz, uint32_t uplink_10hz,
     int32_t range_rate_mm_s, bh_doppler_frequencies *output);
 

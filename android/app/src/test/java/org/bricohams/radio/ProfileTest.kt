@@ -91,23 +91,26 @@ class ProfileTest {
             views(activity.window.decorView).filterIsInstance<android.widget.RadioButton>()
                 .single { it.text == ProfileRadio.FT857.label(activity) }.performClick()
             click(R.string.profile_next)
-            activity.findViewById<EditText>(R.id.profile_callsign).setText("ea1abc")
-            click(R.string.profile_next)
-            // Step 3 of 4 is the location; a lone locator fills approximate centre coordinates.
+            click(R.string.profile_test)
             assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.TextView>()
-                .any { it.text == activity.getString(R.string.profile_step, 3, 4, activity.getString(R.string.profile_step_location)) })
+                .any { it.text == activity.getString(R.string.profile_test_no_usb) })
+            assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.TextView>()
+                .any { it.text == activity.getString(R.string.profile_result_problem) })
+            click(R.string.profile_next)
+            // Step 3 of 4 is the operator (callsign and location); a lone locator fills approximate centre coordinates.
+            assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.TextView>()
+                .any { it.text == activity.getString(R.string.profile_step, 3, 4, activity.getString(R.string.profile_step_operator)) })
+            activity.findViewById<EditText>(R.id.profile_callsign).setText("ea1abc")
             activity.findViewById<EditText>(R.id.profile_locator).setText("im98ib")
             assertEquals("38.06250", activity.findViewById<EditText>(R.id.profile_latitude).text.toString())
             click(R.string.profile_next)
             assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.TextView>()
-                .any { it.text == activity.getString(R.string.profile_step, 4, 4, activity.getString(R.string.profile_step_cat)) })
-            click(R.string.profile_test)
-            assertTrue(views(activity.window.decorView).filterIsInstance<android.widget.TextView>()
-                .any { it.text == activity.getString(R.string.profile_test_no_usb) })
+                .any { it.text == activity.getString(R.string.profile_step, 4, 4, activity.getString(R.string.profile_step_summary)) })
             click(R.string.profile_save)
             val saved = ProfileStore.load(app)
             assertEquals(ProfileRadio.FT857, saved.radio)
             assertEquals("EA1ABC", saved.callsign)
+            assertEquals(CatTransport.USB_SERIAL, saved.transport)
             assertEquals(4800, saved.baud)
             assertEquals("IM98ib", saved.locator)
             assertTrue(saved.approximate)
@@ -185,6 +188,15 @@ class ProfileTest {
         assertFalse(ProfileRadio.RTS10.supports(Tool.RIG_CAT))
         assertEquals(listOf(CatTransport.BLE), ProfileRadio.RTS10.transports)
         assertFalse(ProfileRadio.RT950.supports(Tool.RTS10))
+
+        ProfileStore.save(app, StationProfile(ProfileRadio.RTS10, "EA1ABC", CatTransport.BLE))
+        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
+        try {
+            val activity = controller.get()
+            val tile = views(activity.window.decorView).single { it.tag == "tool_RTS10" }
+            tile.performClick()
+            assertEquals(RtS10Activity::class.java.name, shadowOf(activity).nextStartedActivity.component?.className)
+        } finally { controller.pause().stop().destroy() }
     }
 
     @Test fun capabilityTableGreysOutToolsTheRadioCannotUse() {
@@ -200,13 +212,16 @@ class ProfileTest {
         val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
         try {
             val activity = controller.get()
-            assertTrue(buttons(activity).single { it.text == activity.getString(R.string.home_open_satellites) }.isEnabled)
-            // Radio tools live in the Radio tab since the task-based navigation.
-            assertTrue(buttons(activity).single { it.text == activity.getString(R.string.tab_radio) }.performClick())
-            val channels = buttons(activity).single { it.text == activity.getString(R.string.home_open_channels) }
-            assertFalse(channels.isEnabled)
-            assertTrue(channels.contentDescription.toString().contains(ProfileRadio.FT817.label(activity)))
-            assertTrue(buttons(activity).single { it.text == activity.getString(R.string.home_open_rig_cat) }.isEnabled)
+            val tile = views(activity.window.decorView).singleOrNull { it.tag == "tool_CHANNELS" }
+            assertNull(tile)
+            val entry = views(activity.window.decorView).single { it.tag == "unavailable_CHANNELS" }
+            assertTrue(entry.contentDescription.toString().contains(ProfileRadio.FT817.label(activity)))
+            val list = activity.findViewById<View>(R.id.home_unavailable_list)
+            assertTrue(views(list).contains(entry))
+            assertNotNull(views(activity.window.decorView).single { it.tag == "tool_RIG_CAT" })
+            assertNotNull(views(activity.window.decorView).single { it.tag == "tool_satellites" })
+            assertNull(views(activity.window.decorView).singleOrNull { it.tag == "tool_RTS10" })
+            assertNotNull(views(activity.window.decorView).single { it.tag == "unavailable_RTS10" })
         } finally { controller.pause().stop().destroy() }
     }
 }

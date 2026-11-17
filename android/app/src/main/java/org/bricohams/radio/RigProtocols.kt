@@ -221,6 +221,38 @@ object IcomCiv {
     fun ptt(on: Boolean) = body(0x1C, 0x00, if (on) 1 else 0)
     // CI-V Reference Guide command table: 0F split OFF (00) / ON (01)
     fun split(on: Boolean) = body(0x0F, if (on) 1 else 0)
+    // CI-V Reference Guide p.4 "15 02 Read S-meter level" (0000=S0, 0120=S9, 0241=S9+60 dB)
+    fun readSMeter() = body(0x15, 0x02)
+    // CI-V Reference Guide p.4 "14 0A Send/read the selected band's RF power" (0000=Minimum ~ 0255=Maximum)
+    fun readRfPower() = body(0x14, 0x0A)
+    fun setRfPower(level: Int) = body(0x14, 0x0A) + encodeLevel(level)
+    // CI-V Reference Guide p.14 "1C 00 Send/read the transceiver's status" (00=RX, 01=TX)
+    fun readTxStatus() = body(0x1C, 0x00)
+    // CI-V Reference Guide p.5 "19 00 Read the transceiver ID"
+    fun readId() = body(0x19, 0x00)
+    // CI-V Reference Guide p.22 "Data mode with filter width settings": 1A 06 <00=OFF/01=ON> <01..03 = FIL1..FIL3>; filter 00 when OFF
+    fun readDataMode() = body(0x1A, 0x06)
+    fun setDataMode(on: Boolean, filter: Int = 1): ByteArray {
+        requireUi(!on || filter in 1..3) { UiText(R.string.err_rig_value, filter) }
+        return body(0x1A, 0x06, if (on) 1 else 0, if (on) filter else 0)
+    }
+    // CI-V Reference Guide p.27 "Selected or unselected VFO's operating mode and filter settings": 26 <00 selected/01 unselected>
+    // <mode> [data mode] [filter]; the last two can be skipped (DATA OFF and the default filter of the mode are applied)
+    fun readVfoMode(vfo: Vfo) = body(0x26, vfo.ordinal)
+    fun setVfoMode(vfo: Vfo, mode: RigMode): ByteArray =
+        body(0x26, vfo.ordinal, requireNotNullUi(modeCode(mode)) { UiText(R.string.err_rig_mode, mode.name) })
+    // CI-V Reference Guide p.4 level data "0000 ~ 0255": four digits in two BCD bytes, hundreds first
+    fun encodeLevel(level: Int): ByteArray {
+        requireUi(level in 0..255) { UiText(R.string.err_rig_value, level) }
+        return body(level / 100, ((level / 10 % 10) shl 4) or (level % 10))
+    }
+    fun decodeLevel(bytes: ByteArray, offset: Int = 0): Int {
+        if (bytes.size < offset + 2) invalidReply()
+        val high = bcd(bytes[offset].toInt() and 255)
+        val low = bcd(bytes[offset + 1].toInt() and 255)
+        if (high < 0 || low < 0 || high * 100 + low > 255) invalidReply()
+        return high * 100 + low
+    }
     // CI-V Reference Guide p.18 "Memory content": 1A 00 + group (2 BCD bytes) + channel (2 BCD bytes)
     fun readMemory(channel: Int): ByteArray {
         requireUi(channel in 0..99) { UiText(R.string.err_rig_channel, channel) }
@@ -326,7 +358,8 @@ class IcomCivRig(
 
     override fun identify(): String {
         status()
-        return String.format(Locale.ROOT, "IC-705 @%02Xh", address)
+        val id = query(IcomCiv.readId(), 3)[2].toInt() and 255
+        return String.format(Locale.ROOT, "IC-705 @%02Xh ID %02Xh", address, id)
     }
     override fun status(): RigStatus {
         val frequency = IcomCiv.decodeFrequency(query(IcomCiv.readFrequency(), 6), 1)
@@ -342,6 +375,36 @@ class IcomCivRig(
     override fun setMode(mode: RigMode) = command(IcomCiv.setMode(mode))
     override fun ptt(on: Boolean) = command(IcomCiv.ptt(on))
     override fun setSplit(on: Boolean) = command(IcomCiv.split(on))
+    override val supportsMeter = true
+    override fun signalLevel(): Int = IcomCiv.decodeLevel(query(IcomCiv.readSMeter(), 4), 2)
+    override val supportsRfPower = true
+    override fun rfPower(): Int = IcomCiv.decodeLevel(query(IcomCiv.readRfPower(), 4), 2)
+    override fun setRfPower(level: Int) {
+        command(IcomCiv.setRfPower(level))
+        checkUi(rfPower() == level) { UiText(R.string.err_rig_unconfirmed) }
+    }
+    override val supportsTxStatus = true
+    override fun isTransmitting(): Boolean = when (query(IcomCiv.readTxStatus(), 3)[2].toInt() and 255) {
+        0 -> false
+        1 -> true
+        else -> invalidReply()
+    }
+    override val supportsDataMode = true
+    override fun dataModeOn(): Boolean = when (query(IcomCiv.readDataMode(), 4)[2].toInt() and 255) {
+        0 -> false
+        1 -> true
+        else -> invalidReply()
+    }
+    override fun setDataMode(on: Boolean) {
+        command(IcomCiv.setDataMode(on))
+        checkUi(dataModeOn() == on) { UiText(R.string.err_rig_unconfirmed) }
+    }
+    override val supportsVfoMode = true
+    override fun vfoMode(vfo: Vfo): RigMode? = IcomCiv.mode(query(IcomCiv.readVfoMode(vfo), 3)[2].toInt() and 255)
+    override fun setVfoMode(vfo: Vfo, mode: RigMode) {
+        command(IcomCiv.setVfoMode(vfo, mode))
+        checkUi(vfoMode(vfo) == mode) { UiText(R.string.err_rig_unconfirmed) }
+    }
     override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> {
         requireUi(channels.first >= 0 && channels.last <= 99) { UiText(R.string.err_rig_channel, channels.last) }
         val list = ArrayList<RigMemory>()
@@ -1034,4 +1097,192 @@ class QrpLabsRig(transport: RadioBytes, override val model: RigModel) : Rig {
     }
     override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> = unsupported("memories")
     override fun writeMemory(memory: RigMemory) = unsupported("memory write")
+}
+
+/**
+ * Kenwood TH-D75 over its USB virtual COM port. Commands and replies end in CR; "?" (unknown command) and "N" (not available
+ * now) are rejections. VFO A = band 0 (144/220/430 MHz, FM/DV), VFO B = band 1 (0.1-524 MHz, all modes); memory channels 0..999 (read, and edit of already programmed ones).
+ */
+class Th75Rig(transport: RadioBytes) : Rig {
+    private val link = AsciiLink(transport, terminator = '\r', rejections = setOf("?", "N"))
+    override val model = RigModel.THD75
+    override val supportsVfoB = true
+    override val silentVfoB = true
+    override val supportsSplit = false
+    companion object {
+        // Command set from the Kenwood TH-D74/TH-D75 PC command reference; verify on a real unit.
+        const val ID = "ID\r"
+        const val FIRMWARE = "FV 0\r"
+        const val ACTIVE_BAND = "BC\r"
+        const val TX = "TX\r"
+        const val RX = "RX\r"
+        const val ID_REPLY = "ID TH-D75"
+        const val VFO_MODE = 0
+        // Mode digit <-> RigMode; the DR (7) mode reads as DV.
+        val MODES = mapOf(
+            RigMode.FM to 0, RigMode.DV to 1, RigMode.AM to 2, RigMode.LSB to 3, RigMode.USB to 4, RigMode.CW to 5,
+            RigMode.FM_N to 6, RigMode.WFM to 8, RigMode.CW_R to 9
+        )
+        const val DR_MODE = 7
+        // Band A only tunes the amateur 144, 220 and 430 MHz bands, in FM/NFM/DV.
+        val BAND_A_RANGES = listOf(136_000_000L..174_000_000L, 216_000_000L..260_000_000L, 410_000_000L..470_000_000L)
+        val BAND_A_MODES = setOf(RigMode.FM, RigMode.FM_N, RigMode.DV)
+        fun band(vfo: Vfo) = if (vfo == Vfo.A) 0 else 1
+        fun frequencyQuery(band: Int) = "FQ $band\r"
+        fun frequencyCommand(band: Int, hz: Long) = String.format(Locale.ROOT, "FQ %d,%010d\r", band, hz)
+        fun modeQuery(band: Int) = "MD $band\r"
+        fun modeCommand(band: Int, code: Int) = "MD $band,$code\r"
+        fun vfoModeQuery(band: Int) = "VM $band\r"
+        fun vfoModeCommand(band: Int, mode: Int) = "VM $band,$mode\r"
+        val CHANNELS = 0..999
+        const val NAME_MAX = 16
+        // ME field index of the RX frequency (first field after the channel number), TH-D74/D75 PC command reference; verify on a real unit.
+        const val MEMORY_FREQUENCY_FIELD = 0
+        fun memoryQuery(channel: Int) = String.format(Locale.ROOT, "ME %03d\r", channel)
+        fun memoryCommand(channel: Int, fields: List<String>) = String.format(Locale.ROOT, "ME %03d,", channel) + fields.joinToString(",") + "\r"
+        fun nameQuery(channel: Int) = String.format(Locale.ROOT, "MN %03d\r", channel)
+        fun nameCommand(channel: Int, name: String) = String.format(Locale.ROOT, "MN %03d,", channel) + name + "\r"
+        /** Read-only commands of the diagnostics: never a SET, never TX. */
+        val DIAGNOSTIC_QUERIES = listOf(
+            ID, FIRMWARE, ACTIVE_BAND, vfoModeQuery(0), vfoModeQuery(1), frequencyQuery(0), frequencyQuery(1), modeQuery(0), modeQuery(1)
+        )
+    }
+
+    /** Numbers after the command word: "FQ 1,0131725000" -> [1, 131725000]. */
+    private fun fields(reply: String): List<Long> =
+        reply.substringAfter(' ', "").split(',').map { it.trim().toLongOrNull() ?: invalidReply() }
+    private fun bandFields(reply: String, band: Int): List<Long> {
+        val values = fields(reply)
+        if (values.size != 2 || values[0] != band.toLong()) invalidReply()
+        return values
+    }
+    private fun activeBand(): Int {
+        val values = fields(link.request(ACTIVE_BAND, "BC"))
+        if (values.size != 1 || values[0] !in 0L..1L) invalidReply()
+        return values[0].toInt()
+    }
+    private fun readHz(band: Int): Long = bandFields(link.request(frequencyQuery(band), "FQ"), band)[1]
+    private fun readBandMode(band: Int): RigMode? {
+        val code = bandFields(link.request(modeQuery(band), "MD"), band)[1].toInt()
+        return if (code == DR_MODE) RigMode.DV else MODES.entries.firstOrNull { it.value == code }?.key
+    }
+    private fun vfoOf(band: Int) = if (band == 0) Vfo.A else Vfo.B
+
+    override fun identify(): String {
+        val reply = link.request(ID, "ID")
+        if (!reply.startsWith(ID_REPLY)) invalidReply()
+        return reply.removePrefix("ID ")
+    }
+    override fun firmwareVersion(): String? = try {
+        link.request(FIRMWARE, "FV").substringAfter(',', "").ifEmpty { null }
+    } catch (error: LocalizedIOException) { null }
+    override fun status(): RigStatus = link.transaction {
+        val band = activeBand()
+        RigStatus(readHz(band), readBandMode(band))
+    }
+    override fun frequency(vfo: Vfo): Long = readHz(band(vfo))
+    override fun checkTunable(vfo: Vfo, hz: Long) {
+        checkRange(model, hz)
+        if (vfo == Vfo.A) requireUi(BAND_A_RANGES.any { hz in it }) { UiText(R.string.err_rig_range, mhzText(hz)) }
+    }
+    override fun selectTxVfo(vfo: Vfo) {
+        val band = band(vfo)
+        link.transaction {
+            link.send("BC $band\r")
+            checkUi(activeBand() == band) { UiText(R.string.err_rig_unconfirmed) }
+        }
+    }
+    override fun setFrequency(vfo: Vfo, hz: Long) {
+        checkTunable(vfo, hz)
+        val band = band(vfo)
+        link.transaction {
+            // A frequency can only be set in VFO mode.
+            if (bandFields(link.request(vfoModeQuery(band), "VM"), band)[1] != VFO_MODE.toLong()) link.send(vfoModeCommand(band, VFO_MODE))
+            link.send(frequencyCommand(band, hz))
+            link.confirm(hz) { readHz(band) }
+        }
+    }
+    override fun setMode(mode: RigMode) = setMode(vfoOf(activeBand()), mode)
+    override fun setMode(vfo: Vfo, mode: RigMode) {
+        val code = MODES[mode] ?: unsupported("mode " + mode.name)
+        if (vfo == Vfo.A && mode !in BAND_A_MODES) unsupported("mode " + mode.name + " on VFO A")
+        val band = band(vfo)
+        link.transaction {
+            link.send(modeCommand(band, code))
+            checkUi(readBandMode(band) == mode) { UiText(R.string.err_rig_unconfirmed) }
+        }
+    }
+    // TX / RX act on the active band.
+    override fun ptt(on: Boolean) {
+        try {
+            link.request(if (on) TX else RX, if (on) "TX" else "RX")
+        } catch (error: Exception) {
+            // never leave the radio transmitting
+            if (on) runCatching { link.send(RX) }
+            throw error
+        }
+    }
+    override fun setSplit(on: Boolean) = unsupported("split")
+
+    /** Sends one of [DIAGNOSTIC_QUERIES] (all read-only) and returns the raw reply; anything else is refused. */
+    fun diagnosticReply(command: String): String {
+        requireUi(command in DIAGNOSTIC_QUERIES) { UiText(R.string.err_rig_unsupported, command.trim()) }
+        return link.request(command, command.trim().substringBefore(' '))
+    }
+
+    /** The comma-separated fields after the channel number of an "ME nnn,..." reply; an empty channel answers "N" (rejected). */
+    private fun readChannel(channel: Int): List<String> {
+        val parts = link.request(memoryQuery(channel), "ME").substringAfter(' ', "").split(',')
+        if (parts.size < 2 || parts[0].trim().toIntOrNull() != channel) invalidReply()
+        return parts.drop(1)
+    }
+    private fun channelHz(fields: List<String>): Long = fields[MEMORY_FREQUENCY_FIELD].trim().toLongOrNull() ?: invalidReply()
+    private fun readName(channel: Int): String = try {
+        val parts = link.request(nameQuery(channel), "MN").substringAfter(' ', "").split(',', limit = 2)
+        if (parts.size < 2 || parts[0].trim().toIntOrNull() != channel) invalidReply()
+        parts[1].trim()
+    } catch (error: LocalizedIOException) {
+        if (isRejected(error)) "" else throw error
+    }
+
+    override val supportsMemories = true
+    override val supportsMemoryWrite = true
+    override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> {
+        val list = ArrayList<RigMemory>()
+        for (channel in channels) {
+            if (!keepGoing()) break
+            val fields = try {
+                readChannel(channel)
+            } catch (error: LocalizedIOException) {
+                if (isRejected(error)) continue else throw error
+            }
+            // The mode field index is not confirmed, so the mode stays unknown and the offset/split fields are not decoded.
+            list.add(RigMemory(channel, channelHz(fields), null, readName(channel)))
+        }
+        return list
+    }
+    /** Read-modify-write: only the RX frequency and the name change; every other field is sent back exactly as read. */
+    override fun writeMemory(memory: RigMemory) {
+        val channel = memory.channel
+        requireUi(channel in CHANNELS) { UiText(R.string.err_rig_channel, channel) }
+        checkRange(model, memory.frequencyHz)
+        requireUi(memory.name.length <= NAME_MAX && memory.name.all { it in ' '..'~' && it != ',' }) {
+            UiText(R.string.err_rig_memory_name, NAME_MAX)
+        }
+        link.transaction {
+            val current = try {
+                readChannel(channel)
+            } catch (error: LocalizedIOException) {
+                if (isRejected(error)) throw LocalizedStateException(UiText(R.string.err_rig_channel_empty, channel)) else throw error
+            }
+            val updated = current.toMutableList()
+            updated[MEMORY_FREQUENCY_FIELD] = String.format(Locale.ROOT, "%010d", memory.frequencyHz)
+            link.send(memoryCommand(channel, updated))
+            link.send(nameCommand(channel, memory.name))
+            val stored = readChannel(channel)
+            checkUi(channelHz(stored) == memory.frequencyHz && stored.drop(1) == updated.drop(1) && readName(channel) == memory.name.trim()) {
+                UiText(R.string.err_rig_unconfirmed)
+            }
+        }
+    }
 }

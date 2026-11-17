@@ -81,17 +81,16 @@ function integrateModule(work, module) {
             SendReply(Port, &Reply, (uint16_t)(sizeof(Header_t) + Reply.Header.Size));
             break;
         }
-        case 0x7B00: /* Bricohams CAT RX v1, private experimental command. */
+        case 0x7B00: /* Bricohams CAT RX v1 (8-byte request) and v2 (12 bytes, uplink), private experimental command. */
         {
             struct __attribute__((packed)) {
                 Header_t Header;
-                uint8_t Data[BH_CAT_REPLY_SIZE];
+                uint8_t Data[BH_CAT_REPLY_V2_SIZE];
             } Reply;
             Reply.Header.ID = 0x7B01;
-            Reply.Header.Size = BH_CAT_REPLY_SIZE;
-            bh_cat_request(&bh_cat_receiver, pUART_Command->Data,
+            Reply.Header.Size = bh_cat_request2(&bh_cat_receiver, pUART_Command->Data,
                 pUART_Command->Header.Size, SCHEDULER_GetTick10ms() * 10U, Reply.Data);
-            SendReply(Port, &Reply, sizeof(Reply));
+            SendReply(Port, &Reply, (uint16_t)(sizeof(Header_t) + Reply.Header.Size));
             break;
         }
         case 0x7B02: /* Bricohams CAT TX v1: leased PTT, armed only on the radio keypad. */

@@ -24,7 +24,7 @@
     <string name="profile_test">Verbindung testen</string>
     <string name="profile_test_running">Verbindung wird getestet…</string>
     <string name="profile_test_ok">Verbindung in Ordnung: %1$s</string>
-    <string name="profile_test_no_usb">Kein kompatibles USB-Gerät angeschlossen.</string>
+    <string name="profile_test_no_usb">Kein kompatibles USB-Gerät angeschlossen. Schließen Sie das Funkgerät per USB an und tippen Sie auf Verbindung testen.</string>
     <string name="profile_test_ble">Der Bluetooth-Bildschirm des Funkgeräts wird zum Suchen und Verbinden geöffnet.</string>
     <string name="profile_test_ble_help">Die Bluetooth-Verbindung wird auf dem eigenen Bildschirm des Funkgeräts gesucht und geöffnet.</string>
     <string name="profile_test_network_ok">TCP-Verbindung zu %1$s in Ordnung</string>

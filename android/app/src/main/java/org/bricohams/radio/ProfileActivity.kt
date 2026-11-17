@@ -38,8 +38,11 @@ class ProfileActivity : LocalizedActivity() {
         private const val USB_PERMISSION = "org.bricohams.radio.PROFILE_USB_PERMISSION"
         private const val LOCATION_REQUEST = 63
         private const val STEPS = 4
-        private val STEP_NAMES = listOf(R.string.profile_step_radio, R.string.profile_step_callsign,
-            R.string.profile_step_location, R.string.profile_step_cat)
+        private val STEP_NAMES = listOf(R.string.profile_step_radio, R.string.profile_step_connection,
+            R.string.profile_step_operator, R.string.profile_step_summary)
+        private val STEP_HELP = listOf(R.string.profile_step_radio_help, R.string.profile_step_connection_help,
+            R.string.profile_step_operator_help, R.string.profile_step_summary_help)
+        private val PHONE_ONLY = setOf(Tool.SSTV, Tool.LIVE_AUDIO, Tool.ROTOR)
     }
 
     private val colors by lazy { Brand.Palette(this) }
@@ -69,6 +72,9 @@ class ProfileActivity : LocalizedActivity() {
     private var heightEdit: EditText? = null
     private var locEdit: EditText? = null
     private var approxNote: TextView? = null
+    private var resultBox: LinearLayout? = null
+    private var lastResult: Boolean? = null
+    private var lastResultText: String? = null
     private var baudEdit: EditText? = null
     private var civEdit: EditText? = null
     private var hostEdit: EditText? = null
@@ -199,35 +205,84 @@ class ProfileActivity : LocalizedActivity() {
     private fun render() {
         body.removeAllViews()
         callEdit = null; baudEdit = null; civEdit = null; hostEdit = null; portEdit = null
-        latEdit = null; lonEdit = null; heightEdit = null; locEdit = null; approxNote = null
-        body.addView(Brand.heading(this, getString(R.string.profile_title)))
+        latEdit = null; lonEdit = null; heightEdit = null; locEdit = null; approxNote = null; resultBox = null
+        body.addView(BrandUi.sectionHeader(this, getString(R.string.profile_title), getString(R.string.screen_help_profile), large = true))
+        BrandUi.firstRunTip(this, "screen_profile", getString(R.string.screen_help_profile))?.let { body.addView(it) }
         (status.parent as? LinearLayout)?.removeView(status)
         body.addView(status)
-        body.addView(Brand.heading(this, getString(R.string.profile_step, step + 1, STEPS, getString(STEP_NAMES[step]))))
+        body.addView(BrandUi.sectionHeader(this, getString(R.string.profile_step, step + 1, STEPS, getString(STEP_NAMES[step])),
+            getString(STEP_HELP[step])))
         when (step) {
             0 -> radioStep()
-            1 -> callsignStep()
-            2 -> locationStep()
-            else -> catStep()
+            1 -> catStep()
+            2 -> { callsignStep(); locationStep() }
+            else -> summaryStep()
         }
         if (step > 0) body.addView(Brand.button(this, getString(R.string.profile_back)) { collect(); step--; message(""); render() })
         body.addView(Brand.button(this, getString(if (step == STEPS - 1) R.string.profile_save else R.string.profile_next), true) { next() })
     }
 
+    private fun radioIcon(option: ProfileRadio) = when {
+        option.transports.contains(CatTransport.BLE) -> R.drawable.ic_radio
+        option.transports.isEmpty() -> R.drawable.ic_channels
+        else -> R.drawable.ic_usb
+    }
+
     private fun radioStep() {
         note(R.string.profile_radio_help)
-        val group = RadioGroup(this).apply { contentDescription = getString(R.string.profile_step_radio) }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; contentDescription = getString(R.string.profile_step_radio) }
+        val buttons = mutableListOf<Pair<ProfileRadio, RadioButton>>()
         for (option in ProfileRadio.values()) {
-            group.addView(choice(option.label(this), option == radio) {
+            val button = choice(option.label(this), option == radio) {
                 if (option != radio) {
                     radio = option
                     transport = option.transports.firstOrNull()
                     baud = option.defaultBaud.takeIf { it > 0 }?.toString() ?: ""
                     civ = StationProfile.DEFAULT_CIV
                 }
-            })
+                buttons.forEach { (other, view) -> view.isChecked = other == option }
+            }
+            buttons += option to button
+            val can = option.tools.filter { it !in PHONE_ONLY }.joinToString(", ") { getString(it.label) }
+            list.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                background = Brand.rounded(this@ProfileActivity, colors.surface, 16, colors.outline)
+                val pad = Brand.dp(this@ProfileActivity, 10)
+                setPadding(pad, pad, pad, pad)
+                addView(BrandUi.icon(this@ProfileActivity, radioIcon(option), colors.accent).apply {
+                    (layoutParams as? LinearLayout.LayoutParams)?.marginEnd = pad
+                })
+                addView(LinearLayout(this@ProfileActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(button)
+                    addView(Brand.text(this@ProfileActivity, 13f, colors.muted).apply { text = getString(R.string.profile_radio_can, can) })
+                }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = Brand.dp(this@ProfileActivity, 8) })
         }
-        body.addView(group)
+        body.addView(list)
+    }
+
+    private fun summaryStep() {
+        val chosen = radio
+        val rows = ArrayList<Pair<Int, String>>()
+        rows += R.string.profile_summary_radio to (chosen?.label(this) ?: getString(R.string.profile_summary_empty))
+        rows += R.string.profile_summary_connection to (transport?.let { getString(it.label) } ?: getString(R.string.profile_transport_none))
+        rows += R.string.profile_summary_operator to listOf(callsign.ifEmpty { getString(R.string.profile_callsign_missing_short) },
+            locator).filter { it.isNotEmpty() }.joinToString(" · ")
+        val card = BrandUi.card(this)
+        for ((title, value) in rows) {
+            card.addView(Brand.text(this, 13f, colors.muted).apply { setText(title) })
+            card.addView(Brand.text(this, 16f, bold = true).apply { text = value; setPadding(0, 0, 0, Brand.dp(this@ProfileActivity, 8)) })
+        }
+        card.addView(Brand.text(this, 13f, colors.muted).apply { setText(R.string.profile_summary_tools) })
+        val enabled = Tool.values().filter { chosen.allows(it) }
+        card.addView(Brand.text(this, 15f).apply {
+            tag = "profile_summary_tools"
+            text = enabled.joinToString("\n") { "• " + getString(it.label) }
+        })
+        body.addView(card)
+        body.addView(BrandUi.infoTip(this, getString(R.string.profile_summary_ready)))
     }
 
     private fun callsignStep() {
@@ -370,7 +425,35 @@ class ProfileActivity : LocalizedActivity() {
             portEdit = edit(R.string.aprs_chat_port, port, InputType.TYPE_CLASS_NUMBER)
         }
         if (transport == CatTransport.BLE) note(R.string.profile_test_ble_help)
-        body.addView(Brand.button(this, getString(R.string.profile_test)) { testConnection() })
+        transport?.let { note(explanation(it)) }
+        if (transport == CatTransport.USB_SERIAL || transport == CatTransport.USB_CDC) {
+            body.addView(BrandUi.infoTip(this, getString(R.string.profile_connect_hint)))
+        }
+        body.addView(Brand.button(this, getString(R.string.profile_test), true) { testConnection() })
+        resultBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; tag = "profile_test_result" }.also { body.addView(it) }
+        showResult(lastResult, lastResultText)
+    }
+
+    private fun explanation(value: CatTransport) = when (value) {
+        CatTransport.USB_SERIAL -> R.string.profile_explain_serial
+        CatTransport.USB_CDC -> R.string.profile_explain_cdc
+        CatTransport.BLE -> R.string.profile_explain_ble
+        CatTransport.NETWORK -> R.string.profile_explain_network
+    }
+
+    /** Clear connection-test outcome: icon + words, never colour alone. [ok] null means untested, testing when [text] is non-empty. */
+    private fun showResult(ok: Boolean?, text: String?) {
+        lastResult = ok; lastResultText = text
+        val box = resultBox ?: return
+        box.removeAllViews()
+        val chip = when {
+            ok == true -> BrandUi.statusChip(this, BrandUi.Status.OK, getString(R.string.profile_result_ok))
+            ok == false -> BrandUi.statusChip(this, BrandUi.Status.ERROR, getString(R.string.profile_result_problem))
+            text != null -> BrandUi.statusChip(this, BrandUi.Status.WARN, getString(R.string.profile_result_testing))
+            else -> BrandUi.statusChip(this, BrandUi.Status.IDLE, getString(R.string.profile_result_pending))
+        }
+        box.addView(chip.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = Brand.dp(this@ProfileActivity, 10) })
+        if (text != null && ok != null) box.addView(Brand.text(this, 14f, colors.text).apply { this.text = text })
     }
 
     /** Copies the visible fields into the draft so stepping back and forth keeps what was typed. */
@@ -394,10 +477,13 @@ class ProfileActivity : LocalizedActivity() {
         try {
             when (step) {
                 0 -> requireNotNullUi(radio) { UiText(R.string.profile_radio_required) }
-                1 -> callsign = Callsign.normalize(callsign)
-                2 -> draft().validatedLocation().let {
-                    latitude = it.latitude; longitude = it.longitude; heightKm = it.heightKm
-                    locator = it.locator; approximate = it.approximate
+                1 -> draft().validatedCat()
+                2 -> {
+                    callsign = Callsign.normalize(callsign)
+                    draft().validatedLocation().let {
+                        latitude = it.latitude; longitude = it.longitude; heightKm = it.heightKm
+                        locator = it.locator; approximate = it.approximate
+                    }
                 }
                 else -> {
                     ProfileStore.save(this, draft())
@@ -437,23 +523,32 @@ class ProfileActivity : LocalizedActivity() {
     private fun runNetworkProbe(profile: StationProfile) {
         testing = true
         message(getString(R.string.profile_test_running))
+        showResult(null, getString(R.string.profile_test_running))
         worker.execute {
+            var ok = true
             val result = try {
                 TcpKissLink.connect(profile.host, TcpKissLink.parsePort(profile.port)).close()
                 getString(R.string.profile_test_network_ok, "${profile.host.trim()}:${profile.port.trim()}")
-            } catch (error: Exception) { errorText(error) }
-            mainHandler.post { testing = false; message(result) }
+            } catch (error: Exception) { ok = false; errorText(error) }
+            mainHandler.post { testing = false; message(result); showResult(ok, result) }
         }
     }
 
     private fun usbCandidates(profile: StationProfile) = manager.deviceList.values.filter {
-        if (profile.transport == CatTransport.USB_CDC) CdcRadio.compatible(it)
-        else SerialRadio.description(it) != null && !CdcRadio.compatible(it)
+        when {
+            // The UV-K5 opens whatever the attached device is (CDC or adapter); the choice of transport follows the device.
+            profile.radio == ProfileRadio.UVK5 -> SerialRadio.description(it) != null
+            profile.transport == CatTransport.USB_CDC -> CdcRadio.compatible(it)
+            else -> SerialRadio.description(it) != null && !CdcRadio.compatible(it)
+        }
     }.sortedBy { it.deviceName }
 
     private fun chooseUsb(profile: StationProfile) {
         val devices = usbCandidates(profile)
-        if (devices.isEmpty()) { message(getString(R.string.profile_test_no_usb)); return }
+        if (devices.isEmpty()) {
+            val text = getString(R.string.profile_test_no_usb)
+            message(text); showResult(false, text); return
+        }
         AlertDialog.Builder(this).setTitle(R.string.usb_select_device)
             .setItems(devices.map { "VID %04X PID %04X - %s".format(it.vendorId, it.productId, SerialRadio.description(it)) }.toTypedArray()) { _, index ->
                 requestUsbPermission(devices[index], profile)
@@ -477,9 +572,11 @@ class ProfileActivity : LocalizedActivity() {
         if (testing) return
         testing = true
         message(getString(R.string.profile_test_running))
+        showResult(null, getString(R.string.profile_test_running))
         worker.execute {
-            val result = try { probe(device, profile) } catch (error: Exception) { errorText(error) }
-            mainHandler.post { testing = false; message(result) }
+            var ok = true
+            val result = try { probe(device, profile) } catch (error: Exception) { ok = false; errorText(error) }
+            mainHandler.post { testing = false; message(result); showResult(ok, result) }
         }
     }
 

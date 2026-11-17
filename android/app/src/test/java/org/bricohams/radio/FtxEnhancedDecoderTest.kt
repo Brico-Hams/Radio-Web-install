@@ -99,9 +99,9 @@ class FtxEnhancedDecoderTest {
     }
 
     @Test fun registryExposesFt2AsBeta() {
-        assertTrue(CodecRegistry().availableProfiles().isEmpty())
+        assertEquals(setOf(CodecRegistry.ACARS_PROFILE_ID), CodecRegistry().availableProfiles())
         val registry = CodecRegistry(ldpc)
-        assertEquals(setOf(CodecRegistry.FT2_PROFILE_ID), registry.availableProfiles())
+        assertEquals(setOf(CodecRegistry.ACARS_PROFILE_ID, CodecRegistry.FT2_PROFILE_ID), registry.availableProfiles())
         assertEquals("beta", CodecRegistry.FT2_LABEL)
         val codec = registry.require(CodecRegistry.FT2_PROFILE_ID)
         val audio = codec.encode("CQ EA1ABC IN80", 1200.0)

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="rig_section_acars">ACARS (VHF-Flugfunk, nur Empfang)</string>
+    <string name="acars_help">Dekodiert ACARS (ARINC 618, AM-MSK 2400 Bit/s) aus dem Audio des Funkgeräts. Nur Empfang: Senden auf Flugfunkfrequenzen ist für Amateurfunkstellen illegal, und die App tastet für ACARS nie den PTT. Die Test-WAV dient nur Loopback-Tests.</string>
+    <string name="acars_channel_label">ACARS-Kanal</string>
+    <string name="acars_region_europe">Europa</string>
+    <string name="acars_region_worldwide">Weltweit</string>
+    <string name="acars_region_usa">USA</string>
+    <string name="acars_region_vdl">VDL2 — nicht als POA dekodierbar</string>
+    <string name="acars_channel_item">%1$s MHz — %2$s</string>
+    <string name="acars_tune">RX abstimmen</string>
+    <string name="acars_start">Dekodierung starten</string>
+    <string name="acars_stop">Dekodierung stoppen</string>
+    <string name="acars_generate_wav">Test-WAV erzeugen</string>
+    <string name="acars_listening">ACARS wird empfangen…</string>
+    <string name="acars_stopped">Dekodierung gestoppt.</string>
+    <string name="acars_tuned">Auf %1$s MHz in AM abgestimmt.</string>
+    <string name="acars_no_messages">Noch keine Nachrichten.</string>
+    <string name="acars_entry">%1$s UTC  %2$s MHz  %3$s  %4$s  %5$s  [%7$s]\n%6$s</string>
+    <string name="acars_crc_ok">CRC korrekt</string>
+    <string name="acars_crc_bad">CRC fehlerhaft</string>
+    <string name="acars_vdl_not_decodable">VDL2-Kanäle verwenden D8PSK und lassen sich nicht als ACARS POA dekodieren.</string>
+    <string name="acars_wav_saved">Test-WAV gespeichert.</string>
+    <string name="acars_wav_error">WAV konnte nicht gespeichert werden: %1$s</string>
+    <string name="err_acars_no_airband">Dieses Funkgerät empfängt das Flugfunkband (118–137 MHz AM) nicht.</string>
+    <string name="err_acars_band">%1$s MHz liegt außerhalb des Flugfunkbands 118–137 MHz.</string>
+</resources>

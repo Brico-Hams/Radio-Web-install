@@ -6,7 +6,6 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
-import android.graphics.drawable.StateListDrawable
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -49,6 +48,7 @@ object Brand {
         val focus = context.getColor(R.color.brand_focus)
         val ripple = context.getColor(R.color.brand_ripple)
         val positive = context.getColor(R.color.brand_positive)
+        val error = context.getColor(R.color.brand_error)
     }
 
     /** Original logo PNG, untinted; in dark mode it sits on a discreet white rounded plate. */
@@ -66,22 +66,13 @@ object Brand {
         setColor(color); cornerRadius = dp(context, radius).toFloat()
         if (stroke != null) setStroke(dp(context, 2), stroke)
     }
-    /** Ripple over a fill that gains a thick focus ring for keyboard, D-pad and DeX users (the ripple tint alone is too faint);
-     *  on orange fills the ring uses the text colour because the light focus token is the same orange. */
-    fun pressable(context: Context, fill: Int, radius: Int, stroke: Int? = null): RippleDrawable {
-        val colors = Palette(context)
-        val states = StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_focused), rounded(context, fill, radius).apply { setStroke(dp(context, 3), if (fill == colors.orange) colors.text else colors.focus) })
-            addState(intArrayOf(), rounded(context, fill, radius, stroke))
-        }
-        return RippleDrawable(ColorStateList.valueOf(colors.ripple), states, null)
-    }
     fun card(context: Context, selected: Boolean = false): LinearLayout = LinearLayout(context).apply {
         val colors = Palette(context)
         orientation = LinearLayout.VERTICAL
         val padding = dp(context, 18)
         setPadding(padding, padding, padding, padding)
-        background = pressable(context, colors.surface, 20, if (selected) colors.accent else colors.outline)
+        background = RippleDrawable(ColorStateList.valueOf(colors.ripple),
+            rounded(context, colors.surface, 20, if (selected) colors.accent else colors.outline), null)
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             .apply { bottomMargin = dp(context, 12) }
     }
@@ -99,7 +90,7 @@ object Brand {
         setPadding(dp(context, 16), dp(context, 12), dp(context, 16), dp(context, 12))
         setTextColor(ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
             intArrayOf(colors.muted, if (primary) colors.onAccent else colors.accent)))
-        background = pressable(context, if (primary) colors.orange else colors.surfaceHigh, 16)
+        background = BrandUi.interactive(context, if (primary) colors.orange else colors.surfaceHigh, 16)
         stateListAnimator = null
         setOnClickListener { action() }
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
@@ -113,7 +104,7 @@ object Brand {
         minHeight = dp(context, 48)
         setPadding(dp(context, 8), dp(context, 10), dp(context, 8), dp(context, 10))
         setTextColor(if (active) colors.onAccent else colors.text)
-        background = pressable(context, if (active) colors.orange else colors.surfaceHigh, 16)
+        background = BrandUi.interactive(context, if (active) colors.orange else colors.surfaceHigh, 16)
         isSelected = active
         isClickable = true; isFocusable = true
         setOnClickListener { action() }

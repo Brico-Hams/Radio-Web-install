@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "dossier": "Quansheng UV-5K V3 (grafía solicitada; correspondencia con UV-K5 V3 provisional)",
+  "export_cutoff": "2026-11-01T21:40:00+01:00",
+  "outer_message_date_range": "2024-01-06T12:18:32+01:00/2026-11-01T21:40:00+01:00",
+  "forwarded_source_date_range": "del 2021-04-03 al 2026-11-01T17:01:42+01:00",
+  "export_counts": {
+    "pages": 36,
+    "message_id_records": 35739,
+    "message_divs_total": 36798,
+    "service_message_divs": 7486,
+    "service_message_divs_without_numeric_id": 1059,
+    "default_message_divs": 29312
+  },
+  "identity_status": "UV-5K V3 no se ha establecido de forma independiente como modelo distinto. La posible transposición de UV-K5 V3 sigue siendo provisional hasta disponer de evidencia de placa/MCU/bootloader.",
+  "evidence": [
+    {
+      "id": "CHAT-UV5K-01",
+      "kind": "telegram_export",
+      "locator": "messages12.html#message12516",
+      "date": "2025-04-21",
+      "outer_timestamp": "2025-04-21T11:16:48+01:00",
+      "forwarded_source_date": "2025-04-16",
+      "forwarded_source_timestamp": "2025-04-16T02:28:02+01:00",
+      "summary": "Grafía informal UV5K en contexto de CHIRP/frecuencias satelitales; enlaza un .img genérico de UV-K5. El mensaje externo es del 2025-04-21; la cabecera de reenvío muestra la fecha original 2025-04-16. No identifica V3 ni hardware.",
+      "status": "reported"
+    },
+    {
+      "id": "CHAT-UV5K-02",
+      "kind": "telegram_export",
+      "locator": "messages12.html#message12600",
+      "date": "2025-04-23",
+      "summary": "Pregunta sobre firmware con menciones a SI4732 y almacenamiento ampliado de 2 MB; no establece identidad ni soporte V3.",
+      "status": "question"
+    },
+    {
+      "id": "CHAT-UV5K-03-P",
+      "kind": "telegram_export",
+      "locator": "messages25.html#message27097",
+      "date": "2025-12-12",
+      "summary": "El mensaje padre pregunta en general por la elección de una radio.",
+      "status": "context"
+    },
+    {
+      "id": "CHAT-UV5K-03",
+      "kind": "telegram_export",
+      "locator": "messages25.html#message27098",
+      "date": "2025-12-12",
+      "reply_to": "CHAT-UV5K-03-P",
+      "summary": "Usa la grafía UV-5K(8)V3 en una pregunta de elección de modelo; no identifica placa ni valida una compra.",
+      "status": "question"
+    },
+    {
+      "id": "CHAT-BRICK-01",
+      "kind": "telegram_export",
+      "locator": "messages30.html#message32551",
+      "date": "2026-03-07",
+      "summary": "Fallo de arranque/actualización de una UV-5R Plus informado después de seguir instrucciones etiquetadas UV-5K; modelo distinto y recuperación no verificada.",
+      "status": "reported_unresolved"
+    },
+    {
+      "id": "CHAT-CHIRP-01",
+      "kind": "telegram_export",
+      "locator": "messages30.html#message32662",
+      "date": "2026-03-11",
+      "summary": "Síntoma de solo lectura en CHIRP, informado para un dispositivo llamado UV-5K V3 con Karina; sin diagnóstico ni solución confirmados.",
+      "status": "reported_unresolved"
+    },
+    {
+      "id": "CHAT-BRICK-02",
+      "kind": "telegram_export",
+      "locator": "messages30.html#message32736",
+      "date": "2026-03-12",
+      "summary": "Anécdota separada que dice que Karina ayudó en un caso parecido y menciona que faltaba la calibración original; no se vincula expresamente a CHAT-BRICK-01.",
+      "status": "anecdotal_not_correlated"
+    },
+    {
+      "id": "CHAT-ATTACH-01",
+      "kind": "telegram_attachment",
+      "locator": "messages25.html#message26571",
+      "date": "2025-12-06",
+      "summary": "Adjunto binario alpha de Hawk5; solo metadatos estáticos, arquitectura y objetivo sin establecer.",
+      "status": "binary_observed_static_only"
+    },
+    {
+      "id": "CHAT-ATTACH-02",
+      "kind": "telegram_attachment",
+      "locator": "messages29.html#message31711",
+      "date": "2026-02-19",
+      "summary": "Adjunto ZIP de Delta K1/K5V3; solo cabecera/hash del archivo; no se abrió ni extrajo.",
+      "status": "archive_observed_static_only"
+    },
+    {
+      "id": "DOC-ATLAS",
+      "kind": "repository_document",
+      "locator": "../ATLAS-UV-K5-V3.md",
+      "date": "2026-10-26",
+      "summary": "Referencia técnica del repositorio sobre hardware, almacenamiento, bootloader y protocolos V1/V2/V3/K1; no es una medición física de esta tarea.",
+      "status": "documented_reference"
+    },
+    {
+      "id": "DOC-PACK",
+      "kind": "repository_document",
+      "locator": "../AYUDA-PACK-DIM0S.md",
+      "date": "2026-10-25",
+      "summary": "Inventario fechado y paráfrasis de un paquete Karina V3/K1; fuente, licencia, compatibilidad de slots y comportamiento RF siguen sin verificar.",
+      "status": "secondary_package_inventory"
+    },
+    {
+      "id": "DOC-KARINA",
+      "kind": "repository_document",
+      "locator": "../KARINA.md",
+      "date": "2026-10-25",
+      "summary": "Separa un paquete Karina V1 del material V3/K1 y documenta límites de fuente/licencia.",
+      "status": "repository_investigation"
+    },
+    {
+      "id": "DOC-BRICO",
+      "kind": "repository_document",
+      "locator": "../BRICOHAMS-FIRMWARE.md",
+      "date": "2026-10-31",
+      "summary": "Las imágenes y módulos Bricohams se describen por separado como Beta; las notas de fuente/compilación no validan una radio.",
+      "status": "repository_documented_beta"
+    },
+    {
+      "id": "SRC-SLOTS",
+      "kind": "source_observed",
+      "locator": "../../Multiboot/Multiboot/Fusion61/App/driver/mb_flash.h; ../../Multiboot/Multiboot/Fusion61/App/driver/mb_flash.c; ../../Multiboot/Multiboot/Fusion61/App/driver/py25q16.h; ../../Multiboot/Multiboot/Fusion61/App/driver/py25q16.c; ../../Multiboot/Multiboot/Fusion61/App/ui/multiboot.c",
+      "symbols": ["MB_SLOT_STRIDE", "MB_SLOT_IMG_OFFSET", "MB_SLOT0_EXT_BASE", "MB_SLOT_COUNT", "MB_ValidateSlot", "MB_RestoreSlot", "MB_SlotErase", "MB_SlotWrite", "mb_scan_slots", "MB_BANK_COUNT", "MB_BANK_SIZE", "MB_BANK1_EXT_BASE", "MB_STATE_A_BASE", "MB_STATE_B_BASE", "PY25Q16_BANK_SHARED_FROM", "PY25Q16_SetBankBase"],
+      "summary": "Mapa de slots FMB1, copia protegida, límites y validación/restauración por CRC en el árbol fuente Fusion V3 incluido.",
+      "status": "source_observed_not_hardware_measured"
+    },
+    {
+      "id": "SRC-EEPROM",
+      "kind": "source_observed",
+      "locator": "../../Multiboot/Multiboot/Fusion61/App/driver/eeprom_compat.c",
+      "symbols": ["ADDR_MAPPINGS", "AddrTranslate", "EEPROM_ReadBuffer", "EEPROM_WriteBuffer"],
+      "summary": "Traducción de direcciones EEPROM lógicas a flash SPI externa y lecturas con valor de borrado en los huecos sin mapa.",
+      "status": "source_observed_not_hardware_measured"
+    },
+    {
+      "id": "SRC-SPECTRUM",
+      "kind": "source_observed",
+      "locator": "../../Multiboot/Multiboot/Fusion61/App/app/spectrum.c",
+      "symbol": "APP_RunSpectrum; SetF; GetRssi",
+      "summary": "Sintonía secuencial, espera de estabilización, muestreo RSSI, estado de picos y renderizado de pantalla.",
+      "status": "source_observed_not_rf_measured"
+    },
+    {
+      "id": "SRC-OVERLAY",
+      "kind": "source_observed",
+      "locator": "../../Multiboot/Multiboot/Fusion61/App/apps/app_overlay.c; ../../Multiboot/Multiboot/Fusion61/App/apps/app_overlay.h",
+      "symbols": ["APP_ValidateSlot", "APP_LaunchOverlay", "app_asset_read", "app_cfg_save", "APP_OVERLAY_MAX", "APP_ASSET_MAX"],
+      "summary": "Validación de cabecera/ABI de aplicaciones Labs, overlay RAM y persistencia controlada de configuración.",
+      "status": "source_observed_not_hardware_measured"
+    },
+    {
+      "id": "SRC-DOPPLER",
+      "kind": "source_observed",
+      "locator": "../../firmware/bricohams/doppler.c",
+      "symbol": "bh_doppler_calculate; supported; rounded_divide; BH_LIGHT_MM_S",
+      "summary": "Cálculo Doppler independiente solo de recepción, con límites de banda y velocidad radial en mm/s.",
+      "status": "source_observed_unit_tests_exist_hardware_not_tested"
+    },
+    {
+      "id": "SRC-ARDF",
+      "kind": "source_observed",
+      "locator": "../../firmware/bricohams/ardf.c",
+      "symbol": "bh_ardf_init; bh_ardf_sync; bh_ardf_update; bh_ardf_save_gain; bh_ardf_load_gain",
+      "summary": "Estado independiente del ciclo temporizado ARDF y memoria acotada de ganancia manual de Bricohams.",
+      "status": "source_observed_unit_tests_exist_hardware_not_tested"
+    },
+    {
+      "id": "SRC-BRICO-SPECTRUM",
+      "kind": "source_observed",
+      "locator": "../../firmware/bricohams/spectrum.c",
+      "symbols": ["bh_spectrum_config_valid", "bh_spectrum_init", "bh_spectrum_frequency", "bh_spectrum_tuned", "bh_spectrum_sample", "bh_spectrum_skip", "bh_spectrum_clear_peaks"],
+      "summary": "Lógica de estado y muestreo del espectro de Bricohams, independiente de Fusion/Karina; no se probó en hardware.",
+      "status": "source_observed_hardware_not_tested"
+    },
+    {
+      "id": "SRC-BRICO-PRESETS",
+      "kind": "source_observed",
+      "locator": "../../firmware/bricohams/presets.c",
+      "symbols": ["bh_presets_validate", "bh_presets_encode", "bh_presets_decode"],
+      "summary": "Validación y codificación/decodificación de presets del proyecto Bricohams, separadas de los bancos de configuración Fusion.",
+      "status": "source_observed_hardware_not_tested"
+    },
+    {
+      "id": "SRC-CONNECTOR",
+      "kind": "source_observed",
+      "locator": "../../quansheng-connector.js",
+      "symbol": "QuanshengConnector; inspectSlotImage; encodeSatellitePass; readFlashRaw; verifyFlashRaw; backup; validateRaw; writeSlot",
+      "summary": "Tramado del protocolo host, comprobaciones de vectores/slots, CRC/copias de seguridad de flash y codificación de tabla de pases.",
+      "status": "host_source_observed_no_radio_session"
+    },
+    {
+      "id": "BIN-01",
+      "kind": "local_attachment_static_metadata",
+      "filename": "f4hwn.k5v3.fusion.v4.3.bin",
+      "size_bytes": 81400,
+      "sha256": "4ed45f79911fd963749f74b55cd69258abe958df4424d96773144f835a92bcd0",
+      "vector_words": {
+        "stack": "0x20004000",
+        "reset": "0x08002D35"
+      },
+      "status": "vector_shape_consistent_with_repository_v3_application_window_not_authenticated"
+    },
+    {
+      "id": "BIN-02",
+      "kind": "local_attachment_static_metadata",
+      "filename": "K5_V3_PY32F071_firmware.bin",
+      "size_bytes": 71712,
+      "sha256": "f4e5264a6f9a5436a6c75f7b217c60ba002cec04928f247392b9968c5c9458cb",
+      "vector_words": {
+        "stack": "0x20002FA0",
+        "reset": "0x080028D5"
+      },
+      "status": "vector_shape_consistent_with_repository_v3_application_window_not_authenticated"
+    },
+    {
+      "id": "BIN-03",
+      "kind": "local_attachment_static_metadata",
+      "filename": "k5_V3.00.10_encrypted_18to1300MHz.bin",
+      "size_bytes": 61150,
+      "sha256": "a102723dc86ffda0d076ffea14b0d4b17e01c1420a68e1519cc92312adaac8d4",
+      "status": "vector_target_not_established;not_decrypted"
+    },
+    {
+      "id": "BIN-04",
+      "kind": "local_attachment_static_metadata",
+      "filename": "Hawk5-alfa-by-fagci-20251206_0905.bin",
+      "size_bytes": 61206,
+      "sha256": "6f47e41fb24b118227443ad880330486e61aa63b9081d269e10f2863e2a01574",
+      "status": "target_and_architecture_not_established"
+    },
+    {
+      "id": "IMG-01",
+      "kind": "local_attachment_static_metadata",
+      "filename": "Quansheng_UV-K5_20241128.img",
+      "size_bytes": 8429,
+      "sha256": "19a878db7d65aba753345a53d52ed5fcb3fcf3e77aac20cda8b1a63ae920a8a7",
+      "vector_words": {
+        "first": "0x00E18A48",
+        "second": "0x0000EA60"
+      },
+      "status": "linked_to_generic_uv5k_chirp_message;likely_codeplug_not_validated_as_firmware"
+    },
+    {
+      "id": "ARC-01",
+      "kind": "local_attachment_archive_metadata",
+      "filename": "deltafw-k1-k5v3-main.zip",
+      "size_bytes": 25197765,
+      "sha256": "e9966fc716b238be3377b642f6babfb85f677a9e941d7149ccaa9441e743e7e8",
+      "status": "zip_header_only;not_opened_or_extracted"
+    }
+  ],
+  "explicit_uv_k5_v3_candidates": [
+    {"id": "CHAT-K5V3-01", "locator": "messages24.html#message25407", "date": "2025-11-24"},
+    {"id": "CHAT-K5V3-02", "locator": "messages24.html#message25774", "date": "2025-11-27", "reply_to": "messages24.html#message25773"},
+    {"id": "CHAT-K5V3-03", "locator": "messages25.html#message26231", "date": "2025-12-02"},
+    {"id": "CHAT-K5V3-04", "locator": "messages25.html#message26565", "date": "2025-12-06", "reply_to": "messages25.html#message26564"},
+    {"id": "CHAT-K5V3-05", "locator": "messages25.html#message26599", "date": "2025-12-06"},
+    {"id": "CHAT-K5V3-06", "locator": "messages25.html#message26625", "date": "2025-12-07"},
+    {"id": "CHAT-K5V3-07", "locator": "messages25.html#message26627", "date": "2025-12-07"},
+    {"id": "CHAT-K5V3-08", "locator": "messages25.html#message26636", "date": "2025-12-07"},
+    {"id": "CHAT-K5V3-09", "locator": "messages28.html#message30738", "date": "2026-01-29"},
+    {"id": "CHAT-K5V3-10", "locator": "messages28.html#message30770", "date": "2026-01-29"},
+    {"id": "CHAT-K5V3-11", "locator": "messages28.html#message31008", "date": "2026-02-03"},
+    {"id": "CHAT-K5V3-12", "locator": "messages29.html#message31214", "date": "2026-02-09"},
+    {"id": "CHAT-K5V3-13", "locator": "messages29.html#message31325", "date": "2026-02-11"},
+    {"id": "CHAT-K5V3-14", "locator": "messages29.html#message31400", "date": "2026-02-12"},
+    {"id": "CHAT-K5V3-15", "locator": "messages29.html#message31559", "date": "2026-02-16"},
+    {"id": "CHAT-K5V3-16", "locator": "messages30.html#message32450", "date": "2026-03-06"},
+    {"id": "CHAT-K5V3-17", "locator": "messages30.html#message32465", "date": "2026-03-06"},
+    {"id": "CHAT-K5V3-18", "locator": "messages30.html#message32849", "date": "2026-03-14"},
+    {"id": "CHAT-K5V3-19", "locator": "messages30.html#message33017", "date": "2026-03-18"},
+    {"id": "CHAT-K5V3-20", "locator": "messages30.html#message33941", "date": "2026-04-05"},
+    {"id": "CHAT-K5V3-21", "locator": "messages31.html#message34725", "date": "2026-04-22"},
+    {"id": "CHAT-K5V3-22", "locator": "messages31.html#message36144", "date": "2026-05-21"},
+    {"id": "CHAT-K5V3-23", "locator": "messages32.html#message37933", "date": "2026-06-24"},
+    {"id": "CHAT-K5V3-24", "locator": "messages32.html#message37945", "date": "2026-06-24"},
+    {"id": "CHAT-K5V3-25", "locator": "messages33.html#message39000", "date": "2026-07-11"},
+    {"id": "CHAT-K5V3-26", "locator": "messages33.html#message39428", "date": "2026-07-16"},
+    {"id": "CHAT-K5V3-27", "locator": "messages33.html#message39492", "date": "2026-07-17"},
+    {"id": "CHAT-K5V3-28", "locator": "messages33.html#message39690", "date": "2026-07-20"},
+    {"id": "CHAT-K5V3-29", "locator": "messages34.html#message40066", "date": "2026-08-03"}
+  ],
+  "handling": {
+    "chat_text_in_tracked_docs": false,
+    "personal_identifiers_in_tracked_docs": false,
+    "raw_parsed_context_location": "contexto analizado ignorado: tmp/quansheng-uv-5k-v3/telegram-matched-context.json",
+    "hardware_measurements": false,
+    "radio_writes": false,
+    "transmissions": false,
+    "archive_extraction": false,
+    "binary_execution_or_decryption": false
+  }
+}

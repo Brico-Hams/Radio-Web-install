@@ -1,5 +1,5 @@
 // Quansheng TK-11: settings, channels and full-memory backup/restore. No firmware flashing.
-// Framing, command IDs and memory layout follow CHIRP's chirp/drivers/tk11.py (GPL-3.0-or-later,
+// Framing, command IDs and memory layout follow CHIRP's chirp/drivers/tk11.py (GPL-2.0-or-later,
 // Dan Smith 2012, Thibaut Berg 2025); see ACKNOWLEDGEMENTS.md. This file is an independent implementation.
 (function (root) {
   const R = root.RadioWorkspace = root.RadioWorkspace || {};
@@ -84,6 +84,30 @@
   function assertWritable(offset, length) {
     checkRange(offset, length);
     R.assert(writableRegion(offset, length), `Escritura rechazada: 0x${offset.toString(16)}+${length} no esta en una zona de datos confirmada del TK-11.`);
+  }
+  // Single third-party source, never writable, listed for comparison only.
+  const UNVERIFIED_REGIONS = Object.freeze([
+    ["candidate-calibration-1", 0x10000, 0x11000, "Multi-UVTools calibration claim, CHIRP gap"],
+    ["candidate-calibration-2", 0x20000, 0x21000, "Multi-UVTools calibration claim, CHIRP gap"],
+    ["power-on-password", 0x17000, 0x17004, "Multi-UVTools lock password (u32 LE)"]
+  ].map(([name, start, end, note]) => Object.freeze({ name, start, end, note })));
+  function describeOffset(offset) {
+    const known = WRITABLE.find(region => offset >= region.start && offset < region.end)
+      || UNVERIFIED_REGIONS.find(region => offset >= region.start && offset < region.end);
+    return known ? known.name : "gap";
+  }
+  function diffImages(a, b) {
+    R.assert(a instanceof Uint8Array && b instanceof Uint8Array && a.length === MEMORY_SIZE && b.length === MEMORY_SIZE,
+      "Las dos copias deben ser imagenes completas del TK-11.");
+    const runs = [];
+    let current = null;
+    for (let index = 0; index < MEMORY_SIZE; index++) {
+      if (a[index] === b[index]) { current = null; continue; }
+      const region = describeOffset(index);
+      if (current && current.region === region) current.end = index + 1;
+      else { current = { start: index, end: index + 1, region }; runs.push(current); }
+    }
+    return runs;
   }
   function hex(bytes) {
     return [...bytes].map(byte => byte.toString(16).padStart(2, "0")).join("");
@@ -675,7 +699,7 @@
   }
   Object.assign(R, {
     TK11Connector,
-    TK11: Object.freeze({ MEMORY_SIZE, CHUNK, CHANNELS, BASE, CMD, OFFSETS, WRITABLE, SETTINGS, frame, unframe, crc16, header,
+    TK11: Object.freeze({ MEMORY_SIZE, CHUNK, CHANNELS, BASE, CMD, OFFSETS, WRITABLE, UNVERIFIED_REGIONS, describeOffset, diffImages, SETTINGS, frame, unframe, crc16, header,
       assertWritable, usageFlag, decodeChannel, encodeChannel, decodeChannels, encodeChannels, decodeSettings, encodeSettings,
       decodeFm, channelsToCsv, channelsFromTemplate, hexDump, hex, CSV_HEADER, parseCsv, channelsToTk11Rows, tk11RowsToCsv, channelsToTk11Csv,
       chirpToTk11Rows, chirpCsvToTk11Csv, channelsFromCsv })

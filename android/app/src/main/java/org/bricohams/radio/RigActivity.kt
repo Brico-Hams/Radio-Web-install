@@ -36,11 +36,17 @@ import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
+import org.bricohams.digital.AcarsCodec
+import org.bricohams.digital.CodecException
+import org.bricohams.digital.WavIo
+import org.bricohams.digital.WorkBudget
 import org.json.JSONArray
 import org.json.JSONException
 import java.io.IOException
@@ -58,7 +64,8 @@ import java.util.concurrent.TimeUnit
  * CAT screen for several radios (Yaesu FT-817/857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX), over USB. All radio I/O runs on
  * [worker] (commands, satellite tracking) or [txWorker] (SSTV transmission, so Stop TX never waits behind a command);
  * [audioWorker] receives. The UI thread only renders and the radio is never polled in the background except while a
- * satellite is tracked. The manifest declares configChanges so rotation does not drop the USB connection.
+ * satellite is tracked (the optional S-meter / TX status are read then, on Read and after connecting). The manifest declares
+ * configChanges so rotation does not drop the USB connection.
  */
 class RigActivity : LocalizedActivity() {
     companion object {
@@ -69,6 +76,7 @@ class RigActivity : LocalizedActivity() {
         private const val PREF_SPEAK = "speak"
         private const val PICK_IMAGE = 72
         private const val AUDIO_PERMISSION = 73
+        private const val SAVE_ACARS_WAV = 74
         private const val MAX_TX_MS = 110_000L
         private const val STALL_MS = 2_000L
         private const val MAX_CHANNELS = 100
@@ -101,6 +109,15 @@ class RigActivity : LocalizedActivity() {
     private lateinit var digClock: TextView
     private lateinit var digWarning: TextView
     private lateinit var setVfoB: Button
+    private lateinit var meterCard: LinearLayout
+    private lateinit var meterBar: ProgressBar
+    private lateinit var meterText: TextView
+    private lateinit var txText: TextView
+    private lateinit var powerText: TextView
+    private lateinit var powerSeek: SeekBar
+    private lateinit var dataToggle: CheckBox
+    private var meterSync = false
+    private var powerTouch = false
     private lateinit var memFrom: EditText
     private lateinit var speakToggle: CheckBox
     private var speech: TextToSpeech? = null
@@ -123,6 +140,13 @@ class RigActivity : LocalizedActivity() {
     private lateinit var picture: ImageView
     private lateinit var stopTx: Button
     private lateinit var stopReceive: Button
+    private lateinit var acarsSpinner: Spinner
+    private lateinit var acarsStatus: TextView
+    private lateinit var acarsMessages: TextView
+    private lateinit var acarsToggle: Button
+    private val acarsLog = AcarsLog()
+    @Volatile private var acarsActive = false
+    @Volatile private var acarsStop = false
     private var downEdit: EditText? = null
     private var upEdit: EditText? = null
     private var stepEdit: EditText? = null
@@ -149,6 +173,7 @@ class RigActivity : LocalizedActivity() {
     private fun audioStream(r: Rig?): TruSdxRig? = (r as? TruSdxRig)?.takeIf { linkBaud >= 115200 }
     // Worker-thread state.
     private var tracker: RigTracker? = null
+    @Volatile private var trackingUplink = false
     private var trackingStarted = false
     private var orbit: SatelliteOrbit? = null
     @Volatile private var rig: Rig? = null
@@ -236,7 +261,8 @@ class RigActivity : LocalizedActivity() {
                 insets
             }
         }
-        body.addView(Brand.heading(this, getString(R.string.rig_title)))
+        body.addView(BrandUi.sectionHeader(this, getString(R.string.rig_title), getString(R.string.screen_help_rig), large = true))
+        BrandUi.firstRunTip(this, "screen_rig", getString(R.string.screen_help_rig))?.let { body.addView(it) }
         status = live(Brand.text(this, 15f)).apply { setText(R.string.rig_disconnected) }
         body.addView(Brand.card(this).apply { addView(status) })
         notice = live(Brand.text(this, 14f, colors.accent))
@@ -247,10 +273,12 @@ class RigActivity : LocalizedActivity() {
         sstvStatus = live(Brand.text(this, 14f, colors.accent))
         buildRadio(body)
         buildFrequency(body)
+        buildMeters(body)
         buildDigital(body)
         buildMemories(body)
         buildSatellite(body)
         buildSstv(body)
+        buildAcars(body)
         setContentView(scroll)
         updateControls()
     }
@@ -259,10 +287,16 @@ class RigActivity : LocalizedActivity() {
 
     private fun section(body: LinearLayout, title: Int, build: (LinearLayout) -> Unit) {
         val card = Brand.card(this)
-        card.addView(Brand.text(this, 18f, colors.accent, true).apply {
-            setText(title)
-            if (Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
-        })
+        val help = when (title) {
+            R.string.rig_section_radio -> R.string.rig_help_radio
+            R.string.rig_section_frequency -> R.string.rig_help_frequency
+            R.string.rig_section_meter -> R.string.rig_help_meters
+            R.string.rig_dig_title -> R.string.rig_help_digital
+            R.string.rig_section_memories -> R.string.rig_help_memories
+            R.string.rig_section_satellite -> R.string.rig_help_satellite
+            else -> R.string.rig_help_sstv
+        }
+        card.addView(BrandUi.sectionHeader(this, getString(title), getString(help)))
         build(card)
         body.addView(card)
     }
@@ -371,6 +405,99 @@ class RigActivity : LocalizedActivity() {
         if (speakToggle.isChecked) ensureSpeech()
     }
 
+    private fun buildMeters(body: LinearLayout) = section(body, R.string.rig_section_meter) { card ->
+        meterCard = card
+        meterText = live(Brand.text(this, 14f, colors.text))
+        meterBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 255
+            contentDescription = getString(R.string.rig_signal_label)
+        }
+        txText = live(Brand.text(this, 14f, colors.text))
+        powerText = Brand.text(this, 14f, colors.text)
+        powerSeek = SeekBar(this).apply {
+            max = 255
+            contentDescription = getString(R.string.rig_power_label)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                    powerText.text = getString(R.string.rig_power_value, progress * 100 / 255)
+                    if (fromUser && !powerTouch) applyPower(progress) // accessibility actions change the value without a touch
+                }
+                override fun onStartTrackingTouch(bar: SeekBar) { powerTouch = true }
+                override fun onStopTrackingTouch(bar: SeekBar) { powerTouch = false; applyPower(bar.progress) }
+            })
+        }
+        dataToggle = CheckBox(this).apply {
+            setText(R.string.rig_data_mode)
+            setTextColor(colors.text)
+            setOnCheckedChangeListener { _, on -> if (!meterSync) applyDataMode(on) }
+        }
+        card.addView(meterText)
+        card.addView(meterBar)
+        card.addView(txText)
+        card.addView(powerText)
+        card.addView(powerSeek)
+        card.addView(dataToggle)
+        card.visibility = View.GONE
+    }
+
+    private fun applyPower(level: Int) {
+        val r = rig ?: run { notice.setText(R.string.rig_connect_first); return }
+        operation(notice) { r.setRfPower(level); null }
+    }
+
+    private fun applyDataMode(on: Boolean) {
+        val r = rig ?: run { notice.setText(R.string.rig_connect_first); return }
+        operation(notice) { r.setDataMode(on); null }
+    }
+
+    /** Shows only what the connected radio supports. */
+    private fun updateMeterCard(r: Rig?) {
+        val any = r != null && (r.supportsMeter || r.supportsTxStatus || r.supportsRfPower || r.supportsDataMode)
+        meterCard.visibility = if (any) View.VISIBLE else View.GONE
+        val show = { on: Boolean? -> if (on == true) View.VISIBLE else View.GONE }
+        meterText.visibility = show(r?.supportsMeter)
+        meterBar.visibility = show(r?.supportsMeter)
+        txText.visibility = show(r?.supportsTxStatus)
+        powerText.visibility = show(r?.supportsRfPower)
+        powerSeek.visibility = show(r?.supportsRfPower)
+        dataToggle.visibility = show(r?.supportsDataMode)
+        powerSeek.isEnabled = idle
+        dataToggle.isEnabled = idle
+    }
+
+    /** Worker thread: reads the optional extras; a failed read leaves that value as it was. */
+    private fun readMeters(r: Rig, settings: Boolean) {
+        var signal: Int? = null
+        var tx: Boolean? = null
+        var power: Int? = null
+        var data: Boolean? = null
+        if (r.supportsMeter) attempt<Unit>({ }) { signal = r.signalLevel() }
+        if (r.supportsTxStatus) attempt<Unit>({ }) { tx = r.isTransmitting() }
+        if (settings && r.supportsRfPower) attempt<Unit>({ }) { power = r.rfPower() }
+        if (settings && r.supportsDataMode) attempt<Unit>({ }) { data = r.dataModeOn() }
+        val s = signal
+        val t = tx
+        val p = power
+        val d = data
+        runOnUiThread { if (!isDestroyed && rig === r) showMeters(s, t, p, d) }
+    }
+
+    private fun showMeters(signal: Int?, tx: Boolean?, power: Int?, data: Boolean?) {
+        signal?.let {
+            meterBar.progress = it
+            meterText.text = getString(R.string.rig_signal_value, it)
+            meterBar.contentDescription = meterText.text
+        }
+        tx?.let { txText.setText(if (it) R.string.rig_tx_tx else R.string.rig_tx_rx) }
+        meterSync = true
+        power?.let {
+            powerSeek.progress = it
+            powerText.text = getString(R.string.rig_power_value, it * 100 / 255)
+        }
+        data?.let { dataToggle.isChecked = it }
+        meterSync = false
+    }
+
     private fun ensureSpeech() {
         if (speech != null) return
         speech = TextToSpeech(this) { code ->
@@ -419,7 +546,7 @@ class RigActivity : LocalizedActivity() {
         button(card, R.string.rig_dig_tune, true) {
             val r = rig ?: run { notice.setText(R.string.rig_connect_first); return@button }
             val hz = digBands.getOrNull(digBand.selectedItemPosition) ?: return@button
-            operation(notice) { r.setFrequency(Vfo.A, hz); r.setMode(dataMode(r.model)); refresh(r); null }
+            operation(notice) { r.checkTunable(Vfo.A, hz); r.setFrequency(Vfo.A, hz); r.setMode(Vfo.A, dataMode(r.model)); refresh(r); null }
         }
         // Not a live region: it changes every 250 ms and would flood TalkBack.
         digClock = Brand.text(this, 14f, colors.accent)
@@ -572,6 +699,158 @@ class RigActivity : LocalizedActivity() {
         card.addView(picture)
     }
 
+    /*
+     * ACARS is RECEIVE-ONLY. Transmitting on aeronautical frequencies is illegal for amateur stations, so nothing in this
+     * section may call Rig.ptt or play encoder audio to the radio; the encoder is only used for the "Generate test WAV" file.
+     */
+    private fun buildAcars(body: LinearLayout) = section(body, R.string.rig_section_acars) { card ->
+        card.addView(Brand.text(this, 13f, colors.muted).apply { setText(R.string.acars_help) })
+        label(card, R.string.acars_channel_label)
+        acarsSpinner = spinner(AcarsChannels.ALL.map { channel ->
+            getString(R.string.acars_channel_item, mhzText(channel.hz), getString(channel.region.labelRes))
+        }).apply { contentDescription = getString(R.string.acars_channel_label) }
+        card.addView(acarsSpinner)
+        acarsStatus = live(Brand.text(this, 14f, colors.accent))
+        button(card, R.string.acars_tune, true) { tuneAcars() }
+        acarsToggle = button(card, R.string.acars_start, tracked = false) { toggleAcars() }
+        button(card, R.string.acars_generate_wav) { generateAcarsWav() }
+        card.addView(acarsStatus)
+        acarsMessages = Brand.text(this, 12f).apply {
+            typeface = Typeface.MONOSPACE
+            setText(R.string.acars_no_messages)
+        }
+        card.addView(ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (240 * resources.displayMetrics.density).toInt())
+            isNestedScrollingEnabled = true
+            addView(acarsMessages)
+        })
+    }
+
+    private fun selectedAcarsChannel() =
+        AcarsChannels.ALL[acarsSpinner.selectedItemPosition.coerceIn(0, AcarsChannels.ALL.lastIndex)]
+
+    private fun tuneAcars() {
+        val r = rig ?: run { acarsStatus.setText(R.string.rig_connect_first); return }
+        val channel = selectedAcarsChannel()
+        operation(acarsStatus) {
+            AcarsChannels.tune(r, channel)
+            refresh(r)
+            getString(R.string.acars_tuned, mhzText(channel.hz))
+        }
+    }
+
+    private fun toggleAcars() {
+        if (acarsActive) { acarsStop = true; return }
+        if (!foreground || rxActive) return
+        val channel = selectedAcarsChannel()
+        if (!channel.decodable) { acarsStatus.setText(R.string.acars_vdl_not_decodable); return }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            pendingAudio = { toggleAcars() }
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), AUDIO_PERMISSION)
+            return
+        }
+        val token = generation
+        acarsStop = false
+        acarsActive = true
+        acarsToggle.setText(R.string.acars_stop)
+        acarsStatus.setText(R.string.acars_listening)
+        audioWorker.execute {
+            val failure = try {
+                runAcars(channel, token)
+                null
+            } catch (error: CancellationException) {
+                null
+            } catch (error: CodecException) {
+                if (error.reason == CodecException.Reason.CANCELLED) null else FtxCodecs.errorText(error).resolve(this)
+            } catch (error: IOException) {
+                errorText(error)
+            } catch (error: IllegalStateException) {
+                errorText(error)
+            } catch (error: IllegalArgumentException) {
+                errorText(error)
+            }
+            runOnUiThread {
+                if (token == generation) acarsActive = false
+                if (!isDestroyed) {
+                    acarsToggle.setText(R.string.acars_start)
+                    acarsStatus.text = failure ?: getString(R.string.acars_stopped)
+                }
+            }
+        }
+    }
+
+    /** Audio worker: reads the microphone into a rolling buffer until stopped. Receive only. */
+    private fun runAcars(channel: AcarsChannel, token: Int) {
+        val rolling = AcarsRolling(LiveAudio.SAMPLE_RATE, channel.hz)
+        val budget = WorkBudget {
+            if (acarsStop || token != generation || Thread.currentThread().isInterrupted) {
+                throw CodecException(CodecException.Reason.CANCELLED, "ACARS decoding stopped")
+            }
+        }
+        MicrophoneSource(applicationContext).use { source ->
+            source.start()
+            try {
+                val buffer = ShortArray(4800)
+                val samples = FloatArray(buffer.size)
+                while (!acarsStop && token == generation && !Thread.currentThread().isInterrupted) {
+                    val count = source.read(buffer, buffer.size)
+                    if (count <= 0) {
+                        if (acarsStop) break
+                        throw LocalizedIOException(UiText(R.string.err_mic_no_pcm, count))
+                    }
+                    for (i in 0 until count) samples[i] = buffer[i] / 32768f
+                    val found = rolling.feed(samples, count, budget)
+                    if (found.isNotEmpty()) runOnUiThread { if (!isDestroyed) showAcars(found) }
+                }
+            } finally {
+                source.stop()
+            }
+        }
+    }
+
+    private fun showAcars(entries: List<AcarsEntry>) {
+        entries.forEach { acarsLog.add(it) }
+        val time = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT).withZone(ZoneId.of("UTC"))
+        acarsMessages.text = acarsLog.snapshot().asReversed().joinToString("\n\n") { entry ->
+            getString(R.string.acars_entry, time.format(Instant.ofEpochMilli(entry.timeMillis)), mhzText(entry.hz),
+                entry.registration, entry.label, entry.flight, entry.text,
+                getString(if (entry.crcOk) R.string.acars_crc_ok else R.string.acars_crc_bad))
+        }
+    }
+
+    /** Test WAV for loopback only; it is saved or shared as a file and never sent to the radio. */
+    private fun generateAcarsWav() {
+        if (!foreground) return
+        pickingImage = true
+        try {
+            startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE); type = "audio/wav"
+                putExtra(Intent.EXTRA_TITLE, "bricohams-acars-test.wav")
+            }, SAVE_ACARS_WAV)
+        } catch (error: ActivityNotFoundException) {
+            pickingImage = false
+            acarsStatus.text = getString(R.string.acars_wav_error, errorText(error))
+        }
+    }
+
+    private fun saveAcarsWav(uri: android.net.Uri) {
+        audioWorker.execute {
+            val message = try {
+                val audio = AcarsCodec().encode("2|N12345|H1|1|RADICODEX ACARS TEST", 0.0)
+                val stream = contentResolver.openOutputStream(uri, "wt") ?: throw LocalizedIOException(UiText(R.string.err_ftx_no_write_stream))
+                stream.use { WavIo.write(audio, it) }
+                getString(R.string.acars_wav_saved)
+            } catch (error: IOException) {
+                getString(R.string.acars_wav_error, errorText(error))
+            } catch (error: SecurityException) {
+                getString(R.string.acars_wav_error, errorText(error))
+            } catch (error: CodecException) {
+                getString(R.string.acars_wav_error, FtxCodecs.errorText(error).resolve(this))
+            }
+            runOnUiThread { if (!isDestroyed) acarsStatus.text = message }
+        }
+    }
+
     private fun updateControls() {
         val ready = idle
         controls.forEach { it.isEnabled = ready }
@@ -582,6 +861,7 @@ class RigActivity : LocalizedActivity() {
         stopMemories.isEnabled = busy
         stopTx.isEnabled = txActive
         stopReceive.isEnabled = rxActive
+        updateMeterCard(r)
     }
 
     /** Runs the same catch list as the rest of the CAT code; the callers turn the exception into text. */
@@ -655,10 +935,12 @@ class RigActivity : LocalizedActivity() {
         runOnUiThread {
             if (!isDestroyed && rig === r) {
                 status.text = text
+                updateMeterCard(r)
                 announce(current.frequencyHz, current.mode?.name, spoken)
                 if (!r.supportsMemories) memStatus.setText(R.string.rig_no_memories)
             }
         }
+        readMeters(r, true)
     }
 
     private fun parseMhz(text: String): Long? {
@@ -788,7 +1070,7 @@ class RigActivity : LocalizedActivity() {
                         runOnUiThread { baud.setText(other.toString()) }
                     }
                     // Not needed by the QMX (answers with DTR low); harmless fallback for CDC radios that need DTR high.
-                    (model == RigModel.QMX || model == RigModel.QDX) && silent -> {
+                    (model == RigModel.QMX || model == RigModel.QDX || model == RigModel.THD75) && silent -> {
                         closeRadio()
                         open(device, model, rate, port, civ, dtr = true)
                     }
@@ -828,8 +1110,8 @@ class RigActivity : LocalizedActivity() {
         rig = null; transport = null
         val problems = ArrayList<Exception>()
         if (r != null) {
-            attempt<Unit>({ problems.add(it) }) { tracker?.stop() }
             if (pttHeld) attempt<Unit>({ problems.add(it) }) { releasePtt(r) }
+            attempt<Unit>({ problems.add(it) }) { tracker?.stop() }
         }
         disposeOrbit()
         try { link?.close() } catch (error: IOException) { problems.add(error) }
@@ -858,7 +1140,8 @@ class RigActivity : LocalizedActivity() {
         session = null
         txCancel = true
         rxStop = true
-        memoryCancel = true
+        acarsStop = true
+        acarsActive = false
         capture?.cancel()
         pendingAudio = null
         pickingImage = false
@@ -888,11 +1171,17 @@ class RigActivity : LocalizedActivity() {
             .setPositiveButton(R.string.action_transmit) { _, _ -> runPttTest(r) }.show()
     }
 
+    /** Right before keying: the TH-D75 keys PTT on its control band, so band A is selected unless satellite tracking already chose the uplink band. */
+    internal fun prepareTransmit(r: Rig) {
+        if (!trackingUplink) r.selectTxVfo(Vfo.A)
+    }
+
     private fun runPttTest(r: Rig) {
         val token = generation
         operation(notice, R.string.rig_ptt_running) {
             try {
                 pttHeld = true
+                prepareTransmit(r)
                 r.ptt(true)
                 var waited = 0
                 while (waited < 3000 && token == generation) { Thread.sleep(100); waited += 100 }
@@ -908,6 +1197,7 @@ class RigActivity : LocalizedActivity() {
     private fun channelLimits(model: RigModel) = when (model) {
         RigModel.IC705 -> 0..99
         RigModel.FTX1 -> 1..999
+        RigModel.THD75 -> Th75Rig.CHANNELS
         else -> 1..99
     }
 
@@ -1065,10 +1355,15 @@ class RigActivity : LocalizedActivity() {
         if (down == null || (upText.isNotEmpty() && up == null)) { satStatus.setText(R.string.rig_invalid_sat_frequency); return }
         val step = stepEdit?.text?.toString()?.trim()?.toLongOrNull()
         if (step == null || step !in 1L..5000L) { satStatus.setText(R.string.rig_invalid_step); return }
-        for (hz in listOfNotNull(down, up)) {
-            if (hz !in r.model.rangeHz) {
-                satStatus.text = getString(R.string.rig_sat_range, r.model.label, mhzText(hz),
-                    mhzText(r.model.rangeHz.first), mhzText(r.model.rangeHz.last))
+        val downVfo = r.model.satDownlinkVfo
+        for ((vfo, hz) in listOfNotNull(downVfo to down, up?.let { downVfo.other() to it })) {
+            try {
+                r.checkTunable(vfo, hz)
+            } catch (_: LocalizedArgumentException) {
+                val bandA = r.model == RigModel.THD75 && vfo == Vfo.A
+                val first = if (bandA) Th75Rig.BAND_A_RANGES.first().first else r.model.rangeHz.first
+                val last = if (bandA) Th75Rig.BAND_A_RANGES.last().last else r.model.rangeHz.last
+                satStatus.text = getString(R.string.rig_sat_range, r.model.label, mhzText(hz), mhzText(first), mhzText(last))
                 return
             }
         }
@@ -1085,7 +1380,8 @@ class RigActivity : LocalizedActivity() {
                     assets.open("satellite-6.0.1.js").bufferedReader().use { it.readText() },
                     assets.open("orbital-engine.js").bufferedReader().use { it.readText() })
                 orbit = engine
-                tracker = RigTracker(r, down, up, engine::rangeRateKmS, engine::look, step)
+                tracker = RigTracker(r, down, up, engine::rangeRateKmS, engine::look, step, pttOn = { pttHeld })
+                trackingUplink = up != null
                 trackStep(mine, token, requireNotNull(tracker), plan)
             }
         }
@@ -1112,8 +1408,10 @@ class RigActivity : LocalizedActivity() {
             val line = if (step.uplinkHz == null)
                 getString(R.string.rig_tracking_rx, mhzText(step.downlinkHz), position.azimuth, position.elevation)
             else getString(R.string.rig_tracking_rx_tx, mhzText(step.downlinkHz), mhzText(step.uplinkHz), position.azimuth, position.elevation)
-            val text = line + "\n" + getString(R.string.rig_tracking_sent, sent)
+            val note = if (rig?.model == RigModel.THD75 && step.uplinkHz != null) "\n" + getString(R.string.rig_tracking_ctcss_note) else ""
+            val text = line + "\n" + getString(R.string.rig_tracking_sent, sent) + note
             runOnUiThread { if (!isDestroyed && session === mine) satStatus.text = text }
+            rig?.let { readMeters(it, false) }
             if (token == generation && session === mine) worker.schedule({ trackStep(mine, token, current, plan) }, 1000, TimeUnit.MILLISECONDS)
         }
     }
@@ -1141,7 +1439,7 @@ class RigActivity : LocalizedActivity() {
 
     private fun disposeOrbit() {
         tracker = null
-        trackingStarted = false
+        trackingUplink = false
         orbit?.close()
         orbit = null
     }
@@ -1171,6 +1469,13 @@ class RigActivity : LocalizedActivity() {
     @Deprecated("Platform callback")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == SAVE_ACARS_WAV) {
+            pickingImage = false
+            val target = data?.data
+            if (resultCode != RESULT_OK || target == null) acarsStatus.setText(R.string.sstv_cancelled)
+            else saveAcarsWav(target)
+            return
+        }
         if (requestCode != PICK_IMAGE) return
         pickingImage = false
         val uri = data?.data
@@ -1284,6 +1589,7 @@ class RigActivity : LocalizedActivity() {
         try {
             checkUi(sink.requestFocus()) { UiText(R.string.err_audio_focus) }
             pttHeld = true
+            prepareTransmit(r)
             r.ptt(true)
             sink.start()
             val begin = System.nanoTime() / 1_000_000
@@ -1325,7 +1631,7 @@ class RigActivity : LocalizedActivity() {
     }
 
     private fun startReceive() {
-        if (!idle || !foreground) return
+        if (!idle || !foreground || acarsActive) return
         val trusdx = audioStream(rig)
         var recording: LiveAudio? = null
         if (trusdx == null) {

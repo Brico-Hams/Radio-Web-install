@@ -143,6 +143,33 @@ class QuanshengDevice extends R.BufferedTransport {
       result[1] = status;
       result[3] = this.passCount;
       le(result).setUint32(4, this.passClock || 0, true);
+    } else if (type === 0x7b00 && data.length === 12) {
+      // CAT RX v2: old firmware answers with a v1 reply (status 2, capabilities 15); v2 firmware adds the uplink.
+      this.catV2Requests = (this.catV2Requests || []).concat([Array.from(data)]);
+      result = new Uint8Array(this.catV2 ? 20 : 16);
+      result[0] = this.catV2 ? 2 : 1;
+      result.set(data.subarray(2, 4), 2);
+      const operation = data[1];
+      if (!this.catV2) {
+        result[1] = 2;
+        le(result).setUint32(4, 15, true);
+      } else {
+        le(result).setUint32(4, 31, true);
+        if (this.catPending && operation === 0 && !this.catStuck) { this.catApplied = this.catTarget; this.catPending = false; }
+        if (operation !== 0) {
+          result[1] = this.catActive ? 1 : 5;
+          if (this.catActive) {
+            this.catTarget = operation === 1 ? le(data).getUint32(4, true) : 43500000;
+            this.catRemote = operation === 1;
+            this.catUplink = operation === 1 ? le(data).getUint32(8, true) : 0;
+            this.catPending = true;
+          }
+        }
+        le(result).setUint32(8, this.catActive ? this.catApplied || 43500000 : 0, true);
+        le(result).setUint32(12, (this.catActive ? 1 : 0) | (this.catRemote ? 2 : 0) | (this.catPending ? 4 : 0) |
+          (this.catRemote && this.catUplink ? 32 : 0) | (this.txArmed ? 64 : 0) | (this.txKeyed ? 128 : 0), true);
+        le(result).setUint32(16, this.catRemote ? this.catUplink || 0 : 0, true);
+      }
     } else if (type === 0x7b00) {
       assert.equal(data.length, 8);
       assert.equal(data[0], 1);
@@ -297,6 +324,67 @@ class QuanshengDevice extends R.BufferedTransport {
     this.push(answer.subarray(5));
   }
 }
+test("CAT RX v2: uplink solo con firmware v2 y TX armado en la radio; v1 sigue sin cambios", async () => {
+  const device = new QuanshengDevice();
+  device.catNewFirmware = true;
+  device.catV2 = true;
+  device.catActive = true;
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const down = 43688800, up = 14592500;
+  // TX not armed on the radio: the uplink is never sent (uplink field 0).
+  let state = await connector.setCatReceive(down, up);
+  assert.equal(state.uplinkSent, false);
+  assert.equal(state.uplinkReason, "tx-not-armed");
+  const sets = () => device.catV2Requests.filter(request => request[1] === 1);
+  assert(sets().length > 0 && sets().every(request => request[0] === 2 && request.length === 12));
+  assert(sets().every(request => le(Uint8Array.from(request)).getUint32(8, true) === 0));
+  // Armed with key 9: the uplink travels in the same SET and is echoed back.
+  device.txArmed = true;
+  state = await connector.setCatReceive(down, up);
+  assert.equal(state.uplinkSent, true);
+  assert.equal(state.version, 2);
+  assert.equal(state.uplink10Hz, up);
+  assert.equal(state.txArmed, true);
+  assert.equal(state.halfDuplex, true);
+  assert.equal(le(Uint8Array.from(sets().at(-1))).getUint32(8, true), up);
+  assert.equal(le(Uint8Array.from(sets().at(-1))).getUint32(4, true), down);
+  // Out-of-band uplink is refused before anything is sent.
+  const count = device.commands.length;
+  assert.throws(() => connector.setCatReceive(down, 12000000), /Uplink CAT fuera de banda/);
+  assert.equal(device.commands.length, count);
+  // No change is queued while the radio is keyed (half duplex: no retune during TX).
+  device.txKeyed = true;
+  const keyed = await connector.setCatReceive(down + 100, up + 100);
+  assert.equal(keyed.uplinkSent, false);
+  assert.equal(keyed.uplinkReason, "keyed");
+  device.txKeyed = false;
+  const stopped = await connector.stopCatReceive();
+  assert.equal(stopped.remote, false);
+  assert.equal(stopped.uplink10Hz, 0);
+  await connector.disconnect();
+});
+test("CAT RX v2: firmware v1 no admite uplink y se recurre a RX v1", async () => {
+  const device = new QuanshengDevice();
+  device.catNewFirmware = true;
+  device.catActive = true;
+  device.txArmed = true;
+  const connector = new R.QuanshengConnector(device);
+  await connector.connect("UV-K5-V3");
+  const state = await connector.setCatReceive(43688800, 14592500);
+  assert.equal(state.version, 1);
+  assert.equal(state.uplinkSent, false);
+  assert.equal(state.uplinkReason, "v1-firmware");
+  assert.equal(state.appliedFrequency10Hz, 43688800);
+  assert.equal(connector.catUplinkSupported, false);
+  const v1Sets = device.commands.filter(command => command.type === 0x7b00 && command.data.length === 8 && command.data[1] === 1);
+  assert(v1Sets.length > 0 && v1Sets.every(command => command.data[0] === 1));
+  // The probe is not repeated on later steps.
+  const probes = device.catV2Requests.length;
+  await connector.setCatReceive(43688900, 14592400);
+  assert.equal(device.catV2Requests.length, probes);
+  await connector.disconnect();
+});
 test("CAT RX Bricohams consulta capacidades, confirma aplicacion y restaura sin escribir memoria", async () => {
   const device = new QuanshengDevice();
   const connector = new R.QuanshengConnector(device);

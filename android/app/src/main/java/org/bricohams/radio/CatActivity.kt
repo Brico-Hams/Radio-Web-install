@@ -74,6 +74,7 @@ class CatActivity : LocalizedActivity() {
     @Volatile private var leaseFuture: ScheduledFuture<*>? = null
     private val controls = ArrayList<Button>()
     private var selectedPlan: SatellitePlan? = null
+    private var uplinkField: EditText? = null
     @Volatile private var trackingRequested = false
     @Volatile private var tracker: SatelliteTracking? = null
     private var orbit: SatelliteOrbit? = null
@@ -98,7 +99,10 @@ class CatActivity : LocalizedActivity() {
                 return
             }
             awaitingPermission = false
-            if (manager.hasPermission(device)) connect(device) else status.setText(R.string.cat_permission_denied)
+            if (manager.hasPermission(device)) connect(device) else {
+                CatLog.record(this@CatActivity, "CAT USB permission denied for ${CatLink.usbId(device.vendorId, device.productId)}")
+                status.setText(R.string.cat_permission_denied)
+            }
         }
     }
     private val reattachCheck = object : Runnable {
@@ -147,12 +151,14 @@ class CatActivity : LocalizedActivity() {
             addView(Brand.text(this@CatActivity, 15f).apply { setText(R.string.cat_sat_steps) })
         })
         content.addView(TextView(this).apply { setText(R.string.cat_help) })
+        content.addView(BrandUi.sectionHeader(this, getString(R.string.cat_section_connect), getString(R.string.cat_help_connect), "ayuda-quansheng"))
         fun button(label: Int, action: () -> Unit) {
             val button = Button(this).apply { setText(label); setOnClickListener { action() } }
             controls.add(button); content.addView(button)
         }
         button(R.string.cat_choose_device) { chooseDevice() }
         button(R.string.cat_query) { operation { requireNotNull(protocol) { getString(R.string.cat_connect_first) }.query() } }
+        content.addView(BrandUi.sectionHeader(this, getString(R.string.cat_section_tune), getString(R.string.cat_help_tune), "ayuda-quansheng"))
         content.addView(TextView(this).apply { setText(R.string.cat_frequency_label) })
         val frequency = EditText(this).apply {
             id = R.id.cat_frequency
@@ -186,6 +192,7 @@ class CatActivity : LocalizedActivity() {
             }
         }
         button(R.string.usb_disconnect) { operation { closeRadio(); null } }
+        content.addView(BrandUi.sectionHeader(this, getString(R.string.cat_section_sstv), getString(R.string.cat_help_sstv), "ayuda-quansheng"))
         content.addView(TextView(this).apply { setText(R.string.cat_sstv_help) })
         callsign = TextView(this).apply {
             id = R.id.cat_callsign
@@ -221,6 +228,12 @@ class CatActivity : LocalizedActivity() {
                         java.time.Instant.ofEpochMilli(plan.pass.los.time).toString(),
                         plan.downlinkHz.toString())
                 })
+                content.addView(TextView(this).apply { setText(R.string.cat_half_duplex_note) })
+                uplinkField = EditText(this).apply {
+                    hint = getString(R.string.cat_uplink_hint)
+                    inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+                }
+                content.addView(uplinkField)
                 button(R.string.cat_start_tracking) { startTracking() }
                 content.addView(Button(this).apply {
                     setText(R.string.pass_open_chart)
@@ -253,6 +266,16 @@ class CatActivity : LocalizedActivity() {
         val devices = manager.deviceList.values.filter { SerialRadio.description(it) != null }.sortedBy { it.deviceName }
         if (devices.isEmpty()) {
             status.setText(R.string.cat_no_devices)
+            return
+        }
+        // Profile first: the device that passed the profile test (or the BricoHams CDC radio) is used without asking.
+        val stored = ProfileStore.usbDevice(this)
+        val match = stored?.let { id ->
+            UsbIdentity.find(id, devices.map { UsbIdentity.of(it, 0) })?.let { found -> devices.firstOrNull { UsbIdentity.of(it, 0) == found } }
+        } ?: devices.singleOrNull { CatLink.isBricoHamsCdc(it.vendorId, it.productId) }
+        if (match != null) {
+            reattachWatch = false
+            requestUsbPermission(match)
             return
         }
         AlertDialog.Builder(this).setTitle(R.string.usb_select_device)
@@ -294,14 +317,16 @@ class CatActivity : LocalizedActivity() {
         val token = generation
         lastRadio = device.vendorId to device.productId
         reattachWatch = false
+        val kind = if (CdcRadio.compatible(device)) CatTransport.USB_CDC else CatTransport.USB_SERIAL
         operation {
-            closeRadio()
-            val port = SerialRadio.open(manager, device, SerialRadio.quanshengSettings(device))
-            transport = port
-            val cat = CatProtocol(port, allowTune = { foreground && token == generation })
-            protocol = cat
-            cat.identify()
-            cat.query()
+            try { closeRadio() } catch (stale: IOException) {
+                // A dead previous link must not block a new connection; the failure is only logged.
+                CatLog.record(this, "CAT previous link close: ${stale.message}", stale)
+            }
+            CatLink.connect(kind, device.vendorId, device.productId,
+                open = { SerialRadio.open(manager, device, SerialRadio.quanshengSettings(device)) },
+                protocol = { CatProtocol(it, allowTune = { foreground && token == generation }) },
+                publish = { port, cat -> transport = port; protocol = cat })
         }
     }
     private fun chooseImage() {
@@ -537,6 +562,7 @@ class CatActivity : LocalizedActivity() {
         }
     }
     private fun fail(error: Exception): String {
+        CatLog.record(this, "CAT failed: ${errorText(error)}", error)
         cancelLease()
         val port = transport
         protocol = null; transport = null
@@ -653,7 +679,15 @@ class CatActivity : LocalizedActivity() {
     }
     private fun startTracking() {
         if (busy || trackingRequested || transmitting || !foreground) return
-        val plan = selectedPlan ?: return
+        val chosen = selectedPlan ?: return
+        val uplinkText = uplinkField?.text?.toString()?.trim().orEmpty().replace(',', '.')
+        val uplinkHz = if (uplinkText.isEmpty()) 0L else uplinkText.toBigDecimalOrNull()?.movePointRight(6)?.stripTrailingZeros()
+            ?.takeIf { it.scale() <= 0 }?.toLong() ?: -1L
+        if (uplinkHz < 0 || (uplinkHz > 0 && !CatProtocol.inUplinkBand(uplinkHz / 10))) {
+            status.setText(R.string.err_uplink_band)
+            return
+        }
+        val plan = chosen.copy(uplinkHz = uplinkHz)
         cancelLease()
         val token = generation
         trackingRequested = true
@@ -667,7 +701,8 @@ class CatActivity : LocalizedActivity() {
                     assets.open("satellite-6.0.1.js").bufferedReader().use { it.readText() },
                     assets.open("orbital-engine.js").bufferedReader().use { it.readText() })
                 orbit = engine
-                tracker = SatelliteTracking({ engine.target(plan, it) }, { frequency, permit -> cat.tune(frequency, permit) })
+                tracker = SatelliteTracking({ engine.target(plan, it) }, { frequency, permit -> cat.tune(frequency, permit) },
+                    tuneWithUplink = { frequency, uplink, permit -> cat.tune(frequency, permit, uplink10Hz = uplink) })
                 trackingStep(token)
             } catch (error: IllegalArgumentException) { trackingError(token, error) }
             catch (error: IllegalStateException) { trackingError(token, error) }
@@ -681,8 +716,21 @@ class CatActivity : LocalizedActivity() {
             val next = current.step()
             if (next != null && token == generation && trackingRequested) {
                 runOnUiThread {
-                    if (!isDestroyed && token == generation && trackingRequested)
-                        status.text = getString(R.string.cat_tracking_status, next.frequency10Hz * 10, next.look.azimuth, next.look.elevation)
+                    if (!isDestroyed && token == generation && trackingRequested) {
+                        val base = getString(R.string.cat_tracking_status, next.frequency10Hz * 10, next.look.azimuth, next.look.elevation)
+                        val state = current.lastState
+                        status.text = if (next.uplink10Hz > 0 && state != null) {
+                            val reason = when (state.uplinkReason) {
+                                UplinkReason.SENT -> getString(R.string.cat_uplink_sent)
+                                UplinkReason.V1_FIRMWARE -> getString(R.string.cat_uplink_v1)
+                                UplinkReason.TX_NOT_ARMED -> getString(R.string.cat_uplink_not_armed)
+                                UplinkReason.KEYED -> getString(R.string.cat_uplink_keyed)
+                                UplinkReason.NONE -> ""
+                            }
+                            base + "\n" + getString(R.string.cat_uplink_status, next.uplink10Hz * 10) + " " + reason + "\n" +
+                                getString(R.string.cat_half_duplex_note)
+                        } else base
+                    }
                 }
                 worker.schedule({ trackingStep(token) }, 750, TimeUnit.MILLISECONDS)
             }

@@ -96,6 +96,17 @@ Builds:
       - examples/firmware
       - precompiled
 
+  - versionName: 1.5.0
+    versionCode: 22
+    commit: android-v1.5.0
+    subdir: android/app
+    gradle:
+      - fdroid
+    rm:
+      - android/Bricohams-Android
+      - examples/firmware
+      - precompiled
+
 # TODO: AllowedAPKSigningKeys is required for reproducible builds with the
 # developer signature. Get the SHA-256 of the release certificate with
 #   apksigner verify --print-certs app-github-release.apk
@@ -122,5 +133,5 @@ MaintainerNotes: |-
 AutoUpdateMode: Version
 UpdateCheckMode: Tags ^android-v[0-9]+[.][0-9]+[.][0-9]+(-beta[0-9]*)?$
 UpdateCheckData: 'android/app/build.gradle.kts|versionCode\s*=\s*(\d+)|.|versionName\s*=\s*"([^"]+)"'
-CurrentVersion: 1.4.0
-CurrentVersionCode: 21
+CurrentVersion: 1.5.0
+CurrentVersionCode: 22

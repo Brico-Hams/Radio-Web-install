@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="rig_section_acars">ACARS (VHF aviation, réception seule)</string>
+    <string name="acars_help">Décode l\'ACARS (ARINC 618, AM-MSK 2400 bit/s) à partir de l\'audio de la radio. Réception seule : émettre sur les fréquences aéronautiques est illégal pour les stations amateurs et l\'application ne déclenche jamais le PTT pour l\'ACARS. Le WAV de test sert uniquement aux essais en boucle.</string>
+    <string name="acars_channel_label">Canal ACARS</string>
+    <string name="acars_region_europe">Europe</string>
+    <string name="acars_region_worldwide">Monde</string>
+    <string name="acars_region_usa">États-Unis</string>
+    <string name="acars_region_vdl">VDL2 — non décodable en POA</string>
+    <string name="acars_channel_item">%1$s MHz — %2$s</string>
+    <string name="acars_tune">Accorder RX</string>
+    <string name="acars_start">Démarrer le décodage</string>
+    <string name="acars_stop">Arrêter le décodage</string>
+    <string name="acars_generate_wav">Générer un WAV de test</string>
+    <string name="acars_listening">Écoute ACARS…</string>
+    <string name="acars_stopped">Décodage arrêté.</string>
+    <string name="acars_tuned">Accordé sur %1$s MHz en AM.</string>
+    <string name="acars_no_messages">Aucun message pour l\'instant.</string>
+    <string name="acars_entry">%1$s UTC  %2$s MHz  %3$s  %4$s  %5$s  [%7$s]\n%6$s</string>
+    <string name="acars_crc_ok">CRC correct</string>
+    <string name="acars_crc_bad">CRC erroné</string>
+    <string name="acars_vdl_not_decodable">Les canaux VDL2 utilisent le D8PSK et ne peuvent pas être décodés comme ACARS POA.</string>
+    <string name="acars_wav_saved">WAV de test enregistré.</string>
+    <string name="acars_wav_error">Impossible d\'enregistrer le WAV : %1$s</string>
+    <string name="err_acars_no_airband">Cette radio ne reçoit pas la bande aéronautique (118–137 MHz AM).</string>
+    <string name="err_acars_band">%1$s MHz est hors de la bande aéronautique 118–137 MHz.</string>
+</resources>
