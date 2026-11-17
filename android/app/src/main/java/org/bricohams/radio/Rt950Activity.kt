@@ -136,7 +136,8 @@ class Rt950Activity : LocalizedActivity() {
                 insets
             }
         }
-        body.addView(Brand.heading(this, getString(R.string.rt950_title)))
+        body.addView(BrandUi.sectionHeader(this, getString(R.string.rt950_title), getString(R.string.screen_help_rt950), large = true))
+        BrandUi.firstRunTip(this, "screen_rt950", getString(R.string.screen_help_rt950))?.let { body.addView(it) }
         status = live(Brand.text(this, 15f)).apply { setText(R.string.rt950_disconnected) }
         body.addView(Brand.card(this).apply { addView(status) })
         notice = live(Brand.text(this, 14f, colors.accent))
@@ -167,10 +168,15 @@ class Rt950Activity : LocalizedActivity() {
 
     private fun section(body: LinearLayout, title: Int, build: (LinearLayout) -> Unit) {
         val card = Brand.card(this)
-        card.addView(Brand.text(this, 18f, colors.accent, true).apply {
-            setText(title)
-            if (Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
-        })
+        val help = when (title) {
+            R.string.rt950_section_connect -> R.string.rt950_help_connect
+            R.string.rt950_section_backup -> R.string.rt950_help_backup
+            R.string.rt950_section_aprs -> R.string.rt950_help_aprs
+            R.string.rt950_section_messages -> R.string.rt950_help_messages
+            R.string.rt950_section_sat -> R.string.rt950_help_sat
+            else -> R.string.rt950_help_zone
+        }
+        card.addView(BrandUi.sectionHeader(this, getString(title), getString(help)))
         build(card)
         body.addView(card)
     }

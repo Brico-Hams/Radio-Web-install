@@ -218,6 +218,7 @@
       this.family = "quansheng";
       this.transport.quanshengUSBPadding = true;
       this.catSequence = 0;
+      this.catUplinkSupported = undefined;
       this.flashReadSupport = null;
       this.flashResume = null;
       this.flashChunkTimeoutMs = 4000;
@@ -342,25 +343,28 @@
         this.busy = false;
       }
     }
-    async catExchange(operation, frequency10Hz = 0, retries = 2) {
+    async catExchange(operation, frequency10Hz = 0, uplink10Hz = null, retries = 2) {
       for (let attempt = 0; ; attempt++) {
         try {
-          return await this.catExchangeOnce(operation, frequency10Hz);
+          return await this.catExchangeOnce(operation, frequency10Hz, uplink10Hz);
         } catch (error) {
           // Only lost/garbled replies are retried: CAT SET is idempotent for the same target.
           if (error.code !== "CAT_TIMEOUT" || attempt >= retries || this.transport.error) throw error;
         }
       }
     }
-    async catFrame(requestId, replyId, operation, value = 0) {
+    async catFrame(requestId, replyId, operation, value = 0, uplink = null) {
       // Drop stale bytes so a late reply or a half frame cannot desynchronize the 0xABCD framing.
       if (!this.transport.pending) this.transport.clear();
       const sequence = this.catSequence = (this.catSequence + 1) & 0xffff;
-      const request = new Uint8Array(8);
-      request[0] = 1;
+      // CAT RX v2 (uplink !== null): 12-byte request [2, op, seq, downlink, uplink]; v1 keeps its 8 bytes.
+      const v2 = uplink !== null;
+      const request = new Uint8Array(v2 ? 12 : 8);
+      request[0] = v2 ? 2 : 1;
       request[1] = operation;
       R.view(request).setUint16(2, sequence, true);
       R.view(request).setUint32(4, value, true);
+      if (v2) R.view(request).setUint32(8, uplink, true);
       await this.transport.write(packet(requestId, request));
       const deadline = Date.now() + 1000;
       let response = null;
@@ -374,8 +378,11 @@
           if (stale) throw new Error("Respuesta CAT Bricohams invalida o fuera de secuencia.");
           throw this.catError("CAT_TIMEOUT", "La radio no responde a CAT (sin respuesta en 1 s).");
         }
-        if (candidate.length === 16 && R.view(candidate).getUint16(2, true) !== sequence) { stale = true; continue; }
-        R.assert(candidate.length === 16 && candidate[0] === 1, "Respuesta CAT Bricohams invalida o fuera de secuencia.");
+        if ((candidate.length === 16 || candidate.length === 20) && R.view(candidate).getUint16(2, true) !== sequence) { stale = true; continue; }
+        // Firmware without v2 answers a v2 request with a v1 reply (16 bytes, version 1): the caller falls back.
+        const accepted = v2 ? (candidate.length === 20 && candidate[0] === 2) || (candidate.length === 16 && candidate[0] === 1) :
+          candidate.length === 16 && candidate[0] === 1;
+        R.assert(accepted, "Respuesta CAT Bricohams invalida o fuera de secuencia.");
         response = candidate;
       }
       return response;
@@ -388,54 +395,97 @@
       error.catInfo = info;
       return error;
     }
-    async catExchangeOnce(operation, frequency10Hz = 0) {
-      const response = await this.catFrame(0x7b00, 0x7b01, operation, frequency10Hz);
+    async catExchangeOnce(operation, frequency10Hz = 0, uplink10Hz = null) {
+      const response = await this.catFrame(0x7b00, 0x7b01, operation, frequency10Hz, uplink10Hz);
+      if (uplink10Hz !== null && response.length === 16) {
+        // Old firmware (status 2/3 with a v1 reply): remember it and let the caller fall back to v1.
+        this.catUplinkSupported = false;
+        throw this.catError("CAT_V2_UNSUPPORTED", "El firmware no admite CAT RX v2 (uplink); se usa CAT RX v1 solo recepcion.");
+      }
       const statuses = ["OK", "En cola", "Longitud/campos invalidos", "Version no admitida",
-        "Operacion no admitida", CAT_NOT_ARMED_TEXT, "Frecuencia fuera de banda RX"];
+        "Operacion no admitida", CAT_NOT_ARMED_TEXT, "Frecuencia fuera de banda RX o uplink fuera de banda TX"];
       const status = response[1];
+      const v2 = response.length === 20;
       const capabilities = R.view(response).getUint32(4, true);
       const flags = R.view(response).getUint32(12, true);
-      const outsideSat = capabilities === 15;
+      const outsideSat = capabilities === 15 || capabilities === 31;
       const info = { outsideSat, remoteEnabled: outsideSat && Boolean(flags & 8), holdoff: outsideSat && Boolean(flags & 16) };
       if (status === 5) throw this.catNotArmedError(info);
       R.assert(status === (operation === 0 ? 0 : 1),
         `CAT rechazado: ${statuses[status] || `estado desconocido ${status}`}.`);
       const appliedFrequency10Hz = R.view(response).getUint32(8, true);
-      R.assert((capabilities === 7 && flags <= 7) || (capabilities === 15 && flags <= 31),
-        "Capacidades/estado CAT v1 no reconocidos.");
+      R.assert(v2 ? capabilities === 31 && flags <= 255 :
+        (capabilities === 7 && flags <= 7) || (capabilities === 15 && flags <= 31),
+      "Capacidades/estado CAT no reconocidos.");
       const active = Boolean(flags & 1);
       R.assert(active ? ((appliedFrequency10Hz >= 13600000 && appliedFrequency10Hz <= 17400000) ||
         (appliedFrequency10Hz >= 40000000 && appliedFrequency10Hz <= 47000000)) :
         appliedFrequency10Hz === 0 && (flags & 7) === 0, "Frecuencia/estado CAT incoherentes.");
-      return { version: 1, capabilities, active, remote: Boolean(flags & 2),
+      const state = { version: v2 ? 2 : 1, capabilities, active, remote: Boolean(flags & 2),
         pending: Boolean(flags & 4), appliedFrequency10Hz, leaseMilliseconds: 3000, ...info };
+      if (v2) {
+        const uplink = R.view(response).getUint32(16, true);
+        R.assert(uplink === 0 || ((uplink >= 13600000 && uplink <= 17400000) || (uplink >= 40000000 && uplink <= 47000000)),
+          "Uplink CAT incoherente.");
+        this.catUplinkSupported = true;
+        Object.assign(state, { uplinkSupported: true, uplinkActive: Boolean(flags & 32), uplink10Hz: uplink,
+          txArmed: Boolean(flags & 64), keyed: Boolean(flags & 128), halfDuplex: true });
+      }
+      return state;
     }
     getCatStatus() {
       return this.catRun("Consultar CAT RX Bricohams Beta", () => this.catExchange(0));
     }
-    setCatReceive(frequency10Hz) {
+    // v2 probe: a v2 query. Result is cached; an old firmware answers with a v1 reply and v1 stays in use.
+    async catProbeUplink() {
+      if (this.catUplinkSupported !== undefined) return this.catUplinkSupported;
+      try {
+        return Boolean((await this.catExchange(0, 0, 0)).uplinkSupported);
+      } catch (error) {
+        if (error.code === "CAT_V2_UNSUPPORTED") return false;
+        throw error;
+      }
+    }
+    // uplink10Hz (optional) is the Doppler-corrected uplink. It is sent only with v2 firmware and only while the
+    // radio itself reports TX armed (key 9); otherwise the call is RX-only v1/v2 and result.uplinkSent says why.
+    setCatReceive(frequency10Hz, uplink10Hz = 0) {
       R.assert(Number.isInteger(frequency10Hz) &&
         ((frequency10Hz >= 13600000 && frequency10Hz <= 17400000) ||
         (frequency10Hz >= 40000000 && frequency10Hz <= 47000000)), "Frecuencia CAT RX fuera de banda o resolucion de 10 Hz.");
-      return this.catRun("Sintonizar CAT RX Bricohams Beta", () => this.catChange(1, frequency10Hz));
+      R.assert(uplink10Hz === 0 || (Number.isInteger(uplink10Hz) &&
+        ((uplink10Hz >= 13600000 && uplink10Hz <= 17400000) || (uplink10Hz >= 40000000 && uplink10Hz <= 47000000))),
+      "Uplink CAT fuera de banda TX o resolucion de 10 Hz; no se transmite.");
+      return this.catRun("Sintonizar CAT RX Bricohams Beta", () => this.catChange(1, frequency10Hz, uplink10Hz));
     }
     stopCatReceive() {
       return this.catRun("Detener CAT RX Bricohams Beta", () => this.catChange(2, 0));
     }
-    async catChange(operation, frequency10Hz) {
-      const initial = await this.catExchange(0);
+    async catChange(operation, frequency10Hz, uplink10Hz = 0) {
+      let initial = await this.catExchange(0);
       if (operation === 2 && !initial.active) return initial;
       if (!initial.active) throw this.catNotArmedError(initial);
-      await this.catExchange(operation, frequency10Hz);
+      // v2 is used for set/stop once detected (stop with v2 also drops the uplink); a v1-only radio never sees it.
+      const useV2 = initial.outsideSat && (this.catUplinkSupported === true || (uplink10Hz > 0 && await this.catProbeUplink()));
+      let txArmed = false;
+      let sent = 0;
+      if (useV2) {
+        initial = await this.catExchange(0, 0, 0);
+        txArmed = initial.txArmed;
+        sent = operation === 1 && txArmed && !initial.keyed ? uplink10Hz : 0;
+      }
+      // While keyed the radio defers the retune; do not queue changes from here (no frequency change during TX).
+      if (useV2 && initial.keyed && operation === 1) return { ...initial, uplinkSent: false, uplinkReason: "keyed" };
+      await (useV2 ? this.catExchange(operation, frequency10Hz, sent) : this.catExchange(operation, frequency10Hz));
       for (let attempt = 0; attempt < 12; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 75));
-        const state = await this.catExchange(0);
+        const state = await (useV2 ? this.catExchange(0, 0, 0) : this.catExchange(0));
         if (!state.active) throw this.catNotArmedError(state);
         if (state.pending) continue;
         // The echoed frequency is the only confirmation: a queued SET is not a tuned receiver.
         if (!(operation === 1 ? state.remote && state.appliedFrequency10Hz === frequency10Hz : !state.remote))
           throw this.catError("CAT_UNCONFIRMED", "El receptor no confirma el cambio CAT solicitado; se reintentara.");
-        return state;
+        const reason = !uplink10Hz ? "none" : !useV2 ? "v1-firmware" : !txArmed ? "tx-not-armed" : "sent";
+        return { ...state, uplinkSent: Boolean(sent) && operation === 1, uplinkReason: reason };
       }
       throw this.catError("CAT_PENDING", "El cambio CAT sigue pendiente; no se considera aplicado.");
     }

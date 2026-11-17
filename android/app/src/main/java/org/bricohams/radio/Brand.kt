@@ -48,6 +48,7 @@ object Brand {
         val focus = context.getColor(R.color.brand_focus)
         val ripple = context.getColor(R.color.brand_ripple)
         val positive = context.getColor(R.color.brand_positive)
+        val error = context.getColor(R.color.brand_error)
     }
 
     /** Original logo PNG, untinted; in dark mode it sits on a discreet white rounded plate. */
@@ -89,8 +90,7 @@ object Brand {
         setPadding(dp(context, 16), dp(context, 12), dp(context, 16), dp(context, 12))
         setTextColor(ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
             intArrayOf(colors.muted, if (primary) colors.onAccent else colors.accent)))
-        background = RippleDrawable(ColorStateList.valueOf(colors.ripple),
-            rounded(context, if (primary) colors.orange else colors.surfaceHigh, 16), null)
+        background = BrandUi.interactive(context, if (primary) colors.orange else colors.surfaceHigh, 16)
         stateListAnimator = null
         setOnClickListener { action() }
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
@@ -104,8 +104,7 @@ object Brand {
         minHeight = dp(context, 48)
         setPadding(dp(context, 8), dp(context, 10), dp(context, 8), dp(context, 10))
         setTextColor(if (active) colors.onAccent else colors.text)
-        background = RippleDrawable(ColorStateList.valueOf(colors.ripple),
-            rounded(context, if (active) colors.orange else colors.surfaceHigh, 16), null)
+        background = BrandUi.interactive(context, if (active) colors.orange else colors.surfaceHigh, 16)
         isSelected = active
         isClickable = true; isFocusable = true
         setOnClickListener { action() }

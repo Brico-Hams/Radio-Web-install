@@ -266,6 +266,9 @@ test("CAT RX documenta protocolo experimental, seguimiento web y limites de hard
       "CatPassTracker", "2000 ms", "750 ms", "cliente USB experimental con seguimiento orbital SGP4"]) {
       assert(text.includes(value), `${name}: ${value}`);
     }
+    for (const value of ["CAT RX v2", "semiduplex", "145.925 MHz", "436.888 MHz"]) {
+      assert(text.includes(value), `${name}: ${value}`);
+    }
   }
 });
 test("los presets BHSP distinguen archivos locales de persistencia EEPROM", () => {

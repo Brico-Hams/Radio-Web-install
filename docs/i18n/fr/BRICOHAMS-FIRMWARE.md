@@ -617,7 +617,7 @@ la fréquence appliquée, l'absence de changement TX/VFO et la récupération ap
 Ils ne certifient ni la réception, ni l'audio, ni la restauration physique. Le mode
 est en réception, sauf lorsque le PTT CAT est armé avec 9 (voir CAT TX) ; le reste du
 firmware conserve le TX upstream. Il ne s'agit pas d'un firmware globalement bloqué
-pour TX ni d'un appareil full-duplex.
+pour TX ni d'un appareil à duplex intégral ; le fonctionnement inter-bandes est semi-duplex.
 
 #### CAT RX Bricohams v1 implémenté
 
@@ -720,9 +720,23 @@ du mode SAT RX ou un nouvel appui sur 9 la désarme.
    l'imprime sur l'image Robot36.
 
 L'émission utilise la fréquence TX du VFO d'entrée (avec son décalage), sans
-correction Doppler de la liaison montante. La LED rouge s'allume comme lors d'une
+correction Doppler de la liaison montante (CAT TX v1 n'en calcule pas). La LED rouge s'allume comme lors d'une
 PTT normale et l'écran affiche `CAT TX ON AIR` et la fréquence TX. Pendant l'émission,
 les commandes CAT RX sont acceptées, mais appliquées au retour en RX.
+Semi-duplex avec Doppler sur les deux liaisons : CAT RX v2 (même commande `0x7B00`,
+requête de 12 octets en version 2 avec la liaison montante par pas de 10 Hz, réponse de 20
+octets, capacités 31, drapeaux 32 montante valide, 64 TX armé et 128 en émission) fait
+recevoir à la radio la descendante corrigée et, à l'appui sur PTT (locale ou CAT TX v1)
+avec TX armé par 9 et une montante valide (3000 ms), émettre sur la montante corrigée puis
+revenir à la descendante au relâchement. C'est du semi-duplex (half duplex) : jamais de
+réception et d'émission simultanées, donc la descendante n'est pas audible pendant
+l'émission. Si le bail de la montante expire, la PTT est refusée (jamais d'émission sur
+une fréquence périmée ou nominale) ; la montante doit être dans la bande TX autorisée, et
+le verrou TX, la limite de 120 s et l'abandon par toute touche s'appliquent toujours.
+Exemple : montante 145.925 MHz et descendante 436.888 MHz. Radios avec Doppler sur les
+deux liaisons : Icom IC-705, Yaesu FT-817/818/857/897 et FTX-1 (application Android, split
+sur le VFO B, jamais modifié pendant l'émission) et Quansheng UV-K5 avec ce firmware. Un
+firmware sans v2 répond en version 1 et l'application reste en RX seul.
 
 Contrat : commande privée `0x7B02`, réponse `0x7B03`, little-endian.
 

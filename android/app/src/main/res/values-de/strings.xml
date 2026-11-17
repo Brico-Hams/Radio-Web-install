@@ -50,6 +50,16 @@
     <string name="cat_stop_tracking">Verfolgung stoppen und USB trennen</string>
     <string name="cat_tracking_start">Aktueller Überflug und CAT-Status werden geprüft. Nur vorübergehender Empfang, kein TX.</string>
     <string name="cat_tracking_status">Doppler RX bestätigt %1$d Hz. Azimut %2$.1f, Elevation %3$.1f Grad. SGP4-Berechnung, keine HF-Messung. Stoppen trennt USB.</string>
+    <string name="cat_half_duplex_note">Halbduplex: Beim Senden hörst du den Downlink nicht. Gesendet wird nur, wenn du TX am Gerät scharf schaltest (Taste 9).</string>
+    <string name="cat_uplink_hint">Uplink MHz (optional, z. B. 145.925)</string>
+    <string name="cat_uplink_status">Doppler-korrigierter Uplink %1$d Hz.</string>
+    <string name="cat_uplink_sent">Uplink an das Gerät gesendet (TX scharf).</string>
+    <string name="cat_uplink_v1">Firmware ohne CAT RX v2: nur RX, kein Uplink.</string>
+    <string name="cat_uplink_not_armed">TX am Gerät nicht scharf: nur RX.</string>
+    <string name="cat_uplink_keyed">Sendet: Frequenzen bleiben bis zum Loslassen von PTT fest.</string>
+    <string name="err_uplink_band">Uplink außerhalb des erlaubten TX-Bands (136-174 oder 400-470 MHz, 10-Hz-Schritte). Kein Senden.</string>
+    <string name="err_cat_uplink_unsupported">Diese Firmware unterstützt CAT RX v2 (Uplink) nicht.</string>
+    <string name="err_cat_uplink_band">Uplink außerhalb des Funkgerätebereichs (136-174 oder 400-470 MHz); das Gerät wendet zusätzlich seine TX-Sperren an.</string>
     <string name="sstv_intro">RadiCodex - SSTV aus WAV (Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</string>
     <string name="sstv_limits">Nur WAV PCM mono 16 Bit, 8000-48000 Hz, bis 200 s und 24 MiB. Erfordert einen vollständigen VIS-Header mit Parität eines unterstützten Modus; toleriert +-100 Hz Tonversatz, Taktdrift und verpasste Syncs (verlorene Zeilen werden schwarz oder geschätzt dargestellt). Bei Teilempfang werden die dekodierten Zeilen geliefert. Nutzt weder Mikrofon, USB-Audio noch PTT. Diesen Bildschirm geöffnet lassen und das PNG vor dem Verlassen oder Drehen exportieren.</string>
     <string name="sstv_open">SSTV-WAV dekodieren</string>
@@ -248,6 +258,10 @@
     <string name="cat_robot36_sent">%3$s-Bild mit %1$s gesendet (%2$.1f s). PTT freigegeben und vom Funkgerät bestätigt; keine HF-Messung.</string>
     <string name="cat_state">CAT v1 erkannt. Aktiv=%1$s, ferngesteuert=%2$s, ausstehend=%3$s, RX=%4$d Hz. Firmware-Bestätigung, keine HF-Messung.</string>
     <string name="cat_failed_closed">CAT gestoppt und USB geschlossen: %1$s. Die Firmware-Lease stellt nominales RX wieder her, wenn das Funkgerät noch SAT RX ausführt.</string>
+    <string name="cat_connect_failed">CAT-Verbindung fehlgeschlagen (%1$s, USB %2$s) im Schritt „%3$s“: %4$s</string>
+    <string name="cat_step_open">USB öffnen</string>
+    <string name="cat_step_identify">Hello mit dem Funkgerät</string>
+    <string name="cat_step_status">CAT-Status lesen</string>
     <string name="cat_failed_release">CAT-Fehler: %1$s. Fehler beim Freigeben von USB: %2$s. Funkgerät prüfen.</string>
     <string name="cat_restore_unconfirmed">CAT-Wiederherstellung/-Schließen nicht bestätigt: %1$s</string>
     <string name="cat_connect_before_tracking">USB vor dem Start der Verfolgung verbinden.</string>
@@ -853,6 +867,15 @@
     <string name="rig_vfo_a">VFO A %1$s MHz %2$s</string>
     <string name="rig_vfo_b">VFO B %1$s MHz</string>
     <string name="rig_smeter">S-Meter (MAIN) %1$d/255 %2$s</string>
+    <string name="err_rig_value">Der Wert %1$d liegt außerhalb des Bereichs.</string>
+    <string name="rig_section_meter">Anzeige und Senden</string>
+    <string name="rig_signal_label">Empfangssignal (S)</string>
+    <string name="rig_signal_value">S-Meter %1$d/255</string>
+    <string name="rig_tx_rx">Status: Empfang</string>
+    <string name="rig_tx_tx">Status: Senden</string>
+    <string name="rig_power_label">Ausgangsleistung</string>
+    <string name="rig_power_value">Ausgangsleistung: %1$d %%</string>
+    <string name="rig_data_mode">DATA-Modus ein</string>
     <string name="rig_speak">Per Sprache ansagen</string>
     <string name="rig_speak_mhz">Megahertz</string>
     <string name="rig_speak_signal">Signal</string>

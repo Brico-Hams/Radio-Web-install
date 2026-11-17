@@ -50,6 +50,16 @@
     <string name="cat_stop_tracking">Stop tracking and disconnect USB</string>
     <string name="cat_tracking_start">Checking current pass and CAT state. Temporary reception only, no TX.</string>
     <string name="cat_tracking_status">Doppler RX confirmed %1$d Hz. Azimuth %2$.1f, elevation %3$.1f degrees. SGP4 calculation, not an RF measurement. Stopping disconnects USB.</string>
+    <string name="cat_half_duplex_note">Half duplex: you will not hear the downlink while transmitting. It only transmits if you arm TX on the radio (key 9).</string>
+    <string name="cat_uplink_hint">Uplink MHz (optional, e.g. 145.925)</string>
+    <string name="cat_uplink_status">Doppler-corrected uplink %1$d Hz.</string>
+    <string name="cat_uplink_sent">Uplink sent to the radio (TX armed).</string>
+    <string name="cat_uplink_v1">Firmware without CAT RX v2: RX only, no uplink.</string>
+    <string name="cat_uplink_not_armed">TX not armed on the radio: RX only.</string>
+    <string name="cat_uplink_keyed">Transmitting: frequencies held until PTT is released.</string>
+    <string name="err_uplink_band">Uplink outside the allowed TX band (136-174 or 400-470 MHz, 10 Hz steps). Not transmitting.</string>
+    <string name="err_cat_uplink_unsupported">This firmware does not support CAT RX v2 (uplink).</string>
+    <string name="err_cat_uplink_band">Uplink outside the radio range (136-174 or 400-470 MHz); the radio also applies its own TX locks.</string>
     <string name="sstv_intro">RadiCodex - SSTV from WAV (Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</string>
     <string name="sstv_limits">Only mono 16-bit PCM WAV, 8000-48000 Hz, up to 200 s and 24 MiB. Requires a complete VIS header with parity for a supported mode; tolerates +-100 Hz tone offset, clock drift and missed syncs (lost lines are shown black or estimated). A partial reception returns the decoded lines. Does not use the microphone, USB audio or PTT. Keep this screen open and export the PNG before leaving or rotating.</string>
     <string name="sstv_open">Decode SSTV WAV</string>
@@ -248,6 +258,10 @@
     <string name="cat_robot36_sent">%3$s image sent with %1$s (%2$.1f s). PTT released and confirmed by the radio; no RF measurement.</string>
     <string name="cat_state">CAT v1 recognized. Active=%1$s, remote=%2$s, pending=%3$s, RX=%4$d Hz. Firmware confirmation, not an RF measurement.</string>
     <string name="cat_failed_closed">CAT stopped and USB closed: %1$s. The firmware lease restores nominal RX if the radio is still running SAT RX.</string>
+    <string name="cat_connect_failed">CAT failed to connect (%1$s, USB %2$s) at step “%3$s”: %4$s</string>
+    <string name="cat_step_open">opening USB</string>
+    <string name="cat_step_identify">radio hello</string>
+    <string name="cat_step_status">reading CAT status</string>
     <string name="cat_failed_release">CAT error: %1$s. Error releasing USB: %2$s. Check the radio.</string>
     <string name="cat_restore_unconfirmed">CAT restore/close not confirmed: %1$s</string>
     <string name="cat_connect_before_tracking">Connect USB before starting tracking.</string>
@@ -853,6 +867,15 @@
     <string name="rig_vfo_a">VFO A %1$s MHz %2$s</string>
     <string name="rig_vfo_b">VFO B %1$s MHz</string>
     <string name="rig_smeter">S-meter (MAIN) %1$d/255 %2$s</string>
+    <string name="err_rig_value">Value %1$d is out of range.</string>
+    <string name="rig_section_meter">Meter and transmit</string>
+    <string name="rig_signal_label">Received signal (S)</string>
+    <string name="rig_signal_value">S-meter %1$d/255</string>
+    <string name="rig_tx_rx">Status: receiving</string>
+    <string name="rig_tx_tx">Status: transmitting</string>
+    <string name="rig_power_label">Output power</string>
+    <string name="rig_power_value">Output power: %1$d %%</string>
+    <string name="rig_data_mode">DATA mode on</string>
     <string name="rig_speak">Announce by voice</string>
     <string name="rig_speak_mhz">megahertz</string>
     <string name="rig_speak_signal">signal</string>

@@ -95,7 +95,8 @@ class DiagnosticsActivity : LocalizedActivity() {
                 insets
             }
         }
-        content.addView(Brand.heading(this, getString(R.string.diag_title)))
+        content.addView(BrandUi.sectionHeader(this, getString(R.string.diag_title), getString(R.string.screen_help_diag), large = true))
+        BrandUi.firstRunTip(this, "screen_diag", getString(R.string.screen_help_diag))?.let { content.addView(it) }
         status = Brand.text(this, 16f).apply { setText(R.string.diag_intro) }
         content.addView(status)
         content.addView(Brand.button(this, getString(R.string.diag_refresh)) { refreshDevices() })
@@ -114,7 +115,7 @@ class DiagnosticsActivity : LocalizedActivity() {
         content.addView(Brand.button(this, getString(R.string.diag_save_report)) { saveReport() })
         content.addView(Brand.button(this, getString(R.string.diag_share)) { share() })
 
-        content.addView(Brand.heading(this, getString(R.string.diag_bridge_title)))
+        content.addView(BrandUi.sectionHeader(this, getString(R.string.diag_bridge_title), getString(R.string.diag_help_bridge)))
         content.addView(Brand.card(this).apply {
             addView(Brand.text(this@DiagnosticsActivity, 15f, Brand.Palette(this@DiagnosticsActivity).accent).apply {
                 setText(R.string.diag_bridge_warning)
@@ -354,7 +355,7 @@ class DiagnosticsActivity : LocalizedActivity() {
 
     private fun renderResults() {
         resultsBox.text = DiagnosticsReport.build(versionName(), "${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})",
-            DateFormat.getDateTimeInstance().format(Date()), entries.map { it.second }, results, firmwareLines.distinct())
+            DateFormat.getDateTimeInstance().format(Date()), entries.map { it.second }, results, firmwareLines.distinct(), CatLog.lines(this))
     }
 
     private fun versionName(): String = runCatching { VersionTracker.running(this).let { "${it.name} (codigo ${it.code})" } }.getOrNull() ?: "?"

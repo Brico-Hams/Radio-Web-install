@@ -51,8 +51,10 @@ data class ObserverPosition(val latitude: Double, val longitude: Double, val hei
 }
 data class SatelliteLook(val time: Long, val azimuth: Double, val elevation: Double, val rangeKm: Double)
 data class SatellitePass(val aos: SatelliteLook, val maximum: SatelliteLook, val los: SatelliteLook, val partialStart: Boolean, val partialEnd: Boolean)
-data class SatellitePlan(val tle: Tle, val observer: ObserverPosition, val downlinkHz: Long, val pass: SatellitePass)
-data class SatelliteTarget(val frequency10Hz: Long, val look: SatelliteLook)
+data class SatellitePlan(val tle: Tle, val observer: ObserverPosition, val downlinkHz: Long, val pass: SatellitePass,
+    /** Nominal uplink for half-duplex cross-band (0 = RX only). */
+    val uplinkHz: Long = 0)
+data class SatelliteTarget(val frequency10Hz: Long, val look: SatelliteLook, val uplink10Hz: Long = 0)
 
 data class SubPoint(val latitude: Double, val longitude: Double, val altitudeKm: Double)
 
@@ -220,7 +222,13 @@ class SatelliteOrbit(
         val rate = rangeRateKmS(time)
         val frequency = (plan.downlinkHz * (1 - rate / 299792.458) / 10).roundToLong()
         requireUi(CatProtocol.inBand(frequency)) { UiText(R.string.err_doppler_band) }
-        return SatelliteTarget(frequency, position)
+        var uplink = 0L
+        if (plan.uplinkHz > 0) {
+            requireUi(plan.uplinkHz % 10 == 0L && CatProtocol.inUplinkBand(plan.uplinkHz / 10)) { UiText(R.string.err_uplink_band) }
+            uplink = (Doppler.uplink(plan.uplinkHz, rate) / 10.0).roundToLong()
+            requireUi(CatProtocol.inUplinkBand(uplink)) { UiText(R.string.err_uplink_band) }
+        }
+        return SatelliteTarget(frequency, position, uplink)
     }
     override fun close() {
         if (!closed) { closed = true; if (ownsEngine) shared.close() }

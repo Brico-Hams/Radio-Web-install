@@ -64,6 +64,24 @@ interface Rig {
     fun selectTxVfo(vfo: Vfo) {}
     fun ptt(on: Boolean)
     fun setSplit(on: Boolean)
+    /** Optional extras; every default says "not supported" so rigs that do not implement them are unaffected. */
+    val supportsMeter: Boolean get() = false
+    /** S-meter level 0..255 (0 = S0, 255 = full scale of the radio's own scale). */
+    fun signalLevel(): Int = unsupported("S-meter")
+    val supportsRfPower: Boolean get() = false
+    /** Transmit power setting 0..255 (0 = minimum, 255 = maximum). */
+    fun rfPower(): Int = unsupported("RF power")
+    fun setRfPower(level: Int): Unit = unsupported("RF power")
+    val supportsTxStatus: Boolean get() = false
+    /** True while the radio is transmitting; read only, never keys the radio. */
+    fun isTransmitting(): Boolean = unsupported("TX status")
+    val supportsDataMode: Boolean get() = false
+    fun dataModeOn(): Boolean = unsupported("data mode")
+    fun setDataMode(on: Boolean): Unit = unsupported("data mode")
+    /** Mode of either VFO without selecting it. */
+    val supportsVfoMode: Boolean get() = false
+    fun vfoMode(vfo: Vfo): RigMode? = unsupported("VFO mode")
+    fun setVfoMode(vfo: Vfo, mode: RigMode): Unit = unsupported("VFO mode")
     /** Empty channels are skipped. */
     fun memories(channels: IntRange, keepGoing: () -> Boolean = { true }): List<RigMemory>
         /** Replaces the radio's channel and reads it back; throws LocalizedStateException(err_rig_unconfirmed) on a mismatch. */
@@ -187,9 +205,15 @@ class RigTracker(
     private val rangeRate: (Long) -> Double,
     private val look: (Long) -> SatelliteLook,
     private val stepHz: Long,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
+    /** True while our own PTT is on; the radio's TX state is unknown on some rigs, so this alone must hold every write. */
+    private val pttOn: () -> Boolean = { false }
 ) {
-    data class Step(val downlinkHz: Long, val uplinkHz: Long?, val look: SatelliteLook, val sentDownlink: Boolean, val sentUplink: Boolean)
+    data class Step(
+        val downlinkHz: Long, val uplinkHz: Long?, val look: SatelliteLook, val sentDownlink: Boolean, val sentUplink: Boolean,
+        /** Half duplex: frequency and VFO writes are held while transmitting and resynchronised on the first step after unkey. */
+        val heldForTx: Boolean = false
+    )
     private var splitOn = false
     private var lastDownlink: Long? = null
     private var lastUplink: Long? = null
@@ -214,6 +238,7 @@ class RigTracker(
         val up = uplinkHz?.let { Doppler.uplink(it, rate) }
         rig.checkTunable(downVfo, down)
         if (up != null) rig.checkTunable(upVfo, up)
+        if (transmitting()) return Step(down, up, position, sentDownlink = false, sentUplink = false, heldForTx = true)
         val previousDown = lastDownlink
         val sentDown = previousDown == null || abs(down - previousDown) >= stepHz
         if (sentDown) {
@@ -235,10 +260,18 @@ class RigTracker(
         }
         return Step(down, up, position, sentDown, sentUp)
     }
-    fun stop() {
-        if (!splitOn) return
+    private fun transmitting(): Boolean {
+        if (pttOn()) return true
+        if (!rig.supportsTxStatus) return false
+        return try { rig.isTransmitting() } catch (_: IOException) { true } catch (_: LocalizedUnsupportedException) { false }
+    }
+    /** Turns split off; returns false (and keeps split on so a later call retries) while the radio is transmitting. */
+    fun stop(): Boolean {
+        if (!splitOn) return true
+        if (transmitting()) return false
         splitOn = false
         rig.setSplit(false)
+        return true
     }
     companion object {
         const val TOGGLE_INTERVAL_MS = 5000L

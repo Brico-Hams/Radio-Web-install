@@ -27,6 +27,7 @@ void bh_cat_tx_arm(bh_cat_tx *state, bool armed)
     /* Arming or disarming never leaves a key request behind; the adapter unkeys on the next poll. */
     state->armed = armed;
     state->requested = false;
+    state->local = false;
     state->limit = false;
     state->holdoff = false;
     state->denied_state = 0;
@@ -37,6 +38,22 @@ void bh_cat_tx_abort(bh_cat_tx *state, uint32_t now)
     bh_cat_tx_arm(state, false);
     state->holdoff = true;
     state->holdoff_at = now;
+}
+
+void bh_cat_tx_local(bh_cat_tx *state, bool pressed, uint32_t now)
+{
+    if (!pressed) {
+        if (state->local) {
+            state->local = false;
+            state->requested = false;
+        }
+        return;
+    }
+    if (!state->armed || state->limit || state->denied_state != 0 || in_holdoff(state, now))
+        return;
+    state->local = true;
+    state->requested = true;
+    state->last_renew = now;
 }
 
 void bh_cat_tx_user_key(bh_cat_tx *state, uint32_t now)

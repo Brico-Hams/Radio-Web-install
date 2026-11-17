@@ -591,7 +591,7 @@ Adapter tests simulate RF primitives: they check signs, limits, applied frequenc
 absence of TX/VFO changes, and recovery after errors. They do not certify reception,
 audio, or physical restoration. The mode is receive-only except when CAT PTT is
 armed with 9 (see CAT TX); the rest of the firmware retains upstream TX.
-This is not firmware globally locked against TX or a full-duplex radio.
+This is not firmware globally locked against TX or a full-duplex radio; cross-band operation is half duplex.
 
 #### CAT RX Bricohams v1 Implemented
 
@@ -691,9 +691,22 @@ Safety measures, in order:
    prints it in the Robot36 image.
 
 It transmits on the entry VFO's TX frequency (with its offset), without uplink
-Doppler correction. The red LED lights as with normal PTT, and the screen shows
+Doppler correction (CAT TX v1 does not compute one). The red LED lights as with normal PTT, and the screen shows
 `CAT TX ON AIR` and the TX frequency. While transmitting, CAT RX commands are
 accepted but applied upon returning to RX.
+Half-duplex Doppler on both links: CAT RX v2 (same command `0x7B00`, 12-byte
+request with version 2 and the uplink in 10 Hz steps, 20-byte reply, capabilities 31,
+flags 32 uplink valid, 64 TX armed and 128 transmitting) makes the radio receive the
+corrected downlink and, when PTT is pressed (local or CAT TX v1) with TX armed with 9
+and a valid uplink (3000 ms), transmit on the corrected uplink and return to the
+downlink on release. It is half duplex: it never receives and transmits at the same
+time, so you do not hear the downlink while transmitting. If the uplink lease
+expires, PTT is refused (it never transmits on a stale or nominal frequency); the
+uplink must be inside the allowed TX band, and TX lock, the 120 s limit and abort on
+any key still apply. Example: uplink 145.925 MHz and downlink 436.888 MHz. Radios
+with Doppler on both links: Icom IC-705, Yaesu FT-817/818/857/897 and FTX-1 (Android
+app, split on VFO B, never touched while transmitting) and the Quansheng UV-K5 with
+this firmware. Firmware without v2 answers with version 1 and the app stays RX-only.
 
 Contract: private command `0x7B02`, response `0x7B03`, little-endian.
 

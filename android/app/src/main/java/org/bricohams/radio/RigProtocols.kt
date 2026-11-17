@@ -221,6 +221,38 @@ object IcomCiv {
     fun ptt(on: Boolean) = body(0x1C, 0x00, if (on) 1 else 0)
     // CI-V Reference Guide command table: 0F split OFF (00) / ON (01)
     fun split(on: Boolean) = body(0x0F, if (on) 1 else 0)
+    // CI-V Reference Guide p.4 "15 02 Read S-meter level" (0000=S0, 0120=S9, 0241=S9+60 dB)
+    fun readSMeter() = body(0x15, 0x02)
+    // CI-V Reference Guide p.4 "14 0A Send/read the selected band's RF power" (0000=Minimum ~ 0255=Maximum)
+    fun readRfPower() = body(0x14, 0x0A)
+    fun setRfPower(level: Int) = body(0x14, 0x0A) + encodeLevel(level)
+    // CI-V Reference Guide p.14 "1C 00 Send/read the transceiver's status" (00=RX, 01=TX)
+    fun readTxStatus() = body(0x1C, 0x00)
+    // CI-V Reference Guide p.5 "19 00 Read the transceiver ID"
+    fun readId() = body(0x19, 0x00)
+    // CI-V Reference Guide p.22 "Data mode with filter width settings": 1A 06 <00=OFF/01=ON> <01..03 = FIL1..FIL3>; filter 00 when OFF
+    fun readDataMode() = body(0x1A, 0x06)
+    fun setDataMode(on: Boolean, filter: Int = 1): ByteArray {
+        requireUi(!on || filter in 1..3) { UiText(R.string.err_rig_value, filter) }
+        return body(0x1A, 0x06, if (on) 1 else 0, if (on) filter else 0)
+    }
+    // CI-V Reference Guide p.27 "Selected or unselected VFO's operating mode and filter settings": 26 <00 selected/01 unselected>
+    // <mode> [data mode] [filter]; the last two can be skipped (DATA OFF and the default filter of the mode are applied)
+    fun readVfoMode(vfo: Vfo) = body(0x26, vfo.ordinal)
+    fun setVfoMode(vfo: Vfo, mode: RigMode): ByteArray =
+        body(0x26, vfo.ordinal, requireNotNullUi(modeCode(mode)) { UiText(R.string.err_rig_mode, mode.name) })
+    // CI-V Reference Guide p.4 level data "0000 ~ 0255": four digits in two BCD bytes, hundreds first
+    fun encodeLevel(level: Int): ByteArray {
+        requireUi(level in 0..255) { UiText(R.string.err_rig_value, level) }
+        return body(level / 100, ((level / 10 % 10) shl 4) or (level % 10))
+    }
+    fun decodeLevel(bytes: ByteArray, offset: Int = 0): Int {
+        if (bytes.size < offset + 2) invalidReply()
+        val high = bcd(bytes[offset].toInt() and 255)
+        val low = bcd(bytes[offset + 1].toInt() and 255)
+        if (high < 0 || low < 0 || high * 100 + low > 255) invalidReply()
+        return high * 100 + low
+    }
     // CI-V Reference Guide p.18 "Memory content": 1A 00 + group (2 BCD bytes) + channel (2 BCD bytes)
     fun readMemory(channel: Int): ByteArray {
         requireUi(channel in 0..99) { UiText(R.string.err_rig_channel, channel) }
@@ -326,7 +358,8 @@ class IcomCivRig(
 
     override fun identify(): String {
         status()
-        return String.format(Locale.ROOT, "IC-705 @%02Xh", address)
+        val id = query(IcomCiv.readId(), 3)[2].toInt() and 255
+        return String.format(Locale.ROOT, "IC-705 @%02Xh ID %02Xh", address, id)
     }
     override fun status(): RigStatus {
         val frequency = IcomCiv.decodeFrequency(query(IcomCiv.readFrequency(), 6), 1)
@@ -342,6 +375,36 @@ class IcomCivRig(
     override fun setMode(mode: RigMode) = command(IcomCiv.setMode(mode))
     override fun ptt(on: Boolean) = command(IcomCiv.ptt(on))
     override fun setSplit(on: Boolean) = command(IcomCiv.split(on))
+    override val supportsMeter = true
+    override fun signalLevel(): Int = IcomCiv.decodeLevel(query(IcomCiv.readSMeter(), 4), 2)
+    override val supportsRfPower = true
+    override fun rfPower(): Int = IcomCiv.decodeLevel(query(IcomCiv.readRfPower(), 4), 2)
+    override fun setRfPower(level: Int) {
+        command(IcomCiv.setRfPower(level))
+        checkUi(rfPower() == level) { UiText(R.string.err_rig_unconfirmed) }
+    }
+    override val supportsTxStatus = true
+    override fun isTransmitting(): Boolean = when (query(IcomCiv.readTxStatus(), 3)[2].toInt() and 255) {
+        0 -> false
+        1 -> true
+        else -> invalidReply()
+    }
+    override val supportsDataMode = true
+    override fun dataModeOn(): Boolean = when (query(IcomCiv.readDataMode(), 4)[2].toInt() and 255) {
+        0 -> false
+        1 -> true
+        else -> invalidReply()
+    }
+    override fun setDataMode(on: Boolean) {
+        command(IcomCiv.setDataMode(on))
+        checkUi(dataModeOn() == on) { UiText(R.string.err_rig_unconfirmed) }
+    }
+    override val supportsVfoMode = true
+    override fun vfoMode(vfo: Vfo): RigMode? = IcomCiv.mode(query(IcomCiv.readVfoMode(vfo), 3)[2].toInt() and 255)
+    override fun setVfoMode(vfo: Vfo, mode: RigMode) {
+        command(IcomCiv.setVfoMode(vfo, mode))
+        checkUi(vfoMode(vfo) == mode) { UiText(R.string.err_rig_unconfirmed) }
+    }
     override fun memories(channels: IntRange, keepGoing: () -> Boolean): List<RigMemory> {
         requireUi(channels.first >= 0 && channels.last <= 99) { UiText(R.string.err_rig_channel, channels.last) }
         val list = ArrayList<RigMemory>()

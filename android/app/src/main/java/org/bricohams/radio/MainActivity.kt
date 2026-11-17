@@ -139,6 +139,25 @@ class MainActivity : LocalizedActivity() {
                 override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
             }
         })
+        header.addView(Brand.text(this, 13f, Brand.Palette(this).muted).apply {
+            setText(R.string.theme_label); labelFor = R.id.app_theme
+        })
+        header.addView(Spinner(this).apply {
+            id = R.id.app_theme
+            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf(getString(R.string.theme_system), getString(R.string.theme_light), getString(R.string.theme_dark)))
+            setSelection(AppTheme.tags.indexOf(AppTheme.selected(this@MainActivity)).coerceAtLeast(0))
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    val mode = AppTheme.tags[position]
+                    if (mode != AppTheme.selected(this@MainActivity)) {
+                        AppTheme.save(this@MainActivity, mode)
+                        recreate()
+                    }
+                }
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            }
+        })
         val nav = LinearLayout(this)
         for ((name, label) in TABS) {
             nav.addView(Brand.button(this, getString(label)) {
@@ -225,15 +244,18 @@ class MainActivity : LocalizedActivity() {
             val active = name == tab
             button.isSelected = active
             button.setTextColor(if (active) colors.onAccent else colors.text)
-            button.background = android.graphics.drawable.RippleDrawable(
-                android.content.res.ColorStateList.valueOf(colors.ripple),
+            button.background = BrandUi.interactive(this,
                 // Brand manual: the active tab is a brand-orange fill with graphite text (colors.accent is the link/text tone).
-                Brand.rounded(this, if (active) Brand.ORANGE else colors.surfaceHigh, 16), null)
+                if (active) Brand.ORANGE else colors.surfaceHigh, 16)
         }
         content.background = if (tab == TAB_HOME) null else Brand.rounded(this, colors.surface, 20)
         val padding = if (tab == TAB_HOME) 0 else dp(16)
         content.setPadding(padding, padding, padding, padding)
-        if (tab != TAB_HOME) content.addView(Brand.heading(this, getString(TABS[tab] ?: R.string.tab_home)))
+        if (tab != TAB_HOME) content.addView(BrandUi.sectionHeader(this, getString(TABS[tab] ?: R.string.tab_home), getString(when (tab) {
+            TAB_LOGBOOK -> R.string.home_group_logbook_help
+            TAB_ARDF -> R.string.home_ardf_note
+            else -> R.string.home_group_digital_help
+        }), large = true))
         message(getString(R.string.main_beta_banner))
         userAction {
             when (tab) {
@@ -244,43 +266,129 @@ class MainActivity : LocalizedActivity() {
             }
         }
     }
+    private data class ToolInfo(val icon: Int, val title: Int, val desc: Int, val help: Int, val page: String)
+
+    private fun info(tool: Tool) = when (tool) {
+        Tool.RIG_CAT -> ToolInfo(R.drawable.ic_radio, R.string.tool_rig_cat_title, R.string.tool_rig_cat_desc, R.string.tool_rig_cat_help, "ayuda-android")
+        Tool.UVK5_CAT -> ToolInfo(R.drawable.ic_usb, R.string.tool_uvk5_cat_title, R.string.tool_uvk5_cat_desc, R.string.tool_uvk5_cat_help, "ayuda-quansheng")
+        Tool.RT950 -> ToolInfo(R.drawable.ic_radio, R.string.tool_rt950_title, R.string.tool_rt950_desc, R.string.tool_rt950_help, "ayuda-android")
+        Tool.APRS_CHAT -> ToolInfo(R.drawable.ic_digital, R.string.tool_aprs_title, R.string.tool_aprs_desc, R.string.tool_aprs_help, "ayuda-android")
+        Tool.DIAGNOSTICS -> ToolInfo(R.drawable.ic_tools, R.string.tool_diag_title, R.string.tool_diag_desc, R.string.tool_diag_help, "ayuda-android")
+        Tool.GD77 -> ToolInfo(R.drawable.ic_radio, R.string.tool_gd77_title, R.string.tool_gd77_desc, R.string.tool_gd77_help, "ayuda-opengd77")
+        Tool.CHANNELS -> ToolInfo(R.drawable.ic_channels, R.string.tool_channels_title, R.string.tool_channels_desc, R.string.tool_channels_help, "ayuda-quansheng")
+        Tool.TEMPLATES -> ToolInfo(R.drawable.ic_channels, R.string.tool_templates_title, R.string.tool_templates_desc, R.string.tool_templates_help, "ayuda-android")
+        Tool.SSTV -> ToolInfo(R.drawable.ic_digital, R.string.tool_sstv_title, R.string.tool_sstv_desc, R.string.tool_sstv_help, "ayuda-android")
+        Tool.LIVE_AUDIO -> ToolInfo(R.drawable.ic_mic, R.string.tool_live_title, R.string.tool_live_desc, R.string.tool_live_help, "ayuda-android")
+        Tool.ROTOR -> ToolInfo(R.drawable.ic_satellite, R.string.tool_rotor_title, R.string.tool_rotor_desc, R.string.tool_rotor_help, "ayuda-android")
+    }
+
     private fun home() {
-        content.addView(Brand.heading(this, getString(R.string.home_workspace)))
-        fun section(title: Int, build: () -> Unit) {
-            val parent = content
-            val card = Brand.card(this)
-            parent.addView(card)
-            content = card
-            try {
-                content.addView(Brand.heading(this, getString(title)))
-                build()
-            } finally { content = parent }
-        }
+        val colors = Brand.Palette(this)
         val profile = ProfileStore.load(this)
-        section(R.string.profile_title) {
-            text(ProfileStore.summary(this))
-            text(R.string.home_profile_help)
-            Brand.button(this, getString(R.string.profile_edit), true) {
+        val radio = profile.radio
+        content.addView(BrandUi.sectionHeader(this, getString(R.string.home_workspace), getString(R.string.screen_help_main), large = true))
+        BrandUi.firstRunTip(this, "screen_main", getString(R.string.screen_help_main))?.let { content.addView(it) }
+
+        // Profile header card.
+        val header = BrandUi.card(this, getString(R.string.profile_title), getString(R.string.home_card_help)).apply {
+            tag = "home_profile"
+            id = R.id.home_profile_card
+        }
+        content.addView(header)
+        if (radio == null) {
+            header.addView(BrandUi.statusChip(this, BrandUi.Status.WARN, getString(R.string.home_profile_status_none)))
+            header.addView(Brand.text(this, 14f, colors.muted).apply {
+                text = getString(R.string.home_profile_empty_body); setPadding(0, dp(8), 0, dp(8))
+            })
+            header.addView(BrandUi.primaryButton(this, getString(R.string.home_profile_setup)) {
                 startActivity(Intent(this, ProfileActivity::class.java))
-            }.also(content::addView)
+            })
+        } else {
+            header.addView(Brand.text(this, 20f, bold = true).apply { text = radio.label(this@MainActivity); setPadding(0, 0, 0, dp(4)) })
+            if (profile.callsign.isNotEmpty()) header.addView(Brand.text(this, 15f).apply {
+                text = getString(R.string.home_profile_callsign, profile.callsign)
+            })
+            if (profile.locator.isNotEmpty()) header.addView(Brand.text(this, 15f).apply {
+                text = getString(R.string.home_profile_locator, profile.locator)
+            })
+            val chip = if (ProfileStore.usbDevice(this) != null) BrandUi.statusChip(this, BrandUi.Status.OK, getString(R.string.home_profile_status_ok))
+                else BrandUi.statusChip(this, BrandUi.Status.IDLE, getString(R.string.home_profile_status_untested))
+            header.addView(chip.apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(8) })
+            header.addView(Brand.text(this, 14f, colors.muted).apply { text = getString(R.string.home_profile_help); setPadding(0, dp(8), 0, dp(8)) })
+            header.addView(BrandUi.primaryButton(this, getString(R.string.profile_edit)) {
+                startActivity(Intent(this, ProfileActivity::class.java))
+            })
         }
-        section(R.string.home_main) {
-            button(R.string.home_open_satellites) { startActivity(Intent(this, SatelliteActivity::class.java)) }
-            button(R.string.home_open_ftx) { startActivity(Intent(this, FtxActivity::class.java)) }
-            button(R.string.home_open_logbook) { tab = TAB_LOGBOOK; render() }
-        }
-        section(R.string.home_radio_tools) {
-            for (tool in Tool.values()) {
-                val label = getString(tool.label)
-                val entry = button(label) { startActivity(Intent(this, tool.activity)) }
-                if (!profile.radio.allows(tool)) {
-                    entry.isEnabled = false
-                    entry.alpha = 0.5f
-                    entry.contentDescription = getString(R.string.home_tool_unavailable, label, profile.radio!!.label(this))
-                }
+
+        fun tools(tool: Tool): View {
+            val data = info(tool)
+            return BrandUi.tile(this, "tool_" + tool.name, data.icon, getString(data.title), getString(data.desc), getString(data.help), data.page) {
+                startActivity(Intent(this, tool.activity))
             }
         }
-        section(R.string.home_data) {
+        fun group(title: Int, help: Int, vararg entries: Any) {
+            val card = BrandUi.card(this, getString(title), getString(help))
+            for (entry in entries) when (entry) {
+                is Tool -> if (radio.allows(entry)) card.addView(tools(entry))
+                is View -> card.addView(entry)
+            }
+            content.addView(card)
+        }
+        fun fixed(tag: String, icon: Int, title: Int, desc: Int, help: Int, page: String, open: () -> Unit) =
+            BrandUi.tile(this, tag, icon, getString(title), getString(desc), getString(help), page, open)
+
+        group(R.string.home_group_radio, R.string.home_group_radio_help,
+            Tool.RIG_CAT, Tool.UVK5_CAT, Tool.RT950, Tool.GD77)
+        group(R.string.home_group_satellites, R.string.home_group_satellites_help,
+            fixed("tool_satellites", R.drawable.ic_satellite, R.string.tool_satellites_title, R.string.tool_satellites_desc,
+                R.string.tool_satellites_help, "ayuda-iniciacion-satelite") { startActivity(Intent(this, SatelliteActivity::class.java)) },
+            Tool.ROTOR)
+        group(R.string.home_group_digital, R.string.home_group_digital_help,
+            fixed("tool_ftx", R.drawable.ic_digital, R.string.tool_ftx_title, R.string.tool_ftx_desc, R.string.tool_ftx_help, "ayuda-ftx1") {
+                startActivity(Intent(this, FtxActivity::class.java))
+            }, Tool.APRS_CHAT, Tool.SSTV, Tool.LIVE_AUDIO)
+        group(R.string.home_group_channels, R.string.home_group_channels_help, Tool.CHANNELS, Tool.TEMPLATES)
+        group(R.string.home_group_logbook, R.string.home_group_logbook_help,
+            fixed("tool_logbook", R.drawable.ic_book, R.string.tool_logbook_title, R.string.tool_logbook_desc, R.string.tool_logbook_help,
+                "ayuda-android") { tab = TAB_LOGBOOK; render() })
+        group(R.string.home_group_tools, R.string.home_group_tools_help, Tool.DIAGNOSTICS)
+
+        // Tools this radio cannot use stay discoverable, collapsed, with the reason.
+        val unavailable = Tool.values().filter { !radio.allows(it) }
+        if (radio != null && unavailable.isNotEmpty()) {
+            val radioName = radio.label(this)
+            val card = BrandUi.card(this, getString(R.string.home_unavailable_title, radioName, unavailable.size),
+                getString(R.string.home_unavailable_help))
+            val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; id = R.id.home_unavailable_list; visibility = View.GONE }
+            for (tool in unavailable) {
+                val data = info(tool)
+                val radios = ProfileRadio.values().filter { it.supports(tool) }.map { it.label(this) }
+                val shown = if (radios.size > 4) getString(R.string.home_unavailable_more, radios.take(4).joinToString(", ")) else radios.joinToString(", ")
+                list.addView(Brand.text(this, 15f, colors.text, true).apply {
+                    text = getString(data.title); setPadding(0, dp(10), 0, 0)
+                    tag = "unavailable_" + tool.name
+                    contentDescription = getString(R.string.home_tool_unavailable, getString(tool.label), radioName)
+                })
+                list.addView(Brand.text(this, 14f, colors.muted).apply {
+                    text = getString(R.string.home_unavailable_reason, getString(data.desc), shown)
+                })
+            }
+            val toggle = BrandUi.secondaryButton(this, getString(R.string.home_unavailable_title, radioName, unavailable.size)) {
+                list.visibility = if (list.visibility == View.GONE) View.VISIBLE else View.GONE
+            }.apply { id = R.id.home_unavailable_toggle }
+            card.addView(toggle)
+            card.addView(list)
+            content.addView(card)
+        }
+
+        fun section(title: Int, help: Int, build: () -> Unit) {
+            val parent = content
+            val card = BrandUi.card(this, getString(title), getString(help))
+            parent.addView(card)
+            content = card
+            try { build() } finally { content = parent }
+        }
+        section(R.string.home_data, R.string.home_data_help) {
             button(R.string.home_export_json) { export("json") }
             button(R.string.home_import_json) {
                 AlertDialog.Builder(this).setTitle(R.string.import_json_title)
@@ -293,7 +401,7 @@ class MainActivity : LocalizedActivity() {
                     }.show()
             }
         }
-        section(R.string.home_about) {
+        section(R.string.home_about, R.string.home_about_help) {
             text(getString(R.string.home_version_line, VersionTracker.running(this).name, VersionTracker.running(this).code))
             text(R.string.home_offline)
             text(R.string.home_features)
@@ -394,6 +502,8 @@ class MainActivity : LocalizedActivity() {
                 .any { value -> value.contains(contactSearch, ignoreCase = true) }
         }
         text(getString(R.string.logbook_matches, filtered.size))
+        if (contacts.isEmpty()) content.addView(BrandUi.emptyState(this, R.drawable.ic_book, getString(R.string.logbook_empty_title),
+            getString(R.string.logbook_empty_body)))
         for (contact in filtered.take(50)) {
             val band = Adif.band(contact.frequencyMHz)?.let { " ($it)" } ?: ""
             text("${contact.call} - ${contact.utc}\n${contact.frequencyMHz} MHz$band ${contact.mode} ${contact.sent}/${contact.received}\n${contact.notes}")

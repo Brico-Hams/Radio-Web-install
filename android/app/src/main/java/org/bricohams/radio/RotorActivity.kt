@@ -94,7 +94,8 @@ class RotorActivity : LocalizedActivity() {
                 insets
             }
         }
-        body.addView(Brand.heading(this, getString(R.string.rotor_title)))
+        body.addView(BrandUi.sectionHeader(this, getString(R.string.rotor_title), getString(R.string.screen_help_rotor), large = true))
+        BrandUi.firstRunTip(this, "screen_rotor", getString(R.string.screen_help_rotor))?.let { body.addView(it) }
         status = Brand.text(this, 15f).apply {
             setText(R.string.rotor_disconnected)
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE

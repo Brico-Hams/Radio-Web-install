@@ -35,9 +35,34 @@ object AppLanguage {
     }
 }
 
+/** Light / dark / system theme choice; the override is applied as the night bit of the activity configuration. */
+object AppTheme {
+    val tags = listOf("system", "light", "dark")
+    private const val PREFERENCES = "app-theme"
+
+    fun selected(context: Context): String =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString("mode", "system") ?: "system"
+
+    fun save(context: Context, mode: String) {
+        require(mode in tags)
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit().putString("mode", mode).commit()
+    }
+
+    fun apply(context: Context): Context {
+        val night = when (selected(context)) {
+            "light" -> Configuration.UI_MODE_NIGHT_NO
+            "dark" -> Configuration.UI_MODE_NIGHT_YES
+            else -> return context
+        }
+        val configuration = Configuration(context.resources.configuration)
+        configuration.uiMode = (configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or night
+        return context.createConfigurationContext(configuration)
+    }
+}
+
 open class LocalizedActivity : Activity() {
     override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(AppLanguage.localized(newBase))
+        super.attachBaseContext(AppTheme.apply(AppLanguage.localized(newBase)))
     }
 
     override fun setContentView(view: View) {
@@ -55,6 +80,16 @@ open class LocalizedActivity : Activity() {
             super.setContentView(view)
             return
         }
+        val help = when (this) {
+            is CatActivity -> R.string.screen_help_cat
+            is ChannelActivity -> R.string.screen_help_channels
+            is SstvActivity -> R.string.screen_help_sstv
+            is LiveAudioActivity -> R.string.screen_help_live
+            is FtxActivity -> R.string.screen_help_ftx
+            is TemplateActivity -> R.string.screen_help_templates
+            else -> R.string.screen_help_netcontrol
+        }
+        val page = if (this is CatActivity || this is ChannelActivity) "ayuda-quansheng" else BrandUi.DEFAULT_HELP_PAGE
         (view as? ScrollView)?.let { scroll ->
             scroll.isFillViewport = true
             (scroll.getChildAt(0) as? LinearLayout)?.let { body ->
@@ -90,7 +125,13 @@ open class LocalizedActivity : Activity() {
             addView(Brand.heading(context, getString(title)).apply {
                 setPadding(Brand.dp(context, 14), 0, 0, 0)
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(BrandUi.helpButton(context, getString(title), getString(help), page))
         })
+        BrandUi.firstRunTip(this, "screen_" + javaClass.simpleName, getString(help))?.let { tip ->
+            val margin = Brand.dp(this, 16)
+            root.addView(tip, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = margin; marginEnd = margin })
+        }
         root.addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
         super.setContentView(root)
     }

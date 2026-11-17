@@ -55,6 +55,16 @@
     <string name="cat_stop_tracking">Detener seguimiento y desconectar USB</string>
     <string name="cat_tracking_start">Comprobando pase actual y estado CAT. Solo recepcion temporal, no TX.</string>
     <string name="cat_tracking_status">Doppler RX confirmado %1$d Hz. Azimut %2$.1f, elevacion %3$.1f grados. Calculo SGP4, no medida RF. Parar desconecta USB.</string>
+    <string name="cat_half_duplex_note">Semidúplex: no oyes el downlink mientras transmites. Solo transmite si armas TX en la radio (tecla 9).</string>
+    <string name="cat_uplink_hint">Uplink MHz (opcional, ej. 145.925)</string>
+    <string name="cat_uplink_status">Uplink con Doppler %1$d Hz.</string>
+    <string name="cat_uplink_sent">Uplink enviado a la radio (TX armado).</string>
+    <string name="cat_uplink_v1">Firmware sin CAT RX v2: solo RX, sin uplink.</string>
+    <string name="cat_uplink_not_armed">TX no armado en la radio: solo RX.</string>
+    <string name="cat_uplink_keyed">Transmitiendo: frecuencias retenidas hasta soltar PTT.</string>
+    <string name="err_uplink_band">Uplink fuera de la banda TX permitida (136-174 o 400-470 MHz, paso 10 Hz). No se transmite.</string>
+    <string name="err_cat_uplink_unsupported">Este firmware no admite CAT RX v2 (uplink).</string>
+    <string name="err_cat_uplink_band">Uplink fuera del rango de la radio (136-174 o 400-470 MHz); la radio aplica además sus bloqueos de TX.</string>
     <string name="sstv_intro">RadiCodex - SSTV desde WAV (Robot36/72, Martin M1/M2, Scottie S1/S2, PD90/120/180).</string>
     <string name="sstv_limits">Solo WAV PCM mono 16 bits, 8000-48000 Hz, hasta 200 s y 24 MiB. Requiere cabecera VIS completa con paridad de un modo soportado; tolera desvio de tono de +-100 Hz, deriva de reloj y sincronismos perdidos (las lineas perdidas se marcan en negro o se estiman). Una recepcion parcial devuelve las lineas decodificadas. No usa microfono, USB audio ni PTT. Manten esta pantalla abierta y exporta PNG antes de salir o rotar.</string>
     <string name="sstv_open">Decodificar WAV SSTV</string>
@@ -378,6 +388,10 @@
     <string name="cat_robot36_sent">Imagen %3$s enviada con %1$s (%2$.1f s). PTT liberada y confirmada por la radio; sin medida RF.</string>
     <string name="cat_state">CAT v1 reconocido. Activo=%1$s, remoto=%2$s, pendiente=%3$s, RX=%4$d Hz. Confirmacion de firmware, no medida RF.</string>
     <string name="cat_failed_closed">CAT detenido y USB cerrado: %1$s. El lease de firmware restaura RX nominal si la radio sigue ejecutando SAT RX.</string>
+    <string name="cat_connect_failed">CAT no conectó (%1$s, USB %2$s) en el paso «%3$s»: %4$s</string>
+    <string name="cat_step_open">abrir USB</string>
+    <string name="cat_step_identify">saludo con la radio</string>
+    <string name="cat_step_status">lectura de estado CAT</string>
     <string name="cat_failed_release">Error CAT: %1$s. Error al liberar USB: %2$s. Comprueba la radio.</string>
     <string name="cat_restore_unconfirmed">No se confirmo restauracion/cierre CAT: %1$s</string>
     <string name="cat_connect_before_tracking">Conecta USB antes de iniciar seguimiento.</string>
@@ -863,6 +877,15 @@
     <string name="rig_vfo_a">VFO A %1$s MHz %2$s</string>
     <string name="rig_vfo_b">VFO B %1$s MHz</string>
     <string name="rig_smeter">Señal S (MAIN) %1$d/255 %2$s</string>
+    <string name="err_rig_value">El valor %1$d está fuera de rango.</string>
+    <string name="rig_section_meter">Medidor y transmisión</string>
+    <string name="rig_signal_label">Señal recibida (S)</string>
+    <string name="rig_signal_value">Señal S %1$d/255</string>
+    <string name="rig_tx_rx">Estado: recepción</string>
+    <string name="rig_tx_tx">Estado: transmitiendo</string>
+    <string name="rig_power_label">Potencia de salida</string>
+    <string name="rig_power_value">Potencia de salida: %1$d %%</string>
+    <string name="rig_data_mode">Modo DATA activado</string>
     <string name="rig_speak">Anunciar por voz</string>
     <string name="rig_speak_mhz">megahercios</string>
     <string name="rig_speak_signal">señal</string>

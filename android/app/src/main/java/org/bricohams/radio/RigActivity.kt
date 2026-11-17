@@ -36,9 +36,11 @@ import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import org.bricohams.digital.AcarsCodec
@@ -62,7 +64,8 @@ import java.util.concurrent.TimeUnit
  * CAT screen for several radios (Yaesu FT-817/857/897, Icom IC-705, Yaesu FTX-1, (tr)uSDX), over USB. All radio I/O runs on
  * [worker] (commands, satellite tracking) or [txWorker] (SSTV transmission, so Stop TX never waits behind a command);
  * [audioWorker] receives. The UI thread only renders and the radio is never polled in the background except while a
- * satellite is tracked. The manifest declares configChanges so rotation does not drop the USB connection.
+ * satellite is tracked (the optional S-meter / TX status are read then, on Read and after connecting). The manifest declares
+ * configChanges so rotation does not drop the USB connection.
  */
 class RigActivity : LocalizedActivity() {
     companion object {
@@ -106,6 +109,15 @@ class RigActivity : LocalizedActivity() {
     private lateinit var digClock: TextView
     private lateinit var digWarning: TextView
     private lateinit var setVfoB: Button
+    private lateinit var meterCard: LinearLayout
+    private lateinit var meterBar: ProgressBar
+    private lateinit var meterText: TextView
+    private lateinit var txText: TextView
+    private lateinit var powerText: TextView
+    private lateinit var powerSeek: SeekBar
+    private lateinit var dataToggle: CheckBox
+    private var meterSync = false
+    private var powerTouch = false
     private lateinit var memFrom: EditText
     private lateinit var speakToggle: CheckBox
     private var speech: TextToSpeech? = null
@@ -249,7 +261,8 @@ class RigActivity : LocalizedActivity() {
                 insets
             }
         }
-        body.addView(Brand.heading(this, getString(R.string.rig_title)))
+        body.addView(BrandUi.sectionHeader(this, getString(R.string.rig_title), getString(R.string.screen_help_rig), large = true))
+        BrandUi.firstRunTip(this, "screen_rig", getString(R.string.screen_help_rig))?.let { body.addView(it) }
         status = live(Brand.text(this, 15f)).apply { setText(R.string.rig_disconnected) }
         body.addView(Brand.card(this).apply { addView(status) })
         notice = live(Brand.text(this, 14f, colors.accent))
@@ -260,6 +273,7 @@ class RigActivity : LocalizedActivity() {
         sstvStatus = live(Brand.text(this, 14f, colors.accent))
         buildRadio(body)
         buildFrequency(body)
+        buildMeters(body)
         buildDigital(body)
         buildMemories(body)
         buildSatellite(body)
@@ -273,10 +287,16 @@ class RigActivity : LocalizedActivity() {
 
     private fun section(body: LinearLayout, title: Int, build: (LinearLayout) -> Unit) {
         val card = Brand.card(this)
-        card.addView(Brand.text(this, 18f, colors.accent, true).apply {
-            setText(title)
-            if (Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
-        })
+        val help = when (title) {
+            R.string.rig_section_radio -> R.string.rig_help_radio
+            R.string.rig_section_frequency -> R.string.rig_help_frequency
+            R.string.rig_section_meter -> R.string.rig_help_meters
+            R.string.rig_dig_title -> R.string.rig_help_digital
+            R.string.rig_section_memories -> R.string.rig_help_memories
+            R.string.rig_section_satellite -> R.string.rig_help_satellite
+            else -> R.string.rig_help_sstv
+        }
+        card.addView(BrandUi.sectionHeader(this, getString(title), getString(help)))
         build(card)
         body.addView(card)
     }
@@ -383,6 +403,99 @@ class RigActivity : LocalizedActivity() {
         }
         card.addView(speakToggle)
         if (speakToggle.isChecked) ensureSpeech()
+    }
+
+    private fun buildMeters(body: LinearLayout) = section(body, R.string.rig_section_meter) { card ->
+        meterCard = card
+        meterText = live(Brand.text(this, 14f, colors.text))
+        meterBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 255
+            contentDescription = getString(R.string.rig_signal_label)
+        }
+        txText = live(Brand.text(this, 14f, colors.text))
+        powerText = Brand.text(this, 14f, colors.text)
+        powerSeek = SeekBar(this).apply {
+            max = 255
+            contentDescription = getString(R.string.rig_power_label)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
+                    powerText.text = getString(R.string.rig_power_value, progress * 100 / 255)
+                    if (fromUser && !powerTouch) applyPower(progress) // accessibility actions change the value without a touch
+                }
+                override fun onStartTrackingTouch(bar: SeekBar) { powerTouch = true }
+                override fun onStopTrackingTouch(bar: SeekBar) { powerTouch = false; applyPower(bar.progress) }
+            })
+        }
+        dataToggle = CheckBox(this).apply {
+            setText(R.string.rig_data_mode)
+            setTextColor(colors.text)
+            setOnCheckedChangeListener { _, on -> if (!meterSync) applyDataMode(on) }
+        }
+        card.addView(meterText)
+        card.addView(meterBar)
+        card.addView(txText)
+        card.addView(powerText)
+        card.addView(powerSeek)
+        card.addView(dataToggle)
+        card.visibility = View.GONE
+    }
+
+    private fun applyPower(level: Int) {
+        val r = rig ?: run { notice.setText(R.string.rig_connect_first); return }
+        operation(notice) { r.setRfPower(level); null }
+    }
+
+    private fun applyDataMode(on: Boolean) {
+        val r = rig ?: run { notice.setText(R.string.rig_connect_first); return }
+        operation(notice) { r.setDataMode(on); null }
+    }
+
+    /** Shows only what the connected radio supports. */
+    private fun updateMeterCard(r: Rig?) {
+        val any = r != null && (r.supportsMeter || r.supportsTxStatus || r.supportsRfPower || r.supportsDataMode)
+        meterCard.visibility = if (any) View.VISIBLE else View.GONE
+        val show = { on: Boolean? -> if (on == true) View.VISIBLE else View.GONE }
+        meterText.visibility = show(r?.supportsMeter)
+        meterBar.visibility = show(r?.supportsMeter)
+        txText.visibility = show(r?.supportsTxStatus)
+        powerText.visibility = show(r?.supportsRfPower)
+        powerSeek.visibility = show(r?.supportsRfPower)
+        dataToggle.visibility = show(r?.supportsDataMode)
+        powerSeek.isEnabled = idle
+        dataToggle.isEnabled = idle
+    }
+
+    /** Worker thread: reads the optional extras; a failed read leaves that value as it was. */
+    private fun readMeters(r: Rig, settings: Boolean) {
+        var signal: Int? = null
+        var tx: Boolean? = null
+        var power: Int? = null
+        var data: Boolean? = null
+        if (r.supportsMeter) attempt<Unit>({ }) { signal = r.signalLevel() }
+        if (r.supportsTxStatus) attempt<Unit>({ }) { tx = r.isTransmitting() }
+        if (settings && r.supportsRfPower) attempt<Unit>({ }) { power = r.rfPower() }
+        if (settings && r.supportsDataMode) attempt<Unit>({ }) { data = r.dataModeOn() }
+        val s = signal
+        val t = tx
+        val p = power
+        val d = data
+        runOnUiThread { if (!isDestroyed && rig === r) showMeters(s, t, p, d) }
+    }
+
+    private fun showMeters(signal: Int?, tx: Boolean?, power: Int?, data: Boolean?) {
+        signal?.let {
+            meterBar.progress = it
+            meterText.text = getString(R.string.rig_signal_value, it)
+            meterBar.contentDescription = meterText.text
+        }
+        tx?.let { txText.setText(if (it) R.string.rig_tx_tx else R.string.rig_tx_rx) }
+        meterSync = true
+        power?.let {
+            powerSeek.progress = it
+            powerText.text = getString(R.string.rig_power_value, it * 100 / 255)
+        }
+        data?.let { dataToggle.isChecked = it }
+        meterSync = false
     }
 
     private fun ensureSpeech() {
@@ -748,6 +861,7 @@ class RigActivity : LocalizedActivity() {
         stopMemories.isEnabled = busy
         stopTx.isEnabled = txActive
         stopReceive.isEnabled = rxActive
+        updateMeterCard(r)
     }
 
     /** Runs the same catch list as the rest of the CAT code; the callers turn the exception into text. */
@@ -821,10 +935,12 @@ class RigActivity : LocalizedActivity() {
         runOnUiThread {
             if (!isDestroyed && rig === r) {
                 status.text = text
+                updateMeterCard(r)
                 announce(current.frequencyHz, current.mode?.name, spoken)
                 if (!r.supportsMemories) memStatus.setText(R.string.rig_no_memories)
             }
         }
+        readMeters(r, true)
     }
 
     private fun parseMhz(text: String): Long? {
@@ -994,8 +1110,8 @@ class RigActivity : LocalizedActivity() {
         rig = null; transport = null
         val problems = ArrayList<Exception>()
         if (r != null) {
-            attempt<Unit>({ problems.add(it) }) { tracker?.stop() }
             if (pttHeld) attempt<Unit>({ problems.add(it) }) { releasePtt(r) }
+            attempt<Unit>({ problems.add(it) }) { tracker?.stop() }
         }
         disposeOrbit()
         try { link?.close() } catch (error: IOException) { problems.add(error) }
@@ -1264,7 +1380,7 @@ class RigActivity : LocalizedActivity() {
                     assets.open("satellite-6.0.1.js").bufferedReader().use { it.readText() },
                     assets.open("orbital-engine.js").bufferedReader().use { it.readText() })
                 orbit = engine
-                tracker = RigTracker(r, down, up, engine::rangeRateKmS, engine::look, step)
+                tracker = RigTracker(r, down, up, engine::rangeRateKmS, engine::look, step, pttOn = { pttHeld })
                 trackingUplink = up != null
                 trackStep(mine, token, requireNotNull(tracker), plan)
             }
@@ -1295,6 +1411,7 @@ class RigActivity : LocalizedActivity() {
             val note = if (rig?.model == RigModel.THD75 && step.uplinkHz != null) "\n" + getString(R.string.rig_tracking_ctcss_note) else ""
             val text = line + "\n" + getString(R.string.rig_tracking_sent, sent) + note
             runOnUiThread { if (!isDestroyed && session === mine) satStatus.text = text }
+            rig?.let { readMeters(it, false) }
             if (token == generation && session === mine) worker.schedule({ trackStep(mine, token, current, plan) }, 1000, TimeUnit.MILLISECONDS)
         }
     }

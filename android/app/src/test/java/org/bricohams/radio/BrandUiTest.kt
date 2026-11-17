@@ -107,13 +107,13 @@ class BrandUiTest {
             val activity = controller.get()
             val all = views(activity.window.decorView)
             val buttons = all.filterIsInstance<Button>()
-            for ((label, target) in listOf(
-                R.string.home_open_cat to CatActivity::class.java,
-                R.string.home_open_channels to ChannelActivity::class.java,
-                R.string.home_open_sstv to SstvActivity::class.java,
-                R.string.home_open_live to LiveAudioActivity::class.java,
-                R.string.home_open_satellites to SatelliteActivity::class.java)) {
-                buttons.single { it.text == activity.getString(label) }.performClick()
+            for ((tag, target) in listOf(
+                "tool_UVK5_CAT" to CatActivity::class.java,
+                "tool_CHANNELS" to ChannelActivity::class.java,
+                "tool_SSTV" to SstvActivity::class.java,
+                "tool_LIVE_AUDIO" to LiveAudioActivity::class.java,
+                "tool_satellites" to SatelliteActivity::class.java)) {
+                all.single { it.tag == tag }.performClick()
                 assertEquals(target.name, org.robolectric.Shadows.shadowOf(activity).nextStartedActivity.component?.className)
             }
             val nav = buttons.single { it.text == activity.getString(R.string.tab_logbook) }

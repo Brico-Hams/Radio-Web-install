@@ -205,6 +205,25 @@ Solo se admite ADIF ASCII de hasta 16 MiB y 50000 contactos. Haz antes una copia
 2. Pulsa "Iniciar seguimiento"; "Detener seguimiento" lo termina. Con subida se usa split; la familia FT-817 reprograma la subida en el VFO B como mucho cada 5 s.
 3. Solo FTX-1: "Guardar transpondedor en memoria" abre el editor con bajada, subida y el nombre del satélite (máximo 12 caracteres) en el primer canal libre.
 
+**Icom IC-705: ajuste de la radio y funciones**
+
+Ajuste en el modo Set de la radio (guía CI-V del IC-705, rev. 6, p. 2 "Preparing": hay que fijar dirección, velocidad de comunicación y función transceive antes de controlarla; los nombres de los ajustes "CI-V Transceive" y "CI-V USB Echo Back" figuran en la tabla de comandos, p. 8):
+
+- Cable: USB al conector microUSB del lateral. Con el controlador de Icom instalado en un PC aparecen "IC-705 Serial Port A (CI-V)" y "IC-705 Serial Port B" (p. 2); en la APK elige el puerto que responde al CAT (normalmente el A, "puerto 0"). Usa un cable corto: la guía avisa de que un cable largo puede impedir el reconocimiento (p. 2).
+- Dirección CI-V: A4 por defecto (p. 2); si la cambias en la radio, escribe la misma en "Dirección CI-V (hex)".
+- Velocidad: 115200 baudios por defecto en la APK; debe coincidir con la velocidad CI-V de la radio (la guía no fija el valor, p. 2).
+- "CI-V USB Echo Back": la APK ignora el eco, funciona en ON y en OFF. "CI-V Transceive": las tramas que la radio envía al girar el dial se ignoran.
+- Al conectar, la APK lee el identificador de la radio (orden 19 00, p. 5) y lo muestra junto a la dirección.
+
+Con la radio conectada aparece la tarjeta "Medidor y transmisión" (solo en radios que lo admiten; hoy el IC-705):
+
+- Señal S: barra 0 a 255 (0 = S0, 120 = S9, 241 = S9+60 dB; p. 4, orden 15 02). Se actualiza al conectar, al pulsar "Leer" y cada segundo durante un seguimiento de satélite.
+- Estado de transmisión: "Estado: recepción" o "Estado: transmitiendo" (p. 14, orden 1C 00). Solo lee; el PTT sigue limitado a "Prueba PTT 3 s" y a SSTV.
+- Potencia de salida: deslizador 0 a 255 mostrado en % (p. 4, orden 14 0A, potencia de la banda seleccionada). Se confirma releyendo.
+- "Modo DATA activado": activa o desactiva DATA con el filtro FIL1 (p. 22, orden 1A 06).
+
+Satélite con IC-705: la guía no describe un modo satélite en la radio, así que se usa split (p. 3, orden 0F): VFO A = bajada con Doppler y VFO B = subida con Doppler, escrito en el VFO no seleccionado (p. 27, orden 25 01) sin mover la pantalla. Solo se calcula y envía la subida si rellenas "Subida (MHz, opcional)"; la APK nunca activa la transmisión por sí sola. Los cambios se envían solo cuando superan el "Paso Doppler (Hz)".
+
 **Tarjeta "Modos digitales"**
 
 1. Elige "Modo digital", "Banda y frecuencia" y "Periodo".

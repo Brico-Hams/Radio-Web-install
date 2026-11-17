@@ -24,7 +24,7 @@
     <string name="profile_test">Tester la connexion</string>
     <string name="profile_test_running">Test de la connexion…</string>
     <string name="profile_test_ok">Connexion réussie : %1$s</string>
-    <string name="profile_test_no_usb">Aucun périphérique USB compatible n\'est branché.</string>
+    <string name="profile_test_no_usb">Aucun périphérique USB compatible n\'est branché. Branchez la radio en USB et touchez Tester la connexion.</string>
     <string name="profile_test_ble">Ouverture de l\'écran Bluetooth de la radio pour la chercher et se connecter.</string>
     <string name="profile_test_ble_help">La liaison Bluetooth est recherchée et ouverte sur l\'écran propre à la radio.</string>
     <string name="profile_test_network_ok">Connexion TCP réussie vers %1$s</string>

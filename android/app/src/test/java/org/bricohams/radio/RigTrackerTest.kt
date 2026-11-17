@@ -113,6 +113,60 @@ class RigTrackerTest {
         assertEquals(R.string.err_rig_range, error.text.id)
         assertTrue(rig.calls.isEmpty())
     }
+    @Test fun toggleRigsNeverWriteVfoBWhileOurPttIsOn() {
+        val rig = FakeRig()
+        var ptt = false
+        val tracker = RigTracker(rig, 436_888_000, 145_925_000, { rate }, { SatelliteLook(it, 0.0, 30.0, 1000.0) }, 100, { now }, { ptt })
+        tracker.start()
+        val before = rig.calls.size
+        ptt = true
+        rate = 3.0
+        now = 10_000
+        val held = tracker.step()
+        assertTrue(held.heldForTx && !held.sentDownlink && !held.sentUplink)
+        assertEquals(before, rig.calls.size)
+        assertFalse(tracker.stop())
+        assertEquals("split:true", rig.calls.filter { it.startsWith("split") }.last())
+        ptt = false
+        now = 20_000
+        val resumed = tracker.step()
+        assertTrue(!resumed.heldForTx && resumed.sentDownlink && resumed.sentUplink)
+        assertTrue(tracker.stop())
+        assertEquals("split:false", rig.calls.last())
+    }
+    @Test fun aRadioReportingTxHoldsEveryWriteAndUnknownStateFallsBackToOurPtt() {
+        var tx = true
+        val rig = object : Rig by FakeRig(model = RigModel.IC705, silentVfoB = true) {
+            val written = ArrayList<String>()
+            override fun setFrequency(vfo: Vfo, hz: Long) { written.add("${vfo.name}:$hz") }
+            override fun setSplit(on: Boolean) { written.add("split:$on") }
+            override val supportsTxStatus = true
+            override fun isTransmitting() = tx
+        }
+        val tracker = tracker(rig)
+        assertTrue(tracker.step().heldForTx)
+        assertTrue(rig.written.isEmpty())
+        tx = false
+        assertTrue(tracker.step().sentUplink)
+        val unknown = FakeRig(silentVfoB = true)
+        assertFalse(tracker(unknown).step().heldForTx)
+    }
+    @Test fun satelliteExampleUplinkAndDownlinkAtSevenKmPerSecond() {
+        for ((rr, downExpected, upExpected) in listOf(
+            Triple(7.0, 436_888_000.0 * (1 - 7.0 / Doppler.C_KM_S), 145_925_000.0 / (1 - 7.0 / Doppler.C_KM_S)),
+            Triple(-7.0, 436_888_000.0 * (1 + 7.0 / Doppler.C_KM_S), 145_925_000.0 / (1 + 7.0 / Doppler.C_KM_S)))) {
+            val rig = FakeRig(model = RigModel.IC705, silentVfoB = true)
+            rate = rr
+            val tracker = RigTracker(rig, 436_888_000, 145_925_000, { rate }, { SatelliteLook(it, 0.0, 30.0, 1000.0) }, 100, { now })
+            val step = tracker.start()
+            assertTrue(abs(step.downlinkHz - downExpected) <= 1)
+            assertTrue(abs(step.uplinkHz!! - upExpected) <= 1)
+            assertEquals(listOf("split:true", "A:${step.downlinkHz}", "B:${step.uplinkHz}"), rig.calls)
+            assertTrue((step.downlinkHz < 436_888_000) == (step.uplinkHz!! > 145_925_000))
+            tracker.stop()
+            assertEquals("split:false", rig.calls.last())
+        }
+    }
     @Test fun belowHorizonAndOutOfRangeAreRejected() {
         val rig = FakeRig()
         elevation = -1.0
