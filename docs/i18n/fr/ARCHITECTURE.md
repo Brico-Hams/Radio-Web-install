@@ -108,3 +108,34 @@ Avant toute écriture, la sauvegarde est relue et comparée aux empreintes de l'
 - **RepeaterBook :** nécessite un jeton approuvé par RepeaterBook et n'existe que dans la version locale.
 - **Web :** les données satellites peuvent dater d'un jour (avertissement à partir de 7 jours) ; firmware/RadioID sont chargés manuellement.
 - **Matériel :** des lectures antérieures d'une unité Quansheng existent, mais ne certifient ni les écritures, ni le résident indépendant, ni la combinaison actuelle APK, slot SAT et téléphone. Les essais physiques de cette révision restent à faire.
+
+## Revue de sécurité (SonarQube 2026-11-13)
+
+### Corrigé
+
+**xml:S6358 – Android application backup should be disabled or restricted** (MEDIUM) — `android/app/src/fdroid/AndroidManifest.xml:6`.
+- *Pourquoi c'était un défaut :* avec la sauvegarde activée, les données locales (préférences, fichiers, bases de données) peuvent être exportées vers Google Cloud ou via `adb backup`, ou restaurées depuis une copie altérée (CWE-922, OWASP M9/A1). L'overlay `<application>` du flavor F-Droid ne déclarait pas l'attribut, donc l'analyse le considérait implicite (par défaut `true`).
+- *Modification :* ajout de `android:allowBackup="false"` à l'overlay.
+- *Aucune perte de fonctionnalité :* le manifeste principal déclare déjà `allowBackup="false"`, `fullBackupContent="false"` et `dataExtractionRules` ; la valeur fusionnée ne change pas. Vérification : le `manifest merger report` du flavor fdroid (`processFdroidReleaseMainManifest`) indique `allowBackup=false`.
+
+**xml:S5332 – Clear-text protocols should not be used** (LOW) — même fichier, ligne 6.
+- *Pourquoi c'était un défaut :* sous Android < 9, `usesCleartextTraffic` vaut implicitement `true`, ce qui autorise le http non chiffré (interception et altération, CWE-319, CWE-200).
+- *Modification :* ajout de `android:usesCleartextTraffic="false"` à l'overlay.
+- *Aucune perte de fonctionnalité :* le manifeste principal le fixe déjà à `false` et définit `networkSecurityConfig` ; le résultat fusionné est identique. Vérification : même rapport de fusion ; le comportement du rotor et des radios ne change pas.
+
+**kotlin:S2245 – Pseudorandom number generators (PRNGs) should not be used in security contexts** (MEDIUM) — `android/app/src/main/java/org/bricohams/radio/Rt950Protocol.kt:156`.
+- *Pourquoi c'était un défaut :* `Random()` n'est pas un générateur cryptographiquement sûr ; un attaquant qui connaît ou devine son état interne peut prédire les valeurs suivantes (CWE-338, CWE-330, OWASP A2 Cryptographic Failures). La valeur par défaut de `Rt950Session.random` utilisait `Random()`.
+- *Modification :* la valeur par défaut devient `SecureRandom()` (`java.security.SecureRandom`, sous-classe de `java.util.Random`). Le type du paramètre reste `Random`, les tests peuvent donc injecter une instance avec graine.
+- *Aucune perte de fonctionnalité :* `buildKeyFrame` utilise toujours les mêmes plages (`nextInt(2)+1`, `nextInt(5)`, `nextInt(KEYS.size)`), donc les octets du protocole RT-950 gardent leur format. Vérification : (`Rt950ProtocolTest` : `headersAndKeySelection`, `readAllSkipsUnknownRegions`).
+
+**kotlin:S2245 (MEDIUM)** — `android/app/src/test/java/org/bricohams/radio/Rt950ProtocolTest.kt:93` (et lignes 67, 175, 309). Non modifié.
+- *Pourquoi Sonar le signale :* même raison que ci-dessus (PRNG non cryptographique, CWE-338/CWE-330).
+- *Décision :* c'est un test unitaire qui utilise `Random(it.toLong())` avec une graine fixe pour produire des trames de clé reproductibles ; ce n'est pas un contexte de sécurité (aucun secret généré) et `SecureRandom` rendrait le test non déterministe. Laissé tel quel.
+- *Aucune perte de fonctionnalité :* rien n'est modifié. Vérification : `Rt950ProtocolTest` passe toujours ; la classe de production accepte tout `Random` injecté.
+
+### Non modifié - décision requise
+
+- **javascript:S4036 (LOW, CWE-426/427)** — `scripts/build-platform-app.cjs:16,20,27,30`, `scripts/build-platform-resident.cjs:55,73,82,85,87,89`, `scripts/export-project.cjs:48,94,177,178,181,230`. Les scripts appellent `arm-none-eabi-*`, `git` et `zip` par leur nom. Il n'existe pas de chemin absolu fixe valable sur toutes les machines (la toolchain ARM et git s'installent à des emplacements différents) ; en inventer un ou exiger une nouvelle variable d'environnement changerait l'usage. Décision : accepter le risque (outils de développement lancés par le développeur) ou définir une variable d'environnement pour le chemin de la toolchain. (L'appel à `tar.exe` ligne 228 utilise déjà un chemin absolu.)
+- **kotlin:S1313 (LOW)** — `android/app/src/main/java/org/bricohams/radio/RotorProtocol.kt:14`. `AP_HOST = "192.168.4.1"` est l'adresse d'usine du point d'accès du rotor ESP32 ; la déplacer dans la configuration casserait la connexion par défaut.
+- **kotlin:S2245 (MEDIUM)** — `android/app/src/test/java/org/bricohams/radio/FtxEnhancedDecoderTest.kt:59`. C'est un test unitaire avec une graine fixe `Random(7)` pour reproduire le motif d'erreurs ; ce n'est pas un contexte de sécurité et `SecureRandom` rendrait le test non déterministe.
+- **kotlin:S7204 (HIGH)** — `android/app/build.gradle.kts:52`. Activer `isMinifyEnabled` exige des règles ProGuard/R8 (il n'existe aucun `proguard-rules.pro`) et de vérifier sur un appareil que réflexion/JSON/BLE fonctionnent toujours ; impossible à garantir sans essais physiques. Décision : créer les règles keep et tester un APK release minifié.
