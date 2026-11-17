@@ -69,7 +69,9 @@ async function publish() {
       id, name, edition, publisher: "Bricohams", version: "v6.1.0",
       distributionVersion: distribution,
       size: checked.firmware.bytes.length, sha256: expected, path: `precompiled/${name}`,
-      targets: ["UV-K1", "UV-K5-V3"], stability: "stable", hardwareBootTested: false,
+      targets: ["UV-K1", "UV-K5-V3"], stability: "stable", hardwareBootTested: true,
+      // Reported by the author on 2026-11-17; not an independent certification.
+      hardwareTest: { by: "EA5KGV", radio: "UV-K5 V3", date: "2026-11-17" },
       license: "GPL-3.0-or-later AND Apache-2.0",
       source: "https://github.com/Brico-Hams/Radio-Web-install",
       upstream: checked.info.upstream, build: checked.info

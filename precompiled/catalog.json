@@ -19,7 +19,12 @@
         "UV-K5-V3"
       ],
       "stability": "stable",
-      "hardwareBootTested": false,
+      "hardwareBootTested": true,
+      "hardwareTest": {
+        "by": "EA5KGV",
+        "radio": "UV-K5 V3",
+        "date": "2026-11-17"
+      },
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
       "upstream": {
@@ -272,7 +277,12 @@
         "UV-K5-V3"
       ],
       "stability": "stable",
-      "hardwareBootTested": false,
+      "hardwareBootTested": true,
+      "hardwareTest": {
+        "by": "EA5KGV",
+        "radio": "UV-K5 V3",
+        "date": "2026-11-17"
+      },
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
       "upstream": {
@@ -588,7 +598,12 @@
         "UV-K5-V3"
       ],
       "stability": "stable",
-      "hardwareBootTested": false,
+      "hardwareBootTested": true,
+      "hardwareTest": {
+        "by": "EA5KGV",
+        "radio": "UV-K5 V3",
+        "date": "2026-11-17"
+      },
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
       "upstream": {
@@ -866,7 +881,12 @@
         "UV-K5-V3"
       ],
       "stability": "stable",
-      "hardwareBootTested": false,
+      "hardwareBootTested": true,
+      "hardwareTest": {
+        "by": "EA5KGV",
+        "radio": "UV-K5 V3",
+        "date": "2026-11-17"
+      },
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
       "upstream": {
@@ -1076,7 +1096,12 @@
         "UV-K5-V3"
       ],
       "stability": "stable",
-      "hardwareBootTested": false,
+      "hardwareBootTested": true,
+      "hardwareTest": {
+        "by": "EA5KGV",
+        "radio": "UV-K5 V3",
+        "date": "2026-11-17"
+      },
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
       "upstream": {
@@ -1284,7 +1309,12 @@
         "UV-K5-V3"
       ],
       "stability": "stable",
-      "hardwareBootTested": false,
+      "hardwareBootTested": true,
+      "hardwareTest": {
+        "by": "EA5KGV",
+        "radio": "UV-K5 V3",
+        "date": "2026-11-17"
+      },
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
       "upstream": {
@@ -1490,7 +1520,12 @@
         "UV-K5-V3"
       ],
       "stability": "stable",
-      "hardwareBootTested": false,
+      "hardwareBootTested": true,
+      "hardwareTest": {
+        "by": "EA5KGV",
+        "radio": "UV-K5 V3",
+        "date": "2026-11-17"
+      },
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
       "upstream": {
@@ -1696,7 +1731,12 @@
         "UV-K5-V3"
       ],
       "stability": "stable",
-      "hardwareBootTested": false,
+      "hardwareBootTested": true,
+      "hardwareTest": {
+        "by": "EA5KGV",
+        "radio": "UV-K5 V3",
+        "date": "2026-11-17"
+      },
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
       "upstream": {
@@ -1904,7 +1944,12 @@
         "UV-K5-V3"
       ],
       "stability": "stable",
-      "hardwareBootTested": false,
+      "hardwareBootTested": true,
+      "hardwareTest": {
+        "by": "EA5KGV",
+        "radio": "UV-K5 V3",
+        "date": "2026-11-17"
+      },
       "license": "GPL-3.0-or-later AND Apache-2.0",
       "source": "https://github.com/Brico-Hams/Radio-Web-install",
       "upstream": {

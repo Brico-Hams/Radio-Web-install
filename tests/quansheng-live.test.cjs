@@ -187,7 +187,8 @@ test("precompiled index ships nine verified images, with source and honest hardw
     assert.ok(ALLOWED_FILES.includes(entry.path));
     const bytes = new Uint8Array(fs.readFileSync(path.join(__dirname, "..", entry.path)));
     await R.verifyPrecompiledImage(entry, bytes);
-    assert.equal(entry.hardwareBootTested, false);
+    assert.equal(entry.hardwareBootTested, true);
+    assert.deepEqual(entry.hardwareTest, { by: "EA5KGV", radio: "UV-K5 V3", date: "2026-11-17" });
     const corrupt = bytes.slice();
     corrupt[128] ^= 1;
     await assert.rejects(R.verifyPrecompiledImage(entry, corrupt), /corrupta/);

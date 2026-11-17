@@ -37,8 +37,9 @@ largeur de bande, seuils de squelch/bande, tonalite CTCSS/DCS, compander, NOAA o
 apres TX. Le bref `BK4819_RX_TurnOn` du pas est conserve pour calibrer le VCO.
 Ou : `scripts/firmware-fast-retune.cjs` ; `build-info.json` ->
 `fastRetuneIntegration`. F4HWN est sous Apache-2.0 ; LICENSE/NOTICE conserves.
-Statut : NON compile dans cette validation ni teste sur radio. Avant usage,
-tester RX squelch ouvert, pas de 1 kHz, changement de bande, monitor et TX.
+Statut : compile dans GitHub Actions (toolchain fixee 13.3.rel1), publie comme
+stable sans "BETA" et teste sur radio physique par EA5KGV sur un UV-K5 V3 le
+17-11-2026 (test declare par l'auteur, pas une certification independante).
 
 ## Identité et portée
 

@@ -38,9 +38,9 @@ oder nach TX. Das kurze `BK4819_RX_TurnOn` des Schritts bleibt fuer die
 VCO-Kalibrierung erhalten.
 Wo: `scripts/firmware-fast-retune.cjs`; `build-info.json` ->
 `fastRetuneIntegration`. F4HWN ist Apache-2.0; LICENSE/NOTICE bleiben erhalten.
-Status: In dieser Validierung NICHT kompiliert und nicht am Funkgeraet getestet.
-Vor der Nutzung RX mit offenem Squelch, 1-kHz-Schritte, Bandwechsel, Monitor und
-TX testen.
+Status: In GitHub Actions gebaut (fixierte Toolchain 13.3.rel1), als stabil ohne
+"BETA" veroeffentlicht und am 17.11.2026 von EA5KGV an einem UV-K5 V3 am echten
+Funkgeraet getestet (Angabe des Autors, keine unabhaengige Zertifizierung).
 
 ## Identität und Geltungsbereich
 

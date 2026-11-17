@@ -13,7 +13,11 @@
         entry.name === `${entry.id}.bin` && /^[a-f0-9]{64}$/.test(entry.sha256) &&
         Number.isInteger(entry.size) && entry.size >= 256 && entry.size <= 0x1d800 &&
         entry.targets?.length === 2 && entry.targets.includes("UV-K1") && entry.targets.includes("UV-K5-V3") &&
-        ["stable", "beta", "upstream-stable"].includes(entry.stability) && entry.hardwareBootTested === false &&
+        ["stable", "beta", "upstream-stable"].includes(entry.stability) &&
+        // A hardware claim must say who tested, on which radio and when.
+        (entry.hardwareBootTested === false || (entry.hardwareBootTested === true &&
+          /^[\x20-\x7e]{1,40}$/.test(entry.hardwareTest?.by ?? "") && /^[\x20-\x7e]{1,40}$/.test(entry.hardwareTest?.radio ?? "") &&
+          /^\d{4}-\d{2}-\d{2}$/.test(entry.hardwareTest?.date ?? ""))) &&
         typeof entry.edition === "string" && /^[\x20-\x7e]{1,15}$/.test(entry.edition) &&
         ["Bricohams", "Armel F4HWN"].includes(entry.publisher), "Entrada precompilada no valida.");
       const source = new URL(entry.source);
