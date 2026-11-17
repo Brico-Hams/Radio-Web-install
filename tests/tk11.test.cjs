@@ -294,3 +294,26 @@ test("channels export to CSV and the hex viewer formats offsets", () => {
   assert.deepEqual(imported.map(channel => channel.rxHz), [145500000, 446006250]);
   assert.throws(() => T.channelsFromTemplate(new Array(1000).fill({ rx: 145.5, name: "X" })), /999/);
 });
+
+test("unverified regions never overlap writable regions and are rejected as writes", () => {
+  for (const region of T.UNVERIFIED_REGIONS) {
+    for (const writable of T.WRITABLE) assert.ok(region.end <= writable.start || region.start >= writable.end, region.name);
+    assert.throws(() => T.assertWritable(region.start, 1), /Escritura rechazada/);
+  }
+});
+
+test("diffImages lists differing runs split by region and is read-only", () => {
+  const a = seededMemory();
+  const b = seededMemory();
+  b[0x100] ^= 1;
+  b[0x10010] ^= 1;
+  for (let offset = 0x17000; offset < 0x17004; offset++) b[offset] ^= 1;
+  const runs = T.diffImages(a, b);
+  assert.deepEqual(runs, [
+    { start: 0x100, end: 0x101, region: "channels" },
+    { start: 0x10010, end: 0x10011, region: "candidate-calibration-1" },
+    { start: 0x17000, end: 0x17004, region: "power-on-password" }
+  ]);
+  assert.throws(() => T.diffImages(a, new Uint8Array(10)), /imagenes completas/);
+  assert.equal(T.describeOffset(0x0F9C0), "gap");
+});

@@ -51,7 +51,7 @@
         else if (key === "disconnect") node.disabled = busy || !connector;
         else if (["write-settings", "write-channels", "restore"].includes(key)) node.disabled = busy || !connected || !permit || !memory;
         else if (key === "csv" || key === "csv-tk11") node.disabled = !channels.some(Boolean);
-        else if (key === "import-csv") node.disabled = busy;
+        else if (key === "import-csv" || key === "compare") node.disabled = busy;
         else if (key === "download") node.disabled = !memory;
         else if (key === "hex") node.disabled = !memory;
         else if (key === "template") node.disabled = busy || !templateSelect.value;
@@ -200,6 +200,20 @@
       status.textContent = "Plantilla cargada en la tabla. La radio no se modifica hasta pulsar Escribir canales.";
     }));
     buttons.hex = button("Ver memoria en hexadecimal", () => { if (memory) showHex(); });
+    const compareInput = el("input", { type: "file", accept: ".bin", id: "tk11-compare-files", hidden: true, multiple: true });
+    const compareOutput = el("pre", { id: "tk11-compare", translate: "no" });
+    buttons.compare = button("Comparar dos copias", () => compareInput.click());
+    compareInput.onchange = () => action("Comparando las copias", async () => {
+      const files = [...compareInput.files];
+      compareInput.value = "";
+      R.assert(files.length === 2 && files.every(file => file.size === T.MEMORY_SIZE), "Selecciona exactamente dos copias .bin completas del TK-11.");
+      const [a, b] = await Promise.all(files.map(async file => new Uint8Array(await file.arrayBuffer())));
+      const runs = T.diffImages(a, b);
+      const hex5 = value => `0x${value.toString(16).toUpperCase().padStart(5, "0")}`;
+      compareOutput.textContent = runs.slice(0, 200)
+        .map(run => `${hex5(run.start)}-${hex5(run.end)}  (${run.end - run.start} bytes)  ${run.region}`).join("\n");
+      status.textContent = `${runs.length} zonas distintas entre las dos copias. Solo lectura: la radio no se toca.`;
+    });
     templateSelect.onchange = refresh;
     main.append(el("section", { id: "tk11-panel", className: "panel" },
       el("h2", { text: "TK-11 (Quansheng)" }),
@@ -217,7 +231,9 @@
         el("th", { text: "Desplazamiento MHz" }), el("th", { text: "Direccion" }), el("th", { text: "Modo" }), el("th", { text: "Potencia" }))), channelsBody),
       el("h3", { text: "Memoria" }),
       el("div", { className: "actions" }, hexOffset, buttons.hex),
-      hexView));
+      hexView,
+      el("div", { className: "actions" }, buttons.compare, compareInput),
+      compareOutput));
     refresh();
   }
   Object.assign(R, { mountTK11UI });
