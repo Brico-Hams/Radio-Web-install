@@ -21,6 +21,21 @@
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     },
     {
+      "name": "KO6LNC",
+      "rx": "437.97500",
+      "tx": "437.97500",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/25051",
+      "zone": "Baja California",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
       "name": "XE2CPT",
       "rx": "146.85000",
       "tx": "146.25000",
@@ -1428,6 +1443,21 @@
       "rxOnly": true,
       "source": "https://hearham.com/repeaters/17423",
       "zone": "Tamaulipas",
+      "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
+    },
+    {
+      "name": "XE1IFV",
+      "rx": "145.15000",
+      "tx": "145.15000",
+      "mode": "FM",
+      "colorCode": 0,
+      "timeslot": 1,
+      "talkgroup": 0,
+      "bandwidth": "pending",
+      "broadcastOnly": false,
+      "rxOnly": true,
+      "source": "https://hearham.com/repeaters/12724",
+      "zone": "Zacatecas",
       "notes": "RX only; nominal TX and published tone are reference information, not enabled. Verify local activity, restrictions and licence."
     }
   ]
