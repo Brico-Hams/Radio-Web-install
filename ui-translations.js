@@ -1270,6 +1270,30 @@ Direccion del clarificador|Clarifier direction|Direction du clarificateur|Clarif
 Offset del clarificador|Clarifier offset|Décalage du clarificateur|Clarifier-Offset
 Clarificador RX|RX clarifier|Clarificateur RX|RX-Clarifier
 Clarificador TX|TX clarifier|Clarificateur TX|TX-Clarifier
+Actualizar medidores cada 1 s|Update meters every 1 s|Actualiser les mesures chaque seconde|Messwerte jede Sekunde aktualisieren
+Atenuador RF (ATT)|RF attenuator (ATT)|Atténuateur RF (ATT)|HF-Abschwächer (ATT)
+Reductor de impulsos NB (0 = OFF, 1-10)|Noise blanker NB (0 = OFF, 1-10)|Réducteur d’impulsions NB (0 = OFF, 1-10)|Impulsstörungsunterdrücker NB (0 = OFF, 1-10)
+Reduccion de ruido DNR (0 = OFF, 1-10)|Noise reduction DNR (0 = OFF, 1-10)|Réduction de bruit DNR (0 = OFF, 1-10)|Rauschminderung DNR (0 = OFF, 1-10)
+Notch automatico|Auto notch|Notch automatique|Automatischer Notch
+Filtro estrecho (NAR)|Narrow filter (NAR)|Filtre étroit (NAR)|Schmalfilter (NAR)
+Notch manual|Manual notch|Notch manuel|Manueller Notch
+Frecuencia del notch manual (10-3200 Hz, pasos de 10)|Manual notch frequency (10-3200 Hz, 10 Hz steps)|Fréquence du notch manuel (10-3200 Hz, pas de 10)|Frequenz des manuellen Notch (10-3200 Hz, 10-Hz-Schritte)
+Clarificador de recepcion|Receive clarifier|Clarificateur de réception|Empfangs-Clarifier
+Offset del clarificador (-9999 a +9999 Hz)|Clarifier offset (-9999 to +9999 Hz)|Décalage du clarificateur (-9999 à +9999 Hz)|Clarifier-Offset (-9999 bis +9999 Hz)
+Velocidad CW (4-60 WPM)|CW speed (4-60 WPM)|Vitesse CW (4-60 WPM)|CW-Geschwindigkeit (4-60 WPM)
+Bloqueo del panel|Panel lock|Verrouillage du panneau|Bedienfeldsperre
+5. VFO|5. VFO|5. VFO|5. VFO
+Leer VFO|Read VFO|Lire le VFO|VFO lesen
+VFO A (MHz)|VFO A (MHz)|VFO A (MHz)|VFO A (MHz)
+Fijar VFO A|Set VFO A|Régler le VFO A|VFO A setzen
+VFO B (MHz)|VFO B (MHz)|VFO B (MHz)|VFO B (MHz)
+Fijar VFO B|Set VFO B|Régler le VFO B|VFO B setzen
+Modo MAIN|MAIN mode|Mode MAIN|MAIN-Modus
+Split (ST)|Split (ST)|Split (ST)|Split (ST)
+Leyendo control remoto...|Reading remote control...|Lecture de la commande à distance...|Fernsteuerung wird gelesen...
+Control remoto leido.|Remote control read.|Commande à distance lue.|Fernsteuerung gelesen.
+Leyendo VFO...|Reading VFO...|Lecture du VFO...|VFO wird gelesen...
+VFO leido.|VFO read.|VFO lu.|VFO gelesen.
 Canal vacio|Empty channel|Canal vide|Leerer Kanal
 Frecuencia MHz canal {0}|Frequency MHz channel {0}|Fréquence MHz canal {0}|Frequenz MHz Kanal {0}
 Modo canal {0}|Mode channel {0}|Mode canal {0}|Modus Kanal {0}

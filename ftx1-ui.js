@@ -401,7 +401,10 @@
     // Remote control
     let polling = null;
     let ctlRead = false;
-    const CTL_INPUTS = ["af", "rf", "sql", "width", "ifshift", "agc", "pre0", "pre1", "pre2", "att", "power"];
+    const CTL_INPUTS = ["af", "rf", "sql", "width", "ifshift", "agc", "pre0", "pre1", "pre2", "att", "power",
+      "nb", "dnr", "anotch", "narrow", "notchon", "notchhz", "clar", "clarhz", "keyspeed", "lock"];
+    const VFO_INPUTS = ["a", "a-set", "b", "b-set", "mode", "split"];
+    let vfoRead = false;
     const sideValue = () => Number($("ctl-side").value);
     const sideName = () => sideValue() === 0 ? "MAIN" : "SUB";
     function fillSelect(id, entries) {
@@ -415,6 +418,7 @@
     fillSelect("ctl-pre0", Object.entries(R.FTX1_PREAMP_HF));
     fillSelect("ctl-pre1", [["0", "OFF"], ["1", "ON"]]);
     fillSelect("ctl-pre2", [["0", "OFF"], ["1", "ON"]]);
+    fillSelect("vfo-mode", Object.entries(R.FTX1_MODES));
     function stopPolling() {
       if (polling !== null) { clearTimeout(polling); polling = null; }
       $("ctl-poll").checked = false;
@@ -451,6 +455,22 @@
       $("ctl-agc").value = String(values.agc);
       for (const band of [0, 1, 2]) $(`ctl-pre${band}`).value = String(values.preamp[band]);
       $("ctl-att").checked = values.att;
+      // null = the radio answered "?;" (not available in this mode): leave the control empty and disabled.
+      const put = (id, value, prop = "value") => {
+        const element = $(`ctl-${id}`);
+        element.disabled = value === null;
+        element[prop] = value === null ? (prop === "checked" ? false : "") : value;
+      };
+      put("nb", values.nb);
+      put("dnr", values.dnr);
+      put("anotch", values.anotch, "checked");
+      put("narrow", values.narrow, "checked");
+      put("notchon", values.notchOn, "checked");
+      put("notchhz", values.notchHz);
+      put("clar", values.clar, "checked");
+      put("clarhz", values.clarHz);
+      put("keyspeed", values.keySpeed);
+      put("lock", values.lock, "checked");
       const power = $("ctl-power");
       power.min = values.power.min; power.max = values.power.max; power.value = values.power.watts;
       $("ctl-power-label").textContent = `Potencia (W, ${values.power.min}-${values.power.max} segun ${R.FTX1_POWER_RANGES[values.power.head].name})`;
@@ -480,6 +500,16 @@
     bindControl("agc", "agc", () => Number($("ctl-agc").value));
     bindControl("att", "att", () => $("ctl-att").checked);
     bindControl("power", "power", () => intOf("power"));
+    bindControl("nb", "nb", () => intOf("nb"));
+    bindControl("dnr", "dnr", () => intOf("dnr"));
+    bindControl("anotch", "anotch", () => $("ctl-anotch").checked);
+    bindControl("narrow", "narrow", () => $("ctl-narrow").checked);
+    bindControl("notchon", "notchOn", () => $("ctl-notchon").checked);
+    bindControl("notchhz", "notchHz", () => intOf("notchhz"));
+    bindControl("clar", "clar", () => $("ctl-clar").checked);
+    bindControl("clarhz", "clarHz", () => intOf("clarhz"));
+    bindControl("keyspeed", "keySpeed", () => intOf("keyspeed"));
+    bindControl("lock", "lock", () => $("ctl-lock").checked);
     for (const band of [0, 1, 2]) bindControl(`pre${band}`, "preamp", () => ({ band, value: Number($(`ctl-pre${band}`).value) }));
     bind("ctl-read", "click", async () => {
       status("Leyendo control remoto...");
@@ -490,6 +520,39 @@
       status("Control remoto leido.");
     });
     bind("ctl-side", "change", () => { ctlRead = false; });
+    function showVfo(values) {
+      $("vfo-a").value = (values.a / 1e6).toFixed(6);
+      $("vfo-b").value = (values.b / 1e6).toFixed(6);
+      $("vfo-mode").value = R.FTX1_MODES[values.mode] ? values.mode : "";
+      $("vfo-split").checked = values.split;
+    }
+    const hzOf = id => {
+      const text = $(id).value.trim();
+      R.assert(/^\d{1,3}(\.\d{1,6})?$/.test(text), "Frecuencia en MHz no valida.");
+      return Math.round(Number(text) * 1e6);
+    };
+    // A failed write re-reads the VFO panel so it shows what the radio really holds.
+    function bindVfo(id, event, action, message) {
+      bind(id, event, async () => {
+        try {
+          await radioTask(action);
+          status(message);
+        } catch (error) {
+          try { showVfo(await radioTask(() => cat.readVfo())); } catch { /* the original error is the useful one */ }
+          throw error;
+        }
+      });
+    }
+    bind("vfo-read", "click", async () => {
+      status("Leyendo VFO...");
+      showVfo(await radioTask(() => cat.readVfo()));
+      vfoRead = true;
+      status("VFO leido.");
+    });
+    bindVfo("vfo-a-set", "click", () => cat.setFrequency("A", hzOf("vfo-a")), "VFO A verificado.");
+    bindVfo("vfo-b-set", "click", () => cat.setFrequency("B", hzOf("vfo-b")), "VFO B verificado.");
+    bindVfo("vfo-mode", "change", () => cat.setMode($("vfo-mode").value), "Modo MAIN verificado.");
+    bindVfo("vfo-split", "change", () => cat.setSplit($("vfo-split").checked), "Split verificado.");
     bind("ctl-poll", "change", () => {
       if ($("ctl-poll").checked) pollMeters();
       else stopPolling();
@@ -497,10 +560,12 @@
     const baseRefresh = refresh;
     refresh = function () {
       baseRefresh();
-      if (!cat) { stopPolling(); ctlRead = false; }
+      if (!cat) { stopPolling(); ctlRead = false; vfoRead = false; }
       $("ctl-read").disabled = !cat;
+      $("vfo-read").disabled = !cat;
       $("ctl-poll").disabled = !cat;
       for (const id of CTL_INPUTS) $(`ctl-${id}`).disabled = !(cat && ctlRead);
+      for (const id of VFO_INPUTS) $(`vfo-${id}`).disabled = !(cat && vfoRead);
     };
     refresh();
   };

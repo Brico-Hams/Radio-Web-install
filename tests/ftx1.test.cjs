@@ -474,21 +474,42 @@ class RemotePort extends R.BufferedTransport {
       return null;
     }
     const key = code.toLowerCase() + body[0];
+    if (code === "KS" || code === "LK" || code === "ST" || code === "FA" || code === "FB") {
+      if (body === "") return `${code}${this.state[code.toLowerCase()]};`;
+      set(code.toLowerCase(), body);
+      return null;
+    }
+    if (code === "BP" || code === "CF") {
+      const head = body.slice(0, code === "BP" ? 2 : 3);
+      if (body.length === head.length) return `${code}${head}${this.state[code.toLowerCase() + head]};`;
+      set(code.toLowerCase() + head, body.slice(head.length));
+      return null;
+    }
     if (body.length === 1) return `${code}${body}${this.state[key]};`;
     set(key, body.slice(1));
     return null;
   }
 }
 const remoteState = () => ({ sm: "042", rm: "010", ag0: "128", rg0: "255", sq0: "000", sh0: "005", is0: "0+0200", gt0: "5",
-  pa0: "1", pa1: "0", pa2: "1", ra: "0", pc: "005", pcHead: 1 });
+  pa0: "1", pa1: "0", pa2: "1", ra: "0", pc: "005", pcHead: 1, nl0: "003", rl0: "07", bc0: "0", na0: "1", bp00: "000", bp01: "150",
+  cf000: "00000", cf001: "-0250", ks: "020", lk: "0", st: "0", md0: "2", fa: "014074000", fb: "007074000" });
 
 test("readControls and readMeters read every documented command and setControl verifies by reading back", async () => {
   const port = new RemotePort(remoteState());
   const cat = new R.Ftx1Cat(port);
   const controls = await cat.readControls(0);
   assert.deepEqual(controls, { smeter: 42, af: 128, rf: 255, sql: 0, width: 5, ifShift: 200, agc: 5,
-    preamp: { 0: 1, 1: 0, 2: 1 }, att: false, power: { head: 1, watts: 5, min: 5, max: 10 } });
-  assert.deepEqual(port.commands, ["PA0;", "PA1;", "PA2;", "SM0;", "AG0;", "RG0;", "SQ0;", "SH0;", "IS0;", "GT0;", "RA0;", "PC;"]);
+    preamp: { 0: 1, 1: 0, 2: 1 }, att: false, power: { head: 1, watts: 5, min: 5, max: 10 }, nb: 3, dnr: 7, anotch: false,
+    notchOn: false, notchHz: 1500, narrow: true, clar: false, clarHz: -250, keySpeed: 20, lock: false });
+  assert.deepEqual(port.commands, ["PA0;", "PA1;", "PA2;", "SM0;", "AG0;", "RG0;", "SQ0;", "SH0;", "IS0;", "GT0;", "RA0;", "PC;",
+    "NL0;", "RL0;", "BC0;", "BP00;", "BP01;", "NA0;", "CF000;", "CF001;", "KS;", "LK;"]);
+  const unavailable = new R.Ftx1Cat(new RemotePort(remoteState()));
+  const original = unavailable.command.bind(unavailable);
+  unavailable.command = (text, ...rest) => /^(NL|RL|BC|NA|CF|KS|LK)/.test(text) ? Promise.resolve("?;") : original(text, ...rest);
+  const partial = await unavailable.readControls(0);
+  assert.deepEqual([partial.nb, partial.dnr, partial.anotch, partial.narrow, partial.clar, partial.clarHz, partial.keySpeed, partial.lock],
+    [null, null, null, null, null, null, null, null]);
+  assert.equal(partial.af, 128);
   port.commands.length = 0;
   assert.equal((await cat.readMeters()).vdd, 10);
   assert.deepEqual(port.commands, ["RM1;", "RM2;", "RM3;", "RM4;", "RM5;", "RM6;", "RM7;", "RM8;"]);
@@ -517,4 +538,92 @@ test("setControl rejects out of range values before sending and fails when the r
   const stuckCat = new R.Ftx1Cat(stuck);
   await assert.rejects(stuckCat.setControl("af", 0, 10), /Verificacion fallida en AG/);
   await assert.rejects(stuckCat.setControl("att", 0, true), /Verificacion fallida en RA/);
+});
+
+test("receive extras (NL RL BC BP NA CF KS LK ST MD) are byte exact", () => {
+  assert.equal(R.ftx1NbWriteCommand(0, 10), "NL0010;");
+  assert.equal(R.ftx1NbReadCommand(1), "NL1;");
+  assert.equal(R.parseFtx1Nb("NL1003;", 1), 3);
+  assert.equal(R.ftx1DnrWriteCommand(1, 7), "RL107;");
+  assert.equal(R.parseFtx1Dnr("RL010;", 0), 10);
+  assert.equal(R.ftx1SideFlagWriteCommand("BC", 0, true), "BC01;");
+  assert.equal(R.ftx1SideFlagWriteCommand("NA", 1, false), "NA10;");
+  assert.equal(R.parseFtx1SideFlag("NA", "NA11;", 1), true);
+  assert.equal(R.ftx1NotchOnWriteCommand(0, true), "BP00001;");
+  assert.equal(R.ftx1NotchOnReadCommand(1), "BP10;");
+  assert.equal(R.ftx1NotchHzWriteCommand(0, 1500), "BP01150;");
+  assert.equal(R.ftx1NotchHzWriteCommand(1, 3200), "BP11320;");
+  assert.equal(R.ftx1NotchHzReadCommand(0), "BP01;");
+  assert.equal(R.parseFtx1NotchHz("BP01150;", 0), 1500);
+  assert.equal(R.parseFtx1NotchOn("BP00001;", 0), true);
+  assert.equal(R.ftx1ClarWriteCommand(0, true), "CF00010000;");
+  assert.equal(R.ftx1ClarReadCommand(1), "CF100;");
+  assert.deepEqual(R.parseFtx1Clar("CF00010000;", 0), { rx: true, tx: false });
+  assert.equal(R.ftx1ClarHzWriteCommand(0, 250), "CF001+0250;");
+  assert.equal(R.ftx1ClarHzWriteCommand(1, -9999), "CF101-9999;");
+  assert.equal(R.ftx1ClarHzReadCommand(0), "CF001;");
+  assert.equal(R.parseFtx1ClarHz("CF001-0000;", 0), 0);
+  assert.equal(R.ftx1KeySpeedWriteCommand(4), "KS004;");
+  assert.equal(R.ftx1KeySpeedWriteCommand(60), "KS060;");
+  assert.equal(R.parseFtx1KeySpeed("KS020;"), 20);
+  assert.equal(R.ftx1LockWriteCommand(true), "LK1;");
+  assert.equal(R.parseFtx1Lock("LK0;"), false);
+  assert.equal(R.ftx1SplitWriteCommand(true), "ST1;");
+  assert.equal(R.ftx1SplitReadCommand(), "ST;");
+  assert.equal(R.ftx1ModeWriteCommand("C"), "MD0C;");
+  assert.equal(R.ftx1ModeReadCommand(), "MD0;");
+  assert.equal(R.parseFtx1Mode("MD04;"), "4");
+  assert.throws(() => R.parseFtx1Nb("NL0003;", 1), /otro lado/);
+});
+
+test("the unavailable BP answer (non numeric, e.g. in FM) parses as null", () => {
+  assert.equal(R.parseFtx1NotchHz("BP01F35;", 0), null);
+  assert.equal(R.parseFtx1NotchOn("BP00F00;", 0), null);
+  assert.throws(() => R.parseFtx1NotchHz("BP00150;", 0), /otro lado o ajuste/);
+  assert.throws(() => R.parseFtx1NotchHz("BP01321;", 0), /10-3200/);
+  assert.throws(() => R.parseFtx1NotchOn("BP00002;", 0), /BP no valida/);
+});
+
+test("receive extras are verified by reading back and rejected out of range before sending", async () => {
+  const port = new RemotePort(remoteState());
+  const cat = new R.Ftx1Cat(port);
+  await cat.setControl("nb", 0, 5);
+  await cat.setControl("dnr", 1, 10);
+  await cat.setControl("anotch", 0, true);
+  await cat.setControl("narrow", 0, false);
+  await cat.setControl("notchOn", 0, true);
+  await cat.setControl("notchHz", 0, 1000);
+  await cat.setControl("clar", 0, true);
+  await cat.setControl("clarHz", 0, -1234);
+  await cat.setControl("keySpeed", 0, 30);
+  await cat.setControl("lock", 0, true);
+  for (const written of ["NL0005;", "RL110;", "BC01;", "NA00;", "BP00001;", "BP01100;", "CF00010000;", "CF001-1234;", "KS030;", "LK1;"]) {
+    assert.ok(port.commands.includes(written), written);
+  }
+  assert.equal(port.state.cf001, "-1234");
+  assert.equal(await cat.setMode("C"), "C");
+  assert.equal(await cat.setSplit(true), true);
+  assert.deepEqual(await cat.readVfo(), { a: 14074000, b: 7074000, mode: "C", split: true });
+  port.commands.length = 0;
+  await assert.rejects(cat.setControl("nb", 0, 11), /0-10/);
+  await assert.rejects(cat.setControl("dnr", 0, -1), /0-10/);
+  await assert.rejects(cat.setControl("notchHz", 0, 5), /10-3200/);
+  await assert.rejects(cat.setControl("notchHz", 0, 1005), /10 Hz/);
+  await assert.rejects(cat.setControl("clarHz", 0, 10000), /9999/);
+  await assert.rejects(cat.setControl("keySpeed", 0, 3), /4-60/);
+  await assert.rejects(cat.setControl("keySpeed", 0, 61), /4-60/);
+  await assert.rejects(cat.setControl("lock", 0, 1), /ON\/OFF/);
+  await assert.rejects(cat.setControl("narrow", 2, true), /Lado/);
+  await assert.rejects(cat.setMode("0"), /Modo no valido/);
+  await assert.rejects(cat.setFrequency("A", 29999), /30000/);
+  await assert.rejects(cat.setFrequency("A", 470000001), /470000000/);
+  assert.deepEqual(port.commands, []);
+  const stuck = new RemotePort(remoteState(), { ignore: ["NL", "KS", "CF", "BP", "MD", "ST"] });
+  const stuckCat = new R.Ftx1Cat(stuck);
+  await assert.rejects(stuckCat.setControl("nb", 0, 9), /Verificacion fallida en NL/);
+  await assert.rejects(stuckCat.setControl("keySpeed", 0, 40), /Verificacion fallida en KS/);
+  await assert.rejects(stuckCat.setControl("clar", 0, true), /Verificacion fallida en CF/);
+  await assert.rejects(stuckCat.setControl("notchHz", 0, 1000), /Verificacion fallida en BP/);
+  await assert.rejects(stuckCat.setMode("C"), /Verificacion fallida en MD/);
+  await assert.rejects(stuckCat.setSplit(true), /Verificacion fallida en ST/);
 });

@@ -237,7 +237,7 @@ class IcomCivTest {
         assertEquals(435_200_000L, state.vfo[1])
     }
     @Test fun otherRigsReportTheExtrasAsUnsupported() {
-        val rigs = listOf(YaesuFiveByteRig(ScriptedRadio(), RigModel.FT857), Ftx1Rig(ScriptedRadio()),
+        val rigs = listOf(YaesuFiveByteRig(ScriptedRadio(), RigModel.FT857),
             TruSdxRig(ScriptedRadio()), QrpLabsRig(ScriptedRadio(), RigModel.QMX))
         for (rig in rigs) {
             assertFalse(rig.supportsMeter || rig.supportsRfPower || rig.supportsTxStatus || rig.supportsDataMode || rig.supportsVfoMode)

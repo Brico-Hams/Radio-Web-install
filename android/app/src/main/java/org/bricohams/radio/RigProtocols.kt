@@ -641,6 +641,98 @@ object YaesuFtx1 {
         if (!Regex("PC[12][0-9]{3};").matches(reply)) invalidReply()
         return (reply[2] - '0') to reply.substring(3, 6).toInt()
     }
+    private fun flag(name: String, side: Int, on: Boolean) = name + sideDigit(side) + (if (on) '1' else '0') + ";"
+    private fun parseFlag(reply: String, name: String, side: Int): Boolean {
+        if (!Regex("$name${sideDigit(side)}[01];").matches(reply)) invalidReply()
+        return reply[3] == '1'
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "NL NOISE BLANKER LEVEL" (third_party/ftx1): NL P1 P2P2P2; 000 = OFF, 001-010; read NL P1;
+    fun setNoiseBlanker(side: Int, level: Int): String {
+        requireUi(level in 0..10) { UiText(R.string.err_rig_value, level) }
+        return String.format(Locale.ROOT, "NL%c%03d;", sideDigit(side), level)
+    }
+    fun readNoiseBlanker(side: Int): String = "NL" + sideDigit(side) + ";"
+    fun parseNoiseBlanker(reply: String, side: Int): Int {
+        if (!Regex("NL${sideDigit(side)}[0-9]{3};").matches(reply)) invalidReply()
+        return reply.substring(3, 6).toInt().also { if (it > 10) invalidReply() }
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "RL NOISE REDUCTION LEVEL" (third_party/ftx1): RL P1 P2P2; 00 = OFF, 01-10; read RL P1;
+    fun setNoiseReduction(side: Int, level: Int): String {
+        requireUi(level in 0..10) { UiText(R.string.err_rig_value, level) }
+        return String.format(Locale.ROOT, "RL%c%02d;", sideDigit(side), level)
+    }
+    fun readNoiseReduction(side: Int): String = "RL" + sideDigit(side) + ";"
+    fun parseNoiseReduction(reply: String, side: Int): Int {
+        if (!Regex("RL${sideDigit(side)}[0-9]{2};").matches(reply)) invalidReply()
+        return reply.substring(3, 5).toInt().also { if (it > 10) invalidReply() }
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "BC AUTO NOTCH" (third_party/ftx1): BC P1 P2; P2 0 OFF 1 ON; read BC P1;
+    fun setAutoNotch(side: Int, on: Boolean): String = flag("BC", side, on)
+    fun readAutoNotch(side: Int): String = "BC" + sideDigit(side) + ";"
+    fun parseAutoNotch(reply: String, side: Int): Boolean = parseFlag(reply, "BC", side)
+    // FTX-1 CAT Operation Reference Manual 2508-C "BP MANUAL NOTCH" (third_party/ftx1): BP P1 0 P3P3P3; 000 OFF / 001 ON; read BP P1 0;
+    fun setManualNotch(side: Int, on: Boolean): String =
+        "BP" + sideDigit(side) + "0" + (if (on) "001" else "000") + ";"
+    fun readManualNotch(side: Int): String = "BP" + sideDigit(side) + "0;"
+    fun parseManualNotch(reply: String, side: Int): Boolean {
+        if (!Regex("BP${sideDigit(side)}0[0-9]{3};").matches(reply)) invalidReply()
+        return when (reply.substring(4, 7)) { "000" -> false; "001" -> true; else -> invalidReply() }
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "BP MANUAL NOTCH" (third_party/ftx1): BP P1 1 P3P3P3; 001-320 x 10 Hz; read BP P1 1;
+    fun setManualNotchFrequency(side: Int, step: Int): String {
+        requireUi(step in 1..320) { UiText(R.string.err_rig_value, step) }
+        return String.format(Locale.ROOT, "BP%c1%03d;", sideDigit(side), step)
+    }
+    fun readManualNotchFrequency(side: Int): String = "BP" + sideDigit(side) + "1;"
+    /** Notch frequency in 10 Hz steps; null when the radio answers with letters (e.g. BP01F35; in FM: no notch available). */
+    fun parseManualNotchFrequency(reply: String, side: Int): Int? {
+        if (!Regex("BP${sideDigit(side)}1[0-9A-Za-z]{3};").matches(reply)) invalidReply()
+        val text = reply.substring(4, 7)
+        if (!text.all { it in '0'..'9' }) return null
+        return text.toInt().also { if (it !in 1..320) invalidReply() }
+    }
+    fun notchHz(step: Int): Int = step * 10
+    // FTX-1 CAT Operation Reference Manual 2508-C "NA NARROW" (third_party/ftx1): NA P1 P2; P2 0 OFF 1 ON; read NA P1;
+    fun setNarrow(side: Int, on: Boolean): String = flag("NA", side, on)
+    fun readNarrow(side: Int): String = "NA" + sideDigit(side) + ";"
+    fun parseNarrow(reply: String, side: Int): Boolean = parseFlag(reply, "NA", side)
+    // FTX-1 CAT Operation Reference Manual 2508-C "CF CLARIFIER" (third_party/ftx1): CF P1 0 0 P4 P5 000; P4 RX clarifier, P5 TX clarifier, 0 OFF 1 ON; read CF P1 00;
+    fun setClarifier(side: Int, rx: Boolean, tx: Boolean): String =
+        "CF" + sideDigit(side) + "00" + (if (rx) '1' else '0') + (if (tx) '1' else '0') + "000;"
+    fun readClarifier(side: Int): String = "CF" + sideDigit(side) + "00;"
+    /** (RX clarifier on, TX clarifier on) */
+    fun parseClarifier(reply: String, side: Int): Pair<Boolean, Boolean> {
+        if (!Regex("CF${sideDigit(side)}00[01][01]000;").matches(reply)) invalidReply()
+        return (reply[5] == '1') to (reply[6] == '1')
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "CF CLARIFIER" (third_party/ftx1): CF P1 0 1 P4 P5P5P5P5; P4 '+'/'-', 0000-9999 Hz; read CF P1 01;
+    fun setClarifierOffset(side: Int, hz: Int): String {
+        requireUi(hz in -9999..9999) { UiText(R.string.err_rig_value, hz) }
+        return String.format(Locale.ROOT, "CF%c01%c%04d;", sideDigit(side), if (hz < 0) '-' else '+', Math.abs(hz))
+    }
+    fun readClarifierOffset(side: Int): String = "CF" + sideDigit(side) + "01;"
+    fun parseClarifierOffset(reply: String, side: Int): Int {
+        if (!Regex("CF${sideDigit(side)}01[+-][0-9]{4};").matches(reply)) invalidReply()
+        val hz = reply.substring(6, 10).toInt()
+        return if (reply[5] == '-') -hz else hz
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "KS KEYER SPEED" (third_party/ftx1): KS P1P1P1; 004-060 WPM; read KS;
+    fun setKeySpeed(wpm: Int): String {
+        requireUi(wpm in 4..60) { UiText(R.string.err_rig_value, wpm) }
+        return String.format(Locale.ROOT, "KS%03d;", wpm)
+    }
+    fun readKeySpeed(): String = "KS;"
+    fun parseKeySpeed(reply: String): Int {
+        if (!Regex("KS[0-9]{3};").matches(reply)) invalidReply()
+        return reply.substring(2, 5).toInt().also { if (it !in 4..60) invalidReply() }
+    }
+    // FTX-1 CAT Operation Reference Manual 2508-C "LK LOCK" (third_party/ftx1): LK P1; P1 0 OFF 1 ON; read LK;
+    fun setLock(on: Boolean): String = if (on) "LK1;" else "LK0;"
+    fun readLock(): String = "LK;"
+    fun parseLock(reply: String): Boolean {
+        if (!Regex("LK[01];").matches(reply)) invalidReply()
+        return reply[2] == '1'
+    }
     // FTX-1 CAT Operation Reference Manual 2508-C, p.20 "MZ SPLIT MEMORY"
     fun readSplit(channel: Int): String {
         requireUi(channel in 1..999) { UiText(R.string.err_rig_channel, channel) }
@@ -710,6 +802,48 @@ class Ftx1Rig(transport: RadioBytes) : Rig {
             link.send(YaesuFtx1.setFrequency(vfo, hz))
             link.confirm(hz) { read(vfo) }
         }
+    }
+    // Receive-only extras: every value is range-checked before sending and read back; nothing here keys the transmitter.
+    private fun query(command: String) = link.request(command, command.dropLast(1))
+    fun noiseBlanker(side: Int) = YaesuFtx1.parseNoiseBlanker(query(YaesuFtx1.readNoiseBlanker(side)), side)
+    fun setNoiseBlanker(side: Int, level: Int) = setLevel(YaesuFtx1.setNoiseBlanker(side, level), YaesuFtx1.readNoiseBlanker(side), level) { YaesuFtx1.parseNoiseBlanker(it, side) }
+    fun noiseReduction(side: Int) = YaesuFtx1.parseNoiseReduction(query(YaesuFtx1.readNoiseReduction(side)), side)
+    fun setNoiseReduction(side: Int, level: Int) = setLevel(YaesuFtx1.setNoiseReduction(side, level), YaesuFtx1.readNoiseReduction(side), level) { YaesuFtx1.parseNoiseReduction(it, side) }
+    fun autoNotch(side: Int) = YaesuFtx1.parseAutoNotch(query(YaesuFtx1.readAutoNotch(side)), side)
+    fun setAutoNotch(side: Int, on: Boolean) = confirm(YaesuFtx1.setAutoNotch(side, on), YaesuFtx1.readAutoNotch(side)) { YaesuFtx1.parseAutoNotch(it, side) == on }
+    fun manualNotch(side: Int) = YaesuFtx1.parseManualNotch(query(YaesuFtx1.readManualNotch(side)), side)
+    fun setManualNotch(side: Int, on: Boolean) = confirm(YaesuFtx1.setManualNotch(side, on), YaesuFtx1.readManualNotch(side)) { YaesuFtx1.parseManualNotch(it, side) == on }
+    /** Notch frequency in 10 Hz steps (001-320); null when the radio has no notch in the current mode (e.g. FM). */
+    fun manualNotchFrequency(side: Int) = YaesuFtx1.parseManualNotchFrequency(query(YaesuFtx1.readManualNotchFrequency(side)), side)
+    /** An unavailable (non-numeric) answer never matches, so it is reported as an unconfirmed setting. */
+    fun setManualNotchFrequency(side: Int, step: Int) =
+        confirm(YaesuFtx1.setManualNotchFrequency(side, step), YaesuFtx1.readManualNotchFrequency(side)) { YaesuFtx1.parseManualNotchFrequency(it, side) == step }
+    fun narrow(side: Int) = YaesuFtx1.parseNarrow(query(YaesuFtx1.readNarrow(side)), side)
+    fun setNarrow(side: Int, on: Boolean) = confirm(YaesuFtx1.setNarrow(side, on), YaesuFtx1.readNarrow(side)) { YaesuFtx1.parseNarrow(it, side) == on }
+    fun clarifier(side: Int) = YaesuFtx1.parseClarifier(query(YaesuFtx1.readClarifier(side)), side)
+    fun setClarifier(side: Int, rx: Boolean, tx: Boolean) =
+        confirm(YaesuFtx1.setClarifier(side, rx, tx), YaesuFtx1.readClarifier(side)) { YaesuFtx1.parseClarifier(it, side) == (rx to tx) }
+    fun clarifierOffset(side: Int) = YaesuFtx1.parseClarifierOffset(query(YaesuFtx1.readClarifierOffset(side)), side)
+    fun setClarifierOffset(side: Int, hz: Int) = setLevel(YaesuFtx1.setClarifierOffset(side, hz), YaesuFtx1.readClarifierOffset(side), hz) { YaesuFtx1.parseClarifierOffset(it, side) }
+    fun keySpeed() = YaesuFtx1.parseKeySpeed(query(YaesuFtx1.readKeySpeed()))
+    fun setKeySpeed(wpm: Int) = setLevel(YaesuFtx1.setKeySpeed(wpm), YaesuFtx1.readKeySpeed(), wpm) { YaesuFtx1.parseKeySpeed(it) }
+    fun lock() = YaesuFtx1.parseLock(query(YaesuFtx1.readLock()))
+    fun setLock(on: Boolean) = confirm(YaesuFtx1.setLock(on), YaesuFtx1.readLock()) { YaesuFtx1.parseLock(it) == on }
+
+    override val supportsMeter = true
+    override fun signalLevel(): Int = signal()
+    override val supportsRfPower = true
+    /** The output power as 0..255 of the maximum of the head the radio reports with PC; (5-10 W or 5-100 W). */
+    override fun rfPower(): Int {
+        val (head, watts) = YaesuFtx1.parsePower(link.request(YaesuFtx1.readPower(), "PC"))
+        val max = requireNotNullUi(YaesuFtx1.powerRange(head)) { UiText(R.string.err_rig_reply_invalid) }.last
+        return (watts * 255 / max).coerceIn(0, 255)
+    }
+    override fun setRfPower(level: Int) {
+        requireUi(level in 0..255) { UiText(R.string.err_rig_value, level) }
+        val head = YaesuFtx1.parsePower(link.request(YaesuFtx1.readPower(), "PC")).first
+        val range = requireNotNullUi(YaesuFtx1.powerRange(head)) { UiText(R.string.err_rig_reply_invalid) }
+        setPower(Math.round(level * range.last / 255.0).toInt().coerceIn(range))
     }
     // Set commands have no answer (manual p.4), so each one is confirmed with its read command.
     private fun confirm(set: String, read: String, accepted: (String) -> Boolean) = link.transaction {

@@ -221,6 +221,95 @@
     return { head, watts: checkPower(head, Number(match[2])), min: POWER_RANGES[head].min, max: POWER_RANGES[head].max };
   }
 
+  // NL, RL, BC, BP, NA, CF, KS, LK, ST and MD follow the FTX-1 CAT manual 2508-C (and the matching commands in
+  // third_party/ftx1: gnfrazier-ftxcat, git-jcw-FTX-1-WebUI, ew1abz-yaesu-ftx-1-control). None of them keys the transmitter.
+  const checkFlag = on => {
+    R.assert(typeof on === "boolean", "Valor ON/OFF no valido.");
+    return on ? 1 : 0;
+  };
+  const SIDE_FLAG_CODES = Object.freeze(["BC", "NA"]);
+  function checkFlagCode(code) {
+    R.assert(SIDE_FLAG_CODES.includes(code), "Control ON/OFF no valido (BC, NA).");
+    return code;
+  }
+  const sideFlagReadCommand = (code, side) => `${checkFlagCode(code)}${checkSide(side)};`;
+  const sideFlagWriteCommand = (code, side, on) => `${checkFlagCode(code)}${checkSide(side)}${checkFlag(on)};`;
+  function parseSideFlag(code, answer, side) {
+    const match = answerOf(checkFlagCode(code), answer, "([01])([01])");
+    R.assert(Number(match[1]) === checkSide(side), `Respuesta ${code} de otro lado.`);
+    return match[2] === "1";
+  }
+  const checkNb = level => checkInt(level, 0, 10, "Nivel NB fuera de rango 0-10 (0 = OFF).");
+  const nbReadCommand = side => `NL${checkSide(side)};`;
+  const nbWriteCommand = (side, level) => `NL${checkSide(side)}${pad(checkNb(level), 3)};`;
+  function parseNb(answer, side) {
+    const match = answerOf("NL", answer, "([01])(\\d{3})");
+    R.assert(Number(match[1]) === checkSide(side), "Respuesta NL de otro lado.");
+    return checkNb(Number(match[2]));
+  }
+  const checkDnr = level => checkInt(level, 0, 10, "Nivel DNR fuera de rango 0-10 (0 = OFF).");
+  const dnrReadCommand = side => `RL${checkSide(side)};`;
+  const dnrWriteCommand = (side, level) => `RL${checkSide(side)}${pad(checkDnr(level), 2)};`;
+  function parseDnr(answer, side) {
+    const match = answerOf("RL", answer, "([01])(\\d{2})");
+    R.assert(Number(match[1]) === checkSide(side), "Respuesta RL de otro lado.");
+    return checkDnr(Number(match[2]));
+  }
+  const checkNotchHz = hz => {
+    checkInt(hz, 10, 3200, "Frecuencia del notch fuera de 10-3200 Hz.");
+    R.assert(hz % 10 === 0, "Frecuencia del notch: pasos de 10 Hz.");
+    return hz;
+  };
+  const notchOnReadCommand = side => `BP${checkSide(side)}0;`;
+  const notchOnWriteCommand = (side, on) => `BP${checkSide(side)}0${pad(checkFlag(on), 3)};`;
+  const notchHzReadCommand = side => `BP${checkSide(side)}1;`;
+  const notchHzWriteCommand = (side, hz) => `BP${checkSide(side)}1${pad(checkNotchHz(hz) / 10, 3)};`;
+  // The radio answers a non-numeric value (BP01F35;) when the mode has no manual notch (FM): null = unavailable.
+  function parseNotch(answer, side, p2) {
+    const match = answerOf("BP", answer, "([01])([01])([0-9A-Za-z]{3})");
+    R.assert(Number(match[1]) === checkSide(side) && Number(match[2]) === p2, "Respuesta BP de otro lado o ajuste.");
+    if (!/^\d{3}$/.test(match[3])) return null;
+    if (p2 === 1) return checkNotchHz(Number(match[3]) * 10);
+    R.assert(match[3] === "000" || match[3] === "001", "Respuesta BP no valida.");
+    return match[3] === "001";
+  }
+  const parseNotchOn = (answer, side) => parseNotch(answer, side, 0);
+  const parseNotchHz = (answer, side) => parseNotch(answer, side, 1);
+  // CF P1 0 0 rx tx 000 sets the clarifier on/off (the app drives RX clarifier and clears TX); CF P1 0 1 +/-nnnn its offset.
+  const clarReadCommand = side => `CF${checkSide(side)}00;`;
+  const clarWriteCommand = (side, on) => `CF${checkSide(side)}00${checkFlag(on)}0000;`;
+  function parseClar(answer, side) {
+    const match = answerOf("CF", answer, "([01])00([01])([01])000");
+    R.assert(Number(match[1]) === checkSide(side), "Respuesta CF de otro lado.");
+    return { rx: match[2] === "1", tx: match[3] === "1" };
+  }
+  const checkClarHz = hz => checkInt(hz, -9999, 9999, "Offset del clarificador fuera de -9999..+9999 Hz.");
+  const clarHzReadCommand = side => `CF${checkSide(side)}01;`;
+  const clarHzWriteCommand = (side, hz) => `CF${checkSide(side)}01${checkClarHz(hz) < 0 ? "-" : "+"}${pad(Math.abs(hz), 4)};`;
+  function parseClarHz(answer, side) {
+    const match = answerOf("CF", answer, "([01])01([+-])(\\d{4})");
+    R.assert(Number(match[1]) === checkSide(side), "Respuesta CF de otro lado.");
+    return checkClarHz(Number(match[3]) * (match[2] === "-" ? -1 : 1) || 0);
+  }
+  const checkKeySpeed = wpm => checkInt(wpm, 4, 60, "Velocidad CW fuera de 4-60 WPM.");
+  const keySpeedReadCommand = () => "KS;";
+  const keySpeedWriteCommand = wpm => `KS${pad(checkKeySpeed(wpm), 3)};`;
+  const parseKeySpeed = answer => checkKeySpeed(Number(answerOf("KS", answer, "(\\d{3})")[1]));
+  const lockReadCommand = () => "LK;";
+  const lockWriteCommand = on => `LK${checkFlag(on)};`;
+  const parseLock = answer => answerOf("LK", answer, "([01])")[1] === "1";
+  const splitReadCommand = () => "ST;";
+  const splitWriteCommand = on => `ST${checkFlag(on)};`;
+  const parseSplit = answer => answerOf("ST", answer, "([01])")[1] === "1";
+  const checkMode = mode => {
+    R.assert(Object.hasOwn(MODES, mode), "Modo no valido: solo los modos documentados del manual.");
+    return mode;
+  };
+  // MD0 = MAIN; the answer may carry a mode the manual does not document, so parsing does not restrict the code.
+  const modeReadCommand = () => "MD0;";
+  const modeWriteCommand = mode => `MD0${checkMode(mode)};`;
+  const parseMode = answer => answerOf("MD", answer, "0([0-9A-Z])")[1];
+
   const clone = value => JSON.parse(JSON.stringify(value));
   const FIELDS = ["frequencyHz", "mode", "toneMode", "shift", "clarDirection", "clarOffsetHz", "rxClar", "txClar"];
   function diffMemories(before, after) {
@@ -380,9 +469,28 @@
       return R.parseRigFrequency(R.RIG_PROFILES.ftx1, reply, vfo);
     }
     async setFrequency(vfo, hz) {
+      checkInt(hz, MIN_HZ, MAX_HZ, "Frecuencia fuera de 30000 Hz - 470000000 Hz.");
       await this.command(R.rigFrequencyCommand(R.RIG_PROFILES.ftx1, vfo, hz), false);
       R.assert(await this.readFrequency(vfo) === hz, "La radio no confirma la frecuencia solicitada.");
       return hz;
+    }
+    async readVfo() {
+      return {
+        a: await this.readFrequency("A"),
+        b: await this.readFrequency("B"),
+        mode: parseMode(await this.command(modeReadCommand())),
+        split: parseSplit(await this.command(splitReadCommand()))
+      };
+    }
+    async setMode(mode) {
+      await this.command(modeWriteCommand(mode), false);
+      R.assert(parseMode(await this.command(modeReadCommand())) === mode, "Verificacion fallida en MD: la radio no coincide con lo escrito.");
+      return mode;
+    }
+    async setSplit(on) {
+      await this.command(splitWriteCommand(on), false);
+      R.assert(parseSplit(await this.command(splitReadCommand())) === on, "Verificacion fallida en ST: la radio no coincide con lo escrito.");
+      return on;
     }
     async connect() {
       const id = await this.command("ID;");
@@ -470,6 +578,11 @@
     async readControls(side) {
       checkSide(side);
       const read = async (command, parse) => parse(await this.command(command));
+      // "?;" = the radio does not offer this control in the current mode: null, not an error.
+      const readOptional = async (command, parse) => {
+        const answer = await this.command(command);
+        return answer === "?;" ? null : parse(answer);
+      };
       const preamp = {};
       for (const band of [0, 1, 2]) preamp[band] = await read(preampReadCommand(band), answer => parsePreamp(answer, band));
       return {
@@ -482,10 +595,21 @@
         agc: await read(agcReadCommand(side), answer => parseAgc(answer, side)),
         preamp,
         att: await read(attReadCommand(), parseAtt),
-        power: await read(powerReadCommand(), parsePower)
+        power: await read(powerReadCommand(), parsePower),
+        nb: await readOptional(nbReadCommand(side), answer => parseNb(answer, side)),
+        dnr: await readOptional(dnrReadCommand(side), answer => parseDnr(answer, side)),
+        anotch: await readOptional(sideFlagReadCommand("BC", side), answer => parseSideFlag("BC", answer, side)),
+        notchOn: await readOptional(notchOnReadCommand(side), answer => parseNotchOn(answer, side)),
+        notchHz: await readOptional(notchHzReadCommand(side), answer => parseNotchHz(answer, side)),
+        narrow: await readOptional(sideFlagReadCommand("NA", side), answer => parseSideFlag("NA", answer, side)),
+        clar: (await readOptional(clarReadCommand(side), answer => parseClar(answer, side)))?.rx ?? null,
+        clarHz: await readOptional(clarHzReadCommand(side), answer => parseClarHz(answer, side)),
+        keySpeed: await readOptional(keySpeedReadCommand(), parseKeySpeed),
+        lock: await readOptional(lockReadCommand(), parseLock)
       };
     }
-    // value: number (af, rf, sql, width, ifShift, agc, power), boolean (att) or { band, value } (preamp).
+    // value: number (af, rf, sql, width, ifShift, agc, power, nb, dnr, notchHz, clarHz, keySpeed), boolean (att, anotch,
+    // notchOn, narrow, clar, lock) or { band, value } (preamp).
     async setControl(name, side, value) {
       const verify = (back, expected, label) => R.assert(back === expected,
         `Verificacion fallida en ${label}: la radio no coincide con lo escrito.`);
@@ -525,6 +649,35 @@
         const back = parsePower(await this.command(powerReadCommand()));
         R.assert(back.head === head && back.watts === value, "Verificacion fallida en PC: la radio no coincide con lo escrito.");
         return back.watts;
+      } else if (name === "nb") {
+        await this.command(nbWriteCommand(side, value), false);
+        verify(parseNb(await this.command(nbReadCommand(side)), side), value, "NL");
+      } else if (name === "dnr") {
+        await this.command(dnrWriteCommand(side, value), false);
+        verify(parseDnr(await this.command(dnrReadCommand(side)), side), value, "RL");
+      } else if (name === "anotch" || name === "narrow") {
+        const code = name === "anotch" ? "BC" : "NA";
+        await this.command(sideFlagWriteCommand(code, side, value), false);
+        verify(parseSideFlag(code, await this.command(sideFlagReadCommand(code, side)), side), value, code);
+      } else if (name === "notchOn") {
+        await this.command(notchOnWriteCommand(side, value), false);
+        verify(parseNotchOn(await this.command(notchOnReadCommand(side)), side), value, "BP");
+      } else if (name === "notchHz") {
+        await this.command(notchHzWriteCommand(side, value), false);
+        verify(parseNotchHz(await this.command(notchHzReadCommand(side)), side), value, "BP");
+      } else if (name === "clar") {
+        await this.command(clarWriteCommand(side, value), false);
+        const back = parseClar(await this.command(clarReadCommand(side)), side);
+        R.assert(back.rx === value && !back.tx, "Verificacion fallida en CF: la radio no coincide con lo escrito.");
+      } else if (name === "clarHz") {
+        await this.command(clarHzWriteCommand(side, value), false);
+        verify(parseClarHz(await this.command(clarHzReadCommand(side)), side), value, "CF");
+      } else if (name === "keySpeed") {
+        await this.command(keySpeedWriteCommand(value), false);
+        verify(parseKeySpeed(await this.command(keySpeedReadCommand())), value, "KS");
+      } else if (name === "lock") {
+        await this.command(lockWriteCommand(value), false);
+        verify(parseLock(await this.command(lockReadCommand())), value, "LK");
       } else R.assert(false, "Control no reconocido.");
       return value;
     }
@@ -546,6 +699,17 @@
     ftx1AgcReadCommand: agcReadCommand, ftx1AgcWriteCommand: agcWriteCommand, parseFtx1Agc: parseAgc,
     ftx1PreampReadCommand: preampReadCommand, ftx1PreampWriteCommand: preampWriteCommand, parseFtx1Preamp: parsePreamp,
     ftx1AttReadCommand: attReadCommand, ftx1AttWriteCommand: attWriteCommand, parseFtx1Att: parseAtt,
-    ftx1PowerReadCommand: powerReadCommand, ftx1PowerWriteCommand: powerWriteCommand, parseFtx1Power: parsePower });
+    ftx1PowerReadCommand: powerReadCommand, ftx1PowerWriteCommand: powerWriteCommand, parseFtx1Power: parsePower,
+    ftx1NbReadCommand: nbReadCommand, ftx1NbWriteCommand: nbWriteCommand, parseFtx1Nb: parseNb,
+    ftx1DnrReadCommand: dnrReadCommand, ftx1DnrWriteCommand: dnrWriteCommand, parseFtx1Dnr: parseDnr,
+    ftx1SideFlagReadCommand: sideFlagReadCommand, ftx1SideFlagWriteCommand: sideFlagWriteCommand, parseFtx1SideFlag: parseSideFlag,
+    ftx1NotchOnReadCommand: notchOnReadCommand, ftx1NotchOnWriteCommand: notchOnWriteCommand, parseFtx1NotchOn: parseNotchOn,
+    ftx1NotchHzReadCommand: notchHzReadCommand, ftx1NotchHzWriteCommand: notchHzWriteCommand, parseFtx1NotchHz: parseNotchHz,
+    ftx1ClarReadCommand: clarReadCommand, ftx1ClarWriteCommand: clarWriteCommand, parseFtx1Clar: parseClar,
+    ftx1ClarHzReadCommand: clarHzReadCommand, ftx1ClarHzWriteCommand: clarHzWriteCommand, parseFtx1ClarHz: parseClarHz,
+    ftx1KeySpeedReadCommand: keySpeedReadCommand, ftx1KeySpeedWriteCommand: keySpeedWriteCommand, parseFtx1KeySpeed: parseKeySpeed,
+    ftx1LockReadCommand: lockReadCommand, ftx1LockWriteCommand: lockWriteCommand, parseFtx1Lock: parseLock,
+    ftx1SplitReadCommand: splitReadCommand, ftx1SplitWriteCommand: splitWriteCommand, parseFtx1Split: parseSplit,
+    ftx1ModeReadCommand: modeReadCommand, ftx1ModeWriteCommand: modeWriteCommand, parseFtx1Mode: parseMode });
   if (typeof module !== "undefined") module.exports = R;
 })(typeof globalThis !== "undefined" ? globalThis : this);

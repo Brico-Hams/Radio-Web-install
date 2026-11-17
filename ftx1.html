@@ -133,7 +133,38 @@
       <div class="planning-filters">
         <label><span id="ftx-ctl-power-label">Potencia (W)</span> <input id="ftx-ctl-power" type="number" min="5" max="10" step="1" disabled></label>
       </div>
+      <div class="planning-filters">
+        <label>Reductor de impulsos NB (0 = OFF, 1-10) <input id="ftx-ctl-nb" type="number" min="0" max="10" step="1" disabled></label>
+        <label>Reduccion de ruido DNR (0 = OFF, 1-10) <input id="ftx-ctl-dnr" type="number" min="0" max="10" step="1" disabled></label>
+        <label><input id="ftx-ctl-anotch" type="checkbox" disabled> Notch automatico</label>
+        <label><input id="ftx-ctl-narrow" type="checkbox" disabled> Filtro estrecho (NAR)</label>
+      </div>
+      <div class="planning-filters">
+        <label><input id="ftx-ctl-notchon" type="checkbox" disabled> Notch manual</label>
+        <label>Frecuencia del notch manual (10-3200 Hz, pasos de 10) <input id="ftx-ctl-notchhz" type="number" min="10" max="3200" step="10" disabled></label>
+        <label><input id="ftx-ctl-clar" type="checkbox" disabled> Clarificador de recepcion</label>
+        <label>Offset del clarificador (-9999 a +9999 Hz) <input id="ftx-ctl-clarhz" type="number" min="-9999" max="9999" step="1" disabled></label>
+      </div>
+      <div class="planning-filters">
+        <label>Velocidad CW (4-60 WPM) <input id="ftx-ctl-keyspeed" type="number" min="4" max="60" step="1" disabled></label>
+        <label><input id="ftx-ctl-lock" type="checkbox" disabled> Bloqueo del panel</label>
+      </div>
       <p>El ancho se muestra solo como indice: su valor en Hz depende del modo (Tabla 5 del manual).</p>
+    </section>
+    <section class="panel">
+      <h2>5. VFO</h2>
+      <p>Solo recepcion: fija la frecuencia de VFO A/B, el modo de MAIN y el split. Cada cambio se verifica volviendo a leer la radio.</p>
+      <div class="planning-filters">
+        <button id="ftx-vfo-read" class="button primary" type="button" disabled>Leer VFO</button>
+        <label>VFO A (MHz) <input id="ftx-vfo-a" type="number" min="0.03" max="470" step="0.000001" disabled></label>
+        <button id="ftx-vfo-a-set" class="button" type="button" disabled>Fijar VFO A</button>
+        <label>VFO B (MHz) <input id="ftx-vfo-b" type="number" min="0.03" max="470" step="0.000001" disabled></label>
+        <button id="ftx-vfo-b-set" class="button" type="button" disabled>Fijar VFO B</button>
+      </div>
+      <div class="planning-filters">
+        <label>Modo MAIN <select id="ftx-vfo-mode" disabled></select></label>
+        <label><input id="ftx-vfo-split" type="checkbox" disabled> Split (ST)</label>
+      </div>
     </section>
   </template>
   <noscript>Activa JavaScript para usar el editor web del FTX-1.</noscript>

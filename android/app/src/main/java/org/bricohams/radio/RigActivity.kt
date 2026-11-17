@@ -81,6 +81,7 @@ class RigActivity : LocalizedActivity() {
         private const val STALL_MS = 2_000L
         private const val MAX_CHANNELS = 100
         private const val DEFAULT_ADDRESS = 0xA4
+        private val FTX_METERS = listOf("S-MAIN", "S-SUB", "COMP", "ALC", "PO", "SWR", "IDD", "VDD")
     }
 
     private val colors by lazy { Brand.Palette(this) }
@@ -116,6 +117,10 @@ class RigActivity : LocalizedActivity() {
     private lateinit var powerText: TextView
     private lateinit var powerSeek: SeekBar
     private lateinit var dataToggle: CheckBox
+    private lateinit var ftxCard: LinearLayout
+    private lateinit var ftxSide: Spinner
+    private lateinit var ftxBand: Spinner
+    private lateinit var ftxStatus: TextView
     private var meterSync = false
     private var powerTouch = false
     private lateinit var memFrom: EditText
@@ -274,6 +279,7 @@ class RigActivity : LocalizedActivity() {
         buildRadio(body)
         buildFrequency(body)
         buildMeters(body)
+        buildFtx1(body)
         buildDigital(body)
         buildMemories(body)
         buildSatellite(body)
@@ -291,6 +297,7 @@ class RigActivity : LocalizedActivity() {
             R.string.rig_section_radio -> R.string.rig_help_radio
             R.string.rig_section_frequency -> R.string.rig_help_frequency
             R.string.rig_section_meter -> R.string.rig_help_meters
+            R.string.rig_section_ftx1 -> R.string.rig_help_ftx1
             R.string.rig_dig_title -> R.string.rig_help_digital
             R.string.rig_section_memories -> R.string.rig_help_memories
             R.string.rig_section_satellite -> R.string.rig_help_satellite
@@ -443,6 +450,68 @@ class RigActivity : LocalizedActivity() {
     private fun applyPower(level: Int) {
         val r = rig ?: run { notice.setText(R.string.rig_connect_first); return }
         operation(notice) { r.setRfPower(level); null }
+    }
+
+    /** FTX-1 only: receive controls, meters and filters. Every write is range-checked, sent, and read back by [Ftx1Rig]. */
+    private fun buildFtx1(body: LinearLayout) = section(body, R.string.rig_section_ftx1) { card ->
+        ftxCard = card
+        label(card, R.string.rig_ftx_side)
+        ftxSide = spinner(listOf("MAIN", "SUB"))
+        card.addView(ftxSide)
+        ftxStatus = live(Brand.text(this, 14f, colors.accent))
+        card.addView(ftxStatus)
+        val signed = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED
+        numberRow(card, R.string.rig_ftx_af, InputType.TYPE_CLASS_NUMBER) { r, side, v -> r.setAfGain(side, v) }
+        numberRow(card, R.string.rig_ftx_rf, InputType.TYPE_CLASS_NUMBER) { r, side, v -> r.setRfGain(side, v) }
+        numberRow(card, R.string.rig_ftx_sql, InputType.TYPE_CLASS_NUMBER) { r, side, v -> r.setSquelch(side, v) }
+        numberRow(card, R.string.rig_ftx_width, InputType.TYPE_CLASS_NUMBER) { r, side, v -> r.setWidth(side, v) }
+        numberRow(card, R.string.rig_ftx_ifshift, signed) { r, side, v -> r.setIfShift(side, v) }
+        numberRow(card, R.string.rig_ftx_agc, InputType.TYPE_CLASS_NUMBER) { r, side, v -> r.setAgc(side, v) }
+        label(card, R.string.rig_ftx_band)
+        ftxBand = spinner(listOf("HF/50", "VHF", "UHF"))
+        card.addView(ftxBand)
+        numberRow(card, R.string.rig_ftx_preamp, InputType.TYPE_CLASS_NUMBER, { ftxBand.selectedItemPosition.coerceIn(0, 2) }) { r, band, v -> r.setPreamp(band, v) }
+        numberRow(card, R.string.rig_ftx_nl, InputType.TYPE_CLASS_NUMBER) { r, side, v -> r.setNoiseBlanker(side, v) }
+        numberRow(card, R.string.rig_ftx_rl, InputType.TYPE_CLASS_NUMBER) { r, side, v -> r.setNoiseReduction(side, v) }
+        numberRow(card, R.string.rig_ftx_notch_freq, InputType.TYPE_CLASS_NUMBER) { r, side, v -> r.setManualNotchFrequency(side, v) }
+        numberRow(card, R.string.rig_ftx_clar_offset, signed) { r, side, v -> r.setClarifierOffset(side, v) }
+        numberRow(card, R.string.rig_ftx_keyspeed, InputType.TYPE_CLASS_NUMBER) { r, _, v -> r.setKeySpeed(v) }
+        onOffRow(card, R.string.rig_ftx_att) { r, _, on -> r.setAttenuator(on) }
+        onOffRow(card, R.string.rig_ftx_bc) { r, side, on -> r.setAutoNotch(side, on) }
+        onOffRow(card, R.string.rig_ftx_notch) { r, side, on -> r.setManualNotch(side, on) }
+        onOffRow(card, R.string.rig_ftx_na) { r, side, on -> r.setNarrow(side, on) }
+        onOffRow(card, R.string.rig_ftx_clar) { r, side, on -> r.setClarifier(side, on, on) }
+        onOffRow(card, R.string.rig_ftx_lock) { r, _, on -> r.setLock(on) }
+        button(card, R.string.rig_ftx_meters) {
+            val r = rig as? Ftx1Rig ?: run { notice.setText(R.string.rig_connect_first); return@button }
+            operation(ftxStatus) { (1..8).joinToString("\n") { "RM$it ${FTX_METERS[it - 1]}: ${r.meter(it)}" } }
+        }
+        card.visibility = View.GONE
+    }
+
+    private fun ftxSideIndex() = ftxSide.selectedItemPosition.coerceIn(0, 1)
+
+    private fun numberRow(card: LinearLayout, title: Int, type: Int, sideOf: () -> Int = ::ftxSideIndex, apply: (Ftx1Rig, Int, Int) -> Unit) {
+        label(card, title)
+        val input = field(title, "", type)
+        card.addView(input)
+        button(card, R.string.rig_ftx_set) {
+            val r = rig as? Ftx1Rig ?: run { notice.setText(R.string.rig_connect_first); return@button }
+            val value = input.text.toString().trim().toIntOrNull() ?: run { notice.setText(R.string.rig_ftx_invalid); return@button }
+            val side = sideOf()
+            operation(notice) { apply(r, side, value); getString(R.string.rig_ftx_done) }
+        }
+    }
+
+    private fun onOffRow(card: LinearLayout, title: Int, apply: (Ftx1Rig, Int, Boolean) -> Unit) {
+        label(card, title)
+        for ((text, on) in listOf(R.string.rig_ftx_off to false, R.string.rig_ftx_on to true)) {
+            button(card, text) {
+                val r = rig as? Ftx1Rig ?: run { notice.setText(R.string.rig_connect_first); return@button }
+                val side = ftxSideIndex()
+                operation(notice) { apply(r, side, on); getString(R.string.rig_ftx_done) }
+            }
+        }
     }
 
     private fun applyDataMode(on: Boolean) {
@@ -861,6 +930,7 @@ class RigActivity : LocalizedActivity() {
         stopMemories.isEnabled = busy
         stopTx.isEnabled = txActive
         stopReceive.isEnabled = rxActive
+        ftxCard.visibility = if (r is Ftx1Rig) View.VISIBLE else View.GONE
         updateMeterCard(r)
     }
 

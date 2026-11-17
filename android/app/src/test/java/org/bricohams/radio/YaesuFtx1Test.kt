@@ -267,6 +267,103 @@ class YaesuFtx1Test {
         assertTrue(radio.writes.none { String(it, Charsets.US_ASCII).startsWith("PC") && it.size > 3 })
         assertTrue(radio.writes.none { String(it, Charsets.US_ASCII).startsWith("TX") })
     }
+    @Test fun receiveExtrasAreByteExact() {
+        assertEquals("NL0000;", YaesuFtx1.setNoiseBlanker(0, 0))
+        assertEquals("NL1010;", YaesuFtx1.setNoiseBlanker(1, 10))
+        assertEquals("NL0;", YaesuFtx1.readNoiseBlanker(0))
+        assertEquals("RL0;", YaesuFtx1.readNoiseReduction(0))
+        assertEquals("RL107;", YaesuFtx1.setNoiseReduction(1, 7))
+        assertEquals("BC01;", YaesuFtx1.setAutoNotch(0, true))
+        assertEquals("BC1;", YaesuFtx1.readAutoNotch(1))
+        assertEquals("BP00000;", YaesuFtx1.setManualNotch(0, false))
+        assertEquals("BP00001;", YaesuFtx1.setManualNotch(0, true))
+        assertEquals("BP00;", YaesuFtx1.readManualNotch(0))
+        assertEquals("BP01320;", YaesuFtx1.setManualNotchFrequency(0, 320))
+        assertEquals("BP11001;", YaesuFtx1.setManualNotchFrequency(1, 1))
+        assertEquals("BP01;", YaesuFtx1.readManualNotchFrequency(0))
+        assertEquals("NA01;", YaesuFtx1.setNarrow(0, true))
+        assertEquals("CF00011000;", YaesuFtx1.setClarifier(0, true, true))
+        assertEquals("CF10010000;", YaesuFtx1.setClarifier(1, true, false))
+        assertEquals("CF000;", YaesuFtx1.readClarifier(0))
+        assertEquals("CF001-0150;", YaesuFtx1.setClarifierOffset(0, -150))
+        assertEquals("CF101+9999;", YaesuFtx1.setClarifierOffset(1, 9999))
+        assertEquals("CF001;", YaesuFtx1.readClarifierOffset(0))
+        assertEquals("KS004;", YaesuFtx1.setKeySpeed(4))
+        assertEquals("KS060;", YaesuFtx1.setKeySpeed(60))
+        assertEquals("KS;", YaesuFtx1.readKeySpeed())
+        assertEquals("LK1;", YaesuFtx1.setLock(true))
+        assertEquals("LK;", YaesuFtx1.readLock())
+    }
+    @Test fun receiveExtrasParse() {
+        assertEquals(7, YaesuFtx1.parseNoiseBlanker("NL0007;", 0))
+        assertEquals(10, YaesuFtx1.parseNoiseReduction("RL110;", 1))
+        assertTrue(YaesuFtx1.parseAutoNotch("BC11;", 1))
+        assertFalse(YaesuFtx1.parseManualNotch("BP00000;", 0))
+        assertEquals(35, YaesuFtx1.parseManualNotchFrequency("BP01035;", 0))
+        assertNull(YaesuFtx1.parseManualNotchFrequency("BP01F35;", 0))
+        assertTrue(YaesuFtx1.parseNarrow("NA01;", 0))
+        assertEquals(true to false, YaesuFtx1.parseClarifier("CF00010000;", 0))
+        assertEquals(-150, YaesuFtx1.parseClarifierOffset("CF001-0150;", 0))
+        assertEquals(25, YaesuFtx1.parseKeySpeed("KS025;"))
+        assertTrue(YaesuFtx1.parseLock("LK1;"))
+        val bad = IllegalArgumentException::class.java
+        assertThrows(bad) { YaesuFtx1.parseNoiseBlanker("NL0011;", 0) }
+        assertThrows(bad) { YaesuFtx1.parseManualNotch("BP00002;", 0) }
+        assertThrows(bad) { YaesuFtx1.parseManualNotchFrequency("BP01321;", 0) }
+        assertThrows(bad) { YaesuFtx1.parseManualNotchFrequency("BP11035;", 0) }
+        assertThrows(bad) { YaesuFtx1.parseKeySpeed("KS003;") }
+    }
+    @Test fun receiveExtrasAreRangeCheckedBeforeSending() {
+        val bad = IllegalArgumentException::class.java
+        assertThrows(bad) { YaesuFtx1.setNoiseBlanker(0, 11) }
+        assertThrows(bad) { YaesuFtx1.setNoiseBlanker(0, -1) }
+        assertThrows(bad) { YaesuFtx1.setNoiseReduction(0, 11) }
+        assertThrows(bad) { YaesuFtx1.setAutoNotch(2, true) }
+        assertThrows(bad) { YaesuFtx1.setManualNotchFrequency(0, 0) }
+        assertThrows(bad) { YaesuFtx1.setManualNotchFrequency(0, 321) }
+        assertThrows(bad) { YaesuFtx1.setClarifierOffset(0, 10_000) }
+        assertThrows(bad) { YaesuFtx1.setClarifierOffset(0, -10_000) }
+        assertThrows(bad) { YaesuFtx1.setKeySpeed(3) }
+        assertThrows(bad) { YaesuFtx1.setKeySpeed(61) }
+        val radio = ScriptedRadio { ascii("?;") }
+        val rig = Ftx1Rig(radio)
+        assertThrows(bad) { rig.setKeySpeed(100) }
+        assertThrows(bad) { rig.setManualNotchFrequency(0, 400) }
+        assertTrue(radio.writes.isEmpty())
+    }
+    @Test fun receiveExtrasAreReadBack() {
+        var speed = "KS020;"
+        val radio = ScriptedRadio {
+            when (val text = String(it, Charsets.US_ASCII)) {
+                "KS030;" -> { speed = text; ByteArray(0) }
+                "KS;" -> ascii(speed)
+                "NL0005;" -> ByteArray(0)
+                "NL0;" -> ascii("NL0002;")
+                "BP01100;" -> ByteArray(0)
+                "BP01;" -> ascii("BP01F35;")
+                else -> ascii("?;")
+            }
+        }
+        val rig = Ftx1Rig(radio)
+        rig.setKeySpeed(30)
+        assertEquals(30, rig.keySpeed())
+        assertThrows(IllegalStateException::class.java) { rig.setNoiseBlanker(0, 5) }
+        assertNull(rig.manualNotchFrequency(0))
+        assertThrows(IllegalStateException::class.java) { rig.setManualNotchFrequency(0, 100) }
+        assertTrue(radio.writes.none { String(it, Charsets.US_ASCII).let { text -> text.startsWith("TX") || text.startsWith("KY") } })
+    }
+    @Test fun ftx1ReportsMeterAndPowerSupport() {
+        val rig = Ftx1Rig(ScriptedRadio {
+            when (it.let { bytes -> String(bytes, Charsets.US_ASCII) }) {
+                "PC;" -> ascii("PC2050;")
+                "SM0;" -> ascii("SM0120;")
+                else -> ascii("?;")
+            }
+        })
+        assertTrue(rig.supportsMeter && rig.supportsRfPower)
+        assertEquals(120, rig.signalLevel())
+        assertEquals(127, rig.rfPower())
+    }
     @Test fun speechTextAndBar() {
         assertEquals("145,800 megahercios, FM, señal 120",
             RigSpeech.text(145_800_000, "FM", 120, java.util.Locale("es", "ES"), "megahercios", "señal"))
