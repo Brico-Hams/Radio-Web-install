@@ -1,0 +1,1147 @@
+"""Runtime-owned radio state snapshots and freshness tracking."""
+
+from __future__ import annotations
+
+import copy
+import logging
+import time
+from collections import deque
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, replace
+from dataclasses import field as dataclass_field
+from dataclasses import fields as dataclass_fields
+from enum import Enum, StrEnum
+from typing import Any
+
+from rigplane.core.state_pipeline_contracts import (
+    ChangeSet,
+    FieldChange,
+    FieldPath,
+    Observation,
+    SourceMetadata,
+    VfoSlot,
+)
+
+_DEFAULT_MAX_HISTORY_COUNT = 4096
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "FieldSnapshot",
+    "FreshnessClock",
+    "FreshnessState",
+    "FreshnessTransition",
+    "ReconciliationRequest",
+    "SnapshotDelta",
+    "StateSnapshot",
+    "StateStore",
+    "is_immutable_value",
+]
+
+
+class FreshnessState(StrEnum):
+    """Freshness state for one observed field."""
+
+    UNKNOWN = "unknown"
+    FRESH = "fresh"
+    STALE = "stale"
+
+
+@dataclass(frozen=True, slots=True)
+class FreshnessTransition:
+    """Freshness-only transition for a field."""
+
+    path: FieldPath
+    previous: FreshnessState
+    current: FreshnessState
+    freshness_revision: int
+    timestamp_monotonic: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": str(self.path),
+            "previous": self.previous.value,
+            "current": self.current.value,
+            "freshnessRevision": self.freshness_revision,
+            "timestampMonotonic": self.timestamp_monotonic,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ReconciliationRequest:
+    """A future scheduler hint emitted when a field becomes stale."""
+
+    path: FieldPath
+    reason: str
+    requested_at_monotonic: float
+    state_revision: int
+    freshness_revision: int
+    max_age: float | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": str(self.path),
+            "reason": self.reason,
+            "requestedAtMonotonic": self.requested_at_monotonic,
+            "stateRevision": self.state_revision,
+            "freshnessRevision": self.freshness_revision,
+            "maxAge": self.max_age,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FieldSnapshot:
+    """Consumer-facing snapshot of one field."""
+
+    path: FieldPath
+    value: Any
+    freshness: FreshnessState
+    last_observed_monotonic: float
+    max_age: float | None
+    source: SourceMetadata
+    quality: tuple[str, ...] = ("confirmed",)
+    provider_generation: int = 0
+    clock_domain: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": str(self.path),
+            "value": _copy_value(self.value),
+            "freshness": self.freshness.value,
+            "lastObservedMonotonic": self.last_observed_monotonic,
+            "maxAge": self.max_age,
+            "source": self.source.to_dict(),
+            "quality": list(self.quality),
+            "providerGeneration": self.provider_generation,
+            "clockDomain": self.clock_domain,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class StateSnapshot:
+    """Immutable projection of the store-owned state at one point in time."""
+
+    state_revision: int
+    freshness_revision: int
+    observation_seq: int
+    generated_at_monotonic: float
+    fields: tuple[FieldSnapshot, ...]
+    provider_generation: int = 0
+    # Path index for field(), built on first lookup; replace() starts it over.
+    _by_path: dict[FieldPath, FieldSnapshot] | None = dataclass_field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    @classmethod
+    def empty(cls) -> StateSnapshot:
+        return cls(
+            state_revision=0,
+            freshness_revision=0,
+            observation_seq=0,
+            generated_at_monotonic=0.0,
+            fields=(),
+            provider_generation=0,
+        )
+
+    def field(self, path: FieldPath | str) -> FieldSnapshot:
+        needle = FieldPath.parse(path) if isinstance(path, str) else path
+        index = self._by_path
+        if index is None:
+            index = {}
+            for item in self.fields:
+                index.setdefault(item.path, item)
+            object.__setattr__(self, "_by_path", index)
+        found = index.get(needle)
+        if found is None:
+            raise KeyError(str(needle))
+        return found
+
+    def as_dict(self) -> dict[str, dict[str, Any]]:
+        return {str(field.path): field.to_dict() for field in self.fields}
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stateRevision": self.state_revision,
+            "freshnessRevision": self.freshness_revision,
+            "observationSeq": self.observation_seq,
+            "generatedAtMonotonic": self.generated_at_monotonic,
+            "providerGeneration": self.provider_generation,
+            "fields": [field.to_dict() for field in self.fields],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SnapshotDelta:
+    """Consumer-facing delta projection since a prior snapshot.
+
+    ``requires_full_snapshot`` is true when the requested baseline is older than
+    retained history; partial deltas are intentionally omitted in that case.
+    """
+
+    state_revision: int
+    freshness_revision: int
+    observation_seq: int
+    changes: tuple[FieldChange, ...]
+    freshness: tuple[FreshnessTransition, ...] = ()
+    reconciliation_requests: tuple[ReconciliationRequest, ...] = ()
+    requires_full_snapshot: bool = False
+    provider_generation: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stateRevision": self.state_revision,
+            "freshnessRevision": self.freshness_revision,
+            "observationSeq": self.observation_seq,
+            "changes": [change.to_dict() for change in self.changes],
+            "freshness": [transition.to_dict() for transition in self.freshness],
+            "reconciliationRequests": [
+                request.to_dict() for request in self.reconciliation_requests
+            ],
+            "requiresFullSnapshot": self.requires_full_snapshot,
+            "providerGeneration": self.provider_generation,
+        }
+
+
+@dataclass(slots=True)
+class _FieldEntry:
+    value: Any
+    freshness: FreshnessState
+    last_observed_monotonic: float
+    max_age: float | None
+    source: SourceMetadata
+    quality: tuple[str, ...]
+    provider_generation: int
+    clock_domain: str | None
+    # This entry as snapshot() projects it, shared by every snapshot until the
+    # entry changes (MOR-4212). Never set for a mutable value: that one is
+    # still copied per snapshot.
+    projected: FieldSnapshot | None = None
+
+
+@dataclass(slots=True)
+class _RelativeVfoRetention:
+    generation: int
+    required_paths: frozenset[FieldPath]
+    paths: frozenset[FieldPath]
+    max_age: float
+    coherence_window: float
+    pending: dict[FieldPath, Observation]
+    expires_at: float | None = None
+
+
+class FreshnessClock:
+    """Monotonic clock used by freshness expiration."""
+
+    __slots__ = ("_manual_now",)
+
+    def __init__(self, *, start: float | None = None) -> None:
+        self._manual_now = None if start is None else float(start)
+
+    def now(self) -> float:
+        if self._manual_now is None:
+            return time.monotonic()
+        return self._manual_now
+
+    def advance(self, seconds: float) -> float:
+        if seconds < 0:
+            raise ValueError("freshness clock cannot move backwards")
+        if self._manual_now is None:
+            self._manual_now = time.monotonic()
+        self._manual_now += seconds
+        return self._manual_now
+
+
+class StateStore:
+    """Single-writer store for confirmed radio state observations.
+
+    Delta replay keeps at most ``max_history_count`` history entries. Requests
+    older than the retained semantic or freshness floor return a replay miss
+    marker so consumers can recover by requesting a full snapshot.
+
+    Freshness decay is **not intrinsic** (MOR-432). The store never ages fields
+    on its own: a field only transitions ``FRESH -> STALE`` when an external
+    driver calls :meth:`mark_stale_due` (typically the periodic
+    :class:`~rigplane.core.acquisition_scheduler.StateFreshnessService.run`
+    loop wired over this store). A bare ``StateStore()`` with no such running
+    service therefore reports last-observed values as ``FRESH`` indefinitely.
+    This is acceptable only for non-canonical fallback stores; the production
+    delivery stores (web server, rigctld server) always wire and drive a
+    ``StateFreshnessService`` over the canonical store. See that service and
+    :meth:`mark_stale_due`.
+    """
+
+    __slots__ = (
+        "_entries",
+        "_freshness_clock",
+        "_freshness_revision",
+        "_history",
+        "_history_floor_freshness_revision",
+        "_history_floor_state_revision",
+        "_max_history_count",
+        "_observation_seq",
+        "_ordered_paths",
+        "_projected_fields",
+        "_provider_generation_notifications",
+        "_provider_generation_notifying",
+        "_provider_generation_subscribers",
+        "_provider_generation",
+        "_relative_vfo_retention",
+        "_state_revision",
+    )
+
+    def __init__(
+        self,
+        *,
+        freshness_clock: FreshnessClock | None = None,
+        max_history_count: int = _DEFAULT_MAX_HISTORY_COUNT,
+    ) -> None:
+        if max_history_count < 0:
+            raise ValueError("max_history_count must be non-negative")
+        self._freshness_clock = freshness_clock or FreshnessClock()
+        self._max_history_count = max_history_count
+        self._state_revision = 0
+        self._freshness_revision = 0
+        self._observation_seq = 0
+        self._provider_generation = 0
+        self._provider_generation_subscribers: list[Callable[[int], None]] = []
+        self._provider_generation_notifications: deque[
+            tuple[int, tuple[Callable[[int], None], ...]]
+        ] = deque()
+        self._provider_generation_notifying = False
+        self._relative_vfo_retention: _RelativeVfoRetention | None = None
+        self._entries: dict[FieldPath, _FieldEntry] = {}
+        # Snapshot caches (MOR-4212): the entry paths in snapshot order, and
+        # the projected fields while every value is shareable. Every entry
+        # write goes through _entry_changed / _paths_changed.
+        self._ordered_paths: tuple[FieldPath, ...] | None = None
+        self._projected_fields: tuple[FieldSnapshot, ...] | None = None
+        self._history: list[SnapshotDelta] = []
+        self._history_floor_state_revision = 0
+        self._history_floor_freshness_revision = 0
+
+    @property
+    def provider_generation(self) -> int:
+        """Store-owned provider token; independent of transport/TX counters."""
+
+        return self._provider_generation
+
+    def begin_provider_generation(self) -> int:
+        """Advance the provider token and atomically invalidate prior proof."""
+
+        self._provider_generation += 1
+        retention = self._relative_vfo_retention
+        if retention is not None:
+            retention.pending.clear()
+            retention.expires_at = None
+        removed = tuple(
+            FieldChange(path=path, previous=_copy_value(entry.value), current=None)
+            for path, entry in sorted(
+                self._entries.items(), key=lambda item: str(item[0])
+            )
+        )
+        self._entries.clear()
+        self._paths_changed()
+        if removed:
+            self._state_revision += 1
+            self._append_history(
+                changes=removed,
+                freshness=(),
+                reconciliation_requests=(),
+            )
+        self._provider_generation_notifications.append(
+            (self._provider_generation, tuple(self._provider_generation_subscribers))
+        )
+        if self._provider_generation_notifying:
+            return self._provider_generation
+        self._provider_generation_notifying = True
+        try:
+            while self._provider_generation_notifications:
+                generation, subscribers = (
+                    self._provider_generation_notifications.popleft()
+                )
+                for subscriber in subscribers:
+                    try:
+                        subscriber(generation)
+                    except Exception:
+                        logger.warning(
+                            "provider generation subscriber failed", exc_info=True
+                        )
+        finally:
+            self._provider_generation_notifying = False
+        return self._provider_generation
+
+    def subscribe_provider_generation(
+        self, subscriber: Callable[[int], None]
+    ) -> Callable[[], None]:
+        """Subscribe to synchronous generation invalidation notifications."""
+
+        self._provider_generation_subscribers.append(subscriber)
+
+        def unsubscribe() -> None:
+            self._provider_generation_subscribers[:] = [
+                item
+                for item in self._provider_generation_subscribers
+                if item is not subscriber
+            ]
+
+        return unsubscribe
+
+    def apply(self, observation: Observation) -> ChangeSet:
+        """Apply an explicitly generation-bound observation, or reject it."""
+
+        if not self._is_current_observation(observation):
+            return self._empty_changeset(timestamp=observation.timestamp_monotonic)
+
+        retention = self._relative_vfo_retention
+        if retention is not None and observation.path in retention.paths:
+            return self.apply_relative_vfo_observations(
+                (observation,), generation=retention.generation
+            )
+        return self._apply_one(observation)
+
+    def apply_current(self, observation: Observation) -> ChangeSet:
+        """Bind a synchronous observation; callers must cross no await/detach."""
+
+        return self.apply(
+            replace(observation, provider_generation=self._provider_generation)
+        )
+
+    def _apply_one(self, observation: Observation) -> ChangeSet:
+        """Apply one observation without relative-VFO staging."""
+
+        previous_entry = self._entries.get(observation.path)
+        if not self._is_current_observation(observation) or (
+            previous_entry is not None
+            and self._strictly_older_than_entry(observation, previous_entry)
+        ):
+            return self._empty_changeset(timestamp=observation.timestamp_monotonic)
+
+        self._observation_seq += 1
+        previous_freshness = (
+            FreshnessState.UNKNOWN
+            if previous_entry is None
+            else previous_entry.freshness
+        )
+        freshness_transition = self._mark_fresh(
+            observation.path,
+            previous_freshness=previous_freshness,
+            timestamp_monotonic=observation.timestamp_monotonic,
+        )
+
+        previous_value = None if previous_entry is None else previous_entry.value
+        semantic_changed = previous_entry is None or previous_value != observation.value
+        changes: tuple[FieldChange, ...]
+        if semantic_changed:
+            self._state_revision += 1
+            changes = (
+                FieldChange(
+                    path=observation.path,
+                    previous=_copy_value(previous_value),
+                    current=_copy_value(observation.value),
+                ),
+            )
+        else:
+            changes = ()
+
+        if previous_entry is None:
+            self._paths_changed()
+        else:
+            self._entry_changed(previous_entry)
+        self._entries[observation.path] = _FieldEntry(
+            value=_copy_value(observation.value),
+            freshness=FreshnessState.FRESH,
+            last_observed_monotonic=observation.timestamp_monotonic,
+            max_age=observation.max_age,
+            source=observation.source,
+            quality=observation.quality,
+            provider_generation=self._provider_generation,
+            clock_domain=observation.clock_domain,
+        )
+        changeset = ChangeSet(
+            revision=self._state_revision,
+            freshness_revision=self._freshness_revision,
+            observation_seq=self._observation_seq,
+            changes=changes,
+            timestamp_monotonic=observation.timestamp_monotonic,
+            sources=(observation.source,),
+            coalesced=False,
+            observed_paths=(observation.path,),
+            freshness_paths=()
+            if freshness_transition is None
+            else (freshness_transition.path,),
+        )
+        self._append_history(
+            changes=changes,
+            freshness=() if freshness_transition is None else (freshness_transition,),
+            reconciliation_requests=(),
+        )
+        return changeset
+
+    def configure_relative_vfo_retention(
+        self,
+        *,
+        generation: int,
+        max_age: float,
+        coherence_window: float,
+    ) -> None:
+        """Enable generation-scoped retention for Selected/Unselected tuples.
+
+        A complete frequency+mode base is required before relative fields enter
+        the canonical store. After that bootstrap, each same-generation leaf is
+        authoritative immediately; a complete coherent mandatory refresh is
+        required only to advance the common finite expiry deadline.
+        """
+
+        if generation < 0 or max_age <= 0 or coherence_window <= 0:
+            raise ValueError("relative VFO retention values must be positive")
+        paths = frozenset(
+            builder("0", "freq_mode", name)
+            for builder in (FieldPath.active, FieldPath.unselected)
+            for name in ("freq_hz", "mode", "filter_num", "data_mode")
+        )
+        now = self._freshness_clock.now()
+        existing = tuple(
+            Observation(
+                path=path,
+                value=entry.value,
+                source=entry.source,
+                timestamp_monotonic=entry.last_observed_monotonic,
+                quality=entry.quality,
+                max_age=entry.max_age,
+                provider_generation=entry.provider_generation,
+                clock_domain=entry.clock_domain,
+            )
+            for path, entry in self._entries.items()
+            if path in paths
+            and entry.freshness is FreshnessState.FRESH
+            and (
+                entry.max_age is None
+                or now - entry.last_observed_monotonic <= entry.max_age
+            )
+        )
+        self.discard(paths)
+        self._relative_vfo_retention = _RelativeVfoRetention(
+            generation=generation,
+            required_paths=frozenset(
+                path for path in paths if path.name in {"freq_hz", "mode"}
+            ),
+            paths=paths,
+            max_age=float(max_age),
+            coherence_window=float(coherence_window),
+            pending={},
+        )
+        self.apply_relative_vfo_observations(existing, generation=generation)
+
+    def reset_relative_vfo_retention(self, *, generation: int) -> ChangeSet:
+        """Clear all relative VFO proof and start one empty provider generation."""
+
+        retention = self._relative_vfo_retention
+        if retention is None:
+            return self._empty_changeset()
+        retention.generation = generation
+        retention.pending.clear()
+        retention.expires_at = None
+        return self.discard(self._relative_vfo_session_paths(retention))
+
+    def apply_relative_vfo_observations(
+        self,
+        observations: Iterable[Observation],
+        *,
+        generation: int,
+    ) -> ChangeSet:
+        """Stage/bootstrap or immediately patch one relative VFO provider batch."""
+
+        batch = tuple(observations)
+        retention = self._relative_vfo_retention
+        if retention is None:
+            return self._apply_observation_batch(batch)
+        if (
+            not batch
+            or generation != retention.generation
+            or any(not self._is_current_observation(item) for item in batch)
+        ):
+            return self._empty_changeset(
+                timestamp=max(
+                    (item.timestamp_monotonic for item in batch), default=None
+                ),
+            )
+
+        relative = tuple(
+            item
+            for item in batch
+            if item.path in retention.paths
+            and (
+                item.path not in self._entries
+                or not self._strictly_older_than_entry(item, self._entries[item.path])
+            )
+        )
+        changesets: list[ChangeSet] = []
+        if not relative:
+            return self._empty_changeset()
+
+        newest_at = max(item.timestamp_monotonic for item in relative)
+        if retention.expires_at is not None and newest_at >= retention.expires_at:
+            expired = self.mark_stale_due(now=newest_at)
+            if expired.freshness:
+                changesets.append(
+                    replace(
+                        self._empty_changeset(timestamp=newest_at),
+                        freshness_paths=tuple(item.path for item in expired.freshness),
+                    )
+                )
+
+        if any(
+            item.path in retention.required_paths and item.value is None
+            for item in relative
+        ):
+            changesets.append(self.reset_relative_vfo_retention(generation=generation))
+            return self._merge_changesets(changesets)
+
+        for observation in relative:
+            previous = retention.pending.get(observation.path)
+            if previous is None or not self._strictly_older_than_observation(
+                observation, previous
+            ):
+                retention.pending[observation.path] = observation
+
+        timestamps = (
+            retention.pending[path].timestamp_monotonic
+            for path in retention.required_paths
+            if path in retention.pending
+        )
+        required_times = tuple(timestamps)
+        complete = (
+            len(required_times) == len(retention.required_paths)
+            and max(required_times) - min(required_times) <= retention.coherence_window
+        )
+        if retention.expires_at is None:
+            if not complete:
+                return self._merge_changesets(changesets)
+            complete_at = max(required_times)
+            retention.expires_at = complete_at + retention.max_age
+            committed = tuple(
+                replace(
+                    item,
+                    max_age=retention.expires_at - item.timestamp_monotonic,
+                )
+                for item in retention.pending.values()
+                if abs(complete_at - item.timestamp_monotonic)
+                <= retention.coherence_window
+            )
+            changesets.append(self.discard(retention.paths))
+            changesets.append(
+                self._apply_observation_batch(
+                    self._with_bound_relative_vfo_aliases(committed)
+                )
+            )
+        else:
+            immediate = tuple(
+                replace(
+                    item,
+                    max_age=retention.expires_at - item.timestamp_monotonic,
+                )
+                for item in relative
+            )
+            changesets.append(
+                self._apply_observation_batch(
+                    self._with_bound_relative_vfo_aliases(immediate)
+                )
+            )
+            if not complete:
+                return self._merge_changesets(changesets)
+            retention.expires_at = max(required_times) + retention.max_age
+            for path in retention.paths:
+                entry = self._entries.get(path)
+                if entry is not None:
+                    entry.max_age = retention.expires_at - entry.last_observed_monotonic
+                    self._entry_changed(entry)
+                alias_path = self._bound_relative_vfo_alias_path(path)
+                alias_entry = (
+                    None if alias_path is None else self._entries.get(alias_path)
+                )
+                if alias_entry is not None:
+                    alias_entry.max_age = (
+                        retention.expires_at - alias_entry.last_observed_monotonic
+                    )
+                    self._entry_changed(alias_entry)
+
+        retention.pending.clear()
+        return self._merge_changesets(changesets)
+
+    def _relative_vfo_session_paths(
+        self,
+        retention: _RelativeVfoRetention,
+    ) -> frozenset[FieldPath]:
+        """Return relative values plus all identity-bound aliases for reset."""
+
+        receiver_ids = {
+            path.receiver_id for path in retention.paths if path.receiver_id is not None
+        }
+        identity = {
+            path
+            for receiver_id in receiver_ids
+            for path in (
+                FieldPath.active_slot(receiver_id),
+                *(
+                    FieldPath.vfo_slot(receiver_id, slot, "freq_mode", name)
+                    for slot in ("A", "B")
+                    for name in ("freq_hz", "mode", "filter_num", "data_mode")
+                ),
+            )
+        }
+        return retention.paths | frozenset(identity)
+
+    def _bound_relative_vfo_alias_path(
+        self,
+        path: FieldPath,
+    ) -> FieldPath | None:
+        """Map one relative path through current observed A/B identity."""
+
+        if path.receiver_id is None or path.slot not in {
+            VfoSlot.ACTIVE,
+            VfoSlot.UNSELECTED,
+        }:
+            return None
+        binding = self._entries.get(FieldPath.active_slot(path.receiver_id))
+        if (
+            binding is None
+            or binding.freshness is not FreshnessState.FRESH
+            or binding.value not in {"A", "B"}
+        ):
+            return None
+        selected_slot = str(binding.value)
+        slot = (
+            selected_slot
+            if path.slot is VfoSlot.ACTIVE
+            else "B"
+            if selected_slot == "A"
+            else "A"
+        )
+        return FieldPath.vfo_slot(path.receiver_id, slot, path.family.value, path.name)
+
+    def _with_bound_relative_vfo_aliases(
+        self,
+        observations: tuple[Observation, ...],
+    ) -> tuple[Observation, ...]:
+        """Mirror confirmed relative leaves into bound aliases in one batch."""
+
+        expanded: list[Observation] = []
+        for observation in observations:
+            expanded.append(observation)
+            alias_path = self._bound_relative_vfo_alias_path(observation.path)
+            if alias_path is not None:
+                expanded.append(replace(observation, path=alias_path))
+        return tuple(expanded)
+
+    def _expire_relative_vfo(self, *, now: float) -> tuple[FieldPath, ...]:
+        retention = self._relative_vfo_retention
+        if retention is None or retention.expires_at is None:
+            return ()
+        if now < retention.expires_at:
+            return ()
+        retention.expires_at = None
+        retention.pending.clear()
+        aliases = {
+            alias
+            for path in retention.paths
+            if (alias := self._bound_relative_vfo_alias_path(path)) is not None
+        }
+        return tuple(retention.paths | aliases)
+
+    def _apply_observation_batch(
+        self,
+        observations: tuple[Observation, ...],
+    ) -> ChangeSet:
+        if any(not self._is_current_observation(item) for item in observations):
+            return self._empty_changeset(
+                timestamp=max(
+                    (item.timestamp_monotonic for item in observations), default=None
+                )
+            )
+        return self._merge_changesets(
+            tuple(self._apply_one(item) for item in observations)
+        )
+
+    def _empty_changeset(self, *, timestamp: float | None = None) -> ChangeSet:
+        return ChangeSet(
+            revision=self._state_revision,
+            freshness_revision=self._freshness_revision,
+            observation_seq=self._observation_seq,
+            changes=(),
+            timestamp_monotonic=(
+                self._freshness_clock.now() if timestamp is None else timestamp
+            ),
+            sources=(),
+            coalesced=False,
+        )
+
+    def _merge_changesets(self, changesets: Iterable[ChangeSet]) -> ChangeSet:
+        parts = tuple(changesets)
+        if not parts:
+            return self._empty_changeset()
+        return ChangeSet(
+            revision=self._state_revision,
+            freshness_revision=self._freshness_revision,
+            observation_seq=self._observation_seq,
+            changes=tuple(change for part in parts for change in part.changes),
+            timestamp_monotonic=max(part.timestamp_monotonic for part in parts),
+            sources=tuple(source for part in parts for source in part.sources),
+            coalesced=any(part.coalesced for part in parts),
+            observed_paths=tuple(
+                path for part in parts for path in part.observed_paths
+            ),
+            freshness_paths=tuple(
+                path for part in parts for path in part.freshness_paths
+            ),
+        )
+
+    def discard(self, paths: Iterable[FieldPath | str]) -> ChangeSet:
+        """Remove session-scoped facts so a new provider epoch starts unknown.
+
+        This is deliberately not an observation: removing prior-session proof
+        must not manufacture a fresh value or source. A semantic revision is
+        emitted when at least one field existed so snapshot consumers publish
+        the field as unobserved again.
+        """
+
+        removed: list[FieldChange] = []
+        for item in paths:
+            path = FieldPath.parse(item) if isinstance(item, str) else item
+            entry = self._entries.pop(path, None)
+            if entry is None:
+                continue
+            self._paths_changed()
+            removed.append(
+                FieldChange(
+                    path=path,
+                    previous=_copy_value(entry.value),
+                    current=None,
+                )
+            )
+        changes = tuple(removed)
+        if changes:
+            self._state_revision += 1
+            self._append_history(
+                changes=changes,
+                freshness=(),
+                reconciliation_requests=(),
+            )
+        return ChangeSet(
+            revision=self._state_revision,
+            freshness_revision=self._freshness_revision,
+            observation_seq=self._observation_seq,
+            changes=changes,
+            timestamp_monotonic=self._freshness_clock.now(),
+            sources=(),
+            coalesced=False,
+        )
+
+    def mark_stale_due(self, *, now: float | None = None) -> SnapshotDelta:
+        """Mark overdue fresh fields stale and emit reconciliation hints.
+
+        This is the **sole** freshness-decay entry point: the store does not
+        age fields automatically (MOR-432). It must be driven externally — in
+        production by the periodic
+        :class:`~rigplane.core.acquisition_scheduler.StateFreshnessService`
+        loop. If nothing calls this, fields never go ``STALE``.
+        """
+
+        timestamp = self._freshness_clock.now() if now is None else now
+        transitions: list[FreshnessTransition] = []
+        requests: list[ReconciliationRequest] = []
+        relative_due = set(self._expire_relative_vfo(now=timestamp))
+        for path in self._paths_in_order():
+            entry = self._entries[path]
+            if entry.freshness is not FreshnessState.FRESH:
+                continue
+            if path not in relative_due:
+                if entry.max_age is None:
+                    continue
+                if timestamp - entry.last_observed_monotonic <= entry.max_age:
+                    continue
+
+            self._freshness_revision += 1
+            entry.freshness = FreshnessState.STALE
+            self._entry_changed(entry)
+            transition = FreshnessTransition(
+                path=path,
+                previous=FreshnessState.FRESH,
+                current=FreshnessState.STALE,
+                freshness_revision=self._freshness_revision,
+                timestamp_monotonic=timestamp,
+            )
+            request = ReconciliationRequest(
+                path=path,
+                reason="stale",
+                requested_at_monotonic=timestamp,
+                state_revision=self._state_revision,
+                freshness_revision=self._freshness_revision,
+                max_age=entry.max_age,
+            )
+            transitions.append(transition)
+            requests.append(request)
+
+        freshness = tuple(transitions)
+        reconciliation_requests = tuple(requests)
+        delta = SnapshotDelta(
+            state_revision=self._state_revision,
+            freshness_revision=self._freshness_revision,
+            observation_seq=self._observation_seq,
+            changes=(),
+            freshness=freshness,
+            reconciliation_requests=reconciliation_requests,
+            provider_generation=self._provider_generation,
+        )
+        self._append_history(
+            changes=(),
+            freshness=freshness,
+            reconciliation_requests=reconciliation_requests,
+        )
+        return delta
+
+    def snapshot(self) -> StateSnapshot:
+        """Return a full immutable projection of the current store state.
+
+        Only fields written since the previous snapshot are projected again;
+        an unchanged field is the same immutable ``FieldSnapshot`` object in
+        both (MOR-4212). A mutable value is still copied per snapshot.
+        """
+
+        return StateSnapshot(
+            state_revision=self._state_revision,
+            freshness_revision=self._freshness_revision,
+            observation_seq=self._observation_seq,
+            generated_at_monotonic=self._freshness_clock.now(),
+            provider_generation=self._provider_generation,
+            fields=self._snapshot_fields(),
+        )
+
+    def _snapshot_fields(self) -> tuple[FieldSnapshot, ...]:
+        cached = self._projected_fields
+        if cached is not None:
+            return cached
+        shared = True
+        projected: list[FieldSnapshot] = []
+        for path in self._paths_in_order():
+            entry = self._entries[path]
+            item = _projected_field(path, entry)
+            shared = shared and item is entry.projected
+            projected.append(item)
+        result = tuple(projected)
+        if shared:
+            self._projected_fields = result
+        return result
+
+    def _paths_in_order(self) -> tuple[FieldPath, ...]:
+        paths = self._ordered_paths
+        if paths is None:
+            paths = tuple(sorted(self._entries, key=str))
+            self._ordered_paths = paths
+        return paths
+
+    def _entry_changed(self, entry: _FieldEntry) -> None:
+        entry.projected = None
+        self._projected_fields = None
+
+    def _paths_changed(self) -> None:
+        self._ordered_paths = None
+        self._projected_fields = None
+
+    def field(self, path: FieldPath | str) -> FieldSnapshot:
+        """Return one field as :meth:`snapshot` projects it; ``KeyError`` if absent.
+
+        Reads one entry instead of copying every field, for callers that need
+        a single path.
+        """
+
+        needle = FieldPath.parse(path) if isinstance(path, str) else path
+        entry = self._entries.get(needle)
+        if entry is None:
+            raise KeyError(str(needle))
+        return _projected_field(needle, entry)
+
+    def delta_since(self, snapshot: StateSnapshot) -> SnapshotDelta:
+        """Return all semantic and freshness deltas after ``snapshot``."""
+
+        if self._requires_full_snapshot(snapshot):
+            return SnapshotDelta(
+                state_revision=self._state_revision,
+                freshness_revision=self._freshness_revision,
+                observation_seq=self._observation_seq,
+                changes=(),
+                freshness=(),
+                reconciliation_requests=(),
+                requires_full_snapshot=True,
+                provider_generation=self._provider_generation,
+            )
+
+        changes: list[FieldChange] = []
+        freshness: list[FreshnessTransition] = []
+        requests: list[ReconciliationRequest] = []
+        for delta in self._history:
+            if delta.state_revision > snapshot.state_revision:
+                changes.extend(delta.changes)
+            freshness.extend(
+                transition
+                for transition in delta.freshness
+                if transition.freshness_revision > snapshot.freshness_revision
+            )
+            requests.extend(
+                request
+                for request in delta.reconciliation_requests
+                if request.freshness_revision > snapshot.freshness_revision
+            )
+
+        return SnapshotDelta(
+            state_revision=self._state_revision,
+            freshness_revision=self._freshness_revision,
+            observation_seq=self._observation_seq,
+            changes=_copy_changes(tuple(changes)),
+            freshness=tuple(freshness),
+            reconciliation_requests=tuple(requests),
+            provider_generation=self._provider_generation,
+        )
+
+    def _requires_full_snapshot(self, snapshot: StateSnapshot) -> bool:
+        return (
+            snapshot.provider_generation != self._provider_generation
+            or snapshot.state_revision < self._history_floor_state_revision
+            or snapshot.freshness_revision < self._history_floor_freshness_revision
+        )
+
+    def _mark_fresh(
+        self,
+        path: FieldPath,
+        *,
+        previous_freshness: FreshnessState,
+        timestamp_monotonic: float,
+    ) -> FreshnessTransition | None:
+        if previous_freshness is FreshnessState.FRESH:
+            return None
+        self._freshness_revision += 1
+        return FreshnessTransition(
+            path=path,
+            previous=previous_freshness,
+            current=FreshnessState.FRESH,
+            freshness_revision=self._freshness_revision,
+            timestamp_monotonic=timestamp_monotonic,
+        )
+
+    def _append_history(
+        self,
+        *,
+        changes: tuple[FieldChange, ...],
+        freshness: tuple[FreshnessTransition, ...],
+        reconciliation_requests: tuple[ReconciliationRequest, ...],
+    ) -> None:
+        if not changes and not freshness and not reconciliation_requests:
+            return
+        self._history.append(
+            SnapshotDelta(
+                state_revision=self._state_revision,
+                freshness_revision=self._freshness_revision,
+                observation_seq=self._observation_seq,
+                changes=_copy_changes(changes),
+                freshness=freshness,
+                reconciliation_requests=reconciliation_requests,
+                provider_generation=self._provider_generation,
+            )
+        )
+        self._prune_history()
+
+    def _is_current_observation(self, observation: Observation) -> bool:
+        return observation.provider_generation == self._provider_generation
+
+    @staticmethod
+    def _strictly_older_than_entry(
+        observation: Observation, entry: _FieldEntry
+    ) -> bool:
+        return (
+            observation.provider_generation == entry.provider_generation
+            and observation.clock_domain is not None
+            and observation.clock_domain == entry.clock_domain
+            and observation.timestamp_monotonic < entry.last_observed_monotonic
+        )
+
+    @staticmethod
+    def _strictly_older_than_observation(
+        observation: Observation, previous: Observation
+    ) -> bool:
+        return (
+            observation.provider_generation == previous.provider_generation
+            and observation.clock_domain is not None
+            and observation.clock_domain == previous.clock_domain
+            and observation.timestamp_monotonic < previous.timestamp_monotonic
+        )
+
+    def _prune_history(self) -> None:
+        while len(self._history) > self._max_history_count:
+            pruned = self._history.pop(0)
+            if pruned.changes:
+                self._history_floor_state_revision = max(
+                    self._history_floor_state_revision,
+                    pruned.state_revision,
+                )
+            if pruned.freshness or pruned.reconciliation_requests:
+                self._history_floor_freshness_revision = max(
+                    self._history_floor_freshness_revision,
+                    pruned.freshness_revision,
+                )
+
+
+def _copy_value(value: Any) -> Any:
+    return copy.deepcopy(value)
+
+
+_IMMUTABLE_LEAVES = (type(None), bool, int, float, complex, str, bytes, Enum)
+
+
+def is_immutable_value(value: Any) -> bool:
+    """True when nothing reachable from ``value`` can be changed in place."""
+
+    if isinstance(value, _IMMUTABLE_LEAVES):
+        return True
+    if isinstance(value, (tuple, frozenset)):
+        return all(is_immutable_value(item) for item in value)
+    params = getattr(type(value), "__dataclass_params__", None)
+    if params is not None and params.frozen:
+        return all(
+            is_immutable_value(getattr(value, item.name))
+            for item in dataclass_fields(value)
+        )
+    return False
+
+
+def _projected_field(path: FieldPath, entry: _FieldEntry) -> FieldSnapshot:
+    """``entry`` as a snapshot projects it, kept on the entry when shareable."""
+
+    projected = entry.projected
+    if projected is None:
+        projected = _field_snapshot(path, entry)
+        if is_immutable_value(entry.value):
+            entry.projected = projected
+    return projected
+
+
+def _field_snapshot(path: FieldPath, entry: _FieldEntry) -> FieldSnapshot:
+    return FieldSnapshot(
+        path=path,
+        value=_copy_value(entry.value),
+        freshness=entry.freshness,
+        last_observed_monotonic=entry.last_observed_monotonic,
+        max_age=entry.max_age,
+        source=entry.source,
+        quality=entry.quality,
+        provider_generation=entry.provider_generation,
+        clock_domain=entry.clock_domain,
+    )
+
+
+def _copy_changes(changes: tuple[FieldChange, ...]) -> tuple[FieldChange, ...]:
+    return tuple(
+        FieldChange(
+            path=change.path,
+            previous=_copy_value(change.previous),
+            current=_copy_value(change.current),
+        )
+        for change in changes
+    )

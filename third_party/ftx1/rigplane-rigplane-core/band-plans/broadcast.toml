@@ -1,0 +1,184 @@
+# ITU Broadcast Bands (LW + MW + SW)
+# Source: ITU Radio Regulations
+
+[meta]
+name = "Broadcast Bands"
+layer = "broadcast"
+priority = 5
+source = "ITU Radio Regulations"
+
+[[band]]
+name = "LW"
+start = 148_500
+end = 283_500
+
+  [[band.segment]]
+  start = 148_500
+  end = 283_500
+  mode = "broadcast"
+  label = "LW"
+
+[[band]]
+name = "MW"
+start = 526_500
+end = 1_606_500
+
+  [[band.segment]]
+  start = 526_500
+  end = 1_606_500
+  mode = "broadcast"
+  label = "MW"
+
+[[band]]
+name = "120m"
+start = 2_300_000
+end = 2_495_000
+
+  [[band.segment]]
+  start = 2_300_000
+  end = 2_495_000
+  mode = "broadcast"
+  label = "120m"
+
+[[band]]
+name = "90m"
+start = 3_200_000
+end = 3_400_000
+
+  [[band.segment]]
+  start = 3_200_000
+  end = 3_400_000
+  mode = "broadcast"
+  label = "90m"
+
+[[band]]
+name = "75m"
+start = 3_900_000
+end = 4_000_000
+
+  [[band.segment]]
+  start = 3_900_000
+  end = 4_000_000
+  mode = "broadcast"
+  label = "75m"
+
+[[band]]
+name = "60m"
+start = 4_750_000
+end = 5_060_000
+
+  [[band.segment]]
+  start = 4_750_000
+  end = 5_060_000
+  mode = "broadcast"
+  label = "60m"
+
+[[band]]
+name = "49m"
+start = 5_900_000
+end = 6_200_000
+
+  [[band.segment]]
+  start = 5_900_000
+  end = 6_200_000
+  mode = "broadcast"
+  label = "49m"
+
+[[band]]
+name = "41m"
+start = 7_200_000
+end = 7_450_000
+
+  [[band.segment]]
+  start = 7_200_000
+  end = 7_450_000
+  mode = "broadcast"
+  label = "41m"
+
+[[band]]
+name = "31m"
+start = 9_400_000
+end = 9_900_000
+
+  [[band.segment]]
+  start = 9_400_000
+  end = 9_900_000
+  mode = "broadcast"
+  label = "31m"
+
+[[band]]
+name = "25m"
+start = 11_600_000
+end = 12_100_000
+
+  [[band.segment]]
+  start = 11_600_000
+  end = 12_100_000
+  mode = "broadcast"
+  label = "25m"
+
+[[band]]
+name = "22m"
+start = 13_570_000
+end = 13_870_000
+
+  [[band.segment]]
+  start = 13_570_000
+  end = 13_870_000
+  mode = "broadcast"
+  label = "22m"
+
+[[band]]
+name = "19m"
+start = 15_100_000
+end = 15_800_000
+
+  [[band.segment]]
+  start = 15_100_000
+  end = 15_800_000
+  mode = "broadcast"
+  label = "19m"
+
+[[band]]
+name = "16m"
+start = 17_480_000
+end = 17_900_000
+
+  [[band.segment]]
+  start = 17_480_000
+  end = 17_900_000
+  mode = "broadcast"
+  label = "16m"
+
+[[band]]
+name = "15m BC"
+start = 18_900_000
+end = 19_020_000
+
+  [[band.segment]]
+  start = 18_900_000
+  end = 19_020_000
+  mode = "broadcast"
+  label = "15m BC"
+
+[[band]]
+name = "13m"
+start = 21_450_000
+end = 21_850_000
+
+  [[band.segment]]
+  start = 21_450_000
+  end = 21_850_000
+  mode = "broadcast"
+  label = "13m"
+
+[[band]]
+name = "11m"
+start = 25_600_000
+end = 26_100_000
+
+  [[band.segment]]
+  start = 25_600_000
+  end = 26_100_000
+  mode = "broadcast"
+  label = "11m"

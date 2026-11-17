@@ -1,0 +1,445 @@
+/**
+ * MOR-1090 — approved pixel-diff baselines.
+ *
+ * Representative slice of the MOR-1070/1085 60-capture matrix (not the full
+ * matrix — see fixtures/approved-baselines/README.md for why and for the
+ * rationale table), plus the MOR-1088 mobile PTT pair. Every cockpit case
+ * drives the SAME `fixtures/index.html` entry `capture.mjs` uses, so the
+ * fixture ids and URL contract are shared, not re-invented. `runAssertions`
+ * (the deterministic manifest/assertion layer) already gates behavior on
+ * every push via `capture.mjs`'s own harness; this file is the perceptual
+ * pixel layer on top, per the MOR-1087/1282/1088 ruling that raw PNG bytes
+ * are not a valid identity check on this host.
+ */
+import { test, expect } from '@playwright/test';
+
+const DESKTOP = { width: 1280, height: 800 };
+const PHONE = { width: 375, height: 812 };
+const PTT_SERVER = {
+  held: {
+    phase: 'active', intent: 'momentary', radioTx: 'on', txRisk: 'confirmed-on',
+    fault: null, faultDetail: null, fresh: true, releaseRequired: true,
+    remainingMs: 12_000, lastOperation: 'ptt_on',
+  },
+  rx: {
+    phase: 'idle', intent: null, radioTx: 'off', txRisk: 'none',
+    fault: null, faultDetail: null, fresh: true, releaseRequired: false,
+    remainingMs: null, lastOperation: 'force_receive',
+  },
+} as const;
+/**
+ * MOR-2243 — narrower than the peer-split glass's own 1280px native canvas,
+ * so `computeStageScale` resolves below 1 (1100/1280 ≈ 0.859; the group's
+ * 0.5 floor stays inert). At DESKTOP the same fixture resolves
+ * `min(1280/1280, 800/540, MAX_STAGE_SCALE)` = exactly 1 — the identity
+ * transform — so a baseline taken only there pins the one configuration in
+ * which `ScaledStage`'s scaling path does not run.
+ */
+const NARROW = { width: 1100, height: 800 };
+/** Fixed instant for `freezeClock`; only its constancy matters, not its value. */
+const FROZEN_CLOCK = new Date('2026-01-01T14:32:00Z');
+
+interface Spec {
+  name: string;
+  fixture: string;
+  language?: 'studioline' | 'fieldline';
+  mode?: 'light';
+  viewport?: typeof DESKTOP;
+  /**
+   * Pin `Date` before the page loads. `PeerSplitLayout.svelte` renders a live
+   * wall clock inside the glass (`setInterval(…, 30_000)`, a UTC and a local
+   * `HH:MM` span), so without this its digits differ between the run that
+   * captured the baseline and every later run — legitimate variation that
+   * would spend part of the `maxDiffPixelRatio` budget every run and shrink
+   * what remains for catching a real regression. Opt-in per spec: every
+   * capture approved before MOR-2243 was taken without it.
+   */
+  freezeClock?: boolean;
+}
+
+/**
+ * Topology × {RX, TX, fault} × language, per MOR-1090's acceptance text,
+ * plus two additions from the independent verification's adequacy ranking
+ * (`verify-mor-1090.md` §4/§10.6): a light-mode capture (light is a separate
+ * token resolution from dark — see MOR-1073/1074 — and none of the original
+ * 12 exercised it) and a fault × non-default-language capture (fault only
+ * ever appeared in the default language before).
+ *
+ * MOR-2243 appends the two `peer-split-chassis` rows, which sit outside that
+ * grid entirely: a different layout (`PeerSplitLayout`, not the cockpit),
+ * captured at two frame sizes because at 1280x800 the stage transform
+ * resolves to the identity.
+ */
+const COCKPIT: Spec[] = [
+  { name: 'dual-main-sub--desktop', fixture: 'topology-2-main-sub' },
+  { name: 'topology-1-single--desktop', fixture: 'topology-1-single' },
+  { name: 'topology-2-ab-shared--desktop', fixture: 'topology-2-ab-shared' },
+  { name: 'tx-phase-rx--desktop', fixture: 'tx-phase-rx' },
+  { name: 'tx-phase-tx--desktop', fixture: 'tx-phase-tx' },
+  { name: 'tx-phase-fault--desktop', fixture: 'tx-phase-fault' },
+  { name: 'dual-main-sub--desktop--studioline', fixture: 'topology-2-main-sub', language: 'studioline' },
+  { name: 'dual-main-sub--desktop--fieldline', fixture: 'topology-2-main-sub', language: 'fieldline' },
+  { name: 'tx-phase-tx--desktop--studioline', fixture: 'tx-phase-tx', language: 'studioline' },
+  { name: 'dual-main-sub--phone-portrait', fixture: 'topology-2-main-sub', viewport: PHONE },
+  {
+    name: 'dual-main-sub--desktop--studioline--light',
+    fixture: 'topology-2-main-sub',
+    language: 'studioline',
+    mode: 'light',
+  },
+  { name: 'tx-phase-fault--desktop--fieldline', fixture: 'tx-phase-fault', language: 'fieldline' },
+  { name: 'peer-split-chassis--desktop', fixture: 'peer-split-chassis', freezeClock: true },
+  { name: 'unified-instrument--desktop', fixture: 'lcd-unified-instrument' },
+  { name: 'panadapter-first--desktop', fixture: 'lcd-panadapter-first' },
+  {
+    name: 'peer-split-chassis--1100x800',
+    fixture: 'peer-split-chassis',
+    viewport: NARROW,
+    freezeClock: true,
+  },
+  { name: 'unified-instrument--1100x800', fixture: 'lcd-unified-instrument', viewport: NARROW },
+  { name: 'panadapter-first--1100x800', fixture: 'lcd-panadapter-first', viewport: NARROW },
+];
+
+for (const spec of COCKPIT) {
+  test(spec.name, async ({ page }) => {
+    // MOR-2710: the meter ballistics (`smoothing.svelte.ts` EMA,
+    // `signal-meter-motion.svelte.ts` peak-hold/afterglow) animate from 0
+    // toward the fixture reading on `requestAnimationFrame`, so a screenshot
+    // taken at `data-harness-ready` catches a mid-flight bar whose length
+    // depends on how many frames elapsed — the S-meter band moved ~one
+    // segment between regeneration runs that changed nothing. Under
+    // `prefers-reduced-motion: reduce` the meters snap to the settled value
+    // at mount and schedule no frame (the reduced-motion contract pinned in
+    // `LinearSMeter.reduced-motion.svelte.isolated.test.ts`). The live app
+    // keeps its animation: this is the capture harness only.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    // Before `goto`: the clock is installed into the page's init scripts, so
+    // it has to be in place before any of the page's own script reads `Date`.
+    if (spec.freezeClock) await page.clock.setFixedTime(FROZEN_CLOCK);
+    await page.setViewportSize(spec.viewport ?? DESKTOP);
+    const url = `/fixtures/index.html?fixture=${spec.fixture}&theme=v2`
+      + (spec.language ? `&language=${spec.language}` : '')
+      + (spec.mode ? `&mode=${spec.mode}` : '');
+    await page.goto(url, { waitUntil: 'load' });
+    await page.waitForSelector('body[data-harness-ready="true"]');
+    // MOR-2710: pin the harness contract itself — a capture taken without
+    // the emulation above animates its meters and is not reproducible.
+    expect(await page.evaluate(() =>
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true);
+    await expect(page).toHaveScreenshot(`${spec.name}.png`, { animations: 'disabled', caret: 'hide' });
+  });
+}
+
+/** MOR-2364 → MOR-2425/R41 → MOR-2816 (owner ruling 2026-09-28): the
+ *  portrait VFO / RX-TX deck block is REMOVED — the active VFO lives in
+ *  the header, its controls in the chip tabs — so the phone mounts no VFO
+ *  deck at all. This retires the old one-line tile pin (the deck it
+ *  measured is gone) and pins the removal instead: no VFO tile, no VFO
+ *  surface, and still no freshness cue. */
+test('the portrait phone renders no VFO deck and no freshness cue', async ({ page }) => {
+  await page.setViewportSize(PHONE);
+  await page.goto('/fixtures/mobile-witness.html?fixture=topology-2-main-sub', { waitUntil: 'load' });
+  await page.waitForSelector('body[data-harness-ready="true"]');
+  await page.evaluate(() => document.fonts.ready);
+  const result = await page.evaluate(() => ({
+    tiles: document.querySelectorAll('[data-vfo-tile]').length,
+    surfaces: document.querySelectorAll('[data-testid="vfo-surface"]').length,
+    cues: document.querySelectorAll('[data-vfo-stale-cue]').length,
+  }));
+  expect(result.tiles).toBe(0);
+  expect(result.surfaces).toBe(0);
+  expect(result.cues).toBe(0);
+});
+
+/** MOR-2656 — the phone one-line test on the IC-7300/IC-705 shape (ONE
+ *  receiver, `[vfo] readback = 'selected_unselected'` → the surface's
+ *  `relative` slot kind). The active tile shows the localized ACTIVE word,
+ *  the other tile no word at all. Every shipped catalog's word must fit the
+ *  phone tile on ONE line, and the plaque's reserved width must be IDENTICAL
+ *  in every locale (the reservation measures the widest across ALL catalogs,
+ *  so a locale switch cannot move the layout). Meets the task rule "measure,
+ *  never guess from character counts": this spec mounts the real surface in
+ *  a real browser. */
+test('phone one-tile relative (IC-7300 shape): the active role word fits on one line in every locale', async ({ page }) => {
+  await page.setViewportSize(PHONE);
+  await page.goto('/fixtures/mobile-witness.html?fixture=topology-2-main-sub', { waitUntil: 'load' });
+  await page.waitForSelector('body[data-harness-ready="true"]');
+  await page.evaluate(() => document.fonts.ready);
+  const measured = await page.evaluate(async () => {
+    // Non-literal specifiers, same pattern as the MOR-2662 mount above.
+    const runtimePath = '/@id/svelte';
+    const surfacePath = '/src/semantic/VfoSurface.svelte';
+    const fixturesPath = '/src/semantic/fixtures/topologies';
+    const storePath = '/src/lib/i18n/store.svelte.ts';
+    const { mount, flushSync, unmount } = await import(runtimePath);
+    const { default: VfoSurface } = await import(surfacePath);
+    const { topologyFixtures } = await import(fixturesPath);
+    const { setLocale, _resetLocale } = await import(storePath);
+    const base = topologyFixtures['1/ab'];
+    // IC-7300/IC-705 shape: one receiver (MAIN), relative slots, the
+    // selected one active. `vfoTiles="active"` keeps exactly that tile.
+    const model = {
+      ...base,
+      vfos: [
+        { ...base.vfos[0], slot: { kind: 'relative' as const, role: 'selected' as const },
+          label: 'Selected VFO', isActive: true, isActiveSlot: true },
+        { ...base.vfos[1], slot: { kind: 'relative' as const, role: 'unselected' as const },
+          label: 'Unselected VFO', isActive: false, isActiveSlot: false },
+      ],
+    };
+    const lines = (element: Element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return new Set([...range.getClientRects()].map((box) => box.top)).size;
+    };
+    /** Mount one probe. `appearance='semantic'` is the phone's one-tile
+     *  list; `'sdr'` is the desktop deck's receiver-instrument, where the
+     *  plaque's font is 12px with 0.1em tracking. Both return the same
+     *  reserved width variable — on the sdr deck the role sits in a `1fr`
+     *  grid column, so the rendered box stretches (by design) and only the
+     *  `min-width` RESERVATION is comparable. */
+    const probe = (appearance: 'semantic' | 'sdr', locale: 'en-US' | 'ru-RU' | 'ja-JP') => {
+      setLocale(locale);
+      const target = document.createElement('div');
+      target.style.width = '360px';
+      document.body.append(target);
+      const component = mount(VfoSurface, {
+        target,
+        props: { viewModel: model, vfoTiles: 'active', appearance },
+      });
+      flushSync();
+      const surface = target.querySelector<HTMLElement>('[data-testid="vfo-surface"]')!;
+      const surfaceRect = surface.getBoundingClientRect();
+      const active = surface.querySelector<HTMLElement>('.vfo-role')!;
+      const value = {
+        roleText: active.textContent,
+        roleLines: lines(active),
+        surfaceOverflows: surface.scrollWidth > surfaceRect.width,
+        plaqueWidth: getComputedStyle(surface).getPropertyValue('--vfo-role-width'),
+      };
+      unmount(component);
+      target.remove();
+      return value;
+    };
+    const locales = ['en-US', 'ru-RU', 'ja-JP'] as const;
+    const outcome = {
+      phone: Object.fromEntries(locales.map((locale) => [locale, probe('semantic', locale)])),
+      desktop: Object.fromEntries(locales.map((locale) => [locale, probe('sdr', locale)])),
+    };
+    // Later tests in this file capture screenshots with the default locale.
+    _resetLocale();
+    return outcome;
+  });
+  console.log('MOR-2656 role-plaque geometry:', JSON.stringify(measured));
+  for (const deck of ['phone', 'desktop'] as const) {
+    for (const [locale, value] of Object.entries(measured[deck])) {
+      expect(value.roleLines, `${deck}/${locale}: the active role word on ONE line`).toBe(1);
+      expect(value.surfaceOverflows, `${deck}/${locale}: no horizontal overflow`).toBe(false);
+    }
+    // The reservation is built from ALL catalogs, so the reserved width is
+    // one constant across locales on each deck.
+    expect(new Set(Object.values(measured[deck]).map((value) => value.plaqueWidth)).size).toBe(1);
+  }
+});
+
+/** MOR-2662 — switching the active VFO swaps the ONE tile's content inside
+ *  the same reserved geometry. Real browser layout (jsdom cannot measure), so
+ *  the surface is mounted directly the way the "TX lower state clearance"
+ *  tests above mount a meter. No unread-vs-read width pin here: the
+ *  interactive frequency readout's own unread reservation is a single
+ *  no-break space on main (MOR-2654 left the interactive branch there), so
+ *  that comparison belongs to the readout's own lane, not this one. */
+test('phone one-tile VFO keeps its box across a VFO switch (MOR-2662)', async ({ page }) => {
+  await page.setViewportSize(PHONE);
+  await page.goto('/fixtures/mobile-witness.html?fixture=topology-2-main-sub', { waitUntil: 'load' });
+  await page.waitForSelector('body[data-harness-ready="true"]');
+  await page.evaluate(() => document.fonts.ready);
+  const geometry = await page.evaluate(async () => {
+    // Non-literal specifiers (the "TX lower state clearance" tests' own
+    // pattern): a literal '/@id/svelte' import fails svelte-check's module
+    // resolution, a variable-length one is an `any` dynamic import at check
+    // time and resolves at runtime in the dev server.
+    const runtimePath = '/@id/svelte';
+    const surfacePath = '/src/semantic/VfoSurface.svelte';
+    const fixturesPath = '/src/semantic/fixtures/topologies';
+    const { mount, flushSync, unmount } = await import(runtimePath);
+    const { default: VfoSurface } = await import(surfacePath);
+    const { topologyFixtures } = await import(fixturesPath);
+    const activeOn = (id: 'A' | 'B') => topologyFixtures['1/ab'].vfos.map(
+      (vfo: { slot: { kind: string; id: string } }) => ({
+        ...vfo, frequencyHz: id === 'A' ? 7100000 : 7150000,
+        isActive: vfo.slot.kind === 'slotted' && vfo.slot.id === id,
+        isActiveSlot: vfo.slot.kind === 'slotted' && vfo.slot.id === id,
+      }));
+    const readA = { ...topologyFixtures['1/ab'], vfos: activeOn('A') };
+    const readB = { ...topologyFixtures['1/ab'], vfos: activeOn('B') };
+    const measure = (model: typeof readA) => {
+      const target = document.createElement('div');
+      target.style.width = '360px';
+      document.body.append(target);
+      const component = mount(VfoSurface, {
+        target,
+        props: { viewModel: model, vfoTiles: 'active', onTuneFrequency: () => {} },
+      });
+      flushSync();
+      const tile = target.querySelector<HTMLElement>('[data-vfo-tile]')!;
+      const box = tile.getBoundingClientRect();
+      const digits = tile.querySelectorAll('.digit').length;
+      const text = tile.querySelector('[data-vfo-freq]')?.textContent ?? '';
+      unmount(component);
+      target.remove();
+      return { width: box.width, height: box.height, digits, text };
+    };
+    return { a: measure(readA), b: measure(readB) };
+  });
+  // Exactly one tile in every state, each measured above.
+  expect(geometry.a.digits).toBeGreaterThan(0);
+  expect(geometry.b.digits).toBe(geometry.a.digits);
+  // A→B switch: same box, different content — swapped in place, no size change.
+  expect(geometry.b.width).toBe(geometry.a.width);
+  expect(geometry.b.height).toBe(geometry.a.height);
+  expect(geometry.b.text).not.toBe(geometry.a.text);
+});
+
+/**
+ * MOR-2240 — the mobile layout's portrait and landscape captures. The
+ * `fixtures/index.html` skins never mount `MobileRadioLayout`; the
+ * `fixtures/mobile-witness.html` entry does it with the same stubbed
+ * seams, at the two viewports the ticket's acceptance names (375x812,
+ * 812x375). Both captures assert the non-pixel contract before the pixel
+ * layer, which a comparator cannot see: the full-width landscape surface
+ * and the unread AF level (empty in its reserved box, never the raw
+ * normalized float from the bench).
+ */
+test('mobile-portrait--phone', async ({ page }) => {
+  // MOR-2713: without this the compact S-meter was still growing after
+  // harness-ready (for about 250 ms in run 36333915699), and captures of one
+  // commit ended its lit bar at two different pixels. Same emulation and pin
+  // as the COCKPIT loop above (MOR-2710).
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize(PHONE);
+  // MOR-2852: the phone captures use the facts-bearing twin so the meta
+  // row's BW/AGC/NB/NR chips read KNOWN; every desktop/reference/LCD
+  // capture stays on the shared `topology-2-main-sub`.
+  await page.goto('/fixtures/mobile-witness.html?fixture=topology-2-main-sub--phone', { waitUntil: 'load' });
+  await page.waitForSelector('body[data-harness-ready="true"]');
+  expect(await page.evaluate(() =>
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true);
+  await page.evaluate(() => document.fonts.ready);
+  const layout = page.locator('.m-layout');
+  await expect(layout).toBeVisible();
+  const essentials = page.locator('.m-essentials');
+  await expect(essentials).toContainText('AF Level');
+  const afText = await essentials.innerText();
+  // MOR-2668: the fixture never reports an AF level, so the readout is
+  // unread — empty text in its reserved box (`textContent`, which unlike
+  // `innerText` does not pick up the `:empty::before` line-box strut).
+  expect(await essentials.locator('.vc-value').textContent()).toBe('');
+  expect(afText).not.toContain('NaN');
+  // The bench defect class: a bare normalised float on the AF slider.
+  expect(afText).not.toMatch(/\d\.\d{6,}/);
+  await expect(page).toHaveScreenshot('mobile-portrait--phone.png', { animations: 'disabled', caret: 'hide' });
+});
+
+test('mobile-landscape--phone', async ({ page }) => {
+  await page.setViewportSize({ width: 812, height: 375 });
+  await page.goto('/fixtures/mobile-witness.html?fixture=topology-2-main-sub--phone', { waitUntil: 'load' });
+  await page.waitForSelector('body[data-harness-ready="true"]');
+  await page.evaluate(() => document.fonts.ready);
+  const landscape = page.locator('.m-landscape');
+  await expect(landscape).toBeVisible();
+  const box = await landscape.boundingBox();
+  // Acceptance: full width — pinned here numerically, and pinned at the
+  // `width: 100dvw` rule in MobileRadioLayout.component.svelte.test.ts.
+  expect({ width: box?.width, height: box?.height }).toEqual({ width: 812, height: 375 });
+  expect(await page.locator('.m-layout').count()).toBe(0);
+  await expect(page).toHaveScreenshot('mobile-landscape--phone.png', { animations: 'disabled', caret: 'hide' });
+});
+
+/** The MOR-1088 mobile PTT pair: idle FAB and a real pointer-held FAB. */
+test('ptt-idle--mobile', async ({ page }) => {
+  await page.setViewportSize(PHONE);
+  await page.goto('/fixtures/ptt-harness.html', { waitUntil: 'load' });
+  await page.waitForSelector('body[data-harness-ready="true"]');
+  await expect(page).toHaveScreenshot('ptt-idle--mobile.png', { animations: 'disabled' });
+});
+
+test('ptt-held--mobile', async ({ page }) => {
+  await page.setViewportSize(PHONE);
+  await page.goto('/fixtures/ptt-harness.html', { waitUntil: 'load' });
+  await page.waitForSelector('body[data-harness-ready="true"]');
+  // A real `page.mouse` press (not a hand-built PointerEvent) so Chromium
+  // grants an actual active pointer — `PttFab`'s `setPointerCapture` call
+  // throws on a synthetic pointerId with no matching live pointer. Held past
+  // the 50ms guard, mirroring capture-ptt.mjs's own gesture technique.
+  const box = (await page.locator('.ptt-fab').boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect.poll(() => page.evaluate(() => window.__ptt.deliveryTrace()))
+    .toEqual(['ws.ptt_on']);
+  await page.evaluate((snapshot) => window.__ptt.emitServerSnapshot(snapshot), PTT_SERVER.held);
+  await page.waitForSelector('.ptt-fab.ptt-fab-held', { timeout: 2_000 });
+  await expect(page).toHaveScreenshot('ptt-held--mobile.png', { animations: 'disabled' });
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => window.__ptt.deliveryTrace()))
+    .toEqual(['ws.ptt_on', 'ws.ptt_off']);
+  await page.evaluate((snapshot) => window.__ptt.emitServerSnapshot(snapshot), PTT_SERVER.rx);
+});
+
+for (const compact of [true, false]) for (const stateText of ['IDLE', 'STALE', '?']) {
+  test(`TX lower state clearance -- ${compact ? 'compact' : 'default'} -- ${stateText}`, async ({ page }, testInfo) => {
+    await page.goto('/fixtures/index.html?fixture=topology-1-single&theme=v2');
+    await page.waitForSelector('body[data-harness-ready="true"]');
+    const geometry = await page.evaluate(async ({ compact, stateText }) => {
+      const runtimePath = '/@id/svelte';
+      const meterPath = '/src/components-v2/meters/LinearSMeter.svelte';
+      const { mount, flushSync, unmount } = await import(runtimePath);
+      const { default: Meter } = await import(meterPath);
+      const target = document.createElement('div');
+      target.style.width = '600px';
+      document.body.append(target);
+      const component = mount(Meter, { target, props: {
+        value: 0, label: 'S', compact,
+        lowerScale: { label: 'SWR', ticks: [{ value: 0, label: '1' }, { value: 1, label: '∞' }],
+          valueFraction: 0, fault: false, relevant: false, stateText },
+      } });
+      flushSync();
+      await document.fonts.ready;
+      try {
+        const lower = target.querySelector('[data-lower-relevant]')!;
+        const state = [...lower.querySelectorAll('text')].find((node) => node.textContent === stateText)!;
+        const label = lower.querySelector('[data-lower-row-label]')!;
+        const readouts = [...target.querySelectorAll('[data-main-relevant]:last-child text')];
+        const box = (node: Element) => {
+          const { x, y, width, height, bottom } = node.getBoundingClientRect();
+          return { x, y, width, height, bottom };
+        };
+        const measure = () => {
+          const status = box(state);
+          const readings = readouts.map(box);
+          return { status, readings, lowerTop: box(label).y, bottom: box(target.querySelector('svg')!).bottom,
+            overlaps: readings.map((reading) => Math.max(0, Math.min(status.x + status.width, reading.x + reading.width)
+              - Math.max(status.x, reading.x)) * Math.max(0, Math.min(status.bottom, reading.bottom) - Math.max(status.y, reading.y))),
+          };
+        };
+        const actual = measure();
+        const baseline = state.getAttribute('dominant-baseline');
+        state.removeAttribute('dominant-baseline');
+        const oldOverlap = measure();
+        if (baseline !== null) state.setAttribute('dominant-baseline', baseline);
+        return { actual, oldOverlap, restored: measure(), readoutText: readouts.map((node) => node.textContent) };
+      } finally { await unmount(component); target.remove(); }
+    }, { compact, stateText });
+    await testInfo.attach('lower-state-geometry', { body: JSON.stringify(geometry, null, 2), contentType: 'application/json' });
+    expect(geometry.readoutText.some((text) => text?.includes('dBm'))).toBe(true);
+    expect(geometry.actual.readings).toHaveLength(2);
+    expect(geometry.actual.status.width).toBeGreaterThan(0);
+    expect(geometry.actual.overlaps).toEqual([0, 0]);
+    expect(geometry.actual.status.y).toBeGreaterThanOrEqual(geometry.actual.lowerTop - 0.5);
+    expect(geometry.actual.status.bottom).toBeLessThanOrEqual(geometry.actual.bottom);
+    expect(Math.max(...geometry.oldOverlap.overlaps)).toBeGreaterThan(0);
+    expect(geometry.oldOverlap.readings).toEqual(geometry.actual.readings);
+    expect(geometry.restored).toEqual(geometry.actual);
+  });
+}

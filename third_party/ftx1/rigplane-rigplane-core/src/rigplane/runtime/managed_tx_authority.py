@@ -1,0 +1,1536 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from dataclasses import dataclass, replace
+from enum import StrEnum
+from functools import partial
+from typing import Any, Protocol
+
+from rigplane.core.command_dispatch import DescriptorTxPolicy, command_descriptor
+from rigplane.core.state_pipeline_contracts import CommandIntent
+from rigplane.runtime.controller_authority import (
+    ControllerAuthority,
+    ControllerError,
+    ControllerTicket,
+)
+from rigplane.runtime.managed_tx_config import (
+    ManagedTxTotConfig,
+    ManagedTxTotConfigStore,
+)
+from rigplane.runtime.managed_tx_effect_lane import ManagedTxEffectLane
+from rigplane.runtime.managed_tx_fence import TxAbortFence, TxAbortResult
+from rigplane.runtime.managed_tx_state import (
+    AbortOperation,
+    ActuationOperation,
+    ActuationResult,
+    ActuationSettled,
+    EffectToken,
+    ForceOff,
+    ManagedTxEffect,
+    ManagedTxEvent,
+    ManagedTxIntent,
+    ManagedTxIntentKind,
+    ManagedTxOutcome,
+    ManagedTxState,
+    ManagedTxTransition,
+    PttDown,
+    PttUp,
+    RetryForceReceive,
+    TransmitOn,
+    reduce_managed_tx,
+)
+
+logger = logging.getLogger(__name__)
+
+ManagedTxChangeListener = Callable[[], None]
+
+
+class RadioTxProbe(Protocol):
+    """The radio's PTT readback, as the composition observes it (MOR-3537)."""
+
+    def radio_tx_since(self, since: float) -> bool:
+        """Whether the radio reported TX in an observation newer than ``since``."""
+        ...
+
+
+# The refusal code for a TX start while the radio reports TX and Core holds
+# and owes none (MOR-3537). One code whoever keyed the radio (MOR-3921).
+RADIO_TX_REFUSAL = "radio_tx_unowned"
+
+
+class _Wakeup(Protocol):
+    async def wait_until(self, deadline: float | None) -> None: ...
+
+    def wake(self) -> None: ...
+
+
+class _EventWakeup:
+    def __init__(self, clock: Callable[[], float]) -> None:
+        self._clock = clock
+        self._event = asyncio.Event()
+
+    async def wait_until(self, deadline: float | None) -> None:
+        event = self._event
+        if deadline is None:
+            await event.wait()
+        else:
+            timeout = max(0.0, deadline - self._clock())
+            if timeout:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(event.wait(), timeout)
+        if self._event is event:
+            self._event = asyncio.Event()
+
+    def wake(self) -> None:
+        self._event.set()
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedTxProjection:
+    state: ManagedTxState
+    configured_tot_seconds: float | None
+    remaining_tot_seconds: float | None
+    provider_generation: int | None
+
+
+_SubmissionCompletion = asyncio.Task[
+    tuple[ManagedTxTransition, ActuationSettled | None]
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedTxSubmission:
+    """Accepted or rejected intent plus its separately owned actuation result."""
+
+    transition: ManagedTxTransition
+    _completion: _SubmissionCompletion
+
+    @property
+    def outcome(self) -> ManagedTxOutcome:
+        return self.transition.outcome
+
+    @property
+    def settlement_done(self) -> bool:
+        return self._completion.done()
+
+    @property
+    def pending_release(self) -> bool:
+        """Release debt was admitted without an available provider effect."""
+        return (
+            self.outcome is ManagedTxOutcome.ACCEPTED
+            and self.transition.state.release_required
+            and not self.transition.effects
+        )
+
+    async def wait_settlement(self) -> ActuationSettled | None:
+        """Join provider settlement without transferring cancellation ownership."""
+        _transition, settlement = await asyncio.shield(self._completion)
+        return settlement
+
+
+class ShutdownResult(StrEnum):
+    DRAINED = "drained"
+    TERMINATED = "terminated"
+
+
+_ProviderRetirement = Callable[[int], Awaitable[None]]
+
+# Defaults of ManagedTxAuthority's attempt_timeout_seconds and
+# retry_delay_seconds.
+ATTEMPT_TIMEOUT_S: float = 3.0
+RETRY_DELAY_S: float = 1.0
+
+# Upper bound for one admitted owner-specific TX audio push
+# (``owned_tx_submission``). A stuck push must never hold the
+# keying-exclusion lock, so the caller's body is cancelled (TimeoutError)
+# once the budget expires.
+TX_SUBMISSION_BUDGET_S: float = 0.25
+
+
+def _log_release_attempt(settled: ActuationSettled) -> None:
+    """Log one settled FORCE_RECEIVE; an UNCERTAIN one also warns (MOR-2860)."""
+    attempt = settled.token.attempt_id
+    logger.info(
+        "managed TX release attempt %s: force_receive %s",
+        attempt,
+        settled.result.value,
+    )
+    if settled.result is ActuationResult.UNCERTAIN:
+        logger.warning(
+            "managed TX release attempt %s: force_receive not confirmed (%s)",
+            attempt,
+            settled.error or settled.result.value,
+        )
+
+
+class ManagedTxAuthority:
+    def __init__(
+        self,
+        lane: ManagedTxEffectLane,
+        config_store: ManagedTxTotConfigStore,
+        abort_fence: TxAbortFence,
+        *,
+        provider_generation: int | None,
+        clock: Callable[[], float] | None = None,
+        wakeup: _Wakeup | None = None,
+        attempt_timeout_seconds: float = ATTEMPT_TIMEOUT_S,
+        retry_delay_seconds: float = RETRY_DELAY_S,
+        radio_tx: RadioTxProbe | None = None,
+    ) -> None:
+        if not 0 < attempt_timeout_seconds < float("inf") or not 0 < (
+            retry_delay_seconds
+        ) < float("inf"):
+            raise ValueError("managed TX timeouts must be positive")
+        if provider_generation is not None and provider_generation < 0:
+            raise ValueError("provider generation must be non-negative")
+        self._lane = lane
+        self._config_store = config_store
+        self._abort_fence = abort_fence
+        self._pending_abort_cleanup: list[Coroutine[Any, Any, TxAbortResult]] = []
+        self._abort_cleanup: set[asyncio.Task[TxAbortResult]] = set()
+        self._settlement_tasks: set[_SubmissionCompletion] = set()
+        self._clock = clock or time.monotonic
+        self._wakeup = wakeup or _EventWakeup(self._clock)
+        self._attempt_timeout = attempt_timeout_seconds
+        self._retry_delay = retry_delay_seconds
+        self._lock = asyncio.Lock()
+        # Serializes an admitted owner-specific TX audio push
+        # (``owned_tx_submission``) and the ``before_on`` keying preparation
+        # against every Core-client keying transition. Lock order is this
+        # lock BEFORE ``self._lock`` (only ``_begin_positive_operation`` takes
+        # both); unkeying, settlement, scheduler and shutdown never take it.
+        self._tx_admission_lock = asyncio.Lock()
+        self._state = ManagedTxState()
+        self._latest_on_epoch = 0
+        self._change_listeners: set[ManagedTxChangeListener] = set()
+        self._provider_generation = provider_generation
+        self._generation_high_water = (
+            provider_generation if provider_generation is not None else -1
+        )
+        self._attempt = 0
+        self._retry_due: float | None = None
+        self._release_drained = asyncio.Event()
+        self._release_drained.set()
+        self._shutting_down = False
+        self._shutdown_requested = False
+        self._terminated = False
+        self._shutdown_termination: asyncio.Event | None = None
+        self._shutdown_task: asyncio.Task[ShutdownResult] | None = None
+        self._provider_unavailable_task: asyncio.Task[None] | None = None
+        self._closing = False
+        self._closed = False
+        self._controller: ControllerAuthority | None = None
+        self._controller_effects: dict[EffectToken, ControllerTicket] = {}
+        # Owner of a latched TRANSMIT intent (MOR-3534): the controller session
+        # that sent transmit_on, or None for a sessionless one.
+        self._transmit_owner: str | None = None
+        # MOR-3537: the radio's PTT readback, and the clock reading at which
+        # Core's own TX last ended. A TX the radio reports after that refuses
+        # every TX start; it never blocks force_off.
+        self._radio_tx = radio_tx
+        self._idle_since = float("-inf")
+        self._scheduler_task = asyncio.create_task(self._scheduler())
+
+    def bind_controller(self, controller: ControllerAuthority) -> None:
+        if self._controller is not None and self._controller is not controller:
+            raise RuntimeError("managed TX controller is already bound")
+        self._controller = controller
+
+    def controller_quiescent(self) -> bool:
+        """Positive safety proof for a controlling-seat handoff, without awaits."""
+        return bool(
+            self._provider_generation is not None
+            and not (
+                self._closing
+                or self._closed
+                or self._shutdown_requested
+                or self._shutting_down
+                or self._terminated
+            )
+            and self._state_is_clean_locked()
+            and not self._pending_settlements_locked()
+            and not self._pending_abort_cleanup
+            and not self._abort_cleanup
+        )
+
+    async def ptt_down(self, owner: str) -> ManagedTxOutcome:
+        """Compatibility helper which deliberately drains provider settlement."""
+        submission = await self.submit_ptt(True, owner)
+        await submission.wait_settlement()
+        return submission.outcome
+
+    async def ptt_up(self, owner: str) -> ManagedTxOutcome:
+        """Compatibility helper which deliberately drains provider settlement."""
+        submission = await self.submit_ptt(False, owner)
+        await submission.wait_settlement()
+        return submission.outcome
+
+    async def submit_ptt(
+        self,
+        on: bool,
+        owner: str,
+        *,
+        ready: asyncio.Future[Any] | None = None,
+        expires_at_monotonic: float | None = None,
+    ) -> ManagedTxSubmission:
+        """Return admission after starting the authority-owned submission."""
+        return await self.start_ptt_submission(
+            on,
+            owner,
+            ready=ready,
+            expires_at_monotonic=expires_at_monotonic,
+        )
+
+    def start_ptt_submission(
+        self,
+        on: bool,
+        owner: str,
+        *,
+        ready: asyncio.Future[Any] | None = None,
+        expires_at_monotonic: float | None = None,
+        before_on: Callable[[], Awaitable[bool]] | None = None,
+    ) -> asyncio.Task[ManagedTxSubmission]:
+        """Start a managed-ingress submission with membership installed.
+
+        Unlike :meth:`submit_ptt`, this synchronous seam guarantees that the
+        authority's canonical fence membership exists before it returns.
+
+        ``before_on`` (MOR-3821, spec 7.3a) runs inside the admitted key:
+        after the intent commits to ``PTT(owner)`` and before the PTT_ON
+        effect is dispatched, bounded by the attempt timeout. It must
+        return ``True``; anything else —
+        a falsy return, an exception, a timeout — takes the existing "ON
+        rejected before effect" path (intent back to RX, release debt,
+        scheduled ``force_receive``), with no RF effect and a rejection
+        for the requester. Only a key-down takes it: an unkey with a hook
+        is a programming error (``ValueError``).
+        """
+        if before_on is not None and not on:
+            raise ValueError("before_on applies only to a key-down")
+        started = asyncio.get_running_loop().create_future()
+        worker, admitted = (
+            self._begin_positive_operation(
+                "ptt_down",
+                owner,
+                ready=ready,
+                started=started,
+                expires_at_monotonic=expires_at_monotonic,
+                before_on=before_on,
+            )
+            if on
+            else self._begin_ptt_operation(False, owner, ready=ready, _started=started)
+        )
+        return self._publish_started_submission(worker, admitted, started)
+
+    def _publish_started_submission(
+        self,
+        worker: _SubmissionCompletion,
+        admitted: asyncio.Future[ManagedTxTransition],
+        started: asyncio.Future[None],
+    ) -> asyncio.Task[ManagedTxSubmission]:
+        """Publish admission while retaining authority ownership of settlement."""
+
+        async def submit() -> ManagedTxSubmission:
+            if not started.done():
+                started.set_result(None)
+            try:
+                transition = await asyncio.shield(admitted)
+            except asyncio.CancelledError:
+                worker.cancel()
+                await self._drain_cancelled(worker)
+                raise
+            return ManagedTxSubmission(transition, worker)
+
+        submission = asyncio.create_task(submit())
+
+        def own_submission(task: asyncio.Task[ManagedTxSubmission]) -> None:
+            if task.cancelled():
+                worker.cancel()
+            else:
+                task.exception()
+
+        submission.add_done_callback(own_submission)
+        return submission
+
+    def _begin_positive_operation(
+        self,
+        action: str,
+        owner: str | None,
+        *,
+        ready: asyncio.Future[Any] | None,
+        started: asyncio.Future[None] | None = None,
+        expires_at_monotonic: float | None = None,
+        before_on: Callable[[], Awaitable[bool]] | None = None,
+    ) -> tuple[_SubmissionCompletion, asyncio.Future[ManagedTxTransition]]:
+        """Register one cancellable positive transition before it can admit."""
+        if action not in ("ptt_down", "transmit_on"):
+            raise ValueError("positive managed TX action is invalid")
+        controller_ticket = None
+        if self._controller is not None:
+            controller_ticket = self._controller.capture()
+            self._controller.validate_positive(controller_ticket)
+            if controller_ticket.remote and (
+                action != "ptt_down" or controller_ticket.session_id != owner
+            ):
+                raise ControllerError("controller_tx_unsupported")
+            if controller_ticket.tx_owner is not None:
+                # A session keys only as itself; its latched transmit_on is
+                # owned by the session too.
+                if action == "transmit_on":
+                    owner = controller_ticket.tx_owner
+                elif owner != controller_ticket.tx_owner:
+                    raise ControllerError("controller_tx_unsupported")
+        if action == "ptt_down":
+            if type(owner) is not str:
+                raise TypeError("PTT requires a builtin str owner")
+            if not owner:
+                raise ValueError("PTT intent requires an owner token")
+        if ready is not None and not isinstance(ready, asyncio.Future):
+            raise TypeError("positive TX readiness must be an existing Future or Task")
+        generation = self._provider_generation
+        token = self._abort_fence.issue()
+        admitted: asyncio.Future[ManagedTxTransition] = (
+            asyncio.get_running_loop().create_future()
+        )
+
+        async def run() -> tuple[ManagedTxTransition, ActuationSettled | None]:
+            execution: asyncio.Task[ActuationSettled | None] | None = None
+            try:
+                if started is not None:
+                    await asyncio.wait((started,))
+                if ready is not None:
+                    await asyncio.wait((ready,))
+                # The admission lock is taken BEFORE ``self._lock`` so an
+                # admitted frame's push and this keying transition can never
+                # interleave.
+                async with self._tx_admission_lock:
+                    async with self._lock:
+                        self._require_ingress_open_locked()
+                        if controller_ticket is not None:
+                            controller_ticket.authority.validate_positive(
+                                controller_ticket
+                            )
+                        if not (
+                            self._provider_generation == generation
+                            and self._abort_fence.is_current(token)
+                            and self._abort_fence.remove(token)
+                        ):
+                            return ManagedTxTransition(
+                                self._state, ManagedTxOutcome.REJECTED
+                            ), None
+                        if (
+                            expires_at_monotonic is not None
+                            and self._clock() >= expires_at_monotonic
+                        ):
+                            return ManagedTxTransition(
+                                self._state, ManagedTxOutcome.REJECTED
+                            ), None
+                        if (refusal := self._radio_tx_refusal_locked()) is not None:
+                            # MOR-3537: never key over a TX the radio reports.
+                            raise ControllerError(refusal, 409)
+                        transition, full_force = self._transition_locked(action, owner)
+                        if transition is None:
+                            transition = ManagedTxTransition(
+                                self._state, ManagedTxOutcome.REJECTED
+                            )
+                    hook_ran = False
+                    if (
+                        before_on is not None
+                        and transition.outcome is ManagedTxOutcome.ACCEPTED
+                    ):
+                        # The route-preparation hook runs WITHOUT ``self._lock``:
+                        # it awaits routing writes whose admission takes it
+                        # (spec 7.3a), so holding it would deadlock. It still
+                        # holds ``_tx_admission_lock``: no rival key or audio
+                        # push can interleave, only this lock's readers and
+                        # writers (admission, snapshots, an unkey).
+                        transition = await self._prepare_key_inside_admission(
+                            transition, before_on
+                        )
+                        hook_ran = True
+                    async with self._lock:
+                        if (
+                            hook_ran
+                            and transition.outcome is ManagedTxOutcome.ACCEPTED
+                            and not self._key_intact_locked(owner)
+                        ):
+                            # An unkey or force-off committed while the hook
+                            # ran: the stale PTT_ON must not dispatch. The
+                            # teardown already settled, so report the
+                            # rejection without further effects.
+                            transition = ManagedTxTransition(
+                                self._state, ManagedTxOutcome.REJECTED
+                            )
+                            execution = None
+                        else:
+                            self._wakeup.wake()
+                            if controller_ticket is not None:
+                                controller_effects = {
+                                    effect.token: controller_ticket
+                                    for effect in transition.effects
+                                    if isinstance(effect, ManagedTxEffect)
+                                    and effect.operation
+                                    is not ActuationOperation.FORCE_RECEIVE
+                                }
+                                if controller_effects:
+                                    self._controller_effects = controller_effects
+                            execution = asyncio.create_task(
+                                self._execute(transition.effects, full_force=full_force)
+                            )
+                        if not admitted.done():
+                            admitted.set_result(transition)
+                if execution is None:
+                    return transition, None
+                return transition, await asyncio.shield(execution)
+            except asyncio.CancelledError:
+                if execution is not None:
+                    await self._drain_cancelled(execution)
+                raise
+
+        def finished(
+            task: asyncio.Task[tuple[ManagedTxTransition, ActuationSettled | None]],
+        ) -> None:
+            self._abort_fence.remove(token)
+            error = None if task.cancelled() else task.exception()
+            if not admitted.done():
+                if task.cancelled():
+                    admitted.cancel()
+                elif error is not None:
+                    admitted.set_exception(error)
+                else:
+                    admitted.set_result(task.result()[0])
+
+        worker = asyncio.create_task(run())
+        self._own_submission(worker)
+        worker.add_done_callback(finished)
+
+        def cancel_pending() -> None:
+            worker.cancel()
+
+        try:
+            self._abort_fence.register(token, cancel_pending, scope=owner)
+        except BaseException:
+            worker.cancel()
+            raise
+        return worker, admitted
+
+    def _key_intact_locked(self, owner: str | None) -> bool:
+        """Whether the committed ``PTT(owner)`` intent still holds.
+
+        No await between reads: call holding ``_lock`` after the
+        route-preparation hook ran without it, to catch an unkey or
+        force-off that committed meanwhile. A ``None`` owner never
+        matches: only a ``PTT`` intent carries an owner token.
+        """
+        intent = self._state.intent
+        return intent.kind is ManagedTxIntentKind.PTT and intent.owner_token == owner
+
+    async def _prepare_key_inside_admission(
+        self,
+        transition: ManagedTxTransition,
+        before_on: Callable[[], Awaitable[bool]],
+    ) -> ManagedTxTransition:
+        """Run the keying preparation inside the admitted key (spec 7.3a).
+
+        Runs holding ``_tx_admission_lock`` but NOT ``_lock`` — the hook
+        awaits routing writes whose admission takes it — after the
+        admission block committed the intent to ``PTT(owner)`` (so no
+        other owner can key meanwhile) and before the PTT_ON effect is
+        dispatched. Bounded by the attempt timeout; a hook the worker's
+        own cancellation interrupts propagates as cancellation, anything
+        else (a falsy return, an exception, a timeout) takes the existing
+        "ON rejected before effect" path: the PTT_ON settlement is
+        reduced as rejected (intent back to RX, release debt, scheduled
+        ``force_receive``) and the admitted transition reports REJECTED.
+        """
+        on_effect = next(
+            (
+                effect
+                for effect in transition.effects
+                if effect.operation is ActuationOperation.PTT_ON
+            ),
+            None,
+        )
+        if on_effect is None:
+            return transition
+        owner = transition.state.intent.owner_token
+        try:
+            async with asyncio.timeout(self._attempt_timeout):
+                prepared = await before_on()
+        except TimeoutError:
+            error = "before_on timed out"
+            prepared = False
+        except asyncio.CancelledError:
+            # The key is cancelled while it prepares (a dropped requester
+            # cancels its submission): unwind the committed intent through
+            # the same rejection path, then propagate — the submission
+            # still ends cancelled, but nothing stays stranded.
+            async with self._lock:
+                if owner is not None and self._key_intact_locked(owner):
+                    self._reduce_locked(
+                        ActuationSettled(
+                            token=on_effect.token,
+                            operation=ActuationOperation.PTT_ON,
+                            result=ActuationResult.REJECTED,
+                            error="before_on cancelled",
+                        )
+                    )
+                    # The normal dispatch path refreshes the release retry
+                    # inside _execute; this path never starts one, so refresh
+                    # here — otherwise the debt below would wait for an
+                    # explicit force_off with no deadline scheduled.
+                    self._refresh_retry_locked()
+                    self._wakeup.wake()
+            raise
+        except Exception as exc:
+            error = f"before_on raised {exc!r}"
+            prepared = False
+        else:
+            error = "before_on reported failure"
+        if prepared:
+            return transition
+        async with self._lock:
+            if owner is None or not self._key_intact_locked(owner):
+                # An unkey or force-off committed while the hook ran: the
+                # teardown already settled, so report the rejection without
+                # piling release debt onto the new state.
+                return ManagedTxTransition(self._state, ManagedTxOutcome.REJECTED)
+            rejected = self._reduce_locked(
+                ActuationSettled(
+                    token=on_effect.token,
+                    operation=ActuationOperation.PTT_ON,
+                    result=ActuationResult.REJECTED,
+                    error=error,
+                )
+            )
+        # A rejected key-down returns the held state; ``release_required``
+        # with an RX intent is what marks the release as still owed
+        # (MOR-3810). The empty effect list still schedules the
+        # ``force_receive`` retry when ``_execute`` refreshes the retry.
+        return ManagedTxTransition(rejected.state, ManagedTxOutcome.REJECTED)
+
+    async def _start_ptt_operation(
+        self, on: bool, owner: str, *, ready: asyncio.Future[Any] | None = None
+    ) -> _SubmissionCompletion:
+        """Compatibility seam for internal pre-admission cancellation tests.
+
+        Production ingress must use :meth:`submit_ptt`; this returns the private
+        operation task which the abort fence may cancel before admission.
+        """
+        worker, admitted = self._begin_ptt_operation(on, owner, ready=ready)
+        if not on:
+            try:
+                await asyncio.shield(admitted)
+            except asyncio.CancelledError:
+                worker.cancel()
+                await self._drain_cancelled(worker)
+                raise
+        return worker
+
+    def _begin_ptt_operation(
+        self,
+        on: bool,
+        owner: str,
+        *,
+        ready: asyncio.Future[Any] | None = None,
+        _started: asyncio.Future[None] | None = None,
+    ) -> tuple[_SubmissionCompletion, asyncio.Future[ManagedTxTransition]]:
+        """Build the one cancellable operation and its admission signal."""
+        if type(on) is not bool or type(owner) is not str:
+            raise TypeError("PTT requires a bool and a builtin str owner")
+        if not owner:
+            raise ValueError("PTT intent requires an owner token")
+        if on:
+            return self._begin_positive_operation(
+                "ptt_down", owner, ready=ready, started=_started
+            )
+        if ready is not None and not isinstance(ready, asyncio.Future):
+            raise TypeError("PTT readiness must be an existing Future or Task")
+        generation = self._provider_generation
+        token = self._abort_fence.issue() if on else None
+        admitted: asyncio.Future[ManagedTxTransition] = (
+            asyncio.get_running_loop().create_future()
+        )
+        if not on:
+            self._cancel_pending_ptt(owner)
+
+        async def run() -> tuple[ManagedTxTransition, ActuationSettled | None]:
+            execution: asyncio.Task[ActuationSettled | None] | None = None
+            try:
+                if _started is not None:
+                    await asyncio.wait((_started,))
+                if on and ready is not None:
+                    await asyncio.wait((ready,))
+                async with self._lock:
+                    self._require_ingress_open_locked()
+                    if token is not None and not (
+                        self._provider_generation == generation
+                        and self._abort_fence.is_current(token)
+                        and self._abort_fence.remove(token)
+                    ):
+                        return ManagedTxTransition(
+                            self._state, ManagedTxOutcome.REJECTED
+                        ), None
+                    transition, full_force = self._transition_locked(
+                        "ptt_down" if on else "ptt_up", owner
+                    )
+                    if transition is None:
+                        transition = ManagedTxTransition(
+                            self._state, ManagedTxOutcome.REJECTED
+                        )
+                    self._wakeup.wake()
+                    execution = asyncio.create_task(
+                        self._execute(transition.effects, full_force=full_force)
+                    )
+                    if not admitted.done():
+                        admitted.set_result(transition)
+                return transition, await asyncio.shield(execution)
+            except asyncio.CancelledError:
+                if execution is not None:
+                    await self._drain_cancelled(execution)
+                raise
+
+        def finished(
+            task: asyncio.Task[tuple[ManagedTxTransition, ActuationSettled | None]],
+        ) -> None:
+            if token is not None:
+                self._abort_fence.remove(token)
+            error = None if task.cancelled() else task.exception()
+            if not admitted.done():
+                if task.cancelled():
+                    admitted.cancel()
+                elif error is not None:
+                    admitted.set_exception(error)
+                else:
+                    admitted.set_result(task.result()[0])
+
+        worker = asyncio.create_task(run())
+        self._own_submission(worker)
+        worker.add_done_callback(finished)
+        if token is not None:
+
+            def cancel_pending() -> None:
+                worker.cancel()
+
+            try:
+                self._abort_fence.register(token, cancel_pending, scope=owner)
+            except BaseException:
+                worker.cancel()
+                raise
+        return worker, admitted
+
+    def _cancel_pending_ptt(self, owner: str) -> None:
+        self._pending_abort_cleanup.append(self._abort_fence.cancel_scope(owner))
+        self._start_abort_cleanup()
+
+    def _own_submission(self, task: _SubmissionCompletion) -> None:
+        self._settlement_tasks.add(task)
+
+        def finished(owned: _SubmissionCompletion) -> None:
+            self._settlement_tasks.discard(owned)
+            if not owned.cancelled():
+                owned.exception()
+
+        task.add_done_callback(finished)
+
+    @staticmethod
+    async def _drain_cancelled(task: asyncio.Task[Any]) -> None:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()
+
+    async def transmit_on(self) -> ManagedTxOutcome:
+        """Compatibility helper which deliberately drains provider settlement."""
+        submission = await self.submit_transmit_on()
+        await submission.wait_settlement()
+        return submission.outcome
+
+    async def force_off(self) -> ManagedTxOutcome:
+        """Compatibility helper which deliberately drains provider settlement."""
+        submission = await self.submit_force_off()
+        await submission.wait_settlement()
+        return submission.outcome
+
+    async def submit_transmit_on(
+        self,
+        *,
+        ready: asyncio.Future[Any] | None = None,
+        expires_at_monotonic: float | None = None,
+    ) -> ManagedTxSubmission:
+        """Return the latched-ON admission separately from provider settlement."""
+        return await self.start_transmit_on_submission(
+            ready=ready, expires_at_monotonic=expires_at_monotonic
+        )
+
+    def start_transmit_on_submission(
+        self,
+        *,
+        ready: asyncio.Future[Any] | None = None,
+        expires_at_monotonic: float | None = None,
+    ) -> asyncio.Task[ManagedTxSubmission]:
+        """Install cancellable TRANSMIT_ON membership before queue insertion."""
+        started = asyncio.get_running_loop().create_future()
+        worker, admitted = self._begin_positive_operation(
+            "transmit_on",
+            None,
+            ready=ready,
+            started=started,
+            expires_at_monotonic=expires_at_monotonic,
+        )
+        return self._publish_started_submission(worker, admitted, started)
+
+    async def submit_force_off(self) -> ManagedTxSubmission:
+        """Advance the abort fence and return before provider settlement."""
+        return await self._submit_ingress("force_off")
+
+    async def admit_managed_write(self, intent: CommandIntent) -> bool:
+        """Apply the sole managed-intent relay policy without altering ``intent``."""
+        if not isinstance(intent, CommandIntent):
+            raise TypeError("managed write admission requires a CommandIntent")
+        descriptor = command_descriptor(intent.name)
+        async with self._lock:
+            managed_tx = self._state.intent.kind is not ManagedTxIntentKind.RX
+            if not managed_tx:
+                return True
+            if descriptor is not None:
+                if descriptor.tx_policy is DescriptorTxPolicy.ANTENNA_SWITCH:
+                    return False
+                if descriptor.tx_policy is DescriptorTxPolicy.TUNER_CONTROL:
+                    value = intent.params.get("value")
+                    return type(value) is int and value == 0
+                return True
+            if intent.name == "set_func" and intent.params.get("func") == "TUNER":
+                return intent.params.get("on") is False
+            return True
+
+    def is_effect_current(
+        self, token: EffectToken, operation: ActuationOperation | AbortOperation
+    ) -> bool:
+        if operation is ActuationOperation.FORCE_RECEIVE:
+            return (
+                token.effect_epoch >= self._latest_on_epoch
+                and not (self._closing or self._closed or self._terminated)
+                and not (
+                    self._shutdown_termination is not None
+                    and self._shutdown_termination.is_set()
+                )
+            )
+        pending = self._state.pending_effect
+        if isinstance(operation, AbortOperation):
+            operation = ActuationOperation.FORCE_RECEIVE
+        if operation is not ActuationOperation.FORCE_RECEIVE:
+            if self._shutdown_requested:
+                return False
+            ticket = self._controller_effects.get(token)
+            if ticket is None and self._controller is not None:
+                if self._controller.mode == "remote":
+                    return False
+            if ticket is not None:
+                try:
+                    ticket.authority.validate_positive(ticket)
+                except ControllerError:
+                    return False
+        return bool(
+            not (self._closing or self._closed or self._terminated)
+            and not (
+                self._shutdown_termination is not None
+                and self._shutdown_termination.is_set()
+            )
+            and self._provider_generation == token.provider_generation
+            and pending is not None
+            and pending.token == token
+            and pending.operation is operation
+        )
+
+    async def owner_disconnect(self, owner: str) -> ManagedTxOutcome:
+        self._cancel_pending_ptt(owner)
+        async with self._lock:
+            if (
+                self._shutdown_requested
+                or self._shutting_down
+                or self._closing
+                or self._closed
+                or self._terminated
+            ):
+                return ManagedTxOutcome.REJECTED
+            self._require_ingress_open_locked()
+            if self.tx_holder_nowait() != owner:
+                return ManagedTxOutcome.REJECTED
+            transition = self._force_off_locked()
+            self._wakeup.wake()
+        await self._execute(transition.effects, full_force=True)
+        return transition.outcome
+
+    async def get_tot_config(self) -> ManagedTxTotConfig:
+        async with self._lock:
+            return self._config_store.config
+
+    def subscribe_changes(
+        self, listener: ManagedTxChangeListener
+    ) -> Callable[[], None]:
+        """Register a change listener; the return value unregisters it.
+
+        Listeners run synchronously on state, release, TOT-config and
+        provider mutations, and an exception from a listener is contained.
+        """
+        self._change_listeners.add(listener)
+
+        def unsubscribe() -> None:
+            self._change_listeners.discard(listener)
+
+        return unsubscribe
+
+    def _notify_changed_locked(self) -> None:
+        for listener in tuple(self._change_listeners):
+            try:
+                listener()
+            except Exception:
+                logger.warning("managed TX change listener failed", exc_info=True)
+
+    async def set_tot_seconds(self, value: object) -> ManagedTxTotConfig:
+        transition = None
+        async with self._lock:
+            self._require_ingress_open_locked()
+            config = self._config_store.set_timeout_seconds(value)
+            self._notify_changed_locked()
+            deadline = self._tot_deadline_locked(config.timeout_seconds)
+            if deadline is not None and deadline <= self._clock():
+                transition = self._force_off_locked()
+            self._wakeup.wake()
+        if transition is not None:
+            await self._execute(transition.effects, full_force=True)
+        return config
+
+    async def snapshot(self) -> ManagedTxProjection:
+        async with self._lock:
+            return self._projection_locked()
+
+    def snapshot_nowait(self) -> ManagedTxProjection:
+        """:meth:`snapshot` without the lock, for shutdown diagnostics that must
+        not wait on a stuck authority (MOR-2875); no ``await`` runs between
+        its reads."""
+        return self._projection_locked()
+
+    def tx_holder_nowait(self) -> str | None:
+        """Owner of the held transmitter, read without the lock (MOR-3534).
+
+        The PTT owner, or the owner of a latched transmit_on (``None`` for a
+        sessionless one); ``None`` in RX.
+        """
+        intent = self._state.intent
+        if intent.kind is ManagedTxIntentKind.TRANSMIT:
+            return self._transmit_owner
+        return intent.owner_token
+
+    def held_by_other(self, owner: str | None) -> bool:
+        """Whether the transmitter is held by an owner other than ``owner``."""
+        return (
+            self._state.intent.kind is not ManagedTxIntentKind.RX
+            and self.tx_holder_nowait() != owner
+        )
+
+    def radio_tx_refusal_nowait(self) -> str | None:
+        """Refusal code for a TX start while the radio reports TX (MOR-3537).
+
+        Read without the lock, like :meth:`held_by_other`: a TX the radio
+        reports while Core holds and owes none, whoever keyed it;
+        ``None`` otherwise.
+        """
+        return self._radio_tx_refusal_locked()
+
+    @contextlib.asynccontextmanager
+    async def owned_tx_submission(self, owner: str) -> AsyncIterator[bool]:
+        """Owner-specific TX audio admission, atomic with the push (MOR-3821).
+
+        Yields True only while ALL hold, evaluated synchronously at the
+        submission (no await between reading the state and yielding): the
+        authority is open (not closing/closed/shutting down/terminated) with
+        a provider generation and no ``last_error``; and the held intent is
+        ``PTT(owner)`` — a frame for A admitted before A's unkey never
+        survives into B's over.
+
+        Guarantee: a frame admitted for owner A completes before owner B's
+        keying transition is applied, or not at all after it. The caller's
+        body after a True yield is bounded by ``TX_SUBMISSION_BUDGET_S``;
+        on expiry the body is cancelled and ``TimeoutError`` propagates to
+        the caller. This context never takes ``self._lock``; the keying side
+        holds ``_tx_admission_lock`` before ``self._lock``, so unkeying never
+        waits behind audio.
+        """
+        async with self._tx_admission_lock:
+            if not self._owned_tx_admitted_locked(owner):
+                yield False
+                return
+            async with asyncio.timeout(TX_SUBMISSION_BUDGET_S):
+                yield True
+
+    def _owned_tx_admitted_locked(self, owner: str) -> bool:
+        """The owned-TX admission rule; no await between reads."""
+        if (
+            self._closing
+            or self._closed
+            or self._shutdown_requested
+            or self._shutting_down
+            or self._terminated
+        ):
+            return False
+        if self._provider_generation is None:
+            return False
+        if self._state.last_error is not None:
+            return False
+        return self._state.intent == ManagedTxIntent.ptt(owner)
+
+    def _projection_locked(self) -> ManagedTxProjection:
+        deadline = self._tot_deadline_locked()
+        state = replace(self._state, tot_deadline_monotonic=deadline)
+        remaining = None if deadline is None else max(0.0, deadline - self._clock())
+        return ManagedTxProjection(
+            state,
+            self._config_store.config.timeout_seconds,
+            remaining,
+            self._provider_generation,
+        )
+
+    def start_provider_unavailable(self) -> asyncio.Task[None]:
+        """Invalidate provider authority before returning and own cleanup."""
+        self._require_open_locked()
+        self._require_provider_change_locked()
+        task = self._provider_unavailable_task
+        if self._provider_generation is None and task is not None:
+            return task
+
+        self._provider_generation = None
+        self._retry_due = None
+        self._pending_abort_cleanup.append(self._abort_fence.force_off())
+        if self._state.release_required:
+            self._reduce_locked(ForceOff(None, self._attempt_id_locked()))
+        else:
+            self._notify_changed_locked()
+        self._wakeup.wake()
+        self._start_abort_cleanup()
+
+        task = asyncio.create_task(self._finish_abort_cleanup())
+        self._provider_unavailable_task = task
+
+        def harvest(completion: asyncio.Task[None]) -> None:
+            if not completion.cancelled():
+                completion.exception()
+
+        task.add_done_callback(harvest)
+        return task
+
+    async def provider_unavailable(self) -> None:
+        await asyncio.shield(self.start_provider_unavailable())
+
+    async def provider_available(self, generation: int) -> None:
+        transition = None
+        async with self._lock:
+            self._require_open_locked()
+            self._require_provider_change_locked()
+            if generation == self._provider_generation:
+                return
+            if self._provider_generation is not None:
+                raise RuntimeError("current provider must become unavailable first")
+            if generation <= self._generation_high_water:
+                raise ValueError("provider generation must increase")
+            self._generation_high_water = generation
+            self._provider_generation = generation
+            if self._release_is_retryable_locked():
+                transition = self._reduce_locked(
+                    RetryForceReceive(generation, self._attempt_id_locked())
+                )
+            else:
+                self._notify_changed_locked()
+            self._wakeup.wake()
+        if transition is not None:
+            await self._execute(transition.effects, full_force=False)
+
+    def close_ingress_for_shutdown(self) -> None:
+        self._shutdown_requested = True
+
+    async def shutdown(
+        self,
+        *,
+        retire_provider: _ProviderRetirement,
+        termination: asyncio.Event,
+    ) -> ShutdownResult:
+        async with self._lock:
+            task = self._shutdown_task
+            if task is None:
+                self._require_open_locked()
+                self._shutting_down = True
+                self._shutdown_termination = termination
+                transition = self._force_off_locked()
+                self._wakeup.wake()
+        if task is None:
+            task = asyncio.create_task(
+                self._complete_shutdown(transition, retire_provider, termination)
+            )
+            self._shutdown_task = task
+        return await asyncio.shield(task)
+
+    async def close(self) -> None:
+        await self._dispose_clean(from_shutdown=False)
+
+    async def _complete_shutdown(
+        self,
+        transition: ManagedTxTransition,
+        retire_provider: _ProviderRetirement,
+        termination: asyncio.Event,
+    ) -> ShutdownResult:
+        try:
+            self._start_abort_cleanup()
+            drain = asyncio.create_task(
+                self._wait_for_release_or_termination(termination)
+            )
+            release = asyncio.create_task(
+                self._execute(transition.effects, full_force=True)
+            )
+            try:
+                done, _ = await asyncio.wait(
+                    (drain, release), return_when=asyncio.FIRST_COMPLETED
+                )
+                if release in done:
+                    await release
+                drained = await drain
+            finally:
+                for task in (drain, release):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(drain, release, return_exceptions=True)
+            if not drained:
+                async with self._lock:
+                    scheduler = self._scheduler_task
+                await self._stop_scheduler(scheduler)
+                await self._cancel_abort_cleanup()
+                logger.warning(
+                    "managed TX shutdown: terminated before an accepted "
+                    "force_receive drained the release"
+                )
+                return ShutdownResult.TERMINATED
+
+            async with self._lock:
+                if not self._state_is_clean_locked():
+                    raise RuntimeError("managed TX shutdown drain lost clean state")
+                generation = self._provider_generation
+            logger.info("managed TX shutdown: force_receive accepted; release drained")
+            if generation is not None:
+                await retire_provider(generation)
+            async with self._lock:
+                if self._provider_generation != generation:
+                    raise RuntimeError("managed TX provider changed during retirement")
+                self._provider_generation = None
+            await self._dispose_clean(from_shutdown=True)
+            return ShutdownResult.DRAINED
+        except BaseException:
+            async with self._lock:
+                self._shutting_down = False
+                if self._shutdown_task is asyncio.current_task():
+                    self._shutdown_termination = None
+                    self._shutdown_task = None
+            raise
+
+    async def _wait_for_release_or_termination(
+        self, termination: asyncio.Event
+    ) -> bool:
+        async with self._lock:
+            if (
+                self._state_is_clean_locked()
+                and not self._abort_cleanup
+                and not self._pending_settlements_locked()
+            ):
+                return True
+        drained = asyncio.create_task(self._wait_for_clean_release())
+        terminated = asyncio.create_task(termination.wait())
+        try:
+            done, _ = await asyncio.wait(
+                (drained, terminated), return_when=asyncio.FIRST_COMPLETED
+            )
+            async with self._lock:
+                if self._terminated:
+                    return False
+                if (
+                    drained in done
+                    and self._state_is_clean_locked()
+                    and not self._pending_settlements_locked()
+                ):
+                    return True
+                if terminated in done:
+                    self._terminated = True
+                    return False
+                raise RuntimeError("managed TX drain signalled before clean RX state")
+        finally:
+            for waiter in (drained, terminated):
+                if not waiter.done():
+                    waiter.cancel()
+            await asyncio.gather(drained, terminated, return_exceptions=True)
+
+    async def _wait_for_clean_release(self) -> None:
+        while True:
+            await self._release_drained.wait()
+            await self._finish_abort_cleanup()
+            async with self._lock:
+                settlements = self._pending_settlements_locked()
+            if settlements:
+                await asyncio.gather(
+                    *(asyncio.shield(task) for task in settlements),
+                    return_exceptions=True,
+                )
+                continue
+            if self._release_drained.is_set():
+                return
+
+    def _start_abort_cleanup(self) -> None:
+        pending, self._pending_abort_cleanup = self._pending_abort_cleanup, []
+        for cleanup in pending:
+            task = asyncio.create_task(cleanup)
+            self._abort_cleanup.add(task)
+            task.add_done_callback(self._abort_cleanup.discard)
+
+    async def _finish_abort_cleanup(self) -> None:
+        self._start_abort_cleanup()
+        while self._abort_cleanup:
+            for task in tuple(self._abort_cleanup):
+                if task.done():
+                    self._abort_cleanup.discard(task)
+                    task.result()
+            await asyncio.gather(
+                *(asyncio.shield(task) for task in tuple(self._abort_cleanup))
+            )
+            self._start_abort_cleanup()
+
+    async def _cancel_abort_cleanup(self) -> None:
+        self._start_abort_cleanup()
+        tasks = tuple(self._abort_cleanup)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _dispose_clean(self, *, from_shutdown: bool) -> None:
+        async with self._lock:
+            if self._closed:
+                return
+            if not self._state_is_clean_locked():
+                raise RuntimeError("managed TX disposal requires clean RX state")
+            if self._pending_settlements_locked():
+                raise RuntimeError(
+                    "managed TX disposal requires settled provider operations"
+                )
+            if self._shutting_down and not from_shutdown:
+                raise RuntimeError("managed TX shutdown is in progress")
+            self._closing = True
+            scheduler = self._scheduler_task
+        await self._stop_scheduler(scheduler)
+        await self._finish_abort_cleanup()
+        async with self._lock:
+            self._closed = True
+            self._closing = False
+
+    @staticmethod
+    async def _stop_scheduler(scheduler: asyncio.Task[None]) -> None:
+        scheduler.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await scheduler
+
+    async def _submit_ingress(
+        self, action: str, owner: str | None = None
+    ) -> ManagedTxSubmission:
+        async with self._lock:
+            self._require_ingress_open_locked(release=action == "force_off")
+            transition, full_force = self._transition_locked(action, owner)
+            if transition is None:
+                transition = ManagedTxTransition(self._state, ManagedTxOutcome.REJECTED)
+            self._wakeup.wake()
+
+        async def settle() -> tuple[ManagedTxTransition, ActuationSettled | None]:
+            result = await self._execute(
+                transition.effects,
+                full_force=full_force,
+            )
+            return transition, result
+
+        completion = asyncio.create_task(settle())
+        self._own_submission(completion)
+        return ManagedTxSubmission(transition, completion)
+
+    def _transition_locked(
+        self, action: str, owner: str | None
+    ) -> tuple[ManagedTxTransition | None, bool]:
+        generation = self._provider_generation
+        if action == "force_off":
+            return self._force_off_locked(), True
+        if owner is not None and self._state.intent == ManagedTxIntent.ptt(owner):
+            if action == "ptt_down":
+                return self._reduce_locked(
+                    PttDown(owner, generation or 0, self._attempt_id_locked(), 0, None)
+                ), False
+            if action == "ptt_up" and generation is None:
+                state = replace(
+                    self._state,
+                    intent=ManagedTxIntent.rx(),
+                    tx_started_at_monotonic=None,
+                    tot_deadline_monotonic=None,
+                    pending_effect=None,
+                )
+                transition = ManagedTxTransition(state, ManagedTxOutcome.ACCEPTED)
+                self._state = state
+                self._release_drained.clear()
+                self._notify_changed_locked()
+                return transition, False
+        if (
+            action == "transmit_on"
+            and self._state.intent.kind is ManagedTxIntentKind.TRANSMIT
+        ):
+            if owner != self._transmit_owner:
+                return ManagedTxTransition(
+                    self._state, ManagedTxOutcome.REJECTED
+                ), False
+            return self._reduce_locked(
+                TransmitOn(
+                    generation or max(0, self._generation_high_water),
+                    self._attempt_id_locked(),
+                    0,
+                    None,
+                )
+            ), False
+        if generation is None:
+            return None, False
+        now = self._clock()
+        attempt = self._attempt_id_locked()
+        if action == "ptt_down":
+            assert owner is not None
+            event: ManagedTxEvent = PttDown(
+                owner, generation, attempt, now, self._deadline_from(now)
+            )
+        elif action == "ptt_up":
+            assert owner is not None
+            event = PttUp(owner, generation, attempt)
+        else:
+            event = TransmitOn(generation, attempt, now, self._deadline_from(now))
+            if self._state.intent.kind is ManagedTxIntentKind.RX:
+                self._transmit_owner = owner
+        return self._reduce_locked(event), False
+
+    def _force_off_locked(self) -> ManagedTxTransition:
+        self._retry_due = None
+        self._pending_abort_cleanup.append(self._abort_fence.force_off())
+        return self._reduce_locked(
+            ForceOff(self._provider_generation, self._attempt_id_locked())
+        )
+
+    def _reduce_locked(self, event: ManagedTxEvent) -> ManagedTxTransition:
+        transition = reduce_managed_tx(self._state, event)
+        changed = transition.state != self._state
+        was_clean = self._state_is_clean_locked()
+        self._state = transition.state
+        if self._state.intent.kind is not ManagedTxIntentKind.TRANSMIT:
+            self._transmit_owner = None
+        if was_clean and self._state.intent.kind is not ManagedTxIntentKind.RX:
+            self._latest_on_epoch = self._state.effect_epoch
+        if self._state_is_clean_locked():
+            if not was_clean:
+                self._idle_since = self._clock()
+            self._release_drained.set()
+        else:
+            self._release_drained.clear()
+        if changed:
+            self._notify_changed_locked()
+        return transition
+
+    async def _execute(
+        self, effects: tuple[ManagedTxEffect, ...], *, full_force: bool
+    ) -> ActuationSettled | None:
+        original_effects = effects
+        original_settlement = None
+        while True:
+            self._start_abort_cleanup()
+            deadline = self._clock() + self._attempt_timeout
+            events: list[ManagedTxEvent] = []
+            for effect in effects:
+                if full_force:
+                    # Releasing managed TX must preserve the user's persistent
+                    # tuner setting; STOP_TUNE would switch the tuner OFF.
+                    aborts = [
+                        asyncio.create_task(
+                            self._lane.settle_abort(
+                                effect.token,
+                                operation,
+                                deadline_monotonic=deadline,
+                                is_current=partial(
+                                    self.is_effect_current, effect.token, operation
+                                ),
+                            )
+                        )
+                        for operation in (AbortOperation.STOP_CW,)
+                    ]
+                if settled := await self._lane.settle(
+                    effect,
+                    deadline_monotonic=deadline,
+                    is_current=partial(
+                        self.is_effect_current, effect.token, effect.operation
+                    ),
+                ):
+                    events.append(settled)
+                    if settled.operation is ActuationOperation.FORCE_RECEIVE:
+                        _log_release_attempt(settled)
+                    if any(
+                        settled.token == requested.token
+                        and settled.operation is requested.operation
+                        for requested in original_effects
+                    ):
+                        original_settlement = settled
+                if full_force:
+                    events.extend(
+                        item for item in await asyncio.gather(*aborts) if item
+                    )
+            followup = None
+            async with self._lock:
+                if self._terminated or (
+                    self._shutdown_termination is not None
+                    and self._shutdown_termination.is_set()
+                ):
+                    self._terminated = True
+                    return None
+                for event in events:
+                    transition = self._reduce_locked(event)
+                    if (
+                        transition.outcome is ManagedTxOutcome.APPLIED
+                        and isinstance(event, ActuationSettled)
+                        and event.operation
+                        in (ActuationOperation.PTT_ON, ActuationOperation.TRANSMIT_ON)
+                        and event.result is ActuationResult.UNCERTAIN
+                    ):
+                        followup = self._force_off_locked()
+                self._refresh_retry_locked()
+                self._wakeup.wake()
+            if followup is None:
+                return original_settlement
+            effects, full_force = followup.effects, True
+
+    async def _scheduler(self) -> None:
+        while True:
+            async with self._lock:
+                if self._closing or self._closed or self._terminated:
+                    return
+                deadline = self._next_due_locked()
+            await self._wakeup.wait_until(deadline)
+            await self._process_due()
+            # MOR-4518: a due attempt settles even when this task is cancelled
+            # mid-attempt (the lane records the cancelled attempt and returns
+            # it). Honour that cancellation here, or an owed release re-arms
+            # its retry forever and ``asyncio.run``'s final cancel never ends.
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                raise asyncio.CancelledError
+
+    async def _process_due(self) -> None:
+        transition = None
+        full_force = False
+        async with self._lock:
+            if self._closing or self._closed or self._terminated:
+                return
+            now = self._clock()
+            tot_due = self._tot_deadline_locked()
+            if tot_due is not None and tot_due <= now:
+                transition = self._force_off_locked()
+                full_force = True
+            elif self._retry_due is not None and self._retry_due <= now:
+                generation = self._provider_generation
+                self._retry_due = None
+                if generation is not None and self._release_is_retryable_locked():
+                    transition = self._reduce_locked(
+                        RetryForceReceive(generation, self._attempt_id_locked())
+                    )
+        if transition is not None:
+            await self._execute(transition.effects, full_force=full_force)
+
+    def _tot_deadline_locked(self, seconds: float | None = None) -> float | None:
+        if seconds is None:
+            seconds = self._config_store.config.timeout_seconds
+        started = self._state.tx_started_at_monotonic
+        return None if seconds is None or started is None else started + seconds
+
+    def _deadline_from(self, started: float) -> float | None:
+        seconds = self._config_store.config.timeout_seconds
+        return None if seconds is None else started + seconds
+
+    def _next_due_locked(self) -> float | None:
+        due = [
+            item
+            for item in (self._tot_deadline_locked(), self._retry_due)
+            if item is not None
+        ]
+        return min(due, default=None)
+
+    def _release_is_retryable_locked(self) -> bool:
+        return (
+            self._state.intent.kind is ManagedTxIntentKind.RX
+            and self._state.release_required
+            and self._state.pending_effect is None
+        )
+
+    def _refresh_retry_locked(self) -> None:
+        if (
+            self._provider_generation is not None
+            and self._release_is_retryable_locked()
+        ):
+            if self._retry_due is None:
+                self._retry_due = self._clock() + self._retry_delay
+        else:
+            self._retry_due = None
+
+    def _attempt_id_locked(self) -> str:
+        self._attempt += 1
+        return str(self._attempt)
+
+    def _require_open_locked(self) -> None:
+        if self._terminated:
+            raise RuntimeError("managed TX authority runtime has terminated")
+        if self._closing or self._closed:
+            raise RuntimeError("managed TX authority is closed")
+
+    def _require_ingress_open_locked(self, *, release: bool = False) -> None:
+        """Refuse ingress once shutdown has begun.
+
+        ``close_ingress_for_shutdown`` stops new keying only: a release
+        (``force_off``) is still admitted until the shutdown itself starts,
+        as :meth:`is_effect_current` still admits FORCE_RECEIVE. A release
+        only adds an obligation the shutdown drain then owes (MOR-4186: the
+        release of an aborted startup publication must survive the closed
+        ingress, or shutdown would drain a possibly keyed rig as clean).
+        """
+        self._require_open_locked()
+        if self._shutting_down or (self._shutdown_requested and not release):
+            raise RuntimeError("managed TX authority is shutting down")
+
+    def _require_provider_change_locked(self) -> None:
+        if self._shutting_down and self._state_is_clean_locked():
+            raise RuntimeError("managed TX shutdown drain is complete")
+
+    def _state_is_clean_locked(self) -> bool:
+        return (
+            self._state.intent.kind is ManagedTxIntentKind.RX
+            and not self._state.release_required
+            and self._state.pending_effect is None
+        )
+
+    def _radio_tx_refusal_locked(self) -> str | None:
+        """Refusal code while the radio transmits and Core holds and owes no TX."""
+        if self._radio_tx is None or not self._state_is_clean_locked():
+            return None
+        if not self._radio_tx.radio_tx_since(self._idle_since):
+            return None
+        return RADIO_TX_REFUSAL
+
+    def _pending_settlements_locked(self) -> tuple[_SubmissionCompletion, ...]:
+        return tuple(task for task in self._settlement_tasks if not task.done())

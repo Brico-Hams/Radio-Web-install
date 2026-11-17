@@ -1,0 +1,456 @@
+import type {
+  KeyboardBindingConfig as CapKeyboardBindingConfig,
+  KeyboardConfig as CapKeyboardConfig,
+} from '$lib/types/capabilities';
+import { isLocalExtensionKeyboardScopeActive } from '$lib/local-extensions/keyboard-scope';
+import { hasCommandModifier } from '$lib/utils/keyboard-modifiers';
+
+export type KeyboardBindingConfig = CapKeyboardBindingConfig;
+export type KeyboardConfig = CapKeyboardConfig;
+
+export interface KeyboardActionConfig {
+  id: string;
+  action: string;
+  params?: Record<string, unknown>;
+  section: string;
+  label?: string;
+  description?: string;
+  sequence: string[];
+  modifiers?: string[];
+  repeatable?: boolean;
+}
+
+export const DEFAULT_KEYBOARD_CONFIG: KeyboardConfig = {
+  leaderKey: 'g',
+  leaderTimeoutMs: 1000,
+  altHints: true,
+  helpTitle: 'Keyboard Shortcuts',
+  bindings: [
+    {
+      id: 'step-up',
+      section: 'Tuning',
+      label: 'Increase tuning step',
+      sequence: ['ArrowUp'],
+      action: 'adjust_tuning_step',
+      params: { direction: 'up' },
+    },
+    {
+      id: 'step-down',
+      section: 'Tuning',
+      label: 'Decrease tuning step',
+      sequence: ['ArrowDown'],
+      action: 'adjust_tuning_step',
+      params: { direction: 'down' },
+    },
+    {
+      id: 'tune-down',
+      section: 'Tuning',
+      label: 'Tune down',
+      sequence: ['ArrowLeft'],
+      action: 'tune',
+      repeatable: true,
+      params: { direction: 'down', fine: false },
+    },
+    {
+      id: 'tune-up',
+      section: 'Tuning',
+      label: 'Tune up',
+      sequence: ['ArrowRight'],
+      action: 'tune',
+      repeatable: true,
+      params: { direction: 'up', fine: false },
+    },
+    {
+      id: 'help',
+      section: 'System',
+      label: 'Keyboard help',
+      sequence: ['?'],
+      action: 'toggle_help',
+    },
+    {
+      id: 'switch-active-vfo',
+      section: 'VFO',
+      label: 'Toggle active receiver',
+      sequence: ['m'],
+      action: 'switch_active_vfo',
+    },
+    {
+      id: 'activate-main',
+      section: 'VFO',
+      label: 'Activate MAIN receiver',
+      sequence: ['M'],
+      modifiers: ['SHIFT'],
+      action: 'set_active_vfo',
+      params: { vfo: 'MAIN' },
+    },
+    {
+      id: 'activate-sub',
+      section: 'VFO',
+      label: 'Activate SUB receiver',
+      sequence: ['S'],
+      modifiers: ['SHIFT'],
+      action: 'set_active_vfo',
+      params: { vfo: 'SUB' },
+    },
+    {
+      id: 'scope-span-down',
+      section: 'Spectrum',
+      label: 'Decrease scope span',
+      sequence: ['['],
+      action: 'scope_span_step',
+      params: { direction: 'down' },
+    },
+    {
+      id: 'scope-span-up',
+      section: 'Spectrum',
+      label: 'Increase scope span',
+      sequence: [']'],
+      action: 'scope_span_step',
+      params: { direction: 'up' },
+    },
+    {
+      id: 'scope-ref-down',
+      section: 'Spectrum',
+      label: 'Decrease scope reference level',
+      sequence: ['-'],
+      action: 'scope_ref_step',
+      params: { direction: 'down' },
+    },
+    {
+      id: 'scope-ref-up',
+      section: 'Spectrum',
+      label: 'Increase scope reference level',
+      sequence: ['+'],
+      action: 'scope_ref_step',
+      params: { direction: 'up' },
+    },
+    {
+      id: 'scope-toggle-hold',
+      section: 'Spectrum',
+      label: 'Toggle scope hold',
+      sequence: ['H'],
+      modifiers: ['SHIFT'],
+      action: 'scope_toggle_hold',
+    },
+    {
+      id: 'scope-toggle-dual',
+      section: 'Spectrum',
+      label: 'Toggle dual scope',
+      sequence: ['D'],
+      modifiers: ['SHIFT'],
+      action: 'scope_toggle_dual',
+    },
+    {
+      id: 'scope-toggle-fst',
+      section: 'Spectrum',
+      label: 'Toggle fast scroll (FST)',
+      sequence: ['F'],
+      modifiers: ['SHIFT'],
+      action: 'scope_toggle_fst',
+    },
+  ],
+};
+
+/** Tags whose focused presence should suppress keyboard shortcuts. */
+export const IGNORED_TAGS = new Set(['INPUT', 'TEXTAREA', 'SELECT']);
+
+/** Milliseconds Alt/Option must stay the only key down before the body
+ * shortcut hints appear; any other keydown during the hold keeps them
+ * hidden for the rest of that hold. */
+export const ALT_HINTS_DELAY_MS = 400;
+
+// Display order for formatShortcut's prefix only — matching sorts both
+// sides alphabetically. Alt/Option precedes Shift per platform convention
+// ("Alt+Shift", "Option+Shift"); no pre-MOR-2515 chord combined the two.
+const MODIFIER_ORDER = ['CTRL', 'ALT', 'SHIFT', 'META'] as const;
+
+/** MOR-2515: Apple platforms label the key that produces the Alt modifier
+ * "Option", and a hint must name the key as the viewer's platform does.
+ * controls/install-prompt-utils.ts's detectPlatform answers a different
+ * question (ios/android/desktop install prompts) and does not distinguish
+ * macOS, so this check is scoped to hint rendering here. */
+function isOptionNamingPlatform(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const uaData = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
+  return /mac/i.test(uaData?.platform ?? navigator.platform ?? '');
+}
+
+const MODIFIER_DISPLAY_NAMES: Record<string, string> = {
+  CTRL: 'Ctrl',
+  SHIFT: 'Shift',
+  META: 'Meta',
+};
+
+function modifierDisplayName(modifier: string): string {
+  const normalized = normalizeModifier(modifier);
+  if (normalized === 'ALT') return isOptionNamingPlatform() ? 'Option' : 'Alt';
+  return MODIFIER_DISPLAY_NAMES[normalized] ?? normalized;
+}
+
+function normalizeModifier(modifier: string): string {
+  return modifier.trim().toUpperCase();
+}
+
+export function normalizeKeyboardConfig(config: KeyboardConfig | null | undefined): KeyboardConfig {
+  const source = config ?? DEFAULT_KEYBOARD_CONFIG;
+  return {
+    leaderKey: source.leaderKey || DEFAULT_KEYBOARD_CONFIG.leaderKey,
+    leaderTimeoutMs: source.leaderTimeoutMs || DEFAULT_KEYBOARD_CONFIG.leaderTimeoutMs,
+    altHints: source.altHints ?? DEFAULT_KEYBOARD_CONFIG.altHints,
+    helpTitle: source.helpTitle || DEFAULT_KEYBOARD_CONFIG.helpTitle,
+    bindings: (source.bindings?.length ? source.bindings : DEFAULT_KEYBOARD_CONFIG.bindings).map((binding) => ({
+      id: binding.id,
+      action: binding.action,
+      sequence: [...binding.sequence],
+      section: binding.section || 'General',
+      label: binding.label,
+      description: binding.description,
+      modifiers: binding.modifiers?.map(normalizeModifier),
+      repeatable: binding.repeatable ?? false,
+      params: binding.params,
+    })),
+  };
+}
+
+export function getEventModifiers(event: {
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  metaKey?: boolean;
+}): string[] {
+  const modifiers: string[] = [];
+  if (event.ctrlKey) modifiers.push('CTRL');
+  if (event.shiftKey) modifiers.push('SHIFT');
+  if (event.altKey) modifiers.push('ALT');
+  if (event.metaKey) modifiers.push('META');
+  return modifiers;
+}
+
+// MOR-2512: hasCommandModifier moved to $lib/utils/keyboard-modifiers so
+// primitives can consume it; re-exported here so every existing keyboard-map
+// importer keeps working unchanged.
+export { hasCommandModifier };
+
+/**
+ * Characters that are produced via Shift on a standard keyboard.
+ * When the binding key is one of these and doesn't explicitly list SHIFT
+ * in its modifiers, we ignore the implicit shiftKey from the event so
+ * that e.g. `key = "?"` matches without `modifiers = ["SHIFT"]`.
+ */
+const SHIFT_PRODUCED_CHARS = new Set('~!@#$%^&*()_+{}|:"<>?');
+
+function modifiersMatch(binding: KeyboardBindingConfig, event: { ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean; metaKey?: boolean }): boolean {
+  const expected = [...(binding.modifiers ?? [])].map(normalizeModifier).sort();
+  const actual = getEventModifiers(event).sort();
+
+  // If the binding key is a Shift-produced character and the binding doesn't
+  // explicitly require SHIFT, strip implicit SHIFT from actual modifiers.
+  const bindingKey = binding.sequence?.[binding.sequence.length - 1] ?? '';
+  const implicitShift = SHIFT_PRODUCED_CHARS.has(bindingKey)
+    && !expected.includes('SHIFT');
+  const filtered = implicitShift ? actual.filter((m) => m !== 'SHIFT') : actual;
+
+  if (expected.length !== filtered.length) {
+    return false;
+  }
+  return expected.every((modifier, index) => modifier === filtered[index]);
+}
+
+export function resolveAction(
+  event: { key: string; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean; metaKey?: boolean },
+  config: KeyboardConfig | null | undefined = DEFAULT_KEYBOARD_CONFIG,
+): KeyboardActionConfig | null {
+  const normalized = normalizeKeyboardConfig(config);
+  const binding = normalized.bindings.find(
+    (candidate) => candidate.sequence.length === 1 && candidate.sequence[0] === event.key && modifiersMatch(candidate, event),
+  );
+  if (!binding) {
+    return null;
+  }
+  return {
+    id: binding.id,
+    action: binding.action,
+    params: binding.params,
+    section: binding.section,
+    label: binding.label,
+    description: binding.description,
+    sequence: binding.sequence,
+    modifiers: binding.modifiers,
+    repeatable: binding.repeatable,
+  };
+}
+
+export function resolveSequenceStart(
+  event: { key: string; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean; metaKey?: boolean },
+  config: KeyboardConfig | null | undefined = DEFAULT_KEYBOARD_CONFIG,
+): KeyboardBindingConfig | null {
+  const normalized = normalizeKeyboardConfig(config);
+  return normalized.bindings.find(
+    (binding) => binding.sequence.length > 1 && binding.sequence[0] === event.key && modifiersMatch(binding, event),
+  ) ?? null;
+}
+
+/**
+ * Returns every multi-key binding that can continue from this first key.
+ *
+ * A keyboard leader is a prefix, not a unique binding identifier: profiles
+ * may intentionally declare `g a`, `g r`, and `g f`. Keeping the complete
+ * candidate set lets the handler wait for the second key before choosing one.
+ */
+export function resolveSequenceStarts(
+  event: { key: string; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean; metaKey?: boolean },
+  config: KeyboardConfig | null | undefined = DEFAULT_KEYBOARD_CONFIG,
+): KeyboardBindingConfig[] {
+  const normalized = normalizeKeyboardConfig(config);
+  return normalized.bindings.filter(
+    (binding) => binding.sequence.length > 1 && binding.sequence[0] === event.key && modifiersMatch(binding, event),
+  );
+}
+
+export function resolveSequenceContinuation(
+  bindings: KeyboardBindingConfig | KeyboardBindingConfig[],
+  event: { key: string },
+): KeyboardActionConfig | null {
+  const binding = (Array.isArray(bindings) ? bindings : [bindings]).find(
+    (candidate) => candidate.sequence.length >= 2 && candidate.sequence[1] === event.key,
+  );
+  if (!binding) {
+    return null;
+  }
+  return {
+    id: binding.id,
+    action: binding.action,
+    params: binding.params,
+    section: binding.section,
+    label: binding.label,
+    description: binding.description,
+    sequence: binding.sequence,
+    modifiers: binding.modifiers,
+    repeatable: binding.repeatable,
+  };
+}
+
+export function formatShortcut(binding: KeyboardBindingConfig): string {
+  const sequence = binding.sequence.map((step, index) => {
+    const prefix = index === 0 && binding.modifiers?.length
+      ? [...binding.modifiers].map(normalizeModifier).sort((left, right) => {
+          return MODIFIER_ORDER.indexOf(left as (typeof MODIFIER_ORDER)[number]) - MODIFIER_ORDER.indexOf(right as (typeof MODIFIER_ORDER)[number]);
+        }).map(modifierDisplayName).join('+') + '+'
+      : '';
+    return `${prefix}${step}`;
+  });
+  return sequence.join(' then ');
+}
+
+export function findBindingByAction(
+  config: KeyboardConfig | null | undefined,
+  action: string,
+  predicate?: (binding: KeyboardBindingConfig) => boolean,
+): KeyboardBindingConfig | null {
+  const normalized = normalizeKeyboardConfig(config);
+  return normalized.bindings.find((binding) => binding.action === action && (predicate ? predicate(binding) : true)) ?? null;
+}
+
+/**
+ * Returns true when the active element is an editable field and
+ * keyboard shortcuts should be suppressed.
+ */
+export function shouldIgnoreEvent(activeElement: Element | null): boolean {
+  if (isLocalExtensionKeyboardScopeActive()) return true;
+  if (!activeElement) return false;
+  return IGNORED_TAGS.has(activeElement.tagName);
+}
+
+/** MOR-2507: axis each arrow key belongs to, matched against the owning
+ * widget's data-owns-arrows declaration. */
+const ARROW_AXIS: Readonly<Record<string, 'horizontal' | 'vertical'>> = {
+  ArrowLeft: 'horizontal',
+  ArrowRight: 'horizontal',
+  ArrowUp: 'vertical',
+  ArrowDown: 'vertical',
+};
+
+/**
+ * MOR-2507: true when the focused widget declared, via `data-owns-arrows`
+ * on its focusable element (an axis token `horizontal`/`vertical`/`both`,
+ * plus `shift` when Shift+arrow is a deliberate gesture such as a value
+ * control's fine step), that it consumes the pressed arrow. Modified
+ * arrows (ctrl/alt/meta — the Alt/Option+Arrow volume and gain bindings)
+ * stay global; a bare ARIA role is not evidence of consumption, and native
+ * inputs/selects/text fields are already covered by `shouldIgnoreEvent`'s
+ * IGNORED_TAGS.
+ */
+export function focusedElementOwnsArrowKey(
+  activeElement: Element | null,
+  event: { key: string; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
+): boolean {
+  if (hasCommandModifier(event)) return false;
+  const axis = ARROW_AXIS[event.key];
+  if (axis === undefined) return false;
+  const declared = activeElement?.closest('[data-owns-arrows]')?.getAttribute('data-owns-arrows');
+  if (declared === null || declared === undefined) return false;
+  const tokens = declared.split(/\s+/);
+  if (!tokens.includes(axis) && !tokens.includes('both')) return false;
+  return !event.shiftKey || tokens.includes('shift');
+}
+
+/** MOR-1444: true for a single digit character ("0".."9"), the key class a
+ *  rig profile's keyboard config binds to `band_select`. */
+export function isDigitKey(key: string): boolean {
+  return key.length === 1 && key >= '0' && key <= '9';
+}
+
+/**
+ * MOR-1444: true when the active element is the ACTIVE RECEIVER's
+ * VFO/frequency display, or sits inside it. `data-vfo-freq` is a production
+ * hook: `FrequencyDisplayInteractive.svelte` (MOR-1480) emits it — plus its
+ * own `data-vfo-active` mirroring the same `active` prop it already uses for
+ * styling — directly on its focusable root, so EVERY mount of that primitive
+ * self-qualifies with no bespoke wrapper markup required. `VfoSurface.svelte`
+ * additionally wraps it in a `<span data-vfo-freq>` inside a `[data-vfo-tile]`
+ * for its own layout/testing needs; that wrapper carries no `data-vfo-active`
+ * of its own; and other historical structures.
+ *
+ * MOR-1480 (verifier F1, CONFIRMED): the guard originally required an
+ * ANCESTOR `[data-vfo-tile]` to supply `data-vfo-active` — a shape only
+ * `VfoSurface.svelte` produces. That gap was first attributed to the
+ * desktop-v2 header display (`VfoHeader.svelte` -> `VfoPanel.svelte`), which
+ * was WRONG: `VfoHeader` rendered on NO shipping skin (deleted outright in
+ * MOR-2728 together with its undeclared-layout branch). Reading the matched
+ * `[data-vfo-freq]` element's OWN `data-vfo-active` first — falling back to
+ * the ancestor tile's only when absent — is kept purely as
+ * DEFENSE-IN-DEPTH so any future non-semantic mount is self-sufficient; NO
+ * current mount depends on it (`VfoSurface.svelte` opts out with
+ * `vfoFreqHook={false}`). The bench-observed uncommanded `set_band` + BSR
+ * hops came from the SEMANTIC tree — the `resolveAction()` fall-through now
+ * closed by the swallow-always guard in `KeyboardHandler.svelte`.
+ *
+ * MOR-1444 B1 (round-2 review, reproduced): `hasTunableFrequency` gates on
+ * `isActiveSlot`, not the radio-wide `isActive` (VfoSurface.svelte:258-259)
+ * — so on a dual-receiver cockpit BOTH receivers can mount a focusable
+ * `[data-vfo-freq]` at once. `enterFrequency()` always writes
+ * `view.activeReceiver` (SemanticRadioSurfaces.svelte), so qualifying on
+ * `[data-vfo-freq]` alone would let a digit typed on the INACTIVE receiver's
+ * display commit to the WRONG VFO — reopening the MOR-1322 B1 / MOR-1335 G4
+ * cross-dispatch class. `data-vfo-active` (own or ancestor-tile) is the same
+ * fact `hasTunableFrequency`'s sibling `tuneFrequency` guard reads and the
+ * same fact `VfoPanel`'s callers pass into
+ * `FrequencyDisplayInteractive`'s `active` prop — one source of truth, never
+ * a second derivation.
+ *
+ * MOR-1480 owner ruling A: `KeyboardHandler.svelte`'s caller no longer treats
+ * a `false` return here as "let the digit fall through to `resolveAction()`"
+ * — every digit typed on ANY `[data-vfo-freq]` display is swallowed
+ * regardless of this function's answer (see the swallow-always guard in
+ * `handleKeydown`). This function's OWN return value is unchanged: it still
+ * answers "is the ACTIVE receiver's display focused", and the caller still
+ * uses that answer to decide whether to ROUTE the digit into the
+ * frequency-entry input, just no longer whether to swallow it.
+ */
+export function isFrequencyDisplayFocused(activeElement: Element | null): boolean {
+  const freq = activeElement?.closest('[data-vfo-freq]');
+  if (!freq) return false;
+  const ownActive = freq.getAttribute('data-vfo-active');
+  if (ownActive !== null) return ownActive !== 'false';
+  return freq.closest('[data-vfo-tile]')?.getAttribute('data-vfo-active') !== 'false';
+}

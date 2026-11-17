@@ -1,0 +1,653 @@
+<script lang="ts">
+  import type { CanvasSurfaceFacts } from '$lib/canvas/canvas-surface.svelte';
+  import { audioScopeFactsRevision, audioScopeProjection } from '$lib/runtime/adapters/scope-adapter';
+  import { scopeSubscriptionSurface } from '$lib/runtime/scope-view';
+  import { onDestroy } from 'svelte';
+  import { deriveAmberScopeProps } from '$lib/runtime/adapters/panel-adapters';
+  import {
+    toTxProps, toRitXitProps, toVfoOpsProps, toDspProps, toFilterProps,
+    formatPreLabel,
+  } from '$lib/runtime/props/panel-props';
+  import AmberFrequency from './AmberFrequency.svelte';
+  import AmberAfScope from './AmberAfScope.svelte';
+  import AmberFilterGhost from './AmberFilterGhost.svelte';
+  import AmberIndStrip from './AmberIndStrip.svelte';
+  import AmberSmeter from './AmberSmeter.svelte';
+  import type { IndToken } from './AmberIndStrip.svelte';
+  import { presentationResources, runtime } from '$lib/runtime/frontend-runtime';
+  import { getManagedAppTxController } from '$lib/runtime/tx-controller/managed-app-host';
+  import { projectAgcReadback } from '$lib/runtime/adapters/radio-view-model-adapter';
+  import { isFieldAvailable } from '$lib/state/field-status';
+  import { levelFormatsBelowMax } from '../../../semantic/format-level';
+  import { RF_FRONT_END_LEVELS } from '../../../semantic/rf-front-end-instruments';
+  import { finiteValue } from '../../../primitives/reading-text';
+
+  // Band lookup by frequency (LCD-specific, mirrors AmberCockpit)
+  const BANDS: [string, number, number][] = [
+    ['160m', 1800000, 2000000],
+    ['80m',  3500000, 4000000],
+    ['60m',  5351500, 5366500],
+    ['40m',  7000000, 7300000],
+    ['30m',  10100000, 10150000],
+    ['20m',  14000000, 14350000],
+    ['17m',  18068000, 18168000],
+    ['15m',  21000000, 21450000],
+    ['12m',  24890000, 24990000],
+    ['10m',  28000000, 29700000],
+    ['6m',   50000000, 54000000],
+    ['4m',   70000000, 70500000],
+    ['2m',   144000000, 148000000],
+    ['70cm', 420000000, 450000000],
+    ['MW',   530000, 1710000],
+    ['SW',   2300000, 30000000],
+  ];
+  function freqToBand(hz: number): string {
+    for (const [name, lo, hi] of BANDS) {
+      if (hz >= lo && hz <= hi) return name;
+    }
+    if (hz >= 88000000 && hz <= 108000000) return 'FM';
+    if (hz >= 108000000 && hz <= 137000000) return 'AIR';
+    return '';
+  }
+
+  let scopeProps = $derived(deriveAmberScopeProps());
+  let radioState = $derived(scopeProps.radioState);
+  let caps = $derived(scopeProps.caps);
+  let hasCap = $derived(scopeProps.hasCapability);
+
+  // MOR-2537: `projects FTX-1 read-back 5 to AGC AUTO on %s`, `renders no
+  // numeric text for an unprojectable code on %s`, and `renders unread AGC as
+  // a bare unlit chip on %s` pin this shared projection and unread convention.
+  function agcLabelFor(agcMode: number | null | undefined): string {
+    if (agcMode == null) return 'AGC';
+    const value = projectAgcReadback(caps, agcMode).indicatorValue;
+    return value === undefined ? 'AGC' : `AGC ${value}`;
+  }
+
+  // Owner ruling 2026-09-23 (MOR-2546, extends #3591 to the LCD faces): the
+  // RFG annunciator lights only while RF gain is REDUCED, decided on the
+  // displayed percentage — the same `levelFormatsBelowMax` rounding the VFO
+  // deck applies, over the same 0..1 fraction domain (`RF_FRONT_END_LEVELS[0]`;
+  // the snapshot path normalizes `rfGain` to [0, 1]). At a displayed 100%,
+  // and while the value is null, the chip prints no text, keeps its
+  // reserved slot (`reserveSlot` → AmberIndStrip), and is aria-hidden.
+  function rfgLabelFor(rfGain: number | null | undefined): string {
+    return rfGain != null
+      && levelFormatsBelowMax(rfGain, RF_FRONT_END_LEVELS[0][2], RF_FRONT_END_LEVELS[0][3])
+      ? 'RFG' : '';
+  }
+
+  let tx = $derived(toTxProps(radioState, caps));
+  let ritXit = $derived(toRitXitProps(radioState, caps));
+  let vfoOps = $derived(toVfoOpsProps(radioState, caps));
+  let dsp = $derived(toDspProps(radioState, caps));
+  let filterProps = $derived(toFilterProps(radioState, caps));
+
+  // MOR-2855. Safety invariant R9: the LCD's whole TX look takes its truth
+  // from the App-owned managed TX controller — the SAME source as the
+  // authoritative global lamp (MOR-1008/MOR-1059) and the meters dock
+  // (MOR-1235) — and never from `state.ptt`, a command/readback echo that
+  // reads RX while the key is still down and disappears while a release is
+  // still owed. Predicate is RadioLayout's own, verbatim; fail closed.
+  const txCtl = getManagedAppTxController();
+  let txState = $state.raw(txCtl.snapshot());
+  const stopWatchingTx = txCtl.subscribe((next) => { txState = next; });
+  onDestroy(() => stopWatchingTx());
+  let managedTxActive = $derived(
+    txState.radioTx === 'on' || txState.txRisk === 'confirmed-on' || txState.txRisk === 'uncertain',
+  );
+
+  // MOR-1409 A14: `filterProps.filterWidth` is `Number.NaN` when
+  // unobserved (panel-props honesty hardening, plan §4.1/§4.2 finding #3).
+  // `AmberFilterGhost`/`AmberAfScope` (frozen consumers) compute
+  // `filterWidth / filterWidthMax` with no NaN handling — guard at this
+  // owner-file choke point instead of touching either frozen component.
+  // `0` is a non-plausible, geometrically degenerate placeholder (collapses
+  // the ratio to the floor), not a re-fabrication of the old 2400 Hz
+  // stand-in (mirrors AmberCockpit's identical guard).
+  let safeFilterWidth = $derived(
+    Number.isFinite(filterProps.filterWidth) ? filterProps.filterWidth : 0,
+  );
+
+  // Active receiver for indicator zone data (unchanged from pre-#897)
+  let rx = $derived(radioState?.active === 'SUB' ? radioState?.sub : radioState?.main);
+  let activeRxKey = $derived<'main' | 'sub'>(radioState?.active === 'SUB' ? 'sub' : 'main');
+  let rfgLabel = $derived(rfgLabelFor(rx?.rfGain));
+
+  // MOR-429: gate active-receiver indicators on fieldStatus availability so an
+  // unobserved/default value is never presented as a confirmed reading (a stale
+  // observed value stays available — owner ruling R29, 2026-09-07).
+  function rxAvailable(field: string): boolean {
+    return isFieldAvailable(radioState, `${activeRxKey}.${field}`);
+  }
+
+  // ── VFO A (MAIN) — always top line ──
+  // Read directly from radioState.main so the tag is statically correct (fixes codex P2).
+  let mainFreqHz = $derived(radioState?.main?.freqHz ?? 0);
+  let mainMode = $derived(radioState?.main?.mode ?? '');
+  let mainBand = $derived(freqToBand(mainFreqHz));
+  // Fallback 2400 Hz matches `toFilterProps()` adapter default (codex P2 on
+  // PR #916): keeps the VFO A filter badge visible with a stable width when
+  // `main.filterWidth` is null (initial state or rig without filter reporting).
+  let mainFilterWidth = $derived(radioState?.main?.filterWidth ?? 2400);
+  let mainFilterWidthLabel = $derived.by(() => {
+    const w = mainFilterWidth;
+    if (w <= 0) return '';
+    return w >= 1000 ? `${(w / 1000).toFixed(1)} kHz` : `${w} Hz`;
+  });
+
+  // ── VFO B (SUB) — compact second line on dual-RX only ──
+  let subFreqHz = $derived(radioState?.sub?.freqHz ?? 0);
+  let subMode = $derived(radioState?.sub?.mode ?? '');
+  let subBand = $derived(freqToBand(subFreqHz));
+
+  // MOR-2673 (review F1 + quick follow-up): the reserved mode-box width is
+  // derived from the mounted profile's own mode catalog (`caps.modes`) —
+  // the widest label a shipped profile can show is profile data (FTX-1
+  // "DATA-FM-N" = 9 glyphs, IC-7300 "RTTY-R" = 6 glyphs), never a hardcoded
+  // constant. Each glyph also carries the rule's 1px letter-spacing, and
+  // `box-sizing: content-box` keeps the padding/border out of the
+  // reservation, so the slot is `calc(Nch + Npx)` for N glyphs — widest in
+  // every state. Fixed for the session: it changes only when the
+  // capabilities load, never when a reading arrives.
+  let modeBoxMinWidth = $derived.by(() => {
+    let longest = 0;
+    for (const mode of caps?.modes ?? []) {
+      if (mode.length > longest) longest = mode.length;
+    }
+    return longest > 0 ? `calc(${longest}ch + ${longest}px)` : undefined;
+  });
+
+  // Active-state per VFO: A active when main is the active receiver
+  let isAActive = $derived(radioState?.active !== 'SUB');
+  let isBActive = $derived(radioState?.active === 'SUB');
+
+  // Derived raw state helpers
+  let lockActive = $derived(radioState?.dialLock ?? false);
+  let notchActive = $derived(dsp.notchMode === 'manual');
+
+  // ── Indicator token arrays ──
+
+  // frontendTokens: TX-chain (TX/VOX/PROC/ATT/PRE)
+  let frontendTokens = $derived<IndToken[]>([
+    // MOR-2855: shown for a TX-capable radio (`hasTx`), never gated on the
+    // ptt reading's availability — the chip must stay visible exactly while
+    // the echo is stale or gone, when the managed snapshot is the only TX
+    // truth left.
+    ...(tx.hasTx ? [{
+      id: 'tx' as const, label: 'TX', active: managedTxActive,
+      variant: managedTxActive ? ('tx' as const) : undefined,
+    }] : []),
+    ...(hasCap('vox') && tx.voxAvailable
+      ? [{ id: 'vox' as const, label: 'VOX', active: tx.voxActive }] : []),
+    ...(hasCap('compressor') && tx.compAvailable ? [{
+      id: 'proc' as const,
+      // MOR-2683: a known compressor state with an unread level keeps the
+      // bare key — the availability gate keeps a missing reading's level
+      // off, and `Number.isFinite` guards toTxProps' NaN sentinel. The
+      // chip reserves 8ch (`reserveSlot` → AmberIndStrip) — the widest text
+      // it prints is `PROC 255`.
+      label: tx.compActive && tx.compLevelAvailable && Number.isFinite(tx.compLevel)
+        ? `PROC ${tx.compLevel}` : 'PROC',
+      active: tx.compActive,
+      reserveSlot: 8,
+    }] : []),
+    ...(hasCap('attenuator') && rxAvailable('att') ? [{
+      id: 'att' as const, label: 'ATT', active: (rx?.att ?? 0) > 0,
+    }] : []),
+    ...(hasCap('preamp') && rxAvailable('preamp') ? [{
+      id: 'pre' as const,
+      // MOR-1529: profile-declared `[preamp].labels` (e.g. FTX-1's
+      // IPO/AMP1) instead of hardcoding that Yaesu vocabulary for every
+      // radio — most Icom profiles declare no preamp labels at all, so
+      // this falls back to `formatPreLabel`'s generic OFF/P{n}, matching
+      // `toRfFrontEndProps`'s `preOptions` for the same radios.
+      label: formatPreLabel(rx?.preamp ?? 0, caps?.preLabels ?? {}),
+      active: true,
+    }] : []),
+  ]);
+
+  // dspTokens: RX processing (NB/NR/NOTCH/ANF/RFG)
+  let dspTokens = $derived<IndToken[]>([
+    ...(hasCap('nb') && rxAvailable('nb') ? [{
+      id: 'nb' as const,
+      label: (rx?.nb ?? false) || (rx?.nbLevel ?? 0) > 0
+        ? `NB ${rx?.nbLevel ?? 0}` : 'NB',
+      active: (rx?.nb ?? false) || (rx?.nbLevel ?? 0) > 0,
+    }] : []),
+    ...(hasCap('nr') && rxAvailable('nr') ? [{
+      id: 'nr' as const,
+      label: (rx?.nr ?? false) || (rx?.nrLevel ?? 0) > 0
+        ? `NR ${rx?.nrLevel ?? 0}` : 'NR',
+      active: (rx?.nr ?? false) || (rx?.nrLevel ?? 0) > 0,
+    }] : []),
+    ...(hasCap('notch') ? [
+      ...(rxAvailable('manualNotch')
+        ? [{ id: 'notch' as const, label: 'NOTCH', active: rx?.manualNotch ?? false }]
+        : []),
+      ...(rxAvailable('autoNotch')
+        ? [{ id: 'anf' as const, label: 'ANF', active: rx?.autoNotch ?? false }]
+        : []),
+    ] : []),
+    ...(hasCap('rf_gain') && rxAvailable('rfGain') ? [{
+      id: 'rfg' as const,
+      label: rfgLabel,
+      active: rfgLabel !== '',
+      reserveSlot: true,
+    }] : []),
+  ]);
+
+  // globalTokens: AGC/SQL/LOCK/SPLIT/RIT
+  let globalTokens = $derived<IndToken[]>([
+    ...(rxAvailable('agc')
+      ? [{
+        id: 'agc' as const,
+        label: agcLabelFor(rx?.agc),
+        active: rx?.agc != null,
+      }]
+      : []),
+    ...(hasCap('squelch') && rxAvailable('squelch') ? [{
+      id: 'sql' as const, label: 'SQL', active: (rx?.squelch ?? 0) > 0,
+    }] : []),
+    ...(hasCap('dial_lock') && isFieldAvailable(radioState, 'dialLock')
+      ? [{ id: 'lock' as const, label: 'LOCK', active: lockActive }] : []),
+    ...(hasCap('split') && isFieldAvailable(radioState, 'split')
+      ? [{ id: 'split' as const, label: 'SPLIT', active: vfoOps.splitActive }] : []),
+    ...(hasCap('rit') && ritXit.hasRit ? [{
+      id: 'rit' as const, label: 'RIT', active: ritXit.ritActive,
+    }] : []),
+  ]);
+
+  // FFT scope connection — reactive to capabilities
+  let fftGeometry = $state.raw<import('$lib/runtime/scope-frame').ScopeGeometry | null>(null);
+  let fftProjection = $derived(audioScopeProjection(fftGeometry, runtime.state));
+  let fftBandwidth = $state<number | undefined>(undefined);
+  let surfaceFacts = $state<CanvasSurfaceFacts | null>(null);
+  let fftPush: ((data: Uint8Array | null) => void) | null = null;
+  let showFft = $derived(scopeProps.hasAudioFft);
+
+  // Scope subscription — delegates lifecycle to ScopeController (ADR INV-2, INV-5)
+  $effect(() => {
+    if (!showFft) return;
+
+    runtime.scope.registerPresentationDriver(presentationResources);
+    const lease = presentationResources.acquire('audio-fft', 'AmberScope');
+    // MOR-4270: one stream sink — pixels go straight to the canvas push,
+    // the rarely-changing bandwidth is a geometry fact.
+    const stream = runtime.scope.stream('audio_fft');
+    let hasPixels = false;
+    const clearPixels = () => { if (hasPixels) fftPush?.(null); hasPixels = false; };
+    const stopGeometry = stream.geometry.subscribe((geometry) => {
+      fftGeometry = geometry;
+      if (geometry === null) clearPixels();
+      fftBandwidth = geometry && geometry.view.endHz > geometry.view.startHz
+        ? geometry.view.endHz - geometry.view.startHz : undefined;
+    });
+    const unsubscribe = stream.subscribe((frame) => {
+      hasPixels = frame.pixels !== null; fftPush?.(frame.pixels);
+    });
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      clearPixels();
+      unsubscribe();
+      stopGeometry();
+      presentationResources.release(lease);
+    };
+  });
+</script>
+
+<!--
+  AmberScope — IC-7300-style scope-dominant layout.
+  Grid: header (VFO A always, VFO B on dual-RX) / ind-strips (3 zones) / scope (dominant AfScope).
+  Issue #899 adds frontend/dsp/global indicator zones.
+  Issue #896 / epic #887 C-PR2 (single-RX).
+  Issue #897 / epic #887 C-PR3 (dual-RX compact sub-VFO line).
+  VFO A = always MAIN receiver; VFO B = always SUB receiver (fixes codex P2 tag semantics).
+-->
+<div class="amber-lcd amber-lcd-scope" class:tx-active={managedTxActive}>
+  <div class="lcd-screen">
+    <div class="lcd-scanlines"></div>
+
+    <!-- ═══ Header: VFO A (always) + VFO B (dual-RX only) ═══ -->
+    <div class="lcd-header" style:grid-area="header">
+      <!-- VFO A row (main receiver — always shown) -->
+      <div class="vfo-row" class:inactive={!isAActive}>
+        <span class="vfo-tag">►A</span>
+        <div class="vfo-freq">
+          <AmberFrequency freqHz={mainFreqHz} size="large" />
+        </div>
+        <div class="vfo-badges">
+          {#if mainBand}
+            <span class="vfo-band-box">{mainBand}</span>
+          {/if}
+          <!-- MOR-2673: inline min-width derived from the profile's mode
+               catalog. The App mounts this skin before the capabilities
+               fetch lands, so the box is not drawn at all until the catalog
+               is known — it appears once, with its reservation, and never
+               changes width when a reading arrives. -->
+          {#if modeBoxMinWidth}
+            <span class="vfo-mode-box" style:min-width={modeBoxMinWidth}>{mainMode}</span>
+          {/if}
+          {#if mainFilterWidthLabel}
+            <span class="vfo-filter-box">{mainFilterWidthLabel}</span>
+          {/if}
+        </div>
+      </div>
+
+      <!-- VFO B row (sub receiver — compact, dual-RX only) -->
+      {#if scopeProps.hasDualReceiver}
+        <div class="vfo-row vfo-row-b" class:inactive={!isBActive}>
+          <span class="vfo-tag vfo-tag-sub">►B</span>
+          <div class="vfo-freq">
+            <AmberFrequency freqHz={subFreqHz} size="small" />
+          </div>
+          <div class="vfo-badges">
+            {#if subBand}
+              <span class="vfo-band-box vfo-band-box-sub">{subBand}</span>
+            {/if}
+            {#if modeBoxMinWidth}
+              <span class="vfo-mode-box vfo-mode-box-sub" style:min-width={modeBoxMinWidth}>{subMode}</span>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </div>
+
+    <!-- ═══ Indicator zones: FRONT / DSP / global ═══ -->
+    <div class="lcd-ind-zones" style:grid-area="ind-strips">
+      <AmberIndStrip zone="frontend" tokens={frontendTokens} />
+      <div class="zone-sep"></div>
+      <AmberIndStrip zone="dsp" tokens={dspTokens} />
+      <div class="zone-sep"></div>
+      <AmberIndStrip zone="global" tokens={globalTokens} />
+    </div>
+
+    <div class="lcd-meter-row" style:grid-area="meter">
+      <AmberSmeter value={finiteValue(rx?.sMeter)} source="S" />
+    </div>
+
+    <!-- ═══ Scope: dominant AfScope ═══ -->
+    <div class="lcd-scope" style:grid-area="scope" use:scopeSubscriptionSurface={{
+      stream: runtime.scope.stream('audio_fft'), receiver: null, facts: showFft ? surfaceFacts : null, view: { follow: 'vfo', spanHz: 48000 },
+      revision: audioScopeFactsRevision(radioState, caps),
+    }}>
+      {#if showFft}
+        <AmberAfScope
+          onSurfaceChange={(facts) => { surfaceFacts = facts; }}
+            projection={fftProjection}
+          data={null}
+          onRegisterPush={(fn) => { fftPush = fn; }}
+          filterWidth={safeFilterWidth}
+          filterWidthMax={filterProps.filterWidthMax}
+          ifShift={filterProps.ifShift}
+          bandwidth={fftBandwidth}
+          mode="dominant"
+        />
+      {:else}
+        <AmberFilterGhost
+          filterWidth={safeFilterWidth}
+          filterWidthMax={filterProps.filterWidthMax}
+        />
+      {/if}
+    </div>
+  </div>
+</div>
+
+<style>
+  .amber-lcd {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: stretch;
+    padding: 4px;
+    box-sizing: border-box;
+    min-height: 0;
+  }
+
+  .lcd-screen {
+    container-type: inline-size;
+    /* Contrast tokens — identical defaults to AmberCockpit. */
+    --lcd-alpha-active: 1;
+    --lcd-alpha-inactive: 0.08;
+    --lcd-alpha-ghost: 0.06;
+
+    position: relative;
+    width: 100%;
+    background: #C8A030;
+    border: 2px solid #8A7020;
+    border-radius: 8px;
+    padding: 12px 18px;
+    overflow: hidden;
+    box-shadow:
+      inset 0 0 50px rgba(0, 0, 0, 0.06),
+      0 0 8px rgba(0, 0, 0, 0.5);
+    min-height: 0;
+
+    /* Grid: header / indicator-zones / S-meter / scope (scope-dominant) */
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "header"
+      "ind-strips"
+      "meter"
+      "scope";
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .lcd-scanlines {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0px,
+      transparent 3px,
+      rgba(0, 0, 0, 0.03) 3px,
+      rgba(0, 0, 0, 0.03) 6px
+    );
+  }
+
+  /* ── Header: VFO rows ── */
+  .lcd-header {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    position: relative;
+    z-index: 2;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* One VFO row (A or B): tag + freq + badges in a flex line */
+  .vfo-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Inactive row: demote ink alpha (mirrors AmberCockpit pattern) */
+  .vfo-row.inactive {
+    --lcd-alpha-active: var(--lcd-alpha-inactive);
+  }
+
+  /* Compact B row sits below A; separator line above it */
+  .vfo-row-b {
+    border-top: 1px solid rgba(26, 16, 0, calc(var(--lcd-alpha-ghost) * 2));
+    padding-top: 2px;
+  }
+
+  .vfo-tag {
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 20px;
+    font-weight: 700;
+    color: rgba(26, 16, 0, var(--lcd-alpha-active));
+    border: 2px solid rgba(26, 16, 0, calc(var(--lcd-alpha-active) * 0.4));
+    border-radius: 4px;
+    padding: 0 6px;
+    line-height: 1.3;
+    flex-shrink: 0;
+  }
+
+  /* Sub-VFO tag is slightly smaller to match the compact B row */
+  .vfo-tag-sub {
+    font-size: 14px;
+  }
+
+  .vfo-freq {
+    flex: 0 1 auto;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .vfo-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  @container (max-width: 600px) {
+    .vfo-row {
+      flex-wrap: wrap;
+      flex-shrink: 0;
+      gap: 4px 10px;
+    }
+
+    .vfo-freq {
+      --lcd-frequency-major-size: clamp(24px, 8cqw, 48px);
+      --lcd-frequency-hz-size: clamp(18px, 6cqw, 36px);
+      --lcd-frequency-dot-size: clamp(18px, 5cqw, 34px);
+      flex: 1 1 0;
+    }
+
+    .vfo-badges {
+      flex-basis: 100%;
+      flex-wrap: wrap;
+    }
+  }
+
+  .vfo-band-box,
+  .vfo-mode-box,
+  .vfo-filter-box {
+    flex-shrink: 0;
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 16px;
+    font-weight: 700;
+    color: rgba(26, 16, 0, var(--lcd-alpha-active));
+    letter-spacing: 1px;
+    border: 2px solid rgba(26, 16, 0, calc(var(--lcd-alpha-active) * 0.4));
+    border-radius: 4px;
+    padding: 2px 8px;
+  }
+
+  /* MOR-2673: the mode box is reserved in EVERY state; the reserved width
+     is the profile-derived inline `min-width` (see `modeBoxMinWidth`) —
+     no radio-specific constant here. content-box keeps the padding and
+     border out of the ch budget, so the slot covers the widest text in
+     every state. The sibling badge boxes keep their default sizing: they
+     set no width, so box-sizing never applies to them. */
+  .vfo-mode-box {
+    box-sizing: content-box;
+  }
+
+  .vfo-band-box {
+    background: rgba(26, 16, 0, var(--lcd-alpha-ghost));
+  }
+
+  /* Compact badges for sub-VFO B row */
+  .vfo-band-box-sub,
+  .vfo-mode-box-sub {
+    font-size: 12px;
+    padding: 1px 6px;
+  }
+
+  .vfo-filter-box {
+    font-size: 14px;
+    color: rgba(26, 16, 0, calc(var(--lcd-alpha-active) * 0.7));
+    border-color: rgba(26, 16, 0, calc(var(--lcd-alpha-active) * 0.25));
+  }
+
+  /* ── Indicator zones row ── */
+  .lcd-ind-zones {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    position: relative;
+    z-index: 2;
+    min-height: 0;
+    overflow: hidden;
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  /* Vertical separator between zone strips */
+  .zone-sep {
+    width: 1px;
+    height: 16px;
+    background: rgba(26, 16, 0, calc(var(--lcd-alpha-ghost) * 2));
+    flex-shrink: 0;
+    margin: 0 6px;
+    align-self: center;
+  }
+
+  .lcd-meter-row {
+    position: relative;
+    z-index: 2;
+    min-height: 42px;
+    overflow: hidden;
+    border-top: 1px solid rgba(26, 16, 0, calc(var(--lcd-alpha-ghost) * 2));
+    padding-top: 2px;
+  }
+
+  .lcd-meter-row :global(.lcd-smeter) {
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .lcd-meter-row :global(.meter-bar) {
+    height: 11px;
+  }
+
+  .lcd-meter-row :global(.meter-scale) {
+    height: 24px;
+  }
+
+  .lcd-meter-row :global(.tick-label),
+  .lcd-meter-row :global(.scale-s-label),
+  .lcd-meter-row :global(.scale-db-zone) {
+    font-size: 9px;
+  }
+
+  .lcd-meter-row :global(.readout-s) {
+    font-size: 28px;
+  }
+
+  .lcd-meter-row :global(.readout-dbm) {
+    font-size: 10px;
+  }
+
+  /* ── Scope cell: fills remaining height ── */
+  .lcd-scope {
+    position: relative;
+    z-index: 2;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* ── TX glow ── */
+  .tx-active .lcd-screen {
+    border-color: #5A2000;
+    box-shadow:
+      inset 0 0 40px rgba(180, 30, 0, 0.08),
+      0 0 10px rgba(180, 30, 0, 0.15);
+  }
+</style>

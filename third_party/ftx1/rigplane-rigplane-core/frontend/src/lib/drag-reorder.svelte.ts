@@ -1,0 +1,361 @@
+/**
+ * Shared drag-to-reorder logic for sidebar panels,
+ * with cross-sidebar drag support.
+ *
+ * Usage:
+ *   const drag = createDragReorder({
+ *     storageKey: 'rigplane:panel-order',
+ *     defaults: ['rf-front-end', 'mode', ...],
+ *     containerSelector: '.left-sidebar',
+ *   });
+ *
+ * Cross-sidebar linking happens automatically via module-level registry.
+ * Dragging a panel over another registered container triggers cross-container
+ * drop detection and panel transfer.
+ */
+
+// --- Pure helpers (exported for testing) ---
+
+export const KNOWN_DEFAULTS_SUFFIX = ':known-defaults';
+
+export function loadKnownDefaults(storageKey: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(storageKey + KNOWN_DEFAULTS_SUFFIX);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.filter((id): id is string => typeof id === 'string'));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return new Set<string>();
+}
+
+export function saveKnownDefaults(storageKey: string, ids: Iterable<string>): void {
+  try {
+    localStorage.setItem(storageKey + KNOWN_DEFAULTS_SUFFIX, JSON.stringify([...ids]));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadPanelOrder(storageKey: string, defaults: string[]): string[] {
+  const known = loadKnownDefaults(storageKey);
+  // Union known-defaults with the current defaults list so that future loads
+  // recognise today's defaults as "already presented".
+  const nextKnown = new Set<string>(known);
+  for (const id of defaults) nextKnown.add(id);
+
+  try {
+    const stored = localStorage.getItem(storageKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        // Accept variable-length orders (cross-sidebar moves change panel count).
+        // Filter to strings only, deduplicate, ignore unknowns at render time.
+        const seen = new Set<string>();
+        const unique: string[] = [];
+        for (const id of parsed) {
+          if (typeof id === 'string' && !seen.has(id)) {
+            seen.add(id);
+            unique.push(id);
+          }
+        }
+        // Append ONLY defaults that the app has never presented to this
+        // sidebar before (i.e. newly introduced panels). Defaults that are
+        // already in `known` but absent from the stored order were
+        // deliberately removed by the user (e.g. dragged to the peer
+        // sidebar) — re-adding them would duplicate the panel across both
+        // sidebars. Unknown (peer-owned) ids stay untouched.
+        for (const id of defaults) {
+          if (!seen.has(id) && !known.has(id)) {
+            seen.add(id);
+            unique.push(id);
+          }
+        }
+        saveKnownDefaults(storageKey, nextKnown);
+        return unique;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  saveKnownDefaults(storageKey, nextKnown);
+  return [...defaults];
+}
+
+export function reorderPanels(order: string[], fromId: string, toIndex: number): string[] {
+  const fromIndex = order.indexOf(fromId);
+  if (fromIndex < 0 || fromIndex === toIndex) return order;
+  const newOrder = [...order];
+  const [moved] = newOrder.splice(fromIndex, 1);
+  newOrder.splice(toIndex, 0, moved);
+  return newOrder;
+}
+
+// --- Module-level peer registry ---
+
+interface DragInstance {
+  readonly order: string[];
+  readonly isDropTarget: boolean;
+  readonly containerSelector: string;
+  readonly _incomingDropIndex: number;
+  orderOf(panelId: string): number;
+  dragStyle(panelId: string): string;
+  handleDragStart(panelId: string, event: PointerEvent): void;
+  reset(): void;
+  resetAll(): void;
+  _setIncoming(panelId: string | null, index: number): void;
+  _acceptPanel(panelId: string, atIndex: number): void;
+  _removePanel(panelId: string): void;
+}
+
+const _registry: DragInstance[] = [];
+
+// --- Reactive factory ---
+
+export interface DragReorderOptions {
+  storageKey: string;
+  defaults: string[];
+  containerSelector: string;
+}
+
+export function createDragReorder(options: DragReorderOptions): DragInstance {
+  const { storageKey, defaults, containerSelector } = options;
+
+  let order = $state(loadPanelOrder(storageKey, defaults));
+  let dragPanelId = $state<string | null>(null);
+  let dropTargetIndex = $state<number>(-1);
+  let cancelActiveDrag: (() => void) | null = null;
+
+  // Cross-sidebar state (set by peer during its drag)
+  let _incomingDragId = $state<string | null>(null);
+  let _incomingDropIdx = $state<number>(-1);
+
+  // Persist order changes
+  $effect(() => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(order));
+    } catch {
+      /* ignore */
+    }
+  });
+
+  function orderOf(panelId: string): number {
+    return order.indexOf(panelId);
+  }
+
+  function dragStyle(panelId: string): string {
+    const idx = `order:${orderOf(panelId)};`;
+    if (dragPanelId === panelId) return idx + 'opacity:0.5;transform:scale(0.98);';
+    if (dragPanelId && orderOf(panelId) === dropTargetIndex)
+      return idx + 'border-top:2px solid var(--v2-accent, #4af);';
+    if (_incomingDragId && orderOf(panelId) === _incomingDropIdx)
+      return idx + 'border-top:2px solid var(--v2-accent, #4af);';
+    return idx;
+  }
+
+  function _setIncoming(panelId: string | null, index: number) {
+    _incomingDragId = panelId;
+    _incomingDropIdx = index;
+  }
+
+  function _acceptPanel(panelId: string, atIndex: number) {
+    const newOrder = order.filter((id) => id !== panelId);
+    newOrder.splice(Math.min(atIndex, newOrder.length), 0, panelId);
+    order = newOrder;
+  }
+
+  function _removePanel(panelId: string) {
+    order = order.filter((id) => id !== panelId);
+  }
+
+  function findDropIndex(
+    targetOrder: string[],
+    targetRects: Map<string, DOMRect>,
+    clientY: number,
+  ): number {
+    let closest = 0;
+    let minDist = Infinity;
+    for (let i = 0; i < targetOrder.length; i++) {
+      const rect = targetRects.get(targetOrder[i]);
+      if (!rect) continue;
+      const dist = Math.abs(clientY - (rect.top + rect.height / 2));
+      if (dist < minDist) {
+        minDist = dist;
+        closest = i;
+      }
+    }
+    return closest;
+  }
+
+  function handleDragStart(panelId: string, event: PointerEvent) {
+    const handle = event.currentTarget as HTMLElement;
+    const sidebar = handle.closest(containerSelector) as HTMLElement;
+    if (!sidebar) return;
+    cancelActiveDrag?.();
+    const pointerId = event.pointerId;
+    dragPanelId = panelId;
+    dropTargetIndex = order.indexOf(panelId);
+
+    // Cache own panel rects
+    const rects = new Map<string, DOMRect>();
+    for (const p of sidebar.querySelectorAll<HTMLElement>('[data-panel-id]')) {
+      rects.set(p.dataset.panelId!, p.getBoundingClientRect());
+    }
+
+    // Cache every registered peer container and its panel rects.
+    const peers: Array<{
+      instance: DragInstance;
+      rect: DOMRect;
+      panelRects: Map<string, DOMRect>;
+    }> = [];
+    for (const peer of _registry) {
+      if (peer === instance) continue;
+      const peerEl = document.querySelector(peer.containerSelector) as HTMLElement;
+      if (peerEl) {
+        const panelRects = new Map<string, DOMRect>();
+        for (const p of peerEl.querySelectorAll<HTMLElement>('[data-panel-id]')) {
+          panelRects.set(p.dataset.panelId!, p.getBoundingClientRect());
+        }
+        peers.push({ instance: peer, rect: peerEl.getBoundingClientRect(), panelRects });
+      }
+    }
+
+    let activePeer: (typeof peers)[number] | null = null;
+    let ended = false;
+
+    function onMove(e: PointerEvent) {
+      if (e.pointerId !== pointerId || ended) return;
+      const target = peers.find(({ rect }) =>
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom
+      ) ?? null;
+
+      if (target) {
+        if (activePeer?.instance !== target.instance) {
+          activePeer?.instance._setIncoming(null, -1);
+          dropTargetIndex = -1;
+        }
+        activePeer = target;
+        const targetOrder = target.instance.order;
+        const idx = targetOrder.length === 0
+          ? 0
+          : findDropIndex(targetOrder, target.panelRects, e.clientY);
+        target.instance._setIncoming(panelId, idx);
+      } else {
+        activePeer?.instance._setIncoming(null, -1);
+        activePeer = null;
+        dropTargetIndex = findDropIndex(order, rects, e.clientY);
+      }
+    }
+
+    function cleanup() {
+      if (ended) return;
+      ended = true;
+      activePeer?.instance._setIncoming(null, -1);
+      activePeer = null;
+      dragPanelId = null;
+      dropTargetIndex = -1;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      window.removeEventListener('blur', onCancel);
+      handle.removeEventListener('lostpointercapture', onLostPointerCapture);
+      if (cancelActiveDrag === cleanup) cancelActiveDrag = null;
+    }
+
+    function onUp(e: PointerEvent) {
+      if (e.pointerId !== pointerId || ended) return;
+      if (activePeer && dragPanelId) {
+        const targetIdx = activePeer.instance._incomingDropIndex;
+        activePeer.instance._acceptPanel(dragPanelId, targetIdx >= 0 ? targetIdx : 0);
+        _removePanel(dragPanelId);
+      } else if (dragPanelId && dropTargetIndex >= 0) {
+        const newOrder = reorderPanels(order, dragPanelId, dropTargetIndex);
+        if (newOrder !== order) order = newOrder;
+      }
+      cleanup();
+    }
+
+    function onCancel(e: Event) {
+      if (e instanceof PointerEvent && e.pointerId !== pointerId) return;
+      cleanup();
+    }
+
+    function onLostPointerCapture(e: PointerEvent) {
+      // A Svelte update may replace the original handle while the pointer is
+      // still down. Window listeners keep that drag alive; a capture loss with
+      // no pressed buttons is an end signal and must clear the preview.
+      if (e.pointerId === pointerId && e.buttons === 0) cleanup();
+    }
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('blur', onCancel);
+    handle.addEventListener('lostpointercapture', onLostPointerCapture);
+    cancelActiveDrag = cleanup;
+    try {
+      handle.setPointerCapture(pointerId);
+    } catch {
+      // Global listeners still provide a complete drag lifecycle.
+    }
+  }
+
+  function reset() {
+    order = [...defaults];
+    try {
+      localStorage.removeItem(storageKey);
+      localStorage.removeItem(storageKey + KNOWN_DEFAULTS_SUFFIX);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function resetAll() {
+    reset();
+    for (const other of _registry) {
+      if (other !== instance) other.reset();
+    }
+  }
+
+  const instance: DragInstance = {
+    get order() {
+      return order;
+    },
+    get isDropTarget() {
+      return _incomingDragId !== null;
+    },
+    get _incomingDropIndex() {
+      return _incomingDropIdx;
+    },
+    containerSelector,
+    orderOf,
+    dragStyle,
+    handleDragStart,
+    reset,
+    resetAll,
+    _setIncoming,
+    _acceptPanel,
+    _removePanel,
+  };
+
+  _registry.push(instance);
+
+  // Auto-unregister when the owning component is destroyed.
+  // In Svelte 5, $effect teardown runs on component unmount.
+  $effect(() => {
+    return () => {
+      cancelActiveDrag?.();
+      const idx = _registry.indexOf(instance);
+      if (idx >= 0) _registry.splice(idx, 1);
+    };
+  });
+
+  return instance;
+}

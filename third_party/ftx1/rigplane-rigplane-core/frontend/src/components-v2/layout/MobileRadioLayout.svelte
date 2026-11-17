@@ -1,0 +1,2138 @@
+<script lang="ts">
+  import { runtime } from '$lib/runtime';
+  import { getHostUi } from '$lib/local-extensions/host-ui';
+  import { t } from '$lib/i18n';
+  import { hasTx, hasDualReceiver, hasAnyScope, hasSpectrum, hasCapability, receiverLabel } from '$lib/stores/capabilities.svelte';
+  import { HardwareButton } from '$lib/Button';
+  import SpectrumPanel from '../../components/spectrum/SpectrumPanel.svelte';
+  // MOR-2851: the SCOPE chip tab's four screen keys use the same flat-key
+  // component the semantic scope surface uses on mobile — no second grammar.
+  import ScopeFlatKey from '../../components/spectrum/ScopeFlatKey.svelte';
+  import FrequencyDisplay from '../display/FrequencyDisplay.svelte';
+  import LinearSMeter from '../meters/LinearSMeter.svelte';
+  // MOR-2816: the hoisted bar renders the card meter's own face — the same
+  // frame contract the VFO surface's receiver instruments hand their meter.
+  import type { SignalMeterFrame } from '../meters/signal-meter-motion.svelte';
+  import CollapsiblePanel from '../controls/CollapsiblePanel.svelte';
+  import BottomSheet from '../controls/BottomSheet.svelte';
+  import BandSelector from '../controls/BandSelector.svelte';
+  import FilterPanel from '../panels/FilterPanel.svelte';
+  import RxAudioPanel from '../panels/RxAudioPanel.svelte';
+  import TxPanel from '../panels/TxPanel.svelte';
+  import DspPanel from '../panels/DspPanel.svelte';
+  import AgcPanel from '../panels/AgcPanel.svelte';
+  import RfFrontEnd from '../panels/RfFrontEnd.svelte';
+  import RitXitPanel from '../panels/RitXitPanel.svelte';
+  import AntennaPanel from '../panels/AntennaPanel.svelte';
+  import ScanPanel from '../panels/ScanPanel.svelte';
+  import CwPanel from '../panels/CwPanel.svelte';
+  import DockMeterPanel from '../panels/DockMeterPanel.svelte';
+  import type { MeterSource } from '../panels/meter-utils';
+  import KeyboardHandler from './KeyboardHandler.svelte';
+  import SemanticRadioSurfaces from '../wiring/SemanticRadioSurfaces.svelte';
+  import type { VfoFactKind } from '../../semantic/VfoIndicatorRow.svelte';
+  import type { ManagedScopeRegion } from '$lib/runtime/adapters/scope-display-projection';
+  import type { InstrumentComposition } from '../wiring/instrument-composition';
+  import MobileChipBar from './mobile-chip-bar.svelte';
+  import EssentialsPanel from '../panels/EssentialsPanel.svelte';
+  import PttFab from '../controls/PttFab.svelte';
+  import ModInputTxWarning from '../panels/ModInputTxWarning.svelte';
+  import { ValueControl } from '../controls/value-control';
+  import { rfPowerDisplay, validRfPowerScale } from '../../primitives/scalar/value-control-core';
+  import { finiteValue, valueText } from '../../primitives/reading-text';
+  import {
+    Settings, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
+    Sliders, Radio as RadioIcon,
+  } from 'lucide-svelte';
+  import {
+    resolveVfoLayoutProfile,
+    vfoLayoutStyleVars,
+  } from './vfo-layout-tokens';
+  import { getTxPermit } from '$lib/utils/tx-permit';
+  import { getStepsForMode, formatStep, formatSValue, formatDbm, formatPower } from './mobile-layout-logic';
+  import { isSmeterCalibrated } from '../meters/smeter-scale';
+  // MOR-1409 A13a: reads come from the A11/A12-hardened canonical projections
+  // and commands from the sanctioned adapter layer. The retired state-adapter
+  // twin under components-v2 is the stale side of a 15-of-15 divergence (it
+  // still fabricates 14.074 MHz / USB / FIL1 / a zero-meter reading for an
+  // unobserved rig), and the command-bus shim beside it is the
+  // identity-preserving re-export A15 deletes once its production importer
+  // count reaches zero.
+  import {
+    toVfoProps, toVfoOpsProps, toMeterProps,
+    toModeProps, toFilterProps, toAgcProps, toRitXitProps,
+    toBandSelectorProps, toRxAudioProps, toDspProps, toTxProps, toCwProps, toAntennaProps, toScanProps,
+  } from '$lib/runtime/props/panel-props';
+  import {
+    bindSemanticSurfaceHandlers, getPresetHandlers, getKeyboardHandlers, getPendingFrequencyHz,
+  } from '$lib/runtime/adapters/panel-adapters';
+  import { getKeyboardConfig } from '$lib/stores/capabilities.svelte';
+  import {
+    getRadioHealth, getRadioLinkState, getRadioPowerOn, getRadioReady, getRigConnected,
+  } from '$lib/stores/connection.svelte';
+  import { deriveRadioHealthLabel } from '$lib/runtime/adapters/radio-health-label';
+  import { toRadioViewModel } from '$lib/runtime/adapters/radio-view-model-adapter';
+  import { projectHeaderFrequency } from '$lib/runtime/adapters/tx-capabilities';
+  import { getManagedAppTxController } from '$lib/runtime/tx-controller/managed-app-host';
+  import { createManagedTxGesture, createPttHold } from '../wiring/managed-tx-gesture';
+  import { vibrate } from '$lib/utils/haptics';
+  import { onMount, onDestroy } from 'svelte';
+
+  // ── State — via runtime ──
+  let radioState = $derived(runtime.state);
+  let caps = $derived(runtime.caps);
+  let keyboardConfig = $derived(getKeyboardConfig());
+  let audioState = $derived(runtime.audio);
+  let txCapable = $derived(hasTx());
+  let radioPowerOn = $derived(getRadioPowerOn());
+  let powerLabel = $derived(t(radioPowerOn === true ? 'core.statusbar.power.labelOff'
+    : radioPowerOn === false ? 'core.statusbar.power.labelOn' : 'core.statusbar.power.labelUnknown'));
+  // The reason text the desktop status bar adds to its radio indicator's
+  // title; '' while no reason applies, which hides the line. While
+  // `runtime.state` is null (no state has arrived) no reason is shown.
+  let radioLinkLine = $derived(radioState ? deriveRadioHealthLabel({
+    health: getRadioHealth(),
+    rigConnected: getRigConnected(),
+    radioReady: getRadioReady(),
+    radioState: getRadioPowerOn() === false ? 'disconnected' : getRadioLinkState(),
+  }) : '');
+
+  // MOR-2442 — the PORTRAIT mount's managed scope region: the bare
+  // `scopeManaged` SRS instance below binds it out here, and the portrait
+  // SpectrumPanel reads it. The landscape branch hosts its own instance and
+  // forwards its region through the `children` snippet instead — this bind
+  // never serves landscape.
+  let managedScopeRegion = $state<ManagedScopeRegion | undefined>(undefined);
+
+  // MOR-2851: the three panorama view options the SCOPE chip tab owns. They
+  // bind into the portrait SpectrumPanel's `$bindable` props, so the phone
+  // layout — not the panel — holds them once the toolbar is hidden.
+  let scopeAvg = $state(true);
+  let scopeSmooth = $state(true);
+  let scopePeakHold = $state(true);
+  let scopeBandPlan = $state(true);
+
+  // ── VFO props ──
+  let mainVfo = $derived(toVfoProps(radioState, 'main'));
+  let subVfo = $derived(toVfoProps(radioState, 'sub'));
+  let vfoOps = $derived(toVfoOpsProps(radioState, caps));
+  let meter = $derived(toMeterProps(radioState, caps));
+  let mode = $derived(toModeProps(radioState, caps));
+  let filter = $derived(toFilterProps(radioState, caps));
+  let band = $derived(toBandSelectorProps(radioState));
+  // The canonical projection takes a fourth argument the stale twin does not:
+  // audio-WS link health. Sourced from the same live getter the sanctioned
+  // `lib/runtime/adapters/audio-adapter.ts` uses — never a literal, which
+  // would re-introduce exactly the fabricated truth this gate removes.
+  let rxAudio = $derived(toRxAudioProps(radioState, caps, audioState, runtime.connectionAudio));
+  let tx = $derived(toTxProps(radioState, caps));
+  let agc = $derived(toAgcProps(radioState, caps));
+  let ritXit = $derived(toRitXitProps(radioState, caps));
+  let dsp = $derived(toDspProps(radioState, caps));
+  let cw = $derived(toCwProps(radioState, caps));
+  let antenna = $derived(toAntennaProps(radioState, caps));
+  let scan = $derived(toScanProps(radioState));
+
+  // ── Handlers ──
+  // One binder call per mounted composition root (the A07 convention): it
+  // mints fresh family objects, matching the init-time `make*Handlers()`
+  // semantics this replaces, and filter handlers retain per-instance debounce
+  // state that a shared singleton would leak between mounts. `preset` and
+  // `keyboard` are not binder members, so they come from their accessors.
+  const surfaceHandlers = bindSemanticSurfaceHandlers();
+  const vfoHandlers = surfaceHandlers.vfo;
+  const keyboardHandlers = getKeyboardHandlers();
+  const modeHandlers = surfaceHandlers.mode;
+  const filterHandlers = surfaceHandlers.filter;
+  const bandHandlers = surfaceHandlers.band;
+  const presetHandlers = getPresetHandlers();
+  const rxAudioHandlers = surfaceHandlers.rxAudio;
+  const txHandlers = surfaceHandlers.tx;
+  const rfHandlers = surfaceHandlers.rfFrontEnd;
+  const agcHandlers = surfaceHandlers.agc;
+  const ritXitHandlers = surfaceHandlers.ritXit;
+  const dspHandlers = surfaceHandlers.dsp;
+  const cwHandlers = surfaceHandlers.cw;
+  const antennaHandlers = surfaceHandlers.antenna;
+  const scanHandlers = surfaceHandlers.scan;
+
+  // ── VFO layout ──
+  let receiverDeckElement = $state<HTMLElement | null>(null);
+  let receiverDeckWidth = $state<number | null>(null);
+  let vfoFreqElement = $state<HTMLElement | null>(null);
+  let activeReceiver = $derived((radioState?.active ?? 'MAIN') as 'MAIN' | 'SUB');
+  // MOR-2511: the header shows the ACTIVE receiver's VFO; the small secondary
+  // readout names the other one. Pinned by MobileRadioLayout.component.svelte.test.ts,
+  // describe "mobile header follows the active receiver (MOR-2511)".
+  let activeVfo = $derived(activeReceiver === 'SUB' ? subVfo : mainVfo);
+  // MOR-2911 — the in-flight set_freq target for the ACTIVE receiver, read
+  // at this composition seam from the same accessor the desktop's
+  // SemanticRadioSurfaces seam reads (no second pending tracker). Passed to
+  // the header's passive readout as display-only pending truth; the
+  // confirmed frequency returns when the radio confirms or refuses.
+  let activePendingFrequencyHz = $derived(getPendingFrequencyHz(activeReceiver === 'SUB' ? 1 : 0));
+  function selectReceiver(target: 'MAIN' | 'SUB') {
+    if (target === 'MAIN') {
+      vfoHandlers.onMainVfoClick?.();
+    } else {
+      vfoHandlers.onSubVfoClick?.();
+    }
+    // Scroll the VFO display into view so the selection is visible to the user.
+    if (vfoFreqElement && typeof vfoFreqElement.scrollIntoView === 'function') {
+      vfoFreqElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+  let vfoLayoutProfile = $derived(resolveVfoLayoutProfile(receiverDeckWidth));
+  let receiverDeckStyle = $derived(vfoLayoutStyleVars(vfoLayoutProfile, {
+    width: receiverDeckWidth,
+    overrides: {},
+  }));
+  // MOR-2852: the meta row's chips order and subset, frozen. SQL is last: the
+  // squelch-level tag, drawn only on radios that declare a squelch control.
+  const metaFacts: readonly VfoFactKind[] = ['bandwidth', 'agc', 'nb', 'nr', 'sql'];
+
+  // ── Modals ──
+  // Renamed from settingsOpen for #841 — this sheet now holds only
+  // "SETUP" content (keyboard config, antenna naming, CW defaults,
+  // diagnostics). Operating controls live in chips.
+  let setupOpen = $state(false);
+  let modeModalOpen = $state(false);
+  let filterModalOpen = $state(false);
+  let txSettingsOpen = $state(false);
+  let powerModalOpen = $state(false);
+  let mobileMeterSource = $state<MeterSource>('POWER');
+
+  function selectMobileMeterSource(source: string) {
+    if (source === 'S' || source === 'SWR' || source === 'POWER') {
+      mobileMeterSource = source;
+    }
+  }
+
+  // ── Chip-scroll IA (#839) ──
+  let activeChipId = $state('essentials');
+  // Conditional chips are gated on capabilities so radios without the feature
+  // don't see a dead chip (e.g. RIT-capable rigs get the dedicated RIT chip
+  // per #842, TX-capable rigs get TX). Labels resolve through the i18n
+  // catalog (RP-ML-005); glossary-stable tokens (BAND/DSP/RF/RIT/XIT/TX)
+  // are kept verbatim inside the catalog VALUE — enforced by RP-ML-013A.
+  const mobileChips = $derived([
+    { id: 'essentials', label: t('core.mobile.chip.essentials') },
+    { id: 'band', label: t('core.mobile.chip.band') },
+    // MOR-2851: the SCOPE tab carries the panorama's view keys and the
+    // semantic scope controls. It exists exactly when the radio has a
+    // spectrum — the same `hasSpectrum()` gate as the panorama itself.
+    ...(hasSpectrum() ? [{ id: 'scope', label: t('core.mobile.chip.scope') }] : []),
+    { id: 'scan', label: t('core.mobile.chip.scan') },
+    // MOR-4299 (item 3): the MEMORY chip carries the desktop's semantic
+    // Memory instrument (same controller/handlers/dialog). Ungated, like
+    // the desktop: the surface's own radio-side list keeps the
+    // `memory_read` gate (`memoryReadable` in SemanticRadioSurfaces), so a
+    // radio without it (e.g. IC-7300) still gets the memory channels here.
+    { id: 'memory', label: t('core.mobile.chip.memory') },
+    { id: 'rf', label: t('core.mobile.chip.rf') },
+    // DSP chip carries the level/threshold controls that ESSENTIALS exposes
+    // only as on/off toggles (codex P2 on PR #925 — removing the SETUP
+    // DSP panel left no mobile path to tune NR level, NB level, notch freq).
+    { id: 'dsp', label: t('core.mobile.chip.dsp') },
+    ...(ritXit.hasRit || ritXit.hasXit ? [{ id: 'rit', label: t('core.mobile.chip.ritXit') }] : []),
+    ...(txCapable ? [{ id: 'tx', label: t('core.mobile.chip.tx') }] : []),
+  ]);
+
+  // Reset to ESSENTIALS if the active chip disappears from the list
+  // (e.g., capability refresh after reconnecting to a non-TX radio).
+  $effect(() => {
+    if (!mobileChips.some((c) => c.id === activeChipId)) {
+      activeChipId = 'essentials';
+    }
+  });
+
+  // ── Tuning strip ──
+  // MOR-1486 ruling B: `tuningStep` here is local `$state`, disconnected
+  // from the shared `$lib/stores/tuning.svelte` store that SpectrumPanel's
+  // SpectrumToolbar reads (also mounted on this layout, below) — the two
+  // can show contradictory STEP values on one screen (defect tracked as
+  // MOR-1509). This layout also never drives the store's mode-follow via
+  // `applyModeDefault()` (only `RadioLayout.svelte` and, per ruling A,
+  // `LcdLayout.svelte` do). Both SpectrumPanel mounts below pass
+  // `hideAutoStepToggle` so the AUTO toggle doesn't appear here promising
+  // continuous mode-follow behavior this layout can't provide. The right
+  // mobile step UX — whether to unify onto the shared store (MOR-1509)
+  // and whether mobile should get the mode-follow driver at all — is an
+  // owner-commissioned design-research ticket, MOR-1513, not solved by
+  // this ticket.
+  let availableSteps = $derived(getStepsForMode(mode.currentMode));
+  let tuningStep = $state(1000); // Hz
+  let stepPickerOpen = $state(false);
+
+  // Reset step when mode changes and current step is not in new mode's list
+  $effect(() => {
+    const steps = getStepsForMode(mode.currentMode);
+    if (!steps.includes(tuningStep)) {
+      tuningStep = steps[Math.floor(steps.length / 2)] ?? 1000;
+    }
+  });
+
+  function tuneBy(delta: number) {
+    // MOR-2511: a step tunes the active receiver — onFreqChange takes the
+    // receiver (0 = MAIN, 1 = SUB) and 'step' for a relative tune; pinned by
+    // the "tunes the active receiver" test in MobileRadioLayout.component.svelte.test.ts.
+    const freq = activeVfo.freq + delta * tuningStep;
+    vfoHandlers.onFreqChange(freq, activeReceiver === 'SUB' ? 1 : 0, 'step');
+  }
+
+  function selectStep(hz: number) {
+    tuningStep = hz;
+    stepPickerOpen = false;
+  }
+
+  // ── Quick modes (SSB operation essentials) ──
+  // Quick modes — show first matching from profile (covers both CW and CW-U).
+  const QUICK_MODE_CANDIDATES = ['LSB', 'USB', 'CW', 'CW-U', 'AM'];
+  const QUICK_MODES = $derived(QUICK_MODE_CANDIDATES.filter((m) => mode.modes.includes(m)).slice(0, 4));
+
+  // ── Landscape detection ──
+  let isLandscape = $state(false);
+  function checkOrientation() {
+    const wasLandscape = isLandscape;
+    isLandscape = window.innerWidth > window.innerHeight && window.innerHeight < 500;
+    // Try to enter fullscreen on landscape (hides Safari chrome)
+    if (isLandscape && !wasLandscape) {
+      requestFullscreen();
+      // iOS Safari: scroll trick to minimize chrome
+      setTimeout(() => window.scrollTo(0, 1), 50);
+    } else if (!isLandscape && wasLandscape) {
+      exitFullscreen();
+    }
+  }
+
+  function requestFullscreen() {
+    const el = document.documentElement;
+    // Standard Fullscreen API (not supported in iOS Safari, but works on Android Chrome)
+    if (el.requestFullscreen) {
+      el.requestFullscreen().catch(() => {});
+    } else if ((el as any).webkitRequestFullscreen) {
+      (el as any).webkitRequestFullscreen();
+    }
+  }
+
+  function exitFullscreen() {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else if ((document as any).webkitFullscreenElement) {
+      (document as any).webkitExitFullscreen();
+    }
+  }
+
+  // ── Screen Wake Lock ──
+  let wakeLock: WakeLockSentinel | null = null;
+  let wakeLockRequested = false;
+
+  async function requestWakeLock() {
+    if (wakeLock) return; // already held
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+        console.log('[WakeLock] acquired');
+      }
+    } catch (e) {
+      console.warn('[WakeLock] failed:', e);
+    }
+  }
+
+  // iOS Safari needs user gesture for Wake Lock — request on first touch
+  function ensureWakeLock() {
+    if (!wakeLockRequested) {
+      wakeLockRequested = true;
+      requestWakeLock();
+    }
+  }
+
+  onMount(() => {
+    // Orientation
+    checkOrientation();
+    window.addEventListener('resize', checkOrientation);
+
+    // Try immediately (works on Chrome/Android)
+    requestWakeLock();
+    // Re-acquire on visibility change
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    // Fallback: acquire on first user interaction (iOS)
+    const handleInteraction = () => {
+      ensureWakeLock();
+    };
+    document.addEventListener('touchstart', handleInteraction, { once: true });
+    document.addEventListener('click', handleInteraction, { once: true });
+
+    // Ultimate fallback: invisible video loop keeps screen on (iOS ≤16.3 or any browser w/o Wake Lock)
+    let noSleepVideo: HTMLVideoElement | null = null;
+    if (!('wakeLock' in navigator)) {
+      noSleepVideo = document.createElement('video');
+      noSleepVideo.setAttribute('playsinline', '');
+      noSleepVideo.setAttribute('muted', '');
+      noSleepVideo.muted = true;
+      noSleepVideo.loop = true;
+      noSleepVideo.style.position = 'fixed';
+      noSleepVideo.style.top = '-1px';
+      noSleepVideo.style.left = '-1px';
+      noSleepVideo.style.width = '1px';
+      noSleepVideo.style.height = '1px';
+      noSleepVideo.style.opacity = '0.01';
+      // Minimal silent mp4 (1s, 1x1px)
+      noSleepVideo.src = 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAAA0BtZGF0AAACrwYF//+r3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE2NCByMzEwOCAzMWUxOWY5IC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAyMyAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvbnM6IGNhYmFjPTEgcmVmPTMgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MzoweDExMyBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDowLjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MSBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0tMiB0aHJlYWRzPTEgbG9va2FoZWFkX3RocmVhZHM9MSBzbGljZWRfdGhyZWFkcz0wIG5yPTAgZGVjaW1hdGU9MSBpbnRlcmxhY2VkPTAgYmx1cmF5X2NvbXBhdD0wIGNvbnN0cmFpbmVkX2ludHJhPTAgYmZyYW1lcz0zIGJfcHlyYW1pZD0yIGJfYWRhcHQ9MSBiX2JpYXM9MCBkaXJlY3Q9MSB3ZWlnaHRiPTEgb3Blbl9nb3A9MCB3ZWlnaHRwPTIga2V5aW50PTI1MCBrZXlpbnRfbWluPTI1IHNjZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9NDAgcmM9Y3JmIG1idHJlZT0xIGNyZj0yMy4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4wMACAAAABZWWIhAAR//73aJ8Cm1pDeoDklcUBHwi/GGHhAz8OEad2Arggg0gBEUgALIAAAAMAAAMAAAMDQ5OCAAADABRMHAAAAAZBmoJsQ/8AAAMBiQAAABdBnqF/AHcAAI6gAAaIAAAAAwAAAwAjAAAADkGaxEnhDyZTAh3//qmWAAAAAwAARAAAAAxBnuRFETwn/wAAAwAAKwAAAA0BnwN0Qn8AAAMAAAMnAAAADQGfBWpCfwAAAwAAAxcAAAAPQZsKSahBaJlMCH///qmWAAAAAwAAOAAAAAxBnyhrQn8AAAM/AAAADAGfR3RCfwAAAwAAJQAAAAwBn0lqQn8AAAMAACMAAAANQZtOSahBbJlMCH///qmWAAAAAwAAFgAAABFBn2xFESwn/wAAAwAAAwAcgAAAAA0Bn4t0Qn8AAAM/AAAADAGfjWpCfwAAAwAAIwAAAA9Bm5JJqEFsmUwId//+qZYAAAADAAAjgQAAAktliIQAEf/+92ifAptaQ3qA5JXFAYxn5NAAG6PzJJqAPkAAAAMAQZqCbEP/AAADAYkAAAAXQZ6hfwB3AACOoAAGiAAAAAMAAAMAIwAAAA5BmsRJ4Q8mUwId//6plgAAAAMAAEQAAAAMQZ7kRRE8J/8AAAMAAAUAAAANAZ8DdEJ/AAADAAADJwAAAA0BnwVqQn8AAAMAAAMXAAAAGUGbCkmoQWiZTBhD//6plgAAAAMAAAMAAH0AAAAMQZ8oa0J/AAADPwAAAAwBn0d0Qn8AAAMAACUAAAAMAJtJakJ/AAADAAAjAAAADUGbTkmoQWyZTAh///6plgAAAAMAABYAAAARQZ9sRREsJ/8AAAMAAAMAHMAAAAAMAZ+LdEJ/AAADPwAAAAwBn41qQn8AAAMAACMAAAAPQZuSSahBbJlMCHf//qmWAAAAAwAAI4EAAABHZW1oZAAAAAAAABhoZGxyAAAAAAAAAAB2aWRlAAAAAAAAAAAAAAAAJFZpZGVvSGFuZGxlcgAAAADIbWluZgAAABR2bWhkAAAAAQAAAAAAAAAAJGRpbmYAAAAcZHJlZgAAAAAAAAABAAAADHVybCAAAAABAAAAeHN0YmwAAABYc3RzZAAAAAAAAAABAAAASGF2YzEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAEAAQAEgAAABIAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAY//8AAAA0YXZjQwFkAAr/4QAYZ2QACqzZQo35hAAAAwAEAAADAKQ8UJZYAQAGaOviSyLAAAAAGHN0dHMAAAAAAAAAAQAAAAIAAQAAAAAUc3RzcwAAAAAAAAABAAAAAQAAABxzdHNjAAAAAAAAAAEAAAABAAAAAgAAAAEAAAAcc3RzegAAAAAAAAAAAAAAAgAAAz0AAAACAAAAFHNvZHQAAAABAAAAAA==';
+      document.body.appendChild(noSleepVideo);
+      const playOnTouch = () => {
+        noSleepVideo?.play().catch(() => {});
+        document.removeEventListener('touchstart', playOnTouch);
+      };
+      document.addEventListener('touchstart', playOnTouch, { once: true });
+    }
+
+    return () => {
+      window.removeEventListener('resize', checkOrientation);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      document.removeEventListener('touchstart', handleInteraction);
+      document.removeEventListener('click', handleInteraction);
+      wakeLock?.release();
+      if (noSleepVideo) {
+        noSleepVideo.pause();
+        noSleepVideo.remove();
+      }
+    };
+  });
+
+  // The mobile layout renders canonical server TX state. Its recognizer owns
+  // pointer timing only; admission, deadlines, confirmation and release live
+  // in ManagedTxAuthority.
+  const txCtl = getManagedAppTxController();
+  let txState = $state.raw(txCtl.snapshot());
+  const stopWatchingTx = txCtl.subscribe((next) => { txState = next; });
+  let headerFrequency = $derived(projectHeaderFrequency(
+    toRadioViewModel(radioState, caps, txState), activeVfo.freq,
+  ));
+  let headerPendingFrequencyHz = $derived(
+    headerFrequency.showingTxFrequency ? null : activePendingFrequencyHz,
+  );
+  // Registered BEFORE the PTT teardown below on purpose: Svelte tears
+  // effects down in creation order, so the subscription is dropped first and
+  // the teardown release runs to completion inside the controller instead of
+  // bouncing back into a component that is already being destroyed.
+  onDestroy(stopWatchingTx);
+
+  let owned = $derived(txState.intent === 'momentary');
+  let latched = $derived(txState.intent === 'latched');
+  // The server projection is the only displayed RF truth; stale never means RX.
+  let managedTxRf: 'on' | 'off' | 'unknown' = $derived(
+    txState.radioTx === 'on' || txState.txRisk === 'confirmed-on'
+      ? 'on'
+      : txState.fresh && txState.radioTx === 'off' && txState.txRisk === 'none'
+        ? 'off'
+        : 'unknown'
+  );
+  // PttFab's visual contract is unchanged — it still takes idle/held/latched.
+  let pttMode: 'idle' | 'held' | 'latched' = $derived(
+    latched ? 'latched' : owned ? 'held' : 'idle'
+  );
+
+  // ── TX color (depends only on canonical managed RF state) ──
+  let txPermit = $derived(getTxPermit(mainVfo.freq, caps?.txBands));
+  let txIndicatorColor = $derived(
+    managedTxRf === 'on' ? 'var(--v2-accent-red, #ef4444)' :
+    managedTxRf === 'unknown' ? 'var(--v2-accent-yellow, #facc15)' :
+    txPermit === 'allowed' ? 'var(--v2-accent-green, #4ade80)' : 'var(--v2-text-dim, #555)'
+  );
+
+  // One recognizer and one hold for the whole layout (MOR-3817): rotation
+  // swaps the PTT button, and a hold must outlive the button it started on.
+  const pttGesture = createManagedTxGesture(
+    {
+      latched: () => txCtl.snapshot().intent === 'latched',
+      transmitAvailable: () => txCtl.snapshot().fresh,
+      latchAllowed: () => !runtime.remoteController,
+    },
+    {
+      pttOn: txCtl.pttOn, pttOff: txCtl.pttOff,
+      transmitOn: txCtl.transmitOn, forceOff: txCtl.forceOff,
+    }, {
+    schedule: (callback, ms) => setTimeout(callback, ms),
+    cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  });
+  const pttHold = createPttHold({
+    press: () => { vibrate('tap'); pttGesture.down(); },
+    release: () => pttGesture.up(),
+    abort: () => pttGesture.abort(),
+  });
+  const pttButton = pttHold.attach;
+  // Losing TX capability ends the transmission even while the finger is down.
+  $effect(() => {
+    if (!txCapable) { pttHold.abort(); pttGesture.abort(); }
+  });
+  onDestroy(() => { pttHold.destroy(); pttGesture.destroy(); });
+
+  // ── ATU (long-press = tune) ──
+  let atuTimer: ReturnType<typeof setTimeout> | null = null;
+  let atuDidLongPress = false;
+
+  function atuTouchStart() {
+    atuDidLongPress = false;
+    atuTimer = setTimeout(() => {
+      atuDidLongPress = true;
+      txHandlers.onAtuTune(); // Start antenna tune
+    }, 600);
+  }
+
+  function atuTouchEnd() {
+    if (atuTimer) {
+      clearTimeout(atuTimer);
+      atuTimer = null;
+    }
+    if (!atuDidLongPress) {
+      txHandlers.onAtuToggle(); // Short press = toggle on/off
+    }
+  }
+
+  // ── ATU status ──
+  let atuStatus = $derived(tx.atuActive ? (tx.atuTuning ? 'tuning' : 'on') : 'off');
+
+  // ── Display-honesty guards (MOR-1409 A13a) ──
+  // The canonical meter projection reports `NaN` for a receiver that has
+  // never been read, where the retired twin fabricated a zero reading — a
+  // full-scale "S9" / "-73 dBm" for an operator no one has observed.
+  // `formatSValue`/`formatDbm` have no non-finite branch (`Math.min/max`
+  // propagate `NaN` straight into the template literal), so they render
+  // "S NaN" / "NaN dBm" — the same defect class that BLOCKED PR #2363.
+  // These are their ONLY production consumers, so per the single-consumer
+  // test the guards live here and `mobile-layout-logic.ts` stays untouched.
+  // MOR-2675: an unread value renders EMPTY in its reserved slot (the
+  // reservation lives in the styles below) — never a dash run.
+  function formatSValueDisplay(actual: number): string {
+    return valueText(finiteValue(actual), formatSValue);
+  }
+  function formatDbmDisplay(actual: number): string {
+    return valueText(finiteValue(actual), formatDbm);
+  }
+  // RIT/XIT share one offset field; an active RIT whose offset has never been
+  // reported must not render "+NaN".
+  function formatOffsetDisplay(hz: number): string {
+    return valueText(finiteValue(hz), (value) => `${value >= 0 ? '+' : ''}${value}`);
+  }
+  // MOR-2658: the power sheet slider shares TxPanel's unread contract —
+  // an unread level renders EMPTY in its reserved slot, never "NaN%"
+  // (`normalizedPercentDisplay` has no non-finite branch). `toTxProps`
+  // reports Number.NaN when the rig never sent `powerLevel`.
+  function formatRfPowerDisplay(level: number): string {
+    return valueText(finiteValue(level), (value) => rfPowerDisplay(value, tx.rfPowerScale));
+  }
+  // The TX dock meter takes raw numbers and formats all four rows itself
+  // (`formatPowerWatts`/`formatSwr`/`formatAlc` each render "NaN"-class
+  // strings). It is not an owner of this gate, and there is no honest finite
+  // value to substitute — a fabricated "SWR 1.0" on a live TX surface is
+  // worse than no reading at all — so the row is withheld until the meters
+  // are actually observed, which is one poll away.
+  let txMetersObserved = $derived(
+    finiteValue(meter.rfPower) !== null && finiteValue(meter.swr) !== null
+      && finiteValue(meter.alc) !== null
+  );
+</script>
+
+{#if isLandscape}
+<!-- ═══ LANDSCAPE: fullscreen spectrum + VFO overlay ═══ -->
+<div class="m-landscape">
+  <KeyboardHandler config={keyboardConfig} onAction={keyboardHandlers.dispatch} />
+  <!-- Radio-link reason line: in the layout flow, so .m-ls-body (spectrum and
+       overlay bar) starts below it. -->
+  {#if radioLinkLine}
+    <p class="m-radio-link-line" data-testid="radio-link-line" role="status">{radioLinkLine}</p>
+  {/if}
+  <div class="m-ls-body">
+  <!-- MOR-2511 — a radio without a spectrum renders no stage at all; the
+       overlay below is absolutely positioned inside .m-ls-body and does not
+       depend on this element. Pinned by the no-spectrum orientation tests in
+       MobileRadioLayout.component.svelte.test.ts. -->
+  {#if hasSpectrum()}
+    <div class="m-ls-spectrum">
+      <!-- MOR-2442: landscape hosts its scope panel through the ONE
+           SemanticRadioSurfaces-managed region, the same contract the
+           portrait mount binds below. -->
+      <SemanticRadioSurfaces>
+        {#snippet children(instruments: InstrumentComposition)}
+          <SpectrumPanel hideAutoStepToggle={true}
+            scopeRegion={instruments.managedScope}
+            scopeDemanded={instruments.managedScope?.demanded ?? true}
+            onScopeDemandChange={instruments.managedScope?.setDemand} />
+        {/snippet}
+      </SemanticRadioSurfaces>
+    </div>
+  {/if}
+  <div class="m-ls-overlay">
+    <div class="m-ls-vfo">
+      <span class="m-tx-indicator" data-rf={managedTxRf} style="background: {txIndicatorColor}"></span>
+      <FrequencyDisplay freq={headerFrequency.frequencyHz} pendingDisplayHz={headerPendingFrequencyHz} compact active />
+    </div>
+    <div class="m-ls-quick-modes">
+      {#each QUICK_MODES as m}
+        <button
+          class="m-ls-mode-btn"
+          class:m-ls-mode-active={activeVfo.mode === m}
+          onclick={() => modeHandlers.onModeChange(m)}
+        >{m}</button>
+      {/each}
+    </div>
+    <!-- MOR-2705 part 4a: calibration is a profile fact — an uncalibrated
+         radio draws no S-unit number and no dBm readout at all for the
+         whole session (no empty reserved slot); a calibrated radio keeps
+         both reserved slots, empty until read. -->
+    {#if isSmeterCalibrated()}
+    <div class="m-ls-meter">
+      <span class="m-ls-smeter">{formatSValueDisplay(meter.signal)}</span>
+      <span class="m-ls-dbm">{formatDbmDisplay(meter.signal)}</span>
+    </div>
+    {/if}
+    <div class="m-ls-controls">
+      <button class="m-ls-step-btn" onclick={() => (stepPickerOpen = !stepPickerOpen)}>
+        {formatStep(tuningStep)}
+      </button>
+      <button class="m-ls-tune-btn" onclick={() => tuneBy(-1)}>
+        <ChevronLeft size={20} />
+      </button>
+      <button class="m-ls-tune-btn" onclick={() => tuneBy(1)}>
+        <ChevronRight size={20} />
+      </button>
+      <span class="m-ls-filter">{activeVfo.filter}</span>
+      {#if txCapable}
+        <button
+          type="button"
+          class="m-ls-unkey"
+          aria-label="Unkey transmitter"
+          title="Unkey transmitter"
+          onclick={() => txCtl.forceOff()}
+        >UNKEY</button>
+        {#if !latched}
+          <button
+            class="m-ls-ptt"
+            class:m-ptt-held={owned}
+            class:m-ls-ptt-dim={txPermit === 'denied' && pttMode === 'idle'}
+            use:pttButton
+            title={txPermit === 'denied' ? t('core.mobile.tx.notAllowedFreq') : t('core.mobile.tx.pushToTalk')}
+          >
+            {pttMode === 'held' ? 'TX' : 'PTT'}
+          </button>
+        {/if}
+      {/if}
+    </div>
+  </div>
+  </div>
+  {#if stepPickerOpen}
+    <div
+      class="m-step-picker-backdrop"
+      role="button"
+      tabindex="0"
+      aria-label={t('core.mobile.closeStepPicker')}
+      onclick={() => (stepPickerOpen = false)}
+      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); stepPickerOpen = false; } }}
+    ></div>
+    <div class="m-ls-step-picker">
+      {#each availableSteps as step}
+        <button
+          class="m-step-option"
+          class:m-step-active={step === tuningStep}
+          onclick={() => { tuningStep = step; stepPickerOpen = false; }}
+        >{formatStep(step)}</button>
+      {/each}
+    </div>
+  {/if}
+</div>
+{:else}
+<!-- ═══ PORTRAIT: normal mobile layout ═══ -->
+<div class="m-layout">
+  <KeyboardHandler config={keyboardConfig} onAction={keyboardHandlers.dispatch} />
+
+  <!-- ═══ STICKY VFO HEADER ═══ -->
+  <header class="m-vfo-bar" bind:this={receiverDeckElement} style={receiverDeckStyle}>
+    {#if hasDualReceiver()}
+      <div class="m-receiver-selector" role="group" aria-label={t('core.mobile.receiverSelector.label')}>
+        <button
+          type="button"
+          class="m-receiver-pill"
+          class:m-receiver-pill-active={activeReceiver === 'MAIN'}
+          aria-pressed={activeReceiver === 'MAIN'}
+          onclick={() => selectReceiver('MAIN')}
+        >
+          {receiverLabel('MAIN')}
+        </button>
+        <button
+          type="button"
+          class="m-receiver-pill"
+          class:m-receiver-pill-active={activeReceiver === 'SUB'}
+          aria-pressed={activeReceiver === 'SUB'}
+          onclick={() => selectReceiver('SUB')}
+        >
+          {receiverLabel('SUB')}
+        </button>
+      </div>
+    {/if}
+    <div class="m-vfo-row">
+      <!-- MOR-2705: while the TX state is not known the indicator carries
+           NO status title — never a placeholder word. Known states keep
+           their catalog titles. -->
+      <span class="m-tx-indicator" data-rf={managedTxRf} style="background: {txIndicatorColor}" title={managedTxRf === 'unknown' ? undefined : txPermit === 'allowed' ? t('core.mobile.tx.allowed') : t('core.mobile.tx.notAllowedBand')}></span>
+      <div class="m-vfo-freq" bind:this={vfoFreqElement}>
+        <FrequencyDisplay freq={headerFrequency.frequencyHz} pendingDisplayHz={headerPendingFrequencyHz} compact active />
+      </div>
+      <button class="m-settings-btn" onclick={() => (setupOpen = true)} aria-label={t('core.mobile.setupButton')}>
+        <Settings size={16} />
+        <span>{t('core.mobile.sheet.setup')}</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ═══ SEMANTIC BODY (MOR-2816) ═══
+       ONE mount hosts the whole portrait body. The hosted `children`
+       composition means the mount renders ONLY what this snippet places —
+       the chip tabs are the one place for controls (owner rulings,
+       2026-09-27 and 2026-09-28), so the portrait-deck zone's vfo + rxTx
+       surfaces render NOWHERE on the phone: the header carries the active
+       VFO, the chips carry its controls, and the FAB / TX chip carry TX. -->
+  <SemanticRadioSurfaces scopeManaged
+    bind:managedScopeRegion={managedScopeRegion} suppressModInputTxWarning>
+    {#snippet children(instruments: InstrumentComposition)}
+      <!-- The receiver the header reads — the hoisted meter and the
+           facts both follow it, the way the retired value-fed strip
+           followed the active VFO. -->
+      {@const meterReceiver = activeReceiver === 'SUB' && instruments.receiverInstruments.subSMeter
+        ? 'SUB'
+        : 'MAIN'}
+      {#snippet hoistedMeterFrame(frame: SignalMeterFrame)}
+        <LinearSMeter {frame} compact
+          lowerScale={instruments.receiverInstruments.powerLowerScaleFor?.(meterReceiver)}
+          variant="vfo-wide" />
+      {/snippet}
+
+      <!-- MOR-2852: the meta row lives inside this hosted snippet — only
+           here do `instruments.receiverInstruments` exist. It keeps its
+           old spot under the frequency: same bg, same gaps, followed by
+           the S-meter bar exactly as before the move. -->
+      <div class="m-vfo-meta">
+        <span class="m-vfo-mode">{activeVfo.mode}</span>
+        <span class="m-vfo-filter">{activeVfo.filter}</span>
+        {#if ritXit.ritActive}
+          <span class="m-vfo-rit" title="RIT offset">
+            RIT {formatOffsetDisplay(ritXit.ritOffset)}
+          </span>
+        {:else if ritXit.xitActive}
+          <span class="m-vfo-rit" title="XIT offset">
+            XIT {formatOffsetDisplay(ritXit.xitOffset)}
+          </span>
+        {/if}
+        {#if activeReceiver === 'SUB' && instruments.receiverInstruments.subFacts}
+          {@render instruments.receiverInstruments.subFacts(metaFacts)}
+        {:else}
+          {@render instruments.receiverInstruments.mainFacts(metaFacts)}
+        {/if}
+      </div>
+
+      <!-- ═══ S-METER BAR (MOR-2816) ═══
+           The receiver meter the VFO card's block used to carry, hoisted
+           into the retired strip's slot — the same component (LinearSMeter,
+           compact vfo-wide, the Po lower scale), fed by the same view model
+           through the mount's receiverInstruments handles, so there is no
+           second meter implementation. Since the 2026-09-28 ruling removed
+           the VFO card itself, this bar is the phone's only S-meter. -->
+      <div class="m-smeter-bar" data-receiver={meterReceiver}>
+        {#if meterReceiver === 'SUB'}
+          {@render instruments.receiverInstruments.subSMeter!(hoistedMeterFrame)}
+        {:else}
+          {@render instruments.receiverInstruments.mainSMeter(hoistedMeterFrame)}
+        {/if}
+      </div>
+
+      <!-- Radio-link reason line: outside the scrolling .m-content, directly
+           under the S-meter bar. -->
+      {#if radioLinkLine}
+        <p class="m-radio-link-line" data-testid="radio-link-line" role="status">{radioLinkLine}</p>
+      {/if}
+
+      <!-- ═══ SCROLLABLE CONTENT ═══ -->
+      <main class="m-content">
+
+        <!-- Spectrum / Waterfall — MOR-2511: absent entirely on a radio without
+             a spectrum; pinned by the no-spectrum orientation tests in
+             MobileRadioLayout.component.svelte.test.ts. -->
+        {#if hasSpectrum()}
+          <section class="m-spectrum">
+            <SpectrumPanel hideAutoStepToggle={true} hideToolbar={true}
+              bind:enableAvg={scopeAvg} bind:enableSmooth={scopeSmooth} bind:enablePeakHold={scopePeakHold} bind:showBandPlan={scopeBandPlan}
+              scopeRegion={managedScopeRegion ?? undefined}
+              scopeDemanded={managedScopeRegion?.demanded ?? true}
+              onScopeDemandChange={managedScopeRegion?.setDemand} />
+          </section>
+        {/if}
+
+        <!-- MOR-2816 (owner ruling 2026-09-28): the portrait VFO / RX-TX deck
+             block is removed — the active VFO lives in the header, its
+             controls in the chip tabs, TX in the FAB and the TX chip. The
+             only tenant left is the MOR-1784 TX-fault recovery: one short
+             line the shared wiring renders only while a fault is active,
+             directly above the chip row. No new mechanism — the existing
+             txFaultRecovery path, and the PTT gesture keeps using the single
+             App-root managed intent facade. -->
+        {@render instruments.txFaultRecovery()}
+
+        <!-- Chip-scroll IA nav (#839) -->
+    <MobileChipBar
+      chips={mobileChips}
+      activeId={activeChipId}
+      onSelect={(id) => (activeChipId = id)}
+    />
+
+    <!-- Active-chip content area (single panel mounted at a time) -->
+    {#if activeChipId === 'essentials'}
+      <section class="m-section" id="m-chip-panel-essentials" role="tabpanel">
+        <EssentialsPanel
+          vfoOps={vfoOps}
+          mode={mode}
+          filter={filter}
+          rxAudio={rxAudio}
+          dsp={dsp}
+          quickModes={QUICK_MODES}
+          onSplitToggle={vfoHandlers.onSplitToggle}
+          onSwap={vfoHandlers.onSwap}
+          onEqual={vfoHandlers.onEqual}
+          onModeChange={modeHandlers.onModeChange}
+          onModeMore={() => (modeModalOpen = true)}
+          onFilterChange={(n) => filterHandlers.onFilterChange?.(n)}
+          onFilterMore={() => (filterModalOpen = true)}
+          onMonitorModeChange={rxAudioHandlers.onMonitorModeChange}
+          onAfLevelChange={rxAudioHandlers.onAfLevelChange}
+          onNbToggle={dspHandlers.onNbToggle}
+          onNrModeChange={dspHandlers.onNrModeChange}
+          onNotchModeChange={dspHandlers.onNotchModeChange}
+        />
+      </section>
+    {:else if activeChipId === 'band'}
+      <section class="m-section" id="m-chip-panel-band" role="tabpanel">
+        <CollapsiblePanel title="BAND" panelId="m-band" collapsible={false}>
+          <BandSelector />
+        </CollapsiblePanel>
+      </section>
+    {:else if activeChipId === 'scope'}
+      <section class="m-section" id="m-chip-panel-scope" role="tabpanel">
+        <CollapsiblePanel title="SCOPE" panelId="m-scope-chip" collapsible={false}>
+          <!-- MOR-2851: one row of screen keys. VIEW drives the same managed
+               scope demand the toolbar's VIEW key drove, and renders only
+               when a managed scope region exists — without one there is
+               nothing to demand, so the key would be a dead control. AVG /
+               PEAK / BANDS toggle the layout-level state bound into the
+               portrait SpectrumPanel. No STEP key — the bottom tuning bar
+               owns it. -->
+          <div class="m-scope-keys">
+            {#if managedScopeRegion}
+              <ScopeFlatKey label="VIEW" testid="scope-key-view"
+                lit={managedScopeRegion.demanded}
+                onclick={() => { const region = managedScopeRegion; if (region) region.setDemand(!region.demanded); }} />
+            {/if}
+            <ScopeFlatKey label="AVG" testid="scope-key-avg"
+              lit={scopeAvg} onclick={() => (scopeAvg = !scopeAvg)} />
+            <ScopeFlatKey label="SMTH" testid="scope-key-smooth"
+              lit={scopeSmooth} onclick={() => (scopeSmooth = !scopeSmooth)} />
+            <ScopeFlatKey label="PEAK" testid="scope-key-peak"
+              lit={scopePeakHold} onclick={() => (scopePeakHold = !scopePeakHold)} />
+            <ScopeFlatKey label="BANDS" testid="scope-key-bands"
+              lit={scopeBandPlan} onclick={() => (scopeBandPlan = !scopeBandPlan)} />
+          </div>
+          <!-- The radio's scope controls: the existing semantic surface, the
+               same `instruments.scopeControls` the desktop composition hosts
+               — never a second scope-controls implementation.
+               MOR-2895: the explicit `true` (allowBare) is required. With no
+               argument the snippet inherits `allowBareSurfaces`, which is
+               FALSE in this hosted mount (children defined and App resolves
+               a surface plan for the mobile layout), and the mobile manifest
+               declares no `scopeControls` zone — `zoned()` therefore
+               rendered NOTHING here, while the toolbar-less phone had no
+               other home for SPAN / REF / CTR-FIX / HOLD (owner, 2026-09-28
+               14:37 EDT). The same explicit-bare channel RadioLayout's
+               semantic deck content uses; the surface keeps the desktop
+               toolbar's own handlers and facts.
+               MOR-2987: the fourth argument opts the ⋯ menu into a
+               BottomSheet (one labelled setting per row, pressable keys);
+               the desktop omits it and keeps the popover. -->
+          <div class="m-scope-controls">
+            {@render instruments.scopeControls(true, undefined, undefined, true)}
+          </div>
+        </CollapsiblePanel>
+      </section>
+    {:else if activeChipId === 'scan'}
+      <section class="m-section" id="m-chip-panel-scan" role="tabpanel">
+        <CollapsiblePanel title="SCAN" panelId="m-scan" collapsible={false}>
+          <ScanPanel />
+        </CollapsiblePanel>
+      </section>
+    {:else if activeChipId === 'memory'}
+      <section class="m-section" id="m-chip-panel-memory" role="tabpanel">
+        <!-- MOR-4299 (item 3): the desktop's semantic Memory instrument —
+             the same MemoryListController, the same getMemoryHandlers()
+             intents, the same dialog (SemanticRadioSurfaces' memorySurface
+             snippet); its SemanticControlPanel frame carries the MEMORY
+             title, so no panel wrapper of this layout's own. The explicit
+             `true` (allowBare) is the MOR-2895 SCOPE-tab precedent: the
+             mobile manifest declares no `memory` zone, and the hosted
+             mount's allowBareSurfaces is false, so without it `zoned()`
+             rendered NOTHING here. -->
+        {@render instruments.memory(true)}
+      </section>
+    {:else if activeChipId === 'rf'}
+      <section class="m-section" id="m-chip-panel-rf" role="tabpanel">
+        <CollapsiblePanel title="RF" panelId="m-rf-quick" collapsible={false}>
+          <RfFrontEnd />
+        </CollapsiblePanel>
+      </section>
+    {:else if activeChipId === 'dsp'}
+      <section class="m-section" id="m-chip-panel-dsp" role="tabpanel">
+        <CollapsiblePanel title="DSP" panelId="m-dsp-chip" collapsible={false}>
+          <DspPanel />
+        </CollapsiblePanel>
+      </section>
+    {:else if activeChipId === 'rit'}
+      <section class="m-section" id="m-chip-panel-rit" role="tabpanel">
+        <CollapsiblePanel title="RIT / XIT" panelId="m-rit-chip" collapsible={false}>
+          <RitXitPanel />
+        </CollapsiblePanel>
+      </section>
+    {:else if activeChipId === 'tx' && txCapable}
+      <section class="m-section" id="m-chip-panel-tx" role="tabpanel">
+        <CollapsiblePanel title="TX" panelId="m-tx" collapsible={false}>
+          <div class="m-tx-compact">
+            <!-- Power readout (tap → power modal) -->
+            <!-- MOR-2658: an unread power renders EMPTY in the reserved
+                 `.m-tx-power-value` slot below — never a '—' placeholder.
+                 `rfPowerAvailable` gates the modal tap, but availability
+                 alone cannot decide the text: a rig with no fieldStatus
+                 entry reads as available (legacy no-entry fallback) while
+                 `toTxProps` reports NaN, and `formatPower(NaN)` is "NaNW" —
+                 so finiteness decides with it. -->
+            <button type="button" class="m-tx-info" disabled={!tx.rfPowerAvailable} onclick={() => (powerModalOpen = true)}>
+              <span class="m-tx-power-value">{valueText(tx.rfPowerAvailable ? finiteValue(tx.rfPower) : null, formatPower)}</span>
+              {#if managedTxRf === 'on'}
+                <!-- MOR-2658: an unread SWR renders EMPTY in the reserved
+                     `.m-tx-swr-value` slot — never a '—', and never the
+                     `SWR` word without its number. toMeterProps reports
+                     Number.NaN for an unobserved meter, so NaN (not 0) is
+                     absence: a real reading of 0 renders `SWR 0.0`. -->
+                <span class="m-tx-swr-value">{valueText(finiteValue(meter.swr), (swr) => `SWR ${(swr / 10).toFixed(1)}`)}</span>
+              {/if}
+            </button>
+
+            <!-- ATU -->
+            <button
+              class="m-atu-btn"
+              class:m-atu-on={atuStatus === 'on'}
+              class:m-atu-tuning={atuStatus === 'tuning'}
+              ontouchstart={atuTouchStart}
+              ontouchend={atuTouchEnd}
+              ontouchcancel={atuTouchEnd}
+              onmousedown={atuTouchStart}
+              onmouseup={atuTouchEnd}
+              disabled={!tx.atuAvailable}
+            >
+              ATU
+            </button>
+
+            <!-- TX settings -->
+            <button class="m-tx-settings-btn" onclick={() => (txSettingsOpen = true)}>
+              <Sliders size={14} />
+            </button>
+
+            <!-- Inline PTT button removed (#840) — PttFab at bottom-right
+                 is the persistent, guarded TX affordance. -->
+          </div>
+          {#if managedTxRf === 'on' && txMetersObserved}
+            <div class="m-tx-meter">
+              <DockMeterPanel
+                sValue={mainVfo.sValue}
+                rfPower={meter.rfPower}
+                swr={meter.swr}
+                alc={meter.alc}
+                txActive={true}
+                meterSource={mobileMeterSource}
+                onMeterSourceChange={selectMobileMeterSource}
+              />
+            </div>
+          {/if}
+        </CollapsiblePanel>
+      </section>
+    {/if}
+  </main>
+    {/snippet}
+  </SemanticRadioSurfaces>
+
+  <!-- ═══ TUNING STRIP ═══ -->
+  <nav class="m-tuning-strip" data-bottom-bar>
+    <button class="m-tune-btn m-tune-fast" onclick={() => tuneBy(-10)} aria-label={t('core.mobile.tune.downFast')}>
+      <ChevronsLeft size={18} />
+    </button>
+    <button class="m-tune-btn" onclick={() => tuneBy(-1)} aria-label={t('core.mobile.tune.downStep')}>
+      <ChevronLeft size={22} />
+    </button>
+    <div class="m-tune-step-wrapper">
+      <button class="m-tune-step" onclick={() => (stepPickerOpen = !stepPickerOpen)}>
+        {formatStep(tuningStep)}
+      </button>
+      {#if stepPickerOpen}
+        <div
+          class="m-step-picker-backdrop"
+          role="button"
+          tabindex="0"
+          aria-label={t('core.mobile.closeStepPicker')}
+          onclick={() => (stepPickerOpen = false)}
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); stepPickerOpen = false; } }}
+        ></div>
+        <div class="m-step-picker">
+          {#each availableSteps as s}
+            <button
+              class="m-step-option"
+              class:m-step-active={s === tuningStep}
+              onclick={() => selectStep(s)}
+            >
+              {formatStep(s)}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+    <button class="m-tune-btn" onclick={() => tuneBy(1)} aria-label={t('core.mobile.tune.upStep')}>
+      <ChevronRight size={22} />
+    </button>
+    <button class="m-tune-btn m-tune-fast" onclick={() => tuneBy(10)} aria-label={t('core.mobile.tune.upFast')}>
+      <ChevronsRight size={18} />
+    </button>
+
+    <!-- ═══ PTT (MOR-2874) ═══
+         The FAB lives IN the fixed tuning strip — its own reserved place
+         in the bottom chrome, OUTSIDE the one scroller — so no scrolling
+         control can ever sit under it at any scroll position (the
+         owner's 2026-09-28 ticket: the floating placement drew MUTE
+         half-hidden under the circle). Portrait only: this strip exists
+         only in the portrait branch, and landscape keeps its own
+         `.m-ls-ptt` button (#843) — mounting the FAB there
+         would give two simultaneous TX controls (codex P1 on PR #928).
+         Both buttons attach the layout's one `pttHold`; the FAB adds
+         its press guard. Server authority owns TX. PTT stays large
+         (72 px) and under the thumb (MOR-2816). -->
+    {#if txCapable}
+      <PttFab
+        mode={pttMode}
+        txPermit={txPermit}
+        hold={pttHold}
+      />
+    {/if}
+  </nav>
+
+  <!-- ═══ SETUP BOTTOM SHEET (#841 rename, SETUP-only content) ═══
+       Per docs/plans/2026-04-18-mobile-ia.md §6, rare-config home.
+       BAND / DSP / RF / MODE / FILTER / ESSENTIALS live in chips.
+       Remaining here: AGC, RIT/XIT (until #842 chip lands), ANTENNA, CW. -->
+  <BottomSheet bind:open={setupOpen} title={t('core.mobile.sheet.setup')}>
+          {#if hasCapability('power_control') && !runtime.remoteController}
+            <button type="button" class="power-toggle-btn m-radio-power" disabled={radioPowerOn === null}
+              onclick={() => { if (radioPowerOn !== null) getHostUi()?.setRadioPower(!radioPowerOn); }}>
+              {powerLabel}
+            </button>
+          {/if}
+          <!-- VFO/BAND, DSP panels removed (#841) — BAND lives in the "band" chip,
+               VFO ops (SPLIT/A↔B/A=B) live in ESSENTIALS, DSP levels+toggles live
+               in ESSENTIALS. -->
+
+          <CollapsiblePanel title="AGC" panelId="m-agc">
+            <AgcPanel />
+          </CollapsiblePanel>
+
+          <!-- RF FRONT END panel removed (#841) — lives in the "rf" chip. -->
+
+          <CollapsiblePanel title="RIT / XIT" panelId="m-rit">
+            <RitXitPanel />
+          </CollapsiblePanel>
+
+          {#if antenna.antennaCount > 1}
+            <CollapsiblePanel title="ANTENNA" panelId="m-antenna">
+              <AntennaPanel />
+            </CollapsiblePanel>
+          {/if}
+
+          <CollapsiblePanel
+            title="CW"
+            panelId="m-cw"
+            autoCollapseWhen={mode.currentMode !== 'CW' && mode.currentMode !== 'CW-R'}
+          >
+            <CwPanel />
+          </CollapsiblePanel>
+  </BottomSheet>
+
+  <!-- ═══ MODE MODAL ═══ -->
+  <BottomSheet bind:open={modeModalOpen} title={t('core.mobile.sheet.allModes')} compact>
+          <div class="m-mode-grid">
+            {#each mode.modes as m}
+              <HardwareButton
+                active={mode.currentMode === m}
+                indicator="edge-left"
+                color="cyan"
+                onclick={() => { modeHandlers.onModeChange(m); modeModalOpen = false; }}
+              >
+                {m}
+              </HardwareButton>
+            {/each}
+          </div>
+          {#if mode.hasDataMode}
+            <div class="m-sheet-subtitle">{t('core.mobile.sheet.dataMode')}</div>
+            <div class="m-mode-grid">
+              {#each Array.from({ length: Math.max(0, (mode.dataModeCount ?? 0)) + 1 }, (_, i) => i) as d}
+                <HardwareButton
+                  active={mode.dataMode === d}
+                  indicator="edge-left"
+                  color="cyan"
+                  onclick={() => { modeHandlers.onDataModeChange(d); }}
+                >
+                  {d === 0 ? 'OFF' : `D${d}`}
+                </HardwareButton>
+              {/each}
+            </div>
+          {/if}
+  </BottomSheet>
+
+  <!-- ═══ FILTER MODAL ═══ -->
+  <BottomSheet bind:open={filterModalOpen} title={t('core.mobile.sheet.filterSettings')}>
+          <FilterPanel />
+  </BottomSheet>
+
+  <!-- ═══ POWER MODAL ═══ -->
+  <BottomSheet bind:open={powerModalOpen} title={t('core.mobile.sheet.rfPower')} compact contentStyle="padding: 12px;">
+          <ValueControl
+            label="RF Power"
+            value={tx.rfPower}
+            min={0}
+            max={validRfPowerScale(tx.rfPowerScale).max}
+            step={0.01}
+            renderer="hbar"
+            displayFn={formatRfPowerDisplay}
+            accentColor="var(--v2-accent-red)"
+            onChange={txHandlers.onRfPowerChange}
+            variant="hardware-illuminated"
+            disabled={!tx.rfPowerAvailable}
+          />
+  </BottomSheet>
+
+  <!-- ═══ TX SETTINGS MODAL ═══ -->
+  <BottomSheet bind:open={txSettingsOpen} title={t('core.mobile.sheet.txSettings')}>
+          <!-- MOR-1245 — while this sheet is open, the fixed overlay below
+               stays the one banner: TxPanel's inline copy is suppressed. -->
+          <TxPanel showManagedTotControl={true} suppressModInputTxWarning />
+  </BottomSheet>
+</div>
+{/if}
+
+<!-- Global feedback / power-health / TX indication are hosted by
+     AppGlobalHost at the App composition root (MOR-1059). -->
+
+<!-- MOR-617: floating MOD-input TX warning — keying happens via the FAB or
+     the landscape strip, so the banner must be visible outside the TX
+     settings sheet (where TxPanel renders its inline copy). The wrapper is
+     pointer-transparent; the banner itself stays clickable. -->
+{#if txCapable}
+  <div class="m-mod-input-warning">
+    <ModInputTxWarning />
+  </div>
+{/if}
+
+<style>
+  .m-radio-power {
+    min-height: 44px;
+    margin: 12px;
+    color: var(--v2-text-primary, #fff);
+    background: var(--v2-bg-input, #1a1a2e);
+    border: 1px solid var(--v2-border, #2a2a3e);
+    border-radius: 4px;
+    font: inherit;
+  }
+
+  /* ── MOD-input TX warning overlay (MOR-617) ── */
+  .m-mod-input-warning {
+    position: fixed;
+    left: max(12px, env(safe-area-inset-left, 0px));
+    right: max(12px, env(safe-area-inset-right, 0px));
+    bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    z-index: 9000;
+    pointer-events: none;
+  }
+
+  .m-mod-input-warning > :global(*) {
+    pointer-events: auto;
+  }
+
+  @media (orientation: portrait) {
+    .m-mod-input-warning {
+      right: max(96px, calc(84px + env(safe-area-inset-right, 0px)));
+    }
+  }
+
+  /* ── Landscape layout ── */
+  .m-landscape {
+    position: fixed;
+    top: var(--rp-chrome-top, 0px); /* MOR-3845 */
+    left: 0;
+    width: 100dvw;
+    height: calc(100dvh - var(--rp-chrome-top, 0px));
+    background: #000;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Everything below the radio-link line: the spectrum and, absolutely
+     positioned inside it, the overlay bar. */
+  .m-ls-body {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .m-ls-spectrum {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+
+  /* MOR-2442: the landscape slot hosts the panel through SemanticRadioSurfaces'
+     managed region, so a descendant selector fits the intermediate wrapper. */
+  .m-ls-spectrum :global(.spectrum-panel:not(.fullscreen)) {
+    height: 100% !important;
+    border: none !important;
+    border-radius: 0 !important;
+  }
+
+  .m-ls-overlay {
+    position: absolute;
+    top: env(safe-area-inset-top, 0px);
+    left: env(safe-area-inset-left, 0px);
+    right: env(safe-area-inset-right, 0px);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 8px;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 60;
+    pointer-events: auto;
+  }
+
+  .m-ls-vfo {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .m-ls-vfo > :global(:first-child) {
+    flex-shrink: 0;
+  }
+
+  .m-ls-quick-modes {
+    display: flex;
+    gap: 2px;
+  }
+
+  .m-ls-mode-btn {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 3px 8px;
+    min-height: 44px;
+    border-radius: 3px;
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    background: transparent;
+    color: rgba(0, 212, 255, 0.6);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: all 0.15s;
+    letter-spacing: 0.06em;
+  }
+
+  .m-ls-mode-active {
+    background: rgba(0, 212, 255, 0.25);
+    color: #00d4ff;
+    border-color: #00d4ff;
+  }
+
+  .m-ls-filter {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 3px 6px;
+    border-radius: 3px;
+    background: rgba(156, 163, 175, 0.15);
+    color: #9ca3af;
+    letter-spacing: 0.06em;
+    /* MOR-2683: the chip keeps one width in every state — `min-width` covers
+       the widest label `toVfoProps` prints for a filter ('FIL1'…), so an
+       unread filter rendering as the empty string cannot shift its row. */
+    display: inline-block;
+    min-width: 4ch;
+    box-sizing: content-box;
+    text-align: center;
+  }
+
+  .m-ls-meter {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .m-ls-smeter {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: #4ade80;
+    /* MOR-2675: one width in every state — 5ch covers the widest text
+       formatSValue renders over the raw sMeter domain (0–255): 'S9+60' on
+       the widest shipped calibration ladder (an uncalibrated radio draws no
+       readout at all, MOR-2705 part 4a); tabular digits keep a changing
+       reading from shifting the overlay row. */
+    display: inline-block;
+    min-width: 5ch;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* The MOR-2657 zero-width strut keeps the empty unread box's line-box
+     metrics in this baseline-aligned flex row. */
+  .m-ls-smeter:empty::before { content: '\200b'; }
+
+  .m-ls-dbm {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    color: #9ca3af;
+    /* MOR-2705: the reservation is sized for the widest REAL text the
+       formatter can render — '−127 dBm' (8ch), derived by running
+       formatDbm(calibratedToDbm) over the raw 0–255 sMeter domain against
+       the widest shipped s_meter ladder (S0 at −54 dB, S9+60 at +60 dB;
+       pinned by MobileRadioLayout.honesty.isolated.test.ts). */
+    display: inline-block;
+    min-width: 8ch;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .m-ls-dbm:empty::before { content: '\200b'; }
+
+  .m-ls-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .m-ls-step-btn {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    color: #e0e0e0;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .m-ls-tune-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    min-height: 44px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.08);
+    color: #e0e0e0;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .m-ls-tune-btn:active {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .m-ls-ptt {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    min-width: 52px;
+    min-height: 44px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 2px solid var(--v2-accent-red, #ef4444);
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--v2-accent-red, #ef4444);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .m-ls-unkey {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    min-width: 58px;
+    min-height: 44px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 2px solid #facc15;
+    background: rgba(250, 204, 21, 0.14);
+    color: #facc15;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .m-ls-ptt.m-ptt-held {
+    background: var(--v2-accent-red, #ef4444);
+    color: #fff;
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.5);
+  }
+
+  /* TX-permit denied (#843): dim border + text so the operator sees at a
+     glance that the current frequency is out-of-band before pressing. */
+  .m-ls-ptt.m-ls-ptt-dim {
+    border-color: rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.04);
+    color: rgba(239, 68, 68, 0.5);
+  }
+
+  .m-ls-step-picker {
+    position: fixed;
+    bottom: 50%;
+    right: env(safe-area-inset-right, 8px);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: rgba(10, 10, 15, 0.95);
+    border: 1px solid rgba(42, 42, 62, 0.8);
+    border-radius: 6px;
+    padding: 4px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  }
+
+  /* ── Base layout ── */
+  .m-layout {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - var(--rp-chrome-top, 0px));
+    height: calc(100dvh - var(--rp-chrome-top, 0px));
+    background: linear-gradient(180deg, var(--v2-bg-gradient-start) 0%, var(--v2-bg-darkest) 100%);
+    overflow: hidden;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  /* ── Sticky VFO header ── */
+  .m-vfo-bar {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    /* MOR-2852: the meta row left the header for the hosted snippet — the
+       bottom rule moved with it; the padding-bottom is the meta row's own
+       top gap now, so the header's one-hundred percent parity stays. */
+    padding: 8px 10px 2px;
+    background: var(--v2-bg-card, #111);
+    z-index: 10;
+  }
+
+  .m-tx-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+
+  .m-receiver-selector {
+    display: flex;
+    gap: 4px;
+    padding: 2px 0 4px;
+  }
+
+  .m-receiver-pill {
+    flex: 1 1 0;
+    min-height: 32px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--v2-border-darker, #333);
+    background: var(--v2-bg-input, #1a1a2e);
+    color: var(--v2-text-secondary, #aaa);
+    font-family: 'Roboto Mono', monospace;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+
+  .m-receiver-pill-active {
+    background: var(--v2-accent-cyan, #22d3ee);
+    border-color: var(--v2-accent-cyan, #22d3ee);
+    color: var(--v2-bg-card, #111);
+  }
+
+  .m-vfo-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .m-vfo-freq {
+    line-height: 1;
+    flex: 1;
+  }
+
+  .m-vfo-freq :global(.freq) {
+    font-size: 28px;
+  }
+
+  .m-settings-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 4px;
+    border: 1px solid var(--v2-border-darker, #333);
+    background: var(--v2-bg-input, #1a1a2e);
+    color: var(--v2-text-secondary, #aaa);
+    font-family: 'Roboto Mono', monospace;
+    font-weight: 700;
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    flex-shrink: 0;
+  }
+
+  .m-settings-btn:active {
+    background: var(--v2-bg-card, #222);
+  }
+
+  .m-vfo-meta {
+    /* MOR-2852: the row moved out of the header with its old look: same
+       background, same bottom rule, the 2px header gap before it. */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px 4px;
+    background: var(--v2-bg-card, #111);
+    border-bottom: 1px solid var(--v2-border-panel, #333);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--v2-text-muted, #888);
+  }
+
+  /* MOR-2873: the row's uppercase transform must not capitalize the
+     filter-width unit — the BW chip's source text already reads
+     `BW 2400 Hz` (VfoIndicatorRow), so resetting the transform on that
+     chip alone keeps the unit's case while mode, filter, RIT/XIT and
+     the other chips keep the row's look. */
+  .m-vfo-meta :global([data-indicator-fact='bandwidth']) {
+    text-transform: none;
+  }
+
+  .m-vfo-mode {
+    color: var(--v2-accent-cyan, #22d3ee);
+    padding: 2px 8px;
+    border: 1px solid var(--v2-accent-cyan, #22d3ee);
+    border-radius: 3px;
+    font-size: 11px;
+  }
+
+  .m-vfo-filter {
+    color: var(--v2-text-secondary, #aaa);
+    font-size: 11px;
+    /* MOR-2683: the span keeps one width in every state — covers the widest
+       label `toVfoProps` prints for a filter ('FIL1'…), so the empty-string
+       unread sentinel (MOR-2683) cannot shift its neighbours. */
+    display: inline-block;
+    min-width: 4ch;
+    box-sizing: content-box;
+  }
+
+  /* RIT/XIT offset badge in sticky header meta row (#842). Only renders
+     when RIT or XIT is active so the header stays quiet most of the time. */
+  .m-vfo-rit {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--v2-accent-yellow, #facc15);
+    letter-spacing: 0.02em;
+    padding: 0 4px;
+    border: 1px solid rgba(250, 204, 21, 0.35);
+    border-radius: 3px;
+    /* MOR-2675: one width in every state — 9ch covers the widest text the
+       badge prints, 'RIT +9999' / 'XIT -9999' (the shared ±9999 Hz RIT
+       domain), so the empty unread offset cannot shift the meta row. */
+    display: inline-block;
+    min-width: 9ch;
+    box-sizing: content-box;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── S-meter bar (full width, below VFO) ── */
+  .m-tx-meter {
+    padding: 4px 8px 0;
+    border-top: 1px solid var(--v2-border-darker, #1a1a2e);
+  }
+
+  .m-smeter-bar {
+    flex-shrink: 0;
+    /* MOR-2816 (owner, 2026-09-27): the CONTAINER alone is tightened —
+       padding only. The bar, its scale numerals and its text keep the
+       sizes the VFO card's block drew («просто контейнер ужать, не саму
+       полосу S-метра»). */
+    padding: 0 4px;
+    background: var(--v2-bg-darker, #0a0a14);
+    border-bottom: 1px solid var(--v2-border-darker, #1a1a2e);
+  }
+
+  /* ── Radio-link reason line: plain text, no icon, no animation ──
+     One class in both orientations. The first letter is capitalized by CSS
+     only; the text stays the catalog string. */
+  .m-radio-link-line {
+    flex-shrink: 0;
+    margin: 0;
+    padding: 6px 10px;
+    background: #7f1d1d;
+    color: #fff;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.3;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+
+  .m-radio-link-line::first-letter {
+    text-transform: uppercase;
+  }
+
+  /* ── Scrollable content ── */
+  .m-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scroll-padding-block: 4px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .m-content::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* ── Spectrum ──
+     MOR-2816: the box grew from 220px to 260px so the one-row scrolling
+     toolbar's own 44-64px band leaves the panorama (spectrum + waterfall)
+     at least 190 CSS px at the 375px portrait width. */
+  .m-spectrum {
+    height: 260px;
+    min-height: 254px;
+    border-bottom: 1px solid var(--v2-border-darker, #222);
+  }
+
+  .m-spectrum :global(.spectrum-panel) {
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  /* ── Sections ── */
+  .m-section {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .m-section :global(.collapsible-panel) {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+
+  /* ── SCOPE chip tab (MOR-2851) ──
+     One wrapping row of screen keys. The 16px font / 44px touch floors come
+     from the portrait button floors below (`.m-layout :global(button)`),
+     which already reach these keys; here only the row geometry lives. */
+  .m-scope-keys {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 10px 2px;
+  }
+
+  .m-scope-keys :global(.scope-flat-key) {
+    min-width: 72px;
+    padding: 0 12px;
+  }
+
+  /* ── Semantic scope controls in the SCOPE tab (MOR-2895) ──
+     The desktop toolbar's radio-held row (ScopeControlsSurface) in its
+     native flat-key grammar. The portrait button floors above
+     (`.m-layout :global(button)`) already give every key a 16px font and a
+     44px box; here only the row geometry and the NON-button labels live
+     (MOR-2816: rows may wrap, labels are never clipped). The surface's own
+     narrow-width hide-bands (which fold REF/HOLD/MAIN-SUB into More,
+     measured for 22px keys) are switched off: with wrapping rows every
+     control stays directly visible — the owner asked for Reference and Span
+     on this tab — and the More panel keeps only its native extras (full
+     mode, EDGE, CENTRE, RBW, SPEED, DUAL, During TX, VBW narrow). */
+  /* MOR-2895 (owner, 2026-09-28 15:11 EDT — correction round 2): no red
+     anywhere inside the phone SCOPE tab. ScopeFlatKey keeps reading the
+     flat lamp tokens everywhere else (skins that set their own lamp colour,
+     e.g. the LCD faces, keep it); THIS tab's own container remaps every
+     token the flat-key grammar can resolve red through onto the existing
+     cyan on-state accent — the one the NB/NR chip bar lights with — and
+     kills the lamp glow. Custom properties inherit down the DOM, so the
+     fixed-position More panel (a DOM descendant of this section) is
+     covered too. Scoped to #m-chip-panel-scope only: nothing above (the
+     panorama) or outside this tab changes colour. */
+  #m-chip-panel-scope {
+    --vfo-lamp-color: var(--v2-accent-cyan, #22d3ee);
+    --dl-vfo-red-text: var(--v2-accent-cyan, #22d3ee);
+    --dl-vfo-red: var(--v2-accent-cyan, #22d3ee);
+    --dl-vfo-red-glow: none;
+  }
+
+  .m-scope-controls {
+    padding: 0 10px 10px;
+  }
+
+  .m-scope-controls :global(.scope-controls-row) {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .m-scope-controls :global(.scope-controls-row > [data-overflow]) {
+    display: inline-flex !important;
+  }
+
+  .m-scope-controls :global(.scope-more-overflow) {
+    display: none !important;
+  }
+
+  /* Labels and stepper values are not buttons, so the button floors never
+     reach them — they keep their own 16px floor here. */
+  .m-scope-controls :global(.scope-name),
+  .m-scope-controls :global(.scope-finite-name) {
+    font-size: 16px;
+  }
+
+  .m-scope-controls :global(.scope-step-value),
+  .m-scope-controls :global(.scope-finite-slot),
+  .m-scope-controls :global(.scope-finite-value) {
+    font-size: 16px;
+    height: 44px;
+  }
+
+  .m-scope-controls :global(.scope-step-key) {
+    width: 44px;
+    height: 44px;
+    font-size: 18px;
+  }
+
+  .m-scope-controls :global(.scope-flat-key) {
+    min-width: 72px;
+    padding: 0 12px;
+  }
+
+  /* MOR-2895: the More panel's rows may wrap on the phone — the 16px/44px
+     button floors make the four-key MODE row wider than the panel at a
+     360 px viewport, and `nowrap` there would push items past the panel's
+     and the viewport's right edge. The panel is a DOM descendant of this
+     tab, so the override reaches it despite its fixed positioning. */
+  .m-scope-controls :global(.scope-more-row) {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  /* ── TX compact section ── */
+  .m-tx-compact {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    padding: 8px;
+    min-height: 44px;
+  }
+
+  
+
+  .m-ptt-held {
+    background: var(--v2-accent-red, #ef4444);
+    border-color: var(--v2-accent-red, #ef4444);
+    color: #fff;
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.5);
+  }
+
+  .m-tx-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--v2-border-darker, #333);
+    background: var(--v2-bg-input, #1a1a2e);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .m-tx-info:active {
+    background: var(--v2-bg-card, #222);
+  }
+
+  .m-tx-power-value {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--v2-text-primary, #ddd);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    /* MOR-2658: the power box stays reserved for unread AND each known
+       value — `5ch` covers the widest text (`100W`), tabular digits keep
+       every width identical, so a first reading cannot shift the row. */
+    display: inline-block;
+    min-width: 5ch;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .m-tx-swr-value {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 9px;
+    color: var(--v2-text-dim, #888);
+    white-space: nowrap;
+    /* MOR-2658: same reservation as power — `8ch` covers `SWR 25.5`,
+       the widest text the slot can hold: swrMeter is raw 0–255
+       (`src/rigplane/backends/yaesu_cat/radio.py` `get_swr_meter`; the
+       wire field is `swrMeter` in `src/rigplane/web/state_schema.py`),
+       rendered as `(swr / 10).toFixed(1)`. */
+    display: inline-block;
+    min-width: 8ch;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .m-atu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--v2-text-dim, #444);
+    background: var(--v2-bg-input, #1a1a2e);
+    color: var(--v2-text-muted, #888);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: all 0.15s;
+  }
+
+  .m-atu-on {
+    border-color: var(--v2-accent-green, #4ade80);
+    color: var(--v2-accent-green, #4ade80);
+    background: rgba(74, 222, 128, 0.1);
+  }
+
+  .m-atu-tuning {
+    border-color: var(--v2-accent-yellow, #facc15);
+    color: var(--v2-accent-yellow, #facc15);
+    background: rgba(250, 204, 21, 0.1);
+    animation: atu-pulse 0.6s ease-in-out infinite;
+  }
+
+  @keyframes atu-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .m-atu-tuning {
+      animation: none;
+    }
+  }
+
+  .m-tx-settings-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--v2-border-darker, #333);
+    background: var(--v2-bg-input, #1a1a2e);
+    color: var(--v2-text-muted, #888);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .m-tx-settings-btn:active {
+    background: var(--v2-bg-card, #222);
+  }
+
+  /* ── Tuning strip ── */
+  .m-tuning-strip {
+    position: relative;
+    flex-shrink: 0;
+    display: flex;
+    align-items: stretch;
+    /* MOR-2874: 76px hosts the 72px PTT FAB (2px clearance) as a fixed
+       flex sibling of the tuning keys — the FAB's own reserved place in
+       the bottom chrome, outside the one scroller, so nothing can ever
+       scroll under it. */
+    height: calc(76px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--v2-bg-card, #111);
+    border-top: 1px solid var(--v2-border-panel, #333);
+    z-index: 100;
+    gap: 1px;
+  }
+
+  /* MOR-2874: the FAB's placement in the strip is the host's business —
+     the component keeps its own 72px round look, the strip owns where it
+     sits. Gap-separated from the +10 key, 12px off the screen edge (the
+     inset the floating placement used), centered in the strip height. */
+  .m-tuning-strip :global(.ptt-fab) {
+    flex: 0 0 auto;
+    align-self: center;
+    margin-left: 12px;
+    margin-right: 12px;
+  }
+
+  .m-tune-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--v2-bg-input, #1a1a2e);
+    border: none;
+    color: var(--v2-text-primary, #ddd);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.1s;
+    min-height: 44px;
+  }
+
+  .m-tune-btn:active {
+    background: var(--v2-accent-cyan, #22d3ee);
+    color: var(--v2-bg-darkest, #000);
+  }
+
+  .m-tune-fast {
+    flex: 0.7;
+    color: var(--v2-text-muted, #888);
+  }
+
+  .m-tune-fast:active {
+    background: var(--v2-accent-cyan, #22d3ee);
+    color: var(--v2-bg-darkest, #000);
+  }
+
+  .m-tune-step {
+    flex: 1.2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--v2-bg-darker, #0a0a14);
+    border: 1px solid var(--v2-border-panel, #333);
+    border-top: none;
+    border-bottom: none;
+    color: var(--v2-accent-cyan, #22d3ee);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    min-height: 44px;
+  }
+
+  .m-tune-step:active {
+    background: var(--v2-bg-input, #1a1a2e);
+  }
+
+  .m-tune-step-wrapper {
+    position: relative;
+    flex: 1.2;
+    display: flex;
+  }
+
+  .m-tune-step-wrapper .m-tune-step {
+    flex: 1;
+  }
+
+  .m-step-picker-backdrop {
+    position: fixed;
+    inset: 0;
+    top: var(--rp-chrome-top, 0px); /* MOR-3845 */
+    z-index: 149;
+  }
+
+  .m-step-picker {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-bottom: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    background: var(--v2-bg-primary, #0f0f1a);
+    border: 1px solid var(--v2-border-panel, #333);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.5);
+    z-index: 150;
+    min-width: 100px;
+  }
+
+  .m-step-option {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 16px;
+    background: var(--v2-bg-card, #111);
+    border: none;
+    color: var(--v2-text-primary, #ddd);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    min-height: 44px;
+  }
+
+  .m-step-option:active {
+    background: var(--v2-bg-input, #1a1a2e);
+  }
+
+  .m-step-active {
+    color: var(--v2-accent-cyan, #22d3ee);
+    background: rgba(34, 211, 238, 0.1);
+    font-weight: 700;
+  }
+
+  /* ── Bottom sheet content overrides ── */
+  .m-sheet-subtitle {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--v2-text-dim, #555);
+    padding: 10px 10px 4px;
+    text-transform: uppercase;
+  }
+
+  :global(.m-sheet-content .collapsible-panel) {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+
+  /* ── Mode grid (in modal) ── */
+  .m-mode-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    padding: 8px 10px;
+  }
+
+  .m-mode-grid > :global(button) {
+    min-height: 44px;
+  }
+
+  /* ── MOR-2816 (owner ruling 2026-09-28): portrait button floors ──
+     Every visible button inside the PORTRAIT phone root — chip tabs,
+     chip panels (the SCOPE tab's screen keys and the semantic scope
+     controls included, MOR-2851), sheets and modals opened from the
+     phone, and the PTT FAB in the tuning strip (MOR-2874 moved it
+     inside this root) — carries a label of at least 16px
+     and a touch height of at least 44px. Rows may wrap or drop buttons
+     per row; no label is clipped or ellipsised. Scoped to the portrait
+     phone only: desktop, reference and LCD layouts and the .m-landscape
+     arrangement keep their own sizes. The floors also reach the one
+     button mount that still sits OUTSIDE the .m-layout root — the
+     floating MOD-input warning banner (.m-mod-input-warning, whose own
+     labels were 11-12px) — so no portrait phone button escapes them.
+     `!important` is required because
+     the shared spectrum toolbar pins some button fonts at 8–9px and the
+     global control-button face pins nowrap + overflow:hidden on the
+     button itself, and `max(16px, 1em)` keeps any already-larger label
+     (e.g. the sheet close glyph) at its own size. */
+  .m-layout :global(button),
+  .m-layout :global([role='button']),
+  .m-mod-input-warning :global(button) {
+
+    font-size: max(16px, 1em) !important;
+    min-height: 44px !important;
+    min-width: 44px;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }
+
+  /* Glyph-only buttons (◀ ▶ ⚙ ⛶): the glyph itself keeps the 16px
+     floor — lucide icons carry their size as width/height attributes,
+     so a min box enlarges the small ones without touching bigger ones. */
+  .m-layout :global(button svg),
+  .m-layout :global([role='button'] svg) {
+    min-width: 16px;
+    min-height: 16px;
+  }
+
+  /* MOR-2851: the one-row scope-toolbar rules that used to live here are
+     gone with the toolbar itself — nothing renders above the panorama on
+     the portrait phone; its controls live in the SCOPE chip tab. */
+
+  /* The FAB's label span (PTT / TX LOCK) is not a button element, so the
+     button font floor above never reaches it — it keeps its own 16px
+     floor inside the unchanged 72px FAB. The FAB is the only PttFab mount
+     in the app (portrait phone only), so the bare anchor reaches exactly
+     its label span. */
+  :global(.ptt-fab-label) {
+    font-size: max(16px, 1em) !important;
+  }
+</style>

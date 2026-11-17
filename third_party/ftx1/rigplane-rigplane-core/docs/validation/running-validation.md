@@ -1,0 +1,246 @@
+# Running the radio validation matrix
+
+`rigplane validate` exercises a radio's CAT control surface against the
+capabilities its profile declares, and reports — per check — whether the radio
+actually does what the profile claims. It is a **debugging instrument**: after a
+run, every `fail` is a real discrepancy between the profile and the hardware, not
+a quirk of the tool.
+
+The check list is **generated from the radio's profile** (`rigs/<model>.toml`) via
+the capability→check-spec registry — you do **not** hand-author a template. Pass
+`--model <MODEL>` and the matrix is built in memory from that profile's declared
+capabilities.
+
+> **Safety first.** Hardware execution is opt-in and read-modify-verify-restore
+> (RMVR): every write reads the original, writes a different value, verifies the
+> readback, and **always restores** the original. TX (PTT) and the antenna tuner
+> are **never** auto-actuated — they report `blocked`/`manual_required` unless you
+> explicitly authorize them, and even then they are operator-verified, never keyed
+> by the tool. Unknown/undeclared controls default to read-only.
+
+---
+
+## Quick start
+
+```bash
+# Dry-run (no hardware): generate + plan the matrix from the profile
+uv run rigplane --model IC-7610 validate
+
+# Against real hardware, read-only (safe: all writes SKIP, only reads run)
+RIGPLANE_VALIDATION_ALLOW_HARDWARE=1 uv run rigplane \
+  --model IC-7610 validate --hardware --allow-hardware --read-only
+
+# Against real hardware, write-enabled (RMVR writes with restore; no TX/tuner)
+RIGPLANE_VALIDATION_ALLOW_HARDWARE=1 uv run rigplane \
+  --model IC-7610 validate --hardware --allow-hardware
+```
+
+`--hardware` **and** `--allow-hardware` **and** the env var
+`RIGPLANE_VALIDATION_ALLOW_HARDWARE=1` must all be present to touch a radio; any
+one missing keeps the run a dry-run plan. This triple gate is deliberate.
+
+Add `--json --output report.json` for a machine-readable artifact, or omit `--json`
+for a human-readable summary.
+
+---
+
+## Recipes
+
+### Xiegu X6200 — serial
+
+Control port `/dev/cu.usbmodem58910181093` @ **19200** baud, CI-V address **0xA4**.
+
+```bash
+RIGPLANE_VALIDATION_ALLOW_HARDWARE=1 uv run rigplane \
+  --backend serial --serial-port /dev/cu.usbmodem58910181093 --serial-baud 19200 \
+  --model X6200 --radio-addr 0xA4 --timeout 6 \
+  validate --hardware --allow-hardware --provider native \
+  --json --output /tmp/x6200.json
+```
+
+Start with `--read-only` (above, drop the flag to enable RMVR writes). The X6200's
+RIT, XIT, and manual-notch controls accept a SET but never answer the GET; they are
+declared **write-only** in `rigs/x6200.toml` and validated with **set-and-observe**
+(set a test value, confirm it is accepted with no NAK/timeout, restore a benign
+default) rather than a read-back that would falsely time out.
+
+> The serial port is exclusive. If RigPlane Pro (or any other client) holds it you
+> will see `Commander stopped` / `multiple access on port`. Close the other client
+> first — check with `pgrep -fl usbmodem58910181093`.
+
+### Icom IC-7610 — LAN
+
+Address **0x98**, control port **50001**. Supply host/user/password via flags, env
+(`ICOM_HOST` / `ICOM_USER` / `ICOM_PORT`), or `--pass-file` (avoids exposing the
+password in `ps`). Never commit credentials.
+
+```bash
+ICOM_HOST=192.168.55.40 ICOM_USER=<user> ICOM_PORT=50001 \
+RIGPLANE_VALIDATION_ALLOW_HARDWARE=1 uv run rigplane \
+  --backend lan --pass-file /path/to/secret \
+  --model IC-7610 --radio-addr 0x98 --timeout 6 \
+  validate --hardware --allow-hardware --provider native \
+  --json --output /tmp/ic7610.json
+```
+
+---
+
+## Flags
+
+Global (before the `validate` subcommand):
+
+| Flag | Purpose |
+|---|---|
+| `--model <NAME>` | Radio model → selects the profile the matrix is generated from. |
+| `--backend {lan,serial,yaesu-cat,rigctld}` | Transport (auto-inferred from `--serial-port`). |
+| `--serial-port` / `--serial-baud` | Serial device + baud. |
+| `--host` / `--control-port` / `--user` / `--pass-file` | LAN connection (env: `ICOM_HOST`/`ICOM_PORT`/`ICOM_USER`). |
+| `--radio-addr` | CI-V address. |
+| `--timeout` | Per-operation timeout (s). |
+
+`validate` subcommand:
+
+| Flag | Purpose |
+|---|---|
+| `--template <path>` | Optional. Use a hand-authored template instead of generating from `--model`. |
+| `--hardware` | Execute against the radio (otherwise a dry-run plan). |
+| `--allow-hardware` | Second gate; with `RIGPLANE_VALIDATION_ALLOW_HARDWARE=1`, permits hardware writes. |
+| `--read-only` | Run reads only; every write check is `SKIP`. |
+| `--tx-allowed` / `--tuner-allowed` | Authorize the TX/tuner checks (still operator-verified, never auto-keyed). |
+| `--provider {native,hamlib}` | `native` = RigPlane's own backend; `hamlib` = via the rigctld bridge. |
+| `--compare <artifact.json>` | Diff this run against a prior artifact. |
+| `--gate <golden.json>` | Gate this run against a golden normalized artifact: exit 1 on any regression. |
+| `--regen-golden <path>` | Write the normalized artifact to `<path>` as a new `--gate` golden baseline. |
+| `--operator-id <id>` | Record the operator in the artifact. |
+| `--json` / `--output <path>` | Emit JSON (to stdout or a file) instead of the human summary. |
+
+---
+
+## Golden gate: dry-run regression protection
+
+A **golden** is a normalized dry-run artifact (volatile fields stripped)
+committed to the repo. Gating a run against it turns the validation matrix into
+a regression check: any check that goes `pass`→`fail`, any new `fail`/`blocked`
+check, any missing check, or any declaration drift exits `1`. Improvements
+never block.
+
+Committed goldens live in `tests/golden/validation/` — nine dry-run goldens:
+`ic7610`, `ic7300`, `ic7300mk2`, `ic705`, `ic9700`, `x6100`, `tx500`,
+`x6200`, `ftx1` (`<slug>.dry-run.json`). `tests/test_validation_gating.py::
+test_committed_golden_matches_live_dry_run` compares each of the nine
+against the live dry-run matrix, so the pytest parametrization covers every
+committed golden; `quick.yml` additionally runs CLI `--gate`s for three of
+them by name (IC-7610, X6200, FTX-1). Goldens pin which checks a profile
+declares, not the wire bytes behind them;
+`test_declaration_digest_matches_committed` (same module) pins a sha256 over
+the sorted wire-declaration rows of the nine profiles — every `[commands]`
+entry (including overrides), the `[vfo]` select/swap/equalize codes, and the
+enumerated value tables (`att_values`, `pre_values`, `agc_modes`, …); see
+`tests/test_validation_gating.py: _DIGEST_PROFILE_FIELDS` for the exact
+field list. It has no regeneration flag — update it by hand only after
+reviewing the profile frame diff (`git diff rigs/`).
+
+### Run the dry-run gate
+
+```bash
+uv run rigplane --model IC-7610 validate --provider native --dry-run \
+  --gate tests/golden/validation/ic7610.dry-run.json
+```
+
+Exit `0` = no regression; exit `1` = regression (a diff summary is printed to
+stderr); exit `2` = golden missing/unreadable.
+
+### Regenerate a golden after an intentional matrix change
+
+When you intentionally change the registry, a profile's declared capabilities,
+or an override file, the gate (and
+`tests/test_validation_gating.py::test_committed_golden_matches_live_dry_run`)
+will fail until the golden is refreshed:
+
+```bash
+uv run rigplane --model IC-7610 validate --dry-run \
+  --regen-golden tests/golden/validation/ic7610.dry-run.json
+```
+
+Review the resulting diff carefully before committing — the golden is the
+contract; regenerating it to silence a gate failure you do not understand
+defeats the purpose.
+
+### CI
+
+`.github/workflows/quick.yml` runs the IC-7610, X6200 and FTX-1 native
+dry-run gates on every push/PR that touches `src/**`, `tests/**`, etc. — so
+a registry or profile-declaration regression fails CI without any hardware.
+They are dry-run only and take under a second.
+
+---
+
+## Pre-release validation runner
+
+`scripts/validate-release.sh` bundles the pre-release validation pass across
+the owned radios (IC-7610, X6200, FTX-1).
+
+**Default (CI-safe, no hardware):**
+
+```bash
+scripts/validate-release.sh
+```
+
+For each radio it runs the native dry-run matrix; where a committed golden
+exists it gates against it, otherwise it notes the missing golden (with the
+exact `--regen-golden` command) and still verifies the matrix generates. Exits
+non-zero on any gate regression or matrix-generation error; skips never fail
+the run.
+
+**Hardware (opt-in, pre-release):**
+
+```bash
+RIGPLANE_VALIDATION_ALLOW_HARDWARE=1 \
+ICOM_HOST=192.168.55.40 ICOM_USER=<user> ICOM_PASS_FILE=/path/to/secret \
+X6200_SERIAL_PORT=/dev/cu.usbmodem58910181093 \
+FTX1_SERIAL_PORT=/dev/cu.usbserial-XXXX \
+scripts/validate-release.sh --hardware
+```
+
+Hardware execution requires **both** the `--hardware` script flag **and**
+`RIGPLANE_VALIDATION_ALLOW_HARDWARE=1` (the script then passes the CLI's own
+`--hardware --allow-hardware` gates through). Each radio additionally needs
+its connection environment — `ICOM_HOST`/`ICOM_USER`/`ICOM_PASS_FILE` for the
+IC-7610, `X6200_SERIAL_PORT` (optionally `X6200_SERIAL_BAUD`, default 19200)
+for the X6200, `FTX1_SERIAL_PORT` (optionally `FTX1_SERIAL_BAUD`, default
+38400) for the FTX-1. Radios without configuration are skipped with a note, so
+you can validate whatever subset is on the bench. Hardware artifacts are
+written to `/tmp/<radio>-hw-<timestamp>.json`; the per-radio invocations match
+the recipes above (RMVR writes with restore, TX/tuner never auto-actuated).
+
+---
+
+## Reading the results
+
+Each check reports one status:
+
+| Status | Meaning |
+|---|---|
+| `pass` | The control behaved as the profile declares (readback matched, or — for write-only controls — the SET was accepted). |
+| `fail` | A real discrepancy: the control did not react, the readback disagreed, or a command errored/timed out. **This is a bug to investigate.** |
+| `unsupported` | The capability is not declared for this radio (or the radio lacks the operation) — recorded, not hidden. |
+| `manual_required` | Operator-verified out of band (e.g. RX audio, scope, and the never-auto-actuated TX/tuner). |
+| `blocked` | A TX-adjacent check that was not authorized (`--tx-allowed`/`--tuner-allowed`). |
+| `skip` | Skipped — typically a write check under `--read-only`. |
+
+Every check carries an `evidence` object with the concrete values observed
+(`original` / `changed` / `readback` for RMVR; `verification: set_observe` +
+`set_accepted` for write-only controls). Use it to see exactly what the radio did.
+
+Because the matrix is exhaustive over the profile's declared capabilities, a clean
+run with no `fail` means the profile and the hardware agree. A `fail` points at a
+real defect — a missing or mis-routed CI-V command, a stale readback, or a control
+the profile over-claims.
+
+---
+
+## See also
+
+- `docs/contracts/validation-matrix-v1.md` — the versioned artifact/template schema.
+- `docs/plans/2026-05-28-universal-validation-matrix.md` — the profile-driven matrix
+  design (registry, generators, comparison, converter).

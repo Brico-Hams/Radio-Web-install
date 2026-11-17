@@ -1,0 +1,587 @@
+/**
+ * FrontendRuntime — shared singleton shell for all frontend behavior.
+ *
+ * Wraps existing stores, transport, and audio into a single entry point.
+ * Components import `runtime` instead of reaching into individual modules.
+ *
+ * This is a thin delegation layer — it owns no state, only routes reads
+ * and writes to the existing infrastructure. Svelte 5 reactivity is
+ * preserved because getters return live $state references, not copies.
+ *
+ * @see docs/plans/2026-04-12-target-frontend-architecture.md
+ */
+
+import { radio, subscribeRadioState } from '$lib/stores/radio.svelte';
+import { getCapabilities, subscribeCapabilities } from '$lib/stores/capabilities.svelte';
+import {
+  getConnectionStatus,
+  isConnected,
+  getWsConnected,
+  isAudioConnected,
+  isStale,
+  isReconnecting,
+  getRadioStatus,
+  getRadioPowerOn,
+  getRadioHealth,
+} from '$lib/stores/connection.svelte';
+import { isRxSilent } from '$lib/stores/rx-silence.svelte';
+import {
+  getAudioState,
+  getRxAudioTargetSnapshot,
+  setVolume,
+  setMuted,
+  setRxError,
+  subscribeRxAudioTarget,
+  toggleMute,
+} from '$lib/stores/audio.svelte';
+import * as transport from '$lib/transport/ws-client';
+import { fetchInfo, fetchMemoryPage } from '$lib/transport/http-client';
+import { controllerClient } from '$lib/transport/controller-client';
+import { audioManager } from '$lib/audio/audio-manager';
+import { makeAudioRoutingHandlers } from './commands/panel-commands';
+import { clearLegacyPendingModInputRestore } from './adapters/mod-input-auto.svelte';
+import { derivePresentationCapabilities } from './adapters/presentation-capabilities';
+import { systemController } from './system-controller';
+import { scopeController } from './scope-controller.svelte';
+import type { ScopeController, ScopeSource } from './scope-controller.svelte';
+import { PresentationResourceHost } from './resource-host';
+import type { ResourceHealth, ResourceLease } from './resource-demand';
+import { createSubscriber } from 'svelte/reactivity';
+import type { RadioHealthPublic, ServerState } from '$lib/types/state';
+import type { Capabilities } from '$lib/types/capabilities';
+import type { WsIncoming } from '$lib/types/protocol';
+import type { ConnectionState } from '$lib/transport/ws-client';
+import type { ControlSessionTransition } from '$lib/transport/ws-client';
+import type { RxAudioTargetSnapshot } from '$lib/stores/audio.svelte';
+export const presentationResources = new PresentationResourceHost<unknown>('app');
+// ── Types ──
+
+export type DxMessage = Extract<WsIncoming, { type: 'dx_spot' | 'dx_spots' }>;
+
+export interface ConnectionSnapshot {
+  status: 'connected' | 'partial' | 'disconnected';
+  ws: boolean;
+  audio: boolean;
+  stale: boolean;
+  reconnecting: boolean;
+  radioStatus: string;
+  radioPowerOn: boolean | null;
+}
+
+export interface DefaultScopeStatus {
+  source: ScopeSource | null;
+  available: boolean;
+  resourceSelected: boolean;
+  demand: number;
+  lifecycle: ResourceHealth;
+  transport: ConnectionState;
+  frameSeen: boolean;
+}
+export type ControlSessionSnapshot = Readonly<ControlSessionTransition>;
+export type ControlSessionSubscriber = (next: ControlSessionSnapshot) => void;
+export interface ControlAuthorityPublication {
+  readonly state: ServerState | null;
+  readonly caps: Capabilities | null;
+  readonly session: ControlSessionSnapshot;
+  readonly rxAudioTarget: RxAudioTargetSnapshot;
+}
+export type ControlAuthoritySubscriber = (next: ControlAuthorityPublication) => void;
+const CLOSED_CONTROL_SESSION: ControlSessionSnapshot = Object.freeze({ state: 'disconnected', epoch: -1 });
+
+// ── Runtime class ──
+
+class FrontendRuntime {
+  private _bootstrapCleanup: (() => Promise<void>) | null = null;
+  private _bootstrapInFlight: Promise<() => Promise<void>> | null = null;
+  private _bootstrapTeardown: Promise<void> | null = null;
+  private _capabilitiesUnsubscribe: (() => void) | null = null;
+  private _rxAudioLease: ResourceLease | null = null;
+  private _ended = false;
+  private _audioRoutingSubscribe = createSubscriber((update) => audioManager.onChange(update));
+  private _controllerSubscribe = createSubscriber((update) => controllerClient.onChange(update));
+  private _dxSubscribers = new Map<number, (message: DxMessage) => void>();
+  private _dxControlUnsubscribe: (() => void) | null = null;
+  private _nextDxSubscriber = 0;
+  private _defaultScopeSource: ScopeSource | null = null;
+  private _defaultScopeSnapshot: DefaultScopeStatus = {
+    source: null, available: false, resourceSelected: false, demand: 0,
+    lifecycle: 'inactive', transport: 'disconnected', frameSeen: false,
+  };
+  private _defaultScopeStop: (() => void) | null = null;
+  private _defaultScopeSubscribe = createSubscriber((update) => {
+    if (this._ended) return;
+    const notify = () => {
+      this._defaultScopeSnapshot = this._readDefaultScopeStatus();
+      update();
+    };
+    const unsubscribeHost = presentationResources.subscribe(() => notify());
+    const unsubscribeHealth = scopeController.subscribeHealth(() => notify());
+    let active = true;
+    const stop = () => {
+      if (!active) return;
+      active = false;
+      try { unsubscribeHost(); } finally { unsubscribeHealth(); }
+      if (this._defaultScopeStop === stop) this._defaultScopeStop = null;
+    };
+    this._defaultScopeStop = stop;
+    return stop;
+  });
+
+  constructor() {
+    // TX audio failures reach the operator through the existing notification
+    // bus; lib/audio must not import transport directly
+    // (radio-authority/structural-boundary), so the sink is injected here.
+    audioManager.setOperatorNotifier((level, message, code, params) => (
+      params
+        ? transport.emitLocalNotification(level, message, code, params)
+        : transport.emitLocalNotification(level, message, code)
+    ));
+
+    presentationResources.configure('hardware-scope', {
+      available: false,
+      selected: false,
+      driver: scopeController.hardwareScopeDriver,
+    });
+    scopeController.registerPresentationDriver(presentationResources, {
+      available: false,
+      selected: false,
+    });
+    presentationResources.configure('rx-audio', {
+      available: false,
+      selected: true,
+      driver: {
+        start: () => {
+          audioManager.startRx();
+          return audioManager;
+        },
+        stop: () => {
+          audioManager.stopRx({ automatic: true });
+        },
+      },
+    });
+  }
+
+  // ── Reactive state reads ──
+  // These return live $state references — Svelte 5 tracks them automatically.
+
+  /** Current radio state (frequency, mode, meters, etc.) */
+  get state(): ServerState | null {
+    return radio.current;
+  }
+  get controlSession(): ControlSessionSnapshot {
+    return 'getControlSession' in transport ? transport.getControlSession() : CLOSED_CONTROL_SESSION;
+  }
+  subscribeControlSession(handler: ControlSessionSubscriber): () => void {
+    return 'onControlSessionTransition' in transport ? transport.onControlSessionTransition(handler) : () => undefined;
+  }
+
+  /**
+   * Synchronous fan-in for sources that jointly establish command authority.
+   * It deliberately retains no derived state: every source publication reads
+   * the other two sources and publishes their current references immediately.
+   */
+  subscribeControlAuthority(handler: ControlAuthoritySubscriber): () => void {
+    let active = true;
+    let initializing = true;
+    const publish = (session: ControlSessionSnapshot) => {
+      if (!active || initializing) return;
+      handler(Object.freeze({
+        state: this.state,
+        caps: this.caps,
+        session,
+        rxAudioTarget: getRxAudioTargetSnapshot(),
+      }));
+    };
+    const stops: Array<() => void> = [];
+    try {
+      stops.push(subscribeRadioState(() => publish(this.controlSession)));
+      stops.push(subscribeCapabilities(() => publish(this.controlSession)));
+      stops.push(subscribeRxAudioTarget(() => publish(this.controlSession)));
+      stops.push(this.subscribeControlSession(publish));
+      initializing = false;
+      publish(this.controlSession);
+    } catch (error) {
+      active = false;
+      for (const stop of stops.reverse()) stop();
+      throw error;
+    }
+    return () => {
+      if (!active) return;
+      active = false;
+      for (const stop of stops.reverse()) stop();
+    };
+  }
+
+  /** Radio capabilities (modes, filters, features, etc.) */
+  get caps(): Capabilities | null {
+    return getCapabilities();
+  }
+
+  /** Connection health — individual reactive getters to avoid object allocation. */
+  get connectionStatus(): 'connected' | 'partial' | 'disconnected' {
+    return getConnectionStatus();
+  }
+
+  get connectionWs(): boolean { return getWsConnected(); }
+  get remoteController(): boolean {
+    this._controllerSubscribe();
+    return controllerClient.remote;
+  }
+  get connectionAudio(): boolean { return isAudioConnected(); }
+  /** MOR-2792: server RX capture is digital silence. */
+  get rxSilent(): boolean { return isRxSilent(); }
+  get connectionStale(): boolean { return isStale(); }
+  get connectionReconnecting(): boolean { return isReconnecting(); }
+  get radioStatus(): string { return getRadioStatus(); }
+  get radioPowerOn(): boolean | null { return getRadioPowerOn(); }
+  /** MOR-2841: the published radio health — the UI's honest "not answering"
+   *  signal (radioLink 'reconnecting' while powerOn is unknown). */
+  get radioHealth(): RadioHealthPublic | null { return getRadioHealth(); }
+
+  /**
+   * Connection snapshot (for contexts that need all fields at once).
+   * Prefer individual getters in $derived for better Svelte 5 reactivity.
+   */
+  get connection(): ConnectionSnapshot {
+    return {
+      status: getConnectionStatus(),
+      ws: getWsConnected(),
+      audio: isAudioConnected(),
+      stale: isStale(),
+      reconnecting: isReconnecting(),
+      radioStatus: getRadioStatus(),
+      radioPowerOn: getRadioPowerOn(),
+    };
+  }
+
+  /** Audio UI state — returns the live $state object directly. */
+  get audio() {
+    return getAudioState();
+  }
+
+  get audioRouting() {
+    this._audioRoutingSubscribe();
+    return audioManager.getAppliedAudioConfig();
+  }
+
+  /** Whether the runtime has a radio connection. */
+  get connected(): boolean {
+    return isConnected();
+  }
+
+  // ── System controller ──
+
+  /** System actions (power, connect/disconnect, frequency identification). */
+  get system() {
+    return systemController;
+  }
+
+  // ── Scope controller ──
+
+  /** One subscribed scope channel; source streams expose frames and negotiated geometry. */
+  get scope(): ScopeController {
+    return scopeController;
+  }
+
+  get defaultScopeStatus(): DefaultScopeStatus {
+    this._defaultScopeSubscribe();
+    this._defaultScopeSnapshot = this._readDefaultScopeStatus();
+    return this._defaultScopeSnapshot;
+  }
+
+  private _readDefaultScopeStatus(): DefaultScopeStatus {
+    const source = this._defaultScopeSource;
+    if (source === null) return {
+      source, available: false, resourceSelected: false, demand: 0,
+      lifecycle: 'inactive', transport: 'disconnected', frameSeen: false,
+    };
+    const resource = source === 'hardware' ? 'hardware-scope' : 'audio-fft';
+    const host = presentationResources.snapshot(resource);
+    const health = scopeController.snapshotHealth(source);
+    return {
+      source, available: host.available, resourceSelected: host.selected,
+      demand: host.demand, lifecycle: host.health,
+      transport: health.transport, frameSeen: health.frameSeen,
+    };
+  }
+
+  private _configurePresentationResources(caps: Capabilities | null): void {
+    if (caps === null) {
+      this._defaultScopeSource = null;
+      presentationResources.configure('hardware-scope', {
+        available: false,
+        selected: false,
+      });
+      presentationResources.configure('audio-fft', {
+        available: false,
+        selected: false,
+      });
+      presentationResources.configure('rx-audio', {
+        available: false,
+        selected: true,
+      });
+      return;
+    }
+
+    // Discovery may temporarily lack an optional provider; configured selection
+    // remains authoritative and its demand is retried through the scope channel.
+    scopeController.configureSources(caps.scopeSources ?? [], caps.scopeDefaultSourceId);
+    const presentationCaps = derivePresentationCapabilities(caps);
+    this._defaultScopeSource = presentationCaps.scope.defaultSource;
+    presentationResources.configure('hardware-scope', {
+      available: presentationCaps.scope.hardwareScopeAvailable,
+      selected: presentationCaps.scope.hardwareScopeAvailable,
+    });
+    presentationResources.configure('audio-fft', {
+      available: presentationCaps.scope.audioFftAvailable,
+      selected: presentationCaps.scope.audioFftAvailable,
+    });
+    presentationResources.configure('rx-audio', {
+      available: caps.audio === true && caps.capabilities.includes('audio'),
+      selected: true,
+    });
+  }
+
+  fetchMemoryPage(...args: Parameters<typeof fetchMemoryPage>): ReturnType<typeof fetchMemoryPage> {
+    return fetchMemoryPage(...args);
+  }
+
+  // ── Bootstrap ──
+
+  /**
+   * Initialize the full transport stack: capability listener → WebSocket → subscribe.
+   *
+   * Idempotent: if already started, returns the existing cleanup function without
+   * re-running any transport calls. Concurrent callers share a single in-flight promise
+   * to prevent duplicate initialization. If the previous attempt threw, the sentinel
+   * is cleared and bootstrap can be retried.
+   *
+   * @returns A cleanup function that tears down presentation resources when called.
+   */
+  async bootstrap(signal?: AbortSignal): Promise<() => Promise<void>> {
+    // If already completed, return cached cleanup.
+    if (this._bootstrapCleanup !== null) {
+      return this._bootstrapCleanup;
+    }
+
+    // If in-flight, return that promise to serialize concurrent callers.
+    if (this._bootstrapInFlight !== null) {
+      return this._bootstrapInFlight;
+    }
+
+    // Set sentinel before first await to serialize concurrent callers.
+    this._bootstrapInFlight = this._doBootstrap(signal);
+
+    try {
+      return await this._bootstrapInFlight;
+    } finally {
+      // Clear sentinel after completion (success or failure).
+      this._bootstrapInFlight = null;
+    }
+  }
+
+  /**
+   * Private implementation of bootstrap. Separated so the sentinel
+   * can be set before this async function starts.
+   */
+  private async _doBootstrap(signal?: AbortSignal): Promise<() => Promise<void>> {
+    audioManager.setControllerBinding({
+      remote: () => controllerClient.remote,
+      ready: () => controllerClient.active,
+      epoch: () => controllerClient.epoch,
+      current: (epoch) => controllerClient.active && controllerClient.current(epoch),
+      protocols: () => controllerClient.protocols(),
+      role: () => controllerClient.role,
+    });
+    const previous = this._bootstrapTeardown;
+    if (previous) {
+      try { await previous; } finally {
+        if (this._bootstrapTeardown === previous) this._bootstrapTeardown = null;
+      }
+    }
+    await presentationResources.rearm();
+    await fetchInfo(signal);
+    signal?.throwIfAborted();
+
+    let stopController = () => {};
+    const abort = () => controllerClient.lose();
+    let cleanupInFlight: Promise<void> | undefined;
+    const cleanup = () => {
+      if (cleanupInFlight) return cleanupInFlight;
+      cleanupInFlight = (async () => {
+        stopController();
+        signal?.removeEventListener('abort', abort);
+        // MOR-3753: bootstrap cleanup is automatic — the remote disconnect
+        // must preserve a latched audio failure for the operator, not
+        // acknowledge it the way an explicit user disconnect does.
+        const disconnect = (controllerClient.remote ? systemController.disconnect({ automatic: true }) : Promise.resolve())
+          .then(() => ({ ok: true as const }), (error: unknown) => ({ ok: false as const, error }));
+        this._ended = true;
+        // Drop the cached registration so a later `bootstrap()` (a remounted
+        // App) re-runs the chain instead of being handed a cleanup that has
+        // already run. Safe to do unconditionally: `cleanupInFlight` latches
+        // this body to exactly one execution, which happens before any newer
+        // registration can exist.
+        this._bootstrapCleanup = null;
+        this._rxAudioLease = null;
+        this._dxSubscribers.clear();
+        const unsubscribeDx = this._dxControlUnsubscribe;
+        this._dxControlUnsubscribe = null;
+        const unsubscribeCapabilities = this._capabilitiesUnsubscribe;
+        this._capabilitiesUnsubscribe = null;
+        try { unsubscribeDx?.(); } finally {
+          try { unsubscribeCapabilities?.(); } finally {
+            const stopScopeStatus = this._defaultScopeStop;
+            this._defaultScopeStop = null;
+            try { stopScopeStatus?.(); } finally {
+              try { await presentationResources.teardown(); } finally {
+                const result = await disconnect;
+                if (!result.ok) throw result.error;
+              }
+            }
+          }
+        }
+      })();
+      this._bootstrapTeardown = cleanupInFlight;
+      return cleanupInFlight;
+    };
+    try {
+      signal?.addEventListener('abort', abort, { once: true });
+      await controllerClient.prepare(signal);
+      signal?.throwIfAborted();
+      stopController = controllerClient.onLoss(() => {
+        if (controllerClient.remote) {
+          // MOR-3753: automatic teardown — preserve a latched audio failure.
+          void systemController.disconnect({ automatic: true }).catch(() => {
+            transport.emitLocalNotification('error', 'Удалённое управление потеряно. Подключитесь заново.', 'controller_lost');
+          });
+          return;
+        }
+        // MOR-3535: a lost local session recovers silently; TX audio stops
+        // and never replays — only a deliberate new PTT may key again.
+        // MOR-3753: the stop is automatic, so a latched TX failure survives
+        // it; only an explicit user stop acknowledges the latch.
+        audioManager.stopTx({ automatic: true });
+      });
+
+      // Re-arm a remounted App only after controller admission succeeds.
+      this._ended = false;
+      clearLegacyPendingModInputRestore();
+      this._capabilitiesUnsubscribe = subscribeCapabilities((caps) => {
+        this._configurePresentationResources(caps);
+      });
+      transport.connect('/api/v1/ws');
+      systemController.connect();
+      transport.sendRaw({ type: 'subscribe', streams: ['events'] });
+      await controllerClient.waitForPrimary();
+      signal?.throwIfAborted();
+      makeAudioRoutingHandlers().restoreFromStorage();
+
+      this._bootstrapCleanup = cleanup;
+      return cleanup;
+    } catch (error) {
+      stopController();
+      signal?.removeEventListener('abort', abort);
+      this._capabilitiesUnsubscribe?.();
+      this._capabilitiesUnsubscribe = null;
+      if (controllerClient.remote) {
+        this._configurePresentationResources(null);
+        // MOR-3753: a failed bootstrap is automatic rollback, not a user
+        // acknowledgement — preserve a latched audio failure.
+        await systemController.disconnect({ automatic: true });
+      }
+      throw error;
+    }
+  }
+
+  // ── Audio control ──
+
+  acquireHardwareScope(consumer: string): ResourceLease {
+    if (this._ended) throw new Error('frontend runtime is torn down');
+    return presentationResources.acquire('hardware-scope', consumer);
+  }
+
+  releaseHardwareScope(lease: ResourceLease): boolean {
+    return lease.resource === 'hardware-scope' && presentationResources.release(lease);
+  }
+
+  subscribeDx(handler: (message: DxMessage) => void): () => void {
+    if (this._ended) throw new Error('frontend runtime is torn down');
+    const id = this._nextDxSubscriber++;
+    this._dxSubscribers.set(id, handler);
+    if (this._dxControlUnsubscribe === null) {
+      try {
+        this._dxControlUnsubscribe = transport.onMessage((message) => {
+          if (message.type !== 'dx_spot' && message.type !== 'dx_spots') return;
+          for (const subscriber of [...this._dxSubscribers.values()]) subscriber(message);
+        });
+      } catch (error) {
+        this._dxSubscribers.delete(id);
+        throw error;
+      }
+    }
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this._dxSubscribers.delete(id);
+      if (this._dxSubscribers.size === 0) {
+        const unsubscribe = this._dxControlUnsubscribe;
+        this._dxControlUnsubscribe = null;
+        unsubscribe?.();
+      }
+    };
+  }
+
+  setRxLive(live: boolean): void {
+    if (live) {
+      if (!this._ended && this._rxAudioLease === null) {
+        this._rxAudioLease = presentationResources.acquire('rx-audio', 'presentation');
+      }
+      return;
+    }
+
+    // The user acknowledges RX failure even if automatic teardown retired the lease.
+    setRxError(false);
+    const lease = this._rxAudioLease;
+    this._rxAudioLease = null;
+    if (lease) presentationResources.release(lease);
+  }
+
+  get rxEnabled(): boolean {
+    return audioManager.rxEnabled;
+  }
+
+  setRxVolume(v: number): void {
+    audioManager.setRxVolume(v);
+  }
+
+  async startTx(): Promise<string | null> {
+    return audioManager.startTx();
+  }
+
+  stopTx(options?: { automatic?: boolean }): void {
+    audioManager.stopTx(options);
+  }
+
+  /** MOR-1796: subscribe to mid-transmission local TX capture death. */
+  onTxAudioDied(callback: () => void): () => void {
+    return audioManager.onTxAudioDied(callback);
+  }
+
+  setVolume(v: number): void {
+    setVolume(v);
+  }
+
+  setMuted(v: boolean): void {
+    setMuted(v);
+  }
+
+  toggleMute(): void {
+    toggleMute();
+  }
+
+}
+
+/** Singleton runtime instance. */
+export const runtime = new FrontendRuntime();

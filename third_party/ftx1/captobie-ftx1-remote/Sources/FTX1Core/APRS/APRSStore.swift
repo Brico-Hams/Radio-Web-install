@@ -1,0 +1,139 @@
+import Combine
+import Foundation
+
+/// Owns the app's decoded APRS station/message history — what
+/// `APRSStationListView`/`APRSMessageListView` (the S.LIST/M.LIST windows)
+/// display. Fed by `APRSDecoder`'s output, which always arrives on the
+/// main actor (same contract as `AudioCaptureEngine.onNewFrame`), so this
+/// itself doesn't need to be an actor.
+///
+/// Loads from disk on init and saves after every update — APRS traffic is
+/// sparse (packets per minute at most on a quiet channel), so a
+/// synchronous save per update costs nothing and needs no debouncing.
+@MainActor
+public final class APRSStore: ObservableObject {
+    @Published public private(set) var stations: [APRSStation] = []
+    @Published public private(set) var messages: [APRSMessage] = []
+
+    /// Bound at init (see `APRSPersistence.currentFileURL`).
+    private let fileURL = APRSPersistence.currentFileURL
+
+    public init() {
+        let loaded = APRSPersistence.load(from: fileURL)
+        stations = loaded.stations
+        messages = loaded.messages
+        // Trim on load too, not just on record — covers a limit lowered
+        // in Settings since the history file was last written.
+        trimStations()
+        trimMessages()
+    }
+
+    /// Upserts by callsign (including SSID) — a station heard again
+    /// updates its existing entry (position, comment, last-heard time)
+    /// rather than duplicating. `source` is likewise overwritten on every
+    /// update rather than being part of the upsert key — see
+    /// `APRSStation`'s doc comment: it reflects whichever channel most
+    /// recently heard the station, not a fixed identity.
+    public func recordStation(
+        callsign: String,
+        latitude: Double?,
+        longitude: Double?,
+        symbolTable: String?,
+        symbolCode: String?,
+        comment: String?,
+        heardAt: Date,
+        source: APRSSource
+    ) {
+        if let index = stations.firstIndex(where: { $0.callsign == callsign }) {
+            var station = stations[index]
+            if let latitude { station.latitude = latitude }
+            if let longitude { station.longitude = longitude }
+            if let symbolTable { station.symbolTable = symbolTable }
+            if let symbolCode { station.symbolCode = symbolCode }
+            if let comment { station.comment = comment }
+            station.lastHeardAt = heardAt
+            station.source = source
+            stations[index] = station
+        } else {
+            stations.append(APRSStation(
+                callsign: callsign,
+                latitude: latitude,
+                longitude: longitude,
+                symbolTable: symbolTable,
+                symbolCode: symbolCode,
+                comment: comment,
+                lastHeardAt: heardAt,
+                source: source
+            ))
+        }
+        trimStations()
+        persist()
+    }
+
+    /// A message with an id that's already listed (same sender, addressee,
+    /// id and text within `duplicateWindow`) is a retry of one already
+    /// heard, or its digipeated copy: not listed again. Returns whether it
+    /// was added.
+    @discardableResult
+    public func recordMessage(from: String, to: String, text: String, messageID: String?, receivedAt: Date, source: APRSSource) -> Bool {
+        if let messageID, messages.contains(where: {
+            $0.delivery == nil && $0.from == from && $0.to == to && $0.messageID == messageID && $0.text == text
+                && receivedAt.timeIntervalSince($0.receivedAt) < Self.duplicateWindow
+        }) {
+            return false
+        }
+        messages.append(APRSMessage(from: from, to: to, text: text, messageID: messageID, receivedAt: receivedAt, source: source))
+        trimMessages()
+        persist()
+        return true
+    }
+
+    public static let duplicateWindow: TimeInterval = 30 * 60
+
+    /// One of this station's own messages (`delivery` set).
+    public func recordOutgoing(_ message: APRSMessage) {
+        messages.append(message)
+        trimMessages()
+        persist()
+    }
+
+    /// Changes an own message's delivery state; nothing if it's gone.
+    public func updateDelivery(id: String, _ change: (inout APRSDelivery) -> Void) {
+        guard let index = messages.firstIndex(where: { $0.id == id }), var delivery = messages[index].delivery else { return }
+        change(&delivery)
+        guard delivery != messages[index].delivery else { return }
+        messages[index].delivery = delivery
+        persist()
+    }
+
+    public func clearHistory() {
+        stations = []
+        messages = []
+        APRSPersistence.clear(fileURL)
+    }
+
+    /// Evicts the least-recently-heard stations once over
+    /// `APRSSettings.maxStations` — a station is only ever added here when
+    /// it's genuinely new (an already-known callsign updates in place), so
+    /// this is the only place the array can grow past the limit.
+    private func trimStations() {
+        let limit = APRSSettings.maxStations
+        guard stations.count > limit else { return }
+        stations.sort { $0.lastHeardAt > $1.lastHeardAt }
+        stations.removeLast(stations.count - limit)
+    }
+
+    /// Evicts the oldest messages once over `APRSSettings.maxMessages` —
+    /// unlike stations, every received message is appended (never
+    /// deduped/updated in place), so this is the only bound on growth.
+    private func trimMessages() {
+        let limit = APRSSettings.maxMessages
+        guard messages.count > limit else { return }
+        messages.sort { $0.receivedAt > $1.receivedAt }
+        messages.removeLast(messages.count - limit)
+    }
+
+    private func persist() {
+        APRSPersistence.save(stations: stations, messages: messages, to: fileURL)
+    }
+}

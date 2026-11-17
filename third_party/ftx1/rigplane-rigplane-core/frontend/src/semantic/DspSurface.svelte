@@ -1,0 +1,380 @@
+<!--
+  Semantic DSP surface (MOR-1305, vocabulary slice 5B).
+
+  Presentation only. It renders native continuous controls and
+  finite-control handles owned by the persistent DSP hosts. It holds no
+  state and consults no controller (v3 ADR invariant 11), the same
+  discipline `TxAuxSurface` (MOR-1265) established.
+
+  CARRY-FORWARDS (binding, from the MOR-1290 fact-layer decisions this
+  surface must not relax):
+
+  (1) `agcLabels`/`nbLevelMax`/`nbLevelPercent` are NOT facts — pure
+      caps-echo display metadata (a slider ceiling and a percent-vs-raw
+      display choice, `lib/runtime/props/panel-props.ts`'s own `toDspProps`
+      precedent). They arrive as plain props, read directly off `caps` at the
+      wiring seam (`SemanticRadioSurfaces.svelte`, which already holds
+      `runtime.caps` for the view-model adapter call) — never folded into
+      `DspViewModel`. The finite host consumes `agcLabels`; the scalar host
+      consumes the two scalar display props.
+  (2) `agcTimeConstant` is structural only when the radio actually DECLARES
+      the field: `hasCap(caps, 'agc')` AND the per-receiver
+      `agc_time_constant`/`agc_time_constant_sub` tag
+      (`web/runtime_helpers.py: projected_receiver_control_tags`,
+      MOR-2527/MOR-2588 — the FTX-1 has AGC but no time constant, so the key
+      is NOT DRAWN there).
+      A declared-but-unread field keeps the key in place with its label and
+      NO value text — never a `?` stand-in, in the AGC-T key and the native
+      level outputs alike — and the value span reserves its width so the key
+      does not shift when the reading arrives.
+  (3) Every reading here is rendered exactly as the fact group states it. No
+      range-fallback plumbing, no re-derivation of `controlRangeFromCaps` —
+      `nrLevelProjection` carries NR value/domain/usability, `notchFreqDomain`
+      carries the manual-notch display domain, and `nbDepth` already arrives
+      display-scaled from the adapter.
+  (4) `unknown` renders as EMPTY value text, never as a `?` stand-in and
+      never as a v2 fabricated default (0 dB, OFF, WIDE) — the same
+      fail-closed-presentation doctrine as `TxAuxSurface`, taken to the
+      MOR-2527 owner rule (the operator sees no placeholder at all).
+
+  Two-level availability (MOR-977/1256): `structural: false` renders NOTHING;
+  a present-but-unusable control stays visible and disabled rather than
+  guessing a value.
+
+  FINITE PENDING AFFORDANCE (MOR-1441 leg 2) is owned by
+  `DspInstrumentHost`. `pendingNb`/`pendingNr` stay command-bus-blind display
+  facts there and never become the arithmetic base for a toggle.
+-->
+<script module lang="ts">
+  import type { DspField, DspViewModel } from './radio-view-model';
+  import type { NotchWidthChoice } from '../lib/types/capabilities';
+  import { NOTCH_WIDTH_LABELS, formatAgcTime } from '../components-v2/panels/dsp-panel-logic';
+  import { readingText, readingValue } from '../primitives/reading-text';
+  import { usable } from '../primitives/control-instruments/control-instrument-behavior';
+  export { DSP_TOGGLES, type DspToggleField } from './dsp-instruments';
+
+  /** `[field, label, min, max, step, format?]` — `nrLevel`/`nbDepth` are
+   *  ALREADY the adapter's display-scaled values (carry-forward 3); the rest
+   *  are raw wire ranges, verbatim `DspPanel.svelte`'s own slider bounds.
+   *  `notchFreq`'s row constants are the no-domain fallback: a published
+   *  `notchFreqDomain` on the fact group overrides them (MOR-2475).
+   *  `nbLevel` is excluded from this array. */
+  export const DSP_LEVELS = [
+    ['nrLevel', 'NR level', 0, 15, 1],
+    ['nbDepth', 'NB depth', 1, 10, 1],
+    ['nbWidth', 'NB width', 0, 255, 1],
+    ['notchFreq', 'Notch position', 0, 255, 1],
+    ['manualNotchWidth', 'Notch width', 0, 2, 1, (v: number) => NOTCH_WIDTH_LABELS[v] ?? String(v)],
+    ['agcTimeConstant', 'AGC time', 0, 9, 1, formatAgcTime],
+  ] as const;
+  export type DspLevelField = (typeof DSP_LEVELS)[number][0] | 'nbLevel';
+  export type DspSurfacePart = 'all' | 'agc' | 'dsp';
+  const [, , NR_FALLBACK_MIN, NR_FALLBACK_MAX, NR_FALLBACK_STEP] = DSP_LEVELS[0];
+
+  const reasonOf = (f: DspField<unknown>): 'field-not-observed' | undefined =>
+    usable(f) ? undefined : 'field-not-observed';
+  const numberOf = (f: DspField<number>, fallback: number): number =>
+    f.reading.status === 'known' ? f.reading.value : fallback;
+  /** MOR-2527: an unread level renders NO value text — an unlit slot with
+   *  its reserved width, never a `?` stand-in. MOR-2688: the empty-display
+   *  rule is `readingText`'s predicate; the row formatter stays in the
+   *  formatter, so the text is identical. (`fmt`'s only call site is the
+   *  `nativeLevel` output over `DSP_LEVELS`, every field a `DspField<number>`
+   *  — no boolean value can reach it.) */
+  const fmt = (f: DspField<unknown>, format?: (v: number) => string): string =>
+    readingText(f, (v) => (format ? format(v as number) : String(v)));
+
+  type NrDomain = NonNullable<DspViewModel['nrLevelProjection']>['domain'];
+  type NrPresentation = Readonly<{
+    min: number; max: number; step: number; origin: number;
+    value: number; text: string; usable: boolean;
+  }>;
+
+  /** Slider bounds from the fact group's published `notchFreqDomain`
+   *  (MOR-2475), validated before use; `null` keeps the `DSP_LEVELS` row's
+   *  own constants for a radio that declares no usable domain. */
+  type NotchPresentation = Readonly<{ min: number; max: number; step: number }>;
+  const notchPresentation = (dsp: DspViewModel): NotchPresentation | null => {
+    const domain = dsp.notchFreqDomain;
+    if (domain === undefined || domain === null
+      || !Number.isSafeInteger(domain.min) || !Number.isSafeInteger(domain.max)
+      || !Number.isSafeInteger(domain.step) || domain.step <= 0 || domain.max <= domain.min) {
+      return null;
+    }
+    return { min: domain.min, max: domain.max, step: domain.step };
+  };
+
+  const safeNrInteger = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isSafeInteger(value);
+  const onNrLattice = (value: number, origin: number, step: number): boolean =>
+    (BigInt(value) - BigInt(origin)) % BigInt(step) === 0n;
+  const acceptsNrValue = (value: unknown, domain: NonNullable<NrDomain>): value is number =>
+    safeNrInteger(value) && safeNrInteger(domain.origin)
+    && safeNrInteger(domain.step) && domain.step > 0
+    && value >= domain.min && value <= domain.max
+    && onNrLattice(value, domain.origin, domain.step);
+
+  function nrPresentation(dsp: DspViewModel): NrPresentation {
+    const unavailable = {
+      min: NR_FALLBACK_MIN, max: NR_FALLBACK_MAX, step: NR_FALLBACK_STEP,
+      origin: NR_FALLBACK_MIN, value: NR_FALLBACK_MIN, text: '', usable: false,
+    } as const;
+    try {
+      const projection = dsp.nrLevelProjection;
+      const domain = projection?.domain;
+      if (!projection || !domain
+        || !safeNrInteger(domain.min) || !safeNrInteger(domain.max)
+        || !safeNrInteger(domain.step) || domain.step <= 0
+        || !safeNrInteger(domain.origin)
+        || domain.min >= domain.max || domain.origin < domain.min || domain.origin > domain.max
+        || !onNrLattice(domain.min, domain.origin, domain.step)
+        || !onNrLattice(domain.max, domain.origin, domain.step)) {
+        return unavailable;
+      }
+      // MOR-2704 T1: the text and thumb need a read value, not an operational
+      // field; `usable` decides only whether the slider acts.
+      const shown = projection.adjustable === true
+        && readingValue(dsp.nrLevel) !== null
+        && acceptsNrValue(projection.value, domain);
+      return {
+        ...domain,
+        value: shown ? projection.value : domain.origin,
+        text: shown ? String(projection.value) : '',
+        usable: shown && usable(dsp.nrLevel),
+      };
+    } catch {
+      return unavailable;
+    }
+  }
+</script>
+
+<script lang="ts">
+  import { HardwareButton } from '$lib/Button';
+  import { t } from '$lib/i18n';
+  import { bindChoiceInstrument } from '../primitives/control-instruments/control-instrument-behavior';
+  import type { RadioViewModel } from './radio-view-model';
+  import type { DspFiniteHandles, DspFiniteLayout, DspSettingsPanel } from './dsp-instruments';
+  import type { DspScalarHandles, DspScalarLayout, DspScalarPresentation } from './dsp-scalars';
+
+  interface Props {
+    view: RadioViewModel;
+    finiteHandles: DspFiniteHandles;
+    finiteLayout?: DspFiniteLayout;
+    scalarHandles?: DspScalarHandles;
+    scalarLayout?: DspScalarLayout;
+    part?: DspSurfacePart;
+    compactAgcTime?: boolean;
+    /**
+     * MOR-1685 — profile-declared Manual Notch Width choices, read off
+     * `runtime.caps` at the wiring seam (`SemanticRadioSurfaces.svelte`).
+     * A non-empty list renders the width as a choice group; empty/absent
+     * keeps the existing scalar row.
+     */
+    notchWidthChoices?: readonly NotchWidthChoice[];
+    pendingNotchWidth?: number | null;
+    settingsPanel?: DspSettingsPanel | null;
+    onSettingsPanelChange?: (panel: DspSettingsPanel | null) => void;
+    onLevelChange?: (field: DspLevelField, value: number) => void;
+  }
+  let {
+    view, finiteHandles, finiteLayout, scalarHandles, scalarLayout, part = 'all',
+    compactAgcTime = false, notchWidthChoices, pendingNotchWidth = null,
+    settingsPanel = null, onSettingsPanelChange, onLevelChange,
+  }: Props = $props();
+  const pendingId = $props.id();
+
+  /** Absent group ⇒ this surface renders nothing (S0 optional-group doctrine). */
+  let dsp = $derived(view.dsp);
+  /**
+   * MOR-1685 — the Manual Notch Width choice binding. Options come from the
+   * profile-declared list; the confirmed selection is the `manualNotchWidth`
+   * reading. A choice dispatches through the existing scalar intent
+    * (`onLevelChange('manualNotchWidth', value)` → exactly one
+    * `set_manual_notch_width`). `pendingNotchWidth` is display-only: the
+    * confirmed reading stays the group's sole selection source.
+   */
+  let widthChoiceValues = $derived((notchWidthChoices ?? []).map((choice) => choice.value));
+  const widthChoiceBehavior = bindChoiceInstrument<number>(() => ({
+    field: dsp?.manualNotchWidth,
+    choices: widthChoiceValues,
+    invoke: (value) => level('manualNotchWidth', value),
+  }));
+
+  function level(field: DspLevelField, value: number): void {
+    if (!dsp) return;
+    if (field === 'nrLevel') {
+      const presentation = nrPresentation(dsp);
+      if (presentation.usable && acceptsNrValue(value, presentation)) {
+        onLevelChange?.(field, value);
+      }
+      return;
+    }
+    if (usable(dsp[field])) onLevelChange?.(field, value);
+  }
+  const showsLevel = (field: DspLevelField): boolean => part === 'all'
+    || (part === 'dsp' && field !== 'agcTimeConstant');
+  const hardwareScalar: Readonly<DspScalarPresentation> = {
+    form: 'hbar', compact: false, showLabel: true, showValue: true,
+    variant: 'hardware-illuminated',
+  };
+</script>
+
+{#snippet nativeLevel(
+  field: DspLevelField,
+  label: string,
+  min: number,
+  max: number,
+  step: number,
+  format: ((value: number) => string) | undefined,
+  nr: NrPresentation | null,
+  notch: NotchPresentation | null,
+)}
+  {#if dsp}
+    {#if field === 'manualNotchWidth' && (notchWidthChoices?.length ?? 0) > 0}
+      {@render widthChoices()}
+    {:else}
+      <label class="dsp-level" data-testid={`dsp-${field}`} data-field={field}
+        data-disabled-reason={nr ? (nr.usable ? undefined : 'field-not-observed') : reasonOf(dsp[field])}>
+        <span class="dsp-name">{label}</span>
+        <input type="range" min={nr?.min ?? notch?.min ?? min} max={nr?.max ?? notch?.max ?? max}
+          step={nr?.step ?? notch?.step ?? step}
+          value={nr?.value ?? numberOf(dsp[field], notch?.min ?? min)}
+          disabled={nr ? !nr.usable : !usable(dsp[field])}
+          oninput={(event) => level(field, event.currentTarget.valueAsNumber)} />
+        <output>{nr?.text ?? fmt(dsp[field], format)}</output>
+      </label>
+    {/if}
+  {/if}
+{/snippet}
+
+{#snippet widthChoices()}
+  {#if dsp?.manualNotchWidth.availability.structural}
+    {@const widthPendingId = `${pendingId}-notchWidth`}
+    <div class="dsp-level" role="radiogroup" aria-label="Notch width" data-testid="dsp-manualNotchWidth"
+      data-field="manualNotchWidth"
+      data-notch-width-status={pendingNotchWidth !== null ? 'pending' : 'confirmed'}
+      aria-describedby={pendingNotchWidth !== null ? widthPendingId : undefined}
+      data-disabled-reason={usable(dsp.manualNotchWidth) ? undefined : 'field-not-observed'}>
+      <span class="dsp-name">Notch width</span>
+      <div class="dsp-choice-row">
+        {#each notchWidthChoices ?? [] as choice (choice.value)}
+          <button type="button" class="dsp-choice"
+            data-testid={`dsp-manualNotchWidth-${choice.value}`}
+            role="radio"
+            aria-checked={widthChoiceBehavior.selected === undefined
+              ? undefined : widthChoiceBehavior.isSelected(choice.value)}
+            data-pending={pendingNotchWidth === choice.value}
+            disabled={!widthChoiceBehavior.available}
+            onclick={() => widthChoiceBehavior.invoke(choice.value)}>{choice.label}</button>
+        {/each}
+      </div>
+      {#if pendingNotchWidth !== null}<span id={widthPendingId} class="sr-only">{t('core.dsp.notch.pendingAnnouncement')}</span>{/if}
+    </div>
+  {/if}
+{/snippet}
+
+{#snippet adjustableLevels()}
+  {#if scalarHandles && scalarLayout}
+    {@render scalarLayout(scalarHandles)}
+  {/if}
+
+  {#each DSP_LEVELS as [field, label, min, max, step, format] (field)}
+    {#if field === 'nbWidth'}
+      {#if part !== 'agc' && scalarHandles && !scalarLayout}{@render scalarHandles.nbWidth()}{/if}
+    {:else if showsLevel(field) && dsp?.[field].availability.structural}
+      {@const nr = field === 'nrLevel' ? nrPresentation(dsp) : null}
+      {@const notch = field === 'notchFreq' ? notchPresentation(dsp) : null}
+      {@render nativeLevel(field, label, min, max, step, format, nr, notch)}
+    {/if}
+  {/each}
+
+  {#if part !== 'agc' && scalarHandles && !scalarLayout}{@render scalarHandles.nbLevel()}{/if}
+{/snippet}
+
+{#snippet compactLevels(panel: Exclude<DspSettingsPanel, 'agc'>)}
+  {#if scalarHandles}
+    {#if panel === 'nb'}
+      {@render scalarHandles.nbLevel(hardwareScalar)}
+      {@render scalarHandles.nbDepth(hardwareScalar)}
+      {@render scalarHandles.nbWidth(hardwareScalar)}
+    {:else if panel === 'nr'}
+      {@render scalarHandles.nrLevel(hardwareScalar)}
+    {:else}
+      {@render scalarHandles.notchFreq(hardwareScalar)}
+      {@render scalarHandles.manualNotchWidth(hardwareScalar)}
+    {/if}
+  {/if}
+{/snippet}
+
+{#if dsp}
+  <section class="dsp-surface" data-testid="dsp-surface" data-part={part} aria-label={part === 'agc' ? 'AGC controls' : 'DSP controls'}>
+    {#if finiteLayout}
+      {@render finiteLayout(finiteHandles)}
+    {:else}
+      <div class="dsp-row">
+        {@render finiteHandles.nrActive()}
+        {@render finiteHandles.nbActive()}
+      </div>
+    {/if}
+
+    {#if compactAgcTime}
+      {#if settingsPanel !== null && settingsPanel !== 'agc'}
+        <div class="dsp-settings" id={`dsp-${settingsPanel}-settings`}
+          role="group" aria-label={`${settingsPanel.toUpperCase()} settings`}>
+          {@render compactLevels(settingsPanel)}
+        </div>
+      {/if}
+      {#if dsp.agcTimeConstant.availability.structural}
+        <div class="dsp-agc-time" data-expanded={settingsPanel === 'agc'}>
+          <HardwareButton indicator="edge-left" color="gray" title="AGC Time — click for settings"
+            disabled={!usable(dsp.agcTimeConstant)}
+            ariaLabel="AGC time settings" ariaExpanded={settingsPanel === 'agc'}
+            ariaControls="dsp-agc-settings"
+            onclick={() => onSettingsPanelChange?.(settingsPanel === 'agc' ? null : 'agc')}
+          >AGC-T <span class="dsp-agc-time-value">{readingText(dsp.agcTimeConstant,
+            (v) => `${formatAgcTime(v as number)}s`)}</span> {settingsPanel === 'agc' ? '▴' : '▾'}</HardwareButton>
+        </div>
+        {#if settingsPanel === 'agc'}
+          <div class="dsp-settings" id="dsp-agc-settings">
+            {#if scalarHandles}{@render scalarHandles.agcTimeConstant(hardwareScalar)}{/if}
+          </div>
+        {/if}
+      {/if}
+    {:else}
+      {@render adjustableLevels()}
+    {/if}
+
+    {#if !finiteLayout}
+      {#if part !== 'agc'}{@render finiteHandles.notchMode()}{/if}
+      {#if part !== 'dsp'}{@render finiteHandles.agcMode()}{/if}
+    {/if}
+  </section>
+{/if}
+
+<style>
+  /* Structure only — a design language owns colour and must never become the
+     sole state channel (MOR-977, forced-colors). */
+  .dsp-surface { display: flex; flex-direction: column; gap: 0.25rem; }
+  .dsp-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  .dsp-level { display: flex; align-items: baseline; gap: 0.5rem; }
+  .dsp-name { min-width: 8ch; }
+  /* MOR-2527: the native level value slot keeps its width while the reading
+     is unknown — the key must not shift when the value arrives (6ch covers
+     'NARROW', the widest declared value label). */
+  .dsp-level > output { min-width: 6ch; font-variant-numeric: tabular-nums; }
+  .dsp-settings {
+    padding: 6px; border: 1px solid var(--v2-border-subtle, rgba(255,255,255,.12));
+    border-radius: 3px;
+  }
+  .dsp-agc-time { display: flex; width: calc(50% - 3px); }
+  .dsp-agc-time :global(button) { flex: 1 1 auto; min-width: 0; }
+  /* MOR-2527: the value slot keeps its width while the reading is unknown —
+     the key must not shift when the value arrives. "6.0s" is the widest
+     declared label (`AGC_TIME_LABELS`). */
+  .dsp-agc-time-value { display: inline-block; min-width: 4ch; text-align: center; }
+  .dsp-choice[data-pending='true'] { font-style: italic; opacity: 0.75; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+</style>

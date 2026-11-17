@@ -1,0 +1,248 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+import type { Capabilities } from '$lib/types/capabilities';
+import type { ServerState } from '$lib/types/state';
+import type { ManagedAppTxController } from '$lib/runtime/tx-controller/managed-app-host';
+import { EMPTY_PBT_PRESENTATION, projectPbtPresentation } from '../../../semantic/pbt-presentation-continuity';
+import { topologyFixtures, withFilterPassband } from '../../../semantic/fixtures/topologies';
+import { measuredPbtRawToHz } from '$lib/radio/filter-controls';
+
+const h = vi.hoisted(() => ({
+  session: { state: 'connected', epoch: 1 }, listeners: new Set<(next: { state: string; epoch: number }) => void>(),
+  commands: vi.fn(), txController: null as ManagedAppTxController | null,
+}));
+vi.mock('$lib/transport/ws-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/transport/ws-client')>();
+  return {
+    ...actual, sendCommand: h.commands, getControlSession: () => h.session,
+    onControlSessionTransition: (listener: (next: { state: string; epoch: number }) => void) => { h.listeners.add(listener); return () => h.listeners.delete(listener); },
+    onCommandDelivery: () => () => undefined,
+  };
+});
+vi.mock('$lib/runtime/tx-controller/managed-app-host', () => ({
+  getManagedAppTxController: () => {
+    if (!h.txController) throw new Error('managed TX harness is not installed');
+    return h.txController;
+  },
+}));
+vi.mock('$lib/runtime/adapters/mod-input-tx-guard.svelte', () => ({ deriveModInputTxGuardProps: () => ({ visible: false, sourceLabel: null }), getModInputTxGuardHandlers: () => ({ onSetLan: vi.fn(), onDismiss: vi.fn() }) }));
+
+import { clearCapabilities, setCapabilities } from '$lib/stores/capabilities.svelte';
+import { resetRadioState, setRadioState } from '$lib/stores/radio.svelte';
+import { resetCommandLifecycle } from '$lib/stores/commands.svelte';
+import SemanticRadioSurfaces from '../SemanticRadioSurfaces.svelte';
+import { ManagedAppTxHarness } from '$lib/runtime/tx-controller/__tests__/support/managed-app-tx-harness';
+
+const fresh = (marker: number) => ({ storePath: 'x', observed: true, freshness: 'fresh' as const, availability: 'available' as const, lastObservedMonotonic: marker });
+// MOR-2497 (post-#3519): the per-mode PBT lattice step — the USB fixture mode
+// must declare it for the mounted PBT inputs to have an Hz reading at all.
+// Ignored by the pre-change conversion, load-bearing after it.
+const caps = (generation = 7): Capabilities => ({ model: 'fixture', scope: false, audio: false, tx: false, capabilities: ['pbt', 'dual_rx'], receivers: 2, vfoScheme: 'main_sub', freqRanges: [], modes: ['USB'], filters: ['FIL1'], controls: { pbt_inner: { raw_min: 0, raw_max: 255, raw_center: 128, display_min: -1200, display_max: 1200 } }, filterConfig: { USB: { defaults: [2400], fixed: false, pbtStepHz: 50 } }, audioConfig: { sampleRate: 48000, channels: 1, codecs: ['pcm16'] }, webrtc: { available: false, enabled: false }, txBands: [], scopeSource: null, audioFftAvailable: false, stateContractVersion: 1, providerGeneration: generation } as unknown as Capabilities);
+const state = (inner: number | null, outer: number | null, marker = 1, generation = 7, active: 'MAIN' | 'SUB' = 'MAIN', freshness: 'fresh' | 'stale' = 'fresh', observedMarker = marker): ServerState => {
+  // MOR-2497 step 2: `filterWidth` is load-bearing for a PBT reading in Hz --
+  // the measured lattice has `filterWidth / 50 + 1` positions, so without it
+  // there is no Hz and the projection reports nothing. 2400 Hz is a width the
+  // radio can be at; this fixture omitted the field, which the retired
+  // conversion did not need.
+  // The pair is deliberately UNEQUAL: this describe block is about inner and
+  // outer being retained independently, and a fixture where they carry the
+  // same number cannot tell a crossed wire from a correct one. An earlier
+  // revision of this file remapped both to 100 while remapping out-of-range
+  // raws, and review caught that the block then stayed green with the two
+  // fields swapped in the adapter.
+  // MOR-2497 step 2: a PBT raw is one wire byte, 0..255. This fixture used
+  // values outside that range (300, 500, 700, -400 ...) purely as distinct
+  // numbers; the retired conversion converted them anyway, the measured one
+  // reports no lattice position for a raw the wire cannot carry. Remapped to
+  // distinct reachable raws, every pair still unequal, which is what the
+  // assertions below are about.
+  const receiver = (pbtInner: number | null, pbtOuter: number | null) => ({ freqHz: 14250000, mode: 'USB', filter: 1, dataMode: 0, filterWidth: 2400, sMeter: 0, att: 0, preamp: 0, nb: false, nr: false, afLevel: 0, rfGain: 0, squelch: 0, activeSlot: 'A', vfoA: { freqHz: 14250000, mode: 'USB', filterNum: 1 }, vfoB: { freqHz: 14300000, mode: 'USB', filterNum: 1 }, pbtInner, pbtOuter });
+  const field = (name: string) => inner === null && name.endsWith('pbtInner') ? { ...fresh(observedMarker), freshness } : outer === null && name.endsWith('pbtOuter') ? { ...fresh(observedMarker), freshness } : { ...fresh(observedMarker), freshness };
+  return { revision: marker, stateRevision: marker, freshnessRevision: marker, observationSeq: marker, updatedAt: '2026-08-15T00:00:00Z', stateContractVersion: 1, providerGeneration: generation, active, split: false, dualWatch: false, ptt: false, tunerStatus: 0, connection: { rigConnected: true, radioReady: true, controlConnected: true }, txTarget: { status: 'unknown', reason: 'fixture' }, main: receiver(inner, outer), sub: receiver(inner, outer), fieldStatus: Object.fromEntries(['active', 'main.freqHz', 'main.mode', 'main.filter', 'main.activeSlot', 'sub.freqHz', 'sub.mode', 'sub.filter', 'sub.activeSlot', 'main.pbtInner', 'main.pbtOuter', 'sub.pbtInner', 'sub.pbtOuter'].map((name) => [name, field(name)])) } as unknown as ServerState;
+};
+let target: HTMLDivElement; let component: ReturnType<typeof mount> | null = null;
+let txHarness: ManagedAppTxHarness;
+const render = () => { target = document.createElement('div'); document.body.append(target); component = mount(SemanticRadioSurfaces, { target }); flushSync(); };
+const value = (field: 'pbtInner' | 'pbtOuter') => target.querySelector<HTMLInputElement>(`[data-testid="filter-${field}"] input`)?.value ?? null;
+const transition = (state: string, epoch: number, flush = true) => { h.session = { state, epoch }; for (const listener of h.listeners) listener(h.session); if (flush) flushSync(); };
+const accept = (next: ServerState) => expect(setRadioState(next)).toBe(true);
+
+beforeEach(() => { txHarness = new ManagedAppTxHarness(); h.txController = txHarness.controller; h.session = { state: 'connected', epoch: 1 }; h.listeners.clear(); h.commands.mockClear(); resetRadioState(); clearCapabilities(); expect(setCapabilities(caps())).toBe(true); accept(state(100, 40)); });
+afterEach(() => { component && unmount(component); component = null; expect(h.listeners.size).toBe(0); document.body.innerHTML = ''; resetRadioState(); clearCapabilities(); });
+
+describe('mounted PBT continuity is fenced by the live control session (MOR-1706)', () => {
+  it('retains independent fresh values through transient loss, then synchronously clears coalesced same-epoch reconnects', () => {
+    render(); const initialInner = value('pbtInner'), initialOuter = value('pbtOuter'); expect(initialInner).not.toBeNull(); expect(initialOuter).not.toBeNull(); expect(h.commands).not.toHaveBeenCalled();
+    const staleInput = target.querySelector<HTMLInputElement>('[data-testid="filter-pbtInner"] input'); expect(staleInput).not.toBeNull();
+    accept(state(null, 40, 2)); flushSync(); expect(value('pbtInner')).toBe(initialInner); expect(value('pbtOuter')).toBe(initialOuter);
+    expect(h.listeners.size).toBe(7); transition('disconnected', 1, false); transition('connected', 1, false); flushSync(); expect(value('pbtInner')).toBeNull(); expect(value('pbtOuter')).toBeNull();
+    staleInput!.value = '500'; staleInput!.dispatchEvent(new Event('input', { bubbles: true })); flushSync(); expect(h.commands).not.toHaveBeenCalled(); expect(txHarness.trace()).toEqual([]);
+    transition('connected', 1); expect(value('pbtInner')).toBeNull(); accept(state(160, 96, 3)); flushSync(); expect(value('pbtInner')).not.toBeNull();
+    transition('connected', 2); expect(value('pbtInner')).toBeNull(); accept(state(192, 64, 4)); flushSync(); expect(value('pbtOuter')).not.toBeNull();
+    accept(state(null, null, 5, 7, 'SUB', 'stale')); flushSync(); expect(value('pbtInner')).toBeNull();
+    accept(state(224, 32, 6, 7, 'SUB')); flushSync(); expect(value('pbtInner')).not.toBeNull(); expect(h.commands).not.toHaveBeenCalled(); expect(txHarness.trace()).toEqual([]);
+  });
+
+  it('clears explicitly unsupported fields and cannot revive delayed old generation evidence', () => {
+    render(); const initial = value('pbtInner'); expect(initial).not.toBeNull(); accept(state(null, null, 2)); flushSync(); expect(value('pbtInner')).toBe(initial);
+    expect(setCapabilities({ ...caps(), capabilities: ['dual_rx'] } as Capabilities)).toBe(true); accept(state(null, null, 3)); flushSync(); expect(value('pbtInner')).toBeNull();
+    expect(setCapabilities(caps(8))).toBe(true); accept(state(240, 16, 1, 8)); flushSync(); const current = value('pbtInner'); expect(current).not.toBeNull();
+    accept(state(null, null, 2, 8)); flushSync(); expect(value('pbtInner')).toBe(current);
+  });
+
+  it('keeps operational truth for an exact equal refresh, while the pure reducer stays conservative on conflict', () => {
+    render(); const initial = value('pbtInner');
+    accept(state(100, 40, 2, 7, 'MAIN', 'fresh', 1)); flushSync();
+    const input = target.querySelector<HTMLInputElement>('[data-testid="filter-pbtInner"] input');
+    expect(value('pbtInner')).toBe(initial); expect(input?.disabled).toBe(false);
+    const baseline = withFilterPassband(topologyFixtures['1/single']);
+    baseline.filterPassband!.pbtInner = { reading: { status: 'known', value: 100 }, availability: { structural: true, operational: true } };
+    const canonical = { ...baseline, filterPassband: { ...baseline.filterPassband!, pbtInner: { reading: { status: 'known' as const, value: 999 }, availability: { structural: true, operational: true } } } };
+    const first = projectPbtPresentation(EMPTY_PBT_PRESENTATION, baseline, { boundary: { providerGeneration: 1, receiver: 'MAIN', controlSession: 'connected', epoch: 1 }, fields: { pbtInner: { status: 'fresh', marker: { source: 'field', value: 1 } }, pbtOuter: { status: 'fresh', marker: { source: 'field', value: 1 } } } });
+    const conflict = projectPbtPresentation(first.state, canonical, { boundary: { providerGeneration: 1, receiver: 'MAIN', controlSession: 'connected', epoch: 1 }, fields: { pbtInner: { status: 'fresh', marker: { source: 'field', value: 1 } }, pbtOuter: { status: 'fresh', marker: { source: 'field', value: 1 } } } });
+    expect(conflict.view.filterPassband!.pbtInner.availability.operational).toBe(false); expect(h.commands).not.toHaveBeenCalled(); expect(txHarness.trace()).toEqual([]);
+  });
+
+  it('does not carry a generation-seven floor into generation-eight marker one', () => {
+    accept(state(100, 40, 100)); render(); transition('disconnected', 1); expect(value('pbtInner')).toBeNull();
+    transition('connected', 1);
+    expect(setCapabilities(caps(8))).toBe(true); accept(state(240, 16, 1, 8)); flushSync();
+    expect(value('pbtInner')).not.toBeNull(); expect(h.commands).not.toHaveBeenCalled(); expect(txHarness.trace()).toEqual([]);
+  });
+});
+
+
+describe('mounted fractional PBT display (MOR-1692)', () => {
+  const update = (inner: number, marker: number, observedMarker: number, stale = false) => {
+    const next = state(inner, 128, marker, 7, 'MAIN', 'fresh', observedMarker);
+    if (stale) next.fieldStatus!['main.pbtInner'] = { ...fresh(observedMarker), freshness: 'stale', availability: 'stale' };
+    accept(next); flushSync();
+  };
+  const row = () => target.querySelector<HTMLElement>('[data-testid="filter-pbtInner"]')!;
+
+  it('keeps the row and slot through fractional stale edges, readback and unknown; rejects synthetic input', () => {
+    update(150, 2, 310658.42975425); render();
+    const wrapper = row(), slot = wrapper.querySelector('[data-pbt-slot]');
+    const confirmed = value('pbtInner'); expect(confirmed).not.toBeNull(); expect(slot).not.toBeNull();
+    update(150, 3, 310658.42975425, true);
+    expect(row()).toBe(wrapper); expect(row().querySelector('[data-pbt-slot]')).toBe(slot);
+    expect(value('pbtInner')).toBe(confirmed); expect(row().dataset.presentation).toBe('retained');
+    const slider = row().querySelector('input')!;
+    expect(slider.disabled).toBe(true); slider.value = '500'; slider.dispatchEvent(new Event('input', { bubbles: true })); flushSync();
+    expect(h.commands).not.toHaveBeenCalled();
+    update(160, 4, 310659.1);
+    expect(row().dataset.presentation).toBe('confirmed'); expect(value('pbtInner')).not.toBe(confirmed);
+    transition('disconnected', 1, false); transition('connected', 1, false); flushSync();
+    expect(row()).toBe(wrapper); expect(row().querySelector('[data-pbt-slot]')).toBe(slot); expect(value('pbtInner')).toBeNull();
+    update(160, 5, 310659.1, true); expect(value('pbtInner')).toBeNull();
+    update(170, 6, 310659.2, true); expect(value('pbtInner')).not.toBeNull(); expect(row().dataset.presentation).toBe('retained');
+    expect(h.commands).not.toHaveBeenCalled(); expect(txHarness.trace()).toEqual([]);
+  });
+
+  it.each([20.25, 20.0])('rejects a conflicting replay at %s and its synthetic input', (marker) => {
+    update(150, 2, 20.25); render(); const confirmed = value('pbtInner');
+    update(170, 3, marker);
+    const input = row().querySelector('input')!;
+    expect(input.value).toBe(confirmed); expect(input.disabled).toBe(true);
+    input.value = '500'; input.dispatchEvent(new Event('input', { bubbles: true })); flushSync();
+    expect(h.commands).not.toHaveBeenCalled();
+    update(180, 4, 20.5); expect(row().querySelector('input')!.disabled).toBe(false);
+    expect(value('pbtInner')).not.toBe(confirmed);
+  });
+
+  it('never retains a drag target in place of the observed readback', () => {
+    update(150, 2, 20.25); render(); const confirmed = value('pbtInner');
+    const input = row().querySelector('input')!;
+    // MOR-1691: a committed drag is input-then-change; the intermediate
+    // inputs stay gesture-local drafts.
+    input.value = '500'; input.dispatchEvent(new Event('input', { bubbles: true })); flushSync();
+    input.dispatchEvent(new Event('change', { bubbles: true })); flushSync();
+    expect(h.commands).toHaveBeenCalled(); h.commands.mockClear();
+    update(150, 3, 20.25, true);
+    expect(value('pbtInner')).toBe(confirmed);
+    expect(row().querySelector('output')?.textContent).toBe(confirmed);
+    expect(row().querySelector('input')!.disabled).toBe(true);
+    expect(h.commands).not.toHaveBeenCalled();
+    update(160, 4, 20.5); expect(value('pbtInner')).not.toBe(confirmed);
+  });
+
+  it('admits stale first, respects an unobserved ancestor, and accepts a low new-generation marker', () => {
+    update(150, 2, 10.5, true); render(); expect(value('pbtInner')).not.toBeNull(); expect(row().dataset.presentation).toBe('retained');
+    transition('disconnected', 1); expect(value('pbtInner')).toBeNull();
+    const hidden = state(180, 128, 3, 7, 'MAIN', 'fresh', 11.5);
+    hidden.fieldStatus!.main = { ...fresh(11.5), observed: false };
+    accept(hidden); transition('connected', 1); expect(value('pbtInner')).toBeNull();
+    expect(setCapabilities(caps(8))).toBe(true);
+    accept(state(190, 128, 1, 8, 'MAIN', 'fresh', 0.25)); flushSync();
+    expect(value('pbtInner')).not.toBeNull(); expect(row().dataset.presentation).toBe('confirmed');
+  });
+});
+
+// MOR-2234 acceptance item 1: with the radio connected, the surface shows the
+// same value and freshness fieldStatus reports. The projection under test is
+// `deriveFilterPassband` + `qualifyDisplayObservation` through the full
+// wiring — the PBT rows render in `FilterSurface.svelte` (`filter-pbtInner`/
+// `filter-pbtOuter`, the `filterPassband` view-model group; `DspSurface`
+// consumes the same adapter's groups but carries no PBT row of its own).
+describe('MOR-2234: a fresh PBT observation shows on the surface (item 1)', () => {
+  // The fixture's measured lattice: width 2400 Hz, USB step 50 Hz. Expected
+  // readings come from the ONE conversion (`measuredPbtRawToHz`), never a
+  // hand-computed literal that could drift from the radio's snap rule.
+  const hz = (raw: number) => String(measuredPbtRawToHz(raw, 2400, 50));
+  const row = (field: 'pbtInner' | 'pbtOuter') =>
+    target.querySelector<HTMLElement>(`[data-testid="filter-${field}"]`)!;
+
+  beforeEach(() => { resetCommandLifecycle(); });
+
+  it('renders the ACTIVE receiver\'s observed raw as the shown Hz reading, never the other receiver\'s path', () => {
+    // Distinct per-receiver raws: if the surface read `sub.*` while MAIN is
+    // active (or vice versa), the second half of the assertions reddens.
+    // (Marker 1 was consumed by the beforeEach accept.)
+    const main = state(100, 40, 2);
+    main.sub!.pbtInner = 200; main.sub!.pbtOuter = 60;
+    accept(main); render();
+    for (const [field, raw] of [['pbtInner', 100], ['pbtOuter', 40]] as const) {
+      expect(row(field).dataset.presentation).toBe('confirmed');
+      expect(row(field).querySelector('output')!.textContent).toBe(hz(raw));
+      const input = row(field).querySelector('input')!;
+      expect(input.disabled).toBe(false);
+      expect(input.value).toBe(hz(raw));
+    }
+    const sub = state(100, 40, 3, 7, 'SUB');
+    sub.sub!.pbtInner = 200; sub.sub!.pbtOuter = 60;
+    accept(sub); flushSync();
+    expect(row('pbtInner').querySelector('output')!.textContent).toBe(hz(200));
+    expect(row('pbtOuter').querySelector('output')!.textContent).toBe(hz(60));
+    expect(row('pbtInner').dataset.presentation).toBe('confirmed');
+  });
+});
+
+// MOR-2234 acceptance item 1, guard half: a surface control whose field was
+// never observed renders unknown/unread — never a value that arrived
+// through a legacy fallback (the payload's legacy mirror raw).
+describe('MOR-2234: a never-observed PBT field renders unknown, never a legacy fallback (item 1 guard)', () => {
+  const hz = (raw: number) => String(measuredPbtRawToHz(raw, 2400, 50));
+  const row = (field: 'pbtInner' | 'pbtOuter') =>
+    target.querySelector<HTMLElement>(`[data-testid="filter-${field}"]`)!;
+
+  beforeEach(() => { resetCommandLifecycle(); });
+
+  it('never shows the payload\'s legacy mirror raw when fieldStatus says the field was never observed', () => {
+    // Raw 208 is the legacy mirror value carried in the payload (the bench
+    // saw `main.pbtInner = 128` alongside fieldStatus observed=true); here
+    // the mirror is present but the field's own status says never observed.
+    // (Marker 1 was consumed by the beforeEach accept.)
+    const next = state(100, 40, 2);
+    next.main!.pbtInner = 208;
+    next.fieldStatus!['main.pbtInner'] = { ...fresh(1), observed: false };
+    accept(next); render();
+    expect(row('pbtInner').dataset.presentation).toBe('unknown');
+    expect(row('pbtInner').querySelector('input')).toBeNull();
+    expect(row('pbtInner').querySelector('output')!.textContent).toBe('');
+    // The legacy mirror's Hz must not appear anywhere in the row, and the
+    // OBSERVED sibling keeps its own reading — unknown is per-field.
+    expect(row('pbtInner').textContent).not.toContain(hz(208));
+    expect(row('pbtOuter').dataset.presentation).toBe('confirmed');
+    expect(row('pbtOuter').querySelector('output')!.textContent).toBe(hz(40));
+  });
+});

@@ -1,0 +1,880 @@
+---
+description: RigPlane's built-in browser Web UI for ham radio control — live tuning, scope and waterfall, meters, and RX/TX audio streaming from any browser.
+---
+
+# Web UI
+
+rigplane ships with a built-in browser UI for live control, scope/waterfall, meters,
+and RX/TX audio.
+
+This page documents the **current implementation** (Svelte frontend + asyncio backend),
+public interfaces, and operational workflows.
+
+## Quick Start
+
+```bash
+# Default: bind all interfaces on port 8080
+rigplane --model IC-7610 web
+
+# Explicit listen address and port
+rigplane --model IC-7610 web --listen 0.0.0.0 --port 9090
+
+# Managed local runtime on loopback
+rigplane --model IC-7610 station --port 0
+```
+
+Open `http://<server-ip>:8080` (or your custom port).
+
+### Browser microphone requirement
+
+Browser voice TX uses `getUserMedia()` to capture the microphone. Browsers expose
+that API only in a secure context, such as browser-trusted HTTPS; a private-LAN
+`http://<server-ip>` URL is not the same as `localhost` or a loopback origin.
+See the [W3C Secure Contexts specification](https://www.w3.org/TR/secure-contexts/)
+and the [MDN getUserMedia reference](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia).
+
+For a remote browser, start the Web UI with Core TLS support using
+`--tls-cert` and `--tls-key` together. Use a certificate valid and trusted for
+the server hostname. If that hostname contains a dot and does not end in
+`.localhost`, `.local`, `.home.arpa` or `.internal`, also pass
+`--allowed-host <hostname>`; otherwise the server answers
+`421 Misdirected Request`. The `--tls` option alone generates self-signed TLS and
+does not establish browser certificate trust. Install the [`tls` extra](installation.md#optional-dependencies) when needed, and open the resulting
+`https://` URL. A browser connected through an SSH loopback tunnel may instead
+use `http://localhost:<forwarded-port>` because loopback is a browser-trusted
+origin; the LAN HTTP URL itself remains insecure. This requirement affects
+browser microphone capture and voice TX; it does not imply that every control
+or receive operation fails over HTTP.
+
+## What Runs Where
+
+| Layer | Implementation | Notes |
+|------|----------------|-------|
+| HTTP + WebSocket server | Python asyncio | Pure asyncio, no external web framework |
+| WS handlers | Per-channel handlers | Control, scope (hardware and audio-FFT), and audio channels |
+| Frontend app | Svelte + TypeScript | Built assets served from package by default |
+
+The backend manages reconnect and recovery when the radio link drops; scope enable is deferred until `radio_ready` is true.
+
+## Public HTTP Interface
+
+| Method | Path | Purpose |
+|-------|------|---------|
+| `GET` | `/` | Serve UI entry page (`index.html`) |
+| `GET` | `/api/v1/info` | Version, model, connection status, runtime capability summary |
+| `GET` | `/api/v1/state` | Current radio state snapshot (camelCase, includes revision + updatedAt) |
+| `GET` | `/api/v1/capabilities` | Capabilities, frequency ranges, supported modes/filters, scope/audio config |
+| `GET` | `/api/v1/dx/spots` | Buffered DX spots |
+| `GET` | `/api/v1/bridge` | Audio bridge status |
+
+### Advanced operational HTTP endpoints
+
+These are primarily used by automation, deployment scripts, and operator tooling:
+
+| Method | Path | Purpose |
+|-------|------|---------|
+| `POST` | `/api/v1/radio/connect` | Trigger backend connect/reconnect |
+| `POST` | `/api/v1/radio/disconnect` | Trigger backend disconnect |
+| `POST` | `/api/v1/radio/power` | CI-V power control (`{"state":"on" \| "off"}`) |
+| `POST` | `/api/v1/commands` | Enqueue one structured control command |
+| `POST` | `/api/v1/commands/batch` | Apply an ordered stateless command batch |
+| `POST` | `/api/v1/bridge` | Start audio bridge |
+| `DELETE` | `/api/v1/bridge` | Stop audio bridge |
+| `GET` | `/api/v1/band-plan/config` | Active band-plan region |
+| `POST` | `/api/v1/band-plan/config` | Change region + reload band plans |
+| `GET` | `/api/v1/band-plan/layers` | Loaded overlay layers |
+| `GET` | `/api/v1/band-plan/segments?...` | Band-plan segments for selected range |
+| `GET` | `/api/v1/memories?group=&start=&count=` | Stored memory channels, read-only (radios whose profile has `[memory]`) |
+| `POST` | `/api/v1/eibi/fetch` | Download/refresh EiBi DB |
+| `GET` | `/api/v1/eibi/status` | EiBi loader status |
+| `GET` | `/api/v1/eibi/stations` | EiBi station list (paged/filterable) |
+| `GET` | `/api/v1/eibi/segments?...` | EiBi overlay segments |
+| `GET` | `/api/v1/eibi/identify?...` | Broadcast station identification |
+| `GET` | `/api/v1/eibi/bands` | EiBi band list |
+
+### Application credentials
+
+Clients that can reach Core's web listener need no application credential for
+HTTP or WebSocket access. The browser does not prompt for, read, persist or send
+an application token (`frontend/src/lib/auth.ts: getAuthToken`,
+`frontend/src/lib/transport/http-client.ts: fetchInfo`). Old browser
+token entries may remain inert; preference migration leaves them untouched
+(`frontend/src/lib/migrate-legacy-storage.ts: migrateLegacyStorage`).
+
+Remove `--auth-token` and `--auth-token-file` from old launch commands; these
+flags now fail before radio startup. `RIGPLANE_AUTH_TOKEN` is ignored. See the
+[CLI migration note](cli.md#web) and [API migration contract](../api/web.md#application-authentication-removal)
+for the empty-only `WebConfig.auth_token` compatibility field and diagnostic
+CSRF, Origin and consent behavior. Radio credentials, bind selection and TLS
+options retain their existing roles.
+
+!!! note "Audio bridge control path"
+    Runtime bridge activation is typically done from CLI flags
+    (`rigplane --model <MODEL> web --bridge ...` / `--bridge-rx-only`).
+
+## WebSocket Channels
+
+| Endpoint | Direction | Payload type | Purpose |
+|---------|-----------|--------------|---------|
+| `/api/v1/ws` | bidirectional | JSON text | Commands, responses, notifications, `state_update` stream |
+| `/api/v1/scope` | bidirectional | JSON + Binary | Explicit scope subscription, granted geometry and v2 frames |
+| `/api/v1/audio` | bidirectional | JSON + Binary | RX stream + TX uplink |
+
+The scope channel requires a subscription before sending frames. Select
+`sourceId: "radio"`, `"audio_fft"` or `"iq_fft"`, a receiver (`null` for FFT
+sources), a view, pixel width and `maxFps`. The server answers with granted
+geometry and v2 binary frames. `/api/v1/audio-scope` is removed; see
+[Scope subscriptions](../api/scope.md#websocket-subscriptions).
+
+## Control Channel Workflow (`/api/v1/ws`)
+
+### Command envelope
+
+```json
+{"type":"cmd","id":"42","name":"set_freq","params":{"freq":14074000,"receiver":0}}
+```
+
+Server response:
+
+```json
+{"type":"response","id":"42","ok":true,"result":{"freq":14074000,"receiver":0}}
+```
+
+### `state_update` payload formats
+
+The backend emits `state_update` in two shapes:
+
+1. Full snapshot:
+
+```json
+{"type":"state_update","data":{"type":"full","data":{"main":{"freqHz":14074000}},"revision":1}}
+```
+
+2. Delta update. Each top-level key whose value changed carries its complete new
+   value (a frequency change resends the whole `main` object); keys that
+   disappeared are listed in `removed`:
+
+```json
+{"type":"state_update","data":{"type":"delta","changed":{"ptt":true},"revision":2}}
+```
+
+Client integrations should support both formats. Assuming only full snapshots causes
+state drift: the server sends deltas between full snapshots, and a full snapshot
+follows every 100 deltas and every provider-generation change.
+
+### Connection control
+
+Connect and disconnect go through REST only: `POST /api/v1/radio/connect` and
+`POST /api/v1/radio/disconnect` (see the HTTP table above). The control
+WebSocket does not handle `radio_connect` / `radio_disconnect` messages; it
+ignores them like any other unknown message type.
+
+If backend recovery is already in progress, `POST /api/v1/radio/connect`
+returns HTTP 409:
+
+```json
+{"error":"backend_recovering","message":"backend is already managing radio recovery"}
+```
+
+### Common commands
+
+- Tuning/control: `set_freq`, `set_mode`, `set_filter`, `set_band`, `ptt`
+- RF/audio levels: `set_power`, `set_rf_gain`, `set_af_level`, `set_squelch`
+- DSP/features: `set_nb`, `set_nr`, `set_digisel`, `set_ipplus`, `set_comp`
+- Receiver/routing: `select_vfo`, `vfo_swap`, `vfo_equalize`, `set_dual_watch`
+- Scope control: `switch_scope_receiver`, `set_scope_during_tx`, `set_scope_center_type`
+
+These are representative command names, not the complete catalog. Most non-TX
+commands share names and `params` objects across HTTP and WebSocket. Momentary
+`ptt` uses the owned WebSocket flow; the legacy HTTP `ptt`, `ptt_on` and
+`ptt_off` command payloads are rejected. Latched TRANSMIT and unconditional OFF
+use the managed-transmit API described below.
+The full command catalog — every name, parameter shape, capability gate, and
+batch-eligibility flag — is published in
+[HTTP / WebSocket Command Catalog](../api/command-catalog.md).
+Lower-level Python/CI-V examples are documented in [CI-V Commands](commands.md).
+
+## HTTP Structured Commands
+
+Automation clients can send structured non-TX commands over HTTP:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/commands \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"deck-1","name":"set_freq","params":{"freq":144030000}}'
+```
+
+For ordered profile-like changes, send a stateless batch:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/commands/batch \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "vara-fm",
+    "steps": [
+      {"name":"set_freq","params":{"freq":144030000}},
+      {"name":"set_mode","params":{"mode":"FM"}},
+      {"name":"set_data_mode","params":{"mode":1}},
+      {"name":"set_data1_mod_input","params":{"source":3}},
+      {"name":"set_usb_mod_level","params":{"level":72}},
+      {"name":"set_af_level","params":{"level":72}}
+    ]
+  }'
+```
+
+Batch steps are executed in exact request order. Structured command steps go
+through the radio command queue; raw CI-V transaction steps use
+`send_civ_transaction()` and wait for the requested ACK, NAK, data response, or
+timeout before the next step starts. Repeated commands in one batch are
+preserved. The response includes one result per executed, timed-out, failed, or
+skipped step. `continue_on_error`, when provided, must be a JSON boolean. Core
+does not persist named profiles or stored batches; callers send the full
+sequence each time.
+
+The batch path is designed for local profile switching from tools such as
+Stream Deck, MQTT gateways, shell scripts, and station supervisors:
+
+```mermaid
+flowchart LR
+  Button["operator button"] --> MQTT["MQTT/profile event"]
+  MQTT --> Gateway["local gateway maps name to steps"]
+  Gateway --> Batch["POST /api/v1/commands/batch"]
+  Batch --> Queue["RigPlane ordered command queue"]
+  Queue --> Radio["radio backend and hardware"]
+```
+
+Use `/api/v1/capabilities` before sending model-specific batches; not every
+radio exposes the same receivers, memory operations, audio routing controls, or
+feature toggles. Prefer these structured commands over raw CI-V for routine
+automation so RigPlane remains the single owner of the radio connection,
+queueing, pacing, and safety checks.
+
+For vendor-specific CI-V commands that are not yet covered by structured
+commands, use the queued `send_civ` escape hatch. The payload mirrors the
+Python `radio.send_civ(command=..., sub=..., data=...)` call, but `data` is an
+even-length hex string:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/commands \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "display-type-b",
+    "name": "send_civ",
+    "params": {
+      "command": 26,
+      "sub": 5,
+      "data": "015301"
+    }
+  }'
+```
+
+`send_civ` is fire-and-forget in the HTTP/WS command queue. It preserves order,
+including repeated raw CI-V steps in batches, but it does not return response
+bytes or readback verification. Use it for model-specific gaps such as
+display/menu settings; prefer structured commands for normal profile steps
+where RigPlane already has a command.
+
+When a raw CI-V operation needs a radio response, use
+`POST /api/v1/civ/transaction` instead of `send_civ`. The transaction endpoint
+temporarily claims the CI-V stream, sends one frame, and waits according to an
+explicit expectation:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/v1/civ/transaction \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "display-type-b",
+    "command": 26,
+    "sub": 5,
+    "data": "015301",
+    "expect": "ack",
+    "timeout_ms": 1000
+  }'
+```
+
+`expect` must be `none`, `ack`, or `data`. `none` sends without waiting and
+returns `status: "sent"`; `ack` waits for ACK/NAK; `data` waits for the
+matching data response. NAK returns HTTP `200` with `ok: false`,
+`status: "nak"`, and `error: "radio_nak"`. Timeouts return HTTP `504`.
+Inside `POST /api/v1/commands/batch`, use a `raw_civ_transaction` step when a
+batch needs the same wire-level ACK, NAK, or data response before continuing.
+
+The same transaction can be sent from a small Python tool:
+
+```python
+import json
+import urllib.request
+
+base_url = "http://127.0.0.1:8080"
+
+payload = {
+    "id": "display-type-b",
+    "command": 26,
+    "sub": 5,
+    "data": "015301",
+    "expect": "ack",
+    "timeout_ms": 1000,
+}
+
+request = urllib.request.Request(
+    f"{base_url}/api/v1/civ/transaction",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+
+with urllib.request.urlopen(request, timeout=5) as response:
+    result = json.load(response)
+
+if not result["ok"]:
+    raise SystemExit(result)
+```
+
+DATA mode commands use the active radio profile's numeric DATA value. For the
+current IC-9700 profile, `set_data_mode` uses `mode: 0` for OFF and `mode: 1`
+for DATA. Its modulation input source values are `0 = MIC`, `1 = ACC`,
+`2 = MIC+ACC`, `3 = USB`, and `4 = MIC+USB`; use
+`set_data1_mod_input`, `set_data_off_mod_input`, and modulation level commands
+such as `set_usb_mod_level` or `set_acc1_mod_level` to build audio-route
+specific profiles.
+
+The batch endpoint is stateless. In Core, a "profile" is simply the JSON batch
+the caller sends. Stored named profiles, profile builders, account sync, and
+profile sharing are product-layer concerns outside this open-core endpoint.
+
+Minimal Python client:
+
+```python
+import json
+import urllib.request
+
+batch = {
+    "id": "vara-fm",
+    "steps": [
+        {"name": "set_freq", "params": {"freq": 144030000}},
+        {"name": "set_mode", "params": {"mode": "FM"}},
+        {"name": "set_data_mode", "params": {"mode": 1}},
+        {"name": "set_data1_mod_input", "params": {"source": 3}},
+    ],
+}
+
+request = urllib.request.Request(
+    "http://127.0.0.1:8080/api/v1/commands/batch",
+    data=json.dumps(batch).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+
+with urllib.request.urlopen(request, timeout=30) as response:
+    result = json.load(response)
+```
+
+Minimal MQTT gateway shape:
+
+```python
+import json
+import urllib.request
+
+import paho.mqtt.client as mqtt
+
+BATCHES = {
+    "vara-fm": {
+        "steps": [
+            {"name": "set_freq", "params": {"freq": 144030000}},
+            {"name": "set_mode", "params": {"mode": "FM"}},
+            {"name": "set_data_mode", "params": {"mode": 1}},
+            {"name": "set_data1_mod_input", "params": {"source": 3}},
+        ],
+    }
+}
+
+
+def on_message(client, userdata, message) -> None:
+    batch = BATCHES.get(message.payload.decode("utf-8").strip())
+    if batch is None:
+        return
+    urllib.request.urlopen(
+        urllib.request.Request(
+            "http://127.0.0.1:8080/api/v1/commands/batch",
+            data=json.dumps(batch).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        ),
+        timeout=30,
+    )
+
+
+client = mqtt.Client()
+client.on_message = on_message
+client.connect("127.0.0.1", 1883)
+client.subscribe("radio/profile")
+client.loop_forever()
+```
+
+### Band switching with `set_band` (`bsrCode` workflow)
+
+`set_band` is intended for profile bands that expose `bsrCode` in
+`GET /api/v1/capabilities`:
+
+```json
+{
+  "freqRanges": [
+    {
+      "label": "HF",
+      "bands": [
+        { "name": "20m", "default": 14200000, "bsrCode": 5 },
+        { "name": "60m", "default": 5357000 }
+      ]
+    }
+  ]
+}
+```
+
+Control command:
+
+```json
+{"type":"cmd","id":"73","name":"set_band","params":{"band":5}}
+```
+
+Backend flow (`src/rigplane/web/radio_poller.py`):
+
+1. Read Band Stack Register via CI-V `0x1A 0x01 <band> 0x01` (register 1).
+2. If response is valid, apply recalled frequency and mode/filter.
+3. If recall fails (timeout/exception/short response), fallback to profile
+   `default_hz` for the matching `bsr_code`.
+4. If no band with that `bsr_code` exists, no retune is applied and a warning is logged.
+
+Practical rule:
+
+- If a band has `bsrCode`, use `set_band` (radio recalls last freq/mode for that band).
+- If `bsrCode` is absent, use `set_freq` with band `default`.
+
+## Audio Workflow and Constraints
+
+### RX/TX lifecycle
+
+1. Client enables RX:
+   - `{"type":"audio_start","direction":"rx"}`
+2. Client requests PTT ON on the control channel:
+   `{"type":"cmd","id":"…","name":"ptt","params":{"state":true}}` (or `"name":"ptt_on"`).
+3. Client enables TX stream:
+   - `{"type":"audio_start","direction":"tx"}`
+   - then sends binary TX frames to `/api/v1/audio`.
+4. Client requests PTT OFF.
+5. Backend stops TX stream and restarts RX stream.
+
+### Important constraints
+
+- The backend drops browser TX frames unless RigPlane holds the key: a keyed
+  managed TX intent or an observed PTT ON.
+- If audio send blocks for too long, server closes stale audio WS path and client
+  reconnect logic re-establishes the stream.
+
+!!! danger "IC-7610: set MOD Input to LAN before voice TX"
+    For network (LAN) voice TX the radio's **MOD Input** source for the active
+    mode group must be `LAN` (**Menu → Set → Connectors → MOD Input**,
+    `DATA OFF MOD` for regular SSB/AM/FM). If it is `MIC` — or any option that
+    includes MIC — the open microphone modulates the moment PTT is keyed from
+    the network, producing broadband noise or a rising feedback squeal instead
+    of your audio. See
+    [Network Voice TX Is Noise, a Squeal, or Silent (IC-7610 MOD Input)](troubleshooting.md#network-voice-tx-is-noise-a-squeal-or-silent-ic-7610-mod-input).
+
+### Managed TX and PTT ownership
+
+The browser's App-owned managed TX controller sends intents to the backend's
+canonical managed-transmit authority. Presentation components render its
+snapshot and request operations; they do not create another TX owner or
+infer radio state from a button press. The composition entry is
+`frontend/src/lib/runtime/tx-controller/managed-app-host.ts`:
+`provideManagedAppTxHost`; `WebServer._managed_tx_authority` in
+`src/rigplane/web/server.py` supplies the server authority.
+
+Momentary PTT uses the control WebSocket and keeps press/release on the same
+connection owner. Latched TRANSMIT is a separate operation through
+`POST /api/v1/managed-transmit/command`; its `force_off` operation requests
+unconditional OFF. Releasing an owner's PTT intent is not unconditional OFF.
+See [the TX migration examples](../migrate.md#tx-consumers-ownership-admission-completion-and-off)
+for request shapes and the intentionally rejected legacy HTTP commands.
+
+Admission is not completion or observed RF. Read the managed document at
+`GET /api/v1/managed-transmit` and preserve unavailable, stale and unknown
+states. A lost response must not trigger an automatic positive-TX retry.
+An unavailable managed authority is not permission to fall back to a legacy
+direct-key path. Time-out configuration and remaining time come from the
+managed document; do not infer a universal timer or ownership guarantee from
+a backend name. Direct hardware or external keying is not an owned browser
+PTT intent. Final operator/hardware acceptance is separate from these API
+contracts.
+
+Typed `send_cw_text` keys the rig without managed-authority admission by owner decision (2026-10-12), because its frames run through the abort fence (`src/rigplane/runtime/managed_tx_fence.py`: `TxAbortFence`) that a managed force-off cancels, as pinned by `test_icom_force_off_suppresses_late_cw_write_and_remaining_chunks` in `tests/test_fenced_local_tx_providers.py`.
+
+## Frontend Runtime Workflow (Current Implementation)
+
+The browser app startup path is implemented in `frontend/src/App.svelte`
+(`initMediaSession`, `runtime.bootstrap`) and
+`frontend/src/lib/runtime/frontend-runtime.ts` (`FrontendRuntime._doBootstrap`).
+
+### Boot sequence
+
+1. Initialize the workspace-backed skin selector (see "Layout and skin resolution" below).
+2. Register MediaSession handlers (when API is available).
+3. Fetch `/api/v1/info`.
+4. Subscribe to the capabilities store. The control WebSocket client loads
+   `/api/v1/capabilities` each time a full state reports a new provider generation.
+5. Connect the control WebSocket (`/api/v1/ws`), the only source of state, and
+   subscribe to the `events` stream.
+
+### Runtime ownership (actual code paths)
+
+The frontend keeps one behavior path and splits responsibilities by module:
+
+| Responsibility | Current implementation path | Notes |
+|---|---|---|
+| Runtime read/write entry point | `frontend/src/lib/runtime/frontend-runtime.ts` | Exposes state, capabilities, connection snapshot, audio actions, and command send helpers. |
+| UI view-model mapping | `frontend/src/lib/runtime/adapters/` (`radio-view-model-adapter.ts`, `panel-adapters.ts`) | |
+| WS command dispatch | `frontend/src/lib/runtime/commands/panel-commands.ts` | |
+| HTTP system actions | `frontend/src/lib/runtime/system-controller.ts` via `runtime.system.*` | Power on/off (`POST /api/v1/radio/power`) and EiBi identify (`GET /api/v1/eibi/identify`); `disconnect()` closes the browser's audio, WebSocket and MediaSession channels and `connect()` reopens the WebSocket and MediaSession ones; neither makes an HTTP call. |
+| Presentation composition and resource handover | `frontend/src/App.svelte`: `requestPresentation`, `acquireSwapBridge`; `frontend/src/lib/runtime/resource-demand.ts` | The bridge preserves already-demanded resources during a layout change; it does not create demand for an otherwise unused service. |
+| Browser TX facade and session cleanup | `frontend/src/lib/runtime/tx-controller/managed-app-host.ts`: `provideManagedAppTxHost` | App lifetime, outside replaceable skins; renders server-managed state and submits intents. |
+
+Skin entry points are registered in `frontend/src/skins/registry.ts` and may
+compose semantic surfaces or shared layout components. Layout replacement
+does not recreate runtime bootstrap or TX ownership. The accepted dependency
+direction is documented in the [v3 architecture decision](../plans/2026-07-25-ui-composition-architecture-v3.md).
+
+### Backend CI-V poll cadence (state freshness)
+
+`_FAST_INTERVAL` (LAN) and `_FAST_INTERVAL_SERIAL` (serial) in
+`web/radio_poller.py: RadioPoller` are how often the poller loop wakes, not
+how often any field is read: a pass dispatches whatever the acquisition
+scheduler already has queued. What puts a cadence request there is the
+field's resolved policy
+(`core/state_acquisition_policy.py: RadioAcquisitionProfile.policy_for`):
+its own entry in `rigs/*.toml`
+`[state_acquisition.field_policies]` if it has one; otherwise, for a
+pollable field, its acquisition class's policy, whose cadence the scheduler
+may stretch to fit the transport budget
+(`core/acquisition_scheduler.py: AcquisitionScheduler._fit_transport_budget`);
+otherwise the profile's default policy. It is emitted by
+`core/acquisition_scheduler.py: StateFreshnessService.tick`
+(`AcquisitionScheduler.ensure_fresh` and `.prime_unobserved` also enqueue
+requests, outside this cadence).
+
+A CI-V observation of a field the profile neither declares in
+`[state_acquisition.field_policies]` nor polls is stamped with the
+rig-blind `_OBSERVATION_MAX_AGE_SECONDS` entry where one exists and
+otherwise with the profile's default-policy TTL
+(`runtime/_civ_rx.py: _observation_max_age`), so it decays to stale when
+nothing refreshes it (`core/state_store.py: StateStore.mark_stale_due`).
+A polled field (or one with a declared field policy) instead takes its
+policy's TTL — for a polled field with no entry of its own, its
+acquisition class's TTL, which is no expiry for the setting and menu
+classes (`core/state_acquisition_policy.py: ACQUISITION_CLASS_TABLE`,
+`AcquisitionClassPolicy.expires_by_time`). A field policy on a
+capability that cannot poll must declare
+`freshness_ttl_seconds = "never"`, because no cadence read refreshes it
+(`tests/test_state_acquisition_policy.py: test_non_polling_field_policies_declare_no_freshness_expiry`).
+`tests/test_civ_observation_ttl_census.py: test_every_civ_observation_path_has_a_ttl_or_an_explicit_never`
+fails if an enumerated CI-V ingress path on a `rigs/` CI-V profile is
+stamped with anything other than a finite positive TTL, unless the
+profile declares `"never"` for it or it is polled and its class does not
+expire by time.
+
+### Conditional requests on `/api/v1/state`
+
+The browser app does not poll `/api/v1/state`; its state arrives over `/api/v1/ws`.
+For HTTP clients, the server sends an `ETag` and answers a matching
+`If-None-Match` with `304 Not Modified`. The `ETag` includes the radio-health
+revision, so a radio-health-only transition returns `200` with a fresh payload
+even when frequency/mode/meter state did not change.
+
+### MediaSession mappings (mobile/headset controls)
+
+When `navigator.mediaSession` is supported:
+
+- `previoustrack` -> tune down one step (`set_freq`)
+- `nexttrack` -> tune up one step (`set_freq`)
+
+MediaSession does **not** control PTT. `play`/`pause` have no handler
+registered; only the volume-key tuning actions above are wired up.
+
+Implementation path: `frontend/src/lib/media/media-session.ts`.
+
+!!! note "Receiver routing in MediaSession tuning"
+    MediaSession tuning sends `set_freq` for the active receiver
+    (`receiver: 1` while SUB is active, otherwise `0`).
+
+## Keyboard Shortcuts (Desktop)
+
+Bindings are capability-driven: the backend serializes a per-radio
+`keyboard` config into `GET /api/v1/capabilities`, built from a shared
+default (`rigs/_keyboard-default.toml`) plus optional per-rig overrides.
+Press `?` in the desktop skin to open the in-app shortcut list for the
+connected radio's actual bindings.
+
+Representative bindings from the shared default profile:
+
+| Key | Action |
+|-----|--------|
+| `ArrowUp` / `ArrowDown` | Increase / decrease the tuning step |
+| `ArrowLeft` / `ArrowRight` | Tune down / up by the current step |
+| `PageUp` / `PageDown` | Jump the active receiver +/- 1 kHz |
+| `1`-`9` | Select band (160m .. 6m) |
+| `F1`-`F10` | Select mode (LSB, USB, CW, CW-R, AM, FM, RTTY, RTTY-R, PSK, PSK-R) |
+| `m` / `Shift+M` / `Shift+S` | Toggle active receiver / activate MAIN / activate SUB |
+| `Escape` | Clear RIT/XIT offset |
+
+Editable value controls, the active-receiver toggle, and the spectrum
+splitter (Up/Down only) own their unmodified arrow keys: while one is
+focused, those arrows act on that control instead of tuning (Shift steps a
+value control finely; a control that is not editable owns nothing).
+Modified arrows — the `Alt`/`Option`+`ArrowUp`/`ArrowDown` AF level and
+`Alt`/`Option`+`Shift`+`ArrowUp`/`ArrowDown` RF gain bindings (one set on
+every platform; macOS reserves Ctrl+Arrow for Mission Control / App Exposé,
+which is why the defaults avoid it) — and focus anywhere else, including
+plain buttons, keep the global bindings. Inside a focused text input the
+global map stays silent and the browser keeps Alt/Option+Arrow for word
+navigation.
+
+There is no global keyboard shortcut bound to PTT. Focused PTT controls
+support Space/Enter through their own press/release handlers; this is
+distinct from a window-level radio shortcut. Global-binding implementation:
+`frontend/src/components-v2/layout/keyboard-map.ts` (event matching) and
+`frontend/src/lib/runtime/commands/panel-commands.ts` (`makeKeyboardHandlers`,
+action dispatch).
+
+## Mobile Interaction Model
+
+Mobile-first interaction logic is implemented in:
+
+- `frontend/src/components-v2/layout/RadioLayout.svelte`
+- `frontend/src/components-v2/layout/MobileRadioLayout.svelte`
+- `frontend/src/components-v2/controls/BottomSheet.svelte`
+- `frontend/src/components-v2/controls/CollapsiblePanel.svelte`
+
+### Layout and skin resolution
+
+Skin/layout is resolved in `frontend/src/App.svelte` via `resolveSkinId(...)`
+and lazy-loaded through `skins/registry.ts`:
+
+1. `isMobile` is true when:
+   - `min(window.innerWidth, window.innerHeight) < 640`, or
+   - touch device and `min(window.innerWidth, window.innerHeight) < 500`.
+2. If `isMobile` is true -> `mobile` skin.
+3. Otherwise, the workspace layout preference is used:
+   - `lcd-cockpit` -> LCD Cockpit skin (TS-990S-style dual-cockpit)
+   - `lcd-scope` -> LCD Scope skin (IC-7300-style scope-dominant)
+   - `standard` -> desktop-v2 skin
+   - `sdr-test` -> SDR Screen test skin
+   - `peer-split`, `unified-instrument`, `panadapter-first` -> their respective LCD shell presentations on a dual-receiver radio; on a single-receiver radio each falls back to `lcd-cockpit`
+   - `dual-sdr-face` -> dual-receiver SDR instrument face
+   - `auto` -> desktop-v2 unconditionally; scope availability does not affect this resolution.
+
+`normalizeLayoutMode()` (`frontend/src/presentation/layout-mode.ts`, re-exported from `lib/stores/layout.svelte.ts` for existing
+callers) normalizes legacy persisted values so old localStorage entries
+keep resolving: `amber-lcd`/`lcd` -> `lcd-cockpit`, `spectrum`/`desktop-v2`
+-> `standard`.
+
+The status bar layout control (`StatusBar.svelte`) is a `<select>` dropdown.
+The persistent ID vocabulary is `CANONICAL_LAYOUT_MODES` in
+`frontend/src/presentation/layout-mode.ts`; it is distinct from skin manifest
+IDs (`standard` maps to `desktop-v2`). The QA-only `dual-receiver-cockpit`
+query override is not a persistable workspace choice.
+
+### Workspace settings, import and export
+
+In the standard layout, open Settings and expand WORKSPACE. Select layout,
+design language and theme there. Language IDs are `studioline`,
+`fieldline` and `segmentline`; a language activates only on compatible
+layouts. Density is a supported workspace JSON field, clamped to the active
+language's supported values; WORKSPACE currently has no density picker.
+
+The schema is `WorkspaceV1` in
+`frontend/src/presentation/workspace/contract.ts`. It stores stable IDs and
+per-zone surface visibility/order in `rigplane:workspace`. A workspace can
+hide or reorder surfaces already declared within a zone. It cannot force-show
+unsupported controls, move surfaces across zones, remove required semantic
+surfaces, or persist capabilities, radio state, credentials, transport sessions
+or TX safety settings. Pinned command names are validated schema data with
+no user-interface consumer yet.
+
+Export saves `rigplane-workspace.json`. Import accepts a JSON file or pasted
+JSON and validates the whole document before replacing the workspace. Any
+rejected field prevents the import; the UI reports field/reason details.
+Export includes preserved unknown fields. Reset restores the frozen defaults
+and offers an in-session undo for supported presentation settings. Undo does
+not restore pinned command names or preserved unknown fields. These operations
+use `importWorkspace`, `exportWorkspace` and `resetWorkspace` in
+`frontend/src/presentation/workspace/store.svelte.ts`.
+
+Schema versions 1–4 are readable by the current reader (schema version 2). A lossy newer
+document is held read-only for the session until explicit whole-document
+reset or a valid import; normal edits do not silently overwrite it. Legacy
+pre-workspace keys are retained. An older build reads those retained old
+preferences, not edits made only to the new workspace. The
+[workspace verification runbook](../validation/workspace-v1-verification.md)
+records a historical storage probe, not final installed-release acceptance.
+
+### Bottom sheet gestures
+
+Bottom sheets support swipe-to-dismiss:
+
+- drag starts from the handle, or from content when scroll is at top
+- downward dismiss triggers when either:
+  - drag distance is >30% of sheet height, or
+  - swipe velocity is >0.5 px/ms
+
+### Collapsible panel swipe gestures
+
+Panel headers support vertical swipe:
+
+- swipe down collapses an expanded panel
+- swipe up expands a collapsed panel
+- threshold: 30px, with vertical-dominant movement guard
+
+### Mobile PTT workflow
+
+Mobile PTT pointer timing is implemented by
+`components-v2/wiring/managed-tx-gesture.ts`: `createManagedTxGesture`, wired
+into `MobileRadioLayout.svelte` through the App-owned managed TX controller:
+
+- a press requests momentary PTT; release arms a 300ms window before
+  requesting its release
+- a second press inside that window requests canonical latched TRANSMIT
+  when available, or releases PTT otherwise
+- a press while latched requests ForceOff
+- changing orientation destroys the old gesture generation and releases its
+  in-progress or pending momentary PTT intent; it does not clear canonical
+  latched TRANSMIT
+
+These are requests, not confirmation of radio transitions. Use the managed
+state/observation and explicit OFF control; local gesture cleanup does not
+prove RF OFF. There is no mobile-local safety timer. See
+[Managed TX and PTT ownership](#managed-tx-and-ptt-ownership) for the
+authority and observation boundary.
+
+## Operations Runbook
+
+### Run with DX cluster overlays
+
+```bash
+rigplane --model IC-7610 web --dx-cluster dxc.nc7j.com:7373 --callsign YOURCALL
+```
+
+### Run with custom UI assets
+
+```bash
+rigplane --model IC-7610 web --static-dir /opt/icom-ui/dist
+```
+
+### Package cutover and rollback
+
+Before replacing a deployed package, export the workspace and preserve the
+browser origin/storage used by the deployment. End the active operating
+session and confirm the required release/RX state before stopping or replacing
+it; an accepted OFF request alone is insufficient. Restore a known complete
+package/frontend artifact together, then verify its version, UI and preferences.
+Do not mix legacy static files into a running current session.
+
+The unused pre-v2 `static.old` source copy was removed in #2400; it is not the
+rollback UI. Retained workspace keys preserve the documented legacy-read
+window, but do not by themselves prove package or active-session rollback.
+Final candidate install/browser/rollback evidence remains separate from the
+source contracts here. Core 3.0 scope and the separate Pro product are described
+in the [migration guide](../migrate.md#core-sdr-and-acceptance-scope).
+
+### Quick health checks
+
+```bash
+curl http://127.0.0.1:8080/api/v1/info
+curl http://127.0.0.1:8080/api/v1/state
+```
+
+### Verify StatusBar system actions
+
+`runtime.system.powerOn()`/`powerOff()` in `StatusBar.svelte` call
+`POST /api/v1/radio/power`, and its now-playing lookup calls
+`GET /api/v1/eibi/identify`:
+
+```bash
+# Remote power control
+curl -X POST http://127.0.0.1:8080/api/v1/radio/power \
+  -H "Content-Type: application/json" \
+  -d '{"state":"on"}'
+curl -X POST http://127.0.0.1:8080/api/v1/radio/power \
+  -H "Content-Type: application/json" \
+  -d '{"state":"off"}'
+
+# Optional EiBi "now playing" lookup used by status bar
+curl "http://127.0.0.1:8080/api/v1/eibi/identify?freq=14074000"
+```
+
+## Dynamic UI — Radio-Aware Controls
+
+The Web UI adapts to the active radio's capabilities. Capabilities are fetched
+from `GET /api/v1/capabilities` each time the control WebSocket reports a new
+provider generation, and cached in
+`frontend/src/lib/stores/capabilities.svelte.ts`.
+
+### VFO Labels
+
+VFO button labels change based on the radio's VFO scheme:
+
+| Radio | Scheme | Button A label | Button B label |
+|-------|--------|----------------|----------------|
+| IC-7610 | `main_sub` | **MAIN** | **SUB** |
+| IC-7300 | `ab` | **VFO A** | **VFO B** |
+
+### Capability-Based UI Guards
+
+Controls that depend on hardware features are automatically hidden or disabled when the
+active radio profile doesn't support them:
+
+| Control | Capability flag | Visible on IC-7610 | Visible on IC-7300 |
+|---------|----------------|--------------------|--------------------|
+| DIGI-SEL toggle | `digisel` | ✅ | ❌ hidden |
+| IP+ toggle | `ip_plus` | ✅ | ✅ |
+| SUB receiver panel | `dual_rx` | ✅ | ❌ hidden |
+| TX controls, PTT | `tx` | ✅ | ✅ |
+| Audio RX/TX | `audio` | ✅ | ✅ |
+| Scope/waterfall | `scope` | ✅ | ✅ |
+
+Use `hasCapability(name)` to check for a capability in Svelte components:
+
+```typescript
+import { hasCapability } from '$lib/stores/capabilities.svelte';
+```
+
+### State Endpoint and Receiver Count
+
+`GET /api/v1/state` omits the `sub` receiver for single-receiver radios.
+Frontend code should guard against the missing `sub` key rather than assuming it is
+always present.
+
+```typescript
+// Safe receiver access
+const sub = state.sub ?? null;
+```
+
+## Common Pitfalls for Developers
+
+- **Receiver indexing:** many commands expect `receiver=0` (MAIN) or `receiver=1` (SUB)
+  and validate against runtime profile receiver count.
+- **`sub` may be absent:** `GET /api/v1/state` omits `sub` for single-receiver radios —
+  always guard with a null check.
+- **Authoritative state source:** use `state_update` payloads as source of truth; optimistic
+  UI updates can be overwritten by server state.
+- **Scope recovery behavior:** scope enable/re-enable is deferred until `radio_ready=true`;
+  all-zero scope frames trigger automatic re-enable attempts.
+- **No v1 UI:** `?ui=v1` is no longer supported (since v0.20+) — the app only ships
+  the current skins-based UI. Mobile interactions (sheet/panel swipe, touch-first
+  PTT flow) are always active on a mobile-sized viewport; no query param or stored
+  selection is required.
+- **MediaSession availability:** headset/lock-screen controls are enabled only when
+  `navigator.mediaSession` exists.
+
+## Related Docs
+
+- [CLI Reference](cli.md#web)
+- [Troubleshooting](troubleshooting.md)
+- [Reliability semantics](../internals/reliability-semantics.md) — timeouts, cache TTLs, and `radio_ready` / connection state behavior.

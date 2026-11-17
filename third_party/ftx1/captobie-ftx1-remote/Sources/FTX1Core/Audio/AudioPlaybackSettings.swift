@@ -1,0 +1,105 @@
+import Foundation
+
+/// Per-device audio-playback settings (volume + virtual-squelch threshold)
+/// — `UserDefaults`-backed directly rather than `@AppStorage`, same pattern
+/// as `AppearanceSettings`, so the non-View `AudioPlaybackEngine` can read
+/// it too. Never synced between devices.
+///
+/// The un-prefixed `volume`/`squelchThreshold`/`isMuted` below are the
+/// Main-channel settings — the only ones that existed before Main/Sub
+/// stereo capture (2026-09-18, see repo CLAUDE.md), and still the only ones
+/// iPad has UI for (its audio relay is Main-only). `subVolume`/
+/// `subSquelchThreshold`/`subIsMuted` are new, Mac-only-for-now (Remote
+/// mode only — see `HubService`).
+public enum AudioPlaybackSettings {
+    public static let volumeKey = "audio.playback.volume"
+    public static let squelchThresholdKey = "audio.playback.squelchThreshold"
+    public static let isMutedKey = "audio.playback.isMuted"
+    public static let subVolumeKey = "audio.playback.sub.volume"
+    public static let subSquelchThresholdKey = "audio.playback.sub.squelchThreshold"
+    public static let subIsMutedKey = "audio.playback.sub.isMuted"
+
+    public static var volume: Double {
+        get {
+            (SettingsStore.defaults.object(forKey: volumeKey) as? Double) ?? 0.8
+        }
+        set {
+            SettingsStore.defaults.set(newValue, forKey: volumeKey)
+        }
+    }
+
+    /// See `SquelchGate`'s doc comment — this is now the RMS level at or
+    /// below which a chunk counts as a genuine "quieting" dip, not a level
+    /// that must be exceeded. 0.015 is a starting guess (comfortably above
+    /// the ~0.001-0.003 quiet dips and comfortably below the ~0.06 static
+    /// floor seen in the 2026-09-08 hardware capture this design is based
+    /// on) pending further real-traffic tuning.
+    public static var squelchThreshold: Double {
+        get {
+            (SettingsStore.defaults.object(forKey: squelchThresholdKey) as? Double) ?? 0.015
+        }
+        set {
+            SettingsStore.defaults.set(newValue, forKey: squelchThresholdKey)
+        }
+    }
+
+    /// Seconds the virtual squelch stays open after the last quieting dip
+    /// (`SquelchGate.releaseDuration`) — the tail after a transmission
+    /// ends. One value for Main and Sub. Too short and the gate can drop
+    /// out during loud stretches of speech.
+    public static let squelchHangTimeKey = "audio.playback.squelchHangTime"
+    public static let defaultSquelchHangTime: Double = 1.5
+    public static let squelchHangTimeRange: ClosedRange<Double> = 0.3...5.0
+    public static var squelchHangTime: Double {
+        get {
+            let value = (SettingsStore.defaults.object(forKey: squelchHangTimeKey) as? Double) ?? defaultSquelchHangTime
+            return min(max(value, squelchHangTimeRange.lowerBound), squelchHangTimeRange.upperBound)
+        }
+        set {
+            SettingsStore.defaults.set(newValue, forKey: squelchHangTimeKey)
+        }
+    }
+
+    public static var isMuted: Bool {
+        get { SettingsStore.defaults.bool(forKey: isMutedKey) }
+        set { SettingsStore.defaults.set(newValue, forKey: isMutedKey) }
+    }
+
+    /// Same defaults as the Main-channel settings above — no evidence yet
+    /// that Sub audio needs different starting points, and keeping them
+    /// identical makes an unexpectedly-quiet Sub slider less surprising on
+    /// first use.
+    public static var subVolume: Double {
+        get {
+            (SettingsStore.defaults.object(forKey: subVolumeKey) as? Double) ?? 0.8
+        }
+        set {
+            SettingsStore.defaults.set(newValue, forKey: subVolumeKey)
+        }
+    }
+
+    public static var subSquelchThreshold: Double {
+        get {
+            (SettingsStore.defaults.object(forKey: subSquelchThresholdKey) as? Double) ?? 0.015
+        }
+        set {
+            SettingsStore.defaults.set(newValue, forKey: subSquelchThresholdKey)
+        }
+    }
+
+    public static var subIsMuted: Bool {
+        get { SettingsStore.defaults.bool(forKey: subIsMutedKey) }
+        set { SettingsStore.defaults.set(newValue, forKey: subIsMutedKey) }
+    }
+
+    /// Whether the rig's left/right USB audio channels are currently
+    /// swapped relative to the app's Main/Sub roles — Mac hub only (see
+    /// `HubService.audioChannelsSwapped`). Persisted because the rig's own
+    /// state persists across app launches, so the best guess at relaunch is
+    /// "whatever it was when the app last ran."
+    public static let channelsSwappedKey = "audio.channelsSwapped"
+    public static var channelsSwapped: Bool {
+        get { SettingsStore.defaults.bool(forKey: channelsSwappedKey) }
+        set { SettingsStore.defaults.set(newValue, forKey: channelsSwappedKey) }
+    }
+}

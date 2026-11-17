@@ -1,0 +1,338 @@
+"""Tests for CI-V 0x25/0x26 selected/unselected freq & mode commands.
+
+``get_selected_freq``/``get_unselected_freq``/``get_selected_mode``/
+``get_unselected_mode``/``set_selected_mode`` migrated onto the bound
+command map in MOR-2008 (batch 4, "Group B"): all five now require
+``cmd_map``, no hardcoded fallback ever having existed to delete. IC-7610
+declares the first four with byte-identical wire tuples to the deleted
+hardcoded frames; ``set_selected_mode`` is PROVENANCE OPEN on IC-7610 (and
+IC-7300/IC-9700), so its own builder test below uses X6200's map instead,
+matching the ``to_addr=0xA4`` (X6200's CI-V address) the test already used.
+"""
+
+import pathlib
+
+import pytest
+
+from rigplane import IC_7610_ADDR
+from rigplane.commands import (
+    CONTROLLER_ADDR,
+    _CMD_SELECTED_FREQ,
+    _CMD_SELECTED_MODE,
+    build_civ_frame,
+    get_selected_freq,
+    get_unselected_freq,
+    get_selected_mode,
+    get_unselected_mode,
+    parse_selected_freq_response,
+    parse_selected_mode_response,
+    set_selected_mode,
+)
+from rigplane.radio import IcomRadio
+from rigplane.rig_loader import load_rig
+from rigplane.types import CivFrame, Mode, bcd_encode
+
+from test_radio import MockTransport, _wrap_civ_in_udp
+
+RIG_DIR = pathlib.Path(__file__).resolve().parents[1] / "rigs"
+
+
+@pytest.fixture()
+def cmd_map():
+    rig = load_rig(RIG_DIR / "ic7610.toml")
+    return rig.to_command_map()
+
+
+@pytest.fixture()
+def x6200_cmd_map():
+    rig = load_rig(RIG_DIR / "x6200.toml")
+    return rig.to_command_map()
+
+
+# MOR-1884: this suite drives ``RadioPoller._execute`` directly to exercise
+# dispatch bodies; the interlock seat now lives at its head, so the RF
+# premise is stated once here (see the fixture docstring in conftest.py).
+pytestmark = pytest.mark.usefixtures("observed_rx_dispatch_premise")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _selected_freq_response(receiver: int, freq_hz: int) -> bytes:
+    """Build a CI-V 0x25 frequency response wrapped in UDP."""
+    civ = build_civ_frame(
+        CONTROLLER_ADDR,
+        IC_7610_ADDR,
+        _CMD_SELECTED_FREQ,
+        data=bytes([receiver]) + bcd_encode(freq_hz),
+    )
+    return _wrap_civ_in_udp(civ)
+
+
+def _selected_mode_response(
+    receiver: int, mode: Mode, data_mode: int = 0, filt: int = 1
+) -> bytes:
+    """Build a CI-V 0x26 mode response wrapped in UDP."""
+    civ = build_civ_frame(
+        CONTROLLER_ADDR,
+        IC_7610_ADDR,
+        _CMD_SELECTED_MODE,
+        data=bytes([receiver, mode, data_mode, filt]),
+    )
+    return _wrap_civ_in_udp(civ)
+
+
+# ---------------------------------------------------------------------------
+# Command builder tests
+# ---------------------------------------------------------------------------
+
+
+class TestCommandBuilders:
+    def test_get_selected_freq_frame(self, cmd_map) -> None:
+        frame = get_selected_freq(to_addr=0x98, cmd_map=cmd_map)
+        assert b"\x25\x00" in frame
+        assert frame.startswith(b"\xfe\xfe")
+        assert frame.endswith(b"\xfd")
+
+    def test_get_unselected_freq_frame(self, cmd_map) -> None:
+        frame = get_unselected_freq(to_addr=0x98, cmd_map=cmd_map)
+        assert b"\x25\x01" in frame
+
+    def test_get_selected_mode_frame(self, cmd_map) -> None:
+        frame = get_selected_mode(to_addr=0x98, cmd_map=cmd_map)
+        assert b"\x26\x00" in frame
+
+    def test_get_unselected_mode_frame(self, cmd_map) -> None:
+        frame = get_unselected_mode(to_addr=0x98, cmd_map=cmd_map)
+        assert b"\x26\x01" in frame
+
+    def test_set_selected_mode_frame(self, x6200_cmd_map) -> None:
+        # X6200 CI-V address is 0xA4; controller 0xE0; Mode.LSB == 0x00.
+        # Frame: FE FE A4 E0 26 00 <receiver=00> <mode=LSB=00> <data_mode=00>
+        #        <filter=01> FD. set_selected_mode is PROVENANCE OPEN on
+        #        IC-7610 (and IC-7300/IC-9700), so this builder test uses
+        #        X6200's own declared map instead.
+        frame = set_selected_mode(Mode.LSB, 0, 1, to_addr=0xA4, cmd_map=x6200_cmd_map)
+        assert frame == b"\xfe\xfe\xa4\xe0\x26\x00\x00\x00\x01\xfd"
+
+    def test_get_selected_freq_requires_cmd_map(self) -> None:
+        """cmd_map is required keyword-only -- MOR-2006 Q6's API break."""
+        with pytest.raises(TypeError, match="MOR-2006"):
+            get_selected_freq(to_addr=0x98)  # type: ignore[call-arg]
+
+    def test_set_selected_mode_requires_cmd_map(self) -> None:
+        """cmd_map is required keyword-only -- MOR-2006 Q6's API break."""
+        with pytest.raises(TypeError, match="MOR-2006"):
+            set_selected_mode(Mode.LSB, 0, 1, to_addr=0xA4)  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# Parser tests
+# ---------------------------------------------------------------------------
+
+
+class TestParsers:
+    def test_parse_selected_freq_response_main(self) -> None:
+        freq_hz = 14_074_000
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=IC_7610_ADDR,
+            command=0x25,
+            sub=None,
+            data=bytes([0x00]) + bcd_encode(freq_hz),
+        )
+        rcvr, freq = parse_selected_freq_response(frame)
+        assert rcvr == 0x00
+        assert freq == freq_hz
+
+    def test_parse_selected_freq_response_sub(self) -> None:
+        freq_hz = 7_074_000
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=IC_7610_ADDR,
+            command=0x25,
+            sub=None,
+            data=bytes([0x01]) + bcd_encode(freq_hz),
+        )
+        rcvr, freq = parse_selected_freq_response(frame)
+        assert rcvr == 0x01
+        assert freq == freq_hz
+
+    def test_parse_selected_freq_wrong_command(self) -> None:
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=IC_7610_ADDR,
+            command=0x03,
+            sub=None,
+            data=bcd_encode(14_074_000),
+        )
+        with pytest.raises(ValueError, match="Not a 0x25 response"):
+            parse_selected_freq_response(frame)
+
+    def test_parse_selected_freq_too_short(self) -> None:
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=IC_7610_ADDR,
+            command=0x25,
+            sub=None,
+            data=bytes([0x00, 0x01]),
+        )
+        with pytest.raises(ValueError, match="too short"):
+            parse_selected_freq_response(frame)
+
+    def test_parse_selected_mode_response_full(self) -> None:
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=IC_7610_ADDR,
+            command=0x26,
+            sub=None,
+            data=bytes([0x00, Mode.USB, 0x01, 0x02]),
+        )
+        rcvr, mode, data_mode, filt = parse_selected_mode_response(frame)
+        assert rcvr == 0x00
+        assert mode == Mode.USB
+        assert data_mode == 0x01
+        assert filt == 0x02
+
+    def test_parse_selected_mode_response_minimal(self) -> None:
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=IC_7610_ADDR,
+            command=0x26,
+            sub=None,
+            data=bytes([0x01, Mode.CW]),
+        )
+        rcvr, mode, data_mode, filt = parse_selected_mode_response(frame)
+        assert rcvr == 0x01
+        assert mode == Mode.CW
+        assert data_mode is None
+        assert filt is None
+
+    def test_parse_selected_mode_wrong_command(self) -> None:
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=IC_7610_ADDR,
+            command=0x04,
+            sub=None,
+            data=bytes([Mode.USB]),
+        )
+        with pytest.raises(ValueError, match="Not a 0x26 response"):
+            parse_selected_mode_response(frame)
+
+    def test_parse_selected_mode_too_short(self) -> None:
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=IC_7610_ADDR,
+            command=0x26,
+            sub=None,
+            data=bytes([0x00]),
+        )
+        with pytest.raises(ValueError, match="too short"):
+            parse_selected_mode_response(frame)
+
+
+# ---------------------------------------------------------------------------
+# Radio integration tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_transport() -> MockTransport:
+    return MockTransport()
+
+
+@pytest.fixture
+def radio(mock_transport: MockTransport):
+    r = IcomRadio("192.168.1.100", timeout=0.05, model="IC-7610")
+    r._civ_transport = mock_transport
+    r._ctrl_transport = mock_transport
+    r._connected = True
+    yield r
+    r._connected = False  # reset _conn_state so __del__ stays quiet
+
+
+class TestRadioSelectedFreq:
+    @pytest.mark.asyncio
+    async def test_get_selected_freq(
+        self, radio: IcomRadio, mock_transport: MockTransport
+    ) -> None:
+        mock_transport.queue_response(_selected_freq_response(0x00, 14_074_000))
+        freq = await radio._get_selected_freq()
+        assert freq == 14_074_000
+
+    @pytest.mark.asyncio
+    async def test_get_unselected_freq(
+        self, radio: IcomRadio, mock_transport: MockTransport
+    ) -> None:
+        mock_transport.queue_response(_selected_freq_response(0x01, 7_074_000))
+        freq = await radio._get_unselected_freq()
+        assert freq == 7_074_000
+
+    @pytest.mark.asyncio
+    async def test_get_freq_receiver_sub_uses_cmd25(
+        self, radio: IcomRadio, mock_transport: MockTransport
+    ) -> None:
+        """get_freq(receiver=1) should use 0x25 0x01 instead of VFO swap."""
+        mock_transport.queue_response(_selected_freq_response(0x01, 7_074_000))
+        freq = await radio.get_freq(receiver=1)
+        assert freq == 7_074_000
+
+
+class TestRadioSelectedMode:
+    @pytest.mark.asyncio
+    async def test_get_selected_mode(
+        self, radio: IcomRadio, mock_transport: MockTransport
+    ) -> None:
+        mock_transport.queue_response(_selected_mode_response(0x00, Mode.USB, filt=1))
+        mode, filt = await radio._get_selected_mode()
+        assert mode == Mode.USB
+        assert filt == 1
+
+    @pytest.mark.asyncio
+    async def test_get_unselected_mode(
+        self, radio: IcomRadio, mock_transport: MockTransport
+    ) -> None:
+        mock_transport.queue_response(_selected_mode_response(0x01, Mode.LSB, filt=2))
+        mode, filt = await radio._get_unselected_mode()
+        assert mode == Mode.LSB
+        assert filt == 2
+
+    @pytest.mark.asyncio
+    async def test_get_mode_receiver_sub_uses_cmd26(
+        self, radio: IcomRadio, mock_transport: MockTransport
+    ) -> None:
+        """get_mode(receiver=1) should use 0x26 0x01 instead of VFO swap."""
+        mock_transport.queue_response(_selected_mode_response(0x01, Mode.CW, filt=3))
+        mode_name, filt = await radio.get_mode(receiver=1)
+        assert mode_name == "CW"
+        assert filt == 3
+
+
+# ---------------------------------------------------------------------------
+# Issue #715 — per-receiver VFO A/B state in poller
+# ---------------------------------------------------------------------------
+
+
+class TestActiveSlotCivRx:
+    """CivRuntime writes 0x03 responses to the active slot."""
+
+    def test_cmd03_writes_to_active_slot(self, radio: IcomRadio) -> None:
+        """0x03 writes to the active slot."""
+        from rigplane.radio_state import RadioState
+        from rigplane.types import bcd_encode
+
+        radio._radio_state = RadioState()
+        rs = radio._radio_state
+        rs.main.active_slot = "A"
+        frame = CivFrame(
+            to_addr=CONTROLLER_ADDR,
+            from_addr=IC_7610_ADDR,
+            command=0x03,
+            sub=None,
+            data=bcd_encode(14_074_000),
+        )
+        radio._civ_runtime._update_radio_state_from_frame(frame)
+        assert rs.main.vfo_a.freq_hz == 14_074_000
+        assert rs.main.vfo_b.freq_hz == 0

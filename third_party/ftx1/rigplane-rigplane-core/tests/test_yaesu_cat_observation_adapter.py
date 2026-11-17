@@ -1,0 +1,4414 @@
+"""Observation adapter coverage for the Yaesu CAT backend."""
+# mypy: disable-error-code=untyped-decorator
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, call
+
+import pytest
+
+from rigplane.core.acquisition_scheduler import (
+    AcquisitionScheduler,
+    resolve_available_when,
+)
+from rigplane.core.exceptions import CommandError
+from rigplane.core.state_acquisition_policy import RadioAcquisitionProfile
+from rigplane.core.state_pipeline_contracts import (
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from rigplane.core.state_store import StateStore
+from rigplane.backends.factory import create_radio
+from rigplane.cli import _build_backend_config, _build_parser
+from rigplane.core import serial_open
+from rigplane.core.tx_observation import OBSERVED_PTT_PATH, ObservedPtt, TxStateReading
+from rigplane.core.tx_target import KnownTxTarget, TxReceiver, UnknownTxTarget
+from rigplane.core.types import BreakInMode
+from rigplane.profiles import get_radio_profile, resolve_radio_profile
+from rigplane.radio_state import RadioState
+from rigplane.web.server import WebConfig, WebServer
+from rigplane.web.state_schema import ServerStatePublic, UnknownTxTargetPublic
+
+from rigplane.backends.yaesu_cat.observations import YaesuObservationAdapter
+from rigplane.backends.yaesu_cat.parser import CatParseError
+from rigplane.backends.yaesu_cat.radio import (
+    FilterWidthReading,
+    RadioConnectionError,
+    YaesuCatRadio,
+)
+from rigplane.backends.yaesu_cat.transport import (
+    CatCommandRejected,
+    CatGarbledFrameError,
+    CatTimeoutError,
+    CatTransportError,
+)
+from rigplane.profiles.rig_loader import RigConfig, load_rig
+from rigplane_testkit.sim.adapters.yaesu_cat import YaesuCatSerialFake
+from rigplane_testkit.sim.engine import Ok, Refused
+from rigplane_testkit.yaesu.replay import REFUSAL
+from test_web_server import _addr, _http_get
+from test_yaesu_split_vfo_profile import _http_post_command
+from testkit.test_g7250_session_wire import (
+    _ANSWER_WINDOW_S,
+    _DEVICE,
+    _G7250BenchFake,
+)
+
+
+def _clock() -> float:
+    return 123.456
+
+
+def _normalized_255(raw: int) -> float:
+    return raw / 255.0
+
+
+def _normalized_power(raw_watts: int, *, max_watts: int = 100) -> float:
+    return raw_watts / max_watts
+
+
+def _make_radio() -> MagicMock:
+    radio = MagicMock()
+    radio.profile = get_radio_profile("FTX-1")
+    radio.capabilities = {
+        "dual_rx",
+        "af_level",
+        "rf_gain",
+        "squelch",
+        "meters",
+        "filter_width",
+        "if_shift",
+        "tx",
+        "vox",
+        "compressor",
+        "attenuator",
+        "preamp",
+        "nb",
+        "nr",
+        "notch",
+        "split",
+        "rit",
+        "xit",
+        "tuner",
+        "dial_lock",
+        "cw",
+        "sql_type",
+    }
+    radio.get_freq = AsyncMock(
+        side_effect=lambda receiver=0: 14_074_000 if receiver == 0 else 7_074_000
+    )
+    radio.read_freq = AsyncMock(
+        side_effect=lambda receiver=0: 14_074_000 if receiver == 0 else 7_074_000
+    )
+    radio.get_mode = AsyncMock(
+        side_effect=lambda receiver=0: ("USB", None) if receiver == 0 else ("LSB", None)
+    )
+    radio.read_mode = AsyncMock(
+        side_effect=lambda receiver=0: ("USB", None) if receiver == 0 else ("LSB", None)
+    )
+    radio.get_ptt = AsyncMock(return_value=False)
+    radio.read_ptt = AsyncMock(return_value=False)
+    radio.read_transmit_state = AsyncMock(
+        return_value=TxStateReading(False, "rx", "yaesu_poll_response", True)
+    )
+    radio.get_af_level = AsyncMock(
+        side_effect=lambda receiver=0: 128 if receiver == 0 else 64
+    )
+    radio.read_af_level = AsyncMock(
+        side_effect=lambda receiver=0: 128 if receiver == 0 else 64
+    )
+    radio.get_rf_gain = AsyncMock(
+        side_effect=lambda receiver=0: 180 if receiver == 0 else 90
+    )
+    radio.read_rf_gain = AsyncMock(
+        side_effect=lambda receiver=0: 180 if receiver == 0 else 90
+    )
+    radio.read_s_meter = AsyncMock(
+        side_effect=lambda receiver=0: 150 if receiver == 0 else 75
+    )
+    radio.get_squelch = AsyncMock(
+        side_effect=lambda receiver=0: 12 if receiver == 0 else 8
+    )
+    radio.read_squelch = AsyncMock(
+        side_effect=lambda receiver=0: 12 if receiver == 0 else 8
+    )
+    # RF front-end + AGC controls (MOR-443). The FTX-1 attenuator getter
+    # returns a bool; the registry FieldPath is int, so the adapter coerces.
+    radio.get_attenuator = AsyncMock(return_value=True)
+    radio.read_attenuator = AsyncMock(return_value=True)
+    radio.get_preamp = AsyncMock(return_value=2)
+    radio.read_preamp = AsyncMock(return_value=2)
+    radio.get_agc = AsyncMock(return_value=3)
+    radio.read_agc = AsyncMock(return_value=3)
+    # Filter / IF-shift / narrow DSP controls (MOR-445). The
+    # ``read_filter_width`` decode reads (but never writes) legacy state.
+    # IF-shift/narrow have SUB forms (bench 2026-09-18, MOR-2511 comment
+    # 01:22Z); the SUB answers differ from MAIN's so a MAIN echo fails.
+    radio.get_filter_width = AsyncMock(return_value=500)
+    radio.read_filter_width_reading = AsyncMock(
+        return_value=FilterWidthReading(500, False)
+    )
+    radio.get_if_shift = AsyncMock(return_value=200)
+    radio.read_if_shift = AsyncMock(
+        side_effect=lambda receiver=0: 200 if receiver == 0 else 210
+    )
+    radio.get_narrow = AsyncMock(return_value=True)
+    radio.read_narrow = AsyncMock(side_effect=lambda receiver=0: receiver == 0)
+    # NB/NR levels + derived toggles, auto/manual notch DSP controls (MOR-444).
+    # SUB forms exist (bench 2026-09-18, MOR-2511 comment 01:22Z). The
+    # nb/nr toggles are derived from the non-zero level read in the same cycle.
+    radio.get_nb_level = AsyncMock(return_value=5)
+    radio.read_nb_level = AsyncMock(
+        side_effect=lambda receiver=0: 5 if receiver == 0 else 3
+    )
+    radio.get_nr_level = AsyncMock(return_value=9)
+    radio.read_nr_level = AsyncMock(
+        side_effect=lambda receiver=0: 9 if receiver == 0 else 5
+    )
+    radio.get_auto_notch = AsyncMock(return_value=True)
+    radio.read_auto_notch = AsyncMock(side_effect=lambda receiver=0: receiver == 0)
+    radio.read_manual_notch = AsyncMock(side_effect=lambda receiver=0: receiver == 0)
+    radio.read_manual_notch_freq = AsyncMock(
+        side_effect=lambda receiver=0: 128 if receiver == 0 else 120
+    )
+    # TX meters: ALC/COMP mirror power/swr as stream-like meters (MOR-448/460).
+    radio.get_alc_meter = AsyncMock(return_value=42)
+    radio.read_alc_meter = AsyncMock(return_value=42)
+    radio.get_comp_meter = AsyncMock(return_value=30)
+    radio.read_comp_meter = AsyncMock(return_value=30)
+    radio.get_power_meter = AsyncMock(return_value=180)
+    radio.read_power_meter = AsyncMock(return_value=180)
+    radio.get_swr_meter = AsyncMock(return_value=120)
+    radio.read_swr_meter = AsyncMock(return_value=120)
+    # Drain meters (MOR-2425/T147): the raw values a read-only bench probe read
+    # off the FTX-1 on 2026-09-08 while receiving — VDD 212, IDD 0.
+    radio.get_vd_meter = AsyncMock(return_value=212)
+    radio.get_id_meter = AsyncMock(return_value=0)
+    # Global TX / operator-control setpoints (MOR-447).
+    radio.get_power = AsyncMock(return_value=(2, 55))
+    radio.read_power = AsyncMock(return_value=(2, 55))
+    radio.get_mic_gain = AsyncMock(return_value=40)
+    radio.read_mic_gain = AsyncMock(return_value=40)
+    radio.get_processor = AsyncMock(return_value=True)
+    radio.read_processor = AsyncMock(return_value=True)
+    radio.get_processor_level = AsyncMock(return_value=25)
+    radio.read_processor_level = AsyncMock(return_value=25)
+    radio.get_vox = AsyncMock(return_value=True)
+    radio.read_vox = AsyncMock(return_value=True)
+    # Split + active-slot observation reads (MOR-446). ``read_split`` is a
+    # global tx_state bool; ``read_vfo_select`` returns the active receiver
+    # index (0=MAIN, 1=SUB) which coerces to the neutral "MAIN"/"SUB" str.
+    radio.get_split = AsyncMock(return_value=True)
+    radio.read_split = AsyncMock(return_value=True)
+    radio.get_vfo_select = AsyncMock(return_value=1)
+    radio.read_vfo_select = AsyncMock(return_value=1)
+    radio.get_tx_func = AsyncMock(return_value=0)
+    # Dual receive: CAT ``FR`` P1, 0 = dual receive, 1 = single receive.
+    radio.get_rx_func = AsyncMock(return_value=0)
+    # Clarifier RIT/XIT observation reads (MOR-454). ``read_clarifier`` returns
+    # the (rx, tx) clarifier flags; ``read_clarifier_freq`` returns the signed
+    # Hz offset on the device scale.
+    radio.get_clarifier = AsyncMock(return_value=(True, False))
+    radio.read_clarifier = AsyncMock(return_value=(True, False))
+    radio.get_clarifier_freq = AsyncMock(return_value=-250)
+    radio.read_clarifier_freq = AsyncMock(return_value=-250)
+    radio.get_tuner = AsyncMock(return_value=2)
+    radio.get_tuner_status = AsyncMock(return_value=2)
+    radio.get_lock = AsyncMock(return_value=True)
+    radio.read_lock = AsyncMock(return_value=True)
+    # CW keyer family observation reads (MOR-456). ``read_keyer_speed`` returns
+    # the WPM; ``read_cw_pitch`` returns the sidetone in Hz (idx → 300+idx*10);
+    # ``read_break_in`` returns the BreakInMode IntEnum (emitted as int 0/1);
+    # ``read_break_in_delay`` returns the QSK delay in ms; ``read_cw_spot``
+    # returns the CW-spot bool.
+    radio.get_keyer_speed = AsyncMock(return_value=24)
+    radio.read_keyer_speed = AsyncMock(return_value=24)
+    radio.get_cw_pitch = AsyncMock(return_value=600)
+    radio.read_cw_pitch = AsyncMock(return_value=600)
+    radio.get_break_in = AsyncMock(return_value=BreakInMode.SEMI)
+    radio.read_break_in = AsyncMock(return_value=BreakInMode.SEMI)
+    radio.get_break_in_delay = AsyncMock(return_value=300)
+    radio.read_break_in_delay = AsyncMock(return_value=300)
+    radio.get_cw_spot = AsyncMock(return_value=True)
+    radio.read_cw_spot = AsyncMock(return_value=True)
+    # Tone / CTCSS squelch-type observation read (MOR-457). ``read_sql_type``
+    # returns the CAT ``CT`` P2 code; the default value 1 ("TONE": ENC ON /
+    # DEC OFF) derives repeater_tone=True, repeater_tsql=False.
+    radio.get_sql_type = AsyncMock(return_value=1)
+    radio.read_sql_type = AsyncMock(return_value=1)
+    # CTCSS tone frequency observation read (MOR-458). ``read_ctcss_tone_index``
+    # returns the CAT ``CN`` P3 tone-chart index (0-49); the default index 8 maps
+    # to 88.5 Hz -> 8850 centiHz, emitted to BOTH tone_freq and tsql_freq.
+    radio.read_ctcss_tone_index = AsyncMock(return_value=8)
+    return radio
+
+
+def _profile_state_acquisition() -> RadioAcquisitionProfile:
+    profile = get_radio_profile("FTX-1")
+    assert profile.state_acquisition is not None
+    return profile.state_acquisition
+
+
+class _SideEffectingYaesuRadio:
+    capabilities = {
+        "dual_rx",
+        "af_level",
+        "rf_gain",
+        "squelch",
+        "meters",
+        "tx",
+        "vox",
+        "compressor",
+        "rit",
+        "xit",
+        "tuner",
+        "dial_lock",
+        "cw",
+        "sql_type",
+    }
+
+    def __init__(self) -> None:
+        self.profile = SimpleNamespace(
+            max_watts=100,
+            ctcss_tones_centihz=get_radio_profile("FTX-1").ctcss_tones_centihz,
+            tone_squelch_types=get_radio_profile("FTX-1").tone_squelch_types,
+            # MOR-4433 PR1: the FT answer map lives on the profile; the
+            # fake carries the real FTX-1 map like the other fields above.
+            tx_func=get_radio_profile("FTX-1").tx_func,
+        )
+        self.radio_state = RadioState()
+        self.radio_state.main.freq = 1
+        self.radio_state.main.mode = "INIT-MAIN"
+        self.radio_state.sub.freq = 2
+        self.radio_state.sub.mode = "INIT-SUB"
+        self.radio_state.main.s_meter = 3
+        self.radio_state.sub.s_meter = 4
+        self.radio_state.alc_meter = 5
+        self.radio_state.comp_meter = 5
+        self.radio_state.power_meter = 5
+        self.radio_state.swr_meter = 6
+        # Sentinels for the pure drain reads (MOR-2425/T147).
+        self.radio_state.vd_meter = 23
+        self.radio_state.id_meter = 24
+        self.radio_state.main.af_level = 7
+        self.radio_state.main.rf_gain = 8
+        self.radio_state.main.squelch = 9
+        self.radio_state.sub.af_level = 10
+        self.radio_state.sub.rf_gain = 11
+        self.radio_state.sub.squelch = 12
+        self.radio_state.power_level = 13
+        self.radio_state.mic_gain = 14
+        self.radio_state.compressor_on = False
+        self.radio_state.compressor_level = 15
+        self.radio_state.vox_on = False
+        self.radio_state.main.att = 16
+        self.radio_state.main.preamp = 17
+        self.radio_state.main.agc = 18
+        self.radio_state.main.filter_width = 19
+        self.radio_state.main.if_shift = 20
+        self.radio_state.main.narrow = False
+        self.radio_state.split = False
+        self.radio_state.active = "MAIN"
+        self.radio_state.vfo_select = 0
+        self.radio_state.rit_on = False
+        self.radio_state.rit_tx = False
+        self.radio_state.rit_freq = 21
+        self.radio_state.tuner_status = 0
+        self.radio_state.dial_lock = False
+        self.radio_state.key_speed = 99
+        self.radio_state.cw_pitch = 999
+        self.radio_state.break_in = 2
+        self.radio_state.break_in_delay = 888
+        self.radio_state.cw_spot = False
+        self.radio_state.main.repeater_tone = True
+        self.radio_state.main.repeater_tsql = True
+        # CTCSS tone freq (MOR-458): pre-seed sentinel centiHz values; a pure
+        # read_ctcss_tone_index must not overwrite these from legacy state.
+        self.radio_state.main.tone_freq = 11111
+        self.radio_state.main.tsql_freq = 22222
+
+    async def read_freq(self, receiver: int = 0) -> int:
+        return 14_074_000 if receiver == 0 else 7_074_000
+
+    async def get_freq(self, receiver: int = 0) -> int:
+        value = await self.read_freq(receiver)
+        target = self.radio_state.main if receiver == 0 else self.radio_state.sub
+        target.freq = value
+        return value
+
+    async def read_mode(self, receiver: int = 0) -> tuple[str, int | None]:
+        return ("USB" if receiver == 0 else "LSB"), None
+
+    async def get_mode(self, receiver: int = 0) -> tuple[str, int | None]:
+        value, filter_width = await self.read_mode(receiver)
+        target = self.radio_state.main if receiver == 0 else self.radio_state.sub
+        target.mode = value
+        return value, filter_width
+
+    async def read_ptt(self) -> bool:
+        return True
+
+    async def read_transmit_state(self) -> TxStateReading:
+        return TxStateReading(
+            await self.read_ptt(), "tx_cat", "yaesu_poll_response", True
+        )
+
+    async def get_ptt(self) -> bool:
+        value = await self.read_ptt()
+        self.radio_state.ptt = value
+        return value
+
+    async def get_tx_func(self) -> int:
+        # Unlike legacy getters, FT readback has no RadioState side effect.
+        return 0
+
+    async def get_rx_func(self) -> int:
+        return 0
+
+    async def read_s_meter(self, receiver: int = 0) -> int:
+        return 150 if receiver == 0 else 75
+
+    async def get_s_meter(self, receiver: int = 0) -> int:
+        value = await self.read_s_meter(receiver)
+        target = self.radio_state.main if receiver == 0 else self.radio_state.sub
+        target.s_meter = value
+        return value
+
+    async def read_alc_meter(self) -> int:
+        return 200
+
+    async def get_alc_meter(self) -> int:
+        value = await self.read_alc_meter()
+        self.radio_state.alc_meter = value
+        return value
+
+    async def read_comp_meter(self) -> int:
+        return 90
+
+    async def get_comp_meter(self) -> int:
+        value = await self.read_comp_meter()
+        self.radio_state.comp_meter = value
+        return value
+
+    async def read_power_meter(self) -> int:
+        return 180
+
+    async def get_power_meter(self) -> int:
+        value = await self.read_power_meter()
+        self.radio_state.power_meter = value
+        return value
+
+    async def read_swr_meter(self) -> int:
+        return 120
+
+    async def get_swr_meter(self) -> int:
+        value = await self.read_swr_meter()
+        self.radio_state.swr_meter = value
+        return value
+
+    # Drain meters (MOR-2425/T147): unlike the meters above, the FTX-1 backend
+    # has no ``read_*`` twin for these — ``get_vd_meter``/``get_id_meter`` are
+    # already pure ``_read_meter`` calls that never touch legacy state, which
+    # is what the sentinels seeded in ``__init__`` are here to prove.
+    async def get_vd_meter(self) -> int:
+        return 212
+
+    async def get_id_meter(self) -> int:
+        return 0
+
+    async def read_af_level(self, receiver: int = 0) -> int:
+        return 128 if receiver == 0 else 64
+
+    async def get_af_level(self, receiver: int = 0) -> int:
+        value = await self.read_af_level(receiver)
+        target = self.radio_state.main if receiver == 0 else self.radio_state.sub
+        target.af_level = value
+        return value
+
+    async def read_rf_gain(self, receiver: int = 0) -> int:
+        return 180 if receiver == 0 else 90
+
+    async def get_rf_gain(self, receiver: int = 0) -> int:
+        value = await self.read_rf_gain(receiver)
+        target = self.radio_state.main if receiver == 0 else self.radio_state.sub
+        target.rf_gain = value
+        return value
+
+    async def read_squelch(self, receiver: int = 0) -> int:
+        return 12 if receiver == 0 else 8
+
+    async def get_squelch(self, receiver: int = 0) -> int:
+        value = await self.read_squelch(receiver)
+        target = self.radio_state.main if receiver == 0 else self.radio_state.sub
+        target.squelch = value
+        return value
+
+    async def read_power(self) -> tuple[int, int]:
+        return (2, 55)
+
+    async def get_power(self) -> tuple[int, int]:
+        head, watts = await self.read_power()
+        self.radio_state.power_level = watts
+        return head, watts
+
+    async def read_mic_gain(self) -> int:
+        return 40
+
+    async def get_mic_gain(self) -> int:
+        value = await self.read_mic_gain()
+        self.radio_state.mic_gain = value
+        return value
+
+    async def read_processor(self) -> bool:
+        return True
+
+    async def get_processor(self) -> bool:
+        value = await self.read_processor()
+        self.radio_state.compressor_on = value
+        return value
+
+    async def read_processor_level(self) -> int:
+        return 25
+
+    async def get_processor_level(self) -> int:
+        value = await self.read_processor_level()
+        self.radio_state.compressor_level = value
+        return value
+
+    async def read_vox(self) -> bool:
+        return True
+
+    async def get_vox(self) -> bool:
+        value = await self.read_vox()
+        self.radio_state.vox_on = value
+        return value
+
+    async def read_attenuator(self, receiver: int = 0) -> bool:
+        return True
+
+    async def get_attenuator(self, receiver: int = 0) -> bool:
+        value = await self.read_attenuator(receiver)
+        self.radio_state.main.att = int(value)
+        return value
+
+    async def read_preamp(self, receiver: int = 0) -> int:
+        return 2
+
+    async def get_preamp(self, band: int = 0) -> int:
+        value = await self.read_preamp(band)
+        self.radio_state.main.preamp = value
+        return value
+
+    async def read_agc(self, receiver: int = 0) -> int:
+        return 3
+
+    async def get_agc(self, receiver: int = 0) -> int:
+        value = await self.read_agc(receiver)
+        self.radio_state.main.agc = value
+        return value
+
+    async def read_filter_width(
+        self, receiver: int = 0, mode: str | None = None
+    ) -> int:
+        return 500
+
+    async def get_filter_width(self, receiver: int = 0) -> int:
+        value = await self.read_filter_width(receiver)
+        self.radio_state.main.filter_width = value
+        return value
+
+    async def read_if_shift(self, receiver: int = 0) -> int:
+        return 200
+
+    async def get_if_shift(self, receiver: int = 0) -> int:
+        value = await self.read_if_shift(receiver)
+        self.radio_state.main.if_shift = value
+        return value
+
+    async def read_narrow(self, receiver: int = 0) -> bool:
+        return True
+
+    async def get_narrow(self, receiver: int = 0) -> bool:
+        value = await self.read_narrow(receiver)
+        self.radio_state.main.narrow = value
+        return value
+
+    async def read_split(self) -> bool:
+        return True
+
+    async def get_split(self) -> bool:
+        value = await self.read_split()
+        self.radio_state.split = value
+        return value
+
+    async def read_vfo_select(self) -> int:
+        return 1
+
+    async def get_vfo_select(self) -> int:
+        value = await self.read_vfo_select()
+        self.radio_state.vfo_select = value
+        self.radio_state.active = "SUB" if value else "MAIN"
+        return value
+
+    async def read_clarifier(self, receiver: int = 0) -> tuple[bool, bool]:
+        return True, False
+
+    async def get_clarifier(self, receiver: int = 0) -> tuple[bool, bool]:
+        rx_clar, tx_clar = await self.read_clarifier(receiver)
+        self.radio_state.rit_on = rx_clar
+        self.radio_state.rit_tx = tx_clar
+        return rx_clar, tx_clar
+
+    async def read_clarifier_freq(self, receiver: int = 0) -> int:
+        return -250
+
+    async def get_clarifier_freq(self, receiver: int = 0) -> int:
+        value = await self.read_clarifier_freq(receiver)
+        self.radio_state.rit_freq = value
+        return value
+
+    async def get_tuner_status(self) -> int:
+        return 2
+
+    async def get_tuner(self) -> int:
+        value = await self.get_tuner_status()
+        self.radio_state.tuner_status = value
+        return value
+
+    async def read_lock(self) -> bool:
+        return True
+
+    async def get_lock(self) -> bool:
+        value = await self.read_lock()
+        self.radio_state.dial_lock = value
+        return value
+
+    async def read_keyer_speed(self) -> int:
+        return 24
+
+    async def get_keyer_speed(self) -> int:
+        value = await self.read_keyer_speed()
+        self.radio_state.key_speed = value
+        return value
+
+    async def read_cw_pitch(self) -> int:
+        return 600
+
+    async def get_cw_pitch(self) -> int:
+        value = await self.read_cw_pitch()
+        self.radio_state.cw_pitch = value
+        return value
+
+    async def read_break_in(self) -> BreakInMode:
+        return BreakInMode.SEMI
+
+    async def get_break_in(self) -> BreakInMode:
+        value = await self.read_break_in()
+        self.radio_state.break_in = int(value)
+        return value
+
+    async def read_break_in_delay(self) -> int:
+        return 300
+
+    async def get_break_in_delay(self) -> int:
+        value = await self.read_break_in_delay()
+        self.radio_state.break_in_delay = value
+        return value
+
+    async def read_cw_spot(self) -> bool:
+        return True
+
+    async def get_cw_spot(self) -> bool:
+        value = await self.read_cw_spot()
+        self.radio_state.cw_spot = value
+        return value
+
+    async def read_sql_type(self, receiver: int = 0) -> int:
+        # CAT ``CT`` P2 code 1 = "TONE" (ENC ON / DEC OFF). Pure read: the
+        # derived neutral booleans must come from the observation pipeline, not
+        # from any legacy-state write. The pre-seeded main.repeater_tone/tsql
+        # (True, True) differs from what code 1 actually derives (True, False,
+        # MOR-2130), so a leak into legacy state would flip repeater_tsql and
+        # be caught.
+        return 1
+
+    async def get_sql_type(self, receiver: int = 0) -> int:
+        return await self.read_sql_type(receiver)
+
+    async def read_ctcss_tone_index(self, receiver: int = 0) -> int:
+        # CAT ``CN`` P3 tone-chart index 8 = 88.5 Hz. Pure read: the derived
+        # centiHz value must come from the observation pipeline, not from any
+        # legacy-state write (the pre-seeded sentinel tone_freq/tsql_freq prove
+        # no mutation).
+        return 8
+
+
+@pytest.mark.asyncio
+async def test_medium_poll_emits_frequency_mode_and_ptt_observations() -> None:
+    radio = _make_radio()
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_medium()
+
+    # filter_width is a ``freq_mode`` field emitted in the freq/mode lane
+    # (MOR-445), gated on the ``filter_width`` capability, after PTT — mirroring
+    # the legacy poller which reads it in ``_poll_medium``. Both receivers
+    # since MOR-2511 (the FTX-1 has the SUB-side SH1 read).
+    assert [(str(item.path), item.value) for item in observations] == [
+        ("receiver.main.active.freq_mode.freq_hz", 14_074_000),
+        ("receiver.main.active.freq_mode.mode", "USB"),
+        ("receiver.sub.active.freq_mode.freq_hz", 7_074_000),
+        ("receiver.sub.active.freq_mode.mode", "LSB"),
+        (
+            "global.tx_state.tx_target",
+            KnownTxTarget(receiver="MAIN", slot=None, frequency_hz=14_074_000),
+        ),
+        ("global.tx_state.ptt", False),
+        ("global.tx_state.observed_ptt", ObservedPtt.OFF),
+        ("receiver.main.active.freq_mode.filter_width", 500),
+        ("receiver.main.active.freq_mode.filter_width_radio_default", False),
+        ("receiver.sub.active.freq_mode.filter_width", 500),
+        ("receiver.sub.active.freq_mode.filter_width_radio_default", False),
+    ]
+    assert radio.read_filter_width_reading.await_args_list == [
+        call(0, mode="USB"),
+        call(1, mode="LSB"),
+    ]
+    radio.get_filter_width.assert_not_awaited()
+    assert {item.source.source for item in observations} == {"yaesu_poll_response"}
+    assert {item.source.provider for item in observations} == {"yaesu_cat"}
+    assert {item.source.transport for item in observations} == {"serial"}
+    assert all(item.timestamp_monotonic == 123.456 for item in observations)
+    # freq/ptt/tx_target have no own entry, so each resolves to its
+    # acquisition class TTL (MOR-2574 step 2): ptt keying 1.2s, freq_hz live
+    # 2.0s, tx_target control 10.0s — the pre-step-2 inherited default was
+    # 8.0s for all three. filter_width carries its own slow-control TTL
+    # (2.0s) from the per-field policy, even though it shares the freq/mode
+    # lane (MOR-445).
+    by_path = {str(item.path): item for item in observations}
+    assert by_path["global.tx_state.ptt"].max_age == 1.2
+    assert by_path["global.tx_state.tx_target"].max_age == 10.0
+    assert by_path["receiver.main.active.freq_mode.freq_hz"].max_age == 2.0
+    assert by_path["receiver.main.active.freq_mode.filter_width"].max_age == 2.0
+    assert by_path["receiver.sub.active.freq_mode.filter_width"].max_age == 2.0
+    assert (
+        by_path["receiver.main.active.freq_mode.filter_width_radio_default"].max_age
+        == 2.0
+    )
+    assert (
+        by_path["receiver.sub.active.freq_mode.filter_width_radio_default"].max_age
+        == 2.0
+    )
+    assert all(item.source.capability_id == str(item.path) for item in observations)
+
+
+@pytest.mark.asyncio
+async def test_medium_poll_without_flag_capability_uses_legacy_width_read() -> None:
+    """MOR-3677: a profile that does not declare the flag keeps the old
+    read — one width observation per receiver, no flag, no new-read call."""
+
+    radio = _make_radio()
+    radio.read_filter_width = AsyncMock(return_value=500)
+    profile = _profile_state_acquisition()
+    stripped = replace(
+        profile,
+        capabilities=tuple(
+            capability
+            for capability in profile.capabilities
+            if capability.path.name != "filter_width_radio_default"
+        ),
+    )
+    adapter = YaesuObservationAdapter(radio, profile=stripped, clock=_clock)
+
+    observations = await adapter.poll_medium()
+
+    by_path = {str(item.path): item.value for item in observations}
+    assert by_path["receiver.main.active.freq_mode.filter_width"] == 500
+    assert by_path["receiver.sub.active.freq_mode.filter_width"] == 500
+    assert "receiver.main.active.freq_mode.filter_width_radio_default" not in by_path
+    assert "receiver.sub.active.freq_mode.filter_width_radio_default" not in by_path
+    radio.read_filter_width_reading.assert_not_awaited()
+    assert radio.read_filter_width.await_args_list == [
+        call(0, mode="USB"),
+        call(1, mode="LSB"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_callback", [False, True])
+async def test_medium_canonical_ptt_has_exactly_one_publication(
+    with_callback: bool,
+) -> None:
+    radio = _make_radio()
+    adapter = YaesuObservationAdapter.from_radio(radio, clock=_clock)
+    emitted = []
+    observations = await adapter.poll_medium(
+        ptt_callback=emitted.append if with_callback else None
+    )
+    canonical = [item for item in observations if item.path == OBSERVED_PTT_PATH]
+    assert len(emitted) == int(with_callback)
+    assert len(canonical) == int(not with_callback)
+    assert (emitted + canonical)[0].value is ObservedPtt.OFF
+    legacy = [item for item in observations if str(item.path) == "global.tx_state.ptt"]
+    assert len(legacy) == 1
+    radio.read_transmit_state.assert_awaited_once_with()
+    radio.read_ptt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stage", ["frequency", "ptt", "ptt-sink-error", "ptt-sink-cancel"]
+)
+async def test_medium_ptt_error_publication_is_local_and_preserves_exception(
+    stage: str,
+) -> None:
+    radio = _make_radio()
+    error = CatTransportError("original")
+    reader = "read_freq" if stage == "frequency" else "read_transmit_state"
+    setattr(radio, reader, AsyncMock(side_effect=error))
+    sink = MagicMock(
+        side_effect={
+            "ptt-sink-error": RuntimeError("sink"),
+            "ptt-sink-cancel": asyncio.CancelledError(),
+        }.get(stage)
+    )
+    with pytest.raises(CatTransportError) as caught:
+        await YaesuObservationAdapter.from_radio(radio).poll_medium(ptt_callback=sink)
+    assert caught.value is error
+    assert sink.call_count == int(stage != "frequency")
+    if stage != "frequency":
+        assert sink.call_args.args[0].value is ObservedPtt.UNKNOWN
+    radio.read_filter_width_reading.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("ft", "frequency_response", "frequency_command", "receiver", "frequency"),
+    [
+        ("0", "FA014074000", "FA;", "MAIN", 14_074_000),
+        ("1", "FB007074000", "FB;", "SUB", 7_074_000),
+    ],
+)
+@pytest.mark.asyncio
+async def test_real_ftx1_parser_brackets_selected_frequency(
+    ft: str,
+    frequency_response: str,
+    frequency_command: str,
+    receiver: TxReceiver,
+    frequency: int,
+) -> None:
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    radio._transport._connected = True
+    radio._transport.query = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[f"FT{ft}", frequency_response, f"FT{ft}"]
+    )
+    target = await YaesuObservationAdapter.from_radio(radio)._read_tx_target()
+
+    assert target == KnownTxTarget(receiver=receiver, slot=None, frequency_hz=frequency)
+    assert radio._transport.query.await_args_list == [
+        call("FT;"),
+        call(frequency_command),
+        call("FT;"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tx_func", [True, False, 0.0, 1.0, -1, 2, 2**63])
+async def test_invalid_ft_type_or_range_is_contradiction(tx_func: object) -> None:
+    radio = _make_radio()
+    radio.get_tx_func.return_value = tx_func
+
+    target = await YaesuObservationAdapter(
+        radio, profile=_profile_state_acquisition(), clock=_clock
+    )._read_tx_target()
+
+    assert target == UnknownTxTarget(reason="contradiction")
+    radio.read_freq.assert_not_awaited()
+    assert radio.read_split.await_count == radio.read_vfo_select.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (None, UnknownTxTarget(reason="not-observed")),
+        (
+            CatParseError("FT{vfo};", "FTX;", "invalid vfo"),
+            UnknownTxTarget(reason="contradiction"),
+        ),
+        # Gate P2 (MOR-4433): a refused DECLARED source is not an absent
+        # source — the read exists, only the answer is missing.
+        (CatCommandRejected("?;"), UnknownTxTarget(reason="not-observed")),
+        # MOR-4433 PR1: an undeclared/absent command raises CommandError
+        # out of _query (not CatCommandRejected) — it must report
+        # unsupported, not abort the medium poll batch.
+        (
+            CommandError("Command 'get_tx_func' has no read template"),
+            UnknownTxTarget(reason="unsupported"),
+        ),
+        (NotImplementedError(), UnknownTxTarget(reason="unsupported")),
+        ("missing", UnknownTxTarget(reason="unsupported")),
+    ],
+)
+async def test_missing_or_unsupported_ft_is_unknown(
+    result: object, expected: UnknownTxTarget
+) -> None:
+    radio = _make_radio()
+    if result == "missing":
+        radio.get_tx_func = None
+    elif isinstance(result, Exception):
+        radio.get_tx_func.side_effect = result
+    else:
+        radio.get_tx_func.return_value = result
+
+    target = await YaesuObservationAdapter(
+        radio, profile=_profile_state_acquisition(), clock=_clock
+    )._read_tx_target()
+
+    assert target == expected
+
+
+_ROOT = Path(__file__).resolve().parents[1]
+_FTX1_RIG = _ROOT / "rigs" / "ftx1.toml"
+_FTX1_SIM = _ROOT / "rigplane_testkit" / "sim" / "profiles" / "ftx1.toml"
+
+
+@pytest.mark.asyncio
+async def test_ftx1_refused_ft_is_not_unsupported(monkeypatch) -> None:
+    """Gate P2 (MOR-4433): a declared ``FT;`` source the radio refuses
+    (``?;``) is a source that exists but gave no answer — the medium lane
+    must publish ``not-observed``, never ``unsupported`` (reserved for a
+    source that does not exist at all).
+
+    Production path throughout: the real ``YaesuCatRadio`` on the committed
+    FTX-1 profile over the CAT simulator, with only the ``FT;`` line refused
+    at the wire. Fails before the fix (``CatCommandRejected`` maps to
+    ``unsupported``); passes after.
+    """
+    radio = YaesuCatRadio("/dev/fixture", profile=load_rig(_FTX1_RIG))
+    fake = YaesuCatSerialFake.from_profile(_ROOT, _FTX1_SIM, rig_path=_FTX1_RIG)
+    wire = []
+    handle = fake.model.handle_with_outcome
+
+    def logged(line):
+        wire.append(line)
+        if line == "FT;":
+            return REFUSAL, Refused("native_refusal")
+        return handle(line)
+
+    monkeypatch.setattr(fake.model, "handle_with_outcome", logged)
+
+    async def open_port(*args, **kwargs):
+        return await fake.open_serial_connection()
+
+    monkeypatch.setattr(
+        "rigplane.backends.yaesu_cat.transport.open_serial_port", open_port
+    )
+    await radio._transport.connect()
+    try:
+        observations = await YaesuObservationAdapter.from_radio(radio).poll_medium()
+    finally:
+        await radio._transport.close()
+
+    assert "FT;" in wire, "the TX-function read never reached the wire"
+    by_path = {str(item.path): item.value for item in observations}
+    assert "global.tx_state.tx_target" in by_path, (
+        f"no tx_target observation published: {sorted(by_path)}"
+    )
+    target = by_path["global.tx_state.tx_target"]
+    assert target != UnknownTxTarget(reason="unsupported")
+    assert target == UnknownTxTarget(reason="not-observed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["ft", "generation", "missing-frequency"])
+async def test_tx_target_mid_cycle_change_or_missing_frequency(boundary: str) -> None:
+    radio = _make_radio()
+    radio._transport = SimpleNamespace(stats=SimpleNamespace(reconnects=0))
+    radio.get_tx_func.side_effect = [0, 1 if boundary == "ft" else 0]
+    if boundary == "generation":
+        radio.read_freq.side_effect = lambda _receiver: (
+            setattr(radio._transport.stats, "reconnects", 1) or 14_074_000
+        )
+    elif boundary == "missing-frequency":
+        radio.read_freq.side_effect = ValueError("bad selected frequency")
+
+    target = await YaesuObservationAdapter(
+        radio, profile=_profile_state_acquisition(), clock=_clock
+    )._read_tx_target()
+
+    expected = (
+        UnknownTxTarget(reason="contradiction")
+        if boundary == "ft"
+        else UnknownTxTarget(reason="not-observed")
+        if boundary == "generation"
+        else KnownTxTarget(receiver="MAIN", slot=None, frequency_hz=None)
+    )
+    assert target == expected
+
+
+@pytest.mark.asyncio
+async def test_tx_target_connection_failure_propagates() -> None:
+    radio = _make_radio()
+    radio.get_tx_func.side_effect = RadioConnectionError("link reset")
+    adapter = YaesuObservationAdapter(
+        radio, profile=_profile_state_acquisition(), clock=_clock
+    )
+    with pytest.raises(RadioConnectionError, match="link reset"):
+        await adapter._read_tx_target()
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_emits_declared_control_observations_only() -> None:
+    radio = _make_radio()
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+
+    # ATT/preamp are MAIN-only: the FTX-1 has no per-receiver CAT command
+    # for these front-end controls (no RA1/PA1), matching the legacy poller
+    # which only writes ``main.{att,preamp,agc}``. AGC is per-receiver
+    # (``GT0``/``GT1``, bench 2026-09-18, MOR-2511 comment 01:22Z). The
+    # attenuator ``read`` returns a bool; the int registry path receives the
+    # coerced ``int(True) == 1``.
+    # IF-shift (operator_controls, gated on ``if_shift`` cap) and narrow
+    # (operator_toggles, unconditional like AGC) are per-receiver DSP
+    # controls (MOR-445/MOR-2511), each SUB read following its MAIN twin.
+    # NB/NR levels + derived nb/nr toggles, auto/manual notch + manual notch
+    # freq (MOR-444) follow, gated on ``nb``/``nr``/``notch`` caps, SUB reads
+    # after their MAIN twins (bench 2026-09-18, MOR-2511 comment 01:22Z).
+    # The nb/nr toggles are derived from the level read in the same cycle
+    # (``level > 0``); a non-zero level → toggle ON, a single read each.
+    assert [(str(item.path), item.value) for item in observations] == [
+        ("global.tx_state.dual_watch", True),
+        (
+            "receiver.main.operator_controls.af_level",
+            pytest.approx(_normalized_255(128)),
+        ),
+        (
+            "receiver.main.operator_controls.rf_gain",
+            pytest.approx(_normalized_255(180)),
+        ),
+        ("receiver.main.operator_controls.squelch", pytest.approx(_normalized_255(12))),
+        ("receiver.sub.operator_controls.af_level", pytest.approx(_normalized_255(64))),
+        ("receiver.sub.operator_controls.rf_gain", pytest.approx(_normalized_255(90))),
+        ("receiver.sub.operator_controls.squelch", pytest.approx(_normalized_255(8))),
+        ("receiver.main.operator_controls.att", 1),
+        ("receiver.main.operator_controls.preamp", 2),
+        ("receiver.main.operator_controls.agc", 3),
+        ("receiver.sub.operator_controls.agc", 3),
+        ("receiver.main.operator_controls.if_shift", 200),
+        ("receiver.sub.operator_controls.if_shift", 210),
+        ("receiver.main.operator_toggles.narrow", True),
+        ("receiver.sub.operator_toggles.narrow", False),
+        ("receiver.main.operator_controls.nb_level", 5),
+        ("receiver.main.operator_toggles.nb", True),
+        ("receiver.sub.operator_controls.nb_level", 3),
+        ("receiver.sub.operator_toggles.nb", True),
+        ("receiver.main.operator_controls.nr_level", 9),
+        ("receiver.main.operator_toggles.nr", True),
+        ("receiver.sub.operator_controls.nr_level", 5),
+        ("receiver.sub.operator_toggles.nr", True),
+        ("receiver.main.operator_toggles.auto_notch", True),
+        ("receiver.sub.operator_toggles.auto_notch", False),
+        ("receiver.main.operator_toggles.manual_notch", True),
+        ("receiver.sub.operator_toggles.manual_notch", False),
+        ("receiver.main.operator_controls.manual_notch_freq", 128),
+        ("receiver.sub.operator_controls.manual_notch_freq", 120),
+        # Tone / CTCSS squelch-type (MOR-457): per-receiver toggles grouped
+        # with the other receiver DSP toggles, each side derived from its own
+        # ``read_sql_type(receiver)`` CAT ``CT`` read (CT0 then CT1, MOR-2111).
+        # The default code 1 ("TONE") yields repeater_tone=True,
+        # repeater_tsql=False on both sides; both are emitted every cycle.
+        # Gated on the ``sql_type`` cap; the SUB read rides ``dual_rx``.
+        ("receiver.main.operator_toggles.repeater_tone", True),
+        ("receiver.main.operator_toggles.repeater_tsql", False),
+        ("receiver.main.operator_controls.tone_squelch_type", "tone"),
+        ("receiver.sub.operator_toggles.repeater_tone", True),
+        ("receiver.sub.operator_toggles.repeater_tsql", False),
+        ("receiver.sub.operator_controls.tone_squelch_type", "tone"),
+        # CTCSS tone frequency (MOR-458): per-receiver, each side's own
+        # ``read_ctcss_tone_index(receiver)`` CAT ``CN`` read (CN00 then CN10,
+        # MOR-2111) mapped index -> Hz -> centiHz. The FTX-1 has one CTCSS
+        # tone (CN P2=0) per receiver used for both TONE and TSQL, so the
+        # same centiHz value (default index 8 = 88.5 Hz = 8850) is emitted to
+        # BOTH paths on each side. Gated on the ``sql_type`` cap; the SUB read
+        # rides ``dual_rx``.
+        ("receiver.main.operator_controls.tone_freq", 8850),
+        ("receiver.main.operator_controls.tsql_freq", 8850),
+        ("receiver.sub.operator_controls.tone_freq", 8850),
+        ("receiver.sub.operator_controls.tsql_freq", 8850),
+        # active-slot (MOR-446): the global "which receiver is active" field,
+        # emitted in the slow-control lane, unconditional (no FTX-1 cap gate)
+        # like the legacy poller's always-on ``get_vfo_select`` read. The int
+        # receiver index (1=SUB) coerces to the neutral "MAIN"/"SUB" str.
+        ("global.slow_state.active", "SUB"),
+        # cw_spot (MOR-456): global slow_state bool (CAT ``CS``), gated on the
+        # legacy poller's ``"cw" in caps`` gate.
+        ("global.slow_state.cw_spot", True),
+        # Drain voltage/current (MOR-2425/T147): supply telemetry read in this
+        # always-running lane, not the PTT-gated ``poll_tx_meters``. Raw 212/0
+        # are scaled through the FTX-1 profile's two-point tables; the clamp
+        # at raw 212 is pinned by
+        # ``test_slow_poll_clamps_the_receive_drain_voltage_to_the_last_point``.
+        ("global.meters.vd", 13.8),
+        ("global.meters.id", 0.0),
+    ]
+    assert all(item.source.source == "yaesu_poll_response" for item in observations)
+    assert all(item.max_age == 2.0 for item in observations)
+    assert radio.read_vfo_select.await_count == 1
+    radio.get_vfo_select.assert_not_awaited()
+    assert radio.read_cw_spot.await_count == 1
+    radio.get_cw_spot.assert_not_awaited()
+    assert radio.read_af_level.await_count == 2
+    assert radio.read_rf_gain.await_count == 2
+    assert radio.read_squelch.await_count == 2
+    assert radio.read_attenuator.await_count == 1
+    assert radio.read_preamp.await_count == 1
+    assert radio.read_agc.await_count == 2
+    assert radio.read_if_shift.await_count == 2
+    assert radio.read_narrow.await_count == 2
+    # Single CAT read per family and receiver — nb/nr toggles derive from the
+    # level read.
+    assert radio.read_nb_level.await_count == 2
+    assert radio.read_nr_level.await_count == 2
+    assert radio.read_auto_notch.await_count == 2
+    assert radio.read_manual_notch.await_count == 2
+    assert radio.read_manual_notch_freq.await_count == 2
+    # Tone/CTCSS: a single CT read per receiver feeds both derived booleans
+    # on that side (MOR-457, SUB MOR-2111).
+    assert radio.read_sql_type.await_count == 2
+    radio.get_sql_type.assert_not_awaited()
+    # CTCSS tone freq: a single CN read per receiver feeds both tone_freq and
+    # tsql_freq in centiHz on that side (MOR-458, SUB MOR-2111).
+    assert radio.read_ctcss_tone_index.await_count == 2
+    radio.get_af_level.assert_not_awaited()
+    radio.get_rf_gain.assert_not_awaited()
+    radio.get_squelch.assert_not_awaited()
+    radio.get_attenuator.assert_not_awaited()
+    radio.get_preamp.assert_not_awaited()
+    radio.get_agc.assert_not_awaited()
+    radio.get_if_shift.assert_not_awaited()
+    radio.get_narrow.assert_not_awaited()
+    radio.get_nb_level.assert_not_awaited()
+    radio.get_nr_level.assert_not_awaited()
+    radio.get_auto_notch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_skips_sub_controls_without_matching_runtime_capability() -> (
+    None
+):
+    radio = _make_radio()
+    radio.capabilities = {"dual_rx", "af_level", "tx"}
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+
+    # ATT/preamp/if_shift are gated by their runtime capabilities (dropped
+    # here); AGC and narrow have no FTX-1 capability tag and mirror the legacy
+    # poller's unconditional poll, so they still emit when policy is pollable
+    # — narrow and AGC for both receivers (MOR-2511).
+    assert [(str(item.path), item.value) for item in observations] == [
+        ("global.tx_state.dual_watch", True),
+        (
+            "receiver.main.operator_controls.af_level",
+            pytest.approx(_normalized_255(128)),
+        ),
+        ("receiver.sub.operator_controls.af_level", pytest.approx(_normalized_255(64))),
+        ("receiver.main.operator_controls.agc", 3),
+        ("receiver.sub.operator_controls.agc", 3),
+        ("receiver.main.operator_toggles.narrow", True),
+        ("receiver.sub.operator_toggles.narrow", False),
+        # active-slot is unconditional (like AGC/narrow), so it still emits when
+        # policy is pollable even though no FTX-1 capability tag gates it.
+        ("global.slow_state.active", "SUB"),
+    ]
+    assert radio.read_af_level.await_count == 2
+    radio.read_rf_gain.assert_not_awaited()
+    radio.read_squelch.assert_not_awaited()
+    radio.read_attenuator.assert_not_awaited()
+    radio.read_preamp.assert_not_awaited()
+    assert radio.read_agc.await_count == 2
+    radio.read_if_shift.assert_not_awaited()
+    assert radio.read_narrow.await_count == 2
+    # NB/NR/notch dropped: their runtime caps are absent (MOR-444).
+    radio.read_nb_level.assert_not_awaited()
+    radio.read_nr_level.assert_not_awaited()
+    radio.read_auto_notch.assert_not_awaited()
+    radio.read_manual_notch.assert_not_awaited()
+    radio.read_manual_notch_freq.assert_not_awaited()
+    # Tone/CTCSS dropped: the ``sql_type`` runtime cap is absent here (MOR-457).
+    radio.read_sql_type.assert_not_awaited()
+    # CTCSS tone freq dropped likewise — same ``sql_type`` cap gate (MOR-458).
+    radio.read_ctcss_tone_index.assert_not_awaited()
+    radio.get_af_level.assert_not_awaited()
+    radio.get_rf_gain.assert_not_awaited()
+    radio.get_squelch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_derives_nb_nr_toggles_off_from_zero_level() -> None:
+    """MOR-444: the nb/nr toggles are derived from the level (``level > 0``).
+
+    A zero level (OFF) → toggle ``False``, mirroring the legacy poller's
+    ``state.main.nb = nb_level > 0`` derivation. A single CAT read per family
+    feeds both the level and the derived toggle — no second query.
+    """
+    radio = _make_radio()
+    radio.read_nb_level = AsyncMock(return_value=0)
+    radio.read_nr_level = AsyncMock(return_value=0)
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+
+    assert by_path["receiver.main.operator_controls.nb_level"] == 0
+    assert by_path["receiver.main.operator_toggles.nb"] is False
+    assert by_path["receiver.main.operator_controls.nr_level"] == 0
+    assert by_path["receiver.main.operator_toggles.nr"] is False
+    assert by_path["receiver.sub.operator_controls.nb_level"] == 0
+    assert by_path["receiver.sub.operator_toggles.nb"] is False
+    assert by_path["receiver.sub.operator_controls.nr_level"] == 0
+    assert by_path["receiver.sub.operator_toggles.nr"] is False
+    # Single read per receiver and family — the toggle reuses the level read.
+    assert radio.read_nb_level.await_count == 2
+    assert radio.read_nr_level.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_skips_dsp_without_matching_runtime_capability() -> None:
+    """MOR-444: NB/NR gate on ``nb``/``nr``; notch fields gate on ``notch``."""
+    radio = _make_radio()
+    # Keep nb only; drop nr and notch to prove per-family gating.
+    radio.capabilities = {"meters", "nb"}
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+    paths = [str(item.path) for item in observations]
+
+    assert "receiver.main.operator_controls.nb_level" in paths
+    assert "receiver.main.operator_toggles.nb" in paths
+    assert "receiver.main.operator_controls.nr_level" not in paths
+    assert "receiver.main.operator_toggles.nr" not in paths
+    assert "receiver.main.operator_toggles.auto_notch" not in paths
+    assert "receiver.main.operator_toggles.manual_notch" not in paths
+    assert "receiver.main.operator_controls.manual_notch_freq" not in paths
+    assert radio.read_nb_level.await_count == 1
+    radio.read_nr_level.assert_not_awaited()
+    radio.read_auto_notch.assert_not_awaited()
+    radio.read_manual_notch.assert_not_awaited()
+    radio.read_manual_notch_freq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_coerces_attenuator_bool_to_registry_int() -> None:
+    """The FTX-1 attenuator getter returns a bool; the int FieldPath gets 0/1."""
+    radio = _make_radio()
+    radio.read_attenuator = AsyncMock(return_value=False)
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+
+    att = next(
+        item
+        for item in observations
+        if str(item.path) == "receiver.main.operator_controls.att"
+    )
+    assert att.value == 0
+    assert isinstance(att.value, int)
+    assert not isinstance(att.value, bool)
+
+
+@pytest.mark.asyncio
+async def test_tx_meters_poll_emits_alc_power_swr_comp_stream_like_meters() -> None:
+    """ALC/COMP join power/swr as stream-like TX meters (MOR-448/460).
+
+    The PA compression meter (FTX-1 RM3) is the cross-vendor case (also Icom
+    0x15 0x14); it is read via the non-mutating ``read_comp_meter`` and emitted
+    with the same short ``max_age`` (the meter freshness TTL) as power/swr/alc —
+    NOT the indefinite slow-control treatment.
+    """
+    radio = _make_radio()
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_tx_meters()
+
+    assert [(str(item.path), item.value) for item in observations] == [
+        ("global.meters.alc", 42),
+        ("global.meters.power", 180),
+        ("global.meters.swr", 2.375),
+        ("global.meters.comp", 30),
+    ]
+    assert [(str(item.path), item.quality) for item in observations] == [
+        ("global.meters.alc", ("confirmed", "uncalibrated")),
+        ("global.meters.power", ("confirmed", "uncalibrated")),
+        ("global.meters.swr", ("confirmed", "calibrated")),
+        ("global.meters.comp", ("confirmed", "uncalibrated")),
+    ]
+    assert all(item.source.source == "yaesu_poll_response" for item in observations)
+    # Stream-like meters expire on a short TTL — same freshness TTL as power/swr.
+    assert all(item.max_age == 0.8 for item in observations)
+    radio.read_alc_meter.assert_awaited_once()
+    radio.read_power_meter.assert_awaited_once()
+    radio.read_swr_meter.assert_awaited_once()
+    radio.read_comp_meter.assert_awaited_once()
+    radio.get_alc_meter.assert_not_awaited()
+    radio.get_power_meter.assert_not_awaited()
+    radio.get_swr_meter.assert_not_awaited()
+    radio.get_comp_meter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tx_meters_poll_skips_alc_comp_without_meters_capability() -> None:
+    radio = _make_radio()
+    radio.capabilities = {"dual_rx", "tx", "vox", "compressor"}
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_tx_meters()
+
+    assert observations == ()
+    radio.read_alc_meter.assert_not_awaited()
+    radio.read_power_meter.assert_not_awaited()
+    radio.read_swr_meter.assert_not_awaited()
+    radio.read_comp_meter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_drain_meters_ride_the_slow_lane_and_not_the_tx_meter_lane() -> None:
+    """RM8/RM7 are read by ``poll_slow_controls``, never ``poll_tx_meters``.
+
+    ``poll_tx_meters`` runs only under a truthy PTT observation
+    (``poller.py: YaesuCatPoller._emit_fast_observations``), so a drain read
+    placed there would never fire on a receiving radio — and the profile
+    declares these two paths without ``tx_only``, which puts them in the
+    startup gate.
+    """
+    radio = _make_radio()
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    tx_meters = await adapter.poll_tx_meters()
+
+    assert [str(item.path) for item in tx_meters] == [
+        "global.meters.alc",
+        "global.meters.power",
+        "global.meters.swr",
+        "global.meters.comp",
+    ]
+    radio.get_vd_meter.assert_not_awaited()
+    radio.get_id_meter.assert_not_awaited()
+
+    slow = await adapter.poll_slow_controls()
+
+    assert [str(item.path) for item in slow][-2:] == [
+        "global.meters.vd",
+        "global.meters.id",
+    ]
+    radio.get_vd_meter.assert_awaited_once()
+    radio.get_id_meter.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_clamps_the_receive_drain_voltage_to_the_last_point() -> None:
+    """Raw 212 yields 13.8 V, not an extrapolation above it (MOR-2425/T147).
+
+    ``runtime/meter_cal.py: interpolate_meter`` clamps outside its endpoints,
+    and the FTX-1 profile's last ``vd`` point is raw 210 -> 13.8, so the raw
+    212 the radio answers while receiving lands exactly on that endpoint.
+    """
+    radio = _make_radio()
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    by_path = {str(item.path): item for item in await adapter.poll_slow_controls()}
+
+    assert by_path["global.meters.vd"].value == 13.8
+    assert by_path["global.meters.vd"].quality == ("confirmed", "calibrated")
+    assert by_path["global.meters.id"].value == 0.0
+    assert by_path["global.meters.id"].quality == ("confirmed", "calibrated")
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_interpolates_a_drain_reading_between_the_two_points() -> None:
+    """A raw between the two ``id`` points is the line through them.
+
+    Raw 29 -> 1.0 A is the profile's transmit point, so half of it is half an
+    amp. This is what fails if either calibration point moves.
+    """
+    radio = _make_radio()
+    radio.get_id_meter = AsyncMock(return_value=29)
+    radio.get_vd_meter = AsyncMock(return_value=105)
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    by_path = {
+        str(item.path): item.value for item in await adapter.poll_slow_controls()
+    }
+
+    assert by_path["global.meters.id"] == 1.0
+    assert by_path["global.meters.vd"] == pytest.approx(6.9)
+
+
+@pytest.mark.asyncio
+async def test_tx_controls_poll_emits_global_setpoints() -> None:
+    radio = _make_radio()
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_tx_controls()
+
+    assert [(str(item.path), item.value) for item in observations] == [
+        (
+            "global.operator_controls.power_level",
+            pytest.approx(_normalized_power(55)),
+        ),
+        ("global.operator_controls.mic_gain", 40),
+        ("global.tx_state.compressor_on", True),
+        ("global.operator_controls.compressor_level", 25),
+        ("global.tx_state.vox_on", True),
+        # split (MOR-446) is a global tx_state bool, gated on the ``split``
+        # capability — mirroring the legacy poller's ``"split" in caps`` gate.
+        ("global.tx_state.split", True),
+        # Clarifier RIT/XIT (MOR-454): independently declared global tx_state
+        # flags plus the shared global operator-control signed offset.
+        ("global.tx_state.rit_on", True),
+        ("global.tx_state.rit_tx", False),
+        ("global.operator_controls.rit_freq", -250),
+        # Tuner + dial-lock (MOR-455): tuner_status is a global operator-control
+        # int (raw device scale, 0-3) gated on the ``tuner`` capability;
+        # dial_lock is a global tx_state bool gated on the ``dial_lock``
+        # capability — mirroring the legacy poller's ``"tuner" in caps`` /
+        # ``"dial_lock" in caps`` gates.
+        ("global.operator_controls.tuner_status", 2),
+        ("global.tx_state.dial_lock", True),
+        # CW keyer family (MOR-456): key_speed/cw_pitch/break_in/break_in_delay
+        # are global operator-control ints gated on the legacy poller's single
+        # ``"cw" in caps`` gate. cw_pitch is Hz; break_in is the device int
+        # (1=SEMI) from the BreakInMode IntEnum. (cw_spot is a slow_state bool
+        # emitted on the slow-control lane, asserted separately below.)
+        ("global.operator_controls.key_speed", 24),
+        ("global.operator_controls.cw_pitch", 600),
+        ("global.operator_controls.break_in", 1),
+        ("global.operator_controls.break_in_delay", 300),
+    ]
+    assert all(item.source.source == "yaesu_poll_response" for item in observations)
+    assert all(item.max_age == 2.0 for item in observations)
+    # Power emits the watt SETPOINT (read_power), never the RM5 meter.
+    radio.read_power.assert_awaited_once()
+    radio.read_mic_gain.assert_awaited_once()
+    radio.read_processor.assert_awaited_once()
+    radio.read_processor_level.assert_awaited_once()
+    radio.read_vox.assert_awaited_once()
+    radio.read_split.assert_awaited_once()
+    # Single CAT read pair for the clarifier — flags share one read.
+    radio.read_clarifier.assert_awaited_once()
+    radio.read_clarifier_freq.assert_awaited_once()
+    # Tuner + dial-lock each use a single read (MOR-455).
+    radio.get_tuner_status.assert_awaited_once()
+    radio.read_lock.assert_awaited_once()
+    # CW keyer family each use a single read (MOR-456).
+    radio.read_keyer_speed.assert_awaited_once()
+    radio.read_cw_pitch.assert_awaited_once()
+    radio.read_break_in.assert_awaited_once()
+    radio.read_break_in_delay.assert_awaited_once()
+    radio.get_power.assert_not_awaited()
+    radio.get_mic_gain.assert_not_awaited()
+    radio.get_processor.assert_not_awaited()
+    radio.get_processor_level.assert_not_awaited()
+    radio.get_vox.assert_not_awaited()
+    radio.get_split.assert_not_awaited()
+    radio.get_clarifier.assert_not_awaited()
+    radio.get_clarifier_freq.assert_not_awaited()
+    radio.get_tuner.assert_not_awaited()
+    radio.get_lock.assert_not_awaited()
+    radio.get_keyer_speed.assert_not_awaited()
+    radio.get_cw_pitch.assert_not_awaited()
+    radio.get_break_in.assert_not_awaited()
+    radio.get_break_in_delay.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tx_controls_poll_skips_power_level_without_valid_profile_max_watts() -> (
+    None
+):
+    radio = _make_radio()
+    radio.profile = replace(radio.profile, max_watts=None)
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_tx_controls()
+
+    assert [(str(item.path), item.value) for item in observations] == [
+        ("global.operator_controls.mic_gain", 40),
+        ("global.tx_state.compressor_on", True),
+        ("global.operator_controls.compressor_level", 25),
+        ("global.tx_state.vox_on", True),
+        ("global.tx_state.split", True),
+        ("global.tx_state.rit_on", True),
+        ("global.tx_state.rit_tx", False),
+        ("global.operator_controls.rit_freq", -250),
+        ("global.operator_controls.tuner_status", 2),
+        ("global.tx_state.dial_lock", True),
+        ("global.operator_controls.key_speed", 24),
+        ("global.operator_controls.cw_pitch", 600),
+        ("global.operator_controls.break_in", 1),
+        ("global.operator_controls.break_in_delay", 300),
+    ]
+    radio.read_power.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_tx_controls_poll_skips_fields_without_matching_runtime_capability() -> (
+    None
+):
+    radio = _make_radio()
+    # Drop tx/vox/compressor; mic_gain is unconditional, so it remains.
+    radio.capabilities = {"dual_rx", "af_level", "rf_gain", "squelch", "meters"}
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_tx_controls()
+
+    assert [(str(item.path), item.value) for item in observations] == [
+        ("global.operator_controls.mic_gain", 40),
+    ]
+    radio.read_power.assert_not_awaited()
+    radio.read_processor.assert_not_awaited()
+    radio.read_processor_level.assert_not_awaited()
+    radio.read_vox.assert_not_awaited()
+    # split is dropped: the ``split`` runtime cap is absent here.
+    radio.read_split.assert_not_awaited()
+    # RIT/XIT is dropped: neither runtime capability is present (MOR-454).
+    radio.read_clarifier.assert_not_awaited()
+    radio.read_clarifier_freq.assert_not_awaited()
+    # Tuner + dial-lock are dropped: ``tuner``/``dial_lock`` caps absent (MOR-455).
+    radio.get_tuner_status.assert_not_awaited()
+    radio.read_lock.assert_not_awaited()
+    # CW keyer family dropped: the ``cw`` runtime cap is absent here (MOR-456).
+    radio.read_keyer_speed.assert_not_awaited()
+    radio.read_cw_pitch.assert_not_awaited()
+    radio.read_break_in.assert_not_awaited()
+    radio.read_break_in_delay.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("capabilities", "expected_paths"),
+    [
+        (
+            {"rit"},
+            {
+                "global.tx_state.rit_on",
+                "global.operator_controls.rit_freq",
+            },
+        ),
+        (
+            {"xit"},
+            {
+                "global.tx_state.rit_tx",
+                "global.operator_controls.rit_freq",
+            },
+        ),
+        (
+            {"rit", "xit"},
+            {
+                "global.tx_state.rit_on",
+                "global.tx_state.rit_tx",
+                "global.operator_controls.rit_freq",
+            },
+        ),
+        (set(), set()),
+    ],
+)
+async def test_tx_controls_poll_scopes_clarifier_state_to_declared_capabilities(
+    capabilities: set[str], expected_paths: set[str]
+) -> None:
+    radio = _make_radio()
+    radio.capabilities = capabilities
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_tx_controls()
+
+    clarifier_observations = {
+        str(item.path): item.value
+        for item in observations
+        if str(item.path).startswith("global.tx_state.rit_")
+        or str(item.path) == "global.operator_controls.rit_freq"
+    }
+    assert set(clarifier_observations) == expected_paths
+    if capabilities:
+        radio.read_clarifier.assert_awaited_once()
+        radio.read_clarifier_freq.assert_awaited_once()
+    else:
+        radio.read_clarifier.assert_not_awaited()
+        radio.read_clarifier_freq.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_adapter_uses_read_only_yaesu_paths_when_getters_mutate_state() -> None:
+    radio = _SideEffectingYaesuRadio()
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = (
+        await adapter.poll_medium()
+        + await adapter.poll_rx_meters()
+        + await adapter.poll_tx_meters()
+        + await adapter.poll_slow_controls()
+        + await adapter.poll_tx_controls()
+    )
+
+    assert [(str(item.path), item.value) for item in observations] == [
+        ("receiver.main.active.freq_mode.freq_hz", 14_074_000),
+        ("receiver.main.active.freq_mode.mode", "USB"),
+        ("receiver.sub.active.freq_mode.freq_hz", 7_074_000),
+        ("receiver.sub.active.freq_mode.mode", "LSB"),
+        (
+            "global.tx_state.tx_target",
+            KnownTxTarget(receiver="MAIN", slot=None, frequency_hz=14_074_000),
+        ),
+        ("global.tx_state.ptt", True),
+        ("global.tx_state.observed_ptt", ObservedPtt.ON),
+        ("receiver.main.meters.s_meter", 150),
+        ("receiver.sub.meters.s_meter", 75),
+        ("global.meters.alc", 200),
+        ("global.meters.power", 180),
+        ("global.meters.swr", 120),
+        ("global.meters.comp", 90),
+        ("global.tx_state.dual_watch", True),
+        (
+            "receiver.main.operator_controls.af_level",
+            pytest.approx(_normalized_255(128)),
+        ),
+        (
+            "receiver.main.operator_controls.rf_gain",
+            pytest.approx(_normalized_255(180)),
+        ),
+        (
+            "receiver.main.operator_controls.squelch",
+            pytest.approx(_normalized_255(12)),
+        ),
+        (
+            "receiver.sub.operator_controls.af_level",
+            pytest.approx(_normalized_255(64)),
+        ),
+        (
+            "receiver.sub.operator_controls.rf_gain",
+            pytest.approx(_normalized_255(90)),
+        ),
+        (
+            "receiver.sub.operator_controls.squelch",
+            pytest.approx(_normalized_255(8)),
+        ),
+        # AGC has no FTX-1 capability tag → unconditional and per-receiver
+        # (MOR-2511); ATT and preamp are skipped because this radio lacks
+        # those runtime caps.
+        ("receiver.main.operator_controls.agc", 3),
+        ("receiver.sub.operator_controls.agc", 3),
+        # narrow is unconditional (like AGC) and per-receiver (MOR-2511), so
+        # the SUB read emits too; filter_width and if_shift are skipped
+        # because this radio lacks the ``filter_width`` / ``if_shift`` caps.
+        ("receiver.main.operator_toggles.narrow", True),
+        ("receiver.sub.operator_toggles.narrow", True),
+        # Tone / CTCSS squelch-type (MOR-457): gated on the ``sql_type`` cap
+        # (present here); each receiver's ``read_sql_type`` (code 1 = "TONE")
+        # derives both booleans and does not mutate legacy state (SUB read
+        # MOR-2111).
+        ("receiver.main.operator_toggles.repeater_tone", True),
+        ("receiver.main.operator_toggles.repeater_tsql", False),
+        ("receiver.main.operator_controls.tone_squelch_type", "tone"),
+        ("receiver.sub.operator_toggles.repeater_tone", True),
+        ("receiver.sub.operator_toggles.repeater_tsql", False),
+        ("receiver.sub.operator_controls.tone_squelch_type", "tone"),
+        # CTCSS tone freq (MOR-458): gated on the ``sql_type`` cap (present
+        # here); each receiver's ``read_ctcss_tone_index`` (index 8 = 88.5 Hz)
+        # maps to 8850 centiHz, emitted to BOTH tone_freq and tsql_freq, and
+        # does not mutate legacy state (SUB read MOR-2111).
+        ("receiver.main.operator_controls.tone_freq", 8850),
+        ("receiver.main.operator_controls.tsql_freq", 8850),
+        ("receiver.sub.operator_controls.tone_freq", 8850),
+        ("receiver.sub.operator_controls.tsql_freq", 8850),
+        # active-slot (MOR-446); unconditional like AGC/narrow, the SUB index
+        # coerces to the neutral "SUB" str.
+        ("global.slow_state.active", "SUB"),
+        # cw_spot (MOR-456) — global slow_state bool, gated on the ``cw`` cap
+        # (present here); ``read_cw_spot`` does not mutate legacy state.
+        ("global.slow_state.cw_spot", True),
+        # Drain meters (MOR-2425/T147) close the slow-control lane; the raw
+        # counts are emitted because this double's profile carries no
+        # ``meter_calibrations`` dict.
+        ("global.meters.vd", 212),
+        ("global.meters.id", 0),
+        (
+            "global.operator_controls.power_level",
+            pytest.approx(_normalized_power(55)),
+        ),
+        ("global.operator_controls.mic_gain", 40),
+        ("global.tx_state.compressor_on", True),
+        ("global.operator_controls.compressor_level", 25),
+        ("global.tx_state.vox_on", True),
+        # split is skipped: this radio lacks the ``split`` runtime cap.
+        # Clarifier RIT/XIT (MOR-454): both capabilities are present; shared
+        # clarifier reads do not mutate legacy state.
+        ("global.tx_state.rit_on", True),
+        ("global.tx_state.rit_tx", False),
+        ("global.operator_controls.rit_freq", -250),
+        # Tuner + dial-lock (MOR-455): gated on the ``tuner``/``dial_lock`` caps
+        # (present here); a single ``get_tuner_status``/``read_lock`` each — neither
+        # mutates legacy state. tuner_status is the generic ATU status (0-2).
+        ("global.operator_controls.tuner_status", 2),
+        ("global.tx_state.dial_lock", True),
+        # CW keyer family (MOR-456): gated on the ``cw`` cap (present here); a
+        # single ``read_keyer_speed``/``read_cw_pitch``/``read_break_in``/
+        # ``read_break_in_delay`` each — none mutates legacy state. cw_pitch is
+        # Hz; break_in is the device int (1=SEMI). (cw_spot rides the
+        # slow-control lane, asserted above.)
+        ("global.operator_controls.key_speed", 24),
+        ("global.operator_controls.cw_pitch", 600),
+        ("global.operator_controls.break_in", 1),
+        ("global.operator_controls.break_in_delay", 300),
+    ]
+    assert radio.radio_state.main.freq == 1
+    assert radio.radio_state.main.mode == "INIT-MAIN"
+    assert radio.radio_state.sub.freq == 2
+    assert radio.radio_state.sub.mode == "INIT-SUB"
+    assert radio.radio_state.ptt is False
+    assert radio.radio_state.main.s_meter == 3
+    assert radio.radio_state.sub.s_meter == 4
+
+    assert radio.radio_state.alc_meter == 5
+    assert radio.radio_state.comp_meter == 5
+    assert radio.radio_state.power_meter == 5
+    assert radio.radio_state.swr_meter == 6
+    # The drain reads have no ``read_*`` twin: ``get_vd_meter``/``get_id_meter``
+    # are themselves pure, so the sentinels survive the poll (MOR-2425/T147).
+    assert radio.radio_state.vd_meter == 23
+    assert radio.radio_state.id_meter == 24
+    assert radio.radio_state.main.af_level == 7
+    assert radio.radio_state.main.rf_gain == 8
+    assert radio.radio_state.main.squelch == 9
+    assert radio.radio_state.sub.af_level == 10
+    assert radio.radio_state.sub.rf_gain == 11
+    assert radio.radio_state.sub.squelch == 12
+    # The new read_* TX-control paths must not mutate legacy state either.
+    assert radio.radio_state.power_level == 13
+    assert radio.radio_state.mic_gain == 14
+    assert radio.radio_state.compressor_on is False
+    assert radio.radio_state.compressor_level == 15
+    assert radio.radio_state.vox_on is False
+    # RF front-end + AGC read_* paths must not mutate legacy state (MOR-443).
+    assert radio.radio_state.main.att == 16
+    assert radio.radio_state.main.preamp == 17
+    assert radio.radio_state.main.agc == 18
+    # Filter / IF-shift / narrow read_* paths must not mutate legacy state
+    # either — even ``read_filter_width``, which READS the mode mirror for its
+    # width-table decode but never writes ``self._state`` (MOR-445).
+    assert radio.radio_state.main.filter_width == 19
+    assert radio.radio_state.main.if_shift == 20
+    assert radio.radio_state.main.narrow is False
+    # Split + active-slot read_* paths must not mutate legacy state (MOR-446).
+    assert radio.radio_state.split is False
+    assert radio.radio_state.active == "MAIN"
+    assert radio.radio_state.vfo_select == 0
+    # Clarifier RIT/XIT read_* paths must not mutate legacy state (MOR-454).
+    assert radio.radio_state.rit_on is False
+    assert radio.radio_state.rit_tx is False
+    assert radio.radio_state.rit_freq == 21
+    # Tuner + dial-lock read_* paths must not mutate legacy state (MOR-455).
+    assert radio.radio_state.tuner_status == 0
+    assert radio.radio_state.dial_lock is False
+    # CW keyer family read_* paths must not mutate legacy state (MOR-456).
+    assert radio.radio_state.key_speed == 99
+    assert radio.radio_state.cw_pitch == 999
+    assert radio.radio_state.break_in == 2
+    assert radio.radio_state.break_in_delay == 888
+    assert radio.radio_state.cw_spot is False
+    # Tone/CTCSS read_sql_type must not mutate legacy state (MOR-457). The
+    # pre-seeded sentinel pair (True, True) differs from what the fixture's
+    # fixed code 1 actually derives (True, False, MOR-2130), so it is
+    # preserved rather than overwritten.
+    assert radio.radio_state.main.repeater_tone is True
+    assert radio.radio_state.main.repeater_tsql is True
+    # CTCSS tone freq read_ctcss_tone_index must not mutate legacy state
+    # (MOR-458). The pre-seeded sentinel centiHz values are preserved.
+    assert radio.radio_state.main.tone_freq == 11111
+    assert radio.radio_state.main.tsql_freq == 22222
+
+
+async def test_rx_meters_emit_calibrated_db_domain() -> None:
+    radio = _make_radio()
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_rx_meters()
+
+    by_path = {str(item.path): item for item in observations}
+    main = by_path["receiver.main.meters.s_meter"]
+    sub = by_path["receiver.sub.meters.s_meter"]
+    assert main.value == 6
+    assert main.quality == ("confirmed", "calibrated")
+    assert sub.value == -37
+    assert sub.quality == ("confirmed", "calibrated")
+
+
+@pytest.mark.asyncio
+async def test_read_split_and_vfo_select_are_pure_reads() -> None:
+    """MOR-446: ``read_split`` / ``read_vfo_select`` are pure CAT reads.
+
+    Both delegate to the underlying ``get_*`` query path but must NOT write
+    ``self._state`` — the public ``get_split`` / ``get_vfo_select`` getters keep
+    the legacy mutation; only the ``read_*`` variants feed the observation
+    pipeline (MOR-434 pattern).
+    """
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    radio.radio_state.split = False
+    radio.radio_state.active = "MAIN"
+
+    radio._query = AsyncMock(return_value={"state": "1"})  # type: ignore[method-assign]
+    assert await radio.read_split() is True
+    assert radio.radio_state.split is False
+
+    radio._query = AsyncMock(return_value={"vfo": "1"})  # type: ignore[method-assign]
+    assert await radio.read_vfo_select() == 1
+    assert radio.radio_state.active == "MAIN"
+
+
+@pytest.mark.asyncio
+async def test_read_clarifier_and_freq_are_pure_reads() -> None:
+    """MOR-454: ``read_clarifier`` / ``read_clarifier_freq`` are pure CAT reads.
+
+    Both delegate to the underlying ``get_*`` query/parse path but must NOT
+    write ``self._state`` — only the ``read_*`` variants feed the observation
+    pipeline (MOR-434 pattern). The signed Hz offset is returned on the device
+    scale (cross-vendor calibration is MOR-453).
+    """
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    radio.radio_state.rit_on = False
+    radio.radio_state.rit_tx = False
+    radio.radio_state.rit_freq = 99
+    state_before = radio.radio_state
+
+    radio._query = AsyncMock(  # type: ignore[method-assign]
+        return_value={"rx": "1", "tx": "0"}
+    )
+    assert await radio.read_clarifier(0) == (True, False)
+    assert radio.radio_state is state_before
+    assert radio.radio_state.rit_on is False
+    assert radio.radio_state.rit_tx is False
+
+    radio._query = AsyncMock(  # type: ignore[method-assign]
+        return_value={"sign": "-", "offset": 250}
+    )
+    assert await radio.read_clarifier_freq(0) == -250
+    assert radio.radio_state.rit_freq == 99
+
+
+@pytest.mark.asyncio
+async def test_read_tuner_and_lock_are_pure_reads() -> None:
+    """MOR-455: ``read_tuner`` / ``read_lock`` are pure CAT reads.
+
+    Both delegate to the underlying ``get_*`` query/parse path but must NOT
+    write ``self._state`` — only the ``read_*`` variants feed the observation
+    pipeline (MOR-434 pattern). ``read_tuner`` returns the raw device int (0-3);
+    ``read_lock`` returns the dial-lock bool.
+    """
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    radio.radio_state.tuner_status = 0
+    radio.radio_state.dial_lock = False
+    state_before = radio.radio_state
+
+    radio._query = AsyncMock(return_value={"state": "2"})  # type: ignore[method-assign]
+    assert await radio.read_tuner() == 2
+    assert radio.radio_state is state_before
+    assert radio.radio_state.tuner_status == 0
+
+    radio._query = AsyncMock(return_value={"state": "1"})  # type: ignore[method-assign]
+    assert await radio.read_lock() is True
+    assert radio.radio_state.dial_lock is False
+
+
+@pytest.mark.asyncio
+async def test_read_cw_keyer_family_are_pure_reads() -> None:
+    """MOR-456: the CW keyer ``read_*`` helpers are pure CAT reads.
+
+    Each delegates to the underlying ``get_*`` query/parse path but must NOT
+    write ``self._state`` — only the ``read_*`` variants feed the observation
+    pipeline (MOR-434 pattern). ``read_cw_pitch`` maps the FTX-1 idx to Hz
+    (``300 + idx * 10``); ``read_break_in`` returns the BreakInMode IntEnum
+    (emitted downstream as the device int). Raw device scale (cross-vendor
+    calibration is MOR-453).
+    """
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    radio.radio_state.key_speed = 99
+    radio.radio_state.cw_pitch = 999
+    radio.radio_state.break_in = 2
+    radio.radio_state.break_in_delay = 888
+    radio.radio_state.cw_spot = False
+    state_before = radio.radio_state
+
+    radio._query = AsyncMock(return_value={"wpm": "24"})  # type: ignore[method-assign]
+    assert await radio.read_keyer_speed() == 24
+    assert radio.radio_state is state_before
+    assert radio.radio_state.key_speed == 99
+
+    radio._query = AsyncMock(return_value={"idx": "30"})  # type: ignore[method-assign]
+    assert await radio.read_cw_pitch() == 600  # 300 + 30 * 10
+    assert radio.radio_state.cw_pitch == 999
+
+    radio._query = AsyncMock(return_value={"state": "1"})  # type: ignore[method-assign]
+    assert await radio.read_break_in() is BreakInMode.SEMI
+    assert radio.radio_state.break_in == 2
+
+    radio._query = AsyncMock(return_value={"delay": "300"})  # type: ignore[method-assign]
+    assert await radio.read_break_in_delay() == 300
+    assert radio.radio_state.break_in_delay == 888
+
+    radio._query = AsyncMock(return_value={"state": "1"})  # type: ignore[method-assign]
+    assert await radio.read_cw_spot() is True
+    assert radio.radio_state.cw_spot is False
+
+
+@pytest.mark.asyncio
+async def test_read_sql_type_is_a_pure_read() -> None:
+    """MOR-457: ``read_sql_type`` is a pure CAT read.
+
+    It delegates to the same ``CT0`` query/parse path as ``get_sql_type`` but
+    must NOT write ``self._state`` — only the ``read_*`` variant feeds the
+    observation pipeline (MOR-434 pattern). It returns the raw FTX-1 ``CT`` P2
+    "SQL TYPE" code (FTX-1_CAT_OM_ENG_2508-C); the neutral-boolean derivation
+    happens in the adapter, never here.
+
+    Pre-seeds ``(repeater_tone=False, repeater_tsql=True)`` — the one pair no
+    ``CT`` code can produce (MOR-2130's corrected mapping only reaches
+    (F,F)/(T,F)/(T,T)) — and feeds code 2, which derives (T,T). A leak of that
+    derived value into legacy state would flip ``repeater_tone`` to True,
+    which the assertion below catches; a pre-seed of (T,T) would not, since
+    code 2's derivation and the pre-seed would then be identical.
+    """
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    radio.radio_state.main.repeater_tone = False
+    radio.radio_state.main.repeater_tsql = True
+    state_before = radio.radio_state
+
+    radio._query = AsyncMock(  # type: ignore[method-assign]
+        return_value={"receiver": 0, "type": "2"}
+    )
+    assert await radio.read_sql_type() == 2
+    assert radio.radio_state is state_before
+    # The pre-seeded, not-representable-via-CT pair is untouched.
+    assert radio.radio_state.main.repeater_tone is False
+    assert radio.radio_state.main.repeater_tsql is True
+
+    # get_sql_type delegates to the same pure read.
+    radio._query = AsyncMock(  # type: ignore[method-assign]
+        return_value={"receiver": 0, "type": "1"}
+    )
+    assert await radio.get_sql_type() == 1
+
+
+@pytest.mark.parametrize(
+    ("code", "expected_tone", "expected_tsql", "expected_type"),
+    [
+        # CAT ``CT`` P2 "SQL TYPE" codes (FTX-1_CAT_OM_ENG_2508-C) → the two
+        # independent axes defined by ``RepeaterControlCapable``: repeater_tone
+        # is TX tone ENCODE, repeater_tsql is RX tone-squelch DECODE. Code 2 has
+        # encode ON *and* decode ON, so both booleans are True (MOR-2130).
+        # Codes 3/4/5 are outside the two-boolean vocabulary and publish None
+        # ("observed, not known") — a False pair would invent OFF while the
+        # radio is in DCS (MOR-2572).
+        # The type column is the profile's [tone_squelch_types] table
+        # (MOR-2969).
+        (0, False, False, "off"),  # CTCSS OFF
+        (1, True, False, "tone"),  # CTCSS ENC ON / DEC OFF ("TONE")
+        (2, True, True, "tsql"),  # CTCSS ENC ON / DEC ON ("TSQL")
+        (3, None, None, "dtcs"),  # DCS — no neutral CTCSS-boolean representation
+        (4, None, None, "pr_freq"),  # PR FREQ — no CTCSS-boolean representation
+        (5, None, None, "rev_tone"),  # REV TONE — no CTCSS-boolean representation
+    ],
+)
+@pytest.mark.asyncio
+async def test_sql_type_code_maps_to_ctcss_booleans(
+    code: int,
+    expected_tone: bool | None,
+    expected_tsql: bool | None,
+    expected_type: str,
+) -> None:
+    """MOR-457/MOR-2572: each ``CT`` P2 code derives the correct tone pair.
+
+    Both ``repeater_tone`` and ``repeater_tsql`` are emitted every cycle (incl.
+    the False/None derivations) so the store always reflects current state.
+    Gated on the ``sql_type`` cap (present here) + can_poll.
+    """
+    radio = _make_radio()
+    radio.read_sql_type = AsyncMock(return_value=code)
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+
+    assert by_path["receiver.main.operator_toggles.repeater_tone"] is expected_tone
+    assert by_path["receiver.main.operator_toggles.repeater_tsql"] is expected_tsql
+    assert by_path["receiver.sub.operator_toggles.repeater_tone"] is expected_tone
+    assert by_path["receiver.sub.operator_toggles.repeater_tsql"] is expected_tsql
+    assert by_path["receiver.main.operator_controls.tone_squelch_type"] == expected_type
+    assert by_path["receiver.sub.operator_controls.tone_squelch_type"] == expected_type
+    # A single CT read per receiver feeds both derived booleans on that side.
+    assert radio.read_sql_type.await_args_list == [call(0), call(1)]
+
+
+@pytest.mark.asyncio
+async def test_sql_type_skipped_without_ctcss_capability() -> None:
+    """MOR-457: neither CTCSS path emits when the ``sql_type`` cap is absent."""
+    radio = _make_radio()
+    radio.capabilities = radio.capabilities - {"sql_type"}
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+    paths = {str(item.path) for item in observations}
+
+    assert "receiver.main.operator_toggles.repeater_tone" not in paths
+    assert "receiver.main.operator_toggles.repeater_tsql" not in paths
+    radio.read_sql_type.assert_not_awaited()
+
+
+@pytest.mark.parametrize("code", [0, 1, 2, 3])
+@pytest.mark.asyncio
+async def test_repeater_shift_emits_both_receivers_directly(code: int) -> None:
+    radio = _make_radio()
+    radio.capabilities = radio.capabilities | {"repeater_shift"}
+    radio.read_repeater_shift = AsyncMock(side_effect=[code, code])
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+
+    assert by_path["receiver.main.operator_controls.repeater_shift"] == code
+    assert by_path["receiver.sub.operator_controls.repeater_shift"] == code
+    assert radio.read_repeater_shift.await_args_list == [call(0), call(1)]
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "defective_path", "awaited"),
+    [
+        (
+            [ValueError("MAIN failed"), 2],
+            "receiver.main.operator_controls.repeater_shift",
+            [call(0), call(1)],
+        ),
+        (
+            [1, ValueError("SUB failed")],
+            "receiver.sub.operator_controls.repeater_shift",
+            [call(0), call(1)],
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_repeater_shift_receiver_failures_name_only_their_own_side(
+    side_effect: list[object], defective_path: str, awaited: list[object]
+) -> None:
+    """OS0 and OS1 are read independently, so one side's defect names one path.
+
+    The read that fails records its defect and skips its own side only
+    (MOR-2578): the other side is still read and still publishes, so the
+    poll cycle no longer aborts at the first failing side.
+    """
+    radio = _make_radio()
+    radio.capabilities.add("repeater_shift")
+    radio.read_repeater_shift = AsyncMock(side_effect=side_effect)
+    scheduler = AcquisitionScheduler(profile=_profile_state_acquisition())
+    radio._acquisition_scheduler = scheduler
+    adapter = YaesuObservationAdapter(radio, profile=_profile_state_acquisition())
+
+    await adapter.poll_slow_controls()
+
+    assert scheduler.startup_defect is not None
+    assert [str(path) for path in scheduler.startup_defect.paths] == [defective_path]
+    assert radio.read_repeater_shift.await_args_list == awaited
+
+
+@pytest.mark.asyncio
+async def test_repeater_shift_sub_read_is_gated_by_acquisition_policy() -> None:
+    radio = _make_radio()
+    radio.capabilities.add("repeater_shift")
+    radio.read_repeater_shift = AsyncMock(return_value=1)
+    profile = _profile_state_acquisition()
+    sub_path = "receiver.sub.operator_controls.repeater_shift"
+    profile = replace(
+        profile,
+        capabilities=tuple(
+            capability
+            for capability in profile.capabilities
+            if str(capability.path) != sub_path
+        ),
+    )
+
+    await YaesuObservationAdapter(radio, profile=profile).poll_slow_controls()
+
+    radio.read_repeater_shift.assert_awaited_once_with(0)
+
+
+@pytest.mark.asyncio
+async def test_repeater_shift_skipped_without_capability() -> None:
+    """MOR-2111: shift direction does not emit when the ``repeater_shift`` cap is absent."""
+    radio = _make_radio()
+    radio.read_repeater_shift = AsyncMock(return_value=1)
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+    paths = {str(item.path) for item in observations}
+
+    assert "receiver.main.operator_controls.repeater_shift" not in paths
+    radio.read_repeater_shift.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sql_type_emits_both_receivers_with_their_own_codes() -> None:
+    """MOR-2111: CT0 and CT1 are read independently; each side derives its
+    own boolean pair from its own answer (a MAIN echo would fail). The SUB
+    read rides the ``dual_rx`` capability: dropping it drops only SUB."""
+    radio = _make_radio()
+    radio.read_sql_type = AsyncMock(side_effect=lambda receiver=0: 2 - receiver)
+    adapter = YaesuObservationAdapter(
+        radio, profile=_profile_state_acquisition(), clock=_clock
+    )
+
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+
+    # MAIN answers code 2 (TSQL): both True. SUB answers code 1 (TONE):
+    # tone True, tsql False — different from MAIN, so an echo cannot pass.
+    assert by_path["receiver.main.operator_toggles.repeater_tone"] is True
+    assert by_path["receiver.main.operator_toggles.repeater_tsql"] is True
+    assert by_path["receiver.sub.operator_toggles.repeater_tone"] is True
+    assert by_path["receiver.sub.operator_toggles.repeater_tsql"] is False
+    assert radio.read_sql_type.await_args_list == [call(0), call(1)]
+
+    # Without dual_rx there is no SUB receiver to read CT1 for: MAIN keeps
+    # its pair, SUB is simply absent, and no CT1 read is made.
+    radio.capabilities = radio.capabilities - {"dual_rx"}
+    radio.read_sql_type.reset_mock()
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+    assert by_path["receiver.main.operator_toggles.repeater_tone"] is True
+    assert "receiver.sub.operator_toggles.repeater_tone" not in by_path
+    assert radio.read_sql_type.await_args_list == [call(0)]
+
+
+@pytest.mark.asyncio
+async def test_sql_type_receiver_failure_names_only_its_own_side() -> None:
+    """CT0 and CT1 are read independently, so one side's defect names one side.
+
+    The SUB read fails after MAIN succeeded: the defect names only the SUB
+    paths, the MAIN read was still made, and MAIN's own pair still
+    publishes (MOR-2578 — the cycle continues past the failed side).
+    """
+    radio = _make_radio()
+    radio._poll_warned_fields = set()
+    radio.read_sql_type = AsyncMock(side_effect=[1, ValueError("SUB failed")])
+    scheduler = AcquisitionScheduler(profile=_profile_state_acquisition())
+    radio._acquisition_scheduler = scheduler
+    adapter = YaesuObservationAdapter(radio, profile=_profile_state_acquisition())
+
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+
+    assert scheduler.startup_defect is not None
+    assert [str(path) for path in scheduler.startup_defect.paths] == [
+        "receiver.sub.operator_toggles.repeater_tone",
+        "receiver.sub.operator_toggles.repeater_tsql",
+        "receiver.sub.operator_controls.tone_squelch_type",
+    ]
+    assert radio.read_sql_type.await_args_list == [call(0), call(1)]
+    assert by_path["receiver.main.operator_toggles.repeater_tone"] is True
+    assert by_path["receiver.main.operator_toggles.repeater_tsql"] is False
+
+
+@pytest.mark.asyncio
+async def test_ctcss_freq_emits_both_receivers_with_their_own_indices() -> None:
+    """MOR-2111: CN00 and CN10 are read independently; each side maps its own
+    index to centiHz for both freq paths (a MAIN echo would fail). The SUB
+    read rides the ``dual_rx`` capability: dropping it drops only SUB."""
+    radio = _make_radio()
+    radio.read_ctcss_tone_index = AsyncMock(
+        side_effect=lambda receiver=0: 8 if receiver == 0 else 15
+    )
+    adapter = YaesuObservationAdapter(
+        radio, profile=_profile_state_acquisition(), clock=_clock
+    )
+
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+
+    # MAIN index 8 -> 8850; SUB index 15 -> 11090 (110.9 Hz).
+    assert by_path["receiver.main.operator_controls.tone_freq"] == 8850
+    assert by_path["receiver.main.operator_controls.tsql_freq"] == 8850
+    assert by_path["receiver.sub.operator_controls.tone_freq"] == 11090
+    assert by_path["receiver.sub.operator_controls.tsql_freq"] == 11090
+    assert radio.read_ctcss_tone_index.await_args_list == [call(0), call(1)]
+
+    # Without dual_rx there is no SUB receiver to read CN10 for: MAIN keeps
+    # its pair, SUB is simply absent, and no CN10 read is made.
+    radio.capabilities = radio.capabilities - {"dual_rx"}
+    radio.read_ctcss_tone_index.reset_mock()
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+    assert by_path["receiver.main.operator_controls.tone_freq"] == 8850
+    assert "receiver.sub.operator_controls.tone_freq" not in by_path
+    assert radio.read_ctcss_tone_index.await_args_list == [call(0)]
+
+
+@pytest.mark.asyncio
+async def test_ctcss_freq_receiver_failure_names_only_its_own_side() -> None:
+    """CN0 and CN1 are read independently, so one side's defect names one side.
+
+    The SUB read fails after MAIN succeeded: the defect names only the SUB
+    paths, and MAIN's own centiHz pair still publishes (MOR-2578).
+    """
+    radio = _make_radio()
+    radio._poll_warned_fields = set()
+    radio.read_ctcss_tone_index = AsyncMock(side_effect=[8, ValueError("SUB failed")])
+    scheduler = AcquisitionScheduler(profile=_profile_state_acquisition())
+    radio._acquisition_scheduler = scheduler
+    adapter = YaesuObservationAdapter(radio, profile=_profile_state_acquisition())
+
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+
+    assert scheduler.startup_defect is not None
+    assert [str(path) for path in scheduler.startup_defect.paths] == [
+        "receiver.sub.operator_controls.tone_freq",
+        "receiver.sub.operator_controls.tsql_freq",
+    ]
+    assert radio.read_ctcss_tone_index.await_args_list == [call(0), call(1)]
+    assert by_path["receiver.main.operator_controls.tone_freq"] == 8850
+    assert by_path["receiver.main.operator_controls.tsql_freq"] == 8850
+
+
+@pytest.mark.parametrize(
+    ("index", "expected_centihz"),
+    [
+        (0, 6700),  # 67.0 Hz
+        (8, 8850),  # 88.5 Hz (default CTCSS tone)
+        (49, 25410),  # 254.1 Hz (highest standard EIA tone)
+    ],
+)
+@pytest.mark.asyncio
+async def test_ctcss_tone_freq_emits_both_paths_in_centihz(
+    index: int, expected_centihz: int
+) -> None:
+    """MOR-458: one CN read feeds BOTH tone_freq and tsql_freq in centiHz.
+
+    The FTX-1 has a single CTCSS tone frequency (CN P2=0) used for both encode
+    (TONE) and decode (TSQL), so the same centiHz value is emitted to both
+    neutral paths from a single ``read_ctcss_tone_index`` read. Gated on the
+    ``sql_type`` cap (present here) + can_poll.
+    """
+    radio = _make_radio()
+    radio.read_ctcss_tone_index = AsyncMock(return_value=index)
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+
+    assert by_path["receiver.main.operator_controls.tone_freq"] == expected_centihz
+    assert by_path["receiver.main.operator_controls.tsql_freq"] == expected_centihz
+    assert by_path["receiver.sub.operator_controls.tone_freq"] == expected_centihz
+    assert by_path["receiver.sub.operator_controls.tsql_freq"] == expected_centihz
+    # A single CN read per receiver feeds both emissions on that side.
+    assert radio.read_ctcss_tone_index.await_args_list == [call(0), call(1)]
+
+
+@pytest.mark.asyncio
+async def test_ctcss_tone_freq_uses_active_profile_domain() -> None:
+    """A synthetic resolved tuple changes mapping without model branching."""
+    radio = _make_radio()
+    radio.profile = replace(radio.profile, ctcss_tones_centihz=(1234, 5678))
+    radio.read_ctcss_tone_index = AsyncMock(return_value=1)
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+
+    assert by_path["receiver.main.operator_controls.tone_freq"] == 5678
+    assert by_path["receiver.main.operator_controls.tsql_freq"] == 5678
+
+
+@pytest.mark.parametrize(
+    ("domain", "index"),
+    [
+        (None, 0),
+        ((), 0),
+        ((6700,), 1),
+        ((6700, "invalid"), 0),
+    ],
+)
+@pytest.mark.asyncio
+async def test_ctcss_tone_freq_invalid_profile_domain_emits_nothing(
+    domain: object, index: int
+) -> None:
+    """Missing, malformed, or out-of-range profile domains fail closed."""
+    radio = _make_radio()
+    radio.profile = replace(radio.profile, ctcss_tones_centihz=domain)
+    radio.read_ctcss_tone_index = AsyncMock(return_value=index)
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+    paths = {str(item.path) for item in observations}
+
+    assert "receiver.main.operator_controls.tone_freq" not in paths
+    assert "receiver.main.operator_controls.tsql_freq" not in paths
+    assert "receiver.sub.operator_controls.tone_freq" not in paths
+    assert "receiver.sub.operator_controls.tsql_freq" not in paths
+    assert radio.read_ctcss_tone_index.await_args_list == [call(0), call(1)]
+
+
+@pytest.mark.asyncio
+async def test_ctcss_tone_freq_skipped_without_ctcss_capability() -> None:
+    """MOR-458: neither tone_freq nor tsql_freq emits without the ``sql_type`` cap."""
+    radio = _make_radio()
+    radio.capabilities = radio.capabilities - {"sql_type"}
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+    paths = {str(item.path) for item in observations}
+
+    assert "receiver.main.operator_controls.tone_freq" not in paths
+    assert "receiver.main.operator_controls.tsql_freq" not in paths
+    radio.read_ctcss_tone_index.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_active_slot_coerces_main_index_to_neutral_str() -> None:
+    """MOR-446: the int receiver index (0=MAIN) coerces to the neutral str.
+
+    The neutral ``global.slow_state.active`` field is a ``"MAIN"``/``"SUB"`` str
+    (consumed by the rigctld VFOA/VFOB mapping and the dual-RX runtime), so the
+    adapter maps the ``VS`` index 0 → ``"MAIN"`` rather than emitting the raw int.
+    """
+    radio = _make_radio()
+    radio.read_vfo_select = AsyncMock(return_value=0)
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+
+    active = next(
+        item for item in observations if str(item.path) == "global.slow_state.active"
+    )
+    assert active.value == "MAIN"
+    assert isinstance(active.value, str)
+
+
+@pytest.mark.asyncio
+async def test_public_get_data_mode_returns_flat_value_without_state_synthesis() -> (
+    None
+):
+    """MOR-434/MOR-2518: a public ``get_*`` returns a flat value, not
+    synthesized state.
+
+    ``get_data_mode`` is the representative public read called out for the
+    provider backends. It derives a flat ``bool`` from the radio's live mode
+    answer (``MD0;``, MOR-2518) and must not fabricate or hand out a
+    synthesized ``RadioState`` as consumer state. The consumer pipeline is
+    fed by :class:`YaesuObservationAdapter` (which uses the non-mutating
+    ``read_*`` paths); the private ``self._state`` mirror is legacy compat
+    only.
+    """
+    # Real backend; only the USB audio driver is stubbed (not under test).
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    radio._transport._connected = True
+    radio._transport.query = AsyncMock(return_value="MD0C")  # DATA-U
+    radio.radio_state.main.mode = "LSB"
+    state_before = radio.radio_state
+
+    result = await radio.get_data_mode()
+
+    # Flat derived bool, never a RadioState object.
+    assert result is True
+    assert isinstance(result, bool)
+    # No synthesized RadioState handed back as consumer state.
+    assert radio.radio_state is state_before
+    # The live read does not mutate the legacy mirror.
+    assert radio.radio_state.main.mode == "LSB"
+
+
+@pytest.mark.asyncio
+async def test_read_filter_width_does_not_mutate_state() -> None:
+    """MOR-445/MOR-507: ``read_filter_width`` resolves its width-table from the
+    radio's CURRENT mode (read fresh, not from the stale mirror) and must NOT
+    WRITE ``self._state``.
+
+    ``get_filter_width`` (the public path) and ``read_filter_width`` return the
+    same Hz value; the observation adapter calls ``read_filter_width_reading``
+    (which ``read_filter_width`` delegates to) so that legacy state is never
+    mutated by polling.
+    """
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    # Current mode read fresh via CAT (MOR-507); the legacy mirror is ignored.
+    radio.read_mode = AsyncMock(return_value=("USB", None))  # type: ignore[method-assign]
+    radio.radio_state.main.mode = "USB"
+    radio.radio_state.main.filter_width = 999
+    # SSB table (2508-C Table 5): code 12 decodes to 2250 Hz.
+    radio._query = AsyncMock(return_value={"code": 12})  # type: ignore[method-assign]
+    state_before = radio.radio_state
+
+    value = await radio.read_filter_width(0)
+
+    assert value == 2250
+    assert isinstance(value, int)
+    # A write to legacy state is not permitted.
+    assert radio.radio_state is state_before
+    assert radio.radio_state.main.mode == "USB"
+    assert radio.radio_state.main.filter_width == 999
+
+
+@pytest.mark.asyncio
+async def test_read_filter_width_uses_current_mode_not_stale_state() -> None:
+    """MOR-507: ``read_filter_width`` must resolve the width table from the
+    radio's CURRENT mode, not the stale legacy ``self._state`` mirror.
+
+    The observation adapter never writes ``self._state``, so during polling
+    the mode mirror is stale. Resolving the table from the mirror picks the
+    wrong table (or none), so the raw SH index leaks out as the "Hz" value.
+
+    Setup: the mirror says ``USB`` (where SH code 20 = 3000 Hz), but the rig's
+    ACTUAL mode is ``CW-U`` (where SH code 20 = 3500 Hz; see rigs/ftx1.toml,
+    2508-C Table 5). A correct readback decodes against the CW-U table →
+    3500 Hz. The old code decoded against the stale USB table → 3000 Hz
+    (wrong table), and if no table resolved at all it returned the raw code
+    20 as if it were Hz.
+    """
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    # Stale legacy mirror — wrong mode (and never updated by polling).
+    radio.radio_state.main.mode = "USB"
+    # The CAT layer reports the rig's true current mode.
+    radio.read_mode = AsyncMock(return_value=("CW-U", None))  # type: ignore[method-assign]
+    radio._query = AsyncMock(return_value={"code": 20})  # type: ignore[method-assign]
+
+    # Threaded-mode call (the poll path passes the freshly-read mode).
+    value_threaded = await radio.read_filter_width(0, mode="CW-U")
+    # Fallback call (no mode supplied) must read the mode fresh, not use state.
+    value_fallback = await radio.read_filter_width(0)
+
+    assert value_threaded == 3500
+    assert value_fallback == 3500
+    # Must NOT be the stale-USB-table decode (3000) nor the raw code (20).
+    assert value_threaded != 3000
+    assert value_threaded != 20
+
+
+@pytest.mark.asyncio
+async def test_read_if_shift_and_narrow_are_pure_reads() -> None:
+    """MOR-445: ``read_if_shift`` / ``read_narrow`` are pure CAT reads."""
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    radio.radio_state.main.if_shift = 111
+    radio.radio_state.main.narrow = False
+
+    radio._query = AsyncMock(  # type: ignore[method-assign]
+        return_value={"sign": "+", "offset": 200}
+    )
+    assert await radio.read_if_shift(0) == 200
+    assert radio.radio_state.main.if_shift == 111
+
+    radio._query = AsyncMock(return_value={"state": "1"})  # type: ignore[method-assign]
+    assert await radio.read_narrow(0) is True
+    assert radio.radio_state.main.narrow is False
+
+
+# ---------------------------------------------------------------------------
+# MOR-473: transport failures still propagate out of the poll lanes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_propagates_connection_error() -> None:
+    """MOR-473: a connection/OS error must PROPAGATE for the poller to reconnect.
+
+    ``_safe_read`` only swallows field-level parse/reject errors; a dead link
+    (``RadioConnectionError``/``OSError``) must surface to the poll cycle so the
+    reconnect/backoff path still fires — never masked as a skipped field.
+    """
+    radio = _make_radio()
+    radio.read_af_level = AsyncMock(side_effect=RadioConnectionError("link down"))
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    with pytest.raises(RadioConnectionError):
+        await adapter.poll_slow_controls()
+
+    radio.read_af_level = AsyncMock(side_effect=OSError("device disconnected"))
+    with pytest.raises(OSError):
+        await adapter.poll_slow_controls()
+
+
+@pytest.mark.asyncio
+async def test_happy_path_slow_poll_unchanged_when_all_reads_succeed() -> None:
+    """MOR-473 regression: guarding must not change the happy-path output.
+
+    When every read succeeds, the emitted observation set AND order is
+    byte-identical to the pre-_safe_read behaviour.
+    """
+    radio = _make_radio()
+    adapter = YaesuObservationAdapter(
+        radio,
+        profile=_profile_state_acquisition(),
+        clock=_clock,
+    )
+
+    observations = await adapter.poll_slow_controls()
+
+    assert [(str(item.path), item.value) for item in observations] == [
+        ("global.tx_state.dual_watch", True),
+        (
+            "receiver.main.operator_controls.af_level",
+            pytest.approx(_normalized_255(128)),
+        ),
+        (
+            "receiver.main.operator_controls.rf_gain",
+            pytest.approx(_normalized_255(180)),
+        ),
+        ("receiver.main.operator_controls.squelch", pytest.approx(_normalized_255(12))),
+        ("receiver.sub.operator_controls.af_level", pytest.approx(_normalized_255(64))),
+        ("receiver.sub.operator_controls.rf_gain", pytest.approx(_normalized_255(90))),
+        ("receiver.sub.operator_controls.squelch", pytest.approx(_normalized_255(8))),
+        ("receiver.main.operator_controls.att", 1),
+        ("receiver.main.operator_controls.preamp", 2),
+        ("receiver.main.operator_controls.agc", 3),
+        ("receiver.sub.operator_controls.agc", 3),
+        ("receiver.main.operator_controls.if_shift", 200),
+        ("receiver.sub.operator_controls.if_shift", 210),
+        ("receiver.main.operator_toggles.narrow", True),
+        ("receiver.sub.operator_toggles.narrow", False),
+        ("receiver.main.operator_controls.nb_level", 5),
+        ("receiver.main.operator_toggles.nb", True),
+        ("receiver.sub.operator_controls.nb_level", 3),
+        ("receiver.sub.operator_toggles.nb", True),
+        ("receiver.main.operator_controls.nr_level", 9),
+        ("receiver.main.operator_toggles.nr", True),
+        ("receiver.sub.operator_controls.nr_level", 5),
+        ("receiver.sub.operator_toggles.nr", True),
+        ("receiver.main.operator_toggles.auto_notch", True),
+        ("receiver.sub.operator_toggles.auto_notch", False),
+        ("receiver.main.operator_toggles.manual_notch", True),
+        ("receiver.sub.operator_toggles.manual_notch", False),
+        ("receiver.main.operator_controls.manual_notch_freq", 128),
+        ("receiver.sub.operator_controls.manual_notch_freq", 120),
+        ("receiver.main.operator_toggles.repeater_tone", True),
+        ("receiver.main.operator_toggles.repeater_tsql", False),
+        ("receiver.main.operator_controls.tone_squelch_type", "tone"),
+        ("receiver.sub.operator_toggles.repeater_tone", True),
+        ("receiver.sub.operator_toggles.repeater_tsql", False),
+        ("receiver.sub.operator_controls.tone_squelch_type", "tone"),
+        ("receiver.main.operator_controls.tone_freq", 8850),
+        ("receiver.main.operator_controls.tsql_freq", 8850),
+        ("receiver.sub.operator_controls.tone_freq", 8850),
+        ("receiver.sub.operator_controls.tsql_freq", 8850),
+        ("global.slow_state.active", "SUB"),
+        ("global.slow_state.cw_spot", True),
+        ("global.meters.vd", 13.8),
+        ("global.meters.id", 0.0),
+    ]
+
+
+# ---------------------------------------------------------------------------
+# MOR-561: once-then-suppress for repeated field-level CAT parse failures
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tx_target_frequency_skip_warns_once_then_suppresses(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """MOR-561: the remaining skip surface must not flood the log.
+
+    ``tx_target.freq`` is the read that feeds no declared path of its own, so
+    it is skipped rather than treated as a defect. The poller runs it several
+    times a second: the first occurrence WARNs, every repeat demotes to DEBUG.
+    """
+    radio = _gate_radio()
+    radio.capabilities = radio.capabilities - {"dual_rx"}
+    radio.get_tx_func = AsyncMock(return_value=1)
+    _break_read(radio, "read_freq", 1)
+
+    def _poll() -> "object":
+        # Fresh adapter per cycle (matches the poller, which rebuilds the
+        # adapter every poll cycle via YaesuObservationAdapter.from_radio).
+        return YaesuObservationAdapter(
+            radio,
+            profile=_profile_state_acquisition(),
+            clock=_clock,
+        ).poll_medium()
+
+    with caplog.at_level("DEBUG"):
+        for _ in range(5):
+            await _poll()
+
+    warnings = [
+        rec
+        for rec in caplog.records
+        if rec.levelname == "WARNING" and "tx_target.freq" in rec.getMessage()
+    ]
+    debugs = [
+        rec
+        for rec in caplog.records
+        if rec.levelname == "DEBUG" and "tx_target.freq" in rec.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert len(debugs) == 4
+
+
+def _raise(exc: Exception) -> object:
+    raise exc
+
+
+@pytest.mark.asyncio
+async def test_unparseable_sub_s_meter_is_a_startup_defect() -> None:
+    """A declared read answered in another shape records the defect, then skips.
+
+    The sub ``SM1;`` answer fails to parse, so no
+    ``receiver.sub.meters.s_meter`` observation can ever arrive. The defect
+    is recorded on the scheduler — what the startup gate reads — and only
+    that field is skipped: the MAIN meter still publishes and the path
+    stays outstanding, because nothing releases it (MOR-2578).
+    """
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    sub_path = FieldPath.receiver("sub", "meters", "s_meter")
+    assert sub_path in scheduler.unobserved_startup_paths(())
+
+    radio = _make_radio()
+    radio._poll_warned_fields = set()
+    radio._acquisition_scheduler = scheduler
+    radio.read_s_meter = AsyncMock(
+        side_effect=lambda receiver=0: (
+            120
+            if receiver == 0
+            else _raise(
+                CatParseError(
+                    "SM{receiver}{raw:03d};",
+                    "SM0048;",
+                    "Response does not match pattern",
+                )
+            )
+        )
+    )
+
+    observations = await YaesuObservationAdapter(
+        radio,
+        profile=profile,
+        clock=_clock,
+    ).poll_rx_meters()
+
+    defect = scheduler.startup_defect
+    assert defect is not None
+    assert defect.paths == (sub_path,)
+    assert defect.command == "SM{receiver}{raw:03d};"
+    assert defect.frame == "SM0048;"
+    message = str(defect)
+    assert str(sub_path) in message
+    assert "SM{receiver}{raw:03d};" in message
+    assert "SM0048;" in message
+    assert sub_path in scheduler.unobserved_startup_paths(())
+    # The failed read skipped only itself: MAIN's meter still emitted.
+    assert {str(item.path) for item in observations} == {"receiver.main.meters.s_meter"}
+
+
+def _split_containment_radio(
+    scheduler: AcquisitionScheduler,
+    read_split: AsyncMock,
+) -> MagicMock:
+    """``_make_radio`` with a real timeout tally and startup scheduler."""
+    radio = _make_radio()
+    radio._poll_warned_fields = set()
+    radio._acquisition_scheduler = scheduler
+    radio._critical_read_timeouts = {}
+    radio.read_split = read_split
+    return radio
+
+
+@pytest.mark.asyncio
+async def test_split_timeout_is_contained_and_uncounted() -> None:
+    """MOR-4456: an unanswered split read is served absent within its field.
+
+    Three TX-control cycles with a silent ``ST;`` complete normally — the
+    fields after split (clarifier, tuner) still reach the store — while
+    no timeout tally accrues and no defect is recorded: split left the
+    critical set, so the counting switched off with it.
+    """
+    from rigplane.backends.yaesu_cat.observations import _RIT_ON, _SPLIT
+
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _split_containment_radio(
+        scheduler,
+        AsyncMock(side_effect=CatTimeoutError("ST timeout", command="ST;")),
+    )
+    for _ in range(3):
+        observations = await YaesuObservationAdapter(
+            radio,
+            profile=profile,
+            clock=_clock,
+        ).poll_tx_controls()
+        paths = {item.path for item in observations}
+        assert _SPLIT not in paths
+        assert _RIT_ON in paths, "the reads after split must still reach the store"
+        assert radio._critical_read_timeouts == {}
+    assert radio.read_split.await_count == 3
+    assert scheduler.startup_defect is None
+
+
+@pytest.mark.asyncio
+async def test_split_refusal_records_no_defect_and_stays_in_cycle() -> None:
+    """MOR-4456: a twice-refused split records no defect without raising.
+
+    The refusal is re-issued once (MOR-2584) without touching the timeout
+    tally; the cycle completes, the fields after split still publish, and
+    — split left the critical set — no startup defect is recorded.
+    """
+    from rigplane.backends.yaesu_cat.observations import _RIT_ON, _SPLIT
+
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _split_containment_radio(
+        scheduler,
+        AsyncMock(side_effect=CatCommandRejected("?;", command="ST;")),
+    )
+    observations = await YaesuObservationAdapter(
+        radio,
+        profile=profile,
+        clock=_clock,
+    ).poll_tx_controls()
+    assert radio.read_split.await_count == 2
+    paths = {item.path for item in observations}
+    assert _SPLIT not in paths
+    assert _RIT_ON in paths, "the reads after split must still reach the store"
+    assert radio._critical_read_timeouts == {}
+    assert scheduler.startup_defect is None
+
+
+@pytest.mark.asyncio
+async def test_split_transport_failure_still_raises() -> None:
+    """MOR-4456: only timeouts are contained — a split transport failure raises."""
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _split_containment_radio(
+        scheduler,
+        AsyncMock(side_effect=CatTransportError("link down")),
+    )
+    with pytest.raises(CatTransportError):
+        await YaesuObservationAdapter(
+            radio,
+            profile=profile,
+            clock=_clock,
+        ).poll_tx_controls()
+
+
+@pytest.mark.asyncio
+async def test_freq_timeout_still_raises_for_reconnect() -> None:
+    """MOR-4456: only the PTT/split lanes are contained — a FREQ timeout raises."""
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _split_containment_radio(
+        scheduler,
+        AsyncMock(return_value=False),
+    )
+    radio.read_freq = AsyncMock(
+        side_effect=CatTimeoutError("FA timeout", command="FA;")
+    )
+    with pytest.raises(CatTimeoutError):
+        await YaesuObservationAdapter(
+            radio,
+            profile=profile,
+            clock=_clock,
+        ).poll_medium()
+
+
+@pytest.mark.asyncio
+async def test_sub_s_meter_reads_through_the_profile_despite_the_echoed_side(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The recorded FTX-1 frames reach ``receiver.sub.meters.s_meter``.
+
+    Real ``YaesuCatRadio`` on the bundled ``ftx1`` profile, so the frames go
+    through the profile's own parse templates. Swapping which side carries the
+    signal swaps the two readings.
+    """
+
+    def _radio() -> YaesuCatRadio:
+        radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+        radio._transport._connected = True
+        return radio
+
+    async def _poll(radio: YaesuCatRadio, frames: dict[str, str]) -> dict[str, object]:
+        radio._transport.query = AsyncMock(side_effect=lambda cmd: frames[cmd])
+        observations = await YaesuObservationAdapter.from_radio(
+            radio, clock=_clock
+        ).poll_rx_meters()
+        return {str(item.path): item.value for item in observations}
+
+    radio = _radio()
+    scheduler = AcquisitionScheduler(profile=_profile_state_acquisition())
+    radio._acquisition_scheduler = scheduler
+
+    with caplog.at_level("DEBUG"):
+        signal_on_sub = await _poll(radio, {"SM0;": "SM0000", "SM1;": "SM0052"})
+    signal_on_main = await _poll(_radio(), {"SM0;": "SM0052", "SM1;": "SM0000"})
+
+    assert set(signal_on_sub) == {
+        "receiver.main.meters.s_meter",
+        "receiver.sub.meters.s_meter",
+    }
+    assert (
+        signal_on_sub["receiver.sub.meters.s_meter"]
+        != signal_on_sub["receiver.main.meters.s_meter"]
+    )
+    assert (
+        signal_on_sub["receiver.sub.meters.s_meter"]
+        == signal_on_main["receiver.main.meters.s_meter"]
+    )
+    assert (
+        signal_on_sub["receiver.main.meters.s_meter"]
+        == signal_on_main["receiver.sub.meters.s_meter"]
+    )
+    assert [
+        rec.getMessage() for rec in caplog.records if "s_meter" in rec.getMessage()
+    ] == []
+    assert scheduler.startup_defect is None
+
+
+def _gate_radio() -> MagicMock:
+    """``_make_radio`` plus the ``repeater_shift`` capability and its read."""
+    radio = _make_radio()
+    radio._poll_warned_fields = set()
+    radio.capabilities = radio.capabilities | {"repeater_shift"}
+    radio.read_repeater_shift = AsyncMock(side_effect=lambda receiver=0: receiver)
+    return radio
+
+
+def _break_read(
+    radio: MagicMock,
+    method: str,
+    receiver: int | None,
+    *,
+    failure: str = "parse",
+) -> None:
+    """Make ``method`` answer with an unparseable frame, or refuse the command.
+
+    ``receiver`` selects which call fails: ``None`` fails every call, an int
+    fails only the call whose first positional argument equals it, so a read
+    shared by MAIN and SUB can be broken on one side alone. ``failure``
+    picks the R48 class: ``"parse"`` is a clean frame of another shape,
+    ``"reject"`` is the radio's ``?;``.
+    """
+    original = getattr(radio, method)
+
+    async def _answer(*args: object, **kwargs: object) -> object:
+        if receiver is None or (args and args[0] == receiver):
+            if failure == "reject":
+                raise CatCommandRejected(
+                    "Radio rejected command 'XX;' (returned '?;')", command="XX;"
+                )
+            raise CatParseError("XX{p};", "??;", "Response does not match pattern")
+        return await original(*args, **kwargs)
+
+    setattr(radio, method, _answer)
+
+
+# (id, radio method, failing receiver, poll method, declared paths the defect names)
+_DEFECT_ROWS: tuple[tuple[str, str, int | None, str, tuple[str, ...]], ...] = (
+    (
+        "main.freq",
+        "read_freq",
+        0,
+        "poll_medium",
+        ("receiver.main.active.freq_mode.freq_hz",),
+    ),
+    (
+        "main.mode",
+        "read_mode",
+        0,
+        "poll_medium",
+        ("receiver.main.active.freq_mode.mode",),
+    ),
+    (
+        "sub.freq",
+        "read_freq",
+        1,
+        "poll_medium",
+        ("receiver.sub.active.freq_mode.freq_hz",),
+    ),
+    (
+        "sub.mode",
+        "read_mode",
+        1,
+        "poll_medium",
+        ("receiver.sub.active.freq_mode.mode",),
+    ),
+    (
+        "main.filter_width",
+        "read_filter_width_reading",
+        0,
+        "poll_medium",
+        (
+            "receiver.main.active.freq_mode.filter_width",
+            "receiver.main.active.freq_mode.filter_width_radio_default",
+        ),
+    ),
+    (
+        "main.s_meter",
+        "read_s_meter",
+        0,
+        "poll_rx_meters",
+        ("receiver.main.meters.s_meter",),
+    ),
+    (
+        "sub.s_meter",
+        "read_s_meter",
+        1,
+        "poll_rx_meters",
+        ("receiver.sub.meters.s_meter",),
+    ),
+    ("alc", "read_alc_meter", None, "poll_tx_meters", ("global.meters.alc",)),
+    ("power", "read_power_meter", None, "poll_tx_meters", ("global.meters.power",)),
+    ("swr", "read_swr_meter", None, "poll_tx_meters", ("global.meters.swr",)),
+    ("comp", "read_comp_meter", None, "poll_tx_meters", ("global.meters.comp",)),
+    (
+        "main.af_level",
+        "read_af_level",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_controls.af_level",),
+    ),
+    (
+        "main.rf_gain",
+        "read_rf_gain",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_controls.rf_gain",),
+    ),
+    (
+        "main.squelch",
+        "read_squelch",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_controls.squelch",),
+    ),
+    (
+        "sub.af_level",
+        "read_af_level",
+        1,
+        "poll_slow_controls",
+        ("receiver.sub.operator_controls.af_level",),
+    ),
+    (
+        "sub.rf_gain",
+        "read_rf_gain",
+        1,
+        "poll_slow_controls",
+        ("receiver.sub.operator_controls.rf_gain",),
+    ),
+    (
+        "sub.squelch",
+        "read_squelch",
+        1,
+        "poll_slow_controls",
+        ("receiver.sub.operator_controls.squelch",),
+    ),
+    (
+        "main.att",
+        "read_attenuator",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_controls.att",),
+    ),
+    (
+        "main.preamp",
+        "read_preamp",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_controls.preamp",),
+    ),
+    (
+        "main.agc",
+        "read_agc",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_controls.agc",),
+    ),
+    (
+        "main.if_shift",
+        "read_if_shift",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_controls.if_shift",),
+    ),
+    (
+        "main.narrow",
+        "read_narrow",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_toggles.narrow",),
+    ),
+    (
+        "main.nb_level",
+        "read_nb_level",
+        0,
+        "poll_slow_controls",
+        (
+            "receiver.main.operator_controls.nb_level",
+            "receiver.main.operator_toggles.nb",
+        ),
+    ),
+    (
+        "main.nr_level",
+        "read_nr_level",
+        0,
+        "poll_slow_controls",
+        (
+            "receiver.main.operator_controls.nr_level",
+            "receiver.main.operator_toggles.nr",
+        ),
+    ),
+    (
+        "main.auto_notch",
+        "read_auto_notch",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_toggles.auto_notch",),
+    ),
+    (
+        "main.manual_notch",
+        "read_manual_notch",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_toggles.manual_notch",),
+    ),
+    (
+        "main.manual_notch_freq",
+        "read_manual_notch_freq",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_controls.manual_notch_freq",),
+    ),
+    (
+        "main.sql_type",
+        "read_sql_type",
+        0,
+        "poll_slow_controls",
+        (
+            "receiver.main.operator_toggles.repeater_tone",
+            "receiver.main.operator_toggles.repeater_tsql",
+            "receiver.main.operator_controls.tone_squelch_type",
+        ),
+    ),
+    (
+        "main.ctcss_tone_index",
+        "read_ctcss_tone_index",
+        0,
+        "poll_slow_controls",
+        (
+            "receiver.main.operator_controls.tone_freq",
+            "receiver.main.operator_controls.tsql_freq",
+        ),
+    ),
+    (
+        "main.repeater_shift",
+        "read_repeater_shift",
+        0,
+        "poll_slow_controls",
+        ("receiver.main.operator_controls.repeater_shift",),
+    ),
+    (
+        "sub.repeater_shift",
+        "read_repeater_shift",
+        1,
+        "poll_slow_controls",
+        ("receiver.sub.operator_controls.repeater_shift",),
+    ),
+    (
+        "active",
+        "read_vfo_select",
+        None,
+        "poll_slow_controls",
+        ("global.slow_state.active",),
+    ),
+    (
+        "cw_spot",
+        "read_cw_spot",
+        None,
+        "poll_slow_controls",
+        ("global.slow_state.cw_spot",),
+    ),
+    (
+        "vd",
+        "get_vd_meter",
+        None,
+        "poll_slow_controls",
+        ("global.meters.vd",),
+    ),
+    (
+        "id",
+        "get_id_meter",
+        None,
+        "poll_slow_controls",
+        ("global.meters.id",),
+    ),
+    (
+        "power_level",
+        "read_power",
+        None,
+        "poll_tx_controls",
+        ("global.operator_controls.power_level",),
+    ),
+    (
+        "mic_gain",
+        "read_mic_gain",
+        None,
+        "poll_tx_controls",
+        ("global.operator_controls.mic_gain",),
+    ),
+    (
+        "compressor_on",
+        "read_processor",
+        None,
+        "poll_tx_controls",
+        ("global.tx_state.compressor_on",),
+    ),
+    (
+        "compressor_level",
+        "read_processor_level",
+        None,
+        "poll_tx_controls",
+        ("global.operator_controls.compressor_level",),
+    ),
+    ("vox", "read_vox", None, "poll_tx_controls", ("global.tx_state.vox_on",)),
+    (
+        "clarifier",
+        "read_clarifier",
+        0,
+        "poll_tx_controls",
+        ("global.tx_state.rit_on", "global.tx_state.rit_tx"),
+    ),
+    (
+        "clarifier_freq",
+        "read_clarifier_freq",
+        0,
+        "poll_tx_controls",
+        ("global.operator_controls.rit_freq",),
+    ),
+    (
+        "tuner",
+        "get_tuner_status",
+        None,
+        "poll_tx_controls",
+        ("global.operator_controls.tuner_status",),
+    ),
+    (
+        "dial_lock",
+        "read_lock",
+        None,
+        "poll_tx_controls",
+        ("global.tx_state.dial_lock",),
+    ),
+    (
+        "key_speed",
+        "read_keyer_speed",
+        None,
+        "poll_tx_controls",
+        ("global.operator_controls.key_speed",),
+    ),
+    (
+        "cw_pitch",
+        "read_cw_pitch",
+        None,
+        "poll_tx_controls",
+        ("global.operator_controls.cw_pitch",),
+    ),
+    (
+        "break_in",
+        "read_break_in",
+        None,
+        "poll_tx_controls",
+        ("global.operator_controls.break_in",),
+    ),
+    (
+        "break_in_delay",
+        "read_break_in_delay",
+        None,
+        "poll_tx_controls",
+        ("global.operator_controls.break_in_delay",),
+    ),
+    (
+        "main.rx_func",
+        "get_rx_func",
+        None,
+        "poll_slow_controls",
+        ("global.tx_state.dual_watch",),
+    ),
+)
+
+
+@pytest.mark.parametrize("failure", ["parse", "reject"])
+@pytest.mark.parametrize(
+    ("method", "receiver", "poll", "expected"),
+    [row[1:] for row in _DEFECT_ROWS],
+    ids=[row[0] for row in _DEFECT_ROWS],
+)
+@pytest.mark.asyncio
+async def test_defective_read_names_every_declared_path_it_feeds(
+    method: str,
+    receiver: int | None,
+    poll: str,
+    expected: tuple[str, ...],
+    failure: str,
+) -> None:
+    """One refused or wrong-shape read records a defect naming the paths it feeds.
+
+    A path the backend can never observe must not be released from the
+    startup gate, and the defect must not name a path some other read still
+    supplies. The read skips only its own field (MOR-2578): the poll
+    returns instead of aborting, but the record — what the gate reads —
+    still names exactly the broken read's declared paths.
+    """
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _gate_radio()
+    radio._acquisition_scheduler = scheduler
+    before = scheduler.unobserved_startup_paths(())
+    _break_read(radio, method, receiver, failure=failure)
+
+    adapter = YaesuObservationAdapter(radio, profile=profile, clock=_clock)
+    observations = await getattr(adapter, poll)()
+
+    assert isinstance(observations, tuple)
+    defect = scheduler.startup_defect
+    assert defect is not None
+    assert sorted(str(path) for path in defect.paths) == sorted(expected)
+    # The broken read is skipped, not synthesized: none of the paths it
+    # feeds appears in the cycle's observations, so no invented value
+    # (None, False, ...) leaks into the store (MOR-2578 review round 2).
+    emitted = {str(item.path) for item in observations}
+    assert emitted.isdisjoint(expected)
+    # Nothing is released: the gate's outstanding set is exactly what it was.
+    assert scheduler.unobserved_startup_paths(()) == before
+
+
+#: MOR-4456: PTT and split left the startup-critical set, so a refused or
+#: wrong-shape read records no startup defect — the gate serves them
+#: unknown after the non-critical deadline.
+_NO_DEFECT_TX_ROWS: tuple[tuple[str, str, int | None, str, tuple[str, ...]], ...] = (
+    ("ptt", "read_transmit_state", None, "poll_medium", ("global.tx_state.ptt",)),
+    ("split", "read_split", None, "poll_tx_controls", ("global.tx_state.split",)),
+)
+
+
+@pytest.mark.parametrize("failure", ["parse", "reject"])
+@pytest.mark.parametrize(
+    ("method", "receiver", "poll", "expected"),
+    [row[1:] for row in _NO_DEFECT_TX_ROWS],
+    ids=[row[0] for row in _NO_DEFECT_TX_ROWS],
+)
+@pytest.mark.asyncio
+async def test_noncritical_defective_read_records_no_defect(
+    method: str,
+    receiver: int | None,
+    poll: str,
+    expected: tuple[str, ...],
+    failure: str,
+) -> None:
+    """A refused or wrong-shape PTT/split read is skipped with no defect.
+
+    Same shape as ``test_defective_read_names_every_declared_path_it_feeds``
+    with the MOR-4456 outcome inverted: the read skips only its own field
+    (nothing invented leaks into the store), the scheduler records no
+    startup defect, and the path stays outstanding — the gate (not the
+    lane) releases it at the non-critical deadline with its WARNING.
+    """
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _gate_radio()
+    radio._acquisition_scheduler = scheduler
+    before = scheduler.unobserved_startup_paths(())
+    _break_read(radio, method, receiver, failure=failure)
+
+    adapter = YaesuObservationAdapter(radio, profile=profile, clock=_clock)
+    observations = await getattr(adapter, poll)()
+
+    assert isinstance(observations, tuple)
+    assert scheduler.startup_defect is None
+    emitted = {str(item.path) for item in observations}
+    assert emitted.isdisjoint(expected)
+    assert scheduler.unobserved_startup_paths(()) == before
+
+
+@pytest.mark.asyncio
+async def test_refused_read_mid_cycle_still_emits_later_slow_fields() -> None:
+    """MOR-2578: a refused declared read skips its own field, not the cycle.
+
+    On the live FTX-1 stand (2026-09-24) the radio refused ``RA0;`` (the
+    MAIN attenuator read) with ``?;`` roughly once a second; the raise
+    aborted the whole slow cycle, so every later field — SUB repeater
+    tone/TSQL, tone frequency, repeater shift — stayed stale forever. The
+    refusal now records the defect (what the startup gate reads) and skips
+    only ``main.att``; the later slow fields keep publishing.
+    """
+    radio = _make_radio()
+    radio._poll_warned_fields = set()
+    radio.capabilities.add("repeater_shift")
+    radio.read_repeater_shift = AsyncMock(side_effect=lambda receiver=0: receiver)
+    _break_read(radio, "read_attenuator", 0, failure="reject")
+    scheduler = AcquisitionScheduler(profile=_profile_state_acquisition())
+    radio._acquisition_scheduler = scheduler
+    adapter = YaesuObservationAdapter(
+        radio, profile=_profile_state_acquisition(), clock=_clock
+    )
+
+    observations = await adapter.poll_slow_controls()
+    by_path = {str(item.path): item.value for item in observations}
+
+    assert scheduler.startup_defect is not None
+    assert [str(path) for path in scheduler.startup_defect.paths] == [
+        "receiver.main.operator_controls.att"
+    ]
+    # main.att itself is skipped ...
+    assert "receiver.main.operator_controls.att" not in by_path
+    # ... and every later slow field still publishes — including the
+    # active-slot readout, the owner-visible symptom on the stand.
+    assert by_path["global.slow_state.active"] == "SUB"
+    assert by_path["receiver.sub.operator_toggles.repeater_tone"] is True
+    assert by_path["receiver.sub.operator_toggles.repeater_tsql"] is False
+    assert by_path["receiver.sub.operator_controls.tone_freq"] == 8850
+    assert by_path["receiver.sub.operator_controls.tsql_freq"] == 8850
+    assert by_path["receiver.sub.operator_controls.repeater_shift"] == 1
+
+
+@pytest.mark.asyncio
+async def test_refused_declared_ptt_read_skips_ptt_and_publishes_unknown() -> None:
+    """MOR-2578/MOR-4456: a refused declared PTT read skips PTT, not the lane.
+
+    The PTT branch of ``poll_medium`` is a direct call, not ``_safe_read``:
+    on a refusal it must record no defect (MOR-4456: PTT left the critical
+    set), publish the observed PTT as UNKNOWN (neither ON nor OFF — no
+    invented False), keep ``global.tx_state.ptt`` absent from the
+    observations, and let the lane's remaining reads (filter_width) still
+    publish.
+    """
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _gate_radio()
+    radio._acquisition_scheduler = scheduler
+    _break_read(radio, "read_transmit_state", None, failure="reject")
+
+    observations = await YaesuObservationAdapter(
+        radio, profile=profile, clock=_clock
+    ).poll_medium()
+
+    assert scheduler.startup_defect is None
+    paths = {str(item.path) for item in observations}
+    # The raw PTT path is skipped — no invented False leaks into the store.
+    assert "global.tx_state.ptt" not in paths
+    # The lane continues past the refused read: the earlier freq/mode pair
+    # and the later filter_width still publish.
+    assert "receiver.main.active.freq_mode.freq_hz" in paths
+    assert "receiver.main.active.freq_mode.filter_width" in paths
+    # Exactly one observed-PTT observation, and it is UNKNOWN: neither
+    # ON nor OFF.
+    observed = [item for item in observations if item.path == OBSERVED_PTT_PATH]
+    assert len(observed) == 1
+    assert observed[0].value is ObservedPtt.UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_tx_target_frequency_read_raises_no_defect() -> None:
+    """The TX-target frequency is a sub-read of a field emitted either way.
+
+    ``global.tx_state.tx_target`` is appended whether or not that frequency
+    parses (the frequency degrades to ``None``), so that read names no
+    declared path and stays a skip.
+    """
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _gate_radio()
+    radio._acquisition_scheduler = scheduler
+    radio.capabilities = radio.capabilities - {"dual_rx"}
+    radio.get_tx_func = AsyncMock(return_value=1)
+    _break_read(radio, "read_freq", 1)
+
+    observations = await YaesuObservationAdapter(
+        radio, profile=profile, clock=_clock
+    ).poll_medium()
+
+    assert scheduler.startup_defect is None
+    emitted = [
+        item.value
+        for item in observations
+        if str(item.path) == "global.tx_state.tx_target"
+    ]
+    assert len(emitted) == 1
+    assert isinstance(emitted[0], KnownTxTarget)
+    assert emitted[0].frequency_hz is None
+
+
+@pytest.mark.parametrize(
+    "noise",
+    [
+        CatTimeoutError("Read timeout (1.0s) waiting for ';' terminator"),
+        CatTransportError("Read failed: device disappeared"),
+    ],
+    ids=("timeout", "transport"),
+)
+@pytest.mark.asyncio
+async def test_transport_noise_re_raises_without_recording_a_defect(
+    noise: Exception,
+) -> None:
+    """Link quality is not a product defect: no defect, no gate abort.
+
+    The exception reaches ``YaesuCatPoller._run_poll_cycle``, which is what
+    drives reconnect/backoff.
+    """
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _gate_radio()
+    radio._acquisition_scheduler = scheduler
+    radio.read_s_meter = AsyncMock(
+        side_effect=lambda receiver=0: 120 if receiver == 0 else _raise(noise)
+    )
+
+    with pytest.raises(type(noise)):
+        await YaesuObservationAdapter(
+            radio, profile=profile, clock=_clock
+        ).poll_rx_meters()
+
+    assert scheduler.startup_defect is None
+    assert FieldPath.receiver(
+        "sub", "meters", "s_meter"
+    ) in scheduler.unobserved_startup_paths(())
+
+
+@pytest.mark.asyncio
+async def test_a_garbled_frame_on_the_wire_is_noise_not_a_defect() -> None:
+    """Real transport, real profile: the corrupt byte never reaches the parser.
+
+    ``b"SM\\x00048;"`` keeps the ``SM`` prefix, so the query's stale-line
+    filter passes it through. Without the transport's printability check it
+    would reach the parse template and be recorded as a defect, which is what
+    this row exists to deny.
+    """
+    scheduler = AcquisitionScheduler(profile=_profile_state_acquisition())
+    radio = YaesuCatRadio("/dev/null", audio_driver=MagicMock())
+    radio._acquisition_scheduler = scheduler
+    radio._transport._connected = True
+    radio._transport._writer = MagicMock(drain=AsyncMock())
+    radio._transport._reader = MagicMock(
+        readuntil=AsyncMock(return_value=b"SM\x00048;")
+    )
+
+    with pytest.raises(CatGarbledFrameError):
+        await YaesuObservationAdapter.from_radio(radio, clock=_clock).poll_rx_meters()
+
+    assert scheduler.startup_defect is None
+
+
+@pytest.mark.asyncio
+async def test_single_refusal_then_answer_records_nothing_and_publishes() -> None:
+    """MOR-2584: a one-off ``?;`` is re-read once; the answer wins.
+
+    On the live FTX-1 stand (2026-09-24) ``SM1;`` was refused once during
+    ``AG1`` writes and answered on the next cycle. ``sub.s_meter`` is
+    re-read exactly once and the answer publishes, so the startup gate sees
+    no defect and the bind is not refused — while the second command on the
+    wire is the bounded single retry.
+    """
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _make_radio()
+    radio._poll_warned_fields = set()
+    radio._acquisition_scheduler = scheduler
+    radio.read_s_meter = AsyncMock(
+        side_effect=[
+            150,
+            CatCommandRejected(
+                "Radio rejected command 'SM1;' (returned '?;')", command="SM1;"
+            ),
+            120,
+            120,
+            120,
+        ]
+    )
+
+    observations = await YaesuObservationAdapter(
+        radio, profile=profile, clock=_clock
+    ).poll_rx_meters()
+
+    assert scheduler.startup_defect is None
+    by_path = {str(item.path): item.value for item in observations}
+    assert "receiver.main.meters.s_meter" in by_path
+    assert "receiver.sub.meters.s_meter" in by_path
+    assert radio.read_s_meter.await_args_list == [
+        call(0),
+        call(1),
+        call(1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_repeated_refusal_records_the_defect_and_skips_the_field() -> None:
+    """MOR-2584: a refusal the radio repeats is still a startup defect.
+
+    The same ``SUB_S_METER`` read refuses both attempts, so the defect is
+    recorded — what the startup gate reads, which refuses the bind — and
+    only that field is skipped.
+    """
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _make_radio()
+    radio._poll_warned_fields = set()
+    radio._acquisition_scheduler = scheduler
+    radio.read_s_meter = AsyncMock(
+        side_effect=lambda receiver=0: (
+            120
+            if receiver == 0
+            else _raise(
+                CatCommandRejected(
+                    "Radio rejected command 'SM1;' (returned '?;')", command="SM1;"
+                )
+            )
+        )
+    )
+
+    observations = await YaesuObservationAdapter(
+        radio, profile=profile, clock=_clock
+    ).poll_rx_meters()
+
+    defect = scheduler.startup_defect
+    assert defect is not None
+    assert [str(path) for path in defect.paths] == ["receiver.sub.meters.s_meter"]
+    assert defect.command == "SM1;"
+    assert defect.frame == "?;"
+    emitted = {str(item.path) for item in observations}
+    assert "receiver.sub.meters.s_meter" not in emitted
+    assert "receiver.main.meters.s_meter" in emitted
+    assert radio.read_s_meter.await_args_list == [call(0), call(1), call(1)]
+
+
+@pytest.mark.asyncio
+async def test_refusal_then_malformed_reread_records_the_field_defect() -> None:
+    """MOR-2584 review: a malformed answer on the re-read is a field defect.
+
+    The SUB meter refuses once, then answers in another shape. The defect
+    is recorded from the re-read's own exception — like a malformed first
+    read — and only that field is skipped; it never escapes to the
+    cycle-level handler.
+    """
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _make_radio()
+    radio._poll_warned_fields = set()
+    radio._acquisition_scheduler = scheduler
+    radio.read_s_meter = AsyncMock(
+        side_effect=[
+            150,
+            CatCommandRejected(
+                "Radio rejected command 'SM1;' (returned '?;')", command="SM1;"
+            ),
+            CatParseError(
+                "SM{receiver}{raw:03d};",
+                "SM0048;",
+                "Response does not match pattern",
+            ),
+            150,
+            150,
+        ]
+    )
+
+    observations = await YaesuObservationAdapter(
+        radio, profile=profile, clock=_clock
+    ).poll_rx_meters()
+
+    defect = scheduler.startup_defect
+    assert defect is not None
+    assert [str(path) for path in defect.paths] == ["receiver.sub.meters.s_meter"]
+    assert defect.command == "SM{receiver}{raw:03d};"
+    assert defect.frame == "SM0048;"
+    emitted = {str(item.path) for item in observations}
+    assert "receiver.sub.meters.s_meter" not in emitted
+    assert "receiver.main.meters.s_meter" in emitted
+    assert radio.read_s_meter.await_args_list == [
+        call(0),
+        call(1),
+        call(1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retry_is_generic_a_non_listed_label_rereads_too() -> None:
+    """MOR-2584 round 2: the retry is not a label list.
+
+    ``main.preamp`` was never in the old three-label mapping, yet one
+    refusal followed by an answer publishes and records nothing — while a
+    second refusal still records. Each declared-read site passes its own
+    remake, so a new declared read retries with no mapping change.
+    """
+    profile = _profile_state_acquisition()
+    scheduler = AcquisitionScheduler(profile=profile)
+    radio = _make_radio()
+    radio._poll_warned_fields = set()
+    radio._acquisition_scheduler = scheduler
+    radio.read_preamp = AsyncMock(
+        side_effect=[
+            CatCommandRejected(
+                "Radio rejected command 'PA0;' (returned '?;')", command="PA0;"
+            ),
+            1,
+        ]
+    )
+
+    observations = await YaesuObservationAdapter(
+        radio, profile=profile, clock=_clock
+    ).poll_slow_controls()
+    by_path = {str(item.path) for item in observations}
+
+    assert scheduler.startup_defect is None
+    assert "receiver.main.operator_controls.preamp" in by_path
+    assert radio.read_preamp.await_args_list == [call(0), call(0)]
+
+    radio.read_preamp = AsyncMock(
+        side_effect=CatCommandRejected(
+            "Radio rejected command 'PA0;' (returned '?;')", command="PA0;"
+        )
+    )
+    scheduler2 = AcquisitionScheduler(profile=profile)
+    radio._acquisition_scheduler = scheduler2
+
+    observations = await YaesuObservationAdapter(
+        radio, profile=profile, clock=_clock
+    ).poll_slow_controls()
+    emitted = {str(item.path) for item in observations}
+
+    defect = scheduler2.startup_defect
+    assert defect is not None
+    assert [str(path) for path in defect.paths] == [
+        "receiver.main.operator_controls.preamp"
+    ]
+    assert "receiver.main.operator_controls.preamp" not in emitted
+    assert radio.read_preamp.await_args_list == [call(0), call(0)]
+
+
+# ---------------------------------------------------------------------------
+# available_when: the two fields ``rigs/ftx1.toml`` declares conditional
+# ---------------------------------------------------------------------------
+
+
+_ATT_PATH = "receiver.main.operator_controls.att"
+_NOTCH_FREQ_PATH = "receiver.main.operator_controls.manual_notch_freq"
+
+
+def _availability_store(*, mode: str, freq_hz: int, active: str = "MAIN") -> StateStore:
+    store = StateStore()
+    # A nonzero provider generation, as after connect: ``apply`` is
+    # generation-bound, so the observations go through ``apply_current``.
+    store.begin_provider_generation()
+    # Both receivers carry the same mode/freq so the SUB manual-notch-freq
+    # clause (a twin of MAIN's) resolves on the same snapshot. The active
+    # receiver is observed too (MOR-2581): the attenuator's second clause
+    # reads ``global.slow_state.active``, and a connected radio's snapshot
+    # always carries it — leaving it unobserved would withhold the read.
+    for path, value in (
+        (FieldPath.active("main", "freq_mode", "mode"), mode),
+        (FieldPath.active("main", "freq_mode", "freq_hz"), freq_hz),
+        (FieldPath.active("sub", "freq_mode", "mode"), mode),
+        (FieldPath.active("sub", "freq_mode", "freq_hz"), freq_hz),
+        (FieldPath.global_("slow_state", "active"), active),
+    ):
+        store.apply_current(
+            Observation(
+                path=path,
+                value=value,
+                source=SourceMetadata(source="poll_response", provider="yaesu_cat"),
+                timestamp_monotonic=_clock(),
+            )
+        )
+    return store
+
+
+def _availability_adapter(store: StateStore | None) -> tuple[MagicMock, object]:
+    radio = _make_radio()
+    if store is not None:
+        radio._state_store = store
+    adapter = YaesuObservationAdapter(
+        radio, profile=_profile_state_acquisition(), clock=_clock
+    )
+    return radio, adapter
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_does_not_read_manual_notch_freq_in_fm(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    radio, adapter = _availability_adapter(
+        _availability_store(mode="FM", freq_hz=14_074_000)
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="rigplane.backends.yaesu_cat.observations"
+    ):
+        observations = await adapter.poll_slow_controls()
+
+    # Both receivers are in FM: MAIN by the store's mode, SUB by the twin
+    # clause on its own mode, so neither notch-freq read goes out.
+    radio.read_manual_notch_freq.assert_not_awaited()
+    assert _NOTCH_FREQ_PATH not in [str(item.path) for item in observations]
+    # A read never sent is not a failed read: it does not go through
+    # ``_log_field_skip``, so nothing warns about the field.
+    assert [
+        record
+        for record in caplog.records
+        if "manual_notch_freq" in record.getMessage()
+    ] == []
+    # The band-conditional sibling is unaffected in this snapshot.
+    radio.read_attenuator.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_reads_manual_notch_freq_in_usb() -> None:
+    radio, adapter = _availability_adapter(
+        _availability_store(mode="USB", freq_hz=14_074_000)
+    )
+
+    observations = await adapter.poll_slow_controls()
+
+    radio.read_manual_notch_freq.assert_awaited()
+    assert _NOTCH_FREQ_PATH in [str(item.path) for item in observations]
+    # The SUB twin is sent too once SUB is observed in USB (its clause is a
+    # twin of MAIN's; the store observes both receivers).
+    assert [call.args[:1] for call in radio.read_manual_notch_freq.await_args_list] == [
+        (0,),
+        (1,),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_does_not_read_the_attenuator_above_the_declared_bound() -> (
+    None
+):
+    radio, adapter = _availability_adapter(
+        _availability_store(mode="USB", freq_hz=461_000_000)
+    )
+
+    observations = await adapter.poll_slow_controls()
+
+    radio.read_attenuator.assert_not_awaited()
+    assert _ATT_PATH not in [str(item.path) for item in observations]
+    # The mode-conditional sibling is unaffected in this snapshot.
+    radio.read_manual_notch_freq.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_reads_the_attenuator_below_the_declared_bound() -> None:
+    radio, adapter = _availability_adapter(
+        _availability_store(mode="USB", freq_hz=14_074_000)
+    )
+
+    observations = await adapter.poll_slow_controls()
+
+    radio.read_attenuator.assert_awaited()
+    assert _ATT_PATH in [str(item.path) for item in observations]
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_does_not_read_the_attenuator_while_sub_is_active() -> None:
+    """MOR-2581: ``RA0;`` is refused (``?;``) exactly while SUB is active.
+
+    Stand 2026-09-24 (read-only 1 s sampler of /api/v1/state): ``main.att``
+    stopped updating exactly in the two windows where
+    ``global.slow_state.active`` was "SUB"; with MAIN active ``RA0;``
+    answered normally. The
+    ``global.slow_state.active == "MAIN"`` clause in ``rigs/ftx1.toml``
+    withholds the read, so the refusal never happens: no startup defect is
+    recorded and the startup gate drops the field from its outstanding set.
+    """
+    store = _availability_store(mode="USB", freq_hz=14_074_000, active="SUB")
+    radio = _make_radio()
+    radio._state_store = store
+    scheduler = AcquisitionScheduler(profile=_profile_state_acquisition())
+    radio._acquisition_scheduler = scheduler
+    adapter = YaesuObservationAdapter(
+        radio, profile=_profile_state_acquisition(), clock=_clock
+    )
+
+    observations = await adapter.poll_slow_controls()
+
+    # ``RA0;`` is never sent: the only ``read_attenuator(0)`` call is gated
+    # off while SUB is the active receiver.
+    radio.read_attenuator.assert_not_awaited()
+    assert _ATT_PATH not in [str(item.path) for item in observations]
+    # A withheld read is not a refused read: no startup defect is recorded...
+    assert scheduler.startup_defect is None
+    # ...and the startup gate does not wait for the field either. Not
+    # vacuous: without the resolved availability the same predicate still
+    # reports the attenuator outstanding.
+    att = FieldPath.parse(_ATT_PATH)
+    assert att in scheduler.unobserved_startup_paths(())
+    outstanding = scheduler.unobserved_startup_paths(
+        (),
+        availability=resolve_available_when(scheduler._profile, store.snapshot()),
+    )
+    assert att not in outstanding
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_reads_the_attenuator_while_main_is_active_on_hf() -> None:
+    """The same ``RA0;`` read goes out as before while MAIN is active on HF."""
+    store = _availability_store(mode="USB", freq_hz=14_074_000, active="MAIN")
+    radio, adapter = _availability_adapter(store)
+
+    observations = await adapter.poll_slow_controls()
+
+    radio.read_attenuator.assert_awaited_once_with(0)
+    assert _ATT_PATH in [str(item.path) for item in observations]
+
+
+@pytest.mark.asyncio
+async def test_slow_poll_withholds_a_read_whose_condition_is_unobserved() -> None:
+    radio, adapter = _availability_adapter(StateStore())
+
+    observations = await adapter.poll_slow_controls()
+    paths = [str(item.path) for item in observations]
+
+    radio.read_attenuator.assert_not_awaited()
+    # Both MAIN and SUB notch-freq reads are withheld while their conditions
+    # are unobserved (SUB's clause mirrors MAIN's).
+    radio.read_manual_notch_freq.assert_not_awaited()
+    assert _ATT_PATH not in paths
+    assert _NOTCH_FREQ_PATH not in paths
+
+    radio, adapter = _availability_adapter(
+        _availability_store(mode="USB", freq_hz=14_074_000)
+    )
+
+    observations = await adapter.poll_slow_controls()
+    paths = [str(item.path) for item in observations]
+
+    radio.read_attenuator.assert_awaited()
+    assert [call.args[:1] for call in radio.read_manual_notch_freq.await_args_list] == [
+        (0,),
+        (1,),
+    ]
+    assert _ATT_PATH in paths
+    assert _NOTCH_FREQ_PATH in paths
+
+
+@pytest.mark.asyncio
+async def test_a_non_state_store_attribute_leaves_both_reads_ungated() -> None:
+    radio, adapter = _availability_adapter(None)
+    assert not isinstance(getattr(radio, "_state_store", None), StateStore)
+
+    observations = await adapter.poll_slow_controls()
+    paths = [str(item.path) for item in observations]
+
+    radio.read_attenuator.assert_awaited()
+    radio.read_manual_notch_freq.assert_awaited()
+    assert _ATT_PATH in paths
+    assert _NOTCH_FREQ_PATH in paths
+
+
+# ---------------------------------------------------------------------------
+# Dual receive: the CAT ``FR`` read and the SUB operator controls
+# ---------------------------------------------------------------------------
+
+
+_DUAL_WATCH_PATH = "global.tx_state.dual_watch"
+
+# (id, poll method, radio read method, the declared SUB path it feeds).
+# No SUB operator control is gated on dual receive any more (bench
+# 2026-09-18, MOR-2511); both parametrized tests below pin that each read
+# goes out and lands on its own path in either dual-receive state.
+_SUB_CONTROL_ROWS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "sub.af_level",
+        "poll_slow_controls",
+        "read_af_level",
+        "receiver.sub.operator_controls.af_level",
+    ),
+    (
+        "sub.rf_gain",
+        "poll_slow_controls",
+        "read_rf_gain",
+        "receiver.sub.operator_controls.rf_gain",
+    ),
+    (
+        "sub.squelch",
+        "poll_slow_controls",
+        "read_squelch",
+        "receiver.sub.operator_controls.squelch",
+    ),
+    (
+        "sub.repeater_shift",
+        "poll_slow_controls",
+        "read_repeater_shift",
+        "receiver.sub.operator_controls.repeater_shift",
+    ),
+    # SUB AGC (bench 2026-09-18, MOR-2511 comment 01:22Z: `GT1;` answered
+    # `GT11;` with MAIN at `GT06;`).
+    (
+        "sub.agc",
+        "poll_slow_controls",
+        "read_agc",
+        "receiver.sub.operator_controls.agc",
+    ),
+    # DSP SUB reads (bench 2026-09-18, MOR-2511 comment 01:22Z). The nb/nr
+    # toggle rows share the level read of the row above them.
+    (
+        "sub.nb_level",
+        "poll_slow_controls",
+        "read_nb_level",
+        "receiver.sub.operator_controls.nb_level",
+    ),
+    (
+        "sub.nb",
+        "poll_slow_controls",
+        "read_nb_level",
+        "receiver.sub.operator_toggles.nb",
+    ),
+    (
+        "sub.nr_level",
+        "poll_slow_controls",
+        "read_nr_level",
+        "receiver.sub.operator_controls.nr_level",
+    ),
+    (
+        "sub.nr",
+        "poll_slow_controls",
+        "read_nr_level",
+        "receiver.sub.operator_toggles.nr",
+    ),
+    (
+        "sub.auto_notch",
+        "poll_slow_controls",
+        "read_auto_notch",
+        "receiver.sub.operator_toggles.auto_notch",
+    ),
+    (
+        "sub.manual_notch",
+        "poll_slow_controls",
+        "read_manual_notch",
+        "receiver.sub.operator_toggles.manual_notch",
+    ),
+    (
+        "sub.manual_notch_freq",
+        "poll_slow_controls",
+        "read_manual_notch_freq",
+        "receiver.sub.operator_controls.manual_notch_freq",
+    ),
+    (
+        "sub.if_shift",
+        "poll_slow_controls",
+        "read_if_shift",
+        "receiver.sub.operator_controls.if_shift",
+    ),
+    (
+        "sub.narrow",
+        "poll_slow_controls",
+        "read_narrow",
+        "receiver.sub.operator_toggles.narrow",
+    ),
+)
+
+
+def _dual_watch_store(*, on: bool) -> StateStore:
+    """``_availability_store`` plus an observed dual-receive state."""
+
+    store = _availability_store(mode="USB", freq_hz=14_074_000)
+    store.apply_current(
+        Observation(
+            path=FieldPath.global_("tx_state", "dual_watch"),
+            value=on,
+            source=SourceMetadata(source="poll_response", provider="yaesu_cat"),
+            timestamp_monotonic=_clock(),
+        )
+    )
+    return store
+
+
+def _dual_watch_adapter(*, on: bool) -> tuple[MagicMock, YaesuObservationAdapter]:
+    radio = _gate_radio()
+    radio._state_store = _dual_watch_store(on=on)
+    adapter = YaesuObservationAdapter(
+        radio, profile=_profile_state_acquisition(), clock=_clock
+    )
+    return radio, adapter
+
+
+def _sub_receiver_awaited(radio: MagicMock, method: str) -> bool:
+    return any(call.args[:1] == (1,) for call in getattr(radio, method).await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_dual_receive_on_is_observed_as_dual_watch_true() -> None:
+    """``FR00`` = dual receive, so the canonical bool reads True."""
+
+    radio, adapter = _dual_watch_adapter(on=True)
+    radio.get_rx_func = AsyncMock(return_value=0)
+
+    observations = await adapter.poll_slow_controls()
+
+    assert [
+        item.value for item in observations if str(item.path) == _DUAL_WATCH_PATH
+    ] == [True]
+
+
+@pytest.mark.asyncio
+async def test_single_receive_is_observed_as_dual_watch_false() -> None:
+    """``FR01`` = single receive, so the canonical bool reads False."""
+
+    radio, adapter = _dual_watch_adapter(on=True)
+    radio.get_rx_func = AsyncMock(return_value=1)
+
+    observations = await adapter.poll_slow_controls()
+
+    assert [
+        item.value for item in observations if str(item.path) == _DUAL_WATCH_PATH
+    ] == [False]
+
+
+@pytest.mark.parametrize(
+    ("poll", "method", "path"),
+    [row[1:] for row in _SUB_CONTROL_ROWS],
+    ids=[row[0] for row in _SUB_CONTROL_ROWS],
+)
+@pytest.mark.asyncio
+async def test_sub_read_is_sent_while_dual_receive_is_off(
+    poll: str, method: str, path: str
+) -> None:
+    radio, adapter = _dual_watch_adapter(on=False)
+
+    observations = await getattr(adapter, poll)()
+
+    assert _sub_receiver_awaited(radio, method)
+    assert path in [str(item.path) for item in observations]
+
+
+@pytest.mark.parametrize(
+    ("poll", "method", "path"),
+    [row[1:] for row in _SUB_CONTROL_ROWS],
+    ids=[row[0] for row in _SUB_CONTROL_ROWS],
+)
+@pytest.mark.asyncio
+async def test_sub_read_is_sent_while_dual_receive_is_on(
+    poll: str, method: str, path: str
+) -> None:
+    radio, adapter = _dual_watch_adapter(on=True)
+
+    observations = await getattr(adapter, poll)()
+
+    assert _sub_receiver_awaited(radio, method)
+    assert path in [str(item.path) for item in observations]
+
+
+# ---------------------------------------------------------------------------
+# MOR-4433: a radio with no TX-target source serves "unsupported".
+#
+# Folded here from tests/test_unsupported_tx_target_no_source.py (gate round 1:
+# the PR stays within the 10-file ceiling, so the sourceless-class HTTP seam
+# coverage lives in this file instead of its own). Owner decision: "remove the
+# prohibition, transmit must work" for radios with one transceiver and no
+# readable TX target (Xiegu G7250 on Icom CI-V, and the sourceless
+# single-receiver Yaesu shape). One shared mechanism: the backend publishes
+# the sticky ``UnknownTxTarget(reason="unsupported")`` fact through its
+# existing publication path, so the served state tells "no source exists"
+# apart from "a source exists but is unobserved".
+#
+# Both tests start the REAL backend's production acquisition with only the
+# hardware faked, then read ``unsupported`` through the real HTTP API
+# (``GET /api/v1/state``) parsed through the producer's ``ServerStatePublic``
+# model — never a raw dict, never a private publish helper, never a seed.
+# Each test fails when its backend's new publication is removed (proven by a
+# scratch revert of that backend's change, not committed).
+#
+# Scope note (gate round 1 split): the managed-station WS-key/TUNE and
+# SDK/rigctld pins moved to follow-up PR B (Linear MOR-4472).
+# ---------------------------------------------------------------------------
+
+FT991A_RIG = _ROOT / "rigs" / "ft991a.toml"
+FT991A_SIM = _ROOT / "rigplane_testkit" / "sim" / "profiles" / "ft991a.toml"
+
+#: Model name stamped on the synthetic sourceless profile, so refusal
+#: messages name it instead of the real FT-991A it is derived from.
+_SYNTHETIC_MODEL = "FT-991A-NO-TX-SRC"
+
+
+def _sourceless_yaesu_config() -> RigConfig:
+    """A sourceless Yaesu profile built from the committed FT-991A config.
+
+    FT-991A gained a real TX-target source (#4584), so the sourceless
+    set keeps a Yaesu member through this synthetic: the same loaded
+    config with the source removed through the producer's own loader
+    output — both TX verbs deleted from ``commands``, ``tx_func``
+    cleared, and the ``tx_target`` polling capability (plus its field
+    policy) dropped from the acquisition profile via
+    ``dataclasses.replace`` (which rebuilds the path index in
+    ``__post_init__``). A fresh ``load_rig`` per call, so no test mutates
+    a shared config; the model is renamed so refusal messages name the
+    synthetic, not the real FT-991A.
+    """
+    # RigConfig is frozen: derive a modified copy through the producer's
+    # own dataclass constructor rather than assigning into the loaded
+    # one (a fresh ``load_rig`` per call, so no test mutates shared
+    # loader output either way).
+    loaded = load_rig(FT991A_RIG)
+    acquisition = loaded.state_acquisition
+    assert acquisition is not None
+    dropped = FieldPath.global_("tx_state", "tx_target")
+    return replace(
+        loaded,
+        commands={
+            verb: spec
+            for verb, spec in loaded.commands.items()
+            if verb not in ("get_tx_func", "set_tx_func")
+        },
+        tx_func=None,
+        model=_SYNTHETIC_MODEL,
+        state_acquisition=replace(
+            acquisition,
+            capabilities=tuple(
+                capability
+                for capability in acquisition.capabilities
+                if capability.path != dropped
+            ),
+            field_policies={
+                path: policy
+                for path, policy in acquisition.field_policies.items()
+                if path != dropped
+            },
+        ),
+    )
+
+
+def test_synthetic_sourceless_profile_declares_no_tx_source() -> None:
+    """Premise the sourceless-Yaesu case below stands on: the synthetic
+    carries no TX verb, no answer map, and no polled ``tx_target``."""
+    config = _sourceless_yaesu_config()
+    assert "get_tx_func" not in config.commands
+    assert "set_tx_func" not in config.commands
+    assert config.tx_func is None
+    profile = config.to_profile()
+    assert profile.model == _SYNTHETIC_MODEL
+    assert not profile.supports_command("get_tx_func")
+    assert not profile.supports_command("set_tx_func")
+    assert not profile.supports_command("get_tx_target")
+    assert profile.state_acquisition is not None
+    assert FieldPath.global_("tx_state", "tx_target") not in (
+        profile.state_acquisition.pollable_paths()
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "source_command"),
+    (
+        ("FT-991A", "get_tx_func"),  # sourced since #4584: FT read + [vfo.tx_func]
+        ("G7250", None),
+        ("IC-7300", None),  # derivation radio: no native read, derives instead
+        ("IC-7610", "get_tx_target"),  # native CI-V 1C 03 read (get_tx_target)
+    ),
+)
+def test_tx_target_source_declaration_matrix(
+    model: str, source_command: str | None
+) -> None:
+    """Pin the discriminator the fix keys off: the command each profile's
+    ``tx_target`` source (or its absence) hangs on."""
+    profile = resolve_radio_profile(model=model)
+    if source_command is None:
+        assert not profile.supports_command("get_tx_target")
+        assert not profile.supports_command("get_tx_func")
+    else:
+        assert profile.supports_command(source_command)
+
+
+@asynccontextmanager
+async def _serve_sourceless_yaesu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[tuple[WebServer, list[str]]]:
+    """Serve the synthetic sourceless profile: real ``YaesuCatRadio`` on the
+    CAT simulator answering the FT-991A wire shapes, real ``WebServer`` with
+    its production acquisition started. Only the wire is faked."""
+    radio = YaesuCatRadio("/dev/fixture", profile=_sourceless_yaesu_config())
+    fake = YaesuCatSerialFake.from_profile(_ROOT, FT991A_SIM, rig_path=FT991A_RIG)
+    wire: list[str] = []
+    handle = fake.model.handle_with_outcome
+
+    def logged(line: str) -> Any:
+        wire.append(line)
+        if line in ("BI0;", "BI1;"):
+            # The FT-991A sim profile models no break-in: accept the write
+            # (Yaesu SET convention: no reply data) so the command path is
+            # exercisable without extending the sim. The pin is the wire
+            # itself — the log above records every line either way.
+            return None, Ok()
+        return handle(line)
+
+    monkeypatch.setattr(fake.model, "handle_with_outcome", logged)
+
+    async def open_port(*args: Any, **kwargs: Any) -> Any:
+        return await fake.open_serial_connection()
+
+    monkeypatch.setattr(
+        "rigplane.backends.yaesu_cat.transport.open_serial_port", open_port
+    )
+    await radio._transport.connect()
+    server = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    try:
+        await server.start()
+    except BaseException:
+        await radio._transport.close()
+        raise
+    try:
+        yield server, wire
+    finally:
+        await server.stop()
+        await radio._transport.close()
+
+
+@asynccontextmanager
+async def _serve_g7250(
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[tuple[WebServer, _G7250BenchFake]]:
+    """Serve the G7250 the way production builds it (CLI factory over the
+    bench fake) with the production acquisition started — only the CI-V
+    wire is faked."""
+    fake = _G7250BenchFake()
+
+    async def opener(*, url: str, baudrate: int, **kwargs: Any) -> Any:
+        return await fake.opener(url=url, baudrate=baudrate, **kwargs)
+
+    monkeypatch.setattr(serial_open, "_open_with_idle_lines", opener)
+    args = _build_parser().parse_args(
+        ["--model", "G7250", "--serial-port", _DEVICE, "status"]
+    )
+    radio = create_radio(await _build_backend_config(args))
+    radio._civ_get_timeout = _ANSWER_WINDOW_S
+    radio._civ_min_interval = 0.0  # no hardware pacing sleep (MOR-4075)
+    radio._enumerate_serial_ports_fn = lambda: []  # no OS port enumeration
+    await asyncio.wait_for(radio.connect(), 30)
+    server = WebServer(radio, WebConfig(host="127.0.0.1", port=0))
+    try:
+        await server.start()
+    except BaseException:
+        await radio.disconnect()
+        raise
+    try:
+        yield server, fake
+    finally:
+        await server.stop()
+        await radio.disconnect()
+
+
+async def _wait_served_state(
+    host: str,
+    port: int,
+    ready: Callable[[ServerStatePublic], bool],
+    description: str,
+    timeout: float = 30.0,
+) -> ServerStatePublic:
+    """Poll the served state until ``ready``; every poll parses through the
+    producer's ``ServerStatePublic`` model. Bounded ``asyncio.timeout`` plus
+    the poll-interval sleep only (the ``wait_for_state_value`` shape)."""
+    async with asyncio.timeout(timeout):
+        while True:
+            status, _, raw = await _http_get(host, port, "/api/v1/state")
+            assert status == 200, f"GET /api/v1/state: HTTP {status}"
+            state = ServerStatePublic.model_validate_json(raw)
+            if ready(state):
+                return state
+            await asyncio.sleep(0.05)
+    raise AssertionError(f"unreachable: timed out waiting for {description}")
+
+
+def _is_unsupported(state: ServerStatePublic) -> bool:
+    """The served target is the sticky ``unsupported`` fact."""
+    target = state.txTarget
+    return isinstance(target, UnknownTxTargetPublic) and target.reason == "unsupported"
+
+
+def _unsupported_with_freq(freq_hz: int) -> Callable[[ServerStatePublic], bool]:
+    """Ready when the served target is ``unsupported`` and the poller has
+    read that exact real frequency around it (not vacuous: acquisition ran,
+    and it ran against this radio's wire personality)."""
+
+    def ready(state: ServerStatePublic) -> bool:
+        return _is_unsupported(state) and state.main.freqHz == freq_hz
+
+    return ready
+
+
+def _unsupported_with_any_freq(state: ServerStatePublic) -> bool:
+    """Ready when the served target is ``unsupported`` and the poller has
+    observed some real frequency around it (the simulator's default answer
+    is not pinned here, only that acquisition ran)."""
+    return _is_unsupported(state) and state.main.freqHz is not None
+
+
+@pytest.mark.realtime(reason="real HTTP socket and the production Yaesu acquisition")
+@pytest.mark.asyncio
+async def test_yaesu_sourceless_serves_unsupported_over_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The synthetic sourceless Yaesu profile serves the sticky
+    ``unsupported`` TX target through production acquisition: the medium
+    lane publishes it with no CAT I/O of its own, while freq carries the
+    simulator's real answer next to it."""
+    async with _serve_sourceless_yaesu(monkeypatch) as (web, wire):
+        host, port = _addr(web)
+        state = await _wait_served_state(
+            host, port, _unsupported_with_any_freq, "sourceless txTarget"
+        )
+        assert wire, "the poller never touched the CAT wire"
+        target = state.txTarget
+        assert isinstance(target, UnknownTxTargetPublic)
+        assert target.reason == "unsupported"
+
+
+@pytest.mark.realtime(reason="real HTTP socket and the production CI-V acquisition")
+@pytest.mark.asyncio
+async def test_g7250_serves_unsupported_over_http(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G7250 serves the sticky ``unsupported`` TX target through production
+    acquisition: the poller falls through to ``_compute_tx_target`` (no
+    native ``get_tx_target``, no selected/unselected readback) while the
+    bench fake's real 7.138 MHz answer is served next to it."""
+    async with _serve_g7250(monkeypatch) as (web, fake):
+        host, port = _addr(web)
+        state = await _wait_served_state(
+            host, port, _unsupported_with_freq(7_138_000), "G7250 txTarget"
+        )
+        assert fake.commands, "the poller never spoke CI-V"
+        target = state.txTarget
+        assert isinstance(target, UnknownTxTargetPublic)
+        assert target.reason == "unsupported"
+
+
+@pytest.mark.realtime(reason="real HTTP socket and the production Yaesu command path")
+@pytest.mark.asyncio
+async def test_sourceless_break_in_command_reaches_radio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gate round 1, P1-1 (backend pin, kept tiny): ``POST /api/v1/commands
+    set_break_in`` for the sourceless profile travels the production command
+    path (HTTP admission → command queue → ``YaesuCatRadio.set_break_in``)
+    and reaches the CAT wire as ``BI1;`` — the frontend exception that arms
+    break-in on a sourceless target has a working command behind it."""
+    async with _serve_sourceless_yaesu(monkeypatch) as (web, wire):
+        host, port = _addr(web)
+        body = await _http_post_command(host, port, "set_break_in", {"mode": 1})
+        assert body["ok"] is True
+        async with asyncio.timeout(10):
+            while "BI1;" not in wire:
+                await asyncio.sleep(0.05)
+        assert "BI1;" in wire

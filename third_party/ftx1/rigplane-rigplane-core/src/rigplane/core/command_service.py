@@ -1,0 +1,1887 @@
+"""Backend-neutral command execution service.
+
+The service normalizes command ingress into :class:`CommandIntent`, delegates
+actual radio work to an injected executor, and applies any resulting readbacks
+as confirmed :class:`Observation` values through :class:`StateStore`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import math
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from fractions import Fraction
+from typing import TYPE_CHECKING, Any, Protocol
+
+from rigplane.core.acquisition_scheduler import AcquisitionPriority, AcquisitionStatus
+from rigplane.core.command_dispatch import (
+    _af_level_from_param as _af_level_from_param,
+    _int_param as _int_param,
+    _raw_int_level_from_param as _raw_int_level_from_param,
+    bind_command_intent,
+    command_descriptor,
+)
+from rigplane.core.exceptions import TimeoutError as RigplaneTimeoutError
+from rigplane.core.state_pipeline_contracts import (
+    ChangeSet,
+    CommandIntent,
+    CommandLifecycleEvent,
+    CommandLifecycleState,
+    CommandSource,
+    FieldPath,
+    Observation,
+    ObservationSource,
+    PowerWriteQuantum,
+    SourceMetadata,
+)
+from rigplane.core.state_store import StateStore
+
+if TYPE_CHECKING:
+    from rigplane.core.radio_protocol import StateModelService
+
+logger = logging.getLogger(__name__)
+
+# A write does not age our knowledge of the field it wrote — it invalidates
+# it. ``ensure_fresh`` can only express that as an age no prior observation
+# can satisfy, so the request is never short-circuited by a FRESH pre-write
+# value. Same value and same reasoning as the freshness pipeline's own
+# reconciliation path and as ``_POST_WRITE_READBACK_MAX_AGE`` in
+# ``web/radio_poller.py`` (MOR-1484).
+_WRITE_CONFIRMATION_MAX_AGE = 1e-9
+
+__all__ = [
+    "COMMAND_OUTCOME_INVALIDATED",
+    "CommandExecutionInvalidatedError",
+    "CommandExecutionResult",
+    "CommandExecutor",
+    "CommandService",
+    "CommandServiceResult",
+    "PendingOverlay",
+    "PowerWriteQuantum",
+    "admitted_level_for_intent",
+    "command_intent_from_request",
+    "command_response_observation",
+    "expected_observations_for_command",
+    "observable_field_path",
+    "resolve_power_level_target",
+]
+
+_UNSET = object()
+_MAX_ACTIVE_COMMANDS = 128
+_MAX_READBACK_EXPECTATIONS = 128
+_READBACK_EXPECTATION_GRACE_SECONDS = 2.0
+# ACK stays dispatchable for late queue callbacks. Its active bookkeeping uses
+# the existing overlay/readback windows, without implying terminal success.
+_DISPATCHABLE_LIFECYCLE_STATES = ("accepted", "queued", "sent", "acknowledged")
+_NORMALIZED_LEVEL_EXPECTATION_COMMANDS = {
+    "set_af_level": "af_level",
+    "set_rf_gain": "rf_gain",
+    "set_squelch": "squelch",
+    "set_rf_power": "power_level",
+    "set_power": "power_level",
+}
+
+
+Clock = Callable[[], float]
+LifecycleSubscriber = Callable[[CommandLifecycleEvent], None]
+
+
+#: Lifecycle ``details["outcome"]`` marker for a command ended by fencing —
+#: an in-flight invalidation at (or around) a provider-generation change.
+#: Consumers that must classify the failure (the web server choosing the
+#: RP-ML-005 notification code, MOR-2847) read this structured outcome
+#: instead of matching the free-text reason.
+COMMAND_OUTCOME_INVALIDATED = "commandInvalidated"
+
+
+class CommandExecutionInvalidatedError(RuntimeError):
+    """Raised when an executor finishes after its command was invalidated."""
+
+
+@dataclass(frozen=True, slots=True)
+class CommandExecutionResult:
+    """Backend executor result returned after command queue/backend execution."""
+
+    observations: tuple[Observation, ...] = ()
+    details: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "observations", tuple(self.observations))
+        object.__setattr__(
+            self,
+            "details",
+            {} if self.details is None else dict(self.details),
+        )
+
+
+class CommandExecutor(Protocol):
+    """Backend-neutral command executor seam.
+
+    Runtime, Web, rigctld, and public API adapters can implement this protocol
+    by delegating to the existing command queue, IcomCommander, or backend API.
+    """
+
+    async def execute(self, intent: CommandIntent) -> CommandExecutionResult:
+        """Execute one command intent without directly mutating semantic state."""
+
+
+@dataclass(frozen=True, slots=True)
+class PendingOverlay:
+    """A scoped pending value or an internal post-write readback expectation.
+
+    ``matches_any_value`` is only for value-less operations whose result is
+    chosen by the radio. Such expectations are retained for correlation but
+    are never added to the client-visible pending-overlay collection.
+    """
+
+    source: CommandSource
+    session_id: str | None
+    command_id: str
+    path: FieldPath
+    value: Any
+    expires_at_monotonic: float
+    matches_any_value: bool = False
+
+    def is_expired(self, now: float) -> bool:
+        return now >= self.expires_at_monotonic
+
+
+@dataclass(frozen=True, slots=True)
+class CommandServiceResult:
+    """Observable result of one command service execution."""
+
+    lifecycle_events: tuple[CommandLifecycleEvent, ...]
+    observation_changes: tuple[ChangeSet, ...]
+    executor_result: CommandExecutionResult
+
+
+class CommandService:
+    """Coordinate backend-neutral command execution and pending overlays."""
+
+    __slots__ = (
+        "_active_commands",
+        "_clock",
+        "_default_pending_ttl",
+        "_events",
+        "_executor",
+        "_overlays",
+        "_readback_expectations",
+        "_state_model_service",
+        "_state_store",
+        "_subscribers",
+    )
+
+    def __init__(
+        self,
+        *,
+        executor: CommandExecutor,
+        state_store: StateStore,
+        clock: Clock | None = None,
+        default_pending_ttl: float = 2.0,
+        state_model_service: StateModelService | None = None,
+    ) -> None:
+        if default_pending_ttl < 0:
+            raise ValueError("default_pending_ttl must be non-negative")
+        self._executor = executor
+        self._state_store = state_store
+        self._state_model_service = state_model_service
+        self._clock = clock or time.monotonic
+        self._default_pending_ttl = default_pending_ttl
+        self._active_commands: dict[
+            tuple[CommandSource, str | None, str], CommandLifecycleEvent
+        ] = {}
+        self._events: list[CommandLifecycleEvent] = []
+        self._subscribers: list[LifecycleSubscriber] = []
+        self._overlays: list[PendingOverlay] = []
+        self._readback_expectations: list[PendingOverlay] = []
+
+    async def execute(
+        self,
+        intent: CommandIntent,
+        *,
+        executor: CommandExecutor | None = None,
+    ) -> CommandServiceResult:
+        """Execute an intent through the injected backend executor."""
+
+        start = len(self._events)
+        self.emit_lifecycle(intent, "accepted")
+        self._record_intent_overlay(intent)
+        self.emit_lifecycle(intent, "queued")
+        sent_event = self.emit_lifecycle(intent, "sent")
+        key = (intent.source, _session_id(intent), intent.id)
+        provider_generation = self._state_store.provider_generation
+
+        try:
+            selected_executor = self._executor if executor is None else executor
+            executor_result = await selected_executor.execute(intent)
+        except asyncio.CancelledError:
+            if self._active_commands.get(key) is sent_event:
+                self.expire_command(
+                    intent.id,
+                    source=intent.source,
+                    session_id=_session_id(intent),
+                )
+                self.emit_lifecycle(intent, "failed", message="command cancelled")
+            raise
+        except (TimeoutError, RigplaneTimeoutError) as exc:
+            if self._active_commands.get(key) is sent_event:
+                self.expire_command(
+                    intent.id,
+                    source=intent.source,
+                    session_id=_session_id(intent),
+                )
+                self.emit_lifecycle(intent, "timed_out", message=str(exc) or None)
+            raise
+        except Exception as exc:
+            if self._active_commands.get(key) is sent_event:
+                self.expire_command(
+                    intent.id,
+                    source=intent.source,
+                    session_id=_session_id(intent),
+                )
+                self.emit_lifecycle(intent, "failed", message=str(exc) or None)
+            raise
+
+        if self._active_commands.get(key) is not sent_event:
+            message = (
+                "command invalidated during provider generation change"
+                if self._state_store.provider_generation != provider_generation
+                else "command invalidated during execution"
+            )
+            # Record the fencing outcome as a structured lifecycle detail
+            # (idempotent: a terminate that already failed the command
+            # leaves it terminal and this call is a no-op), so downstream
+            # consumers classify by kind instead of the reason text.
+            self.fail_command(
+                intent.id,
+                source=intent.source,
+                session_id=_session_id(intent),
+                message=message,
+                details={"outcome": COMMAND_OUTCOME_INVALIDATED},
+            )
+            raise CommandExecutionInvalidatedError(message)
+
+        self.emit_lifecycle(intent, "acknowledged", details=executor_result.details)
+        changes: list[ChangeSet] = []
+        for observation in executor_result.observations:
+            changes.append(
+                self.apply_observation(
+                    replace(
+                        observation,
+                        provider_generation=provider_generation,
+                    )
+                )
+            )
+
+        self._request_write_confirmation(intent, executor_result)
+
+        return CommandServiceResult(
+            lifecycle_events=tuple(self._events[start:]),
+            observation_changes=tuple(changes),
+            executor_result=executor_result,
+        )
+
+    def _request_write_confirmation(
+        self, intent: CommandIntent, executor_result: CommandExecutionResult
+    ) -> None:
+        """Ask for a fresh observation of the field this command just wrote.
+
+        A write does not make our knowledge of that field *stale*, it makes it
+        **wrong**: the field's last observation predates the command, still
+        carries the pre-write value, and is still FRESH. Freshness decay is
+        time-based, so nothing in the pipeline notices, and every consumer
+        that reads observed truth keeps answering from the old value until the
+        next cadence poll happens along. The pending overlay recorded above
+        does not help them: it is deliberately optimistic and deliberately
+        scoped to the ingress that raised the command, because consumers that
+        must not trust our own optimism — the TX interlock first among them —
+        read the raw store instead.
+
+        The concrete casualty (MOR-1892) is RF truth after an unkey. The
+        interlock reads the observed PTT field; for up to a full poll cadence
+        after a client's unkey that field still reads "transmitting", so a
+        write arriving in that window is refused or dropped. WSJT-X in "Fake
+        It" split lands its dial restore exactly there — a fixed 100 ms after
+        its unkey — so the rig is left on the transmit-shifted frequency.
+
+        Closing it by *inferring* RX from our own successful write is what
+        this programme has refused all along, so this does the other thing:
+        it asks the radio, immediately, through the machinery that already
+        exists for it. The written path is queued for re-acquisition at
+        ``AcquisitionPriority.COMMAND`` — the priority class the scheduler
+        reserves for acquisitions caused by a command, and which nothing had
+        wired until now — with an age no earlier observation can satisfy.
+        Whichever drain owns this radio picks it up on its next cycle.
+
+        Three things it deliberately does not do: it does not run when the
+        write failed (nothing was written, so nothing changed), it does not
+        run when the executor already returned an observation of the target
+        (the write came back confirmed — asking again would be pure traffic
+        on a serial budget that is already tight), and it never fails the
+        command. It is also synchronous and fire-and-queue by the
+        ``StateModelService`` contract: nothing here awaits the radio, so a
+        write's reply is never delayed by its own confirmation.
+
+        **Reach, probed rather than assumed** (PR #2758 review). A target is
+        re-observable only where the acquisition profile declares a capability
+        for that exact path; anything else answers ``UNAVAILABLE``. Against the
+        IC-7300 profile:
+
+        * ``global.tx_state.ptt`` — queued. That is the one this ticket needs.
+        * ``global.tx_state.power_on`` — unavailable. Global scope is not by
+          itself enough.
+        * every receiver-scoped target — unavailable, because
+          :func:`_command_target` names the receiver by index
+          (``receiver.0.operator_controls.rf_gain``) while profiles and the
+          StateStore name it (``receiver.main.operator_controls.rf_gain``, and
+          ``receiver.main.active.freq_mode.freq_hz`` for the ``freq_mode``
+          family — the only family where a VFO slot is legal at all).
+
+        Those misses are no-ops, logged rather than swallowed so that a silent
+        miss cannot read as coverage. The divergence is older than this method
+        and is tracked in MOR-1897.
+        """
+        service = self._state_model_service
+        target = intent.target
+        if service is None or target is None:
+            return
+        if any(
+            observation.path == target for observation in executor_result.observations
+        ):
+            return
+        try:
+            ensure_fresh = service.ensure_fresh
+            if asyncio.iscoroutinefunction(ensure_fresh):
+                # A coroutine implementation violates the synchronous
+                # contract; calling it would leave an un-awaited coroutine
+                # behind instead of a queued request.
+                return
+            result = ensure_fresh(
+                (target,),
+                max_age=_WRITE_CONFIRMATION_MAX_AGE,
+                priority=AcquisitionPriority.COMMAND,
+                reason=f"post_write:{intent.name}",
+                # The answer must come from a send made after the write.
+                # Joined into a poll dispatched before the write, this
+                # confirmation would be answered by that poll — whose reply
+                # can still carry the pre-write value (MOR-2592).
+                require_fresh_dispatch=True,
+            )
+            status = getattr(result, "status", None)
+            if status is not None and str(status) == AcquisitionStatus.UNAVAILABLE:
+                # Not an error, but not a confirmation either: say so rather
+                # than let a silent no-op read as coverage.
+                logger.debug(
+                    "command service: %s cannot be re-observed after %s — "
+                    "no acquisition capability declared for that path",
+                    target,
+                    intent.name,
+                )
+        except Exception:
+            logger.warning(
+                "command service: could not queue write confirmation for %s",
+                target,
+                exc_info=True,
+            )
+
+    def apply_observation(self, observation: Observation) -> ChangeSet:
+        """Apply a confirmed observation and reconcile matching overlays."""
+
+        observation = self._normalize_correlated_readback_observation(observation)
+        changeset = self._state_store.apply(observation)
+        if (
+            changeset.observed_paths
+            and observation.provider_generation == self._state_store.provider_generation
+        ):
+            self._reconcile_observation(observation, changeset)
+        return changeset
+
+    def fail_command(
+        self,
+        command_id: str,
+        *,
+        message: str | None = None,
+        timed_out: bool = False,
+        source: CommandSource | None = None,
+        session_id: str | None | object = _UNSET,
+        details: Mapping[str, Any] | None = None,
+    ) -> bool:
+        """Mark a previously acknowledged command as failed and expire overlays."""
+
+        template = self._last_event(
+            command_id,
+            source=source,
+            session_id=session_id,
+        )
+        if template is None or template.state in {
+            "failed",
+            "timed_out",
+            "reconciled",
+            "confirmed",
+            "superseded",
+        }:
+            return False
+        scoped_source = template.source if source is None else source
+        scoped_session = (
+            _event_session_id(template) if session_id is _UNSET else session_id
+        )
+        self.expire_command(
+            command_id,
+            source=scoped_source,
+            session_id=scoped_session,
+        )
+        params = {}
+        if scoped_session is not _UNSET:
+            params["session_id"] = scoped_session
+        self.emit_lifecycle(
+            CommandIntent(
+                id=command_id,
+                name="queued_completion",
+                params=params,
+                source=scoped_source,
+                target=template.target,
+                priority="user",
+                timeout=None,
+                pending_policy="none",
+                expected_observations=(),
+            ),
+            "timed_out" if timed_out else "failed",
+            message=message,
+            details=details,
+        )
+        return True
+
+    def terminate_active_commands(
+        self,
+        reason: str,
+        *,
+        source: CommandSource | None = None,
+        session_id: str | None | object = _UNSET,
+        details: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Fail active commands in an exact source/session lifecycle scope."""
+
+        if source is not None and type(source) is not str:
+            return 0
+        if (
+            session_id is not _UNSET
+            and session_id is not None
+            and type(session_id) is not str
+        ):
+            return 0
+        matches = [
+            key
+            for key in self._active_commands
+            if (source is None or key[0] == source)
+            and (session_id is _UNSET or key[1] == session_id)
+        ]
+        for key in matches:
+            self._active_commands.pop(key)
+        for scoped_source, scoped_session, command_id in matches:
+            self.fail_command(
+                command_id,
+                source=scoped_source,
+                session_id=scoped_session,
+                message=reason,
+                details=details,
+            )
+        return len(matches)
+
+    def emit_lifecycle(
+        self,
+        intent: CommandIntent,
+        state: CommandLifecycleState,
+        *,
+        message: str | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> CommandLifecycleEvent:
+        """Record and publish a lifecycle event for an intent."""
+
+        self._purge_expired()
+        payload_details = dict(details or {})
+        if "session_id" in intent.params:
+            payload_details["session_id"] = _session_id(intent)
+        event = CommandLifecycleEvent(
+            command_id=intent.id,
+            state=state,
+            timestamp_monotonic=self._clock(),
+            source=intent.source,
+            target=intent.target,
+            message=message,
+            details=payload_details,
+        )
+        key = (intent.source, _session_id(intent), intent.id)
+        if state in _DISPATCHABLE_LIFECYCLE_STATES:
+            while key not in self._active_commands and (
+                len(self._active_commands) >= _MAX_ACTIVE_COMMANDS
+            ):
+                acknowledged = next(
+                    (
+                        item
+                        for item, active in self._active_commands.items()
+                        if active.state == "acknowledged"
+                    ),
+                    None,
+                )
+                oldest = acknowledged or next(iter(self._active_commands))
+                self._active_commands.pop(oldest)
+                if acknowledged is None:
+                    self.fail_command(
+                        oldest[2],
+                        source=oldest[0],
+                        session_id=oldest[1],
+                        message="active command capacity exceeded",
+                    )
+            self._active_commands[key] = event
+            if state == "acknowledged":
+                self._purge_expired()
+        else:
+            self._active_commands.pop(key, None)
+        self._events.append(event)
+        for subscriber in tuple(self._subscribers):
+            subscriber(event)
+        return event
+
+    def lifecycle_events(self) -> tuple[CommandLifecycleEvent, ...]:
+        """Return recorded lifecycle events in emission order."""
+
+        return tuple(self._events)
+
+    def subscribe_lifecycle(
+        self,
+        subscriber: LifecycleSubscriber,
+    ) -> Callable[[], None]:
+        """Subscribe to lifecycle events and return an unsubscribe callback."""
+
+        self._subscribers.append(subscriber)
+
+        def unsubscribe() -> None:
+            try:
+                self._subscribers.remove(subscriber)
+            except ValueError:
+                pass
+
+        return unsubscribe
+
+    def record_pending_overlay(self, overlay: PendingOverlay) -> None:
+        """Record or replace one scoped pending overlay."""
+
+        self._purge_expired()
+        self._overlays = [
+            item
+            for item in self._overlays
+            if not (
+                item.source == overlay.source
+                and item.session_id == overlay.session_id
+                and item.command_id == overlay.command_id
+                and item.path == overlay.path
+            )
+        ]
+        if not overlay.is_expired(self._clock()):
+            self._overlays.append(overlay)
+
+    def pending_overlays(
+        self,
+        *,
+        source: CommandSource,
+        session_id: str | None,
+        command_id: str | None = None,
+        path: FieldPath | None = None,
+    ) -> tuple[PendingOverlay, ...]:
+        """Return non-expired overlays matching an ingress scope."""
+
+        self._purge_expired()
+        return tuple(
+            item
+            for item in self._overlays
+            if item.source == source
+            and item.session_id == session_id
+            and (command_id is None or item.command_id == command_id)
+            and (path is None or item.path == path)
+        )
+
+    def readback_expectations(
+        self,
+        *,
+        source: CommandSource,
+        session_id: str | None,
+        command_id: str,
+    ) -> tuple[PendingOverlay, ...]:
+        """Return command expectations retained for immediate readback matching."""
+
+        self._purge_expired()
+        return tuple(
+            item
+            for item in self._readback_expectations
+            if item.source == source
+            and item.session_id == session_id
+            and item.command_id == command_id
+        )
+
+    def retain_readback_expectations_for_dispatch(
+        self,
+        *,
+        source: CommandSource,
+        session_id: str | None,
+        command_id: str,
+    ) -> tuple[PendingOverlay, ...] | None:
+        """Refresh existing expectations at dispatch, or reject a terminal command."""
+        event = self._last_event(command_id, source=source, session_id=session_id)
+        if event is None or event.state not in _DISPATCHABLE_LIFECYCLE_STATES:
+            return None
+        matches = self.readback_expectations(
+            source=source, session_id=session_id, command_id=command_id
+        )
+        expires_at = self._clock() + _READBACK_EXPECTATION_GRACE_SECONDS
+        retained = tuple(
+            replace(item, expires_at_monotonic=expires_at) for item in matches
+        )
+        self._readback_expectations = [
+            item for item in self._readback_expectations if item not in matches
+        ] + list(retained)
+        return retained
+
+    def discard_readback_expectations(
+        self,
+        *,
+        source: CommandSource,
+        session_id: str | None,
+        command_id: str,
+        path: FieldPath | None = None,
+    ) -> int:
+        """Discard immediate-readback expectations after an attempted readback."""
+
+        before = len(self._readback_expectations)
+        self._readback_expectations = [
+            item
+            for item in self._readback_expectations
+            if not (
+                item.source == source
+                and item.session_id == session_id
+                and item.command_id == command_id
+                and (path is None or item.path == path)
+            )
+        ]
+        return before - len(self._readback_expectations)
+
+    def project_pending_values(
+        self,
+        *,
+        source: CommandSource,
+        session_id: str | None,
+        paths: Sequence[FieldPath],
+    ) -> dict[FieldPath, Any]:
+        """Project pending values for one source/session without leakage."""
+
+        wanted = set(paths)
+        projected: dict[FieldPath, Any] = {}
+        for overlay in self.pending_overlays(source=source, session_id=session_id):
+            if overlay.path in wanted:
+                projected[overlay.path] = overlay.value
+        return projected
+
+    def expire_command(
+        self,
+        command_id: str,
+        *,
+        source: CommandSource | None = None,
+        session_id: str | None | object = _UNSET,
+    ) -> None:
+        """Remove all pending overlays created by one command."""
+
+        self._overlays = [
+            item
+            for item in self._overlays
+            if not _overlay_matches(
+                item,
+                command_id=command_id,
+                source=source,
+                session_id=session_id,
+            )
+        ]
+        self._readback_expectations = [
+            item
+            for item in self._readback_expectations
+            if not _overlay_matches(
+                item,
+                command_id=command_id,
+                source=source,
+                session_id=session_id,
+            )
+        ]
+
+    def _record_intent_overlay(self, intent: CommandIntent) -> None:
+        if intent.pending_policy != "scoped":
+            return
+        paths = _observable_paths_for_intent(intent)
+        if not paths:
+            return
+        now = self._clock()
+        timeout = (
+            self._default_pending_ttl if intent.timeout is None else intent.timeout
+        )
+        session_id = _session_id(intent)
+        for path in paths:
+            try:
+                value = _expected_value_for_path(intent, path)
+            except KeyError:
+                if intent.name == "reset_filter_width":
+                    self._record_readback_expectation(
+                        PendingOverlay(
+                            source=intent.source,
+                            session_id=session_id,
+                            command_id=intent.id,
+                            path=path,
+                            value=None,
+                            expires_at_monotonic=(
+                                now + timeout + _READBACK_EXPECTATION_GRACE_SECONDS
+                            ),
+                            matches_any_value=True,
+                        )
+                    )
+                continue
+            self.record_pending_overlay(
+                PendingOverlay(
+                    source=intent.source,
+                    session_id=session_id,
+                    command_id=intent.id,
+                    path=path,
+                    value=value,
+                    expires_at_monotonic=now + timeout,
+                )
+            )
+            self._record_readback_expectation(
+                PendingOverlay(
+                    source=intent.source,
+                    session_id=session_id,
+                    command_id=intent.id,
+                    path=path,
+                    value=value,
+                    expires_at_monotonic=(
+                        now + timeout + _READBACK_EXPECTATION_GRACE_SECONDS
+                    ),
+                )
+            )
+
+    def _record_readback_expectation(self, overlay: PendingOverlay) -> None:
+        self._purge_expired()
+        self._readback_expectations = [
+            item
+            for item in self._readback_expectations
+            if not (
+                item.source == overlay.source
+                and item.session_id == overlay.session_id
+                and item.command_id == overlay.command_id
+                and item.path == overlay.path
+            )
+        ]
+        self._readback_expectations.append(overlay)
+        excess = len(self._readback_expectations) - _MAX_READBACK_EXPECTATIONS
+        if excess > 0:
+            self._readback_expectations = self._readback_expectations[excess:]
+
+    def _reconcile_observation(
+        self,
+        observation: Observation,
+        changeset: ChangeSet,
+    ) -> None:
+        self._purge_expired()
+        reconciled: list[PendingOverlay] = []
+        remaining: list[PendingOverlay] = []
+        for overlay in self._overlays:
+            if _observation_reconciles_overlay(observation, overlay):
+                reconciled.append(overlay)
+            else:
+                remaining.append(overlay)
+        self._overlays = remaining
+
+        for overlay in reconciled:
+            self._remove_readback_expectation(overlay)
+            self.emit_lifecycle(
+                CommandIntent(
+                    id=overlay.command_id,
+                    name="reconcile",
+                    params=(
+                        {}
+                        if overlay.session_id is None
+                        else {"session_id": overlay.session_id}
+                    ),
+                    source=overlay.source,
+                    target=overlay.path,
+                ),
+                "reconciled",
+                message="confirmed by matching observation",
+                details={
+                    "revision": changeset.revision,
+                    "observationSeq": changeset.observation_seq,
+                },
+            )
+        if not reconciled:
+            self._reconcile_readback_expectation(observation, changeset)
+
+    def _reconcile_readback_expectation(
+        self,
+        observation: Observation,
+        changeset: ChangeSet,
+    ) -> None:
+        if (
+            observation.correlation_id is None
+            or not (
+                _is_external_rigctld_readback(observation.source)
+                or _is_yaesu_cat_readback(observation.source)
+            )
+            or observation.source.command_source is None
+        ):
+            return
+        matches = [
+            item
+            for item in self._readback_expectations
+            if _observation_reconciles_overlay(observation, item)
+        ]
+        if not matches:
+            return
+        expectation = matches[0]
+        template = self._last_event(
+            expectation.command_id,
+            source=expectation.source,
+            session_id=expectation.session_id,
+        )
+        if template is None or template.state in {
+            "failed",
+            "timed_out",
+            "reconciled",
+            "confirmed",
+            "superseded",
+        }:
+            return
+
+        self._remove_readback_expectation(expectation)
+        self.emit_lifecycle(
+            CommandIntent(
+                id=expectation.command_id,
+                name="reconcile",
+                params=(
+                    {}
+                    if expectation.session_id is None
+                    else {"session_id": expectation.session_id}
+                ),
+                source=expectation.source,
+                target=expectation.path,
+            ),
+            "reconciled",
+            message="confirmed by matching observation",
+            details={
+                "revision": changeset.revision,
+                "observationSeq": changeset.observation_seq,
+            },
+        )
+
+    def _remove_readback_expectation(self, overlay: PendingOverlay) -> None:
+        self._readback_expectations = [
+            item
+            for item in self._readback_expectations
+            if not (
+                item.source == overlay.source
+                and item.session_id == overlay.session_id
+                and item.command_id == overlay.command_id
+                and item.path == overlay.path
+            )
+        ]
+
+    def _normalize_correlated_readback_observation(
+        self,
+        observation: Observation,
+    ) -> Observation:
+        if observation.correlation_id is None:
+            return observation
+        if observation.source.command_source is None:
+            return observation
+        self._purge_expired()
+        for expectation in self._readback_expectations:
+            if not _observation_matches_readback_scope(observation, expectation):
+                continue
+            normalized = _normalized_observation_value_for_expectation(
+                observation,
+                expectation,
+            )
+            if normalized is not _UNSET:
+                return replace(observation, value=normalized)
+        return observation
+
+    def _purge_expired(self) -> None:
+        now = self._clock()
+        self._overlays = [
+            overlay for overlay in self._overlays if not overlay.is_expired(now)
+        ]
+        self._readback_expectations = [
+            overlay
+            for overlay in self._readback_expectations
+            if not overlay.is_expired(now)
+        ]
+        retained = {
+            (overlay.source, overlay.session_id, overlay.command_id)
+            for overlay in (*self._overlays, *self._readback_expectations)
+        }
+        for key, event in tuple(self._active_commands.items()):
+            if event.state == "acknowledged" and key not in retained:
+                self._active_commands.pop(key)
+
+    def _last_event(
+        self,
+        command_id: str,
+        *,
+        source: CommandSource | None = None,
+        session_id: str | None | object = _UNSET,
+    ) -> CommandLifecycleEvent | None:
+        for event in reversed(self._events):
+            if (
+                event.command_id == command_id
+                and (source is None or event.source == source)
+                and (session_id is _UNSET or _event_session_id(event) == session_id)
+            ):
+                return event
+        return None
+
+
+def _pending_value_for_intent(intent: CommandIntent) -> Any:
+    assert intent.target is not None
+    return _pending_value_for_path(intent.params, intent.target)
+
+
+def _expected_value_for_path(intent: CommandIntent, path: FieldPath) -> Any:
+    value = _pending_value_for_path(intent.params, path)
+    if intent.name in {"set_rf_power", "set_power"} and path.name == "power_level":
+        return value
+    if _should_normalize_level_expectation(intent.name, path):
+        return _normalize_raw_level_value(value)
+    return value
+
+
+def _should_normalize_level_expectation(name: str, path: FieldPath) -> bool:
+    return _NORMALIZED_LEVEL_EXPECTATION_COMMANDS.get(name) == path.name
+
+
+def admitted_level_for_intent(intent: CommandIntent) -> float | None:
+    """The intent's normalized readback target from ``_expected_value_for_path``.
+
+    Re-exports the value the level-expectation owner already computes, so a
+    response consumer can never see a second, parallel quantization.
+    ``None`` when the intent has no normalized 0.0-1.0 level target.
+    """
+    target = intent.target
+    if target is None or not _should_normalize_level_expectation(intent.name, target):
+        return None
+    value = _expected_value_for_path(intent, target)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    level = float(value)
+    if not math.isfinite(level) or not 0.0 <= level <= 1.0:
+        return None
+    return level
+
+
+def resolve_power_level_target(
+    value: Any,
+    *,
+    power_native_unit: str | None = None,
+    power_max_watts: int | float | None = None,
+    power_min_watts: int | float | None = None,
+    power_write_quantum: PowerWriteQuantum | None = None,
+) -> tuple[int, float]:
+    """Resolve the native power integer and its exact normalized readback.
+
+    On a watts-native radio with a valid max and a valid positive min,
+    the native value is clamped to ``[min, max]`` — normalized floats and
+    bare ints alike (MOR-2998: a profile floor such as the FTX-1's 5 W
+    lifts the bottom of the range off the refused 0 W write). A radio
+    without ``min_watts`` keeps today's behaviour exactly.
+
+    On a raw_255 (CI-V) radio whose profile declares a whole-watt write
+    quantum (MOR-4352, ``[controls.rf_power].write_quantum_w``), the
+    request is resolved through the radio's measured storage model — see
+    :func:`_resolve_quantized_power_target`. A radio without the field,
+    an invalid one, or a watts-native radio keeps today's behaviour.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"level {value!r} must be an int or a normalized float")
+
+    valid_max = (
+        isinstance(power_max_watts, (int, float))
+        and not isinstance(power_max_watts, bool)
+        and power_max_watts > 0
+    )
+    watts_native = power_native_unit == "watts" or (
+        power_native_unit is None and valid_max
+    )
+    scale = float(power_max_watts) if watts_native and valid_max else 255.0
+    upper = int(power_max_watts) if watts_native and valid_max else 255
+    valid_min = (
+        watts_native
+        and valid_max
+        and isinstance(power_min_watts, (int, float))
+        and not isinstance(power_min_watts, bool)
+        and power_min_watts > 0
+    )
+    lower = int(power_min_watts) if valid_min else 0
+
+    quantum = _valid_write_quantum(
+        power_write_quantum, watts_native=watts_native, valid_max=valid_max
+    )
+    if quantum is not None:
+        assert power_max_watts is not None  # valid_max held for the branch
+        return _resolve_quantized_power_target(
+            value, quantum, max_watts=power_max_watts
+        )
+
+    if isinstance(value, float):
+        if not (0.0 <= value <= 1.0):
+            raise ValueError(f"level {value!r} is out of the normalized 0.0-1.0 domain")
+        native = max(lower, min(upper, round(value * scale)))
+    elif valid_min:
+        native = max(lower, min(upper, value))
+    else:
+        native = value
+    return native, native / scale
+
+
+def _valid_write_quantum(
+    quantum: PowerWriteQuantum | None, *, watts_native: bool, valid_max: bool
+) -> PowerWriteQuantum | None:
+    """The declared write quantum when it applies, else ``None``.
+
+    A hand-built fact with a non-positive quantum or a malformed raw band
+    is ignored (today's behaviour), mirroring how the resolver treats an
+    invalid ``power_max_watts``; the loader guarantees shipped profiles
+    declare it correctly.
+    """
+    if quantum is None or watts_native or not valid_max:
+        return None
+    q = quantum.quantum_w
+    raw_min, raw_max = quantum.raw_min, quantum.raw_max
+    if (
+        isinstance(q, bool)
+        or not isinstance(q, (int, float))
+        or not q > 0
+        or isinstance(raw_min, bool)
+        or not isinstance(raw_min, int)
+        or isinstance(raw_max, bool)
+        or not isinstance(raw_max, int)
+        or not 0 <= raw_min <= raw_max <= 255
+    ):
+        return None
+    return quantum
+
+
+def _resolve_quantized_power_target(
+    value: int | float,
+    quantum: PowerWriteQuantum,
+    *,
+    max_watts: int | float,
+) -> tuple[int, float]:
+    """Resolve a power target through a radio's whole-watt storage model.
+
+    Measured on the Xiegu G7250 (LIVE 2026-11-10, MOR-4352): the radio
+    stores power on a fixed watt lattice — a write of raw ``r`` lands on
+    ``W = floor(r * max_w / 255)`` and a read answers
+    ``floor(W * 255 / max_w)``. Writing the raw byte a normalized level
+    rounds to stores the WRONG watt (12 stored 4 W, read back 10), so a
+    float level ``L`` resolves instead to the target watt
+    ``W = round(L * max_w / q) * q``, clamped to the watt range the
+    declared raw band represents, and is written as the SMALLEST raw
+    ``r`` with ``floor(r * max_w / 255) == W``; the admitted normalized
+    level is the radio's own readback ``floor(W * 255 / max_w) / 255``.
+    A bare int is the documented raw byte: it goes out as written and
+    only its admitted readback follows the storage model. Computed in
+    exact :class:`~fractions.Fraction` arithmetic — no float drift
+    between the write byte and the readback expectation.
+    """
+    max_w = _exact_power_fraction(max_watts)
+    step = _exact_power_fraction(quantum.quantum_w)
+    # The watt range the declared raw band represents, on the lattice:
+    # floor(W * 255 / max_w) >= raw_min  <=>  W >= raw_min * max_w / 255.
+    lowest_step = math.ceil(Fraction(quantum.raw_min) * max_w / 255 / step)
+    highest_step = math.floor(Fraction(quantum.raw_max) * max_w / 255 / step)
+    if isinstance(value, float):
+        if not (0.0 <= value <= 1.0):
+            raise ValueError(f"level {value!r} is out of the normalized 0.0-1.0 domain")
+        target_step = round(Fraction(value) * max_w / step)
+        target_step = max(lowest_step, min(highest_step, target_step))
+        watts = target_step * step
+        native = math.ceil(watts * 255 / max_w)
+    else:
+        native = value
+        watts = math.floor(Fraction(value) * max_w / 255)
+    admitted = math.floor(watts * 255 / max_w) / 255
+    return int(native), admitted
+
+
+def _exact_power_fraction(value: int | float) -> Fraction:
+    """An exact Fraction for a loader-validated power fact.
+
+    ``str()`` keeps the decimal the TOML author wrote (``0.5`` stays 1/2,
+    not the binary float near it); ints convert exactly.
+    """
+    return Fraction(str(value)) if isinstance(value, float) else Fraction(value)
+
+
+def _normalize_raw_level_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) / 255
+    return value
+
+
+def _normalize_observed_level_value(value: Any) -> Any:
+    if isinstance(value, float) and 0.0 <= value <= 1.0:
+        return value
+    return _normalize_raw_level_value(value)
+
+
+def _is_normalized_level_value(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and 0.0 <= float(value) <= 1.0
+    )
+
+
+def _path_uses_normalized_level_value(path: FieldPath) -> bool:
+    if path.family.value != "operator_controls":
+        return False
+    if path.scope.value == "receiver":
+        return path.name in {"af_level", "rf_gain", "squelch"}
+    return path.scope.value == "global" and path.name == "power_level"
+
+
+def _normalized_observation_value_for_expectation(
+    observation: Observation,
+    expectation: PendingOverlay,
+) -> Any:
+    if not _path_uses_normalized_level_value(expectation.path):
+        return _UNSET
+    if not _is_normalized_level_value(expectation.value):
+        return _UNSET
+    if observation.value == expectation.value:
+        return observation.value
+    normalized = _normalize_observed_level_value(observation.value)
+    return normalized if normalized == expectation.value else _UNSET
+
+
+def _observable_paths_for_intent(intent: CommandIntent) -> tuple[FieldPath, ...]:
+    if intent.expected_observations:
+        return intent.expected_observations
+    if intent.target is not None:
+        return (intent.target,)
+    return ()
+
+
+def _pending_value_for_path(params: Mapping[str, Any], path: FieldPath) -> Any:
+    if path.name in params:
+        return params[path.name]
+    if "value" in params:
+        return params["value"]
+    raise KeyError(path.name)
+
+
+def _session_id(intent: CommandIntent) -> str | None:
+    value = intent.params.get("session_id")
+    return None if value is None else str(value)
+
+
+def _event_session_id(event: CommandLifecycleEvent) -> str | None:
+    value = (event.details or {}).get("session_id")
+    return None if value is None else str(value)
+
+
+def _overlay_matches(
+    overlay: PendingOverlay,
+    *,
+    command_id: str,
+    source: CommandSource | None,
+    session_id: str | None | object,
+) -> bool:
+    return (
+        overlay.command_id == command_id
+        and (source is None or overlay.source == source)
+        and (session_id is _UNSET or overlay.session_id == session_id)
+    )
+
+
+def _observation_reconciles_overlay(
+    observation: Observation,
+    overlay: PendingOverlay,
+) -> bool:
+    """Decide whether an observation reconciles (clears) a pending overlay.
+
+    Value-equality is *not* a sufficient signal on its own. For
+    low-cardinality fields (booleans like ``split``/``vox_on``/
+    ``compressor_on``, small enums like ``mode``/``agc``) a coincidental
+    same-value observation would otherwise be indistinguishable from the
+    causal readback of the command that created the overlay. To prevent such
+    false reconciliation, ALL of the following are load-bearing and required
+    together:
+
+    - matching command source (when the observation carries one);
+    - matching ``session_id`` (MOR-430 session scoping);
+    - a causal correlation: ``observation.correlation_id`` must be present and
+      equal the overlay's ``command_id`` (MOR-435 — value-equality alone is a
+      weak signal for low-cardinality fields);
+    - a reconcilable path (exact, or the external-rigctld main alias);
+    - value equality, unless the operation explicitly expects the radio to
+      choose the resulting value.
+
+    Because correlation is mandatory, an unsolicited update or poll response
+    that merely happens to carry the same value with no (or a different)
+    ``correlation_id`` does not reconcile the overlay.
+    """
+
+    observed_source = observation.source.command_source
+    if observed_source is not None and observed_source != overlay.source:
+        return False
+    observed_session = observation.source.session_id
+    if observed_session != overlay.session_id:
+        return False
+    return (
+        observation.correlation_id is not None
+        and observation.correlation_id == overlay.command_id
+        and _paths_reconcile(observation, overlay.path)
+        and (overlay.matches_any_value or overlay.value == observation.value)
+    )
+
+
+def _observation_matches_readback_scope(
+    observation: Observation,
+    overlay: PendingOverlay,
+) -> bool:
+    observed_source = observation.source.command_source
+    return (
+        observed_source == overlay.source
+        and observation.source.session_id == overlay.session_id
+        and observation.correlation_id == overlay.command_id
+        and _paths_reconcile(observation, overlay.path)
+    )
+
+
+def _paths_reconcile(observation: Observation, overlay_path: FieldPath) -> bool:
+    observation_path = observation.path
+    if observation_path == overlay_path:
+        return True
+    if _is_yaesu_cat_readback(observation.source):
+        return _yaesu_receiver_alias(observation_path) == _yaesu_receiver_alias(
+            overlay_path
+        )
+    if not _is_external_rigctld_readback(observation.source):
+        return False
+    return _external_rigctld_main_alias(observation_path) == (
+        _external_rigctld_main_alias(overlay_path)
+    )
+
+
+def _is_external_rigctld_readback(source: SourceMetadata) -> bool:
+    return (
+        source.source == "hamlib_response"
+        and source.provider == "external_rigctld"
+        and source.transport == "rigctld"
+    )
+
+
+def _is_yaesu_cat_readback(source: SourceMetadata) -> bool:
+    return (source.source, source.provider, source.transport) == (
+        "yaesu_poll_response",
+        "yaesu_cat",
+        "serial",
+    )
+
+
+def observable_field_path(path: FieldPath) -> FieldPath:
+    """Return the spelling acquisition and the state model actually use.
+
+    A :class:`CommandIntent` target names its receiver by ingress index
+    (``"0"``/``"1"``) and leaves ``freq_mode`` slot-less. Profiles
+    (``rigs/*.toml``) and ``runtime/_civ_rx.py``'s observations use
+    ``"main"``/``"sub"`` and the relative ``active`` slot, so an
+    ``ensure_fresh`` for the intent's own spelling would name a path no
+    profile declares. Paths already in the second spelling pass through.
+    """
+
+    if path.scope.value != "receiver" or path.receiver_id not in {"0", "1"}:
+        return path
+    receiver = "main" if path.receiver_id == "0" else "sub"
+    if path.family.value == "freq_mode" and path.slot is None:
+        return FieldPath.active(receiver, path.family.value, path.name)
+    return FieldPath.receiver(receiver, path.family.value, path.name)
+
+
+def expected_observations_for_command(
+    name: str, params: Mapping[str, Any]
+) -> tuple[FieldPath, ...]:
+    """Return the field paths a write named *name* is expected to change.
+
+    A descriptor-backed name never reaches this function through
+    ``command_intent_from_request`` -- that path returns a
+    ``CommandIntent`` whose ``target`` already comes from
+    ``CommandDescriptor.target`` there. A legacy ``Command`` dataclass has
+    no such intent, so it reaches this function through
+    ``runtime/_poller_types.py: LEGACY_COMMAND_NAMES`` instead; when its
+    canonical name also has a descriptor, ``_command_target`` binds the
+    dataclass's own params through that descriptor's ``bind``/``target``
+    (MOR-2425 PR-1b) rather than duplicating the mapping here.
+    """
+
+    return _command_expected_observations(name, params, _command_target(name, params))
+
+
+def _yaesu_receiver_alias(path: FieldPath) -> FieldPath:
+    return observable_field_path(path)
+
+
+def _external_rigctld_main_alias(path: FieldPath) -> FieldPath:
+    if path.scope.value != "receiver" or path.receiver_id != "0":
+        return path
+    if path.family.value == "freq_mode" and path.slot is None:
+        return FieldPath.active("main", path.family.value, path.name)
+    return FieldPath.receiver("main", path.family.value, path.name)
+
+
+def command_intent_from_request(
+    name: str,
+    params: Mapping[str, Any],
+    *,
+    source: CommandSource,
+    command_id: str | None = None,
+    session_id: str | None = None,
+    timeout: float | None = 2.0,
+    power_native_unit: str | None = None,
+    power_max_watts: int | float | None = None,
+    power_min_watts: int | float | None = None,
+    power_write_quantum: PowerWriteQuantum | None = None,
+) -> CommandIntent:
+    """Normalize a production command request into a backend-neutral intent."""
+
+    if command_descriptor(name) is not None:
+        return bind_command_intent(
+            name,
+            params,
+            source=source,
+            command_id=command_id,
+            session_id=session_id,
+            timeout=timeout,
+        )
+    normalized = dict(params)
+    if session_id is not None:
+        normalized["session_id"] = session_id
+    command_name = str(name)
+    if command_name == "set_vfo_freq":
+        normalized["freq_hz"] = normalized["freq"]
+    elif command_name == "set_freq":
+        raw_freq = (
+            normalized["freq_hz"] if "freq_hz" in normalized else normalized["freq"]
+        )
+        field = "freq_hz" if "freq_hz" in normalized else "freq"
+        freq = _int_param(raw_freq, field)
+        normalized["freq_hz"] = freq
+        normalized.setdefault("freq", freq)
+    elif command_name == "set_mode":
+        normalized["mode"] = str(normalized["mode"])
+    elif command_name == "set_filter":
+        if "filter_num" not in normalized:
+            raw_filter = normalized.get("filter", normalized.get("value", 1))
+            if isinstance(raw_filter, str):
+                normalized["filter_num"] = (
+                    int(raw_filter[-1]) if raw_filter[-1:].isdigit() else 1
+                )
+            else:
+                normalized["filter_num"] = _int_param(raw_filter, "filter")
+    elif command_name == "set_filter_width":
+        normalized["filter_width"] = _int_param(normalized["width"], "width")
+    elif command_name in ("set_ptt", "ptt"):
+        normalized["ptt"] = _ptt_value(command_name, normalized)
+    elif command_name == "ptt_on":
+        normalized["ptt"] = True
+    elif command_name == "ptt_off":
+        normalized["ptt"] = False
+    elif command_name == "set_preamp":
+        level_key = "level" if "level" in normalized else "value"
+        normalized["preamp"] = _int_param(normalized[level_key], level_key)
+    elif command_name == "set_nb":
+        normalized["nb"] = bool(normalized["on"])
+    elif command_name == "set_nr":
+        normalized["nr"] = bool(normalized["on"])
+    elif command_name == "set_digisel":
+        normalized["digisel"] = bool(normalized["on"])
+    elif command_name in ("set_ip_plus", "set_ipplus"):
+        normalized["ipplus"] = bool(normalized["on"])
+    elif command_name == "set_pbt_inner":
+        inner_key = "value" if "value" in normalized else "level"
+        normalized["pbt_inner"] = _int_param(normalized[inner_key], inner_key)
+    elif command_name == "set_pbt_outer":
+        outer_key = "value" if "value" in normalized else "level"
+        normalized["pbt_outer"] = _int_param(normalized[outer_key], outer_key)
+    elif command_name == "set_powerstat":
+        normalized["power_on"] = bool(normalized.get("on", True))
+    elif command_name in ("set_rf_power", "set_power"):
+        raw_level = (
+            normalized["level"] if "level" in normalized else normalized["value"]
+        )
+        _, normalized["power_level"] = resolve_power_level_target(
+            raw_level,
+            power_native_unit=power_native_unit,
+            power_max_watts=power_max_watts,
+            power_min_watts=power_min_watts,
+            power_write_quantum=power_write_quantum,
+        )
+    elif command_name == "set_split":
+        normalized["split"] = bool(normalized.get("on", False))
+    elif command_name == "set_rit":
+        hz = _int_param(normalized["hz"], "hz")
+        normalized["hz"] = hz
+        normalized["rit_freq"] = hz
+        normalized["rit_on"] = hz != 0
+    elif command_name == "set_xit":
+        hz = _int_param(normalized["hz"], "hz")
+        normalized["hz"] = hz
+        normalized["rit_freq"] = hz
+        normalized["rit_tx"] = hz != 0
+    elif command_name in ("set_vfo", "select_vfo"):
+        raw_vfo = normalized.get("vfo", "A")
+        receiver_count = _receiver_count_value(normalized)
+        active_slot = _active_slot_value(raw_vfo, receiver_count=receiver_count)
+        if active_slot is not None:
+            normalized["active_slot"] = active_slot
+        active = _active_receiver_value(raw_vfo, receiver_count=receiver_count)
+        if active is not None:
+            normalized["active"] = active
+        if receiver_count is not None:
+            normalized["receiver_count"] = receiver_count
+    elif command_name == "set_level":
+        normalized["level"] = str(normalized["level"]).upper()
+        try:
+            normalized["value"] = float(normalized["value"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"value must be a number, got {normalized['value']!r}"
+            ) from exc
+        _normalize_level_value(
+            normalized,
+            power_native_unit=power_native_unit,
+            power_max_watts=power_max_watts,
+            power_min_watts=power_min_watts,
+            power_write_quantum=power_write_quantum,
+        )
+    elif command_name == "set_func":
+        func = str(normalized["func"]).lower()
+        normalized["func"] = func.upper()
+        # The pending value keys under the StateStore field name, which
+        # differs from the hamlib token for TONE/TSQL.
+        normalized[_SET_FUNC_TOGGLE_FIELDS.get(func.upper(), func)] = bool(
+            normalized["on"]
+        )
+    elif command_name == "set_split_vfo":
+        normalized["split"] = bool(normalized["on"])
+
+    target = _command_target(command_name, normalized)
+    expected = _command_expected_observations(command_name, normalized, target)
+    return CommandIntent(
+        id=command_id or f"{source}-{time.monotonic_ns()}",
+        name=command_name,
+        params=normalized,
+        source=source,
+        target=target,
+        priority="user",
+        timeout=timeout,
+        pending_policy="scoped" if target is not None else "none",
+        expected_observations=expected,
+    )
+
+
+def command_response_observation(
+    intent: CommandIntent,
+    *,
+    timestamp_monotonic: float,
+    provider: str,
+    transport: str | None = None,
+    value: Any = None,
+    source: ObservationSource = "command_response",
+) -> Observation:
+    """Create a confirmed command-response observation for an intent target.
+
+    The default ``command_response`` source is a claim that the radio
+    answered and this code parsed it (MOR-2893). A caller whose value was
+    NOT parsed from a radio answer — e.g. an expected-value echo after a
+    fire-and-forget setter — must pass an explicitly unconfirmed source
+    such as ``local_reconcile`` instead.
+    """
+
+    if intent.target is None:
+        raise ValueError(f"command {intent.name!r} has no observable target")
+    observed_value = (
+        _expected_value_for_path(intent, intent.target)
+        if value is None
+        else _normalize_explicit_command_response_value(intent, value)
+    )
+    return Observation(
+        path=intent.target,
+        value=observed_value,
+        source=SourceMetadata(
+            source=source,
+            provider=provider,
+            transport=transport,
+            command_source=intent.source,
+            session_id=_session_id(intent),
+        ),
+        timestamp_monotonic=timestamp_monotonic,
+        correlation_id=intent.id,
+    )
+
+
+# hamlib func token -> StateStore operator_toggles field, where they differ.
+_SET_FUNC_TOGGLE_FIELDS = {"TONE": "repeater_tone", "TSQL": "repeater_tsql"}
+
+
+def _command_target(name: str, params: Mapping[str, Any]) -> FieldPath | None:
+    receiver = str(_int_param(params.get("receiver", 0), "receiver"))
+    if name == "set_vfo_freq":
+        if params.get("slot") not in ("A", "B") or params.get(
+            "expected_active_slot"
+        ) not in ("A", "B"):
+            raise ValueError("direct VFO frequency requires explicit A/B identity")
+        factory = (
+            FieldPath.active
+            if params["slot"] == params["expected_active_slot"]
+            else FieldPath.unselected
+        )
+        return factory(receiver, "freq_mode", "freq_hz")
+    if name == "set_freq":
+        return FieldPath.receiver(receiver, "freq_mode", "freq_hz")
+    if name == "set_mode":
+        return FieldPath.receiver(receiver, "freq_mode", "mode")
+    if name == "set_filter":
+        return FieldPath.receiver(receiver, "freq_mode", "filter_num")
+    if name == "set_filter_width":
+        return FieldPath.receiver(receiver, "freq_mode", "filter_width")
+    if name == "reset_filter_width":
+        # MOR-2535: the radio-default reset moves the same field; the
+        # readback answers the radio-resolved default width in Hz.
+        return FieldPath.receiver(receiver, "freq_mode", "filter_width")
+    if name in ("set_ptt", "ptt", "ptt_on", "ptt_off"):
+        return FieldPath.global_("tx_state", "ptt")
+    if name in ("set_att", "set_attenuator", "set_attenuator_level"):
+        return FieldPath.receiver(receiver, "operator_controls", "att")
+    if name == "set_preamp":
+        return FieldPath.receiver(receiver, "operator_controls", "preamp")
+    if name == "set_nb":
+        return FieldPath.receiver(receiver, "operator_toggles", "nb")
+    if name == "set_nr":
+        return FieldPath.receiver(receiver, "operator_toggles", "nr")
+    if name == "set_digisel":
+        return FieldPath.receiver(receiver, "operator_toggles", "digisel")
+    if name in ("set_ip_plus", "set_ipplus"):
+        return FieldPath.receiver(receiver, "operator_toggles", "ipplus")
+    if name == "set_pbt_inner":
+        return FieldPath.receiver(receiver, "operator_controls", "pbt_inner")
+    if name == "set_pbt_outer":
+        return FieldPath.receiver(receiver, "operator_controls", "pbt_outer")
+    if name == "set_nr_level":
+        return FieldPath.receiver(receiver, "operator_controls", "nr_level")
+    if name == "set_nb_level":
+        return FieldPath.receiver(receiver, "operator_controls", "nb_level")
+    if name == "set_notch_filter":
+        return FieldPath.receiver(receiver, "operator_controls", "notch_filter")
+    if name == "set_manual_notch_width":
+        return FieldPath.receiver(receiver, "operator_controls", "manual_notch_width")
+    if name == "set_auto_notch":
+        return FieldPath.receiver(receiver, "operator_toggles", "auto_notch")
+    if name == "set_manual_notch":
+        return FieldPath.receiver(receiver, "operator_toggles", "manual_notch")
+    if name == "set_narrow":
+        return FieldPath.receiver(receiver, "operator_toggles", "narrow")
+    if name == "set_twin_peak":
+        return FieldPath.receiver(receiver, "operator_toggles", "twin_peak_filter")
+    if name == "set_agc_time_constant":
+        return FieldPath.receiver(receiver, "operator_controls", "agc_time_constant")
+    if name == "set_filter_shape":
+        return FieldPath.receiver(receiver, "operator_controls", "filter_shape")
+    if name == "set_data_mode":
+        return FieldPath.receiver(receiver, "freq_mode", "data_mode")
+    # RX controls (MOR-2425 PR-1b): agc resolves to a declared acquisition
+    # capability on IC-7300. apf/audio_peak_filter/digisel_shift/nb_depth/
+    # nb_width have a state-model field but no acquisition capability on
+    # either profile -- left pending. if_shift is NOT resolved here (MOR-
+    # 2425 PR-1b review, B2): on a real FTX-1 the command queue is drained
+    # by ``backends/yaesu_cat/poller.py: YaesuCatPoller``, not
+    # ``RadioPoller`` (``YaesuCatRadio.create_state_poller`` returns the
+    # former) -- ``RadioPoller._execute``'s ``SetIfShift`` arm, and this
+    # target, are unreachable in production. ``IcomRadio`` has no
+    # ``set_if_shift`` method at all, so the arm cannot be reached from
+    # that side either. Left pending.
+    if name == "set_agc":
+        return FieldPath.receiver(receiver, "operator_controls", "agc")
+    # dial_lock is NOT resolved here for the same reason as if_shift above:
+    # FTX-1's real dispatcher is ``YaesuCatPoller``, which has no readback
+    # path. Icom profiles declare "dial_lock" as a write feature (they can
+    # send the CI-V command) but none declares it in
+    # ``[state_acquisition.capabilities]``, so ``ensure_fresh`` would
+    # resolve UNAVAILABLE there too. Left pending.
+    # TX audio / modulation (MOR-2425 PR-1b): all nine resolve on IC-7300;
+    # mic_gain/compressor_on/compressor_level/vox_on also resolve on
+    # FTX-1. af_mute/ssb_tx_bandwidth/drive_gain and the four mod-input
+    # names have a state-model field but no declared acquisition
+    # capability on either profile; acc1/usb/lan mod level have no field
+    # at all -- all left pending or reclassified as no-field.
+    if name == "set_mic_gain":
+        return FieldPath.global_("operator_controls", "mic_gain")
+    if name == "set_compressor":
+        return FieldPath.global_("tx_state", "compressor_on")
+    if name == "set_compressor_level":
+        return FieldPath.global_("operator_controls", "compressor_level")
+    if name == "set_monitor":
+        return FieldPath.global_("tx_state", "monitor_on")
+    if name == "set_monitor_gain":
+        return FieldPath.global_("operator_controls", "monitor_gain")
+    if name == "set_vox":
+        return FieldPath.global_("tx_state", "vox_on")
+    if name == "set_vox_gain":
+        return FieldPath.global_("operator_controls", "vox_gain")
+    if name == "set_anti_vox_gain":
+        return FieldPath.global_("operator_controls", "anti_vox_gain")
+    if name == "set_vox_delay":
+        return FieldPath.global_("operator_controls", "vox_delay")
+    # CW keyer (MOR-2425 PR-3): folded off
+    # ``web/radio_poller.py: RadioPoller._confirm_global_operator_write``,
+    # which is deleted. All three are declared
+    # ``command_response_observable`` on IC-7300.
+    if name == "set_cw_pitch":
+        return FieldPath.global_("operator_controls", "cw_pitch")
+    if name == "set_key_speed":
+        return FieldPath.global_("operator_controls", "key_speed")
+    if name == "set_break_in":
+        return FieldPath.global_("operator_controls", "break_in")
+    # Scope-display settings (MOR-2425 PR-3): ten of the twelve leaves folded
+    # off the inline ``RadioPoller._reconfirm_scope_field``. ``rbw`` and
+    # ``fixed_edge`` are NOT resolved here and keep that helper -- see the
+    # reasons recorded against them in
+    # ``tests/test_post_write_readback_one_path.py: _PENDING_LATER_PR``.
+    if name == "set_scope_during_tx":
+        return FieldPath.scope_control("display", "during_tx")
+    if name == "set_scope_center_type":
+        return FieldPath.scope_control("display", "center_type")
+    if name == "set_scope_edge":
+        return FieldPath.scope_control("display", "edge")
+    if name == "set_scope_vbw":
+        return FieldPath.scope_control("display", "vbw_narrow")
+    if name == "set_scope_dual":
+        return FieldPath.scope_control("display", "dual")
+    if name == "set_scope_mode":
+        return FieldPath.scope_control("display", "mode")
+    if name == "set_scope_span":
+        return FieldPath.scope_control("display", "span")
+    if name == "set_scope_speed":
+        return FieldPath.scope_control("display", "speed")
+    if name == "set_scope_ref":
+        return FieldPath.scope_control("display", "ref_db")
+    if name == "set_scope_hold":
+        return FieldPath.scope_control("display", "hold")
+    if name == "set_rit_frequency":
+        return FieldPath.global_("operator_controls", "rit_freq")
+    if name == "set_rit_status":
+        return FieldPath.global_("tx_state", "rit_on")
+    if name == "set_rit_tx_status":
+        return FieldPath.global_("tx_state", "rit_tx")
+    if name == "set_break_in_delay":
+        return FieldPath.global_("operator_controls", "break_in_delay")
+    if name == "set_powerstat":
+        return FieldPath.global_("tx_state", "power_on")
+    if name in ("set_rf_power", "set_power"):
+        return FieldPath.global_("operator_controls", "power_level")
+    if name == "set_split":
+        return FieldPath.global_("tx_state", "split")
+    if name == "set_rit":
+        return FieldPath.global_("operator_controls", "rit_freq")
+    if name == "set_xit":
+        return FieldPath.global_("operator_controls", "rit_freq")
+    if (
+        name in ("set_vfo", "select_vfo")
+        and _is_dual_receiver_selection(params)
+        and "active" in params
+    ):
+        return FieldPath.global_("slow_state", "active")
+    if name in ("set_vfo", "select_vfo") and "active_slot" in params:
+        return FieldPath.active_slot(receiver)
+    if name == "set_level":
+        return _level_target(params, receiver)
+    if name == "set_func":
+        # TONE/TSQL project from the radio-concept fields the state
+        # pipeline publishes; the pending value must land there too.
+        func_name = str(params["func"]).upper()
+        toggle = _SET_FUNC_TOGGLE_FIELDS.get(func_name, func_name.lower())
+        return FieldPath.receiver(
+            receiver,
+            "operator_toggles",
+            toggle,
+        )
+    if name == "set_split_vfo":
+        return FieldPath.global_("tx_state", "split")
+    # Descriptor-backed names (MOR-2425 PR-1b): a legacy dataclass whose
+    # canonical name has a ``CommandDescriptor`` has no ``CommandIntent``
+    # of its own to carry ``CommandDescriptor.target`` -- bind the
+    # dataclass's own params (passed in *params* by
+    # ``RadioPoller._request_post_write_readback``) through the
+    # descriptor's own ``bind``/``target`` instead of duplicating that
+    # mapping here. A name whose params don't satisfy the descriptor's
+    # ``bind`` (missing/invalid) resolves to no target, same as any other
+    # unrecognized name.
+    descriptor = command_descriptor(name)
+    if descriptor is not None:
+        try:
+            bound_params = descriptor.bind(params)
+        except (KeyError, ValueError, TypeError):
+            return None
+        return descriptor.target(bound_params)
+    return None
+
+
+def _command_expected_observations(
+    name: str,
+    params: Mapping[str, Any],
+    target: FieldPath | None,
+) -> tuple[FieldPath, ...]:
+    del params
+    if name == "set_rit":
+        return (
+            FieldPath.global_("operator_controls", "rit_freq"),
+            FieldPath.global_("tx_state", "rit_on"),
+        )
+    if name == "set_xit":
+        return (
+            FieldPath.global_("operator_controls", "rit_freq"),
+            FieldPath.global_("tx_state", "rit_tx"),
+        )
+    return () if target is None else (target,)
+
+
+def _normalize_explicit_command_response_value(
+    intent: CommandIntent, value: Any
+) -> Any:
+    if intent.target is not None and _should_normalize_level_expectation(
+        intent.name,
+        intent.target,
+    ):
+        return _normalize_observed_level_value(value)
+    return value
+
+
+def _ptt_value(name: str, params: Mapping[str, Any]) -> bool:
+    if name == "ptt" and "state" in params:
+        return bool(params["state"])
+    if "on" in params:
+        return bool(params["on"])
+    if "value" in params:
+        return bool(params["value"])
+    return False
+
+
+def _active_slot_value(value: Any, *, receiver_count: int | None) -> str | None:
+    text = str(value).strip().upper()
+    if text == "B" or (text == "VFOB" and (receiver_count or 1) < 2):
+        return "B"
+    if text == "A" or (text == "VFOA" and (receiver_count or 1) < 2):
+        return "A"
+    return None
+
+
+def _active_receiver_value(value: Any, *, receiver_count: int | None) -> str | None:
+    text = str(value).strip().upper()
+    if text in ("SUB", "1") or (text == "VFOB" and (receiver_count or 1) >= 2):
+        return "SUB"
+    if text in ("MAIN", "0") or (text == "VFOA" and (receiver_count or 1) >= 2):
+        return "MAIN"
+    return None
+
+
+def _receiver_count_value(params: Mapping[str, Any]) -> int | None:
+    if "receiver_count" not in params:
+        return None
+    try:
+        return int(params["receiver_count"])
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _is_dual_receiver_selection(params: Mapping[str, Any]) -> bool:
+    receiver_count = _receiver_count_value(params)
+    return receiver_count is not None and receiver_count >= 2
+
+
+def _normalize_level_value(
+    params: dict[str, Any],
+    *,
+    power_native_unit: str | None = None,
+    power_max_watts: int | float | None = None,
+    power_min_watts: int | float | None = None,
+    power_write_quantum: PowerWriteQuantum | None = None,
+) -> None:
+    level = str(params["level"]).upper()
+    value = float(params["value"])
+    receiver_control_names = {
+        "AF": "af_level",
+        "RF": "rf_gain",
+        "SQL": "squelch",
+        "NR": "nr_level",
+        "NB": "nb_level",
+        "COMP": "compressor_level",
+        "MICGAIN": "mic_gain",
+        "MONITOR_GAIN": "monitor_gain",
+        "KEYSPD": "key_speed",
+        "CWPITCH": "cw_pitch",
+        "PREAMP": "preamp",
+        "ATT": "att",
+    }
+    if level == "RFPOWER":
+        # The one shared power encoder resolves the wire byte and the
+        # admitted readback together (MOR-4352): the pending expectation
+        # records what the radio's own answer will be (a whole-watt radio
+        # admits floor(W * 255 / max_w) / 255), never a second, unquantized
+        # rounding of the request.
+        native, admitted = resolve_power_level_target(
+            value,
+            power_native_unit=power_native_unit,
+            power_max_watts=power_max_watts,
+            power_min_watts=power_min_watts,
+            power_write_quantum=power_write_quantum,
+        )
+        params["power_level"] = admitted
+        params["power_native"] = int(native)
+    elif level in {"AF", "RF", "SQL", "NR", "NB", "COMP", "MICGAIN", "MONITOR_GAIN"}:
+        params[receiver_control_names[level]] = max(0, min(255, round(value * 255)))
+    elif level == "PREAMP" and "preamp" in params:
+        params["preamp"] = _int_param(params["preamp"], "preamp")
+    elif level in receiver_control_names:
+        params[receiver_control_names[level]] = round(value)
+
+
+def _level_target(params: Mapping[str, Any], receiver: str) -> FieldPath | None:
+    level = str(params["level"]).upper()
+    if level == "RFPOWER":
+        return FieldPath.global_("operator_controls", "power_level")
+    names = {
+        "AF": "af_level",
+        "RF": "rf_gain",
+        "SQL": "squelch",
+        "NR": "nr_level",
+        "NB": "nb_level",
+        "COMP": "compressor_level",
+        "MICGAIN": "mic_gain",
+        "MONITOR_GAIN": "monitor_gain",
+        "KEYSPD": "key_speed",
+        "CWPITCH": "cw_pitch",
+        "PREAMP": "preamp",
+        "ATT": "att",
+    }
+    name = names.get(level)
+    if name is None:
+        return None
+    return FieldPath.receiver(receiver, "operator_controls", name)

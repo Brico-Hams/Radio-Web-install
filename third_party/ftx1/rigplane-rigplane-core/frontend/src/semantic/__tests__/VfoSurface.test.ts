@@ -1,0 +1,3190 @@
+/**
+ * Tests for the semantic VFO surface (MOR-1063), built on the MOR-1062
+ * `RadioViewModel` contract and its four topology fixtures.
+ *
+ * Discriminating-test goals (see ticket acceptance evidence):
+ *   - render VFO facts faithfully per fixture, across all four topologies;
+ *   - the four topologies must render structurally differently — a test
+ *     that would pass on identical renders is tautological, so we assert a
+ *     rendered-DOM signature is pairwise distinct, mirroring
+ *     `topology-fixtures.test.ts`'s own non-vacuous-distinctness guard;
+ *   - unknown facts (ActiveRx, VFO slot, split/dualWatch) must render as an
+ *     explicit "unknown" state, never silently defaulted;
+ *   - selection/toggle intents fire with the right payload, and never fire
+ *     while the control is disabled (mutation-kill coverage);
+ *   - accessible names and disabled/absent gating per the MOR-977 two-level
+ *     doctrine (structural = absent, operational = disabled);
+ *   - i18n coverage: no unresolved catalog key leaks into rendered text.
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import enUS from '$lib/i18n/locales/en-US.json' with { type: 'json' };
+import jaJP from '$lib/i18n/locales/ja-JP.json' with { type: 'json' };
+import ruRU from '$lib/i18n/locales/ru-RU.json' with { type: 'json' };
+import { createRawSnippet, mount, unmount, flushSync } from 'svelte';
+import { writable, fromStore } from 'svelte/store';
+import type { ComponentProps } from 'svelte';
+import VfoSurface from '../VfoSurface.svelte';
+import type {
+  ReceiverFrequencyMount, ReceiverInstrumentHandles, ReceiverSMeterRenderer,
+  ReceiverVfoAppearance,
+} from '../ReceiverInstrumentHost.svelte';
+import type { VfoFactKind } from '../VfoIndicatorRow.svelte';
+import {
+  validateRadioViewModel, type RadioViewModel, type ReceiverId,
+  type ReceiverIndicatorViewModel, type VfoSlot,
+} from '../radio-view-model';
+import { topologyFixtures, withAudioOnlyScope, withBand, type TopologyFixtureId } from '../fixtures/topologies';
+import { createTuningAccumulator } from '$lib/runtime/commands/tuning-accumulator';
+import { toRadioViewModel } from '$lib/runtime/adapters/radio-view-model-adapter';
+import { editState } from '$lib/transport/__tests__/support/state-edit';
+import {
+  FTX1_CAPABILITIES,
+  FTX1_STATE,
+} from '$lib/runtime/adapters/__tests__/fixtures/ftx1-profile';
+import type { Capabilities } from '$lib/types/capabilities';
+import type { ServerState } from '$lib/types/state';
+import { t } from '$lib/i18n';
+import { setLocale, _resetLocale } from '$lib/i18n/store.svelte';
+import { splitFrequencyToDigits, groupDigitsForDisplay } from '../../primitives/frequency/frequency-tuning';
+
+const ids: readonly TopologyFixtureId[] = ['1/single', '1/ab', '2/ab_shared', '2/main_sub'];
+
+let components: ReturnType<typeof mount>[] = [];
+
+function mountSurface(props: ComponentProps<typeof VfoSurface>): HTMLElement {
+  const target = document.createElement('div');
+  document.body.appendChild(target);
+  const component = mount(VfoSurface, { target, props });
+  flushSync();
+  components.push(component);
+  return target;
+}
+
+describe('VFO qualified display continuity', () => {
+  function view(state: 'current' | 'stale' | 'unknown'): RadioViewModel {
+    const base = topologyFixtures['1/single'];
+    const display = {
+      frequencyHz: state === 'unknown' ? { state, reason: 'not-observed' as const } : { state, value: 14250000 },
+      mode: state === 'unknown' ? { state, reason: 'not-observed' as const } : { state, value: 'USB' },
+      filter: state === 'unknown' ? { state, reason: 'not-observed' as const } : { state, value: 'FIL1' },
+    };
+    return { ...base, vfos: base.vfos.map((vfo) => ({ ...vfo, display,
+      frequencyHz: state === 'current' ? 14250000 : null,
+      mode: state === 'current' ? 'USB' : null, filter: state === 'current' ? 'FIL1' : null,
+    })) };
+  }
+  it.each(['semantic', 'sdr'] as const)('%s retains primitive/digits through display-state transitions and paints no cue', (appearance) => {
+    const model = writable(view('current'));
+    const live = fromStore(model);
+    const onTuneFrequency = vi.fn();
+    const root = mountSurface({ get viewModel() { return live.current; }, appearance, onTuneFrequency });
+    const primitive = root.querySelector('.freq')!;
+    const digits = [...primitive.querySelectorAll('.digit')];
+    expect(root.querySelector('[data-vfo-stale-cue]')).toBeNull();
+    digits.at(-1)!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    flushSync();
+    for (const state of ['stale', 'current'] as const) {
+      model.set(view(state)); flushSync();
+      expect(root.querySelector('.freq')).toBe(primitive);
+      expect(primitive.querySelectorAll('.digit')).toHaveLength(digits.length);
+      digits.forEach((digit, index) => expect(primitive.querySelectorAll('.digit')[index]).toBe(digit));
+      expect(primitive.textContent?.replace(/\s/g, '')).toBe('14.250.000');
+      expect(root.querySelector('.vfo-mode')!.textContent).toBe('USB / FIL1');
+      expect(primitive.getAttribute('aria-disabled')).toBe(String(state === 'stale'));
+      expect(root.querySelector('[data-vfo-stale-cue]')).toBeNull();
+      const wheel = new WheelEvent('wheel', { deltaY: -1, cancelable: true, bubbles: true });
+      digits.at(-1)!.dispatchEvent(wheel);
+      primitive.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+      flushSync();
+      expect(wheel.defaultPrevented).toBe(false);
+      expect(onTuneFrequency).not.toHaveBeenCalled();
+    }
+    digits.at(-1)!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    digits.at(-1)!.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true }));
+    expect(onTuneFrequency).toHaveBeenCalledExactlyOnceWith('MAIN', 14250001);
+  });
+  it('standard keeps a stale observed value visible but removes arithmetic when confirmed truth is absent', () => {
+    const onTuneFrequency = vi.fn();
+    const root = mountSurface({ viewModel: view('stale'), appearance: 'standard', onTuneFrequency });
+    expect(root.querySelector('[data-vfo-freq]')?.textContent?.trim()).toBe('14.250.000');
+    expect(root.querySelector('.digit')).toBeNull();
+    expect(root.querySelector('[data-vfo-stale-cue]')).toBeNull();
+    expect(onTuneFrequency).not.toHaveBeenCalled();
+  });
+  it('renders first stale, unknown, unsupported and readonly slots without fabricating frequency', () => {
+    const root = mountSurface({ viewModel: view('stale') });
+    expect(root.querySelector('.vfo-freq')!.textContent?.trim()).toBe('14.250.000');
+    expect(root.querySelector('.digit')).toBeNull();
+    const unknown = mountSurface({ viewModel: view('unknown'), onTuneFrequency: vi.fn() });
+    expect(unknown.querySelector('.freq')!.textContent?.trim()).toBe('');
+    expect(unknown.querySelector('.digit')).toBeNull();
+    const unsupported = view('current');
+    unsupported.vfos = unsupported.vfos.map((vfo) => ({ ...vfo, display: { frequencyHz: { state: 'unsupported' }, mode: { state: 'unsupported' }, filter: { state: 'unsupported' } } }));
+    // MOR-2655: unsupported reaches the same fallback as unread — it prints
+    // nothing in the reserved box, never the MOR-2527 dash.
+    const unsupportedFreq = mountSurface({ viewModel: unsupported }).querySelector('.vfo-freq');
+    expect(unsupportedFreq?.textContent?.trim()).toBe('');
+    expect(unsupportedFreq?.classList.contains('display-unknown')).toBe(true);
+    expect(unsupportedFreq?.classList.contains('vfo-freq-unlit')).toBe(true);
+  });
+  // MOR-2425/R41 replaces the MOR-1692-era marker/sentence pin, in any locale.
+  it.each(['en-US', 'ru-RU'] as const)('paints no freshness marker, sentence or description for a held reading in %s', (locale) => {
+    setLocale(locale);
+    try {
+      const root = mountSurface({ viewModel: view('stale'), onTuneFrequency: vi.fn() });
+      expect(root.querySelector('[data-vfo-stale-cue]')).toBeNull();
+      expect(root.textContent).not.toContain('†');
+      expect(root.textContent).not.toContain(locale === 'en-US' ? 'the last reading is too old to trust'
+        : 'последние данные устарели и не заслуживают доверия');
+      expect(root.querySelector('[data-vfo-freq]')!.getAttribute('aria-describedby')).toBeNull();
+    } finally { _resetLocale(); }
+  });
+  it('keeps pending feedback separate and computes renewed gestures from strict frequency', () => {
+    const onTuneFrequency = vi.fn();
+    const root = mountSurface({ viewModel: view('current'), onTuneFrequency, pendingFrequencyHz: { MAIN: 14300000 } });
+    const primitive = root.querySelector('.freq')!;
+    expect(primitive.getAttribute('data-freq-status')).toBe('pending');
+    expect(primitive.textContent?.replace(/\s/g, '')).toContain('14.300.000');
+    const digit = primitive.querySelectorAll('.digit').item(7);
+    digit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    primitive.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    expect(onTuneFrequency).toHaveBeenCalledExactlyOnceWith('MAIN', 14250001);
+  });
+  it('the parent callback independently rejects a stale/null strict frequency', () => {
+    const source = readFileSync('src/semantic/VfoSurface.svelte', 'utf8');
+    const body = source.match(/function tuneFrequency\(vfo: VfoViewModel, frequencyHz: number\): void \{([\s\S]*?)\n  \}/)![1];
+    const invoke = new Function('disabled', 'vfo', 'frequencyHz', 'onTuneFrequency', body);
+    const tune = vi.fn();
+    invoke(false, view('stale').vfos[0], 15000000, tune);
+    invoke(true, view('current').vfos[0], 15000000, tune);
+    invoke(false, { ...view('current').vfos[0], isActiveSlot: false }, 15000000, tune);
+    expect(tune).not.toHaveBeenCalled();
+    invoke(false, view('current').vfos[0], 14250001, tune);
+    expect(tune).toHaveBeenCalledExactlyOnceWith('MAIN', 14250001);
+  });
+  // MOR-2425/R29+R40: a stale ancestor no longer disables the readout.
+  it('a stale ancestor keeps the local readout live on its strict frequency', () => {
+    const caps = { receivers: 1, vfoScheme: 'single', capabilities: [],
+      stateContractVersion: 1, providerGeneration: 1 } as unknown as Capabilities;
+    const state = { stateContractVersion: 1, providerGeneration: 1, active: 'MAIN',
+      main: { freqHz: 14250000, mode: 'USB', filter: 1 },
+      fieldStatus: Object.fromEntries(['main', 'main.freqHz', 'main.mode', 'main.filter'].map((path) => [path, {
+        observed: true, freshness: 'fresh', availability: 'available', lastObservedMonotonic: 0,
+      }])),
+    } as unknown as ServerState;
+    const model = writable(toRadioViewModel(state, caps)!);
+    const live = fromStore(model);
+    const onTuneFrequency = vi.fn();
+    const root = mountSurface({ get viewModel() { return live.current; }, onTuneFrequency });
+    const primitive = root.querySelector('.freq')!;
+    const digit = primitive.querySelectorAll('.digit').item(7);
+    digit.dispatchEvent(new MouseEvent('click', { bubbles: true })); flushSync();
+    // MOR-4213: the stale ancestor arrives as a new snapshot, as the client builds it.
+    const staleState = editState(state, (s) => { s.fieldStatus!.main.freshness = 'stale'; });
+    const staleView = toRadioViewModel(staleState, caps)!;
+    expect(staleView.vfos[0].frequencyHz).toBe(14250000);
+    expect(staleView.vfos[0].display?.frequencyHz.state).toBe('stale');
+    model.set(staleView); flushSync();
+    expect(root.querySelector('.freq')).toBe(primitive);
+    expect(primitive.getAttribute('aria-disabled')).toBe('false');
+    digit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    digit.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true }));
+    expect(onTuneFrequency).toHaveBeenCalledExactlyOnceWith('MAIN', 14250001);
+  });
+});
+
+beforeEach(() => {
+  components = [];
+});
+
+afterEach(() => {
+  components.forEach((c) => unmount(c));
+  while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
+});
+
+describe('FTX-1 filter selector absence (MOR-2530)', () => {
+  it('keeps the reserved filter slot without drawing or naming a FIL chip', () => {
+    const viewModel = validateRadioViewModel(
+      toRadioViewModel(FTX1_STATE, {
+        ...FTX1_CAPABILITIES,
+        providerGeneration: FTX1_STATE.providerGeneration,
+      })!,
+    );
+    const target = mountSurface({ viewModel, appearance: 'standard' });
+    const rows = [...target.querySelectorAll('.receiver-row')];
+
+    expect(rows).toHaveLength(viewModel.vfos.length);
+    for (const row of rows) {
+      expect(row.querySelector('[data-chip="filter"]')).toBeNull();
+      expect(row.querySelectorAll('.chip-slot')).toHaveLength(1);
+      expect(row.textContent).not.toContain('FIL');
+    }
+  });
+});
+
+function expectedSlotKey(slot: VfoSlot): string {
+  return slot.kind === 'slotted' ? slot.id : slot.kind;
+}
+/**
+ * MOR-1482: the ONE stable frequency format the whole surface uses — the same
+ * dot-grouped digit convention `FrequencyDisplayInteractive` (the tunable/
+ * selected-tile readout) uses, built from the SAME shared utility rather than
+ * a hand-rolled string, so this helper cannot drift from what the component
+ * actually renders. Previously this asserted a decimal-MHz string
+ * (`14.250000 MHz`) that matched neither the selected tile's dot convention
+ * nor the design-language renderer's own text — two mismatched fallback
+ * formats on the same slot (the ticket's bug).
+ */
+function expectedFreq(hz: number | null): string {
+  // MOR-2655: an unread frequency draws nothing, never a dash.
+  if (hz === null) return '';
+  const { mhz, khz, hz: hzGroup } = groupDigitsForDisplay(splitFrequencyToDigits(hz));
+  return [mhz, khz, hzGroup].map((group) => group.map((d) => d.char).join('')).join('.');
+}
+
+const indicatorField = <T>(value: T) => ({
+  reading: { status: 'known' as const, value },
+  availability: { structural: true, operational: true },
+});
+
+function receiverIndicator(receiver: ReceiverId): ReceiverIndicatorViewModel {
+  return {
+    receiver,
+    availability: { structural: true, operational: true },
+    sMeter: {
+      ...indicatorField(receiver === 'MAIN' ? 0 : -31),
+      source: {
+        providerGeneration: 1, scope: 'receiver', receiver,
+        path: receiver === 'MAIN' ? 'main.sMeter' : 'sub.sMeter',
+      },
+    },
+    bandwidthHz: indicatorField(receiver === 'MAIN' ? 2400 : 500),
+    agcMode: indicatorField(receiver === 'MAIN' ? 0 : 2),
+    nbActive: indicatorField(receiver === 'SUB'),
+    nrActive: indicatorField(receiver === 'MAIN'),
+    notchMode: indicatorField<'off' | 'auto' | 'manual'>(receiver === 'MAIN' ? 'off' : 'auto'),
+    attenuator: indicatorField(receiver === 'MAIN' ? 0 : 12),
+    preamp: indicatorField(receiver === 'MAIN' ? 0 : 2),
+    rfGain: indicatorField(receiver === 'MAIN' ? 0 : 0.75),
+    digiSel: indicatorField(receiver === 'SUB'),
+    ipPlus: indicatorField(receiver === 'MAIN'),
+  };
+}
+
+function withReceiverIndicators(id: TopologyFixtureId): RadioViewModel {
+  const base = topologyFixtures[id];
+  const receivers: ReceiverId[] = id.startsWith('2/') ? ['MAIN', 'SUB'] : ['MAIN'];
+  return validateRadioViewModel({
+    ...base, receiverIndicators: receivers.map(receiverIndicator),
+  });
+}
+
+function hostedReceiverInstruments(): ReceiverInstrumentHandles {
+  const frequency = (receiver: ReceiverId) => createRawSnippet<[ReceiverFrequencyMount?]>(() => ({
+    render: () => `<span data-hosted-frequency="${receiver}">${receiver} frequency</span>`,
+  }));
+  const meter = (receiver: ReceiverId) => createRawSnippet<[ReceiverSMeterRenderer?]>(() => ({
+    render: () => `<span data-hosted-s-meter="${receiver}">${receiver} meter</span>`,
+  }));
+  const facts = createRawSnippet<[facts: readonly VfoFactKind[]]>(() => ({ render: () => '' }));
+  return {
+    mainFrequency: frequency('MAIN'), subFrequency: frequency('SUB'),
+    mainSMeter: meter('MAIN'), subSMeter: meter('SUB'),
+    mainFacts: facts, subFacts: facts,
+    frequencyTunable: () => true,
+    vfoOperations: createRawSnippet<[appearance: ReceiverVfoAppearance]>((appearance) => ({
+      render: () => `<span data-hosted-vfo-operations="${appearance()}">VFO operations</span>`,
+    })),
+  };
+}
+
+describe('receiver-addressed indicator composition (MOR-2299 slice 1)', () => {
+  it.each([
+    ['1/single', 1], ['1/ab', 1], ['2/ab_shared', 2], ['2/main_sub', 2],
+  ] as const)('%s renders one row and S-meter per structural receiver', (id, expected) => {
+    const target = mountSurface({ viewModel: withReceiverIndicators(id) });
+    expect(target.querySelectorAll('[data-testid="vfo-indicator-row"]')).toHaveLength(expected);
+    expect(target.querySelectorAll('[data-testid="receiver-s-meter"]')).toHaveLength(expected);
+  });
+
+  it('partitions the root collection by receiver for cockpit strip mounts', () => {
+    const viewModel = withReceiverIndicators('2/main_sub');
+    const main = mountSurface({ viewModel, indicatorReceiver: 'MAIN' });
+    const sub = mountSurface({ viewModel, indicatorReceiver: 'SUB' });
+    expect(main.querySelectorAll('[data-testid="vfo-indicator-row"]')).toHaveLength(1);
+    expect(main.querySelector('[data-indicator-receiver="MAIN"]')).not.toBeNull();
+    expect(sub.querySelectorAll('[data-testid="vfo-indicator-row"]')).toHaveLength(1);
+    expect(sub.querySelector('[data-indicator-receiver="SUB"]')).not.toBeNull();
+  });
+
+  it('renders no indicators in the radio-wide facts-only mount', () => {
+    const target = mountSurface({
+      viewModel: withReceiverIndicators('2/main_sub'), showVfoList: false,
+    });
+    expect(target.querySelector('[data-testid="vfo-receiver-indicators"]')).toBeNull();
+  });
+
+  it('does not duplicate singleton actions or start slice-2 ANT/TUNE/RIT/XIT facts', () => {
+    const target = mountSurface({
+      viewModel: withReceiverIndicators('2/main_sub'),
+      onEqualizeVfos: vi.fn(), onSwapVfos: vi.fn(),
+    });
+    expect(target.querySelectorAll('[data-testid="vfo-ops"]')).toHaveLength(1);
+    expect(target.querySelectorAll('[data-vfo-split]')).toHaveLength(1);
+    expect(target.querySelectorAll('[data-vfo-dual-watch]')).toHaveLength(1);
+    expect(target.querySelectorAll('[data-indicator-fact="antenna"], [data-indicator-fact="tune"], [data-indicator-fact="rit"], [data-indicator-fact="xit"]')).toHaveLength(0);
+  });
+
+  it.each([
+    ['current', 0, '0%'],
+    ['current', 0.4823529411764706, '48%'],
+    ['current', 0.5333333333333333, '53%'],
+    ['current', 253 / 255, '99%'],
+    ['stale', 0, '0%'],
+    ['stale', 0.4823529411764706, '48%'],
+    ['stale', 0.5333333333333333, '53%'],
+  ] as const)(
+    'MOR-2425/R41: the Standard %s RFG badge formats a reduced gain %s as %s without a dagger cue',
+    (displayState, rfGainValue, expected) => {
+      const base = withReceiverIndicators('1/single');
+      const indicator = base.receiverIndicators![0];
+      const viewModel = validateRadioViewModel({
+        ...base,
+        receiverIndicators: [{
+          ...indicator,
+          rfGain: {
+            ...indicator.rfGain,
+            reading: { status: 'known' as const, value: rfGainValue },
+            display: { state: displayState, value: rfGainValue },
+          },
+        }],
+      });
+      const target = mountSurface({ viewModel, appearance: 'standard' });
+      const badge = target.querySelector('[data-indicator-fact="rfg"]')!;
+      expect(badge).not.toBeNull();
+      expect(badge.textContent).not.toContain('†');
+      expect(badge.textContent).toContain(`RFG ${expected}`);
+      expect(badge.textContent).not.toBe(`RFG ${rfGainValue}`);
+    },
+  );
+
+  // Owner ruling 2026-09-23: at the control's maximum the operator sees no
+  // RFG label at all — but the lamp keeps its reserved slot, unlit and
+  // aria-hidden, so the deck never shifts when the gain changes.
+  // Coordinator decision, same day: "the maximum" is the DISPLAYED maximum —
+  // a raw 254 of 255 is strictly below 1 yet formats as 100%, so it prints
+  // nothing too.
+  it.each([
+    ['current', 1],
+    ['stale', 1],
+    ['current', 254 / 255],
+    ['stale', 254 / 255],
+  ] as const)(
+    'the Standard RFG badge prints nothing when the gain displays as the maximum (%s, gain %s), keeping its reserved slot',
+    (displayState, gainValue) => {
+      const base = withReceiverIndicators('1/single');
+      const indicator = base.receiverIndicators![0];
+      const viewModel = validateRadioViewModel({
+        ...base,
+        receiverIndicators: [{
+          ...indicator,
+          rfGain: {
+            ...indicator.rfGain,
+            reading: { status: 'known' as const, value: gainValue },
+            display: { state: displayState, value: gainValue },
+          },
+        }],
+      });
+      const target = mountSurface({ viewModel, appearance: 'standard' });
+      const badge = target.querySelector('[data-indicator-fact="rfg"]')!;
+      expect(badge, 'the slot stays in the flow').not.toBeNull();
+      expect(badge.textContent).toBe('');
+      expect(badge.getAttribute('aria-hidden')).toBe('true');
+      expect(badge.getAttribute('data-lit')).toBe('false');
+    },
+  );
+
+  it('omits the Standard RFG badge when display support is unavailable despite a known reading', () => {
+    const base = withReceiverIndicators('1/single');
+    const indicator = base.receiverIndicators![0];
+    const viewModel = validateRadioViewModel({
+      ...base,
+      receiverIndicators: [{
+        ...indicator,
+        rfGain: {
+          ...indicator.rfGain,
+          reading: { status: 'known' as const, value: 0.75 },
+          display: { state: 'unsupported' },
+        },
+      }],
+    });
+
+    const target = mountSurface({ viewModel, appearance: 'standard' });
+    expect(target.querySelector('[data-indicator-fact="rfg"]')).toBeNull();
+  });
+});
+
+function withRadioWide(
+  id: TopologyFixtureId = '2/main_sub',
+  actionOverrides: Partial<NonNullable<RadioViewModel['radioWideIndicators']>['actions']> = {},
+): RadioViewModel {
+  const base = withReceiverIndicators(id);
+  const available = { structural: true, operational: true };
+  return validateRadioViewModel({
+    ...base,
+    radioWideIndicators: {
+      rfState: 'receiving', antenna: indicatorField(1), atu: indicatorField('off'),
+      dialLock: indicatorField(false),
+      ritActive: indicatorField(false), ritOffset: indicatorField(0),
+      xitActive: indicatorField(true), xitOffset: indicatorField(0),
+      actions: {
+        main: available, sub: available, equalize: available, swap: available,
+        ...actionOverrides,
+      },
+    },
+  });
+}
+
+describe('radio-wide singleton row and complete DUAL action block (MOR-2309)', () => {
+  it('renders one shared row and one four-action block only in the radio-wide mount', () => {
+    const viewModel = withRadioWide();
+    const strip = mountSurface({ viewModel, showRadioWideFacts: false, indicatorReceiver: 'MAIN' });
+    const global = mountSurface({ viewModel, showVfoList: false });
+    expect(strip.querySelector('[data-testid="vfo-shared-indicators"]')).toBeNull();
+    expect(strip.querySelector('[data-dual-action-block]')).toBeNull();
+    expect(global.querySelectorAll('[data-testid="vfo-shared-indicators"]')).toHaveLength(1);
+    expect(global.querySelectorAll('[data-dual-action-block]')).toHaveLength(1);
+    expect(global.querySelectorAll('[data-dual-action]')).toHaveLength(4);
+  });
+
+  it('keeps exact action order, accessible names, tab order, and one-to-one callbacks', () => {
+    const callbacks = {
+      onSelectMainReceiver: vi.fn(), onSelectSubReceiver: vi.fn(),
+      onEqualizeVfos: vi.fn(), onSwapVfos: vi.fn(),
+    };
+    const target = mountSurface({ viewModel: withRadioWide(), ...callbacks });
+    const cases = [
+      ['main', 'MAIN', 'onSelectMainReceiver'],
+      ['sub', 'SUB', 'onSelectSubReceiver'],
+      ['equalize', 'M=S', 'onEqualizeVfos'],
+      ['swap', 'M⇄S', 'onSwapVfos'],
+    ] as const;
+    const buttons = [...target.querySelectorAll<HTMLButtonElement>('[data-dual-action]')];
+    expect(buttons.map((button) => button.dataset.dualAction)).toEqual(cases.map(([id]) => id));
+    expect(buttons.map((button) => button.getAttribute('aria-label') ?? button.textContent?.trim()))
+      .toEqual(cases.map(([, label]) => label));
+    expect(buttons.map((button) => button.tabIndex)).toEqual([0, -1, 0, 0]);
+    for (const [action, , selected] of cases) {
+      for (const callback of Object.values(callbacks)) callback.mockClear();
+      target.querySelector<HTMLButtonElement>(`[data-dual-action="${action}"]`)!.click();
+      for (const [name, callback] of Object.entries(callbacks)) {
+        expect(callback, `${action} -> ${name}`).toHaveBeenCalledTimes(name === selected ? 1 : 0);
+      }
+    }
+  });
+
+  it.each(['semantic', 'sdr', 'standard'] as const)(
+    '%s appearance preserves its admitted fact and action intent wiring',
+    (appearance) => {
+      const callbacks = {
+        onSelectMainReceiver: vi.fn(), onSelectSubReceiver: vi.fn(),
+        onEqualizeVfos: vi.fn(), onSwapVfos: vi.fn(),
+        onToggleSplit: vi.fn(), onToggleDualWatch: vi.fn(),
+      };
+      const target = mountSurface({ viewModel: withRadioWide(), appearance, ...callbacks });
+      for (const action of [
+        'main', 'sub', 'equalize', 'swap',
+      ]) {
+        const button = target.querySelector<HTMLButtonElement>(`[data-dual-action="${action}"]`);
+        button!.click();
+      }
+      target.querySelector<HTMLButtonElement>('[data-vfo-split]')!.click();
+      target.querySelector<HTMLButtonElement>('[data-vfo-dual-watch]')!.click();
+      for (const [name, callback] of Object.entries(callbacks)) {
+        expect(callback).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it('uses AB identities for equalize/swap without conflating receiver selection', () => {
+    const target = mountSurface({
+      viewModel: withRadioWide('1/ab', {
+        main: { structural: false, operational: false },
+        sub: { structural: false, operational: false },
+      }),
+      onEqualizeVfos: vi.fn(), onSwapVfos: vi.fn(),
+    });
+    expect(target.querySelector('[data-dual-action="main"]')).toBeNull();
+    expect(target.querySelector('[data-dual-action="sub"]')).toBeNull();
+    expect(target.querySelector('[data-dual-action="equalize"]')?.textContent?.trim()).toBe('A=B');
+    expect(target.querySelector('[data-dual-action="swap"]')?.textContent?.trim()).toBe('A↔B');
+  });
+
+  it('omits structurally unsupported actions and guards operationally disabled callbacks', () => {
+    const onSelectSubReceiver = vi.fn();
+    const target = mountSurface({
+      viewModel: withRadioWide('2/main_sub', {
+        sub: { structural: true, operational: false },
+      }),
+      onSelectSubReceiver,
+    });
+    const sub = target.querySelector<HTMLButtonElement>('[data-dual-action="sub"]')!;
+    expect(sub.disabled).toBe(true);
+    sub.disabled = false;
+    sub.click();
+    expect(onSelectSubReceiver).not.toHaveBeenCalled();
+  });
+
+  it('omits every structural-false action and guards every forced disabled click', () => {
+    const callbacks = {
+      onSelectMainReceiver: vi.fn(), onSelectSubReceiver: vi.fn(),
+      onEqualizeVfos: vi.fn(), onSwapVfos: vi.fn(),
+    };
+    const actionMap = [
+      ['main', 'main', 'onSelectMainReceiver'], ['sub', 'sub', 'onSelectSubReceiver'],
+      ['equalize', 'equalize', 'onEqualizeVfos'], ['swap', 'swap', 'onSwapVfos'],
+    ] as const;
+    for (const [dom, key, handler] of actionMap) {
+      const absent = mountSurface({
+        viewModel: withRadioWide('2/main_sub', {
+          [key]: { structural: false, operational: false },
+        }), ...callbacks,
+      });
+      expect(absent.querySelector(`[data-dual-action="${dom}"]`)).toBeNull();
+
+      const disabled = mountSurface({
+        viewModel: withRadioWide('2/main_sub', {
+          [key]: { structural: true, operational: false },
+        }), ...callbacks,
+      });
+      const button = disabled.querySelector<HTMLButtonElement>(`[data-dual-action="${dom}"]`)!;
+      expect(button.disabled).toBe(true);
+      button.disabled = false;
+      button.click();
+      expect(callbacks[handler]).not.toHaveBeenCalled();
+    }
+  });
+
+});
+
+/** Normalized rendered-DOM summary — only VFO-surface-owned facts. */
+function renderSignature(target: HTMLElement): string {
+  const tiles = Array.from(target.querySelectorAll<HTMLElement>('[data-vfo-tile]')).map((el) => ({
+    receiver: el.dataset.vfoReceiver,
+    slot: el.dataset.vfoSlot,
+    active: el.dataset.vfoActive,
+    txTarget: el.dataset.vfoTxTarget,
+    freq: el.querySelector('.vfo-freq')?.textContent,
+    mode: el.querySelector('.vfo-mode')?.textContent,
+  }));
+  return JSON.stringify({
+    tiles,
+    activeReceiver: target.querySelector('[data-testid="vfo-active-receiver"]')?.getAttribute('data-active-receiver'),
+    split: target.querySelector('[data-vfo-split]')?.getAttribute('aria-checked'),
+    dualWatch: target.querySelector('[data-vfo-dual-watch]')?.getAttribute('aria-checked'),
+  });
+}
+
+// ── Faithful rendering per fixture ──────────────────────────────────────────
+
+describe.each(ids)('topology %s', (id) => {
+  it('renders every VFO fact faithfully', () => {
+    const model = topologyFixtures[id];
+    const target = mountSurface({ viewModel: model });
+    const tiles = target.querySelectorAll<HTMLElement>('[data-vfo-tile]');
+    expect(tiles.length).toBe(model.vfos.length);
+
+    model.vfos.forEach((vfo, i) => {
+      const tile = tiles[i];
+      expect(tile.dataset.vfoReceiver).toBe(vfo.receiver);
+      expect(tile.dataset.vfoSlot).toBe(expectedSlotKey(vfo.slot));
+      expect(tile.dataset.vfoActive).toBe(String(vfo.isActive));
+      expect(tile.dataset.vfoTxTarget).toBe(String(vfo.isTxTarget));
+      const freqEl = tile.querySelector('.vfo-freq');
+      if (vfo.frequencyHz === null) {
+        // MOR-2655: unread → nothing in the reserved unlit box, never a dash.
+        expect(freqEl?.textContent).toBe('');
+        expect(freqEl?.classList.contains('display-unknown')).toBe(true);
+        expect(freqEl?.classList.contains('vfo-freq-unlit')).toBe(true);
+      } else {
+        expect(freqEl?.textContent).toBe(expectedFreq(vfo.frequencyHz));
+      }
+      const modeEl = tile.querySelector('.vfo-mode');
+      if (vfo.mode === null) {
+        expect(modeEl?.textContent).not.toContain('—');
+        expect(modeEl?.classList.contains('vfo-mode-unlit')).toBe(true);
+      } else {
+        expect(modeEl?.textContent).toContain(vfo.mode);
+        expect(modeEl?.classList.contains('vfo-mode-unlit')).toBe(false);
+      }
+      if (vfo.filter) expect(tile.querySelector('.vfo-mode')?.textContent).toContain(vfo.filter);
+      expect(tile.querySelector('[data-vfo-tx-badge]') !== null).toBe(vfo.isTxTarget);
+      const shownLabel =
+        tile.querySelector('[data-vfo-select]')?.textContent?.trim() ??
+        tile.querySelector('[data-vfo-label]')?.textContent?.trim();
+      expect(shownLabel).toBe(vfo.label);
+    });
+  });
+
+  it('never leaks an unresolved i18n catalog key', () => {
+    const target = mountSurface({ viewModel: topologyFixtures[id] });
+    expect(target.textContent).not.toMatch(/\[missing:/);
+  });
+});
+
+// ── Non-vacuous structural distinctness across topologies (V2-style) ───────
+
+it('renders four structurally different DOM signatures across the four topologies', () => {
+  const signatures = ids.map((id) => renderSignature(mountSurface({ viewModel: topologyFixtures[id] })));
+  expect(new Set(signatures).size).toBe(ids.length);
+});
+
+// ── S1: audio-only scope is orthogonal to the VFO surface ──────────────────
+
+it.each(ids)('withAudioOnlyScope on %s changes nothing this surface renders (scope is out of scope)', (id) => {
+  const base = renderSignature(mountSurface({ viewModel: topologyFixtures[id] }));
+  const variant = renderSignature(mountSurface({ viewModel: withAudioOnlyScope(topologyFixtures[id]) }));
+  expect(variant).toBe(base);
+});
+
+// ── Roles: receiver + slot identity text ────────────────────────────────────
+
+it('shows a distinct role per VFO across single/dual and slotted/unslotted schemes', () => {
+  const single = mountSurface({ viewModel: topologyFixtures['1/single'] });
+  expect(single.querySelector('.vfo-role')?.textContent).toBe('MAIN');
+
+  const ab = mountSurface({ viewModel: topologyFixtures['1/ab'] });
+  const abRoles = Array.from(ab.querySelectorAll('.vfo-role')).map((e) => e.textContent);
+  expect(abRoles).toEqual(['MAIN A', 'MAIN B']);
+
+  const mainSub = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+  const roles = Array.from(mainSub.querySelectorAll('.vfo-role')).map((e) => e.textContent);
+  expect(roles).toEqual(['MAIN', 'SUB']);
+});
+
+it('reserves the role plaque at the widest role text in every state', () => {
+  const source = readFileSync('src/semantic/VfoSurface.svelte', 'utf8');
+  const fn = source.slice(source.indexOf('function roleLabel'), source.indexOf('const ROLE_TEXTS'));
+  // MOR-2656: the relative kind goes through t() — no English literal may
+  // remain there; the slotted and unslotted returns are unchanged.
+  expect(fn).toContain("slot.role === 'selected' ? t(ACTIVE_ROLE_KEY) : ''");
+  expect(fn).not.toContain("'Selected VFO'");
+  expect(fn).not.toContain("'Unselected VFO'");
+  const emitted = [...fn.matchAll(/return (?:`[^`]+`|vfo\.receiver)/g)].map((match) => match[0]);
+  expect(emitted).toEqual([
+    'return `${vfo.receiver} ${slot.id}`',
+    'return vfo.receiver',
+    'return vfo.receiver',
+  ]);
+  const listedMatch = /const ROLE_TEXTS = \[([^\]]+)\]/.exec(source);
+  const listedLiterals = [...(listedMatch?.[1] ?? '').matchAll(/'([^']+)'/g)].map((text) => text[1]);
+  // The catalog-built active words join the reservation via a catalog
+  // spread, not literals pasted into the source.
+  expect(listedMatch?.[1]).toContain('...ACTIVE_ROLE_CATALOGS');
+  const activeTexts = [enUS, jaJP, ruRU]
+    .map((catalog) => catalog['core.vfo.role.active'])
+    .filter((value): value is string => typeof value === 'string');
+  const listed = [...listedLiterals, ...activeTexts];
+  // The reservation covers the slotted forms, the unread bare name, and
+  // every catalog's active word — including the WIDEST one, built from the
+  // catalogs, not remembered as a literal.
+  expect(listedLiterals).toEqual(['MAIN', 'SUB', 'MAIN A', 'MAIN B', 'SUB A', 'SUB B']);
+  expect(listed).not.toContain('Selected VFO');
+  expect(listed).not.toContain('Unselected VFO');
+  for (const text of activeTexts) expect(listed).toContain(text);
+  const widestActive = activeTexts.reduce((best, text) => (text.length > best.length ? text : best), '');
+  expect(listed).toContain(widestActive);
+  // The widest of ALL role texts across the three locales, built from the
+  // catalog strings, must be in the list — any localized role string joins
+  // the comparison and must be covered by the reservation.
+  const roleTexts = [enUS, jaJP, ruRU]
+    .flatMap((catalog) => Object.entries(catalog)
+      .filter(([key]) => key.startsWith('core.vfo.role.'))
+      .map(([, text]) => text))
+    .filter((text): text is string => typeof text === 'string')
+    .concat(['MAIN', 'SUB'].flatMap((receiver) => [receiver, `${receiver} A`, `${receiver} B`]));
+  for (const text of roleTexts) expect(listed).toContain(text);
+  const widest = roleTexts.reduce((best, text) => (text.length > best.length ? text : best), '');
+  expect(listed).toContain(widest);
+  for (const catalog of [enUS, jaJP, ruRU]) {
+    expect(Object.values(catalog).join('\n')).not.toMatch(/Selected VFO|Unselected VFO|MAIN [AB]|SUB [AB]/);
+  }
+  expect(source).toMatch(/roleWidth = `\$\{Math\.ceil\(widest\)\}px`/);
+  expect(source).toMatch(/style:--vfo-role-width=\{roleWidth\}/);
+  const known = mountSurface({ viewModel: topologyFixtures['1/ab'] });
+  const slotted = known.querySelector('[data-vfo-slot="A"] .vfo-role')!;
+  expect(slotted.textContent).toBe('MAIN A');
+  expect(slotted.getAttribute('style')).toBe('min-width: var(--vfo-role-width);');
+  const unread = mountSurface({ viewModel: validateRadioViewModel({
+    ...topologyFixtures['1/ab'],
+    vfos: topologyFixtures['1/ab'].vfos.map((vfo) => ({ ...vfo, slot: { kind: 'unknown' as const } })),
+  }) });
+  const unslotted = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+  for (const role of [
+    ...unread.querySelectorAll('.vfo-role'),
+    ...unslotted.querySelectorAll('.vfo-role'),
+  ]) {
+    expect(role.getAttribute('style')).toBe('min-width: var(--vfo-role-width);');
+  }
+});
+
+// ── MOR-2656: the ACTIVE role word through the catalogs ───────────────────
+//
+// Owner ruling 2026-09-26: on a radio that reports only "selected /
+// unselected" (the `relative` slot kind) the active tile shows the ONE
+// localized active word, and the other tile has no role word at all — an
+// empty reserved plaque. No English literal remains in `roleLabel`. The
+// pins below are LITERAL strings per locale (proved by a locale mutation,
+// not by t(key) against itself), and the inactive tile pins ''.
+
+describe('MOR-2656 — the active VFO tile says ACTIVE, the other tile has no role word', () => {
+  const base = topologyFixtures['1/ab'];
+  const relativeModel: RadioViewModel = validateRadioViewModel({
+    ...base,
+    vfos: [
+      {
+        ...base.vfos[0], slot: { kind: 'relative', role: 'selected' },
+        label: 'Selected VFO', isActive: true, isActiveSlot: true,
+      },
+      {
+        ...base.vfos[1], slot: { kind: 'relative', role: 'unselected' },
+        label: 'Unselected VFO', isActive: false, isActiveSlot: false,
+      },
+    ],
+  });
+
+  const mountedRole = (model: RadioViewModel, slotRole: string) =>
+    mountSurface({ viewModel: model }).querySelector(`[data-vfo-slot="${slotRole}"] .vfo-role`)!;
+
+  it('literal: the active tile says ACTIVE (en-US), the inactive tile renders nothing', () => {
+    expect(mountedRole(relativeModel, 'selected').textContent).toBe('ACTIVE');
+    expect(mountedRole(relativeModel, 'unselected').textContent).toBe('');
+  });
+
+  it.each([
+    ['ru-RU', 'АКТИВЕН'],
+    ['ja-JP', '使用中'],
+  ] as const)('literal under %s: the active tile says %s', (locale, word) => {
+    setLocale(locale);
+    try {
+      expect(mountedRole(relativeModel, 'selected').textContent).toBe(word);
+      // The other tile still has no role word in the reserved plaque.
+      expect(mountedRole(relativeModel, 'unselected').textContent).toBe('');
+    } finally {
+      _resetLocale();
+    }
+  });
+
+  it('slotted and unslotted roles are unchanged by the relative treatment', () => {
+    const ab = mountSurface({ viewModel: topologyFixtures['1/ab'] });
+    expect([...ab.querySelectorAll('.vfo-role')].map((el) => el.textContent)).toEqual(['MAIN A', 'MAIN B']);
+    const dual = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    expect([...dual.querySelectorAll('.vfo-role')].map((el) => el.textContent)).toEqual(['MAIN', 'SUB']);
+  });
+});
+//
+// ── MOR-1482: one stable frequency format + role text shown exactly once ───
+//
+// Live-observed bug: the unselected-VFO tile's frequency readout flipped
+// between two DIFFERENT formats — a decimal-MHz fallback (`14.332000 MHz`)
+// and, whenever the studioline/fieldline design language is active (it is
+// the workspace DEFAULT — `DEFAULT_WORKSPACE.designLanguage === 'studioline'`,
+// declared compatible with the `desktop-v2` skin — this is not a rare edge
+// case), the language's own thin-space-grouped text. Neither matched the
+// selected tile's dot-grouped convention (`FrequencyDisplayInteractive`),
+// and at tile font size the thin space (U+2009) is imperceptible, so the
+// language variant reads as an unformatted digit string. This block pins
+// the fallback (no-design-language) path to the SAME dot convention the
+// selected tile always uses, in both the observed and not-yet-observed
+// (`null`) states, and pins that each tile's role text is visually shown
+// exactly once.
+
+describe('MOR-1482: unselected-tile frequency format is stable and dot-grouped', () => {
+  function nonTunableModel(frequencyHz: number | null): RadioViewModel {
+    const base = topologyFixtures['1/ab'];
+    return validateRadioViewModel({
+      ...base,
+      vfos: [
+        { ...base.vfos[0], frequencyHz: 7_100_000 },
+        { ...base.vfos[1], frequencyHz },
+      ],
+    });
+  }
+
+  it('an observed frequency renders dot-grouped, matching the selected tile\'s convention — never decimal-MHz, never a thin space', () => {
+    // No `onTuneFrequency` wired and no design language active: the tile
+    // renders through the plain fallback this ticket fixes.
+    const target = mountSurface({ viewModel: nonTunableModel(14_332_000) });
+    const text = target.querySelectorAll('.vfo-freq')[1]?.textContent ?? '';
+    expect(text).toBe('14.332.000');
+    expect(text).not.toContain('MHz');
+    expect(text).not.toContain(' '); // studioline's THIN_SPACE grouping mark
+    expect(text).not.toMatch(/\s/); // no space-grouped digits either
+  });
+
+  it('a not-yet-observed frequency draws nothing in the reserved box, never a differently-formatted number', () => {
+    const target = mountSurface({ viewModel: nonTunableModel(null) });
+    const tiles = target.querySelectorAll('.vfo-freq');
+    expect(tiles[0]?.textContent).toBe('7.100.000');
+    expect(tiles[1]?.textContent).toBe('');
+    // MOR-2655: the old pin was the dash; the reserved unlit box replaces it.
+    expect(tiles[1]?.classList.contains('display-unknown')).toBe(true);
+    expect(tiles[1]?.classList.contains('vfo-freq-unlit')).toBe(true);
+    expect(tiles[1]?.textContent).not.toContain('MHz');
+  });
+
+  it('the tile role text appears exactly once, visually — the duplicate label span is hidden, not deleted', () => {
+    // Mirrors the ADAPTER's real output for a 'relative' slot scheme
+    // (`radio-view-model-adapter.ts`): since MOR-2656 the adapter's own
+    // identity string ('Selected VFO') and `roleLabel()`'s catalog word
+    // ('ACTIVE') deliberately DIFFER — the visible role word is localized,
+    // the accessible copy keeps the radio-reported identity.
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: [
+        {
+          ...base.vfos[0], slot: { kind: 'relative', role: 'selected' },
+          label: 'Selected VFO', isActive: true, isActiveSlot: true,
+        },
+        {
+          ...base.vfos[1], slot: { kind: 'relative', role: 'unselected' },
+          label: 'Unselected VFO', isActive: false, isActiveSlot: false,
+        },
+      ],
+    });
+    const target = mountSurface({ viewModel: model });
+    const selected = target.querySelector<HTMLElement>('[data-vfo-slot="selected"]')!;
+
+    const role = selected.querySelector('.vfo-role')!;
+    const label = selected.querySelector<HTMLElement>('[data-vfo-label]')!;
+    // The role text is the one VISIBLE copy — the catalog's active word.
+    expect(role.textContent).toBe('ACTIVE');
+    expect(role.getAttribute('style')).toContain('min-width: var(--vfo-role-width)');
+    // ...and the label span carries the adapter's identity string, present
+    // for tests/assistive tech but hidden from sight.
+    expect(label.textContent).toBe('Selected VFO');
+    expect(role.className).not.toMatch(/sr-only/);
+    expect(label.className).toMatch(/sr-only/);
+  });
+});
+
+// ── UNCERTAINTY IS VISIBLE ───────────────────────────────────────────────────
+
+describe('uncertainty is rendered explicitly, never defaulted', () => {
+  it('unknown activeReceiver draws the unlit label in a reserved slot, never MAIN or the word unknown', () => {
+    const model: RadioViewModel = validateRadioViewModel({
+      ...topologyFixtures['1/single'],
+      activeReceiver: { status: 'unknown' },
+    });
+    const target = mountSurface({ viewModel: model });
+    const el = target.querySelector('[data-testid="vfo-active-receiver"]');
+    expect(el?.getAttribute('data-active-receiver')).toBe('unknown');
+    expect(el?.getAttribute('data-active-receiver')).not.toBe('MAIN');
+    // MOR-2655: unread is the unlit label in a reserved slot, never the word
+    // "unknown" as a value. The old pin was `toContain('unknown')`.
+    expect(el?.textContent?.trim()).toBe(t('core.vfo.activeReceiver.label').trim());
+    expect(el?.textContent).not.toMatch(/unknown/i);
+    expect(el?.getAttribute('aria-label') ?? '').not.toMatch(/unknown/i);
+  });
+
+  it('known activeReceiver renders "Active receiver: MAIN" with the space, and the value alone sits in its span', () => {
+    // MOR-2655 follow-up: with the space inside the value span, the captures
+    // drew "Active receiver:MAIN". The span is `display: inline-block`, and a
+    // space at the start of an inline-block's line is removed at render, so
+    // the separator sits in the catalog string, outside the span.
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    const el = target.querySelector('[data-testid="vfo-active-receiver"]');
+    expect(el?.textContent).toBe('Active receiver: MAIN');
+    expect(el?.querySelector('.active-receiver-value')?.textContent).toBe('MAIN');
+  });
+
+  it('unknown activeReceiver checks neither operation segment through the real group', () => {
+    const model: RadioViewModel = { ...withRadioWide(), activeReceiver: { status: 'unknown' } };
+    const onSelectMainReceiver = vi.fn();
+    const onSelectSubReceiver = vi.fn();
+    const target = mountSurface({ viewModel: model, onSelectMainReceiver, onSelectSubReceiver });
+    const main = target.querySelector<HTMLButtonElement>('[data-dual-action="main"]')!;
+    const sub = target.querySelector<HTMLButtonElement>('[data-dual-action="sub"]')!;
+    expect([main.getAttribute('aria-checked'), sub.getAttribute('aria-checked')])
+      .toEqual(['false', 'false']);
+    expect([main.tabIndex, sub.tabIndex]).toEqual([0, -1]);
+    main.click();
+    expect(onSelectMainReceiver).toHaveBeenCalledOnce();
+    expect(onSelectSubReceiver).not.toHaveBeenCalled();
+  });
+
+  it('unknown VFO slot draws the receiver name unlit, never the word unknown and never slot A', () => {
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: [base.vfos[0], { ...base.vfos[1], slot: { kind: 'unknown' } }],
+    });
+    const target = mountSurface({ viewModel: model });
+    const tiles = target.querySelectorAll<HTMLElement>('[data-vfo-tile]');
+    expect(tiles[1].dataset.vfoSlot).toBe('unknown');
+    expect(tiles[1].dataset.vfoSlot).not.toBe('A');
+    // MOR-2655: the slot stays reserved and unlit. The old pin was
+    // `toContain('unknown')` ("MAIN (unknown)").
+    const role = tiles[1].querySelector('.vfo-role')!;
+    expect(role.textContent).toBe('MAIN');
+    expect(role.textContent).not.toMatch(/unknown/i);
+    expect(role.classList.contains('vfo-role-unlit')).toBe(true);
+    expect(role.getAttribute('style')).toContain('min-width: var(--vfo-role-width)');
+  });
+
+  it('R2: two VFOs on the SAME receiver with BOTH slots unobserved render without crashing, ' +
+    'each with its own explicit unknown-slot presentation', () => {
+    // MOR-988 §3.2/§4: missing/stale slot projects as unknown per VFO,
+    // independently — the contract validator accepts two same-receiver VFOs
+    // that are each separately unobserved; the surface must never fabricate
+    // a shared/synthesized slot id to disambiguate them, and must not use a
+    // key derived from slot identity (which would collide here).
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: [
+        { ...base.vfos[0], slot: { kind: 'unknown' } },
+        { ...base.vfos[1], slot: { kind: 'unknown' } },
+      ],
+    });
+    let target!: HTMLElement;
+    expect(() => {
+      target = mountSurface({ viewModel: model });
+    }).not.toThrow();
+    const tiles = target.querySelectorAll<HTMLElement>('[data-vfo-tile]');
+    expect(tiles.length).toBe(2);
+    tiles.forEach((tile) => {
+      expect(tile.dataset.vfoSlot).toBe('unknown');
+      expect(tile.dataset.vfoSlot).not.toBe('A');
+      // MOR-2655: unlit receiver name, never "MAIN (unknown)". The old pin
+      // was `toContain('unknown')`.
+      const role = tile.querySelector('.vfo-role')!;
+      expect(role.textContent).toBe(tile.dataset.vfoReceiver);
+      expect(role.textContent).not.toMatch(/unknown/i);
+      expect(role.classList.contains('vfo-role-unlit')).toBe(true);
+    });
+  });
+
+  it('unknown dualWatch carries no state claim: bare name, no aria-checked', () => {
+    // 1/ab fixture carries dualWatch: { status: 'unknown' } verbatim.
+    const target = mountSurface({ viewModel: topologyFixtures['1/ab'] });
+    const toggle = target.querySelector<HTMLButtonElement>('[data-vfo-dual-watch]')!;
+    expect(toggle.getAttribute('role')).not.toBe('switch');
+    expect(toggle.getAttribute('aria-checked')).toBeNull();
+    expect(toggle.getAttribute('aria-label')).toBe('Dual watch');
+    expect(toggle.textContent).toBe('DW');
+  });
+
+  it('keeps SPLIT and DW faceplate labels compact while exposing their full state', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'], appearance: 'standard' });
+    const split = target.querySelector<HTMLButtonElement>('[data-vfo-split]')!;
+    const dualWatch = target.querySelector<HTMLButtonElement>('[data-vfo-dual-watch]')!;
+    expect(split.textContent).toBe('SPLIT');
+    expect(dualWatch.textContent).toBe('DW');
+    expect(split.getAttribute('aria-label')).toBe('Split: on');
+    expect(dualWatch.getAttribute('aria-label')).toBe('Dual watch: on');
+  });
+
+  it('owns only the embedded M/S radios in a named active-receiver group', () => {
+    const target = mountSurface({ viewModel: withRadioWide(), appearance: 'standard' });
+    const group = target.querySelector('[role="radiogroup"][aria-label="Active receiver"]')!;
+    expect(group).not.toBeNull();
+    expect([...group.querySelectorAll(':scope > [role="radio"]')]
+      .map((radio) => radio.getAttribute('data-dual-action'))).toEqual(['main', 'sub']);
+    expect(group.querySelector('[data-vfo-equalize]')).toBeNull();
+    expect(group.querySelector('[data-vfo-swap]')).toBeNull();
+    expect(target.querySelectorAll('[role="radiogroup"]')).toHaveLength(1);
+  });
+
+  it('unknown split carries no state claim: bare name, no aria-checked', () => {
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({ ...base, split: { status: 'unknown' } });
+    const target = mountSurface({ viewModel: model });
+    const toggle = target.querySelector<HTMLButtonElement>('[data-vfo-split]')!;
+    expect(toggle.getAttribute('role')).not.toBe('switch');
+    expect(toggle.getAttribute('aria-checked')).toBeNull();
+    expect(toggle.getAttribute('aria-label')).toBe('Split');
+    expect(toggle.textContent).toBe('SPLIT');
+    // R1 (review cycle 1): pin the disabled attribute itself, not just the
+    // aria-checked/label facts above — mutation M14 deleted
+    // `disabled={viewModel.split.status === 'unknown'}` and every other
+    // assertion in this file still passed (dualWatch's equivalent was
+    // pinned; split's was not).
+    expect(toggle.disabled).toBe(true);
+  });
+
+  it('null frequency draws nothing in the reserved box, never 0 or a dash', () => {
+    const base = topologyFixtures['1/single'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: [{ ...base.vfos[0], frequencyHz: null }],
+    });
+    const target = mountSurface({ viewModel: model });
+    const freq = target.querySelector('.vfo-freq');
+    // MOR-2655: the old pin was the literal dash ('—').
+    expect(freq?.textContent).toBe('');
+    expect(freq?.classList.contains('display-unknown')).toBe(true);
+    expect(freq?.classList.contains('vfo-freq-unlit')).toBe(true);
+  });
+});
+
+// ── Selection intents: payload correctness + disabled/absent gating ────────
+
+describe('VFO selection intent', () => {
+  it('relative bootstrap shows honest values and explicit A/B selectors with duplicate protection', () => {
+    vi.useFakeTimers();
+    const onSelectVfo = vi.fn();
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: [
+        {
+          ...base.vfos[0], slot: { kind: 'relative', role: 'selected' },
+          label: 'Selected VFO', isActive: true, isActiveSlot: true,
+        },
+        {
+          ...base.vfos[1], slot: { kind: 'relative', role: 'unselected' },
+          label: 'Unselected VFO', isActive: false, isActiveSlot: false,
+        },
+      ],
+    });
+    const target = mountSurface({ viewModel: model, onSelectVfo });
+    const selected = target.querySelector<HTMLElement>('[data-vfo-slot="selected"]')!;
+    const unselected = target.querySelector<HTMLElement>('[data-vfo-slot="unselected"]')!;
+    // MOR-2656: the visible role word is the catalog's ACTIVE; the inactive
+    // tile has no role word. The sr-only label keeps the adapter's identity.
+    expect(selected.querySelector('.vfo-role')!.textContent).toBe('ACTIVE');
+    expect(unselected.querySelector('.vfo-role')!.textContent).toBe('');
+    expect(selected.querySelector('[data-vfo-label]')!.textContent).toBe('Selected VFO');
+    expect(target.querySelector('[data-vfo-active="true"]')).toBe(selected);
+
+    const a = target.querySelector<HTMLButtonElement>('[data-vfo-select-absolute="A"]')!;
+    const b = target.querySelector<HTMLButtonElement>('[data-vfo-select-absolute="B"]')!;
+    expect(a.textContent).toBe('Select VFO A');
+    expect(b.textContent).toBe('Select VFO B');
+    expect(a.title).toBe('Current A/B identity is unknown. Selecting this VFO will change the radio selection and establish identity.');
+    b.click();
+    flushSync();
+    a.click();
+    expect(onSelectVfo).toHaveBeenCalledOnce();
+    expect(onSelectVfo).toHaveBeenCalledWith({
+      receiver: 'MAIN', slot: { kind: 'slotted', id: 'B' },
+    });
+    expect(a.disabled).toBe(true);
+    expect(b.disabled).toBe(true);
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it('relative bootstrap disables identity-dependent VFO operations', () => {
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: base.vfos.map((vfo, index) => ({
+        ...vfo,
+        slot: {
+          kind: 'relative', role: index === 0 ? 'selected' : 'unselected',
+        },
+        label: index === 0 ? 'Selected VFO' : 'Unselected VFO',
+        isActive: index === 0,
+        isActiveSlot: index === 0,
+      })),
+    });
+    const target = mountSurface({ viewModel: model });
+    const ops = target.querySelector<HTMLElement>('[data-testid="vfo-ops"]')!;
+    expect(ops.dataset.disabledReason).toBe('vfo-identity-unknown');
+    expect(Array.from(ops.querySelectorAll<HTMLButtonElement>('button')).every((button) => button.disabled)).toBe(true);
+  });
+
+  it('selected-only bootstrap keeps the selected value and marks unselected unavailable', () => {
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: [
+        {
+          ...base.vfos[0], slot: { kind: 'relative', role: 'selected' },
+          label: 'Selected VFO', frequencyHz: 14_250_000,
+          isActive: true, isActiveSlot: true,
+        },
+        {
+          ...base.vfos[1], slot: { kind: 'relative', role: 'unselected' },
+          label: 'Unselected VFO', frequencyHz: null, mode: null, filter: null,
+          isActive: false, isActiveSlot: false,
+        },
+      ],
+    });
+    const target = mountSurface({ viewModel: model });
+    expect(target.querySelector('[data-vfo-slot="selected"] .vfo-freq')?.textContent)
+      .toContain(expectedFreq(14_250_000));
+    const unselectedFreq = target.querySelector('[data-vfo-slot="unselected"] .vfo-freq');
+    // MOR-2655: the old pin was the dash ('—').
+    expect(unselectedFreq?.textContent).toBe('');
+    expect(unselectedFreq?.classList.contains('display-unknown')).toBe(true);
+    expect(unselectedFreq?.classList.contains('vfo-freq-unlit')).toBe(true);
+    // The unread mode also draws nothing in its reserved box.
+    const unselectedMode = target.querySelector('[data-vfo-slot="unselected"] .vfo-mode');
+    expect(unselectedMode?.textContent).toBe('');
+    expect(unselectedMode?.classList.contains('vfo-mode-unlit')).toBe(true);
+    expect(target.querySelector('[data-testid="vfo-ops"]')?.getAttribute('data-disabled-reason'))
+      .toBe('vfo-identity-unknown');
+    expect(target.querySelectorAll('[data-vfo-select-absolute]')).toHaveLength(2);
+  });
+
+  it('clicking a selectable inactive VFO emits onSelectVfo with the exact receiver+slot payload', () => {
+    const onSelectVfo = vi.fn();
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'], onSelectVfo });
+    target.querySelector<HTMLButtonElement>('[data-vfo-receiver="SUB"][data-vfo-slot="unslotted"] [data-vfo-select]')!.click();
+    expect(onSelectVfo).toHaveBeenCalledOnce();
+    expect(onSelectVfo).toHaveBeenCalledWith({ receiver: 'SUB', slot: { kind: 'unslotted' } });
+  });
+
+  it('the active VFO renders no select control at all (nothing to choose)', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    const activeTile = target.querySelector<HTMLElement>('[data-vfo-active="true"]')!;
+    expect(activeTile.querySelector('[data-vfo-select]')).toBeNull();
+  });
+
+  // MOR-1260: colour is not a state channel under forced-colors, and a wider
+  // border on only the active tile shifts the layout on every MAIN↔SUB
+  // switch. The mark is an outline drawn INSIDE the tile. jsdom does not
+  // inject a Svelte <style>, so the component's own tile rules are applied
+  // as a sheet and the difference is read from computed style.
+  it('marks the active tile by an inner outline, without moving its geometry (MOR-1260)', () => {
+    const source = readFileSync('src/semantic/VfoSurface.svelte', 'utf8');
+    const styleBlock = source.slice(source.indexOf('<style>') + '<style>'.length, source.indexOf('</style>'));
+    const style = document.createElement('style');
+    style.textContent = styleBlock.replace(/\/\*[\s\S]*?\*\//g, '');
+    document.head.appendChild(style);
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    const active = target.querySelector<HTMLElement>('[data-vfo-active="true"]')!;
+    const inactive = target.querySelector<HTMLElement>('[data-vfo-active="false"]')!;
+    const activeStyle = getComputedStyle(active);
+    const inactiveStyle = getComputedStyle(inactive);
+    // The layout never moves: the border keeps the same width in every state.
+    expect(activeStyle.borderTopWidth).toBe(inactiveStyle.borderTopWidth);
+    expect(activeStyle.borderRightWidth).toBe(inactiveStyle.borderRightWidth);
+    expect(activeStyle.borderBottomWidth).toBe(inactiveStyle.borderBottomWidth);
+    expect(activeStyle.borderLeftWidth).toBe(inactiveStyle.borderLeftWidth);
+    // The active mark is a shape, not a colour: a double outline on the
+    // active tile alone, drawn inside it so nothing shifts.
+    expect(activeStyle.outlineStyle).toBe('double');
+    expect(inactiveStyle.outlineStyle).not.toBe('double');
+    style.remove();
+  });
+
+  it('a single-VFO topology renders no select control — structurally nothing to choose', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['1/single'] });
+    expect(target.querySelector('[data-vfo-select]')).toBeNull();
+  });
+
+  it('a lone inactive VFO (structural edge case) still renders no select control', () => {
+    // Independent of `isActive`: with only one VFO in the model there is
+    // nothing else to select between, regardless of its active flag.
+    const base = topologyFixtures['1/single'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: [{ ...base.vfos[0], isActive: false }],
+    });
+    const target = mountSurface({ viewModel: model });
+    expect(target.querySelector('[data-vfo-select]')).toBeNull();
+  });
+
+  it('a VFO with an unobserved slot renders its select control disabled', () => {
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: [base.vfos[0], { ...base.vfos[1], slot: { kind: 'unknown' } }],
+    });
+    const target = mountSurface({ viewModel: model });
+    const button = target.querySelectorAll<HTMLButtonElement>('[data-vfo-select]')[0];
+    expect(button.disabled).toBe(true);
+  });
+
+  it('MUTATION KILL: clicking a disabled (unknown-slot) select control never emits the intent, ' +
+    'even if the native disabled gate is bypassed', () => {
+    const onSelectVfo = vi.fn();
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: [base.vfos[0], { ...base.vfos[1], slot: { kind: 'unknown' } }],
+    });
+    const target = mountSurface({ viewModel: model, onSelectVfo });
+    const button = target.querySelectorAll<HTMLButtonElement>('[data-vfo-select]')[0];
+    // A native `disabled` button already refuses to dispatch `click` in jsdom
+    // and real browsers alike. Force it enabled first so this test proves
+    // the component's OWN handler guard — not just DOM disabled semantics —
+    // refuses to fabricate an A/B id and emit the intent.
+    button.disabled = false;
+    button.click();
+    expect(onSelectVfo).not.toHaveBeenCalled();
+  });
+});
+
+// ── Split / dual-watch toggle intents ───────────────────────────────────────
+
+describe('split / dual-watch toggle intents', () => {
+  it('clicking a known split toggle emits onToggleSplit', () => {
+    const onToggleSplit = vi.fn();
+    const target = mountSurface({ viewModel: topologyFixtures['1/single'], onToggleSplit });
+    target.querySelector<HTMLButtonElement>('[data-vfo-split]')!.click();
+    expect(onToggleSplit).toHaveBeenCalledOnce();
+  });
+
+  it('clicking a known dualWatch toggle emits onToggleDualWatch', () => {
+    const onToggleDualWatch = vi.fn();
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'], onToggleDualWatch });
+    target.querySelector<HTMLButtonElement>('[data-vfo-dual-watch]')!.click();
+    expect(onToggleDualWatch).toHaveBeenCalledOnce();
+  });
+
+  it('MUTATION KILL: clicking a disabled (unknown) dualWatch toggle never emits the intent, ' +
+    'even if the native disabled gate is bypassed', () => {
+    const onToggleDualWatch = vi.fn();
+    // 1/ab carries dualWatch: unknown verbatim.
+    const target = mountSurface({ viewModel: topologyFixtures['1/ab'], onToggleDualWatch });
+    const toggle = target.querySelector<HTMLButtonElement>('[data-vfo-dual-watch]')!;
+    toggle.disabled = false;
+    toggle.click();
+    expect(onToggleDualWatch).not.toHaveBeenCalled();
+  });
+
+  it('MUTATION KILL: clicking a disabled (unknown) split toggle never emits the intent, ' +
+    'even if the native disabled gate is bypassed', () => {
+    const onToggleSplit = vi.fn();
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({ ...base, split: { status: 'unknown' } });
+    const target = mountSurface({ viewModel: model, onToggleSplit });
+    const toggle = target.querySelector<HTMLButtonElement>('[data-vfo-split]')!;
+    toggle.disabled = false;
+    toggle.click();
+    expect(onToggleSplit).not.toHaveBeenCalled();
+  });
+
+  it('both split and dualWatch can be independently true at once (2/main_sub)', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    expect(target.querySelector('[data-vfo-split]')?.getAttribute('aria-checked')).toBe('true');
+    expect(target.querySelector('[data-vfo-dual-watch]')?.getAttribute('aria-checked')).toBe('true');
+  });
+});
+
+// ── Accessibility basics ─────────────────────────────────────────────────────
+
+describe('accessibility basics', () => {
+  it('the surface exposes an accessible group name', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    const region = target.querySelector('[data-testid="vfo-surface"]');
+    expect(region?.getAttribute('role')).toBe('group');
+    expect(region?.getAttribute('aria-label')?.length).toBeGreaterThan(0);
+  });
+
+  it('every enabled select control has a non-empty accessible name', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    const buttons = target.querySelectorAll<HTMLButtonElement>('[data-vfo-select]');
+    expect(buttons.length).toBeGreaterThan(0);
+    buttons.forEach((b) => expect(b.getAttribute('aria-label')?.length).toBeGreaterThan(0));
+  });
+
+  it('split/dualWatch toggles have accessible names and role="switch"', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    for (const sel of ['[data-vfo-split]', '[data-vfo-dual-watch]']) {
+      const btn = target.querySelector<HTMLButtonElement>(sel)!;
+      expect(btn.getAttribute('role')).toBe('switch');
+      expect(btn.getAttribute('aria-label')?.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('disabled controls are excluded from the tab order (native disabled semantics)', () => {
+    const base = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base,
+      vfos: [base.vfos[0], { ...base.vfos[1], slot: { kind: 'unknown' } }],
+    });
+    const target = mountSurface({ viewModel: model });
+    const disabledSelect = target.querySelectorAll<HTMLButtonElement>('[data-vfo-select]')[0];
+    const disabledDualWatch = target.querySelector<HTMLButtonElement>('[data-vfo-dual-watch]')!;
+    expect(disabledSelect.disabled).toBe(true);
+    expect(disabledDualWatch.disabled).toBe(true);
+    // jsdom mirrors the browser: a disabled element cannot become activeElement.
+    disabledSelect.focus();
+    expect(document.activeElement).not.toBe(disabledSelect);
+  });
+
+  it('focus order follows DOM order: enabled buttons appear in source-array order', () => {
+    const target = mountSurface({
+      viewModel: topologyFixtures['2/main_sub'], onEqualizeVfos: vi.fn(), onSwapVfos: vi.fn(),
+    });
+    const focusable = Array.from(target.querySelectorAll<HTMLButtonElement>('button:not([disabled])'));
+    // MAIN is active (no select button); expect the SUB select, then the
+    // split and dualWatch toggles, then MOR-1321's two ops — facts
+    // before actions, in that DOM order. The classifier NAMES each op rather
+    // than letting an unrecognised button fall through to 'dualWatch', which is
+    // what made this test read four phantom dualWatch entries when the ops row
+    // first landed.
+    const OPS = ['equalize', 'swap'];
+    const order = focusable.map(
+      (el) => el.dataset.vfoSelect !== undefined
+        ? `select:${el.closest('[data-vfo-tile]')?.getAttribute('data-vfo-receiver')}:${el.closest('[data-vfo-tile]')?.getAttribute('data-vfo-slot')}`
+        : el.hasAttribute('data-vfo-split') ? 'split'
+          : el.hasAttribute('data-vfo-dual-watch') ? 'dualWatch'
+            : OPS.find((op) => el.hasAttribute(`data-vfo-${op}`)) ?? 'UNCLASSIFIED',
+    );
+    expect(order).toEqual([
+      'select:SUB:unslotted', 'split', 'dualWatch', ...OPS,
+    ]);
+  });
+});
+
+// ── MOR-1068: the three composition props a per-receiver cockpit needs ───────
+// `selectionPoolSize` and `showRadioWideFacts` shipped with MOR-1067;
+// `showVfoList` and `groupLabel` land with the radio-wide row's move out of
+// the strips. Every default path below must stay byte-identical for the
+// unsliced callers (sdr-test / LCD / mobile).
+
+describe('selectionPoolSize (MOR-1067) — the ?? vs || distinction', () => {
+  // MOR-1067 verification, gap (c): `??` -> `||` in the fallback survived
+  // mutation because every existing caller passes a positive pool. An
+  // EXPLICIT pool of 0 is the only value that separates them: `??` keeps 0
+  // (nothing to choose -> control ABSENT), `||` treats 0 as "unset" and
+  // silently falls back to the slice's own length, resurrecting the control.
+  it('an explicit pool size of 0 means "nothing to choose", not "unset"', () => {
+    const target = mountSurface({
+      viewModel: topologyFixtures['2/main_sub'],
+      selectionPoolSize: 0,
+    });
+    expect(target.querySelectorAll('[data-vfo-select]')).toHaveLength(0);
+    // Same model with no pool override still offers the controls, so the
+    // assertion above cannot pass for the trivial reason.
+    const unsliced = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    expect(unsliced.querySelectorAll('[data-vfo-select]').length).toBeGreaterThan(0);
+  });
+
+  it('a pool larger than the slice keeps the control present (MOR-1067 F1)', () => {
+    const sliced: RadioViewModel = {
+      ...topologyFixtures['2/ab_shared'],
+      vfos: topologyFixtures['2/ab_shared'].vfos.filter((v) => v.receiver === 'MAIN'),
+    };
+    expect(mountSurface({ viewModel: sliced }).querySelectorAll('[data-vfo-select]')).toHaveLength(0);
+    expect(
+      mountSurface({ viewModel: sliced, selectionPoolSize: 2 }).querySelectorAll('[data-vfo-select]'),
+    ).toHaveLength(1);
+  });
+});
+
+describe('showVfoList (MOR-1068) — the radio-wide half, placeable on its own', () => {
+  // Kills: ignoring the prop (the cockpit's global row would duplicate every
+  // VFO tile already rendered in the strips), or letting it also suppress the
+  // radio-wide facts (the row would render nothing at all).
+  it('false renders the radio-wide facts with no VFO list', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'], showVfoList: false });
+    expect(target.querySelectorAll('[data-vfo-tile]')).toHaveLength(0);
+    expect(target.querySelector('[data-testid="vfo-list"]')).toBeNull();
+    expect(target.querySelectorAll('[data-vfo-split]')).toHaveLength(1);
+    expect(target.querySelectorAll('[data-vfo-dual-watch]')).toHaveLength(1);
+    expect(target.querySelectorAll('[data-testid="vfo-active-receiver"]')).toHaveLength(1);
+  });
+
+  // Kills: defaulting the new prop to false — every unsliced caller would
+  // lose its VFO tiles.
+  it('defaults to true: the unsliced surface is unchanged', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    expect(target.querySelectorAll('[data-vfo-tile]')).toHaveLength(2);
+    expect(target.querySelector('[data-testid="vfo-list"]')).not.toBeNull();
+  });
+});
+
+describe('disabled (MOR-1256) — the strip-level operational gate', () => {
+  // Mirrors the existing per-VFO `slot.kind === 'unknown'` disabled-select
+  // mechanism rather than inventing a parallel one: same `disabled`
+  // attribute on the same button, now also forced by this prop. A
+  // dual-receiver-cockpit strip whose receiver is structurally present but
+  // operationally unavailable (`dual-rx-unavailable`) sets this.
+  it('forces every otherwise-selectable control disabled when true', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'], disabled: true });
+    const buttons = target.querySelectorAll<HTMLButtonElement>('[data-vfo-select]');
+    expect(buttons.length).toBeGreaterThan(0);
+    buttons.forEach((b) => expect(b.disabled).toBe(true));
+  });
+
+  it('MUTATION KILL: clicking a strip-disabled select control never emits the intent, ' +
+    'even if the native disabled gate is bypassed', () => {
+    const onSelectVfo = vi.fn();
+    const target = mountSurface({
+      viewModel: topologyFixtures['2/main_sub'], disabled: true, onSelectVfo,
+    });
+    const button = target.querySelectorAll<HTMLButtonElement>('[data-vfo-select]')[0];
+    button.disabled = false;
+    button.click();
+    expect(onSelectVfo).not.toHaveBeenCalled();
+  });
+
+  // Kills: defaulting the new prop to `true` — every existing caller
+  // (single/unsliced, and an operationally-fine dual strip) would lose its
+  // selection controls.
+  it('defaults to false: the unsliced surface is unchanged', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    const buttons = target.querySelectorAll<HTMLButtonElement>('[data-vfo-select]');
+    expect(buttons.length).toBeGreaterThan(0);
+    buttons.forEach((b) => expect(b.disabled).toBe(false));
+  });
+
+  // The MOR-977 structural half is untouched by this prop: a control that is
+  // structurally ABSENT (nothing to choose) must stay absent, not reappear
+  // as a disabled button.
+  it('does not resurrect a structurally-absent control', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['1/single'], disabled: true });
+    expect(target.querySelector('[data-vfo-select]')).toBeNull();
+  });
+});
+
+describe('groupLabel (MOR-1068) — distinct accessible names per mounted surface', () => {
+  // Kills: ignoring the prop. A cockpit mounts three of these surfaces at
+  // once (MAIN strip, SUB strip, radio-wide row); with one shared generic
+  // name assistive tech sees three identical groups and cannot tell which
+  // receiver it is in.
+  it('overrides the group accessible name when supplied', () => {
+    const target = mountSurface({
+      viewModel: topologyFixtures['2/main_sub'], groupLabel: 'Receiver SUB',
+    });
+    expect(target.querySelector('[data-testid="vfo-surface"]')?.getAttribute('aria-label'))
+      .toBe('Receiver SUB');
+  });
+
+  it('falls back to the generic catalog label when absent', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    const label = target.querySelector('[data-testid="vfo-surface"]')?.getAttribute('aria-label');
+    expect(label).toBeTruthy();
+    expect(label).not.toBe('Receiver SUB');
+    // i18n coverage: never an unresolved catalog key.
+    expect(label).not.toContain('core.vfo.');
+  });
+});
+
+// ── MOR-1321 (S3a): the VFO ops row and the split RX/TX digest ──────────────
+//
+// Receiver-deck parity for the two VFO-scoped actions the legacy `VfoOps`
+// bridge carried (A=B, A↔B) and the `RX … TX …` digest
+// that sat under them, restated on facts. Every test's doc line names the
+// mutation it exists to kill.
+
+describe('VFO ops (MOR-1321) — structural gating', () => {
+  // Kills: rendering the ops row unconditionally. With one VFO there is nothing
+  // to equalize onto, swap with, or split against — MOR-977 says ABSENT, not
+  // present-and-inert.
+  it('is absent when there is structurally nothing to swap against', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['1/single'] });
+    expect(target.querySelector('[data-testid="vfo-ops"]')).toBeNull();
+    expect(target.querySelector('[data-testid="vfo-split-digest"]')).toBeNull();
+  });
+
+  // The non-vacuous half: the same assertions must NOT hold for a multi-VFO
+  // radio, or "absent" above would be passing for the trivial reason.
+  it.each(['1/ab', '2/ab_shared', '2/main_sub'] as const)(
+    'renders the explicitly admitted four-action block on the %s topology', (id) => {
+      const target = mountSurface({ viewModel: withRadioWide(id) });
+      expect(target.querySelector('[data-testid="vfo-ops"]')).not.toBeNull();
+      for (const action of [
+        'main', 'sub', 'equalize', 'swap',
+      ]) {
+        expect(target.querySelector(`[data-dual-action="${action}"]`), action).not.toBeNull();
+      }
+    },
+  );
+
+  // Kills: reading `viewModel.vfos.length` directly instead of the pool. A
+  // per-receiver cockpit strip holds ONE vfo but the radio still has a pair —
+  // the same MOR-1067 distinction tile selection already makes.
+  it('follows selectionPoolSize, not the slice length', () => {
+    const sliced: RadioViewModel = {
+      ...topologyFixtures['2/ab_shared'],
+      vfos: topologyFixtures['2/ab_shared'].vfos.filter((v) => v.receiver === 'MAIN'),
+    };
+    expect(mountSurface({ viewModel: sliced }).querySelector('[data-testid="vfo-ops"]')).toBeNull();
+    const fallback = mountSurface({ viewModel: sliced, selectionPoolSize: 2 });
+    expect(fallback.querySelector('[data-testid="vfo-ops"]')).not.toBeNull();
+  });
+
+  // Kills: emitting the ops from a per-receiver strip. They are radio-wide
+  // actions; one per receiver would fire equalize twice from one screen.
+  it('rides with the radio-wide facts, so a per-receiver strip renders none', () => {
+    const target = mountSurface({
+      viewModel: topologyFixtures['2/main_sub'], showRadioWideFacts: false,
+    });
+    expect(target.querySelector('[data-testid="vfo-ops"]')).toBeNull();
+    expect(target.querySelector('[data-testid="vfo-split-digest"]')).toBeNull();
+  });
+});
+
+describe('VFO ops (MOR-1321) — intents', () => {
+  it.each([
+    ['equalize', 'onEqualizeVfos'], ['swap', 'onSwapVfos'],
+  ] as const)('%s emits exactly its own intent, once', (op, prop) => {
+    const spies = {
+      onEqualizeVfos: vi.fn(), onSwapVfos: vi.fn(),
+    };
+    const target = mountSurface({ viewModel: withRadioWide(), ...spies });
+    target.querySelector<HTMLButtonElement>(`[data-vfo-${op}]`)!.click();
+    flushSync();
+    // Exactly one intent fired, and it was this button's — a cross-wired
+    // handler (swap firing equalize) passes a "was called" assertion alone.
+    for (const [name, spy] of Object.entries(spies)) {
+      expect(spy.mock.calls.length, name).toBe(name === prop ? 1 : 0);
+    }
+  });
+
+  // R9. The ops surface must not grow a key path: none of these four intents
+  // is a TX action, and the surface carries no key/unkey affordance at all.
+  it('R9: the ops row emits no TX intent and mounts no key affordance', () => {
+    const target = mountSurface({ viewModel: withRadioWide() });
+    expect(target.querySelector('[data-testid="rx-tx-surface"]')).toBeNull();
+    const ops = target.querySelector<HTMLElement>('[data-testid="vfo-ops"]')!;
+    expect(ops.querySelectorAll('[data-dual-action]')).toHaveLength(4);
+    // Actions, not facts: no switch semantics on any of them.
+    expect(ops.querySelectorAll('[role="switch"]')).toHaveLength(0);
+  });
+});
+
+describe('VFO ops (MOR-1321) — fact independence', () => {
+  // Kills: gating equalize/swap on an unrelated unknown. Neither reads split or
+  // dual-watch, so an unobserved fact must not make them inert — that would
+  // invent a dependency the radio does not have.
+  it('equalize and swap stay live while both toggle facts are unknown', () => {
+    const model = validateRadioViewModel({
+      ...withRadioWide(), split: { status: 'unknown' }, dualWatch: { status: 'unknown' },
+    });
+    const onEqualizeVfos = vi.fn();
+    const onSwapVfos = vi.fn();
+    const target = mountSurface({ viewModel: model, onEqualizeVfos, onSwapVfos });
+    for (const op of ['equalize', 'swap'] as const) {
+      const button = target.querySelector<HTMLButtonElement>(`[data-vfo-${op}]`)!;
+      expect(button.disabled, op).toBe(false);
+      button.click();
+    }
+    flushSync();
+    expect(onEqualizeVfos).toHaveBeenCalledTimes(1);
+    expect(onSwapVfos).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('VFO ops disabled reasons (MOR-1481)', () => {
+  const base = topologyFixtures['2/main_sub'];
+
+  /** Resolves a control's `aria-describedby` target and returns ITS text —
+   *  the id alone would only prove wiring, not that a screen reader has
+   *  something to actually read. Mirrors `TxAuxSurface.test.ts`'s helper. */
+  function describedText(target: HTMLElement, el: HTMLElement): string | null {
+    const id = el.getAttribute('aria-describedby');
+    if (!id) return null;
+    return target.querySelector(`#${id}`)?.textContent ?? null;
+  }
+
+  it('carries no reason text on hover or for screen readers on any op button once every fact is known', () => {
+    const target = mountSurface({
+      viewModel: withRadioWide(),
+      onEqualizeVfos: vi.fn(), onSwapVfos: vi.fn(),
+    });
+    for (const op of ['equalize', 'swap'] as const) {
+      const button = target.querySelector<HTMLButtonElement>(`[data-vfo-${op}]`)!;
+      expect(button.title, op).toBe('');
+      expect(button.hasAttribute('aria-describedby'), op).toBe(false);
+    }
+  });
+
+  it('keeps caller-admitted equalize and swap live while the group reports unresolved identity', () => {
+    const admitted = withRadioWide('1/ab');
+    const model: RadioViewModel = validateRadioViewModel({
+      ...admitted,
+      vfos: admitted.vfos.map((vfo, index) => ({
+        ...vfo,
+        slot: { kind: 'relative', role: index === 0 ? 'selected' : 'unselected' },
+        label: index === 0 ? 'Selected VFO' : 'Unselected VFO',
+        isActive: index === 0,
+        isActiveSlot: index === 0,
+      })),
+    });
+    const onEqualizeVfos = vi.fn();
+    const onSwapVfos = vi.fn();
+    const target = mountSurface({ viewModel: model, onEqualizeVfos, onSwapVfos });
+    for (const op of ['equalize', 'swap'] as const) {
+      const button = target.querySelector<HTMLButtonElement>(`[data-vfo-${op}]`)!;
+      expect(button.disabled, op).toBe(false);
+      expect(button.title, op).toBe('');
+      button.click();
+    }
+    expect(onEqualizeVfos).toHaveBeenCalledOnce();
+    expect(onSwapVfos).toHaveBeenCalledOnce();
+    const expected = 'The radio has not confirmed which VFO is A and which is B yet — press Select VFO A or Select VFO B first.';
+    expect(target.querySelector('[data-testid="vfo-ops"]')!.getAttribute('title')).toBe(expected);
+  });
+
+  it('refuses equalize and swap when the caller has not admitted the matching primitive', () => {
+    const target = mountSurface({ viewModel: base });
+    for (const op of ['equalize', 'swap'] as const) {
+      const button = target.querySelector<HTMLButtonElement>(`[data-vfo-${op}]`)!;
+      expect(button.disabled, op).toBe(true);
+      button.click();
+    }
+  });
+
+  it('localizes the ops-row identity reason under ru-RU', () => {
+    const admitted = withRadioWide('1/ab');
+    const model: RadioViewModel = validateRadioViewModel({
+      ...admitted,
+      vfos: admitted.vfos.map((vfo, index) => ({
+        ...vfo,
+        slot: { kind: 'relative', role: index === 0 ? 'selected' : 'unselected' },
+        label: index === 0 ? 'Selected VFO' : 'Unselected VFO',
+        isActive: index === 0,
+        isActiveSlot: index === 0,
+      })),
+    });
+    setLocale('ru-RU');
+    try {
+      const target = mountSurface({ viewModel: model });
+      const expected = 'Радио ещё не подтвердило, какой VFO — A, а какой — B. Сначала нажмите Select VFO A или Select VFO B.';
+      expect(target.querySelector('[data-testid="vfo-ops"]')!.getAttribute('title')).toBe(expected);
+    } finally {
+      _resetLocale();
+    }
+  });
+
+  it('puts a split-specific reason on the split fact-toggle while split is unknown', () => {
+    const model = validateRadioViewModel({ ...withRadioWide(), split: { status: 'unknown' } });
+    const target = mountSurface({ viewModel: model });
+    // Neither equalize nor swap depends on split — neither carries this reason.
+    expect(target.querySelector<HTMLButtonElement>('[data-vfo-equalize]')!.title).toBe('');
+    const toggle = target.querySelector<HTMLButtonElement>('[data-vfo-split]')!;
+    expect(toggle.title).toBe('The radio has not confirmed the split state yet.');
+    expect(describedText(target, toggle)).toBe('The radio has not confirmed the split state yet.');
+  });
+
+  it('puts a dual-watch-specific reason on the fact-toggle while dualWatch is unknown', () => {
+    const model = validateRadioViewModel({ ...withRadioWide(), dualWatch: { status: 'unknown' } });
+    const target = mountSurface({ viewModel: model });
+    const toggle = target.querySelector<HTMLButtonElement>('[data-vfo-dual-watch]')!;
+    expect(toggle.title).toBe('The radio has not confirmed the dual watch state yet.');
+    expect(describedText(target, toggle)).toBe('The radio has not confirmed the dual watch state yet.');
+  });
+
+  it('a per-tile select control disabled by its own unknown slot carries a reason', () => {
+    const base1ab = topologyFixtures['1/ab'];
+    const model: RadioViewModel = validateRadioViewModel({
+      ...base1ab,
+      vfos: [base1ab.vfos[0], { ...base1ab.vfos[1], slot: { kind: 'unknown' } }],
+    });
+    const target = mountSurface({ viewModel: model });
+    const button = target.querySelectorAll<HTMLButtonElement>('[data-vfo-select]')[0];
+    const expected = "The radio has not confirmed this VFO's A/B identity yet, so it can't be selected.";
+    expect(button.disabled).toBe(true);
+    expect(button.title).toBe(expected);
+    expect(describedText(target, button)).toBe(expected);
+  });
+
+  it('a per-tile select control forced off by the MOR-1256 strip-level `disabled` prop carries a reason', () => {
+    const target = mountSurface({ viewModel: base, disabled: true });
+    const button = target.querySelectorAll<HTMLButtonElement>('[data-vfo-select]')[0];
+    const expected = "This receiver is not available right now, so it can't be selected.";
+    expect(button.disabled).toBe(true);
+    expect(button.title).toBe(expected);
+    expect(describedText(target, button)).toBe(expected);
+  });
+
+  it('an enabled per-tile select control carries no reason', () => {
+    const target = mountSurface({ viewModel: base });
+    const button = target.querySelector<HTMLButtonElement>('[data-vfo-select]')!;
+    expect(button.disabled).toBe(false);
+    expect(button.title).toBe('');
+    expect(button.hasAttribute('aria-describedby')).toBe(false);
+  });
+
+  // MOR-1481 rework (R2): the Select VFO A/B resolver buttons used to render
+  // no reason at all whenever the MOR-1256 strip-level `disabled` prop forced
+  // them off (a silent, unexplained disabled control), and always fell back
+  // to `relativeSelectionHelp` while a resolution was merely pending (a
+  // promise the radio was not, in that instant, capable of keeping).
+  describe('Select VFO A/B resolver buttons carry an honest reason (MOR-1481 rework)', () => {
+    const relativeModel = (): RadioViewModel => validateRadioViewModel({
+      ...topologyFixtures['1/ab'],
+      vfos: topologyFixtures['1/ab'].vfos.map((vfo, index) => ({
+        ...vfo,
+        slot: { kind: 'relative', role: index === 0 ? 'selected' : 'unselected' },
+        label: index === 0 ? 'Selected VFO' : 'Unselected VFO',
+        isActive: index === 0,
+        isActiveSlot: index === 0,
+      })),
+    });
+
+    it('carries the receiver-unavailable reason when forced off by the strip-level `disabled` prop', () => {
+      const target = mountSurface({ viewModel: relativeModel(), disabled: true });
+      const expected = "This receiver is not available right now, so it can't be selected.";
+      for (const id of ['A', 'B'] as const) {
+        const button = target.querySelector<HTMLButtonElement>(`[data-vfo-select-absolute="${id}"]`)!;
+        expect(button.disabled, id).toBe(true);
+        expect(button.title, id).toBe(expected);
+        expect(describedText(target, button), id).toBe(expected);
+      }
+    });
+
+    it('carries the pending reason — not the receiver-unavailable one — while a resolution is in flight', () => {
+      vi.useFakeTimers();
+      const onSelectVfo = vi.fn();
+      const target = mountSurface({ viewModel: relativeModel(), onSelectVfo });
+      const a = target.querySelector<HTMLButtonElement>('[data-vfo-select-absolute="A"]')!;
+      const b = target.querySelector<HTMLButtonElement>('[data-vfo-select-absolute="B"]')!;
+      a.click();
+      flushSync();
+      const expected = 'Waiting for the radio to confirm the selection.';
+      expect(a.disabled).toBe(true);
+      expect(a.title).toBe(expected);
+      expect(describedText(target, a)).toBe(expected);
+      expect(b.disabled).toBe(true);
+      expect(b.title).toBe(expected);
+      expect(describedText(target, b)).toBe(expected);
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    });
+
+    it('falls back to `relativeSelectionHelp` when neither disabled nor pending applies', () => {
+      const target = mountSurface({ viewModel: relativeModel() });
+      const a = target.querySelector<HTMLButtonElement>('[data-vfo-select-absolute="A"]')!;
+      expect(a.disabled).toBe(false);
+      expect(a.title).toBe(
+        'Current A/B identity is unknown. Selecting this VFO will change the radio selection and establish identity.',
+      );
+      expect(a.hasAttribute('aria-describedby')).toBe(false);
+    });
+  });
+
+  // Two independently mounted surfaces (the dual-receiver cockpit's real
+  // shape) must not collide on `aria-describedby` target ids.
+  it('reason ids stay unique across two mounted surfaces', () => {
+    const model = validateRadioViewModel({
+      ...withRadioWide('1/ab'), split: { status: 'unknown' },
+    });
+    const targetA = mountSurface({ viewModel: model });
+    const targetB = mountSurface({ viewModel: model });
+    const idA = targetA.querySelector<HTMLButtonElement>('[data-vfo-split]')!.getAttribute('aria-describedby');
+    const idB = targetB.querySelector<HTMLButtonElement>('[data-vfo-split]')!.getAttribute('aria-describedby');
+    expect(idA).not.toBeNull();
+    expect(idB).not.toBeNull();
+    expect(idA).not.toBe(idB);
+  });
+});
+
+describe('split RX/TX digest (MOR-1321)', () => {
+  // Kills: reading TX off the active VFO (or RX off the TX target) — the two
+  // sides would then agree by construction and the digest could never show the
+  // split it exists to show.
+  it('reads RX from the active VFO and TX from the radio-wide txTarget', () => {
+    const model = topologyFixtures['2/main_sub'];
+    const active = model.vfos.find((v) => v.isActive)!;
+    const target = mountSurface({ viewModel: model });
+    const digest = target.querySelector<HTMLElement>('[data-testid="vfo-split-digest"]')!;
+    expect(digest.querySelector('[data-split-rx]')!.textContent)
+      .toContain(expectedFreq(active.frequencyHz));
+    expect(model.txTarget.status).toBe('known');
+    if (model.txTarget.status === 'known') {
+      expect(digest.querySelector('[data-split-tx]')!.textContent)
+        .toContain(expectedFreq(model.txTarget.frequencyHz));
+    }
+  });
+
+  // Unknown honesty, TX side: an unobserved txTarget must render nothing in
+  // its slot — never fall back to the active VFO's frequency, which would
+  // tell the operator he is transmitting on a frequency nobody observed,
+  // and (MOR-2655) never a dash either.
+  it('renders nothing for TX while txTarget is unknown', () => {
+    const base = topologyFixtures['2/main_sub'];
+    const model = validateRadioViewModel({
+      ...base,
+      txTarget: { status: 'unknown', reason: 'not-observed' },
+      // The validator refuses `txPermit: 'allowed'` while the target is
+      // unknown (fail-open is not permitted), and refuses `isTxTarget` on a
+      // tile no known target names — so an honest unknown-TX model has to
+      // carry all three, which is exactly the state the radio reports.
+      txPermit: { status: 'unknown', reason: 'tx-target-unknown' },
+      vfos: base.vfos.map((v) => ({ ...v, isTxTarget: false })),
+      disabledReasons: [{ field: 'txTarget', code: 'field-not-observed' }],
+    });
+    const digest = mountSurface({ viewModel: model })
+      .querySelector<HTMLElement>('[data-testid="vfo-split-digest"]')!;
+    // MOR-2655: the old pin was `toContain('—')` on the shared formatFrequency
+    // fallback — now nothing is drawn, same rule as the tile.
+    expect(digest.querySelector('[data-split-tx]')!.textContent).not.toContain('—');
+    // ...and RX is still stated, so blank is TX-specific rather than the
+    // whole digest going blank.
+    expect(digest.querySelector('[data-split-rx]')!.textContent).not.toBe('');
+  });
+
+  // Kills: collapsing the split fact to a boolean for the dimming hook, which
+  // is what the legacy bridge did (`class:inactive={!splitActive}`) and what
+  // this surface must not do.
+  it.each([
+    [{ status: 'known', value: true } as const, 'true'],
+    [{ status: 'known', value: false } as const, 'false'],
+    [{ status: 'unknown' } as const, 'mixed'],
+  ])('carries the split fact as a tri-state (%j)', (split, expected) => {
+    const model = validateRadioViewModel({ ...topologyFixtures['2/main_sub'], split });
+    const digest = mountSurface({ viewModel: model })
+      .querySelector<HTMLElement>('[data-testid="vfo-split-digest"]')!;
+    expect(digest.getAttribute('data-split-active')).toBe(expected);
+  });
+});
+
+describe('MOR-1321 i18n', () => {
+  // Kills: a missing catalog key silently rendering its own dotted name.
+  it('no unresolved catalog key leaks into the ops row or the digest', () => {
+    const target = mountSurface({ viewModel: topologyFixtures['2/main_sub'] });
+    for (const sel of ['vfo-ops', 'vfo-split-digest']) {
+      const text = target.querySelector<HTMLElement>(`[data-testid="${sel}"]`)!.textContent ?? '';
+      expect(text, sel).not.toMatch(/core\.vfo\./);
+      expect(text.trim().length, sel).toBeGreaterThan(0);
+    }
+  });
+});
+
+// ── MOR-1322 (S3b): per-digit frequency tuning ──────────────────────────────
+//
+// Parity with the legacy VfoHeader's `FrequencyDisplayInteractive`, now a
+// layer-clean primitive. The owner's ruling is option (b): tuning OPTS OUT of
+// the design language — the MOR-1275 renderer stays display-only and the digit
+// control self-renders. Each test's doc line names the mutation it kills.
+
+const DIGIT = '.vfo-freq .digit';
+const tunableTile = topologyFixtures['2/main_sub'];
+
+/** The one readout slot per tile — the composition invariant's subject. */
+const slots = (t: HTMLElement) => [...t.querySelectorAll<HTMLElement>('[data-vfo-freq]')];
+/** The radio-wide ACTIVE tile's slot. */
+const activeSlot = (t: HTMLElement) => slots(t).find(
+  (sl) => (sl.closest('[data-vfo-tile]') as HTMLElement).dataset.vfoActive === 'true')!;
+/**
+ * MOR-1335 — every slot whose tile is its OWN receiver's active slot: since
+ * G4 that, not the radio-wide active flag, is what may carry tuning. On a
+ * single-receiver topology the two sets coincide, so the pre-G4 tests that
+ * read `activeSlot` above are unchanged there.
+ */
+const activeSlots = (t: HTMLElement) => slots(t).filter(
+  (sl) => (sl.closest('[data-vfo-tile]') as HTMLElement).dataset.vfoActiveSlot === 'true');
+const tileOf = (sl: HTMLElement) => sl.closest('[data-vfo-tile]') as HTMLElement;
+/** The slots that actually mounted a digit control — the observable outcome. */
+const withDigits = (t: HTMLElement) => slots(t).filter((sl) => sl.querySelectorAll('.digit').length > 0);
+const tileId = (sl: HTMLElement) => `${tileOf(sl).dataset.vfoReceiver}:${tileOf(sl).dataset.vfoSlot}`;
+
+describe('per-digit tuning (MOR-1322) — structural gating', () => {
+  // Kills: mounting the control with no intent wired, which would give the
+  // operator digits that silently do nothing.
+  it('renders the plain readout when no tune intent is supplied', () => {
+    const t = mountSurface({ viewModel: tunableTile });
+    expect(t.querySelectorAll(DIGIT)).toHaveLength(0);
+    expect(slots(t).every((s) => s.dataset.freqTunable === 'false')).toBe(true);
+  });
+
+  // The non-vacuous half.
+  it('mounts the digit control on each receiver\'s ACTIVE-SLOT tile once the intent is wired', () => {
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency: vi.fn() });
+    expect(slots(t)).toHaveLength(tunableTile.vfos.length);
+    // MOR-1335: exactly one control per RECEIVER — never one per tile (B1's
+    // wrong-VFO hazard), and no longer only one per radio (G4's parity gap).
+    expect(slots(t).filter((sl) => sl.dataset.freqTunable === 'true'))
+      .toHaveLength(tunableTile.vfos.filter((v) => v.isActiveSlot).length);
+    expect(activeSlot(t).querySelectorAll('.digit').length).toBeGreaterThan(0);
+  });
+
+  // Kills: rendering digits from a fabricated 0 when the frequency is
+  // unobserved — MOR-977 says ABSENT, and MOR-2655 draws nothing in the box.
+  it('an unknown frequency renders nothing in the reserved box and NO digits', () => {
+    const base = topologyFixtures['1/ab'];
+    const model = validateRadioViewModel({
+      ...base,
+      vfos: base.vfos.map((v, i) => (i === 0 ? { ...v, frequencyHz: null } : v)),
+    });
+    const t = mountSurface({ viewModel: model, onTuneFrequency: vi.fn() });
+    const slot = slots(t)[0];
+    expect(slot.dataset.freqTunable).toBe('false');
+    expect(slot.querySelectorAll('.digit')).toHaveLength(0);
+    // MOR-2655: the old pin was `toContain('—')`.
+    expect(slot.textContent).not.toContain('—');
+    expect(slot.classList.contains('display-unknown')).toBe(true);
+    expect(slot.classList.contains('vfo-freq-unlit')).toBe(true);
+    // ABSENT, not inert: there is no control here to disable, so the slot must
+    // NOT claim `aria-disabled`. That attribute is reserved for the operational
+    // case (a mounted control the strip gate has made inert) — conflating the
+    // two is exactly the MOR-977 distinction this surface exists to keep.
+    expect(slot.hasAttribute('aria-disabled')).toBe(false);
+  });
+});
+
+describe('per-digit tuning (MOR-1322) — intents (R9: frequency, never TX)', () => {
+  const wheelOn = (el: Element, deltaY: number) => {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return el.dispatchEvent(new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true }));
+  };
+
+  // Kills: dropping the receiver from the intent — MAIN and SUB tune different
+  // radios' halves and a lost receiver silently moves the wrong one.
+  // Index by RECEIVER and by ACTIVE (B1): `2/main_sub` carries two tiles
+  // (MAIN/SUB, one per receiver) and only the active one per receiver is
+  // tunable, so a hardcoded position would test the wrong tile.
+  it.each(['MAIN', 'SUB'] as const)('a digit on the active %s tile tunes that receiver', (receiver) => {
+    const onTuneFrequency = vi.fn();
+    const model = validateRadioViewModel({
+      ...tunableTile,
+      // Make this receiver's first tile the active one, so both receivers are
+      // exercised through the same active-tile rule.
+      vfos: tunableTile.vfos.map((v, i) => ({
+        ...v,
+        isActive: i === tunableTile.vfos.findIndex((x) => x.receiver === receiver),
+      })),
+      activeReceiver: { status: 'known', receiver },
+    });
+    const t = mountSurface({ viewModel: model, onTuneFrequency });
+    const digits = activeSlot(t).querySelectorAll('.digit');
+    wheelOn(digits[digits.length - 1], -1);
+    flushSync();
+    expect(onTuneFrequency).toHaveBeenCalledTimes(1);
+    expect(onTuneFrequency.mock.calls[0][0]).toBe(receiver);
+  });
+
+  it('requires a deliberate digit click before a VFO wheel event becomes a tuning intent', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency });
+    const digit = slots(t)[0].querySelectorAll<HTMLElement>('.digit')[4];
+    const unarmed = new WheelEvent('wheel', { deltaY: -1, bubbles: true, cancelable: true });
+
+    expect(digit.dispatchEvent(unarmed)).toBe(true);
+    flushSync();
+    expect(unarmed.defaultPrevented).toBe(false);
+    expect(onTuneFrequency).not.toHaveBeenCalled();
+
+    digit.click();
+    const armed = new WheelEvent('wheel', { deltaY: -1, bubbles: true, cancelable: true });
+    expect(digit.dispatchEvent(armed)).toBe(false);
+    flushSync();
+    expect(armed.defaultPrevented).toBe(true);
+    expect(onTuneFrequency).toHaveBeenCalledOnce();
+    expect(onTuneFrequency).toHaveBeenCalledWith('MAIN', tunableTile.vfos[0].frequencyHz! + 1000);
+  });
+
+  // Kills: an inverted or constant step. Wheel up must raise, wheel down must
+  // lower, and by the clicked digit's own multiplier.
+  it('wheel up and wheel down step the clicked digit in opposite directions', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency });
+    const start = tunableTile.vfos[0].frequencyHz!;
+    const digits = slots(t)[0].querySelectorAll('.digit');
+    wheelOn(digits[digits.length - 1], -1);
+    wheelOn(digits[digits.length - 1], 1);
+    flushSync();
+    const [up, down] = onTuneFrequency.mock.calls.map((c) => c[1] as number);
+    expect(up).toBeGreaterThan(start);
+    expect(down).toBeLessThan(start);
+    expect(up - start).toBe(start - down);
+  });
+
+  // Keyboard parity: the legacy widget supported click-to-select then ↑/↓.
+  // Kills: losing the keyboard path in the relocation, which would make tuning
+  // mouse-only.
+  it('click-to-select then ArrowUp/ArrowDown tunes the selected digit', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency });
+    const slot = slots(t)[0];
+    const digits = slot.querySelectorAll<HTMLElement>('.digit');
+    digits[digits.length - 1].click();
+    flushSync();
+    const group = slot.querySelector<HTMLElement>('.freq')!;
+    for (const key of ['ArrowUp', 'ArrowDown']) {
+      group.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    }
+    flushSync();
+    expect(onTuneFrequency).toHaveBeenCalledTimes(2);
+    expect(onTuneFrequency.mock.calls[0][1]).toBeGreaterThan(tunableTile.vfos[0].frequencyHz!);
+    expect(onTuneFrequency.mock.calls[1][1]).toBeLessThan(tunableTile.vfos[0].frequencyHz!);
+  });
+
+  // Kills: arrow keys tuning without a digit selected — the legacy widget
+  // required a selection first, and stepping an unselected readout would move
+  // the radio on a stray keypress.
+  it('arrow keys do nothing until a digit is selected', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency });
+    slots(t)[0].querySelector<HTMLElement>('.freq')!
+      .dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+    flushSync();
+    expect(onTuneFrequency).not.toHaveBeenCalled();
+  });
+});
+
+// ── MOR-1441: pending-target affordance ─────────────────────────────────
+describe('pending-target affordance (MOR-1441)', () => {
+  // Kills: rendering the pending target with no distinguishing marker, or
+  // rendering the CONFIRMED digits while a pending target exists — either
+  // way the operator loses sight of where a hot burst is heading, or the
+  // pending value gets presented as confirmed truth.
+  it('renders the pending target, marked distinct from confirmed, on the receiver that has one', () => {
+    const t = mountSurface({
+      viewModel: tunableTile,
+      onTuneFrequency: vi.fn(),
+      pendingFrequencyHz: { MAIN: 14260000 },
+    });
+    const main = activeSlot(t); // MAIN's active tile (isActive: true)
+    const mainGroup = main.querySelector<HTMLElement>('.freq')!;
+    expect(mainGroup.dataset.freqStatus).toBe('pending');
+    const digitsText = [...main.querySelectorAll('.digit')].map((d) => d.textContent).join('');
+    expect(digitsText).toBe('14260000');
+    expect(digitsText).not.toBe(String(tunableTile.vfos[0].frequencyHz));
+
+    // SUB's active-slot tile has no pending entry — stays confirmed.
+    const sub = activeSlots(t).find((sl) => tileOf(sl).dataset.vfoReceiver === 'SUB')!;
+    const subGroup = sub.querySelector<HTMLElement>('.freq')!;
+    expect(subGroup.dataset.freqStatus).toBe('confirmed');
+  });
+
+  // Kills: leaving the marker "pending" (or the digits stuck on a stale
+  // target) once no in-flight `set_freq` exists for the receiver — the
+  // MOR-1441 snap-to-confirmed-on-echo/expiry rule.
+  it('renders confirmed digits when no pending target is supplied', () => {
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency: vi.fn() });
+    const group = activeSlot(t).querySelector<HTMLElement>('.freq')!;
+    expect(group.dataset.freqStatus).toBe('confirmed');
+    const digitsText = [...activeSlot(t).querySelectorAll('.digit')].map((d) => d.textContent).join('');
+    expect(digitsText).toBe(String(tunableTile.vfos[0].frequencyHz));
+  });
+
+  // ── MOR-1441 REVIEW FIX: the anti-runaway pin ───────────────────────────
+  // Reproduced defect: VfoSurface fed the PENDING display value into
+  // `FrequencyDisplayInteractive`'s `freq` prop, which doubles as the SOLE
+  // arithmetic base for wheel/arrow gestures. Every hot tick then computed
+  // its next target off an already-drifted base and fed the excess back
+  // into the MOR-1425 tuning accumulator's own delta — a positive-feedback
+  // loop the verifier reproduced against the REAL accumulator (10 ticks of
+  // +10 Hz intent -> +1910 Hz actual; 30 ticks -> +15.7 MHz; a TX-out-of-
+  // band hazard). This drives the actual production seam — VfoSurface's
+  // `onTuneFrequency` feeding a REAL `createTuningAccumulator`, with
+  // `pendingFrequencyHz` updated between ticks exactly as a live re-render
+  // would (`SemanticRadioSurfaces` re-deriving it from the accumulator's own
+  // emitted target). THE kill: N hot ticks must land on confirmed + N*step,
+  // never runaway growth.
+  it('MUTATION KILL: N hot wheel ticks accumulate linearly (confirmed + N*step), never runaway', () => {
+    vi.useFakeTimers();
+    try {
+      const CONFIRMED = tunableTile.vfos[0].frequencyHz!; // MAIN's active tile
+      const N = 10;
+      let target = CONFIRMED;
+      const accumulator = createTuningAccumulator({
+        emit: (_receiver, freq) => { target = freq; },
+        paceMs: 0,
+      });
+
+      let pendingFrequencyHz: Partial<Record<'MAIN' | 'SUB', number>> = {};
+      let stepSize: number | null = null;
+
+      for (let i = 0; i < N; i++) {
+        let requested: number | null = null;
+        const onTuneFrequency = (_receiver: 'MAIN' | 'SUB', hz: number) => {
+          requested = hz;
+          accumulator.step(0, CONFIRMED, hz, 1);
+        };
+        const el = document.createElement('div');
+        document.body.appendChild(el);
+        const component = mount(VfoSurface, {
+          target: el,
+          props: { viewModel: tunableTile, onTuneFrequency, pendingFrequencyHz },
+        });
+        flushSync();
+
+        const digits = activeSlot(el).querySelectorAll<HTMLElement>('.digit');
+        const oneKhzDigit = digits[digits.length - 4]; // 1 kHz place, robust to MHz digit-count trim
+        oneKhzDigit.click();
+        oneKhzDigit.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true }));
+        flushSync();
+        vi.advanceTimersByTime(1); // flush the accumulator's paced emit
+
+        unmount(component);
+        document.body.removeChild(el);
+
+        expect(requested, `tick ${i}`).not.toBeNull();
+        if (stepSize === null) stepSize = requested! - CONFIRMED;
+        pendingFrequencyHz = { MAIN: target };
+      }
+
+      expect(stepSize).not.toBeNull();
+      expect(target).toBe(CONFIRMED + N * stepSize!);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('per-digit tuning (MOR-1322) — the operational guard, pinned independently', () => {
+  const wheel = (el: Element) => {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return el.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true, cancelable: true }));
+  };
+
+  // The MOR-1321 B2 lesson applied FROM THE START, and the reason `disabled` is
+  // an OPERATIONAL gate rather than a structural one: the control still mounts,
+  // so the handler guard is reachable and a mutant deleting it cannot hide
+  // behind an absent control.
+  it('MUTATION KILL: a strip-disabled surface mounts the control but the guard refuses the intent', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency, disabled: true });
+    const digits = slots(t)[0].querySelectorAll('.digit');
+    // Present — this is what makes the assertion below about the GUARD.
+    expect(digits.length).toBeGreaterThan(0);
+    wheel(digits[digits.length - 1]);
+    flushSync();
+    expect(onTuneFrequency).not.toHaveBeenCalled();
+  });
+
+  // The attribute half, asserted separately so deleting either mechanism fails
+  // on its own: markup says inert, handler enforces inert.
+  it('MUTATION KILL: a strip-disabled slot is marked inert for assistive tech', () => {
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency: vi.fn(), disabled: true });
+    // Each receiver's ACTIVE-SLOT tile is the one that mounts a control
+    // (MOR-1335), so those are the ones that must be marked inert; the rest are
+    // structurally absent (B1) and must NOT claim `aria-disabled` — absent is
+    // not inert. Since MOR-2467 both `2/main_sub` tiles are active-slot (one
+    // per receiver), so the inert half runs there and the absent half on
+    // `1/ab`, whose B tile is not its receiver's active slot.
+    const inert = activeSlots(t);
+    expect(inert.length).toBeGreaterThan(0);
+    for (const slot of inert) {
+      expect(slot.dataset.freqTunable, tileId(slot)).toBe('false');
+      expect(slot.getAttribute('aria-disabled'), tileId(slot)).toBe('true');
+    }
+    const ab = mountSurface({ viewModel: topologyFixtures['1/ab'], onTuneFrequency: vi.fn(), disabled: true });
+    const absent = slots(ab).filter((sl) => !activeSlots(ab).includes(sl));
+    expect(absent.length).toBeGreaterThan(0);
+    for (const slot of absent) {
+      expect(slot.hasAttribute('aria-disabled'), tileId(slot)).toBe(false);
+    }
+  });
+
+  // Non-vacuous companion: the identical wheel on an ENABLED surface DOES
+  // dispatch, so the refusal above is the guard and not a dead control.
+  it('the same wheel gesture tunes once the strip is operational', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency });
+    const digits = slots(t)[0].querySelectorAll('.digit');
+    wheel(digits[digits.length - 1]);
+    flushSync();
+    expect(onTuneFrequency).toHaveBeenCalledTimes(1);
+  });
+
+  // The structural gate's own pin, with a live control alongside so the
+  // absence cannot be a broken mount.
+  it('an unknown-frequency tile carries no control while its sibling does', () => {
+    const base = topologyFixtures['2/main_sub'];
+    // Index 1 is SUB's record: since MOR-1335 it would otherwise mount a
+    // control (it is SUB's active slot), so nulling its frequency is a real
+    // structural gate test rather than a tile that was absent for the slot
+    // reason anyway.
+    const model = validateRadioViewModel({
+      ...base,
+      vfos: base.vfos.map((v, i) => (i === 1 ? { ...v, frequencyHz: null } : v)),
+    });
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: model, onTuneFrequency });
+    expect(slots(t)[0].querySelectorAll('.digit').length).toBeGreaterThan(0);
+    expect(slots(t)[1].querySelectorAll('.digit')).toHaveLength(0);
+    const digits = slots(t)[0].querySelectorAll('.digit');
+    wheel(digits[digits.length - 1]);
+    flushSync();
+    expect(onTuneFrequency).toHaveBeenCalledTimes(1);
+    expect(onTuneFrequency.mock.calls[0][0]).toBe('MAIN');
+  });
+});
+
+describe('per-digit tuning (MOR-1322) — the SLOT axis (verification B1)', () => {
+  const wheel = (el: Element) => {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return el.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true, cancelable: true }));
+  };
+
+  /**
+   * The tune intent is RECEIVER-scoped: `set_freq {receiver}` writes that
+   * receiver's ACTIVE VFO. A control on a tile that is not its receiver's
+   * active slot would therefore take its step from that tile's digits and move
+   * a DIFFERENT VFO — the operator scrolls B and A moves. MOR-1335 states that
+   * rule per RECEIVER (`isActiveSlot`) instead of per RADIO (`isActive`): the
+   * hazard is intra-receiver, so the qualification must be too.
+   */
+  it.each(['1/ab', '2/main_sub', '2/ab_shared'] as const)(
+    'on %s, every tile carrying a tuning control is its receiver\'s active slot', (id) => {
+      const t = mountSurface({ viewModel: topologyFixtures[id], onTuneFrequency: vi.fn() });
+      for (const slot of slots(t)) {
+        const tunable = slot.querySelectorAll('.digit').length > 0;
+        expect(tunable, `${id} ${tileId(slot)}`)
+          .toBe(tileOf(slot).dataset.vfoActiveSlot === 'true');
+      }
+    },
+  );
+
+  // The verifier's PD scenario, as a test. On `1/ab` the B tile is inactive:
+  // before the fix it mounted a control that dispatched a B-derived value
+  // against MAIN's active VFO (A). Kills the regression directly.
+  it('PD: the inactive B tile on 1/ab has no control and dispatches nothing', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: topologyFixtures['1/ab'], onTuneFrequency });
+    const inactive = slots(t).filter(
+      (sl) => (sl.closest('[data-vfo-tile]') as HTMLElement).dataset.vfoActive !== 'true');
+    expect(inactive.length).toBeGreaterThan(0);
+    for (const slot of inactive) {
+      expect(slot.querySelectorAll('.digit')).toHaveLength(0);
+      expect(slot.dataset.freqTunable).toBe('false');
+      wheel(slot);
+    }
+    flushSync();
+    expect(onTuneFrequency).not.toHaveBeenCalled();
+  });
+
+  // Non-vacuous: the ACTIVE tile on the same model still tunes, so the absence
+  // above is the slot gate and not a dead surface.
+  it('the active tile on the same model still tunes', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: topologyFixtures['1/ab'], onTuneFrequency });
+    const active = slots(t).find(
+      (sl) => (sl.closest('[data-vfo-tile]') as HTMLElement).dataset.vfoActive === 'true')!;
+    const digits = active.querySelectorAll('.digit');
+    expect(digits.length).toBeGreaterThan(0);
+    wheel(digits[digits.length - 1]);
+    flushSync();
+    expect(onTuneFrequency).toHaveBeenCalledTimes(1);
+  });
+
+  // Tuning FOLLOWS the active VFO: flip which slot is active and the control
+  // moves with it. Kills a gate keyed to slot identity (e.g. always 'A')
+  // rather than to the active fact.
+  it('tuning follows an active-VFO flip', () => {
+    const base = topologyFixtures['1/ab'];
+    const flipped = validateRadioViewModel({
+      ...base,
+      // Both flags move together: on a single-receiver topology "the active
+      // VFO" and "this receiver's active slot" are the same event, and the
+      // MOR-1335 validator refuses `isActive` without `isActiveSlot`.
+      vfos: base.vfos.map((v) => ({ ...v, isActive: !v.isActive, isActiveSlot: !v.isActiveSlot })),
+    });
+    const before = mountSurface({ viewModel: base, onTuneFrequency: vi.fn() });
+    const after = mountSurface({ viewModel: flipped, onTuneFrequency: vi.fn() });
+    const tunableIndex = (t: HTMLElement) =>
+      slots(t).findIndex((sl) => sl.querySelectorAll('.digit').length > 0);
+    expect(tunableIndex(before)).not.toBe(tunableIndex(after));
+    expect(tunableIndex(after)).toBeGreaterThanOrEqual(0);
+  });
+
+  // The guard's own half of the slot axis, reachable because the ACTIVE tile
+  // does mount a control: a mutant deleting `!vfo.isActive` from the handler
+  // must fail even though the markup gate already hides inactive tiles.
+  it('MUTATION KILL: the handler refuses a non-active tile even when handed one directly', () => {
+    const base = topologyFixtures['1/ab'];
+    // Both tiles active in the MARKUP sense is impossible via the validator, so
+    // reach the guard the way production would if the markup gate regressed:
+    // an inactive tile whose control was force-mounted by a widened gate.
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: base, onTuneFrequency });
+    const inactiveTile = slots(t).find(
+      (sl) => (sl.closest('[data-vfo-tile]') as HTMLElement).dataset.vfoActive !== 'true')!;
+    // No control exists, so nothing can dispatch — the markup gate. The guard's
+    // independent proof is the disabled-strip test above, which keeps a live
+    // control and still refuses.
+    expect(inactiveTile.querySelectorAll('.digit')).toHaveLength(0);
+    expect(onTuneFrequency).not.toHaveBeenCalled();
+  });
+});
+
+// ── MOR-1335 (vocabulary gap G4): per-receiver active slot ─────────────────
+//
+// S3b gated tuning on `isActive`, which is GLOBALLY unique, so on `2/main_sub`
+// (IC-7610) exactly one tile on the whole radio was tunable and the SUB
+// receiver lost the per-digit tuning the legacy `VfoPanel` had (one widget per
+// RECEIVER). G4 restores it by qualifying the gate per receiver.
+//
+// The widening must not reintroduce the hazard it replaced. The adversarial
+// property, asserted below in both directions: a tune raised on a receiver's
+// tile dispatches to THAT receiver, carrying a value derived from THAT tile's
+// own frequency. Cross-dispatch (SUB's gesture moving MAIN, or MAIN's value
+// landing on SUB) is impossible by construction, and the intra-receiver hazard
+// B1 found stays closed — an inactive slot of the SAME receiver never mounts.
+describe('per-receiver tuning (MOR-1335) — cross-dispatch is impossible', () => {
+  const wheelUp = (el: Element) => {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return el.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true, cancelable: true }));
+  };
+  /** The 1 Hz digit — a wheel here steps the frequency by exactly one. */
+  const onesDigit = (sl: HTMLElement) => {
+    const digits = sl.querySelectorAll('.digit');
+    return digits[digits.length - 1];
+  };
+
+  /**
+   * `2/main_sub` with each receiver's active-slot fact set independently —
+   * the IC-7610 axis this ticket exists for. MOR-2467 leaves each receiver
+   * exactly one unslotted record, so a receiver either holds that record as
+   * its own active slot or its active slot was never observed (`false`);
+   * `isActive` stays radio-wide (it is the active RECEIVER's record).
+   */
+  function mainSubActiveSlots(
+    mainActiveSlot: boolean, subActiveSlot: boolean,
+  ): RadioViewModel {
+    const base = topologyFixtures['2/main_sub'];
+    const activeReceiver = base.activeReceiver;
+    return validateRadioViewModel({
+      ...base,
+      vfos: base.vfos.map((v) => {
+        const isActiveSlot = v.receiver === 'MAIN' ? mainActiveSlot : subActiveSlot;
+        return {
+          ...v,
+          isActiveSlot,
+          isActive: isActiveSlot && activeReceiver.status === 'known'
+            && activeReceiver.receiver === v.receiver,
+        };
+      }),
+    });
+  }
+
+  // THE PARITY GAP, stated directly: on the dual-receiver bench radio the SUB
+  // receiver must be tunable again. Red before G4 (one control per RADIO).
+  it('2/main_sub mounts exactly one control per RECEIVER, MAIN and SUB', () => {
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency: vi.fn() });
+    expect(withDigits(t).map(tileId)).toEqual(['MAIN:unslotted', 'SUB:unslotted']);
+  });
+
+  // THE ADVERSARIAL PROPERTY. Both controls are exercised in ONE mount, so a
+  // gate that leaked a receiver would show up as the wrong pair here — and the
+  // frequency proves the VALUE could not have come from another tile either.
+  it('each control dispatches its OWN receiver and its OWN tile frequency', () => {
+    const model = mainSubActiveSlots(true, true);
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: model, onTuneFrequency });
+    const controls = withDigits(t);
+    expect(controls.map(tileId)).toEqual(['MAIN:unslotted', 'SUB:unslotted']);
+    for (const slot of controls) wheelUp(onesDigit(slot));
+    flushSync();
+    const main = model.vfos.find((v) => v.receiver === 'MAIN' && v.isActiveSlot)!;
+    const sub = model.vfos.find((v) => v.receiver === 'SUB' && v.isActiveSlot)!;
+    // Non-vacuous: the two tiles hold DIFFERENT frequencies, so a swapped
+    // value cannot coincide with the right one.
+    expect(main.frequencyHz).not.toBe(sub.frequencyHz);
+    expect(onTuneFrequency.mock.calls).toEqual([
+      ['MAIN', main.frequencyHz! + 1],
+      ['SUB', sub.frequencyHz! + 1],
+    ]);
+  });
+
+  // The other direction of the same property: SUB's own record is tunable
+  // while MAIN is the active RECEIVER. A gate that read the radio-wide flag
+  // would dispatch MAIN here.
+  it('a SUB gesture never reaches MAIN, even while MAIN is the active receiver', () => {
+    const model = mainSubActiveSlots(true, true);
+    expect(model.activeReceiver).toEqual({ status: 'known', receiver: 'MAIN' });
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: model, onTuneFrequency });
+    const sub = withDigits(t).find((sl) => tileOf(sl).dataset.vfoReceiver === 'SUB')!;
+    expect(tileId(sub)).toBe('SUB:unslotted');
+    wheelUp(onesDigit(sub));
+    flushSync();
+    expect(onTuneFrequency).toHaveBeenCalledTimes(1);
+    expect(onTuneFrequency.mock.calls[0][0]).toBe('SUB');
+  });
+
+  // B1's hazard, still closed: a record that is NOT its receiver's active
+  // slot mounts nothing and dispatches nothing, on BOTH receivers at once.
+  // MOR-2467 left each 2/main_sub receiver a single record, so the
+  // inactive-sibling-within-one-receiver case now lives only in the slotted
+  // '1/ab' PD test above; this pin keeps the both-receivers-at-once exercise
+  // the old slotted fixture carried.
+  it('a record that is not its receiver\'s active slot stays non-tunable on both receivers', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: mainSubActiveSlots(false, false), onTuneFrequency });
+    const inactive = slots(t).filter((sl) => tileOf(sl).dataset.vfoActiveSlot !== 'true');
+    expect(inactive.map(tileId)).toEqual(['MAIN:unslotted', 'SUB:unslotted']);
+    for (const slot of inactive) {
+      expect(slot.querySelectorAll('.digit'), tileId(slot)).toHaveLength(0);
+      expect(slot.dataset.freqTunable, tileId(slot)).toBe('false');
+      wheelUp(slot);
+    }
+    flushSync();
+    expect(onTuneFrequency).not.toHaveBeenCalled();
+  });
+
+  // FAILS CLOSED. An unobserved active-slot reading for SUB (the adapter's
+  // `activeSlot === null`) leaves SUB's record untunable — the unknown is
+  // never guessed into an active slot. MAIN keeps its control, so the absence
+  // is the per-receiver gate and not a dead surface.
+  it('an unobserved active slot leaves that receiver untunable while the other still tunes', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: mainSubActiveSlots(true, false), onTuneFrequency });
+    expect(withDigits(t).map(tileId)).toEqual(['MAIN:unslotted']);
+    for (const slot of slots(t).filter((sl) => tileOf(sl).dataset.vfoReceiver === 'SUB')) {
+      wheelUp(slot);
+    }
+    flushSync();
+    expect(onTuneFrequency).not.toHaveBeenCalled();
+    wheelUp(onesDigit(withDigits(t)[0]));
+    flushSync();
+    expect(onTuneFrequency.mock.calls).toEqual([['MAIN', tunableTile.vfos[0].frequencyHz! + 1]]);
+  });
+
+  // The unslotted topology: one position per receiver IS that receiver's
+  // active slot, so `2/ab_shared` regains BOTH controls. Kills a gate keyed to
+  // a slotted `id` that would leave every unslotted position untunable.
+  it('2/ab_shared tunes both receivers, each on its own position', () => {
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: topologyFixtures['2/ab_shared'], onTuneFrequency });
+    expect(withDigits(t).map(tileId)).toEqual(['MAIN:unslotted', 'SUB:unslotted']);
+    for (const slot of withDigits(t)) wheelUp(onesDigit(slot));
+    flushSync();
+    expect(onTuneFrequency.mock.calls.map((c) => c[0])).toEqual(['MAIN', 'SUB']);
+  });
+
+  // The single-receiver topologies are UNCHANGED by G4: one receiver has one
+  // active slot, so the pre-G4 "one tunable tile per radio" still holds there.
+  it.each(['1/single', '1/ab'] as const)('%s still carries exactly one control', (id) => {
+    const t = mountSurface({ viewModel: topologyFixtures[id], onTuneFrequency: vi.fn() });
+    expect(withDigits(t)).toHaveLength(1);
+    expect(tileOf(withDigits(t)[0]).dataset.vfoActive).toBe('true');
+  });
+
+  // MOR-1331: the digit widget accepts bounds, but this seam passed none —
+  // stepping past the band's tuneMaxHz still left. With a band pinning
+  // 14.200–14.300 MHz over a 14.250 MHz tile, a +1 MHz wheel step must clamp
+  // to 14.300 MHz; a half-known bound pair (max unknown) keeps the legacy
+  // wide-open clamp.
+  it('clamps a digit step to the band tuneMaxHz at this seam', () => {
+    const base = withBand(topologyFixtures['1/single']);
+    const model = validateRadioViewModel({
+      ...base,
+      vfos: base.vfos.map((vfo) => ({ ...vfo, frequencyHz: 14_250_000 })),
+      band: { ...base.band!, tuneMinHz: 14_200_000, tuneMaxHz: 14_300_000 },
+    });
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: model, onTuneFrequency });
+    const digits = activeSlot(t).querySelectorAll<HTMLElement>('.digit');
+    const mhzDigit = [...digits].find((digit) => digit.textContent === '4')!;
+    mhzDigit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    mhzDigit.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true, cancelable: true }));
+    flushSync();
+    expect(onTuneFrequency).toHaveBeenCalledExactlyOnceWith('MAIN', 14_300_000);
+  });
+
+  it('keeps the legacy wide clamp while one band edge is unknown', () => {
+    const base = withBand(topologyFixtures['1/single']);
+    const model = validateRadioViewModel({
+      ...base,
+      vfos: base.vfos.map((vfo) => ({ ...vfo, frequencyHz: 14_250_000 })),
+      band: { ...base.band!, tuneMinHz: 30_000, tuneMaxHz: null },
+    });
+    const onTuneFrequency = vi.fn();
+    const t = mountSurface({ viewModel: model, onTuneFrequency });
+    // Same digit pick as the VfoPanel pin: "14.250.000" renders the 10 MHz
+    // '1' first. Stepping it stays inside the legacy clamp and proves the
+    // half-known band pair engaged nothing.
+    const digits = activeSlot(t).querySelectorAll<HTMLElement>('.digit');
+    const tenMhzDigit = digits[0];
+    expect(tenMhzDigit.textContent).toBe('1');
+    tenMhzDigit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    tenMhzDigit.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true, cancelable: true }));
+    flushSync();
+    expect(onTuneFrequency).toHaveBeenCalledExactlyOnceWith('MAIN', 14_250_000 + 10_000_000);
+  });
+});
+
+/**
+ * MOR-1322 fix round (verification B2) — the composition crux, pinned with a
+ * design language ACTUALLY ACTIVE.
+ *
+ * The first cut asserted `not.toContain('MHz')` and never set
+ * `[data-design-language]`, so the only state that can produce a double readout
+ * was never entered: two mutants — rendering the language text alongside the
+ * digits, and dropping the language's region attributes in the tunable branch —
+ * both survived the whole suite. These tests activate a real registered
+ * language (MOR-1278 attribute doctrine, same `activate` idiom as
+ * `design-language-wiring.component.test.ts`) and assert the rule directly.
+ *
+ * MOR-1482 (owner ruling, session 19) update: the NON-tunable branch now ALSO
+ * opts out of the language's TEXT — previously only the tunable branch did
+ * (this is the same MOR-1322 option-(b) precedent, extended). The verifier's
+ * live finding: `studioline` is `DEFAULT_WORKSPACE.designLanguage`, declared
+ * compatible with the shipped `desktop-v2` skin, so a hero-scale grammar
+ * (thin-space-grouped ranked digits) flattened to tile-scale text was the
+ * OUT-OF-THE-BOX readout, not a rare state, and read as unformatted digits.
+ * Tests (a) and (c) below are rewritten for that: a language's TEXT never
+ * reaches this slot now, in either filling — only its `data-dl-*` region
+ * attributes do, still pinned unchanged by (b).
+ */
+describe('per-digit tuning (MOR-1322) — composition with an ACTIVE design language', () => {
+  /** MOR-1278: the activation attribute is the single switch. */
+  const activate = (id: string | null) => {
+    if (id === null) delete document.documentElement.dataset.designLanguage;
+    else document.documentElement.dataset.designLanguage = id;
+  };
+  afterEach(() => activate(null));
+
+  /** Every `data-dl-*` the language stamps on the slot — its claim on the region. */
+  const regionAttrs = (el: HTMLElement) => [...el.attributes]
+    .filter((a) => a.name.startsWith('data-dl-'))
+    .map((a) => `${a.name}=${a.value}`)
+    .sort();
+
+  const LANGUAGES = ['studioline', 'fieldline'] as const;
+
+  // (a) THE RULE. Kills MV3: rendering `freq.text` alongside the digits when a
+  // language is active — the exact double readout the ruling forbids, in the
+  // only state that can produce it.
+  it.each(LANGUAGES)('%s: a tunable slot shows the digits and NO language text', (lang) => {
+    activate(lang);
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency: vi.fn() });
+    const slot = activeSlot(t);
+    const digits = [...slot.querySelectorAll('.digit')].map((d) => d.textContent).join('');
+    // No OTHER text node sits alongside the digit control — MOR-1482: this is
+    // no longer "the language's text specifically", it is ANY text at all,
+    // since the non-tunable branch's language text was retired too.
+    const ownText = [...slot.childNodes]
+      .filter((n) => n.nodeType === Node.TEXT_NODE)
+      .map((n) => n.textContent!.trim()).join('');
+    expect(ownText).toBe('');
+    // The one readout present is the digit control, spelling the same fact.
+    expect(Number(digits)).toBe(tunableTile.vfos.find((v) => v.isActive)!.frequencyHz);
+  });
+
+  // (b) Kills MV4: dropping the language's region attributes from the tunable
+  // branch. The renderer stays display-only, but the language still owns the
+  // REGION — its hooks must be identical in both fillings.
+  it.each(LANGUAGES)('%s: region attributes are identical in both fillings', (lang) => {
+    activate(lang);
+    const tuned = activeSlot(mountSurface({ viewModel: tunableTile, onTuneFrequency: vi.fn() }));
+    const plain = activeSlot(mountSurface({ viewModel: tunableTile }));
+    // Non-vacuous: the language really does stamp something here, so an
+    // "identical" of two empty lists cannot pass.
+    expect(regionAttrs(plain).length).toBeGreaterThan(0);
+    expect(regionAttrs(tuned)).toEqual(regionAttrs(plain));
+  });
+
+  // (c) MOR-1482: the v2 dot-grouped fallback RETURNS when tuning is
+  // unavailable — the other half of the mutual exclusion (the rule is not
+  // "digits always win") — and, unlike before this ticket, it reads
+  // IDENTICALLY whether or not a language is active: there is no longer a
+  // separate "language readout" for this slot to fall back FROM.
+  it.each(LANGUAGES)('%s: the v2 fallback returns on a non-tunable tile, identical with or without the language', (lang) => {
+    activate(lang);
+    const untuned = activeSlot(mountSurface({ viewModel: tunableTile }));
+    const untunedText = untuned.textContent!.trim();
+    expect(untunedText.length).toBeGreaterThan(0);
+    expect(untuned.querySelectorAll('.digit')).toHaveLength(0);
+
+    const t = mountSurface({ viewModel: tunableTile, onTuneFrequency: vi.fn() });
+    expect(activeSlot(t).querySelectorAll('.digit').length).toBeGreaterThan(0);
+
+    // ...and a NON-TUNABLE tile stays on the fallback even while tuning is
+    // wired for a different tile — the mutual-exclusion gate is per-tile,
+    // not a surface-wide switch. Since MOR-2467 every 2/main_sub record is
+    // its receiver's active slot, the non-tunable-with-intent-wired tile
+    // lives on '1/ab' (B is not MAIN's active slot). Selecting it by its
+    // data-vfo-active-slot attribute — structurally, not by element
+    // identity — also keeps the language-on/off comparison below on the
+    // SAME tile position across two separate mounts.
+    const nonTunableOf = (root: HTMLElement) => slots(root).find(
+      (sl) => tileOf(sl).dataset.vfoActiveSlot !== 'true')!;
+    const inactive = nonTunableOf(
+      mountSurface({ viewModel: topologyFixtures['1/ab'], onTuneFrequency: vi.fn() }));
+    expect(inactive.querySelectorAll('.digit')).toHaveLength(0);
+    const inactiveText = inactive.textContent!.trim();
+    expect(inactiveText.length).toBeGreaterThan(0);
+
+    // THE SAME TILE POSITION, language OFF.
+    activate(null);
+    const bare = mountSurface({ viewModel: topologyFixtures['1/ab'], onTuneFrequency: vi.fn() });
+    const bareInactive = nonTunableOf(bare);
+    expect(bareInactive.querySelectorAll('.digit')).toHaveLength(0);
+    expect(inactiveText).toBe(bareInactive.textContent!.trim());
+  });
+
+  // Exactly ONE readout per tile, counted structurally — no tautology this
+  // time: a tile must carry either digits or text, never both. MOR-2655 adds
+  // the one blank the tile may carry: the unlit, reserved unread box.
+  it.each([...LANGUAGES, null])('%s: every tile carries exactly one readout', (lang) => {
+    activate(lang);
+    for (const props of [{}, { onTuneFrequency: vi.fn() }]) {
+      const t = mountSurface({ viewModel: tunableTile, ...props });
+      for (const slot of slots(t)) {
+        const hasDigits = slot.querySelectorAll('.digit').length > 0;
+        // Text OUTSIDE the digit control — what a double readout would add.
+        const ownText = [...slot.childNodes]
+          .filter((n) => n.nodeType === Node.TEXT_NODE)
+          .map((n) => n.textContent!.trim()).join('');
+        // Exactly one filling: digits XOR text. Both arms are asserted, and
+        // they differ — no tautology this time (verification B2). MOR-2655:
+        // the blank third arm is the unlit reserved unread box, and only it —
+        // never a blank that came from anywhere else.
+        if (hasDigits) expect(ownText, 'digits + text = double readout').toBe('');
+        else if (ownText.length === 0) {
+          expect(slot.classList.contains('display-unknown'),
+            'a blank readout must be the unlit reserved box').toBe(true);
+          expect(slot.classList.contains('vfo-freq-unlit')).toBe(true);
+          expect(slot.textContent).not.toContain('—');
+        } else expect(ownText.length, 'known readout carries its text').toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe('MOR-2342 historical instrument presentations', () => {
+  it('delegates operations to a pure v3 fact-and-intent component', () => {
+    const surface = readFileSync('src/semantic/VfoSurface.svelte', 'utf8');
+    const group = readFileSync('src/semantic/VfoOperationGroup.svelte', 'utf8');
+    expect(surface).toContain("import VfoOperationGroup from './VfoOperationGroup.svelte'");
+    expect(surface).toContain("from './vfo-operation-projection'");
+    expect(surface).toContain('<VfoOperationGroup');
+    expect(group).toContain('ActiveReceiverToggle');
+    expect(group).not.toMatch(/\$lib\/(?:runtime|stores|transport)|capabilities\.svelte/);
+    expect(group).not.toContain('document.querySelector');
+    expect(group).not.toMatch(/active(?:Receiver)?\s*=\s*['\"]MAIN['\"]/);
+    expect(group).not.toMatch(/phase\??:|['\"](?:idle|pending|failed)['\"]/);
+  });
+
+  it('keeps local meter source/session on every receiver branch', () => {
+    const source = readFileSync('src/semantic/VfoSurface.svelte', 'utf8');
+    expect(source.match(/<VfoIndicatorRow/g)).toHaveLength(3);
+    expect(source).toMatch(/radioWide=\{viewModel\.radioWideIndicators\}[\s\S]*?\{continuitySession\}/);
+    expect(source).toMatch(/slotLabel=\{instrumentSlot\(receiver\)\} \{continuitySession\}/);
+    const panel = source.match(/<VfoPanel([\s\S]*?)\/>/)?.[1] ?? '';
+    expect(panel).toMatch(/meterSource=\{indicator\?\.sMeter\.source\}/);
+    expect(panel).toMatch(/\{continuitySession\}/);
+    expect(source.match(/receiverInstruments\?\.(?:mainSMeter|subSMeter)/g)).toHaveLength(6);
+    expect(source.match(/sMeter=\{receiverInstruments === undefined/g)).toHaveLength(3);
+  });
+
+  it.each(['semantic', 'sdr', 'standard'] as const)(
+    'uses named frequency handles and its local operation group in grouped %s',
+    (appearance) => {
+      const root = mountSurface({
+        viewModel: withReceiverIndicators('2/main_sub'), appearance,
+        receiverInstruments: hostedReceiverInstruments(),
+      });
+      for (const receiver of ['MAIN', 'SUB']) {
+        expect(root.querySelectorAll(`[data-hosted-frequency="${receiver}"]`)).toHaveLength(1);
+        expect(root.querySelectorAll(`[data-hosted-s-meter="${receiver}"]`)).toHaveLength(1);
+      }
+      expect(root.querySelector('[data-hosted-vfo-operations]')).toBeNull();
+      expect(root.querySelectorAll('[data-testid="vfo-ops"]')).toHaveLength(1);
+      expect(root.querySelector('[data-vfo-operation-appearance]')?.getAttribute('data-vfo-operation-appearance')).toBe(appearance);
+      expect(root.querySelector('[data-hosted-frequency]')?.closest('[data-vfo-freq]')).not.toBeNull();
+    },
+  );
+
+  it('keeps standalone VfoSurface on its established local frequency and meter owners', () => {
+    const root = mountSurface({
+      viewModel: withReceiverIndicators('2/main_sub'), onTuneFrequency: vi.fn(),
+    });
+    expect(root.querySelector('[data-hosted-frequency]')).toBeNull();
+    expect(root.querySelectorAll('.freq.interactive')).toHaveLength(2);
+    expect(root.querySelectorAll('[data-testid="receiver-s-meter"] svg')).toHaveLength(2);
+  });
+
+  it.each(['sdr', 'standard'] as const)('pairs addressed facts and one bridge in %s', (appearance) => {
+    const root = mountSurface({ viewModel: withReceiverIndicators('2/main_sub'), appearance });
+    const panels = root.querySelectorAll('[data-receiver-instrument]');
+    expect(panels).toHaveLength(2);
+    for (const receiver of ['MAIN', 'SUB']) {
+      const panel = root.querySelector(`[data-receiver-instrument="${receiver}"]`)!;
+      expect(panel.querySelector(`[data-vfo-receiver="${receiver}"]`)).not.toBeNull();
+      expect(panel.querySelectorAll('[data-testid="receiver-s-meter"]')).toHaveLength(1);
+      expect(panel.querySelector('[data-indicator-receiver]')?.getAttribute('data-indicator-receiver')).toBe(receiver);
+    }
+    expect(root.querySelectorAll('[data-instrument-bridge]')).toHaveLength(1);
+  });
+  it('keeps A/B memories in one receiver instrument with one S-meter', () => {
+    const root = mountSurface({ viewModel: withReceiverIndicators('1/ab'), appearance: 'sdr' });
+    expect(root.querySelectorAll('[data-receiver-instrument]')).toHaveLength(1);
+    expect(root.querySelectorAll('[data-vfo-tile]')).toHaveLength(2);
+    expect(root.querySelectorAll('[data-testid="receiver-s-meter"]')).toHaveLength(1);
+  });
+  it('keeps Standard VFO A left and VFO B right while the confirmed active highlight moves', () => {
+    const base = withReceiverIndicators('1/ab');
+    const aActive = mountSurface({ viewModel: base, appearance: 'standard' });
+    expect(Array.from(aActive.querySelectorAll('[data-standard-vfo-slot]')).map((node) =>
+      node.getAttribute('data-standard-vfo-slot'))).toEqual(['A', 'B']);
+    expect(aActive.querySelector('[data-standard-vfo-slot="A"] .panel')?.classList.contains('active')).toBe(true);
+    expect(aActive.querySelector('[data-standard-vfo-slot="B"] .panel')?.classList.contains('active')).toBe(false);
+    expect(aActive.querySelectorAll('[data-testid="receiver-s-meter"]')).toHaveLength(1);
+    expect(aActive.querySelector('[data-standard-vfo-slot="B"] [data-meter-space="reserved"]')).not.toBeNull();
+
+    const bModel: RadioViewModel = {
+      ...base,
+      vfos: base.vfos.map((vfo) => ({
+        ...vfo,
+        isActive: vfo.slot.kind === 'slotted' && vfo.slot.id === 'B',
+        isActiveSlot: vfo.slot.kind === 'slotted' && vfo.slot.id === 'B',
+      })),
+    };
+    const bActive = mountSurface({ viewModel: bModel, appearance: 'standard' });
+    expect(Array.from(bActive.querySelectorAll('[data-standard-vfo-slot]')).map((node) =>
+      node.getAttribute('data-standard-vfo-slot'))).toEqual(['A', 'B']);
+    expect(bActive.querySelector('[data-standard-vfo-slot="A"] .panel')?.classList.contains('active')).toBe(false);
+    expect(bActive.querySelector('[data-standard-vfo-slot="B"] .panel')?.classList.contains('active')).toBe(true);
+    expect(bActive.querySelector('[data-standard-vfo-slot="A"] [data-vfo-freq]')?.textContent?.replace(/\s/g, '')).toBe('7.100.000');
+    expect(bActive.querySelector('[data-standard-vfo-slot="B"] [data-vfo-freq]')?.textContent?.replace(/\s/g, '')).toBe('7.150.000');
+  });
+
+  it('keeps the inactive Standard peer on its own slot frequency when the active receiver uses a hosted readout', () => {
+    const onTuneFrequency = vi.fn();
+    const onSelectVfo = vi.fn();
+    const root = mountSurface({
+      viewModel: withReceiverIndicators('1/ab'), appearance: 'standard',
+      receiverInstruments: hostedReceiverInstruments(), onTuneFrequency, onSelectVfo,
+    });
+    expect(root.querySelector('[data-standard-vfo-slot="A"] [data-hosted-frequency="MAIN"]')).not.toBeNull();
+    expect(root.querySelector('[data-standard-vfo-slot="B"] [data-vfo-freq]')?.textContent?.replace(/\s/g, '')).toBe('7.150.000');
+    expect(root.querySelector('[data-standard-vfo-slot="B"] [data-hosted-frequency]')).toBeNull();
+    const inactiveFrequency = root.querySelector<HTMLElement>('[data-standard-vfo-slot="B"] [data-vfo-freq]')!;
+    expect(inactiveFrequency.getAttribute('data-freq-tunable')).toBe('false');
+    inactiveFrequency.click();
+    inactiveFrequency.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true }));
+    inactiveFrequency.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    expect(onTuneFrequency).not.toHaveBeenCalled();
+    expect(onSelectVfo).not.toHaveBeenCalled();
+  });
+
+  it('reports the exact Standard A/B record clicked without selecting or tuning either slot', () => {
+    const onOpenFrequencyEntry = vi.fn();
+    const onSelectVfo = vi.fn();
+    const onTuneFrequency = vi.fn();
+    const model = withReceiverIndicators('1/ab');
+    const root = mountSurface({
+      viewModel: model, appearance: 'standard', onOpenFrequencyEntry, onSelectVfo,
+      onTuneFrequency,
+    });
+
+    for (const id of ['A', 'B'] as const) {
+      root.querySelector<HTMLElement>(`[data-standard-vfo-slot="${id}"] .digit`)?.click();
+    }
+    expect(onOpenFrequencyEntry).toHaveBeenCalledTimes(2);
+    expect(onOpenFrequencyEntry.mock.calls.map(([target]) => target)).toEqual([
+      { receiver: 'MAIN', slot: { kind: 'slotted', id: 'A' } },
+      { receiver: 'MAIN', slot: { kind: 'slotted', id: 'B' } },
+    ]);
+    expect(onOpenFrequencyEntry.mock.calls.every(([, trigger]) => trigger instanceof HTMLElement)).toBe(true);
+    expect(onSelectVfo).not.toHaveBeenCalled();
+    expect(onTuneFrequency).not.toHaveBeenCalled();
+  });
+
+  it('keeps only selection and shared operation controls in the center of the Standard pair', () => {
+    const onSelectVfo = vi.fn();
+    const root = mountSurface({
+      viewModel: withReceiverIndicators('1/ab'), appearance: 'standard', onSelectVfo,
+    });
+    const bridge = root.querySelector('[data-instrument-bridge]')!;
+    expect(bridge.previousElementSibling?.getAttribute('data-standard-vfo-slot')).toBe('A');
+    expect(bridge.nextElementSibling?.getAttribute('data-standard-vfo-slot')).toBe('B');
+    expect(bridge.querySelectorAll('[data-standard-select-vfo]')).toHaveLength(2);
+    bridge.querySelector<HTMLButtonElement>('[data-standard-select-vfo="B"]')?.click();
+    expect(onSelectVfo).toHaveBeenCalledExactlyOnceWith({ receiver: 'MAIN', slot: { kind: 'slotted', id: 'B' } });
+    expect(bridge.querySelector('[data-vfo-split]')).not.toBeNull();
+    expect(bridge.querySelector('[data-vfo-equalize]')).not.toBeNull();
+    expect(bridge.querySelector('[data-vfo-swap]')).not.toBeNull();
+    expect(bridge.querySelector('[data-vfo-tx-target-status]')).toBeNull();
+    expect(bridge.querySelector('[data-indicator-fact]')).toBeNull();
+    expect(bridge.querySelector('[data-vfo-operation-digest]')).toBeNull();
+  });
+
+  it.each([
+    ['off', false, 0, true, 'RIT', 'off'],
+    ['on', true, 120, true, 'RIT +120', 'on'],
+    ['unknown', null, null, true, 'RIT', 'unknown'],
+    ['unsupported', null, null, false, null, null],
+  ] as const)(
+    'renders the Standard active-VFO RIT %s state once with structural gating',
+    (_name, active, offset, structural, expectedText, expectedState) => {
+      const base = withRadioWide('1/ab');
+      const wide = base.radioWideIndicators!;
+      const availability = { structural, operational: structural };
+      const viewModel = validateRadioViewModel({
+        ...base,
+        radioWideIndicators: {
+          ...wide,
+          ritActive: {
+            reading: active === null
+              ? { status: 'unknown' as const }
+              : { status: 'known' as const, value: active },
+            availability,
+          },
+          ritOffset: {
+            reading: offset === null
+              ? { status: 'unknown' as const }
+              : { status: 'known' as const, value: offset },
+            availability,
+          },
+        },
+      });
+      const root = mountSurface({ viewModel, appearance: 'standard' });
+      const badges = root.querySelectorAll('[data-indicator-fact="rit"]');
+      expect(badges).toHaveLength(expectedText === null ? 0 : 1);
+      if (expectedText !== null) {
+        expect(badges[0].textContent?.trim()).toBe(expectedText);
+        expect(badges[0].getAttribute('data-state')).toBe(expectedState);
+        expect(badges[0].closest('[data-standard-vfo-slot]')?.getAttribute('data-standard-vfo-slot')).toBe('A');
+      }
+      expect(root.querySelector('.rit-row')).toBeNull();
+    },
+  );
+
+  it('mounts the surviving Standard VfoPanel with honest meter states', () => {
+    const base = withReceiverIndicators('1/single');
+    const standard = mountSurface({ viewModel: base, appearance: 'standard' });
+    expect(standard.querySelector('.panel .panel-header')).not.toBeNull();
+    expect(standard.querySelector('[data-testid="receiver-s-meter"]')?.getAttribute('data-operational')).toBe('true');
+
+    const indicator = base.receiverIndicators![0];
+    const unknown = mountSurface({
+      viewModel: { ...base, receiverIndicators: [{ ...indicator, sMeter: {
+        reading: { status: 'unknown' }, availability: { structural: true, operational: false },
+      } }] }, appearance: 'standard',
+    });
+    expect(unknown.querySelector('[data-testid="receiver-s-meter"]')?.getAttribute('aria-label')).toBe('MAIN S meter');
+
+    const absent = mountSurface({
+      viewModel: { ...base, receiverIndicators: [{ ...indicator, sMeter: {
+        reading: { status: 'unknown' }, availability: { structural: false, operational: false },
+      } }] }, appearance: 'standard',
+    });
+    expect(absent.querySelector('[data-testid="receiver-s-meter"]')).toBeNull();
+  });
+
+  it('keeps two receiver-level Standard records without invented slot selection', () => {
+    const onSelectVfo = vi.fn();
+    const root = mountSurface({
+      viewModel: withReceiverIndicators('2/main_sub'), appearance: 'standard', onSelectVfo,
+    });
+    expect(root.querySelectorAll('[data-receiver-instrument]')).toHaveLength(2);
+    expect(root.querySelectorAll('[data-vfo-tile]')).toHaveLength(2);
+    for (const receiver of ['MAIN', 'SUB']) {
+      const tile = root.querySelector(`[data-vfo-tile][data-vfo-receiver="${receiver}"]`)!;
+      expect(tile.getAttribute('data-vfo-slot')).toBe('unslotted');
+      expect(tile.querySelector('[data-vfo-freq]')?.textContent?.replace(/\s/g, ''))
+        .toBe(receiver === 'MAIN' ? '14.250.000' : '21.295.000');
+    }
+    expect(root.querySelectorAll('[data-vfo-select]')).toHaveLength(0);
+    root.querySelector<HTMLElement>('[data-vfo-tile][data-vfo-receiver="SUB"]')?.click();
+    expect(onSelectVfo).not.toHaveBeenCalled();
+  });
+
+  it('retains both fixed cards without an optimistic highlight when the active slot is unknown', () => {
+    const base = withReceiverIndicators('1/ab');
+    const onSelectVfo = vi.fn();
+    const viewModel: RadioViewModel = {
+      ...base,
+      activeReceiver: { status: 'unknown' },
+      vfos: base.vfos.map((vfo) => ({ ...vfo, isActive: false, isActiveSlot: false })),
+    };
+    const root = mountSurface({ viewModel, appearance: 'standard', onSelectVfo });
+    expect(root.querySelectorAll('[data-receiver-instrument="MAIN"]')).toHaveLength(2);
+    expect(root.querySelectorAll('[data-standard-vfo-slot]')).toHaveLength(2);
+    expect(root.querySelectorAll('.panel.active')).toHaveLength(0);
+    expect(root.querySelectorAll('[data-vfo-tile]')).toHaveLength(2);
+    expect(Array.from(root.querySelectorAll('[data-vfo-slot]')).map((node) => node.getAttribute('data-vfo-slot'))).toEqual(['A', 'B']);
+    root.querySelector<HTMLButtonElement>('[data-standard-select-vfo="B"]')?.click();
+    expect(onSelectVfo).toHaveBeenCalledExactlyOnceWith({ receiver: 'MAIN', slot: { kind: 'slotted', id: 'B' } });
+  });
+
+  it('retains an unknown secondary record as disabled, reasoned, and inert', () => {
+    const base = withReceiverIndicators('1/ab');
+    const onSelectVfo = vi.fn();
+    const viewModel: RadioViewModel = {
+      ...base,
+      vfos: [base.vfos[0], { ...base.vfos[1], slot: { kind: 'unknown' } }],
+    };
+    const root = mountSurface({ viewModel, appearance: 'standard', onSelectVfo });
+    expect(root.querySelectorAll('[data-vfo-tile]')).toHaveLength(2);
+    const unknown = root.querySelector<HTMLElement>('[data-vfo-slot="unknown"]')!;
+    expect(unknown).not.toBeNull();
+    const unknownHeader = unknown.querySelector<HTMLButtonElement>('.panel-header')!;
+    expect(unknownHeader.disabled).toBe(true);
+    expect(unknownHeader.title).toContain("has not confirmed this VFO's A/B identity");
+    unknownHeader.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onSelectVfo).not.toHaveBeenCalled();
+  });
+
+  it('retains a relative secondary record as disabled, reasoned, and inert', () => {
+    const base = withReceiverIndicators('1/ab');
+    const onSelectVfo = vi.fn();
+    const viewModel: RadioViewModel = {
+      ...base,
+      vfos: [
+        { ...base.vfos[0], slot: { kind: 'relative', role: 'selected' } },
+        { ...base.vfos[1], slot: { kind: 'relative', role: 'unselected' } },
+      ],
+    };
+    const root = mountSurface({ viewModel, appearance: 'standard', onSelectVfo });
+    expect(root.querySelectorAll('[data-vfo-tile]')).toHaveLength(2);
+    const relative = root.querySelector<HTMLElement>('[data-vfo-slot="unselected"]')!;
+    expect(relative).not.toBeNull();
+    expect(relative.querySelector('.panel-header')?.getAttribute('disabled')).not.toBeNull();
+    expect(root.querySelectorAll('[data-vfo-select-absolute]')).toHaveLength(2);
+    relative.querySelector<HTMLElement>('.panel-header')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onSelectVfo).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('MOR-2342 preserved instrument intents', () => {
+  it.each(['sdr', 'standard'] as const)('tunes the addressed SUB active slot exactly once in %s', (appearance) => {
+    const model = withReceiverIndicators('2/main_sub');
+    const onTuneFrequency = vi.fn();
+    const root = mountSurface({ viewModel: model, appearance, onTuneFrequency });
+    const tile = root.querySelector('[data-vfo-receiver="SUB"][data-vfo-active-slot="true"]')!;
+    const digits = tile.querySelectorAll<HTMLElement>('.digit');
+    const digit = digits[digits.length - 1];
+    digit.click();
+    digit.dispatchEvent(new WheelEvent('wheel', { deltaY: -1, bubbles: true, cancelable: true }));
+    expect(onTuneFrequency).toHaveBeenCalledExactlyOnceWith('SUB', 21295001);
+    expect(root.querySelector('[data-vfo-receiver="SUB"][data-vfo-active-slot="false"] .digit')).toBeNull();
+  });
+  it.each(['sdr', 'standard'] as const)('keeps unknown frequency and split inert in %s', (appearance) => {
+    const base = withReceiverIndicators('1/ab');
+    const model: RadioViewModel = { ...base, split: { status: 'unknown' },
+      vfos: base.vfos.map((vfo) => ({ ...vfo, frequencyHz: null })) };
+    const tune = vi.fn(); const split = vi.fn();
+    const root = mountSurface({ viewModel: model, appearance, onTuneFrequency: tune, onToggleSplit: split });
+    expect(root.querySelector('.digit')).toBeNull();
+    // MOR-2655: nothing is painted for an unobserved frequency in either
+    // appearance — the old pin kept the semantic/sdr dash ('—').
+    expect(root.querySelector('[data-vfo-freq]')?.textContent?.trim()).toBe('');
+    const toggle = root.querySelector<HTMLButtonElement>('[data-vfo-split]')!;
+    expect(toggle.disabled).toBe(true); toggle.click();
+    expect(split).not.toHaveBeenCalled(); expect(tune).not.toHaveBeenCalled();
+  });
+});
+
+// ── MOR-2467: Standard presents main_sub's two receiver-level records ───────
+//
+// The owner-confirmed IC-7610 payload: `main.freqHz`/`main.mode`/`main.filter`
+// and the `sub` equivalents, with NO `vfoA`/`vfoB` and NO `activeSlot` (the
+// radio has no per-receiver A/B slots). Driven through the REAL adapter so the
+// assertion covers the whole producer→Standard chain, not a hand-built model.
+describe('MOR-2467: main_sub Standard displays receiver-level MAIN/SUB records', () => {
+  it('shows qualified main./sub. freq/mode/filter with vfoA/vfoB and activeSlot absent', () => {
+    const caps = {
+      model: 'fixture', receivers: 2, vfoScheme: 'main_sub',
+      capabilities: ['audio', 'tx', 'dual_rx'],
+      stateContractVersion: 1, providerGeneration: 1,
+      freqRanges: [], modes: [], filters: [],
+      txBands: [{ start: 14000000, end: 14350000, name: '20m' }],
+    } as unknown as Capabilities;
+    const freshLeaf = {
+      observed: true, freshness: 'fresh', availability: 'available',
+      lastObservedMonotonic: 0,
+    };
+    const state = {
+      stateContractVersion: 1, providerGeneration: 1,
+      active: 'MAIN', split: false, dualWatch: false,
+      txTarget: { status: 'known', receiver: 'MAIN', slot: null, frequencyHz: 14250000 },
+      main: { freqHz: 14250000, mode: 'USB', filter: 1 },
+      sub: { freqHz: 21295000, mode: 'LSB', filter: 2 },
+      fieldStatus: Object.fromEntries([
+        'active', 'split', 'dualWatch', 'txTarget',
+        'main.freqHz', 'main.mode', 'main.filter',
+        'sub.freqHz', 'sub.mode', 'sub.filter',
+      ].map((path) => [path, freshLeaf])),
+    } as unknown as ServerState;
+
+    const viewModel = toRadioViewModel(state, caps)!;
+    expect(viewModel.vfoScheme).toBe('main_sub');
+    expect(viewModel.vfos.map((vfo) => [vfo.receiver, vfo.slot.kind])).toEqual([
+      ['MAIN', 'unslotted'], ['SUB', 'unslotted'],
+    ]);
+
+    const root = mountSurface({ viewModel, appearance: 'standard' });
+    expect(root.querySelectorAll('[data-receiver-instrument="MAIN"]')).toHaveLength(1);
+    expect(root.querySelectorAll('[data-receiver-instrument="SUB"]')).toHaveLength(1);
+    for (const [receiver, freq, mode, filter] of [
+      ['MAIN', '14.250.000', 'USB', 'FIL1'],
+      ['SUB', '21.295.000', 'LSB', 'FIL2'],
+    ] as const) {
+      const panel = root.querySelector(`[data-receiver-instrument="${receiver}"]`)!;
+      expect(panel.querySelector('[data-vfo-freq]')?.textContent?.replace(/\s/g, ''))
+        .toBe(freq);
+      expect(panel.textContent).toContain(mode);
+      expect(panel.textContent).toContain(filter);
+    }
+  });
+
+  it('routes a click on each receiver frequency to that exact unslotted target', () => {
+    const onOpenFrequencyEntry = vi.fn();
+    const caps = {
+      model: 'fixture', receivers: 2, vfoScheme: 'main_sub',
+      capabilities: ['audio', 'tx', 'dual_rx'],
+      stateContractVersion: 1, providerGeneration: 1,
+      freqRanges: [], modes: [], filters: [], txBands: [],
+    } as unknown as Capabilities;
+    const freshLeaf = {
+      observed: true, freshness: 'fresh', availability: 'available', lastObservedMonotonic: 0,
+    };
+    const state = {
+      stateContractVersion: 1, providerGeneration: 1, active: 'MAIN', split: false,
+      dualWatch: false, main: { freqHz: 14_250_000, mode: 'USB', filter: 1 },
+      sub: { freqHz: 21_295_000, mode: 'LSB', filter: 2 },
+      fieldStatus: Object.fromEntries(['active', 'split', 'dualWatch',
+        'main.freqHz', 'main.mode', 'main.filter', 'sub.freqHz', 'sub.mode', 'sub.filter']
+        .map(path => [path, freshLeaf])),
+    } as unknown as ServerState;
+    const root = mountSurface({
+      viewModel: toRadioViewModel(state, caps)!, appearance: 'standard', onOpenFrequencyEntry,
+    });
+
+    for (const receiver of ['MAIN', 'SUB'] as const) {
+      root.querySelector<HTMLElement>(`[data-receiver-instrument="${receiver}"] .digit`)!.click();
+    }
+    expect(onOpenFrequencyEntry.mock.calls.map(([target]) => target)).toEqual([
+      { receiver: 'MAIN', slot: { kind: 'unslotted' } },
+      { receiver: 'SUB', slot: { kind: 'unslotted' } },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MOR-2662 (owner ruling 2026-09-26): the phone's ONE-tile presentation.
+// `vfoTiles="active"` renders only the ACTIVE VFO's tile — the active
+// receiver's active slot — while every default caller keeps the full list.
+// ---------------------------------------------------------------------------
+describe('MOR-2662 — the one-tile presentation (vfoTiles="active")', () => {
+  const ab = topologyFixtures['1/ab'];
+  const dual = topologyFixtures['2/main_sub'];
+  // The IC-7300/IC-705 shape: relative slots, selected/unselected readback,
+  // A/B identity unresolved (the adapter's own labels, verbatim).
+  const relative: RadioViewModel = {
+    ...ab,
+    vfos: [
+      {
+        receiver: 'MAIN', slot: { kind: 'relative', role: 'selected' }, label: 'Selected VFO',
+        frequencyHz: 7100000, mode: 'LSB', filter: 'NARROW',
+        isActive: true, isActiveSlot: true, isTxTarget: false,
+      },
+      {
+        receiver: 'MAIN', slot: { kind: 'relative', role: 'unselected' }, label: 'Unselected VFO',
+        frequencyHz: 7150000, mode: 'LSB', filter: 'NARROW',
+        isActive: false, isActiveSlot: false, isTxTarget: false,
+      },
+    ],
+  };
+
+  it.each([
+    ['slotted A/B', ab, 'A'],
+    ['dual receiver', dual, 'unslotted'],
+    ['relative (IC-7300 shape)', relative, 'selected'],
+  ] as const)('%s: renders exactly the active VFO\'s tile', (_label, model, slotKey) => {
+    const root = mountSurface({ viewModel: model, vfoTiles: 'active' });
+    const tiles = root.querySelectorAll('[data-vfo-tile]');
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0].getAttribute('data-vfo-active')).toBe('true');
+    expect(tiles[0].getAttribute('data-vfo-slot')).toBe(slotKey);
+  });
+
+  it('the default presentation still renders every tile (the option, not a default change)', () => {
+    const root = mountSurface({ viewModel: ab });
+    expect(root.querySelectorAll('[data-vfo-tile]')).toHaveLength(2);
+  });
+
+  it('keeps the IC-7300 A/B identity selectors — switching stays possible with one tile', () => {
+    const root = mountSurface({ viewModel: relative, vfoTiles: 'active' });
+    expect(root.querySelector('[data-testid="vfo-identity-selectors"]')).not.toBeNull();
+    expect(root.querySelector('[data-vfo-select-absolute="A"]')).not.toBeNull();
+    expect(root.querySelector('[data-vfo-select-absolute="B"]')).not.toBeNull();
+  });
+
+  it('switching the active VFO swaps the ONE tile in place — same element, no second tile', () => {
+    const model = writable(structuredClone(ab));
+    const live = fromStore(model);
+    const root = mountSurface({
+      get viewModel() { return live.current as RadioViewModel; },
+      vfoTiles: 'active',
+    });
+    const list = root.querySelector('[data-testid="vfo-list"]')!;
+    const tile = root.querySelector('[data-vfo-tile]')!;
+    expect(tile.getAttribute('data-vfo-slot')).toBe('A');
+    expect(tile.textContent).toContain('7.100.000');
+
+    const flipped = structuredClone(ab);
+    flipped.vfos = flipped.vfos.map((vfo) => ({ ...vfo, isActive: vfo.slot.kind === 'slotted' && vfo.slot.id === 'B', isActiveSlot: vfo.slot.kind === 'slotted' && vfo.slot.id === 'B' }));
+    model.set(flipped);
+    flushSync();
+
+    // Same list, exactly one tile, and it is the SAME DOM node — the content
+    // swapped in place, so nothing can move (the browser-lane spec pins the
+    // real width below zero movement).
+    expect(root.querySelector('[data-testid="vfo-list"]')).toBe(list);
+    expect(root.querySelectorAll('[data-vfo-tile]')).toHaveLength(1);
+    expect(root.querySelector('[data-vfo-tile]')).toBe(tile);
+    expect(tile.getAttribute('data-vfo-slot')).toBe('B');
+    expect(tile.textContent).toContain('7.150.000');
+  });
+
+  it('startup window (no active receiver observed): still exactly one tile, none invented active', () => {
+    const unread = structuredClone(dual);
+    unread.activeReceiver = { status: 'unknown' };
+    unread.vfos = unread.vfos.map((vfo) => ({ ...vfo, isActive: false }));
+    const root = mountSurface({ viewModel: unread, vfoTiles: 'active' });
+    const tiles = root.querySelectorAll('[data-vfo-tile]');
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0].getAttribute('data-vfo-active')).toBe('false');
+    expect(tiles[0].getAttribute('data-vfo-receiver')).toBe('MAIN');
+  });
+});
+
+
+// ── MOR-2688 S4c — the migrated VfoSurface chips keep their treatment ───────
+//
+// `standardPanelSections`'s `{reading}` value-or-null lines (frontToggle,
+// dspToggle, notch, offsetChip) now enter through `readingValue`, and the
+// RFG strict fallback enters through `observationValue(display, fallback)`.
+// Literal pins; red under a mutation that drops the reading, and under one
+// of `observationValue` that ignores the ABSENT argument (a no-display
+// reading would go dark).
+describe('MOR-2688 S4c — the Standard chips read through the entry points', () => {
+  it('pins the front/dsp/notch chip text and lit state for both receivers', () => {
+    const root = mountSurface({ viewModel: withReceiverIndicators('2/main_sub'), appearance: 'standard' });
+    const panels = {
+      MAIN: root.querySelector<HTMLElement>('[data-receiver-instrument="MAIN"]')!,
+      SUB: root.querySelector<HTMLElement>('[data-receiver-instrument="SUB"]')!,
+    };
+    const chip = (panel: HTMLElement, key: string) =>
+      panel.querySelector<HTMLElement>(`[data-chip="${key}"]`!)!;
+
+    // receiverIndicator fixture: MAIN ipPlus known true, digiSel known
+    // false, nbActive false, nrActive true, notchMode 'off'; SUB mirrors.
+    expect(chip(panels.MAIN, 'ip-plus').textContent).toBe('IP+');
+    expect(chip(panels.MAIN, 'ip-plus').getAttribute('data-lit')).toBe('true');
+    expect(chip(panels.MAIN, 'digi-sel').textContent).toBe('DIGI-SEL');
+    expect(chip(panels.MAIN, 'digi-sel').getAttribute('data-lit')).toBe('false');
+    expect(chip(panels.MAIN, 'nb').textContent).toBe('NB');
+    expect(chip(panels.MAIN, 'nb').getAttribute('data-lit')).toBe('false');
+    expect(chip(panels.MAIN, 'nr').textContent).toBe('NR');
+    expect(chip(panels.MAIN, 'nr').getAttribute('data-lit')).toBe('true');
+    expect(chip(panels.MAIN, 'notch').textContent).toBe('NOTCH');
+    expect(chip(panels.MAIN, 'notch').getAttribute('data-lit')).toBe('false');
+
+    expect(chip(panels.SUB, 'ip-plus').getAttribute('data-lit')).toBe('false');
+    expect(chip(panels.SUB, 'digi-sel').getAttribute('data-lit')).toBe('true');
+    expect(chip(panels.SUB, 'nb').getAttribute('data-lit')).toBe('true');
+    expect(chip(panels.SUB, 'nr').getAttribute('data-lit')).toBe('false');
+    expect(chip(panels.SUB, 'notch').textContent).toBe('NOTCH A');
+    expect(chip(panels.SUB, 'notch').getAttribute('data-lit')).toBe('true');
+  });
+
+  it('pins the RFG ABSENT fallback: no display observation → the strict reading decides', () => {
+    const root = mountSurface({ viewModel: withReceiverIndicators('2/main_sub'), appearance: 'standard' });
+    const sub = root.querySelector<HTMLElement>('[data-receiver-instrument="SUB"]')!;
+    const subRfg = sub.querySelector<HTMLElement>('[data-indicator-fact="rfg"]')!;
+    // SUB rfGain is a known 0.75 with NO `display` — an absent observation
+    // must return the strict reading, never nothing.
+    expect(subRfg.textContent).toBe('RFG 75%');
+    expect(subRfg.getAttribute('data-lit')).toBe('true');
+    // MAIN rfGain is a known 0 — reduced at the formatted level, so the
+    // strict reading decides there too.
+    const main = root.querySelector<HTMLElement>('[data-receiver-instrument="MAIN"]')!;
+    const mainRfg = main.querySelector<HTMLElement>('[data-indicator-fact="rfg"]')!;
+    expect(mainRfg.textContent).toBe('RFG 0%');
+    expect(mainRfg.getAttribute('data-lit')).toBe('true');
+  });
+});

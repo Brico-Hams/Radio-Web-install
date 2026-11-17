@@ -1,0 +1,212 @@
+import type { Capabilities, ControlRange } from '../types/capabilities';
+
+// Capabilities accepted from the generation-gated WebSocket full snapshot.
+// MOR-4213: raw, like `radio.current`: a snapshot is only ever replaced as a
+// whole, and a deep proxy made every capability read in the view-model
+// derivations pay a proxy trap (the top self-time frame in the UI profile).
+let capabilities = $state.raw<Capabilities | null>(null);
+type CapabilitiesSubscriber = (caps: Capabilities | null) => void;
+const subscribers = new Set<CapabilitiesSubscriber>();
+
+const STATE_CONTRACT_VERSION = 1;
+
+function validProviderGeneration(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0;
+}
+
+function hasCurrentEpoch(value: unknown): value is Capabilities {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return record.stateContractVersion === STATE_CONTRACT_VERSION
+    && validProviderGeneration(record.providerGeneration);
+}
+
+function notifySubscribers(): void {
+  for (const subscriber of subscribers) {
+    try {
+      subscriber(capabilities);
+    } catch (error) {
+      console.warn('Capability subscriber failed', error);
+    }
+  }
+}
+
+export function getCapabilities(): Capabilities | null {
+  return capabilities;
+}
+
+export function setCapabilities(caps: Capabilities): boolean {
+  if (!hasCurrentEpoch(caps)) {
+    capabilities = null;
+    notifySubscribers();
+    return false;
+  }
+  capabilities = caps;
+  notifySubscribers();
+  return true;
+}
+
+/** Clear capability truth whenever the provider epoch is no longer proven. */
+export function clearCapabilities(): void {
+  capabilities = null;
+  notifySubscribers();
+}
+
+/** Observe only capability values accepted by the epoch-validating store. */
+export function subscribeCapabilities(subscriber: CapabilitiesSubscriber): () => void {
+  subscribers.add(subscriber);
+  subscriber(capabilities);
+  let active = true;
+  return () => {
+    if (!active) return;
+    active = false;
+    subscribers.delete(subscriber);
+  };
+}
+
+/** True only when capabilities and radio state prove the same provider epoch. */
+export function capabilitiesMatchGeneration(providerGeneration: unknown): boolean {
+  return validProviderGeneration(providerGeneration)
+    && capabilities !== null
+    && (capabilities as Record<string, unknown>).stateContractVersion === STATE_CONTRACT_VERSION
+    && (capabilities as Record<string, unknown>).providerGeneration === providerGeneration;
+}
+
+export function hasSpectrum(): boolean {
+  return capabilities?.scope ?? false;
+}
+
+export function hasAnyScope(): boolean {
+  // True if hardware scope OR audio FFT scope available
+  return (capabilities?.scope ?? false) || (capabilities?.scopeSources?.length ?? 0) > 0 || getScopeSource() === 'audio_fft';
+}
+
+export function getScopeSource(): string | null {
+  const selected = capabilities?.scopeDefaultSourceId;
+  if (selected != null) return selected === 'audio_fft' ? 'audio_fft' : 'hardware';
+  const sources = capabilities?.scopeSources;
+  if (sources) return sources.includes('radio') || sources.includes('iq_fft') ? 'hardware'
+    : sources.includes('audio_fft') ? 'audio_fft' : null;
+  return capabilities?.scopeSource ?? null;
+}
+
+export function isAudioFftScope(): boolean {
+  return getScopeSource() === 'audio_fft';
+}
+
+export function hasAudioFft(): boolean {
+  return capabilities?.audioFftAvailable ?? false;
+}
+
+export function hasAudio(): boolean {
+  return capabilities?.audio ?? false;
+}
+
+export function hasDualReceiver(): boolean {
+  return capabilities?.capabilities.includes('dual_rx') ?? false;
+}
+
+export function hasTx(): boolean {
+  return capabilities?.tx ?? false;
+}
+
+export function getSupportedModes(): string[] {
+  return capabilities?.modes ?? [];
+}
+
+export function getSupportedFilters(): string[] {
+  return capabilities?.filters ?? [];
+}
+
+export function getKeyboardConfig() {
+  return capabilities?.keyboard ?? null;
+}
+
+export function getAttValues(): number[] {
+  return capabilities?.attValues ?? [0, 6, 12, 18];
+}
+
+export function getAttLabels(): Record<string, string> {
+  return capabilities?.attLabels ?? {};
+}
+
+export function getPreValues(): number[] {
+  return capabilities?.preValues ?? [0, 1];
+}
+
+export function getPreLabels(): Record<string, string> {
+  return capabilities?.preLabels ?? {};
+}
+
+export function getAgcModes(): number[] {
+  return capabilities?.agcModes ?? [1, 2, 3];
+}
+
+export function getAgcLabels(): Record<string, string> {
+  return capabilities?.agcLabels ?? { "1": "FAST", "2": "MID", "3": "SLOW" };
+}
+
+export function getAntennaCount(): number {
+  return capabilities?.antennas ?? 1;
+}
+
+export function getVfoScheme(): string {
+  return capabilities?.vfoScheme ?? 'main_sub';
+}
+
+export function hasCapability(name: string): boolean {
+  return capabilities?.capabilities.includes(name) ?? false;
+}
+
+/**
+ * Label for a receiver (MAIN / SUB).
+ *
+ * Use when the UI wants the *receiver* name — e.g. dual-RX panels that
+ * show which physical receiver is active. Independent of VFO slot: a
+ * single receiver can tune VFO A *or* VFO B.
+ */
+export function receiverLabel(id: 'MAIN' | 'SUB'): string {
+  return id;
+}
+
+let _vfoLabelWarned = false;
+
+/**
+ * @deprecated Conflates receiver identity with VFO slot.
+ *   Scheduled for removal one minor version after 0.16.
+ */
+export function vfoLabel(slot: 'A' | 'B'): string {
+  if (!_vfoLabelWarned) {
+    _vfoLabelWarned = true;
+    // eslint-disable-next-line no-console
+    console.warn('[deprecated] vfoLabel(...)');
+  }
+  const scheme = capabilities?.vfoScheme ?? 'main_sub';
+  if (scheme === 'ab') return slot === 'A' ? 'VFO A' : 'VFO B';
+  return slot === 'A' ? 'MAIN' : 'SUB';
+}
+
+export function getControlRange(name: string): ControlRange | null {
+  const control = capabilities?.controls?.[name];
+  return control && !('mapping' in control) ? control : null;
+}
+
+export function getMeterCalibration(
+  meterType: string,
+): { raw: number; actual: number; label: string }[] | null {
+  return capabilities?.meterCalibrations?.[meterType] ?? null;
+}
+
+export function getMeterRedline(meterType: string): number | null {
+  return capabilities?.meterRedlines?.[meterType] ?? null;
+}
+
+export function getSmeterCalibration(): { raw: number; actual: number; label: string }[] | null {
+  return getMeterCalibration('s_meter');
+}
+
+export function getSmeterRedline(): number | null {
+  return getMeterRedline('s_meter');
+}

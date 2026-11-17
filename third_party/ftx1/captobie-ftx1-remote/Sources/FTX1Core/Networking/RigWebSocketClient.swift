@@ -1,0 +1,360 @@
+import Foundation
+
+/// Client-side connection to the Mac hub's WebSocket server.
+/// Used by iOS/iPadOS apps (and optionally the Mac app's own UI, if it
+/// ends up talking to its own server rather than the local RigctldClient
+/// directly — see the open design question on Mac UI architecture).
+public actor RigWebSocketClient {
+    public enum ConnectionState: Sendable, Equatable {
+        case disconnected
+        case connecting
+        case connected
+        case failed(String)
+    }
+
+    private var task: URLSessionWebSocketTask?
+    private let session: URLSession
+    private let openSignal = OpenSignal()
+    private let url: URL
+    private var heartbeatTask: Task<Void, Never>?
+    private var lastActivity: Date = .distantPast
+
+    public private(set) var state: ConnectionState = .disconnected
+
+    /// Called on every state push received from the hub. Delivered on
+    /// whatever executor the caller sets up — UI layers should hop to
+    /// @MainActor themselves when updating SwiftUI state.
+    public var onStateUpdate: (@Sendable (RigState) -> Void)?
+
+    /// Called whenever `state` changes, including transitions that happen
+    /// well after `connect()` already returned — e.g. the heartbeat below
+    /// noticing a dead link. A caller that only reads `state` once, right
+    /// after `connect()`, has no way to learn the connection later died: a
+    /// "blackholed" link (the peer's network interface vanishes with no
+    /// RST ever arriving) can leave `URLSessionWebSocketTask` looking
+    /// connected for a very long time with no read error to trigger
+    /// `markFailed` on its own.
+    public var onStateChange: (@Sendable (ConnectionState) -> Void)?
+
+    /// Called with the raw PCM payload of every Main-channel audio frame
+    /// received from the hub (tag byte already stripped) — see
+    /// `AudioStreamFormat`. Never fires for a client that never sees an
+    /// audio frame (Mac-only servers or an older hub build); delivered on
+    /// whatever executor the caller sets up, same as `onStateUpdate`.
+    public var onAudioData: (@Sendable (Data) -> Void)?
+
+    /// Sub-channel counterpart to `onAudioData` — same delivery contract.
+    /// Never fires against a hub build that predates the Sub relay
+    /// (2026-09-18) or in `.local` mode against a mono input device (see
+    /// `AudioCaptureEngine.onSubChannelSamples`'s doc comment) — the hub
+    /// simply never sends a tagged Sub frame in either case.
+    public var onSubAudioData: (@Sendable (Data) -> Void)?
+
+    /// The hub's memory channel list (`MemoryListPush`), on connect and
+    /// whenever it changes. Never fires against a hub that predates it.
+    public var onMemoryList: (@Sendable (MemoryListSnapshot) -> Void)?
+    /// The hub's decoded APRS history (`APRSListPush`), on connect and
+    /// whenever it changes.
+    public var onAPRSList: (@Sendable (APRSListPush) -> Void)?
+
+    /// Answers to `sendMenuItemRead` (`MenuItemPush`).
+    public var onMenuItem: (@Sendable (MenuItemPush) -> Void)?
+    /// Answers to `sendCWKeyer` (`CWKeyerReply`).
+    public var onCWKeyerReply: (@Sendable (CWKeyerReply) -> Void)?
+
+    public init(hubURL: URL) {
+        self.url = hubURL
+        self.session = URLSession(configuration: .default, delegate: openSignal, delegateQueue: nil)
+    }
+
+    public func setOnStateUpdate(_ handler: @escaping @Sendable (RigState) -> Void) {
+        onStateUpdate = handler
+    }
+
+    public func setOnStateChange(_ handler: @escaping @Sendable (ConnectionState) -> Void) {
+        onStateChange = handler
+    }
+
+    public func setOnAudioData(_ handler: @escaping @Sendable (Data) -> Void) {
+        onAudioData = handler
+    }
+
+    public func setOnSubAudioData(_ handler: @escaping @Sendable (Data) -> Void) {
+        onSubAudioData = handler
+    }
+
+    public func setOnMemoryList(_ handler: @escaping @Sendable (MemoryListSnapshot) -> Void) {
+        onMemoryList = handler
+    }
+
+    public func setOnAPRSList(_ handler: @escaping @Sendable (APRSListPush) -> Void) {
+        onAPRSList = handler
+    }
+
+    public func setOnMenuItem(_ handler: @escaping @Sendable (MenuItemPush) -> Void) {
+        onMenuItem = handler
+    }
+
+    public func setOnCWKeyerReply(_ handler: @escaping @Sendable (CWKeyerReply) -> Void) {
+        onCWKeyerReply = handler
+    }
+
+    /// Waits for the server to actually accept the WebSocket handshake
+    /// before reporting `.connected` — `URLSessionWebSocketTask.resume()`
+    /// only *schedules* the attempt, it doesn't confirm success. Flipping to
+    /// `.connected` right after `resume()` (as this used to do) meant the UI
+    /// could show "Connected" even when the Mac was unreachable (wrong
+    /// Tailscale address, firewalled port, rigctld host down) and no data
+    /// would ever arrive, with no way to distinguish that from a real,
+    /// working connection that just hasn't received its first push yet.
+    public func connect(timeout: Duration = .seconds(8)) async {
+        setState(.connecting)
+        let task = session.webSocketTask(with: url)
+        self.task = task
+        openSignal.reset()
+        task.resume()
+
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { try await self.openSignal.waitForOpen() }
+                group.addTask {
+                    try await Task.sleep(for: timeout)
+                    throw RigWebSocketError.connectTimedOut
+                }
+                try await group.next()
+                group.cancelAll()
+            }
+            setState(.connected)
+            listen()
+            startHeartbeat()
+        } catch {
+            task.cancel(with: .goingAway, reason: nil)
+            self.task = nil
+            setState(.failed(errorMessage(for: error)))
+        }
+    }
+
+    private func errorMessage(for error: Error) -> String {
+        if error is RigWebSocketError {
+            return String(localized: "rigWebSocketClient.timedOutConnecting", bundle: .module)
+        }
+        return error.localizedDescription
+    }
+
+    public func disconnect() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        setState(.disconnected)
+    }
+
+    public func send(_ command: RigCommand) async throws {
+        guard let task else { throw RigWebSocketError.notConnected }
+        let data = try JSONEncoder().encode(command)
+        try await task.send(.data(data))
+    }
+
+    /// Asks the hub for one Deep Settings item; the answer arrives through
+    /// `onMenuItem`.
+    public func sendMenuItemRead(p1: Int, p2: Int, p3: Int) async throws {
+        guard let task else { throw RigWebSocketError.notConnected }
+        let data = try JSONEncoder().encode(MenuItemReadRequest(p1: p1, p2: p2, p3: p3))
+        try await task.send(.data(data))
+    }
+
+    /// Asks the hub to write (or, with no `text`, check) CW TEXT keyer
+    /// memory `slot`; the answer arrives through `onCWKeyerReply`.
+    public func sendCWKeyer(_ request: CWKeyerRequest) async throws {
+        guard let task else { throw RigWebSocketError.notConnected }
+        let data = try JSONEncoder().encode(request)
+        try await task.send(.data(data))
+    }
+
+    /// One chunk of microphone audio (8 kHz Int16 mono) while this client
+    /// holds PTT — tagged `AudioStreamFormat.txAudioTag`. The hub drops it
+    /// from any client that didn't key.
+    public func sendTXAudio(_ pcm: Data) async throws {
+        guard let task else { throw RigWebSocketError.notConnected }
+        try await task.send(.data(AudioStreamFormat.txFrame(pcm)))
+    }
+
+    private func listen() {
+        guard let task else { return }
+        task.receive { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let message):
+                Task { await self.handle(message) }
+                Task { await self.listen() }
+            case .failure(let error):
+                Task { await self.markFailed(error, from: task) }
+            }
+        }
+    }
+
+    private func handle(_ message: URLSessionWebSocketTask.Message) {
+        let data: Data?
+        switch message {
+        case .data(let d): data = d
+        case .string(let s): data = s.data(using: .utf8)
+        @unknown default: data = nil
+        }
+        guard let data else { return }
+
+        if AudioStreamFormat.isAudioFrame(data) {
+            lastActivity = Date()
+            onAudioData?(AudioStreamFormat.payload(of: data))
+            return
+        }
+        if AudioStreamFormat.isSubAudioFrame(data) {
+            lastActivity = Date()
+            onSubAudioData?(AudioStreamFormat.payload(of: data))
+            return
+        }
+
+        if let push = try? JSONDecoder().decode(RigStatePush.self, from: data) {
+            lastActivity = Date()
+            onStateUpdate?(push.state)
+        } else if let push = try? JSONDecoder().decode(MemoryListPush.self, from: data) {
+            lastActivity = Date()
+            onMemoryList?(push.list)
+        } else if let push = try? JSONDecoder().decode(APRSListPush.self, from: data), push.type == APRSListPush.typeName {
+            lastActivity = Date()
+            onAPRSList?(push)
+        } else if let push = try? JSONDecoder().decode(MenuItemPush.self, from: data), push.type == MenuItemPush.typeName {
+            lastActivity = Date()
+            onMenuItem?(push)
+        } else if let reply = try? JSONDecoder().decode(CWKeyerReply.self, from: data), reply.type == CWKeyerReply.typeName {
+            lastActivity = Date()
+            onCWKeyerReply?(reply)
+        }
+    }
+
+    /// `failedTask` guards against a stale callback from a task that's
+    /// already been superseded (by `disconnect()` or a fresh `connect()`)
+    /// clobbering current state — without it, a receive-failure callback
+    /// that fires just after a clean, user-initiated `disconnect()` could
+    /// flip `state` from `.disconnected` back to `.failed`.
+    private func markFailed(_ error: Error, from failedTask: URLSessionWebSocketTask) {
+        guard task === failedTask else { return }
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        task = nil
+        setState(.failed(error.localizedDescription))
+    }
+
+    private func setState(_ newState: ConnectionState) {
+        state = newState
+        onStateChange?(newState)
+    }
+
+    /// Periodically pings the hub and tracks how long it's been since we
+    /// last heard *anything* back (a state push, or a successful pong) —
+    /// needed because a blackholed link (e.g. the Mac's Tailscale interface
+    /// disappearing) produces no TCP reset for the socket layer to react
+    /// to; without an active probe, `URLSessionWebSocketTask` can sit
+    /// looking connected indefinitely.
+    ///
+    /// Deliberately does *not* structurally await `sendPing`'s completion:
+    /// on a genuinely blackholed connection that completion handler may
+    /// simply never fire, and `withTaskGroup` waits for every child task to
+    /// finish (even cancelled ones) before returning, which would let one
+    /// hung ping wedge this whole loop forever — exactly the symptom this
+    /// is meant to fix, not reintroduce. Firing the ping and separately
+    /// polling elapsed time sidesteps that: a hung ping's completion
+    /// handler is simply abandoned rather than awaited.
+    private func startHeartbeat() {
+        lastActivity = Date()
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                if Task.isCancelled { return }
+                guard let self else { return }
+                let shouldContinue = await self.heartbeatTick()
+                if !shouldContinue { return }
+            }
+        }
+    }
+
+    /// Returns `false` once the link should be considered dead.
+    private func heartbeatTick() -> Bool {
+        guard state == .connected, let task else { return false }
+        task.sendPing { [weak self] error in
+            guard error == nil else { return }
+            Task { await self?.recordActivity() }
+        }
+        guard Date().timeIntervalSince(lastActivity) <= 12 else {
+            handleHeartbeatTimeout()
+            return false
+        }
+        return true
+    }
+
+    private func recordActivity() {
+        lastActivity = Date()
+    }
+
+    private func handleHeartbeatTimeout() {
+        guard state == .connected else { return }
+        task?.cancel(with: .abnormalClosure, reason: nil)
+        task = nil
+        heartbeatTask = nil
+        setState(.failed(String(localized: "rigWebSocketClient.connectionTimedOut", bundle: .module)))
+    }
+}
+
+public enum RigWebSocketError: Error {
+    case notConnected
+    case connectTimedOut
+}
+
+/// Bridges `URLSessionWebSocketDelegate`'s handshake-outcome callbacks
+/// (which fire on an arbitrary delegate queue, not the actor) into a single
+/// `async` wait point `connect()` can race against a timeout. `reset()`
+/// must be called before each new connection attempt so a stale open/error
+/// from a previous attempt can't resolve the new one.
+private final class OpenSignal: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var resolution: Result<Void, Error>?
+
+    func reset() {
+        lock.lock()
+        continuation = nil
+        resolution = nil
+        lock.unlock()
+    }
+
+    func waitForOpen() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            lock.lock()
+            if let resolution {
+                lock.unlock()
+                continuation.resume(with: resolution)
+                return
+            }
+            self.continuation = continuation
+            lock.unlock()
+        }
+    }
+
+    private func resolve(_ result: Result<Void, Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        resolution = result
+        lock.unlock()
+        pending?.resume(with: result)
+    }
+
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+        resolve(.success(()))
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let error else { return }
+        resolve(.failure(error))
+    }
+}

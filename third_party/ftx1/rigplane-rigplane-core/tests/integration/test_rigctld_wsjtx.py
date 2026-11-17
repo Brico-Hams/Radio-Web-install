@@ -1,0 +1,616 @@
+"""Integration tests: WSJT-X / fldigi / JS8Call flows through rigctld.
+
+Part of issue #723 — exercise real-world rigctld command sequences against
+the in-process rigctld server + a recording mock radio, and assert the
+sequence of Radio-level calls the server issues as a result.
+
+Why not raw CI-V bytes?
+    The handler's job is to translate rigctld commands to Radio protocol
+    calls (``set_freq``, ``set_mode``, ``set_split``, ``set_vfo``,
+    ``set_ptt``). CI-V wire encoding of those calls is already covered by
+    ``tests/test_commands.py`` and contract tests. Duplicating the full
+    LAN UDP stack here would add auth/keep-alive timing noise without
+    testing anything new.
+
+What we assert
+    * Exact order and arguments of recorded Radio-level calls.
+    * Split enable/disable routing for the IC-7610 dual-RX profile.
+    * fldigi-style mode/freq change on both IC-7610 (dual-RX) and
+      IC-7300 (single-RX) profiles.
+    * JS8Call heartbeat GETs returning the current state.
+    * Backwards-compatible fallback for unknown VFO names.
+
+Tests are marked ``integration`` + ``mock_integration``. The
+``mock_integration`` marker is what keeps them off hardware —
+``conftest.py``'s ``pytest_collection_modifyitems`` skips over them
+without ever adding a skip marker — so they run in the standard suite and
+in all three CI workflows, with no real hardware required.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncGenerator
+
+import pytest
+
+from rigplane.rigctld.contract import RigctldConfig
+from rigplane.rigctld.server import RigctldServer
+
+from _ptt_reread_fixtures import PttAnsweringSerialMockRadio, wait_for_known_rf_state
+
+pytestmark = [pytest.mark.integration, pytest.mark.mock_integration]
+
+# ---------------------------------------------------------------------------
+# Recording mock radio
+# ---------------------------------------------------------------------------
+
+
+class RecordingMockRadio(PttAnsweringSerialMockRadio):
+    """SerialMockRadio subclass that records every Radio-level call.
+
+    Each recorded entry is ``(method_name, args_tuple)``. The tests assert
+    the exact sequence of calls emitted by the rigctld handler.
+
+    Adds ``set_split`` which ``SerialMockRadio`` does not implement;
+    the rigctld handler calls it via ``getattr(radio, 'set_split', None)``
+    so without this override the split-VFO paths would silently no-op.
+
+    Inherits from ``PttAnsweringSerialMockRadio`` (not the bare
+    ``SerialMockRadio``) so it answers rigctld's ``0x1C/0x00`` PTT re-read —
+    see ``_ptt_reread_fixtures.py`` for why that is required since MOR-1900.
+    """
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+        self._split_on = False
+
+    def reset_calls(self) -> None:
+        self.calls.clear()
+
+    # ---- Frequency / mode ------------------------------------------------
+
+    async def set_freq(self, freq: int, receiver: int = 0) -> None:
+        self.calls.append(("set_freq", (freq, receiver)))
+        await super().set_freq(freq, receiver=receiver)
+
+    async def set_mode(
+        self,
+        mode: object,
+        filter_width: int | None = None,
+        receiver: int = 0,
+    ) -> None:
+        self.calls.append(("set_mode", (mode, filter_width, receiver)))
+        await super().set_mode(mode, filter_width=filter_width, receiver=receiver)  # type: ignore[arg-type]
+
+    async def set_data_mode(self, on: int | bool, receiver: int = 0) -> None:
+        self.calls.append(("set_data_mode", (bool(on), receiver)))
+        await super().set_data_mode(on, receiver=receiver)
+
+    # ---- PTT -------------------------------------------------------------
+
+    async def set_ptt(self, on: bool) -> None:
+        self.calls.append(("set_ptt", (bool(on),)))
+        await super().set_ptt(on)
+
+    # ---- Split / VFO -----------------------------------------------------
+
+    async def set_split(self, on: bool) -> None:
+        """Handler uses getattr fallback — must exist here to be observable."""
+        self.calls.append(("set_split", (bool(on),)))
+        self._split_on = bool(on)
+
+    async def set_vfo(self, vfo: str) -> None:
+        self.calls.append(("set_vfo", (vfo,)))
+        await super().set_vfo(vfo)
+
+
+# ---------------------------------------------------------------------------
+# Test client — minimal rigctld ASCII client
+# ---------------------------------------------------------------------------
+
+
+class RigctldClient:
+    """Minimal rigctld ASCII client used by the WSJT-X/fldigi/JS8Call tests."""
+
+    def __init__(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        self._reader = reader
+        self._writer = writer
+
+    async def send(self, line: str, *, read_timeout: float = 1.0) -> str:
+        """Send one command, return the decoded response (no trailing newline).
+
+        Responses are either ``"RPRT <code>"`` for SET or a value block
+        terminated by ``\\n`` for GET. We read whatever arrives within
+        ``read_timeout`` and strip the trailing ``\\n``.
+        """
+        self._writer.write((line + "\n").encode("ascii"))
+        await self._writer.drain()
+        data = await asyncio.wait_for(self._reader.read(4096), timeout=read_timeout)
+        return data.decode("ascii").rstrip("\n")
+
+    async def close(self) -> None:
+        try:
+            self._writer.close()
+            await self._writer.wait_closed()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+def _addr(server: RigctldServer) -> tuple[str, int]:
+    assert server._server is not None
+    host, port = server._server.sockets[0].getsockname()[:2]
+    return str(host), int(port)
+
+
+async def _make_server(
+    radio: RecordingMockRadio,
+) -> RigctldServer:
+    cfg = RigctldConfig(
+        host="127.0.0.1",
+        port=0,
+        max_clients=2,
+        client_timeout=5.0,
+        command_timeout=2.0,
+    )
+    srv = RigctldServer(radio, cfg)
+    await srv.start()
+    return srv
+
+
+async def _make_client(server: RigctldServer) -> RigctldClient:
+    host, port = _addr(server)
+    reader, writer = await asyncio.open_connection(host, port)
+    return RigctldClient(reader, writer)
+
+
+@pytest.fixture
+async def ic7610_setup() -> AsyncGenerator[
+    tuple[RecordingMockRadio, RigctldServer], None
+]:
+    radio = RecordingMockRadio(model="IC-7610")
+    await radio.connect()
+    server = await _make_server(radio)
+    # Keep one client connected for the fixture's lifetime so
+    # ``RigctldServer._run_ptt_reread`` (MOR-1903) actually sends and the
+    # DEFER write gate can leave UNKNOWN before any test body issues a
+    # MODE/BAND/VFO write — see ``_ptt_reread_fixtures.py``.
+    keepalive = await _make_client(server)
+    await wait_for_known_rf_state(server)
+    radio.reset_calls()
+    try:
+        yield radio, server
+    finally:
+        await keepalive.close()
+        await server.stop()
+
+
+@pytest.fixture
+async def ic7300_setup() -> AsyncGenerator[
+    tuple[RecordingMockRadio, RigctldServer], None
+]:
+    radio = RecordingMockRadio(model="IC-7300")
+    await radio.connect()
+    server = await _make_server(radio)
+    keepalive = await _make_client(server)
+    await wait_for_known_rf_state(server)
+    radio.reset_calls()
+    try:
+        yield radio, server
+    finally:
+        await keepalive.close()
+        await server.stop()
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+class TestWsjtxSplitOnIc7610:
+    """WSJT-X split-on-TX-freq sequence against IC-7610 (dual-RX)."""
+
+    async def test_split_enable_preserves_rx_selection(
+        self, ic7610_setup: tuple[RecordingMockRadio, RigctldServer]
+    ) -> None:
+        """``S 1 VFOB`` enables split without changing the RX selection.
+
+        The profile routes split frequency/mode writes to physical SUB;
+        enabling split must not select SUB as the receive bank.
+        """
+        radio, server = ic7610_setup
+        client = await _make_client(server)
+        try:
+            # WSJT-X-typical preflight GETs (we don't assert on their
+            # recorded-call side-effects — they go to getters only).
+            await client.send("f")  # get_freq
+            radio.reset_calls()
+
+            # The split enable sequence.
+            resp = await client.send("S 1 VFOB")
+            assert resp == "RPRT 0"
+
+            # PTT on → PTT off
+            resp = await client.send("T 1")
+            assert resp == "RPRT 0"
+            resp = await client.send("T 0")
+            assert resp == "RPRT 0"
+
+            assert radio.calls == [
+                ("set_split", (True,)),
+                ("set_ptt", (True,)),
+                ("set_ptt", (False,)),
+            ]
+        finally:
+            await client.close()
+
+    async def test_split_disable_does_not_switch_vfo(
+        self, ic7610_setup: tuple[RecordingMockRadio, RigctldServer]
+    ) -> None:
+        """``set_split_vfo 0 VFOA`` disables split without changing RX."""
+        radio, server = ic7610_setup
+        client = await _make_client(server)
+        try:
+            radio.reset_calls()
+            resp = await client.send("S 0 VFOA")
+            assert resp == "RPRT 0"
+
+            assert radio.calls == [("set_split", (False,))]
+        finally:
+            await client.close()
+
+
+class TestFldigiModeFreqSequence:
+    """fldigi mode/freq change sequence against IC-7610 and IC-7300."""
+
+    async def test_fldigi_sequence_ic7610(
+        self, ic7610_setup: tuple[RecordingMockRadio, RigctldServer]
+    ) -> None:
+        """fldigi: get_mode → set_mode USB → DATA-off → set_freq → get_freq.
+
+        A plain-SSB ``M USB`` must clear DATA (the handler's
+        ``_apply_plain_ssb_data_off``; the IC-7610 profile maps
+        ``set_data_mode`` to unwrapped 1A 06), so the DATA-off write sits
+        between ``set_mode`` and ``set_freq``.
+        """
+        radio, server = ic7610_setup
+        client = await _make_client(server)
+        try:
+            # 1. get_mode — should return the current (USB, passband) pair
+            resp = await client.send("m")
+            lines = resp.splitlines()
+            assert lines[0] == "USB"
+            assert lines[1].isdigit()
+
+            # Seed DATA on through the radio API (after the plain-mode
+            # check above), verify it took, then start the tested
+            # sequence from a clean call record.
+            await radio.set_data_mode(True)
+            assert await radio.get_data_mode() is True
+
+            radio.reset_calls()
+
+            # 2. set_mode USB (no passband)
+            resp = await client.send("M USB")
+            assert resp == "RPRT 0"
+
+            # 3. set_freq 7074000
+            resp = await client.send("F 7074000")
+            assert resp == "RPRT 0"
+
+            # 4. get_freq — served from the handler's optimistic cache after set.
+            resp = await client.send("f")
+            assert resp == "7074000"
+
+            # Active receiver is MAIN → receiver=0. The plain-SSB mode
+            # change clears DATA between set_mode and set_freq.
+            assert radio.calls == [
+                ("set_mode", ("USB", None, 0)),
+                ("set_data_mode", (False, 0)),
+                ("set_freq", (7074000, 0)),
+            ]
+
+            # The seeded DATA is gone after the ordinary M USB: the
+            # radio's own getter reports OFF (not the handler's mode
+            # overlay).
+            assert await radio.get_data_mode() is False
+
+            # Readback through the rigctld surface: the mode GET still
+            # answers USB after the DATA-off clear.
+            resp = await client.send("m")
+            assert resp.splitlines()[0] == "USB"
+        finally:
+            await client.close()
+
+    async def test_fldigi_sequence_ic7300(
+        self, ic7300_setup: tuple[RecordingMockRadio, RigctldServer]
+    ) -> None:
+        """Same fldigi flow on IC-7300 (single-RX) — no regression.
+
+        The plain-SSB DATA-off clear applies here too, between set_mode
+        and set_freq.
+        """
+        radio, server = ic7300_setup
+        client = await _make_client(server)
+        try:
+            resp = await client.send("m")
+            assert resp.splitlines()[0] == "USB"
+
+            # Seed DATA on (after the plain-mode check), verify, then
+            # start the tested sequence from a clean call record.
+            await radio.set_data_mode(True)
+            assert await radio.get_data_mode() is True
+
+            radio.reset_calls()
+
+            resp = await client.send("M USB")
+            assert resp == "RPRT 0"
+            resp = await client.send("F 7074000")
+            assert resp == "RPRT 0"
+            resp = await client.send("f")
+            assert resp == "7074000"
+
+            # IC-7300 has one receiver; handler still uses receiver=0.
+            assert radio.calls == [
+                ("set_mode", ("USB", None, 0)),
+                ("set_data_mode", (False, 0)),
+                ("set_freq", (7074000, 0)),
+            ]
+
+            # The seeded DATA is cleared by the ordinary M USB: the
+            # radio's own getter reports OFF.
+            assert await radio.get_data_mode() is False
+
+            # Mode readback through the rigctld surface stays USB.
+            resp = await client.send("m")
+            assert resp.splitlines()[0] == "USB"
+        finally:
+            await client.close()
+
+
+class TestJs8CallHeartbeat:
+    """JS8Call heartbeat GETs against IC-7610."""
+
+    async def test_heartbeat_get_freq_mode_roundtrip(
+        self, ic7610_setup: tuple[RecordingMockRadio, RigctldServer]
+    ) -> None:
+        """JS8Call periodically issues get_freq and get_mode.
+
+        The responses must be well-formed and should NOT produce any
+        SET-style Radio calls.
+        """
+        radio, server = ic7610_setup
+        client = await _make_client(server)
+        try:
+            radio.reset_calls()
+
+            resp = await client.send("f")
+            assert resp.isdigit()
+            assert int(resp) == 14_074_000  # SerialMockRadio default
+
+            resp = await client.send("m")
+            mode_line, pb_line = resp.splitlines()
+            assert mode_line == "USB"
+            assert pb_line.isdigit()
+
+            # A third heartbeat round — still GETs only.
+            resp = await client.send("f")
+            assert resp.isdigit()
+
+            # No SET Radio calls produced by heartbeat GETs.
+            set_calls = [name for name, _ in radio.calls if name.startswith("set_")]
+            assert set_calls == []
+        finally:
+            await client.close()
+
+
+class TestUnknownVfoBackwardsCompat:
+    """Unknown VFO names must not raise; handler returns ok() fallback."""
+
+    async def test_unknown_vfo_name_returns_ok(
+        self, ic7610_setup: tuple[RecordingMockRadio, RigctldServer]
+    ) -> None:
+        """``set_vfo VFO-B`` (hyphenated) is not a known VFO — ok() fallback.
+
+        Handler code (set_vfo):
+            if vfo not in ("VFOA", "VFOB") or info is None:
+                return _ok()
+
+        The radio's set_vfo must NOT be called for unknown names.
+        """
+        radio, server = ic7610_setup
+        client = await _make_client(server)
+        try:
+            radio.reset_calls()
+            resp = await client.send("V VFO-B")
+            assert resp == "RPRT 0"
+            # No Radio-level set_vfo was issued.
+            assert ("set_vfo", ("SUB",)) not in radio.calls
+            assert ("set_vfo", ("MAIN",)) not in radio.calls
+            assert all(name != "set_vfo" for name, _ in radio.calls)
+        finally:
+            await client.close()
+
+
+# ---------------------------------------------------------------------------
+# MOR-2890: HTTP cross-protocol guard
+# ---------------------------------------------------------------------------
+
+
+async def _close_writer(writer: asyncio.StreamWriter) -> None:
+    try:
+        writer.close()
+        await writer.wait_closed()
+    except Exception:
+        pass
+
+
+class TestHttpCrossProtocolGuard:
+    """A browser's no-cors POST to the rigctld port must not execute its body.
+
+    Without a guard the request line and each HTTP header earn an ENIMPL
+    and the body line after them runs as a rigctld command — ``T 1`` keys
+    the transmitter (MOR-2890). The server must instead close the
+    connection when the FIRST non-blank line looks like an HTTP request
+    line, before parsing or executing anything, while ordinary client
+    sessions keep working unchanged.
+    """
+
+    async def test_http_post_is_refused_and_never_keys_ptt(
+        self, ic7300_setup: tuple[RecordingMockRadio, RigctldServer]
+    ) -> None:
+        """The attacker's exact shape: request line, headers, blank line, ``T 1``.
+
+        The connection must close with no bytes answered and no PTT call
+        may reach the radio.
+        """
+        radio, server = ic7300_setup
+        reader, writer = await asyncio.open_connection(*_addr(server))
+        try:
+            writer.write(
+                b"POST / HTTP/1.1\r\n"
+                b"Host: 127.0.0.1:4532\r\n"
+                b"Content-Type: text/plain\r\n"
+                b"\r\n"
+                b"T 1\n"
+            )
+            await writer.drain()
+            try:
+                data = await asyncio.wait_for(reader.read(4096), timeout=2.0)
+            except ConnectionResetError:
+                data = b""
+            assert data == b""
+        finally:
+            await _close_writer(writer)
+
+        await asyncio.sleep(0.1)
+        assert all(name != "set_ptt" for name, _ in radio.calls)
+        assert radio._ptt is False  # noqa: SLF001
+
+    async def test_normal_session_still_works_as_before(
+        self, ic7300_setup: tuple[RecordingMockRadio, RigctldServer]
+    ) -> None:
+        """``\\dump_state``, ``f``, ``T 1``, ``T 0`` behave exactly as before."""
+        radio, server = ic7300_setup
+        reader, writer = await asyncio.open_connection(*_addr(server))
+        try:
+            writer.write(b"\\dump_state\n")
+            await writer.drain()
+            dump = bytearray()
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(reader.read(4096), timeout=0.3)
+                except asyncio.TimeoutError:
+                    break
+                if not chunk:
+                    break
+                dump += chunk
+            dump_lines = bytes(dump).decode().splitlines()
+            assert dump_lines[0] == "1"
+            assert dump_lines[-2:] == ["targetable_vfo=0x3", "done"]
+            assert dump_lines[1].isdigit()
+            assert len(dump) > 200
+
+            writer.write(b"f\n")
+            await writer.drain()
+            freq = await asyncio.wait_for(reader.read(4096), timeout=1.0)
+            assert freq == b"14074000\n"
+
+            writer.write(b"T 1\n")
+            await writer.drain()
+            assert await asyncio.wait_for(reader.read(4096), timeout=1.0) == b"RPRT 0\n"
+            writer.write(b"T 0\n")
+            await writer.drain()
+            assert await asyncio.wait_for(reader.read(4096), timeout=1.0) == b"RPRT 0\n"
+
+            ptt_calls = [args for name, args in radio.calls if name == "set_ptt"]
+            assert ptt_calls == [(True,), (False,)]
+        finally:
+            await _close_writer(writer)
+
+    async def test_lowercase_and_partial_request_lines_are_not_refused(
+        self, ic7300_setup: tuple[RecordingMockRadio, RigctldServer]
+    ) -> None:
+        """The pattern stays exact: lowercase or partial lines are not HTTP.
+
+        ``post / http/1.1`` and ``GET /`` must keep earning ENIMPL on a
+        still-open connection, and a following ``f`` must still answer.
+        """
+        radio, server = ic7300_setup
+        reader, writer = await asyncio.open_connection(*_addr(server))
+        try:
+            writer.write(b"post / http/1.1\nGET /\nf\n")
+            await writer.drain()
+            buf = b""
+            while b"14074000" not in buf:
+                chunk = await asyncio.wait_for(reader.read(4096), timeout=2.0)
+                if not chunk:
+                    break
+                buf += chunk
+            assert buf == b"RPRT -4\nRPRT -4\n14074000\n"
+        finally:
+            await _close_writer(writer)
+
+
+# ---------------------------------------------------------------------------
+# Real Hamlib chk_vfo=1 path — Variant A 1/5 (#1342)
+# ---------------------------------------------------------------------------
+#
+# All test classes ABOVE this line exercise the bare-form path used by
+# Hamlib clients under chk_vfo=0 (single-RX behaviour, or post-Variant-B
+# rollback). They predate epic #1341.
+#
+# THIS class delegates to the golden-replay test in
+# tests/integration/test_rigctld_golden_replay.py. The reason: research
+# finding A5 of issue #1319 — the existing fake bare-form tests are why
+# regression #1319 escaped CI in #722. We don't duplicate the replay
+# here; we make the dependency explicit so a reviewer reading this file
+# knows the chk_vfo=1 contract is enforced (just elsewhere).
+
+
+class TestRigctldWsjtxRealDualRx:
+    """The chk_vfo=1 wire trace — see test_rigctld_golden_replay.py.
+
+    Variant A 1/5 (#1342) introduced ``tests/golden/wsjtx_dual_rx_session.txt``
+    and ``tests/integration/test_rigctld_golden_replay.py::TestGoldenReplayDualRx``
+    as the load-bearing assertion that prevents another #1319.
+
+    This class documents that, on the WSJT-X side, the contract is:
+        1. Open TCP connection.
+        2. Send ``\\chk_vfo``; expect ``1``.
+        3. Send ``\\dump_state``; receive 26+ lines.
+        4. Every freq/mode/PTT/level/func/split command thereafter is
+           prefixed with ``VFOA``/``VFOB``/``currVFO``.
+
+    The test below is a "marker" test — it asserts the golden file
+    exists and contains the chk_vfo=1 handshake. The actual wire-level
+    replay lives in the dedicated test file so the wsjtx file stays
+    focused on call-sequence assertions for the bare-form path.
+    """
+
+    def test_golden_replay_fixture_exists(self) -> None:
+        """The wsjtx_dual_rx_session.txt fixture must exist and start
+        with the chk_vfo=1 handshake. Replay assertions live in
+        test_rigctld_golden_replay.py.
+        """
+        from pathlib import Path
+
+        golden = Path(__file__).parent.parent / "golden" / "wsjtx_dual_rx_session.txt"
+        assert golden.exists(), (
+            "Variant A 1/5 (#1342) golden replay fixture missing — "
+            "was it deleted or moved?"
+        )
+        text = golden.read_text()
+        assert "> \\chk_vfo" in text
+        assert "< 1" in text  # vfo_opt enabled response
+        assert "> f VFOA" in text  # canonical VFO-prefixed command

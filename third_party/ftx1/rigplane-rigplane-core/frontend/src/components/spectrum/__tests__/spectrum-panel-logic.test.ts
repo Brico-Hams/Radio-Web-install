@@ -1,0 +1,143 @@
+/**
+ * SpectrumPanel pure logic tests: frame parsing edge cases, frequency formatting,
+ * scale ticks, drag rate limiting, scope mode classification, click-to-tune.
+ */
+import { describe, it, expect } from 'vitest';
+import {
+  formatFreqOffset,
+  deriveFreqTicks,
+  getDragInterval,
+  isRadioOwnedWindowScope,
+  freqFromPixel,
+  nativeWidthFromSpanChoice,
+} from '../spectrum-logic';
+import { isSpanApplicable } from '../spectrum-toolbar-logic';
+import fixture from '../../../../../contracts/scope-mode-families.json';
+
+describe('formatFreqOffset', () => {
+  it('formats zero', () => expect(formatFreqOffset(0)).toBe('0'));
+  it('formats sub-kHz', () => {
+    expect(formatFreqOffset(500)).toBe('+500');
+    expect(formatFreqOffset(-750)).toBe('-750');
+  });
+  it('formats kHz with rounding', () => {
+    expect(formatFreqOffset(12_500)).toBe('+13k');
+    expect(formatFreqOffset(-87_500)).toBe('-88k');
+  });
+  it('formats exact kHz', () => expect(formatFreqOffset(25_000)).toBe('+25k'));
+  it('formats MHz with one decimal', () => {
+    expect(formatFreqOffset(1_500_000)).toBe('+1.5M');
+    expect(formatFreqOffset(-2_000_000)).toBe('-2.0M');
+  });
+  it('boundary: 1000 Hz → kHz, 1 MHz → MHz', () => {
+    expect(formatFreqOffset(1000)).toBe('+1k');
+    expect(formatFreqOffset(1_000_000)).toBe('+1.0M');
+  });
+});
+
+describe('deriveFreqTicks', () => {
+  it('returns empty for spanHz <= 0', () => {
+    expect(deriveFreqTicks(0)).toEqual([]);
+    expect(deriveFreqTicks(-1000)).toEqual([]);
+  });
+
+  it('produces 5 ticks at correct positions', () => {
+    const ticks = deriveFreqTicks(100_000);
+    expect(ticks).toHaveLength(5);
+    expect(ticks.map((t) => t.position)).toEqual([0, 25, 50, 75, 100]);
+  });
+
+  it('center tick is "0", edges are symmetric', () => {
+    const ticks = deriveFreqTicks(350_000);
+    expect(ticks[2].label).toBe('0');
+    expect(ticks[0].label).toBe('-175k');
+    expect(ticks[4].label).toBe('+175k');
+  });
+
+  it('quarter ticks match half of edge offsets', () => {
+    const ticks = deriveFreqTicks(200_000);
+    expect(ticks[1].label).toBe('-50k');
+    expect(ticks[3].label).toBe('+50k');
+  });
+});
+
+describe('getDragInterval — adaptive rate limiting', () => {
+  it('slow (<= 200 px/s) → 200ms', () => {
+    expect(getDragInterval(0)).toBe(200);
+    expect(getDragInterval(200)).toBe(200);
+  });
+  it('medium (201-600 px/s) → 400ms', () => {
+    expect(getDragInterval(201)).toBe(400);
+    expect(getDragInterval(600)).toBe(400);
+  });
+  it('fast (> 600 px/s) → 700ms', () => {
+    expect(getDragInterval(601)).toBe(700);
+    expect(getDragInterval(1000)).toBe(700);
+  });
+});
+
+describe('isRadioOwnedWindowScope', () => {
+  it('CTR=0 is client-centered', () => {
+    expect(isRadioOwnedWindowScope(0)).toBe(false);
+  });
+  it('FIX=1, SCROLL-C=2 and SCROLL-F=3 are radio-owned', () => {
+    expect(isRadioOwnedWindowScope(1)).toBe(true);
+    expect(isRadioOwnedWindowScope(2)).toBe(true);
+    expect(isRadioOwnedWindowScope(3)).toBe(true);
+  });
+  it('agrees with the shared server fixture', () => {
+    const family: readonly number[] = fixture.radio_owned_window_scope_modes;
+    for (const mode of [0, 1, 2, 3]) {
+      expect(isRadioOwnedWindowScope(mode)).toBe(family.includes(mode));
+    }
+  });
+});
+
+describe('isSpanApplicable', () => {
+  it('CTR=0 and SCROLL-C=2 take the span preset, FIX=1 and SCROLL-F=3 the edge number', () => {
+    expect(isSpanApplicable(0)).toBe(true);
+    expect(isSpanApplicable(2)).toBe(true);
+    expect(isSpanApplicable(1)).toBe(false);
+    expect(isSpanApplicable(3)).toBe(false);
+  });
+  it('agrees with the shared server fixture', () => {
+    const family: readonly number[] = fixture.span_applicable_scope_modes;
+    for (const mode of [0, 1, 2, 3]) {
+      expect(isSpanApplicable(mode)).toBe(family.includes(mode));
+    }
+  });
+});
+
+describe('nativeWidthFromSpanChoice (MOR-4451)', () => {
+  // span_choices_hz states FULL view widths: the reader returns the published
+  // value unchanged — reintroducing a client ×2 breaks this test.
+  const viewWidths = [5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000];
+  it('returns the published view width unchanged', () => {
+    expect(nativeWidthFromSpanChoice(viewWidths, { status: 'known', value: 5 })).toBe(200000);
+    expect(nativeWidthFromSpanChoice(viewWidths, { status: 'known', value: 0 })).toBe(5000);
+  });
+  it('returns null for unknown/out-of-range/invalid readings', () => {
+    expect(nativeWidthFromSpanChoice(viewWidths, { status: 'stale', value: 5 })).toBeNull();
+    expect(nativeWidthFromSpanChoice(viewWidths, { status: 'known', value: 8 })).toBeNull();
+    expect(nativeWidthFromSpanChoice(viewWidths, { status: 'known', value: -1 })).toBeNull();
+    expect(nativeWidthFromSpanChoice([], { status: 'known', value: 0 })).toBeNull();
+    expect(nativeWidthFromSpanChoice(undefined, { status: 'known', value: 0 })).toBeNull();
+    expect(nativeWidthFromSpanChoice(viewWidths, undefined)).toBeNull();
+  });
+});
+
+describe('freqFromPixel — click-to-tune calculation', () => {
+  it('maps left/center/right to correct frequencies', () => {
+    expect(freqFromPixel(0, 0, 1000, 14_000_000, 350_000)).toBe(14_000_000);
+    expect(freqFromPixel(500, 0, 1000, 14_000_000, 350_000)).toBe(14_175_000);
+    expect(freqFromPixel(1000, 0, 1000, 14_000_000, 350_000)).toBe(14_350_000);
+  });
+  it('accounts for rect offset', () => {
+    expect(freqFromPixel(300, 200, 1000, 14_000_000, 350_000)).toBe(14_035_000);
+  });
+  it('narrow span → higher resolution per pixel', () => {
+    const f1 = freqFromPixel(500, 0, 1000, 14_000_000, 10_000);
+    const f2 = freqFromPixel(501, 0, 1000, 14_000_000, 10_000);
+    expect(f2 - f1).toBe(10);
+  });
+});

@@ -1,0 +1,100 @@
+"""Core types for the validation check registry.
+
+Defines the closed set of check kinds and value-mutation rules plus the
+``CheckSpec`` dataclass (pure data, no hardware dependencies).
+
+Layer rule: imports only stdlib and ``rigplane.validation.schema``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+from rigplane.validation.schema import FailureDomain, ValidationLevel
+
+
+# ---------------------------------------------------------------------------
+# CheckKind
+# ---------------------------------------------------------------------------
+
+
+class CheckKind(StrEnum):
+    """How a check exercises the radio under test."""
+
+    READ_ONLY = "read_only"
+    RMVR_SAFE_WRITE = "rmvr_safe_write"
+    WRITE_ONLY_OBSERVE = "write_only_observe"
+    TX_ADJACENT_BLOCKED = "tx_adjacent_blocked"
+    MANUAL = "manual"
+    # Automated audio-pipeline probe (GH #1650, MOR-639/640/641): executes in
+    # CI against the deterministic audio fakes via
+    # ``rigplane.validation.audio_checks`` — never auto-run on a live radio
+    # (hardware templates carry these checks as MANUAL_REQUIRED).
+    AUDIO_PROBE = "audio_probe"
+
+
+# ---------------------------------------------------------------------------
+# ValueRule
+# ---------------------------------------------------------------------------
+
+
+class ValueRule(StrEnum):
+    """How the runner mutates a value for the write-then-read-back cycle."""
+
+    TOGGLE_BOOL = "toggle_bool"
+    STEP_LEVEL_255 = "step_level_255"
+    BUMP_HZ = "bump_hz"
+    NUDGE_FILTER = "nudge_filter"
+    PREAMP_CYCLE = "preamp_cycle"
+    AGC_FLIP = "agc_flip"
+    MODE_CYCLE = "mode_cycle"
+    # MOR-642..645 command-coverage families
+    TONE_FREQ_CYCLE = "tone_freq_cycle"
+    VFO_AB_FLIP = "vfo_ab_flip"
+    KEY_SPEED_WPM = "key_speed_wpm"
+    # T11 / MOR-646 — scope-control SET commands
+    SCOPE_INDEX_FLIP = "scope_index_flip"
+    SCOPE_EDGE_CYCLE = "scope_edge_cycle"
+    SCOPE_REF_DB = "scope_ref_db"
+    # MOR-671 — FTX-1 DSP RMVR checks
+    SHIFT_HZ = "shift_hz"
+    CONTOUR_FLIP = "contour_flip"
+    # MOR-678 — IC-7610 MOD-input routing source select (enumerated 0-5)
+    MOD_SRC_FLIP = "mod_src_flip"
+    # MOR-679 — CW pitch is Hz (300-900), not a 0-255 level; nudge on the 5 Hz
+    # grid inside the documented band so the write is always restorable.
+    CW_PITCH_HZ = "cw_pitch_hz"
+    # MOR-672 — FTX-1 SQL-type select (CAT ``CT``): 0=off / 1=TONE / 2=TSQL
+    SQL_TYPE_CYCLE = "sql_type_cycle"
+
+
+# ---------------------------------------------------------------------------
+# VALUE_RULES
+# ---------------------------------------------------------------------------
+
+VALUE_RULES: frozenset[str] = frozenset(ValueRule)
+
+
+# ---------------------------------------------------------------------------
+# CheckSpec
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class CheckSpec:
+    """Immutable specification for a single validation check."""
+
+    check_id: str
+    capability: str
+    kind: CheckKind
+    level: ValidationLevel
+    failure_domain: FailureDomain
+    summary: str
+    protocol: str | None = None
+    get_op: str | None = None
+    set_op: str | None = None
+    value_rule: str = ValueRule.TOGGLE_BOOL
+    tolerance: int = 0
+    hamlib_token: str | None = None
+    tx_adjacent: bool = False

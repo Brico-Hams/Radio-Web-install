@@ -1,0 +1,2257 @@
+"""Abstract Radio Protocol — multi-backend radio control interface.
+
+Defines :class:`Radio` (core) and optional capability Protocols
+(:class:`AudioCapable`, :class:`ScopeCapable`, :class:`DualReceiverCapable`)
+so that the Web UI, rigctld server, and CLI can work with **any** radio
+backend — Icom LAN, Icom serial, Yaesu CAT, etc.
+
+Quick start::
+
+    from rigplane.radio_protocol import Radio, AudioCapable
+
+    async def tune(radio: Radio) -> None:
+        await radio.set_freq(14_074_000)
+        mode, filt = await radio.get_mode()
+        print(f"Mode: {mode}, filter: {filt}")
+
+    # Check optional capabilities at runtime:
+    if isinstance(radio, AudioCapable):
+        await radio.start_audio_rx_opus(callback)
+
+Architecture::
+
+    ┌──────────────────────────────────────────────┐
+    │          Web UI  /  rigctld  /  CLI           │
+    ├──────────────────────────────────────────────┤
+    │          Radio Protocol (core)                │
+    │  ┌──────────────┬─────────────┬────────────┐ │
+    │  │ AudioCapable │ ScopeCapable│ DualRxCap. │ │
+    │  └──────────────┴─────────────┴────────────┘ │
+    ├────────┬──────────┬──────────┬───────────────┤
+    │IcomLAN │IcomSerial│ YaesuCAT │  Future...    │
+    └────────┴──────────┴──────────┴───────────────┘
+
+Standard mode names (cross-vendor):
+    USB, LSB, CW, CWR, AM, FM, RTTY, RTTYR, PSK, PSKR, DV, DD
+
+Standard capability tags:
+    audio, scope, dual_rx, meters, tx, cw,
+    attenuator, preamp, rf_gain, af_level, squelch, nb, nr
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from inspect import getattr_static
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Literal,
+    Protocol,
+    Sequence,
+    cast,
+    runtime_checkable,
+)
+
+from .radio_state import RadioState, VfoSlotState
+from .tx_safety import TxOwner, TxReleaseReason, TxTransition
+from .types import AudioCodec, BreakInMode, Mode, RepeaterShiftDirection
+
+if TYPE_CHECKING:
+    from ._state_cache import StateCache
+    from .acquisition_scheduler import AcquisitionPriority, EnsureFreshResult
+    from .state_pipeline_contracts import CommandSource, FieldPath, Observation
+    from .state_store import StateStore
+    from rigplane.audio_bus import AudioBus
+    from rigplane.runtime._poller_types import CommandQueue
+    from rigplane.scope import ScopeFrame
+    from .tx_observation import TxStateReading
+    from .types import BandStackRegister, MemoryChannel, MemoryEntry, ScopeFixedEdge
+
+__all__ = [
+    "Radio",
+    "VfoSlotState",
+    "AudioCapable",
+    "AudioTransport",
+    "CivCommandCapable",
+    "CivTransactionCapable",
+    "ModeInfoCapable",
+    "ScopeCapable",
+    "DualReceiverCapable",
+    "ReceiverBankCapable",
+    "TransceiverBankCapable",
+    "VfoSlotCapable",
+    "RelativeVfoReadbackCapable",
+    "RelativeVfoFrequencyWritable",
+    "RelativeVfoModeWritable",
+    "RelativeVfoState",
+    "StateCacheCapable",
+    "StateModelCapable",
+    "StateModelService",
+    "RecoverableConnection",
+    "AdvancedControlCapable",
+    "DspControlCapable",
+    "FilterWidthRadioDefaultCapable",
+    "AntennaControlCapable",
+    "AttenuatorObservationProjectable",
+    "AttenuatorStepsCapable",
+    "CwControlCapable",
+    "VoiceControlCapable",
+    "SystemControlCapable",
+    "RepeaterControlCapable",
+    "LevelsCapable",
+    "ManagedTxApi",
+    "ManagedTxCapable",
+    "ManagedTxSupervisor",
+    "MetersCapable",
+    "PowerControlCapable",
+    "PrivilegedTxApi",
+    "PrivilegedTxSupervisor",
+    "RigctldRoutable",
+    "RigctldRoutingStrategy",
+    "ControlDomainCapable",
+    "SplitCapable",
+    "StateNotifyCapable",
+    "PhysicalWriteReadbackCapable",
+    "PhysicalWriteReadbackResult",
+    "PhysicalWriteReadbackStatus",
+    "ObservationPollable",
+    "ObservationPoller",
+    "StatePollable",
+    "StatePoller",
+    "StateStoreCapable",
+    "RitXitCapable",
+    "TransmitStateReadable",
+    "UsbAudioCapable",
+    "ProviderOwnedStateCapable",
+    "MemoryCapable",
+    "MemoryReadCapable",
+    "RadioIdentity",
+    "RadioIdentityStatus",
+]
+
+
+# ---------------------------------------------------------------------------
+# Core Protocol — every backend MUST implement this
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class Radio(Protocol):
+    """Core interface for a controllable radio transceiver.
+
+    Every radio backend must implement this protocol.  Optional features
+    (audio streaming, spectrum scope, dual receivers) are expressed as
+    separate protocols that a backend may additionally implement.
+    """
+
+    # -- Lifecycle ---------------------------------------------------------
+
+    async def connect(self) -> None:
+        """Establish connection to the radio."""
+        ...
+
+    async def disconnect(self) -> None:
+        """Disconnect from the radio, releasing all resources."""
+        ...
+
+    async def __aenter__(self) -> "Radio": ...
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None: ...
+
+    @property
+    def connected(self) -> bool:
+        """Whether the radio is currently connected and healthy."""
+        ...
+
+    @property
+    def radio_ready(self) -> bool:
+        """Whether the backend considers the CI-V stream ready for clients."""
+        ...
+
+    # -- Frequency ---------------------------------------------------------
+
+    async def get_freq(self, receiver: int = 0) -> int:
+        """Get the current frequency in Hz.
+
+        Args:
+            receiver: 0 = main (default), 1 = sub.
+        """
+        ...
+
+    async def set_freq(self, freq: int, receiver: int = 0) -> None:
+        """Set the frequency in Hz.
+
+        Args:
+            freq: Frequency in Hz (e.g. 14_074_000).
+            receiver: 0 = main (default), 1 = sub.
+        """
+        ...
+
+    # -- Mode --------------------------------------------------------------
+
+    async def get_mode(self, receiver: int = 0) -> tuple[str, int | None]:
+        """Get the current operating mode.
+
+        Returns:
+            Tuple of (mode_name, filter_number_or_None).
+            Mode names are standardised strings: USB, LSB, CW, AM, FM, etc.
+        """
+        ...
+
+    async def set_mode(
+        self,
+        mode: str,
+        filter_width: int | None = None,
+        receiver: int = 0,
+    ) -> None:
+        """Set the operating mode.
+
+        Args:
+            mode: Mode name string (e.g. "USB", "CW", "FT8").
+            filter_width: Optional filter number (1-3 on Icom, varies by vendor).
+            receiver: 0 = main, 1 = sub.
+        """
+        ...
+
+    async def get_data_mode(self) -> bool:
+        """Whether DATA mode is active (e.g. USB-D for FT8/FT4)."""
+        ...
+
+    async def set_data_mode(self, on: int | bool, receiver: int = 0) -> None:
+        """Set receiver DATA mode.
+
+        Args:
+            on: False/0 to disable, True/1 to enable DATA1, or an explicit
+                DATA mode value 0-3 when the radio supports multiple DATA
+                sub-modes.
+            receiver: 0 = main, 1 = sub.
+        """
+        ...
+
+    # -- TX ----------------------------------------------------------------
+
+    async def set_ptt(self, on: bool) -> None:
+        """Key or unkey the transmitter."""
+        ...
+
+    # -- State -------------------------------------------------------------
+
+    @property
+    def radio_state(self) -> RadioState:
+        """Live radio state (freq, mode, meters for all receivers)."""
+        ...
+
+    @property
+    def model(self) -> str:
+        """Human-readable radio model name (e.g. 'IC-7610', 'FTX-1')."""
+        ...
+
+    @property
+    def backend_id(self) -> str:
+        """Stable string identifier for the backend family.
+
+        Consumers (web server, rigctld) use this to route backend-specific
+        logic without importing concrete backend classes.
+
+        Known values (family-level, not per-model):
+          - ``"rigplane"``    — Icom LAN/CI-V-over-Ethernet (IC-7610, IC-9700, …)
+          - ``"icom_serial"`` — Icom serial CI-V (IC-7300, IC-705, …)
+          - ``"yaesu_cat"``   — Yaesu CAT (FTX-1, …)
+          - ``"rigctld"``     — external Hamlib rigctld TCP adapter
+        """
+        ...
+
+    @property
+    def capabilities(self) -> set[str]:
+        """Set of capability tags this radio supports.
+
+        Standard tags: audio, scope, dual_rx, meters, tx, cw,
+        attenuator, preamp, rf_gain, af_level, squelch, nb, nr.
+        """
+        ...
+
+    # -- Liveness (MOR-3845) -------------------------------------------------
+
+    last_valid_frame_monotonic: float | None = None
+    """Monotonic time of the last valid radio-originated frame, else ``None``.
+
+    Every backend stamps this at its decode point ONLY after a frame decodes
+    successfully AND carries radio-originated information (a response or an
+    unsolicited message from the radio). Not qualifying: raw bytes,
+    malformed/undecodable traffic, receiver start-up, a reconnect without an
+    answer, and — for daemon-backed clients — a daemon ack/error not backed
+    by a fresh read of a radio value. Reset to ``None`` on every connection
+    generation. Declared with a ``None`` default so implementers only ever
+    assign the stamp; consumers read it duck-typed (``getattr``) and treat
+    ``None`` as "never answered".
+    """
+
+    def supports_command(self, command: str, *, receiver: int | None = None) -> bool:
+        """Check if this radio supports a specific command.
+
+        Profile-driven backends derive this from direct profile declarations
+        and explicit runtime relations. Other providers may resolve support
+        through their own backend command inventory.
+
+        ``receiver=None`` retains name-only support. An explicit receiver
+        opts into target admission for ``set_af_level``, ``set_rf_gain``,
+        ``set_squelch`` and ``set_attenuator_level``: it must be an integer
+        (not bool) in the provider's topology with an executable write route.
+        This is structural eligibility, not current-frequency applicability.
+        Other commands return False for this opt-in query; their name-only
+        support is unchanged.
+        """
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Optional capability Protocols
+# ---------------------------------------------------------------------------
+
+# --- Capabilities split from Radio (P1 slim) -------------------------------
+
+
+@runtime_checkable
+class LevelsCapable(Protocol):
+    """Radio supports setting receiver levels: AF, RF gain, squelch."""
+
+    async def get_af_level(self, receiver: int = 0) -> int:
+        """Get AF (audio) output level (0-255).
+
+        Args:
+            receiver: 0 = main (default), 1 = sub.
+        """
+        ...
+
+    async def set_af_level(self, level: int, receiver: int = 0) -> None:
+        """Set AF (audio) output level (0-255).
+
+        Args:
+            level: Level in 0-255 scale.
+            receiver: 0 = main (default), 1 = sub.
+        """
+        ...
+
+    async def get_rf_gain(self, receiver: int = 0) -> int:
+        """Get RF gain level (0-255).
+
+        Args:
+            receiver: 0 = main (default), 1 = sub.
+        """
+        ...
+
+    async def set_rf_gain(self, level: int, receiver: int = 0) -> None:
+        """Set RF gain level (0-255).
+
+        Args:
+            level: Level in 0-255 scale.
+            receiver: 0 = main (default), 1 = sub.
+        """
+        ...
+
+    async def set_squelch(self, level: int, receiver: int = 0) -> None:
+        """Set squelch level (0-255).
+
+        Args:
+            level: Level in 0-255 scale.
+            receiver: 0 = main (default), 1 = sub.
+        """
+        ...
+
+    async def get_squelch(self, receiver: int = 0) -> int:
+        """Get squelch level (0-255).
+
+        Args:
+            receiver: 0 = main (default), 1 = sub.
+
+        Returns:
+            Current squelch level in 0-255 scale.
+        """
+        ...
+
+    async def get_nr_level(self, receiver: int = 0) -> int:
+        """Get noise reduction level (0-255)."""
+        ...
+
+    async def set_nr_level(self, level: int, receiver: int = 0) -> None:
+        """Set noise reduction level (0-255)."""
+        ...
+
+    async def get_nb_level(self, receiver: int = 0) -> int:
+        """Get noise blanker level (0-255)."""
+        ...
+
+    async def set_nb_level(self, level: int, receiver: int = 0) -> None:
+        """Set noise blanker level (0-255)."""
+        ...
+
+    async def get_mic_gain(self) -> int:
+        """Get microphone gain level (0-255)."""
+        ...
+
+    async def set_mic_gain(self, level: int) -> None:
+        """Set microphone gain level (0-255)."""
+        ...
+
+    async def get_drive_gain(self) -> int:
+        """Get drive gain / TX power adjust level (0-255)."""
+        ...
+
+    async def set_drive_gain(self, level: int) -> None:
+        """Set drive gain / TX power adjust level (0-255)."""
+        ...
+
+    async def get_compressor_level(self) -> int:
+        """Get speech compressor level (0-255)."""
+        ...
+
+    async def set_compressor_level(self, level: int) -> None:
+        """Set speech compressor level (0-255)."""
+        ...
+
+
+@runtime_checkable
+class MetersCapable(Protocol):
+    """Radio supports read-only meters: S-meter, SWR, TX power."""
+
+    async def get_s_meter(self, receiver: int = 0) -> int:
+        """Get S-meter reading (raw value, vendor-specific scale).
+
+        Args:
+            receiver: 0 = main (default), 1 = sub.
+        """
+        ...
+
+    async def get_swr(self) -> float:
+        """Get SWR reading (1.0 = perfect match)."""
+        ...
+
+    async def get_rf_power(self) -> int:
+        """Get TX power level (0-255 normalised scale).
+
+        .. deprecated::
+            Redundant with :meth:`PowerControlCapable.get_rf_power`. Kept here
+            to preserve ``isinstance(radio, MetersCapable)`` checks. New code
+            should program against :class:`PowerControlCapable`, which exposes
+            both ``get_rf_power`` and ``set_rf_power`` together.
+        """
+        ...
+
+    async def get_comp_meter(self) -> int:
+        """Get compression meter reading (0-255)."""
+        ...
+
+    async def get_id_meter(self) -> int:
+        """Get drive (Id) meter reading (0-255)."""
+        ...
+
+    async def get_vd_meter(self) -> int:
+        """Get Vd meter reading (0-255)."""
+        ...
+
+    async def get_power_meter(self) -> int:
+        """Get TX power meter reading (raw 0-255).
+
+        Distinct from :meth:`get_rf_power` (configured/set TX power level)
+        — this returns the live TX output meter.
+        """
+        ...
+
+    async def get_alc_meter(self) -> int:
+        """Get ALC meter reading (raw 0-255)."""
+        ...
+
+    async def get_swr_meter(self) -> int:
+        """Get SWR meter reading (raw 0-255).
+
+        Returns the unscaled meter value. For a calibrated SWR ratio
+        (>= 1.0) use :meth:`get_swr`.
+        """
+        ...
+
+
+@runtime_checkable
+class PowerControlCapable(Protocol):
+    """Radio supports power on/off and TX power level control."""
+
+    async def get_powerstat(self) -> bool:
+        """Get the current radio power state.
+
+        Returns:
+            True if radio is powered on, False if powered off.
+        """
+        ...
+
+    async def set_powerstat(self, on: bool) -> None:
+        """Power the radio on or off.
+
+        Args:
+            on: True to power on, False to power off.
+        """
+        ...
+
+    async def get_rf_power(self) -> int:
+        """Get TX power level (0-255 normalised scale).
+
+        Paired with :meth:`set_rf_power`. Also declared on
+        :class:`MetersCapable` for backwards compatibility with existing
+        ``isinstance`` checks.
+        """
+        ...
+
+    async def set_rf_power(self, level: int) -> None:
+        """Set TX power level (0-255 normalised scale).
+
+        Args:
+            level: Power level in 0-255 scale.
+        """
+        ...
+
+    @property
+    def native_power_unit(self) -> Literal["raw_255", "watts"]:
+        """The wire-level unit used by this radio's power commands.
+
+        Icom CI-V radios use a raw 0-255 scale (``"raw_255"``); Yaesu
+        CAT ``PC`` commands use watts (0-999, three-digit padded).
+        Higher-level layers (web UI, rigctld) inspect this to decide
+        whether to translate from a user-friendly unit before queueing
+        a :class:`SetPower` command.
+
+        Implementations typically declare this as a class attribute
+        (``native_power_unit: Literal["raw_255", "watts"] = "raw_255"``)
+        — a class attribute structurally satisfies the property
+        requirement under :func:`runtime_checkable`.
+        """
+        ...
+
+
+@runtime_checkable
+class SplitCapable(Protocol):
+    """Radio supports split-frequency operation (RX on one VFO, TX on the other).
+
+    Universal across the supported HF/VHF matrix: Icom rigs use CI-V ``0x0F``
+    (read with no payload, set with ``0x00``/``0x01``), Yaesu CAT uses ``ST;``.
+    Split is rig-global on every supported model — there is intentionally no
+    ``receiver`` parameter; split applies to the whole transceiver, not a
+    per-receiver toggle.
+    """
+
+    async def get_split(self) -> bool:
+        """Return ``True`` if split mode is enabled."""
+        ...
+
+    async def set_split(self, on: bool) -> None:
+        """Enable (``True``) or disable (``False``) split mode."""
+        ...
+
+
+# --- Transmit-state observation primitive -----------------------------------
+
+
+@runtime_checkable
+class TransmitStateReadable(Protocol):
+    """A backend that can request one solicited transmit-state observation.
+
+    Deliberately **not** a member of :class:`Radio`: ``Radio`` is
+    ``@runtime_checkable``, so a new required member would silently break
+    ``isinstance`` for every implementer that lacks it — the identical
+    capability-loss mechanism caused by adding a required protocol member.
+    """
+
+    async def read_transmit_state(self) -> TxStateReading:
+        """Return one solicited transmit-state observation.
+
+        A read that reaches the wire and fails, is refused, or is
+        unverifiable comes back as an ordinary
+        :class:`~rigplane.core.tx_observation.TxStateReading` with ``value``
+        left ``None`` (or ``verified_readback=False``) and a ``failure``
+        tag — never as an exception for *that* outcome. A returned value does
+        not by itself prove a fresh physical-radio read; callers must inspect
+        ``verified_readback`` and provenance. This is **not** a
+        blanket "never raises" guarantee, though: a precondition failure
+        ahead of the wire — not connected at all — follows the same
+        convention every other read on the implementation uses and may raise.
+        """
+        ...
+
+
+# --- Managed TX (supervised PTT) -------------------------------------------
+
+
+@runtime_checkable
+class ManagedTxSupervisor(Protocol):
+    """Supervised PTT surface of a radio's managed TX runtime.
+
+    Structural surface of
+    :class:`~rigplane.runtime.managed_radio_runtime.ManagedRadioRuntime`.
+    Managed ingress keys and unkeys through these methods only; the bare
+    :meth:`Radio.set_ptt` write stays private to the supervisor's own effect
+    path, so an ingress request never re-enters the supervisor.
+    """
+
+    async def request_on(self, owner: TxOwner) -> TxTransition:
+        """Request TX for ``owner`` — one supervisor entry per call."""
+        ...
+
+    async def release_owner(
+        self, owner: TxOwner, *, reason: TxReleaseReason
+    ) -> TxTransition:
+        """Release ``owner``'s TX lease — one supervisor entry per call."""
+        ...
+
+
+@runtime_checkable
+class ManagedTxCapable(Protocol):
+    """Radio that publishes a managed TX supervisor for every ingress.
+
+    Backends assembled with a managed runtime expose it here so Web, the SDK,
+    the CLI and rigctld all route through :class:`ManagedTxApi` instead of
+    writing PTT themselves when the rig is managed (rigctld's routing landed
+    under MOR-1014, #2148).  Backends without a runtime expose no
+    ``managed_tx`` attribute (or return ``None``) and keep the legacy
+    :meth:`Radio.set_ptt` path unchanged — the path a rigctld key on an
+    unmanaged rig still takes, with no lease and no watchdog.
+
+    Publish it as a real class or instance member, never through
+    ``__getattr__``: :meth:`ManagedTxApi.bind` settles absence without running
+    the accessor, so a conjured attribute reads as absent there.  Do not probe
+    with ``isinstance`` instead — 3.11 answers that with ``hasattr``, which
+    reads a conjured attribute as present and a raising one as absent, which
+    is the bypass MOR-1193 exists to close.
+
+    For consumers the rule is that resolving a supervisor is a fallible
+    operation and not an attribute lookup: the accessor is backend code and may
+    raise anything.  So no call site may read a failed resolution as absence —
+    ``getattr(radio, "managed_tx", None)`` does exactly that, its default
+    absorbing an ``AttributeError`` raised *inside* the property — nor let one
+    escape a guard that owns cleanup.  Three call sites got this wrong
+    independently (MOR-1187, MOR-1193, MOR-1196).  Bind through
+    :meth:`ManagedTxApi.bind` wherever an owner identity is in hand; where one
+    is not, repeat its two-step read rather than collapsing it to a ``getattr``.
+
+    The published supervisor MAY additionally satisfy
+    :class:`PrivilegedTxSupervisor` — a managed runtime does, publishing
+    ``force_unkey`` alongside ``request_on``/``release_owner`` — but
+    :class:`ManagedTxSupervisor` remains the guaranteed minimum every managed
+    backend publishes.  Ordinary ingress binds :class:`ManagedTxApi` and never
+    sees the extra surface; only :meth:`PrivilegedTxApi.bind` looks for it.
+    """
+
+    @property
+    def managed_tx(self) -> ManagedTxSupervisor | None:
+        """The radio's managed TX supervisor, or ``None`` when unmanaged."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedTxApi:
+    """One managed PTT facade bound to one stable ingress identity.
+
+    ``owner`` is bound once per ingress session: the supervisor matches a
+    release against the owner that took the lease, so a per-request owner
+    would fail that match and strand the radio keyed.
+    """
+
+    supervisor: ManagedTxSupervisor
+    owner: TxOwner
+
+    @staticmethod
+    def bind(radio: object, owner: TxOwner) -> ManagedTxApi | None:
+        """Bind ``owner`` to ``radio``'s supervisor; ``None`` when unmanaged.
+
+        Unmanaged is a positive finding, never a fallback from a failed read.
+        ``getattr_static`` settles absence without running the accessor, so the
+        single explicit read below is the only backend code this touches and
+        its failures propagate.  ``isinstance(radio, ManagedTxCapable)`` cannot
+        draw that line: 3.11 probes the non-callable member with ``hasattr``,
+        which turns an ``AttributeError`` raised *inside* the property — a typo
+        on a nested attribute will do — into "no supervisor", handing a managed
+        rig to the legacy write with no lease, no owner and no watchdog.  3.12+
+        reads the member statically and raised instead, leaving the silent
+        bypass on the one interpreter the per-PR gate pins (MOR-1193).
+        """
+        if getattr_static(radio, "managed_tx", None) is None:
+            return None  # no such member, or a backend that publishes none
+        supervisor = cast(ManagedTxCapable, radio).managed_tx
+        return None if supervisor is None else ManagedTxApi(supervisor, owner)
+
+    async def set_ptt(
+        self, on: bool, *, reason: TxReleaseReason = TxReleaseReason.OPERATOR_RELEASE
+    ) -> TxTransition:
+        """Route one key/unkey request into the supervisor exactly once."""
+        if on:
+            return await self.supervisor.request_on(self.owner)
+        return await self.supervisor.release_owner(self.owner, reason=reason)
+
+
+@runtime_checkable
+class PrivilegedTxSupervisor(Protocol):
+    """Force-unkey surface of a radio's managed TX runtime.
+
+    Deliberately NOT a member of :class:`ManagedTxSupervisor`. Every ingress —
+    Web, the SDK, the CLI, rigctld — binds through :class:`ManagedTxApi`, whose
+    ``supervisor`` is typed as :class:`ManagedTxSupervisor`; adding
+    ``force_unkey`` there would hand force semantics to all of them,
+    including two that must never get it. rigctld's own session-scoped
+    :class:`TxOwner` (MOR-1014, landed #2148) only releases the lease that
+    owner itself took; an implicit force there would let ordinary release
+    traffic escalate into adopting someone else's lease. The SDK is automation-shaped
+    with no operator attached to a session either; an author who actually
+    wants force names :class:`PrivilegedTxApi` explicitly rather than
+    inheriting it silently from the ordinary managed path. Splitting the two
+    protocols is what keeps :class:`ManagedTxSupervisor` the guaranteed
+    minimum every managed backend publishes, while force stays reachable only
+    to the one facade that asks for it by name.
+    """
+
+    async def force_unkey(
+        self, owner: TxOwner, *, reason: TxReleaseReason
+    ) -> TxTransition:
+        """Adopt an unowned/idle key and drive a durable release for it."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class PrivilegedTxApi:
+    """One force-unkey facade bound to one stable ingress identity.
+
+    Distinct from :class:`ManagedTxApi`: it does not publish or read a second
+    attribute on the radio, it re-reads the same ``managed_tx`` member and
+    additionally probes the supervisor object it finds for ``force_unkey``. A
+    supervisor satisfying only :class:`ManagedTxSupervisor`
+    (``request_on``/``release_owner``, nothing else) binds ``ManagedTxApi``
+    but not this one — ``bind`` answers ``None``, a positive finding that the
+    backend publishes no privileged surface, not a failure to resolve one.
+    """
+
+    supervisor: PrivilegedTxSupervisor
+    owner: TxOwner
+
+    @staticmethod
+    def bind(radio: object, owner: TxOwner) -> PrivilegedTxApi | None:
+        """Bind ``owner`` to ``radio``'s privileged surface; ``None`` when absent.
+
+        Two reads, two different failure disciplines, mirroring
+        :meth:`ManagedTxApi.bind`.
+
+        The first is the same ``managed_tx`` *property* that facade reads:
+        ``getattr_static`` settles absence — no such member, or a backend
+        that publishes ``None`` — without running the accessor, so the one
+        explicit property read below is the only backend code this touches
+        and its failures propagate. A raising ``managed_tx`` is a broken
+        accessor, not "no privileged surface"; swallowing it here would
+        repeat the bug :class:`ManagedTxCapable` documents (MOR-1187,
+        MOR-1193, MOR-1196) one layer up.
+
+        The second is a plain ``getattr`` shape-probe for ``force_unkey`` — a
+        coroutine *method*, not a property, so the probe runs no accessor
+        body at all (precedent: the ``replace_provider`` probe in
+        ``web/server.py``'s ``_service_managed_tx_release``). A supervisor
+        with no ``force_unkey`` answers ``None`` here — a positive finding,
+        never a fallback from a failed read.
+        """
+        if getattr_static(radio, "managed_tx", None) is None:
+            return None  # no such member, or a backend that publishes none
+        supervisor = cast(ManagedTxCapable, radio).managed_tx
+        if supervisor is None:
+            return None  # backend publishes the member but no supervisor
+        if getattr(supervisor, "force_unkey", None) is None:
+            return None  # exactly ManagedTxSupervisor; no privileged surface
+        return PrivilegedTxApi(cast(PrivilegedTxSupervisor, supervisor), owner)
+
+    async def force_unkey(self) -> TxTransition:
+        """Force-unkey ``owner``'s target, hardcoded to the operator reason.
+
+        Takes no parameters: :attr:`TxReleaseReason.OPERATOR_FORCED_UNKEY` is
+        the only reason this may ever carry. A caller-supplied ``reason``
+        would let any holder of this facade launder a system-attributed
+        release through the one path meant for an operator reaching for the
+        kill switch.
+        """
+        return await self.supervisor.force_unkey(
+            self.owner, reason=TxReleaseReason.OPERATOR_FORCED_UNKEY
+        )
+
+
+@runtime_checkable
+class StateNotifyCapable(Protocol):
+    """Radio supports server integration callbacks for state and reconnect."""
+
+    def set_state_change_callback(
+        self,
+        callback: Callable[..., Any] | None,
+    ) -> None:
+        """Register a callback for radio state change notifications.
+
+        Called by the web server to receive real-time updates.
+        Pass ``None`` to unregister.
+        """
+        ...
+
+    def set_reconnect_callback(
+        self,
+        callback: Callable[..., Any] | None,
+    ) -> None:
+        """Register a callback invoked after successful reconnection.
+
+        Used by the web server to re-enable scope/audio after transport
+        recovery.  Pass ``None`` to unregister.
+        """
+        ...
+
+
+@runtime_checkable
+class StatePoller(Protocol):
+    """Coroutine-driven request-response state poller.
+
+    Periodically issues read-state commands and invokes the registered
+    callback with the freshest :class:`RadioState`. Used by the web and
+    rigctld layers for radio backends that lack push-style state events
+    (Yaesu CAT and similar).
+    """
+
+    async def start(self) -> None:
+        """Start the polling loops."""
+        ...
+
+    async def stop(self) -> None:
+        """Stop the polling loops and wait for them to finish."""
+        ...
+
+
+@runtime_checkable
+class StatePollable(Protocol):
+    """Radio that needs an explicit request-response state poller.
+
+    Yaesu CAT radios implement this; Icom CI-V radios do not (they push
+    state changes via the CI-V RX stream and let the web layer drive a
+    fire-and-forget :class:`~rigplane.web.radio_poller.RadioPoller` for
+    cache prewarming instead).
+
+    Consumers (web, rigctld) check this with ``isinstance`` and route
+    state-driving logic without importing concrete backend classes::
+
+        if isinstance(radio, StatePollable):
+            poller = radio.create_state_poller(callback=on_state)
+            await poller.start()
+    """
+
+    def create_state_poller(
+        self,
+        *,
+        callback: Callable[[RadioState], None],
+        command_queue: "CommandQueue | None" = None,
+    ) -> StatePoller:
+        """Construct a :class:`StatePoller` bound to this radio.
+
+        Args:
+            callback: Invoked with the current :class:`RadioState`
+                after every successful poll.
+            command_queue: Optional outbound command queue drained on
+                each poll cycle.
+
+        Returns:
+            A :class:`StatePoller` ready for ``await poller.start()``.
+        """
+        ...
+
+
+@runtime_checkable
+class ObservationPoller(Protocol):
+    """Coroutine-driven request-response observation poller."""
+
+    async def start(self) -> None:
+        """Start the polling loops."""
+        ...
+
+    async def stop(self) -> None:
+        """Stop the polling loops and wait for them to finish."""
+        ...
+
+
+PhysicalWriteReadbackStatus = Literal[
+    "reconciled",
+    "mismatched",
+    "rejected",
+    "timed_out",
+    "provider_lost",
+    "cancelled",
+    "superseded",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalWriteReadbackResult:
+    """Terminal provider evidence for one physically dispatched write."""
+
+    status: PhysicalWriteReadbackStatus
+    command_id: str
+    source: "CommandSource"
+    session_id: str | None
+    path: "FieldPath"
+    expected_value: Any
+    observed_value: Any | None = None
+    provider_generation: int | None = None
+
+
+@runtime_checkable
+class PhysicalWriteReadbackCapable(Protocol):
+    def set_physical_write_result_callback(
+        self, callback: Callable[[PhysicalWriteReadbackResult], None] | None
+    ) -> None:
+        """Register a result callback, or clear it with ``None``."""
+        ...
+
+
+@runtime_checkable
+class ObservationPollable(Protocol):
+    """Radio that can emit backend-neutral observations from poll reads."""
+
+    def create_observation_poller(
+        self,
+        *,
+        callback: Callable[[Sequence["Observation"]], None],
+        command_queue: "CommandQueue | None" = None,
+    ) -> ObservationPoller:
+        """Construct an observation poller bound to this radio."""
+        ...
+
+
+@runtime_checkable
+class StateModelService(Protocol):
+    """Service capable of requesting fresh StateStore-backed fields.
+
+    ``ensure_fresh`` is a **synchronous, fire-and-queue** contract: it is a
+    plain (non-``async``) method and callers MUST NOT ``await`` it. See the
+    method docstring for the precise await/timeout semantics. Implementations
+    that need to schedule backend reads do so by enqueueing an
+    :class:`~rigplane.core.acquisition_scheduler.AcquisitionRequest`; the
+    backend executor runs later on a separate poller loop. A conforming
+    implementation never blocks the caller waiting for the read to complete.
+    """
+
+    def ensure_fresh(
+        self,
+        paths: FieldPath | str | Iterable[FieldPath | str],
+        *,
+        max_age: float,
+        priority: AcquisitionPriority | str,
+        reason: str,
+        timeout: float | None = None,
+        require_fresh_dispatch: bool = False,
+    ) -> EnsureFreshResult:
+        """Request freshness for ``paths`` and return immediately (no await).
+
+        Contract (callers depend on every clause):
+
+        - **Synchronous / non-blocking.** This is a regular method, not a
+          coroutine. It returns synchronously and does NOT ``await`` the
+          acquisition. If a field is already fresh it is returned inline
+          (``status == FRESH``); otherwise the request is *enqueued*
+          (``status == QUEUED``/``DEFERRED``) or rejected as
+          ``UNAVAILABLE`` — in none of these cases has a backend read yet
+          completed.
+        - **Fire-and-queue.** A non-``FRESH`` result means acquisition has
+          only been *scheduled*. The actual backend read is driven later by
+          a separate async poller loop (e.g. the web radio poller draining
+          ``scheduler.pending_requests()`` through the backend executor).
+        - **``timeout`` governs the backend executor, not a caller await.**
+          It is carried on the enqueued ``AcquisitionRequest.timeout`` and is
+          interpreted by the executor/poller as a deadline for the in-flight
+          backend read (after which the request is expired and a failure is
+          recorded). It is NOT a budget for any await inside this call —
+          there is no such await.
+        - **Callers must handle "not yet fresh".** Because freshness is not
+          guaranteed on return, callers re-project the StateStore on the next
+          observation and, on a miss, fall back to their own readback or
+          surface unavailability (rigctld returns the value once observed, or
+          ``EIO``/``ENIMPL`` per command). Do not assume the field is fresh
+          immediately after this returns.
+        """
+        ...
+
+
+@runtime_checkable
+class StateStoreCapable(Protocol):
+    """Radio exposes the canonical StateStore through a public capability."""
+
+    @property
+    def state_store(self) -> "StateStore":
+        """Canonical confirmed-observation store for runtime state ingress."""
+        ...
+
+
+@runtime_checkable
+class StateModelCapable(StateStoreCapable, Protocol):
+    """Radio exposes StateStore-backed acquisition through a public capability."""
+
+    @property
+    def state_model_service(self) -> StateModelService | None:
+        """Optional service for StateStore freshness/acquisition requests."""
+        ...
+
+
+@runtime_checkable
+class RigctldRoutingStrategy(Protocol):
+    """Neutral contract for a vendor-specific rigctld command-routing strategy.
+
+    Captures the get/set level, get/set func, ``dump_state``, and
+    ``get_info`` surface that the rigctld handler drives, without ``core``
+    naming the rigctld layer's :class:`~rigplane.rigctld.contract.RigctldResponse`
+    type. The response-bearing methods are typed :class:`~typing.Any`
+    because the concrete response object is a rigctld-layer type; the
+    rigctld handler narrows it back to its own contract.
+
+    The shipping :class:`~rigplane.rigctld.routing.RigctldRouting` Protocol
+    (and its implementations) structurally satisfy this contract.
+    """
+
+    async def get_level(self, level: str, *, vfo: str | None = None) -> Any: ...
+    async def set_level(
+        self, level: str, value: float, *, vfo: str | None = None
+    ) -> Any: ...
+    async def get_func(self, func: str, *, vfo: str | None = None) -> Any: ...
+    async def set_func(self, func: str, on: bool, *, vfo: str | None = None) -> Any: ...
+    def dump_state(self) -> list[str]: ...
+    def get_info(self) -> str: ...
+
+
+@runtime_checkable
+class RigctldRoutable(Protocol):
+    """Radio that provides a custom rigctld command-routing strategy.
+
+    The rigctld TCP server's handler ships with a built-in default
+    routing that works for Icom CI-V radios. Backends with significantly
+    different command semantics (Yaesu CAT today; future Kenwood TS-590
+    or other vendors) expose their own :class:`RigctldRoutingStrategy`
+    implementation via this method.
+
+    Consumers (rigctld handler) check this with ``isinstance`` and pick
+    up the vendor-specific routing without importing concrete backend
+    classes::
+
+        if isinstance(radio, RigctldRoutable):
+            routing = radio.rigctld_routing(max_power_w)
+        else:
+            routing = None  # fall through to the built-in Icom path
+    """
+
+    def rigctld_routing(
+        self,
+        max_power_w: float = 100.0,
+    ) -> RigctldRoutingStrategy:
+        """Construct a :class:`RigctldRoutingStrategy` bound to this radio.
+
+        Args:
+            max_power_w: Rated maximum TX power in watts; used to scale
+                normalised RFPOWER readings (defaults to 100 W).
+
+        Returns:
+            A :class:`RigctldRoutingStrategy` ready to serve get/set
+            level, get/set func, ``dump_state``, and ``get_info`` calls.
+        """
+        ...
+
+
+@runtime_checkable
+class ControlDomainCapable(Protocol):
+    """Radio that converts between display values and raw control codes.
+
+    A backend whose active profile publishes normalized control domains
+    implements this surface so callers can convert between a domain's
+    display values and its raw codes through the backend, instead of
+    each caller re-deriving the profile math.
+    All methods are synchronous and never touch the wire.
+    """
+
+    def snap_control_display(self, control: str, display: str) -> int | None:
+        """Return the raw code for the legal display value nearest *display*.
+
+        Ties snap to the larger display value. Returns ``None`` when the
+        radio publishes no normalized domain for *control* it can invert
+        to a raw code, or when *display* is not a canonical decimal
+        string. Raises ``ValueError`` when a normalized domain is
+        published and *display* lies outside its display range.
+        """
+        ...
+
+    def decode_control_raw(self, control: str, raw: int) -> str | None:
+        """Return the canonical display string for *raw*.
+
+        Returns ``None`` when the radio publishes no normalized domain
+        for *control*, or when *raw* is not a legal point on it.
+        """
+        ...
+
+    def control_display_bounds(self, control: str) -> tuple[str, str] | None:
+        """Return the canonical display ``(minimum, maximum)`` for *control*.
+
+        Both bounds are canonical decimal strings read from the radio's
+        published control domain — the band the radio itself scales its
+        display values over, so callers never substitute a code constant
+        for it. Returns ``None`` when the radio publishes no domain for
+        *control*. Synchronous; never touches the wire.
+        """
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Other optional capability Protocols
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class AudioCapable(Protocol):
+    """Radio supports real-time audio streaming (LAN, USB, or virtual).
+
+    Audio format is Opus-encoded.  For USB audio devices, the backend
+    handles capture/playback internally and exposes the same interface.
+
+    Preferred consumer pattern: use :attr:`audio_bus` for pub/sub access
+    so multiple consumers can receive audio simultaneously::
+
+        async with radio.audio_bus.subscribe(name="recorder") as sub:
+            async for packet in sub:
+                save(packet)
+    """
+
+    @property
+    def audio_bus(self) -> "AudioBus":
+        """AudioBus instance for pub/sub audio distribution.
+
+        Returns an :class:`~rigplane.audio_bus.AudioBus` that manages
+        subscriptions and automatically starts/stops the radio's audio
+        stream based on subscriber count.
+        """
+        ...
+
+    @property
+    def audio_codec(self) -> AudioCodec:
+        """Configured audio codec for the radio's audio stream.
+
+        Backends fix this once at construction time (e.g. Yaesu USB-audio
+        always reports :attr:`~rigplane.types.AudioCodec.PCM_1CH_16BIT`);
+        Icom LAN backends honour the value supplied to the constructor.
+        """
+        ...
+
+    @property
+    def audio_sample_rate(self) -> int:
+        """Configured audio sample rate in Hz.
+
+        Used by the web audio broadcaster to clock the relay correctly
+        (see ``web/handlers/audio.py``); a missing property would silently
+        fall back to a default rate and mis-clock playback.
+        """
+        ...
+
+    async def start_audio_rx_opus(
+        self,
+        callback: Callable[..., Awaitable[None]],
+    ) -> None:
+        """Start receiving audio.  Decoded frames are passed to *callback*.
+
+        Note: prefer :attr:`audio_bus` for multi-consumer scenarios.
+        Direct callback usage is single-consumer only.
+        """
+        ...
+
+    async def stop_audio_rx_opus(self) -> None:
+        """Stop receiving audio."""
+        ...
+
+    async def push_audio_tx_opus(self, data: bytes) -> None:
+        """Send Opus-encoded audio data for transmission."""
+        ...
+
+    async def start_audio_rx_pcm(
+        self,
+        callback: Callable[..., Any],
+        *,
+        sample_rate: int | None = None,
+        channels: int | None = None,
+        frame_ms: int | None = None,
+    ) -> None: ...
+
+    async def stop_audio_rx_pcm(self) -> None: ...
+
+    async def start_audio_tx_pcm(
+        self,
+        *,
+        sample_rate: int | None = None,
+        channels: int | None = None,
+        frame_ms: int | None = None,
+    ) -> None: ...
+
+    async def push_audio_tx_pcm(self, data: bytes) -> None: ...
+    async def stop_audio_tx_pcm(self) -> None: ...
+    async def get_audio_stats(self) -> dict[str, Any]: ...
+    async def start_audio_tx_opus(self) -> None: ...
+    async def stop_audio_tx_opus(self) -> None: ...
+
+
+@runtime_checkable
+class AudioTransport(Protocol):
+    """Codec/transport-neutral audio surface (MOR-532 epic, MOR-538).
+
+    This is the target audio interface for all backends: descriptors
+    (``audio_codec`` / ``audio_tx_codec`` / ``audio_sample_rate`` /
+    ``audio_duplex_mode``) declare the negotiated format, and the
+    ``start_rx``/``push_tx`` methods move bytes already encoded in that
+    format. No method carries codec or format arguments — backends own
+    format resolution from their negotiated contracts (e.g. the Icom
+    ``AudioStreamContract``), so :meth:`start_tx` takes none.
+
+    RX delivery keeps the existing packet shape by design decision:
+    *callback* receives an :class:`~rigplane.audio.AudioPacket` whose
+    ``data`` is encoded per :attr:`audio_codec`. Retaining
+    ``AudioPacket`` keeps the audio bus, the web broadcaster, and the
+    bridge byte-compatible with the legacy path.
+
+    The existing ``*_opus``/``*_pcm`` methods on :class:`AudioCapable`
+    remain as permanent back-compat shims; new consumers should target
+    this protocol once backends implement it in the later MOR-532
+    steps. Until then no shipping backend satisfies
+    ``isinstance(radio, AudioTransport)`` — the neutral methods land
+    backend-by-backend after this definition step.
+    """
+
+    @property
+    def audio_bus(self) -> "AudioBus":
+        """AudioBus instance for pub/sub audio distribution.
+
+        Same bus as :attr:`AudioCapable.audio_bus`; packets on the bus
+        carry ``data`` encoded per :attr:`audio_codec`.
+        """
+        ...
+
+    @property
+    def audio_codec(self) -> AudioCodec:
+        """Negotiated RX codec — the encoding of every RX packet."""
+        ...
+
+    @property
+    def audio_tx_codec(self) -> AudioCodec:
+        """Negotiated TX codec — the encoding :meth:`push_tx` expects."""
+        ...
+
+    @property
+    def audio_sample_rate(self) -> int:
+        """Negotiated audio sample rate in Hz (RX and TX clock)."""
+        ...
+
+    @property
+    def audio_duplex_mode(self) -> Literal["full", "half", "exclusive"]:
+        """Duplex capability of the audio transport.
+
+        * ``"full"`` — RX keeps flowing while TX is active (Icom LAN UDP).
+        * ``"half"`` — RESERVED: alternating RX/TX on a shared channel;
+          no shipping backend maps to it yet.
+        * ``"exclusive"`` — starting TX requires stopping RX first
+          (single shared OS audio device).
+        """
+        ...
+
+    async def start_rx(self, callback: Callable[..., Awaitable[None]]) -> None:
+        """Start receiving audio.
+
+        *callback* receives :class:`~rigplane.audio.AudioPacket`
+        instances whose ``data`` is encoded per :attr:`audio_codec`.
+        Prefer :attr:`audio_bus` for multi-consumer scenarios.
+        """
+        ...
+
+    async def stop_rx(self) -> None:
+        """Stop receiving audio."""
+        ...
+
+    async def start_tx(self) -> None:
+        """Open the TX path.
+
+        Takes no format arguments: the backend resolves the TX format
+        from its negotiated contract (see :attr:`audio_tx_codec` and
+        :attr:`audio_sample_rate`).
+        """
+        ...
+
+    async def push_tx(self, data: bytes) -> None:
+        """Send audio for transmission, encoded per :attr:`audio_tx_codec`."""
+        ...
+
+    async def stop_tx(self) -> None:
+        """Close the TX path."""
+        ...
+
+
+@runtime_checkable
+class UsbAudioCapable(Protocol):
+    """Marker for radios whose audio is exposed as a separate OS-level
+    USB Audio Class device, NOT through the in-band Radio Protocol.
+
+    Yaesu CAT radios (FT-991A, FTX-1, …) connect over USB and expose
+    their audio as standard USB Audio Class endpoints; the application
+    layer (and the operating system) speaks to the audio device
+    directly, while CI-V/CAT commands flow through the serial port.
+    Higher layers (the web ``runtime_capabilities`` helper, future
+    rigctld extensions) use this Protocol to advertise the ``"audio"``
+    UI capability for backends that lack in-band :class:`AudioCapable`
+    audio but still let the user listen via the OS sound device.
+    Resolution of the actual USB audio device indices is independent of
+    this Protocol — see :mod:`rigplane.audio._usb_resolve`, which keys
+    off the serial port path.
+
+    Implementations declare a ``has_usb_audio: bool`` class attribute
+    set to ``True``. The sentinel is required (rather than a pure
+    marker) because :func:`runtime_checkable` Protocols with no members
+    accept *any* object — see the
+    `"empty Protocol matches everything"
+    <https://docs.python.org/3/library/typing.html#typing.runtime_checkable>`_
+    note in the standard library docs. Backends that implement
+    :class:`AudioCapable` are still detected via that Protocol; this
+    one specifically captures backends that ONLY have OS-level audio
+    (e.g. classic CAT-only Yaesu radios). Note: the shipping
+    :class:`~rigplane.backends.yaesu_cat.radio.YaesuCatRadio` already
+    structurally satisfies :class:`AudioCapable` because its
+    ``UsbAudioDriver`` is wrapped behind the same ``audio_bus`` /
+    ``start_audio_rx_*`` surface; declaring ``has_usb_audio = True``
+    documents the OS-level reality and provides a future-proof gate
+    for backends that don't (yet) wrap USB Audio behind the in-band
+    Protocol.
+    """
+
+    @property
+    def has_usb_audio(self) -> bool:
+        """``True`` if this radio's audio is delivered as a separate
+        USB Audio Class device handled by the OS (not by the Radio
+        Protocol's in-band audio methods).
+
+        Implementations typically declare this as a class attribute
+        (``has_usb_audio: bool = True``) — a class attribute
+        structurally satisfies the property requirement under
+        :func:`runtime_checkable`, mirroring the
+        :attr:`PowerControlCapable.native_power_unit` pattern.
+        """
+        ...
+
+
+@runtime_checkable
+class ProviderOwnedStateCapable(Protocol):
+    """Marker for backends that own their capability and state contract.
+
+    A provider-owned backend (the external rigctld client) reports its
+    capabilities and every observed value itself, with no RigPlane
+    profile. The web layer may serve such a backend profile-less:
+    profile-derived fields become unavailable rather than a refusal
+    (MOR-2901, decision (b) of 2026-09-28).
+
+    Backends WITHOUT this marker stay on the resolve-or-refuse path
+    (MOR-2012): an unidentified radio on the Icom serial/LAN backends
+    refuses aloud instead of being served a profile-less projection.
+
+    Implementations declare ``has_provider_owned_state: bool = True`` as a
+    class attribute — the sentinel is required because a
+    :func:`runtime_checkable` Protocol with no members accepts any object
+    (see :class:`UsbAudioCapable`).
+    """
+
+    @property
+    def has_provider_owned_state(self) -> bool:
+        """``True`` when this backend serves its own state contract and the
+        web layer must not require a RigPlane profile for it."""
+        ...
+
+
+@runtime_checkable
+class CivCommandCapable(Protocol):
+    """Radio exposes low-level CI-V command injection for background pollers."""
+
+    async def send_civ(
+        self,
+        command: int,
+        sub: int | None = None,
+        data: bytes | None = None,
+        *,
+        wait_response: bool = True,
+        priority: Any = ...,
+        wait_dispatch: bool = True,
+        is_current: Callable[[], bool] | None = None,
+    ) -> Any:
+        """Send a CI-V command through the active backend transport.
+
+        ``priority`` selects the Commander lane priority (``Priority`` enum,
+        typed ``Any`` here to keep ``core`` free of the ``commands`` import).
+        Background pollers pass ``Priority.BACKGROUND``; user commands keep
+        the implementation's NORMAL default (MOR-497i).
+
+        ``wait_dispatch`` controls whether the caller awaits the Commander
+        dispatching the frame.  Defaults to True (blocking, user-command
+        contract); background pollers pass False so the poll burst is
+        fire-and-forget and does not park the poll loop (MOR-497ii).
+        """
+        ...
+
+
+@runtime_checkable
+class CivTransactionCapable(Protocol):
+    """Radio exposes scoped raw CI-V transactions with explicit expectations."""
+
+    async def send_civ_transaction(
+        self,
+        command: int,
+        sub: int | None = None,
+        data: bytes | None = None,
+        *,
+        expect: Literal["none", "ack", "data"] = "data",
+        timeout: float | None = None,
+    ) -> Any:
+        """Send one raw CI-V transaction and return a deterministic result."""
+        ...
+
+
+@runtime_checkable
+class ModeInfoCapable(Protocol):
+    """Radio exposes backend-native mode metadata for rigctld consumers."""
+
+    async def get_mode_info(self, receiver: int = 0) -> tuple[Mode, int | None]:
+        """Return backend-native mode enum and filter selector."""
+        ...
+
+
+@runtime_checkable
+class ScopeCapable(Protocol):
+    """Radio supports a spectrum/panadapter scope data stream."""
+
+    async def enable_scope(self, **kwargs: Any) -> None:
+        """Enable the spectrum scope.
+
+        Keyword arguments are backend-specific (e.g. span, center_freq).
+        """
+        ...
+
+    async def disable_scope(self) -> None:
+        """Disable the spectrum scope."""
+        ...
+
+    def on_scope_data(self, callback: Callable[..., Any] | None) -> None:
+        """Register scope-frame callback; pass ``None`` to unregister."""
+        ...
+
+    def scope_stream(self) -> AsyncIterator["ScopeFrame"]:
+        """Deprecated native-frame iterator; use ``on_scope_data`` instead."""
+        ...
+
+    async def get_scope_during_tx(self) -> bool: ...
+    async def set_scope_during_tx(self, on: bool) -> None: ...
+    async def get_scope_center_type(self) -> int: ...
+    async def set_scope_center_type(self, center_type: int) -> None: ...
+    async def get_scope_fixed_edge(
+        self, *, range_index: int | None = None, edge: int | None = None
+    ) -> "ScopeFixedEdge": ...
+    async def set_scope_fixed_edge(
+        self, *, edge: int, start_hz: int, end_hz: int
+    ) -> None: ...
+    async def get_scope_edge(self) -> int: ...
+    async def set_scope_edge(self, edge: int) -> None: ...
+    async def get_scope_rbw(self) -> int: ...
+    async def set_scope_rbw(self, rbw: int) -> None: ...
+    async def get_scope_vbw(self) -> bool: ...
+    async def set_scope_vbw(self, narrow: bool) -> None: ...
+    async def capture_scope_frame(self, *, timeout: float = 10.0) -> "ScopeFrame": ...
+    async def capture_scope_frames(
+        self, *, count: int, timeout: float = 15.0
+    ) -> list[Any]: ...
+
+    # Scope control settings (Command 0x27 sub-commands)
+    async def get_scope_receiver(self) -> int: ...
+    async def set_scope_receiver(self, receiver: int) -> None: ...
+    async def get_scope_dual(self) -> bool: ...
+    async def set_scope_dual(self, dual: bool) -> None: ...
+    async def get_scope_mode(self) -> int: ...
+    async def set_scope_mode(self, mode: int) -> None: ...
+    async def get_scope_span(self) -> int: ...
+    async def set_scope_span(self, span: int) -> None: ...
+    async def get_scope_speed(self) -> int: ...
+    async def set_scope_speed(self, speed: int) -> None: ...
+    async def get_scope_ref(self) -> float: ...
+    async def set_scope_ref(self, ref: float) -> None: ...
+    async def get_scope_hold(self) -> bool: ...
+    async def set_scope_hold(self, on: bool) -> None: ...
+
+
+@runtime_checkable
+class DualReceiverCapable(Protocol):
+    """Radio has two independent receivers (e.g. IC-7610 Main/Sub)."""
+
+    async def swap_main_sub(self) -> None:
+        """Swap Main and Sub VFO frequencies."""
+        ...
+
+    async def equalize_main_sub(self) -> None:
+        """Set Sub VFO frequency equal to Main."""
+        ...
+
+    async def set_main_sub_tracking(self, on: bool) -> None:
+        """Enable or disable Main/Sub frequency tracking."""
+        ...
+
+    async def get_main_sub_tracking(self) -> bool:
+        """Get Main/Sub frequency tracking on/off state."""
+        ...
+
+
+@runtime_checkable
+class ReceiverBankCapable(Protocol):
+    """Radio exposes a bank of independent receivers.
+
+    Surfaces the ``Transceiver → Receiver → VFO`` hierarchy without breaking
+    the existing ``receiver: int = 0`` parameter convention used across the
+    codebase.  A *receiver* is a full signal chain (RF front-end, IF, demod)
+    that can be tuned independently; each receiver in turn owns a pair of
+    VFO slots (A/B) accessed via :class:`VfoSlotCapable`.
+
+    On a single-receiver radio ``receiver_count == 1`` and
+    :meth:`select_receiver` is a no-op for ``which == 0``.  On a dual-receiver
+    rig (e.g. IC-7610 Main/Sub) ``receiver_count == 2`` and the ``which``
+    argument accepts either the integer index (``0`` for Main, ``1`` for Sub)
+    or the case-insensitive name (``"main"`` / ``"sub"``).
+    """
+
+    @property
+    def receiver_count(self) -> int:
+        """Number of independent receivers exposed by this transceiver."""
+        ...
+
+    async def select_receiver(self, which: int | str) -> None:
+        """Make ``which`` the active receiver for subsequent commands.
+
+        Accepts an integer index (``0``-based) or a case-insensitive name
+        (``"main"`` / ``"sub"``).  Implementations may reject out-of-range
+        values with :class:`ValueError`.
+        """
+        ...
+
+    async def get_active_receiver(self) -> int:
+        """Return the index of the currently active receiver."""
+        ...
+
+
+@runtime_checkable
+class TransceiverBankCapable(Protocol):
+    """Radio exposes a bank of independent transceivers.
+
+    Sits at the top of the ``Transceiver → Receiver → VFO`` hierarchy: a
+    *transceiver* is a fully independent RF stage (its own TX PA, antenna
+    port, and receiver chain) addressable as a distinct unit.  Examples are
+    the Yaesu FTX-1 family, where HF+50 MHz and 144+430 MHz are wired as two
+    separate transceivers sharing a single control head.
+
+    On a single-transceiver radio ``transceiver_count == 1`` and
+    :meth:`set_tx_source` is a no-op for ``xcvr == 0``.  On a multi-
+    transceiver rig the ``xcvr`` argument is a 0-based integer index
+    identifying which transceiver the operator is driving on TX; the radio
+    may expose additional receivers per transceiver via
+    :class:`ReceiverBankCapable`.
+    """
+
+    @property
+    def transceiver_count(self) -> int:
+        """Number of independent transceivers exposed by this rig."""
+        ...
+
+    async def get_tx_source(self) -> int:
+        """Return the 0-based index of the currently active TX transceiver."""
+        ...
+
+    async def set_tx_source(self, xcvr: int) -> None:
+        """Make ``xcvr`` the active TX transceiver.
+
+        Implementations may reject out-of-range values with
+        :class:`ValueError`.
+        """
+        ...
+
+    async def set_cross_band_split(self, rx_xcvr: int, tx_xcvr: int) -> None:
+        """Enable cross-band split: receive on ``rx_xcvr``, transmit on ``tx_xcvr``.
+
+        ``rx_xcvr`` and ``tx_xcvr`` must differ; same-transceiver operation is
+        regular split, not cross-band.  Implementations may reject out-of-range
+        values or unsupported combinations with :class:`ValueError`.
+        """
+        ...
+
+
+@runtime_checkable
+class VfoSlotCapable(Protocol):
+    """Radio exposes VFO A/B slots per receiver.
+
+    Completes the ``Transceiver → Receiver → VFO`` hierarchy: each receiver
+    owns a pair of VFO slots (A and B) with independent state tracked by
+    :class:`~rigplane.radio_state.VfoSlotState` (frequency, mode, filter,
+    etc.).  Operations take an explicit ``receiver`` index matching the
+    existing ``receiver: int = 0`` convention.
+
+    The slot parameter is always a single-character string (``"A"`` or
+    ``"B"``), case-insensitive on input and upper-case on output.
+    """
+
+    async def get_vfo_slot(self, receiver: int = 0) -> str:
+        """Return the active VFO slot (``"A"`` or ``"B"``) for ``receiver``."""
+        ...
+
+    async def set_vfo_slot(self, slot: str, receiver: int = 0) -> None:
+        """Make ``slot`` (``"A"`` or ``"B"``) the active VFO on ``receiver``."""
+        ...
+
+    async def swap_vfo_ab(self, receiver: int = 0) -> None:
+        """Swap VFO A and VFO B state on ``receiver`` (frequency, mode, …)."""
+        ...
+
+    async def equalize_vfo_ab(self, receiver: int = 0) -> None:
+        """Copy the active VFO to the other VFO on ``receiver``.
+
+        Yaesu single-transceiver profiles: A→B, through the profile's
+        ``vfo_a_to_b`` copy primitive (MOR-4434). A Yaesu ``ab_shared``
+        (dual-receiver) profile has no per-receiver copy and refuses.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class RelativeVfoState:
+    """Provider-neutral Selected/Unselected frequency-mode tuple."""
+
+    freq_hz: int
+    mode: str
+    filter_num: int | None = None
+    data_mode: int = 0
+
+
+class RadioIdentityStatus(Enum):
+    """Outcome of the connect-time radio identity read (MOR-3071).
+
+    ``CHECKING``: the link is open and the identity read is in flight.
+    Every connect attempt resets the identity to ``CHECKING``, including
+    in-process reconnects, so a result never outlives its link.
+
+    ``UNVERIFIED``: the radio answered the read but no profile declares an
+    expected identity yet, so there is nothing to compare against. The
+    connect proceeds exactly as before this gate existed.
+
+    ``VERIFIED`` / ``IDENTITY_MISMATCH``: the native ID answer matches or
+    differs from the profile's expected IDs. A mismatch does not require
+    identifying the other model.
+
+    ``NO_RESPONSE``: nothing answered the read. Not terminal — the read is
+    retried on the open link. Serial and Yaesu hold the connect until the
+    right radio answers; the Icom LAN runtime only publishes the status and
+    never blocks commands or state reads on it (MOR-4382).
+    """
+
+    CHECKING = "checking"
+    VERIFIED = "verified"
+    IDENTITY_MISMATCH = "identity_mismatch"
+    NO_RESPONSE = "no_response"
+    UNVERIFIED = "unverified"
+
+
+@dataclass(frozen=True, slots=True)
+class RadioIdentity:
+    """Typed identity of the radio that answered on the link (MOR-3071).
+
+    ``answered_id`` is the opaque native ID: CI-V payload after the
+    ``19 00`` echo as uppercase hex (for example ``"94"``), or Yaesu's
+    four-digit CAT ID (``"0840"``). It is not the user-settable address.
+
+    ``answered_model`` names the requested model after an expected-ID
+    match; ``None`` when the answer's model is unknown.
+    """
+
+    status: RadioIdentityStatus
+    expected_model: str | None = None
+    answered_model: str | None = None
+    answered_id: str | None = None
+
+
+def serial_identity_hold(radio: object) -> RadioIdentityStatus | None:
+    """The active native-identity hold status, or ``None`` (MOR-3078).
+
+    One shared predicate for every upper layer that asks whether the
+    connect-time identity read holds the radio: the CLI's bridge
+    deferral, the web startup gate and the no_response print. It returns
+    ``CHECKING``/``NO_RESPONSE``/``IDENTITY_MISMATCH`` while a real :class:`RadioIdentity`
+    carries that status AND the radio reports itself not connected — a
+    stale ``checking`` left on a connected radio describes nothing and
+    must not act as a hold. Anything else the attribute may hold
+    (including the ``Mock`` a test double returns) is not a hold; the
+    decision is made by ``isinstance``, never by truthiness.
+    """
+
+    identity = getattr(radio, "connection_identity", None)
+    if not isinstance(identity, RadioIdentity):
+        return None
+    if identity.status not in (
+        RadioIdentityStatus.CHECKING,
+        RadioIdentityStatus.NO_RESPONSE,
+        RadioIdentityStatus.IDENTITY_MISMATCH,
+    ):
+        return None
+    if bool(getattr(radio, "connected", False)):
+        return None
+    return identity.status
+
+
+def radio_audio_ready(radio: object) -> bool:
+    """Whether the radio link can serve a radio-RX start now (MOR-2922).
+
+    One shared predicate for the audio-bridge auto-start's two sides:
+    the CLI's arming condition and the web server's deferred-start wait
+    ask the same question, so they can never drift apart. It is ``True``
+    only when the radio reports itself connected AND no connect-time
+    identity hold (:func:`serial_identity_hold`) owns the link. While it
+    is ``False`` — the serial port never opened (the MOR-2876 no-port
+    start) or the identity read has not answered (MOR-3078) — the
+    bridge's first demand, the radio-RX subscribe, would be refused.
+    """
+
+    if not bool(getattr(radio, "connected", False)):
+        return False
+    return serial_identity_hold(radio) is None
+
+
+@runtime_checkable
+class RelativeVfoReadbackCapable(Protocol):
+    """Radio can read Selected/Unselected VFOs without selecting or swapping."""
+
+    async def read_relative_vfo(self, *, selected: bool) -> RelativeVfoState:
+        """Return a fresh tuple for the radio's current relative role."""
+        ...
+
+
+@runtime_checkable
+class RelativeVfoFrequencyWritable(Protocol):
+    """Radio can write and read back a Selected/Unselected VFO frequency."""
+
+    async def write_relative_vfo_frequency(
+        self,
+        freq_hz: int,
+        *,
+        selected: bool,
+        before_set: Callable[[], None] | None = None,
+        after_ack: Callable[[], None] | None = None,
+        after_readback: Callable[[], None] | None = None,
+    ) -> int:
+        """Return observed Hz; synchronous hooks may raise to reject stale targets."""
+        ...
+
+
+@runtime_checkable
+class RelativeVfoModeWritable(Protocol):
+    """Radio can write and read back a Selected/Unselected VFO mode tuple."""
+
+    async def write_relative_vfo_mode(
+        self,
+        mode: int,
+        *,
+        selected: bool,
+        data: bool | int | None = None,
+        filter_width: int | None = None,
+        before_set: Callable[[], None] | None = None,
+    ) -> RelativeVfoState:
+        """Preserve omitted fields; the synchronous hook may refuse before SET.
+
+        ``data`` is a boolean (legacy: DATA1 on/off) or an explicit
+        numeric DATA sub-mode bounded by the profile's ``data_mode_count``
+        (MOR-3821 P0e); the write is verified against an immediate
+        readback of the exact sub-mode.
+        """
+        ...
+
+
+@runtime_checkable
+class StateCacheCapable(Protocol):
+    """Radio exposes a shared state cache for server-side snapshots."""
+
+    @property
+    def state_cache(self) -> "StateCache":
+        """Shared state cache object."""
+        ...
+
+
+@runtime_checkable
+class RecoverableConnection(Protocol):
+    """Radio supports soft reconnect/disconnect operations."""
+
+    async def soft_reconnect(self) -> None:
+        """Attempt in-place reconnect without full teardown."""
+        ...
+
+    async def soft_disconnect(self) -> None:
+        """Gracefully disconnect from the radio."""
+        ...
+
+
+@runtime_checkable
+class DspControlCapable(Protocol):
+    """DSP controls: NB, NR, DIGISEL, AGC, filters, notch, PBT, APF/TPF."""
+
+    async def set_filter(self, filter_num: int, receiver: int = 0) -> None: ...
+    async def get_filter(self, receiver: int = 0) -> int | None:
+        """Get current mode filter number (1-3) when reported, else None."""
+        ...
+
+    async def set_filter_shape(self, shape: int, receiver: int = 0) -> None: ...
+
+    async def set_filter_width(self, width_hz: int, receiver: int = 0) -> None:
+        """Set DSP IF filter width in Hz (Hz↔index translation handled by backend)."""
+        ...
+
+    async def get_filter_width(self, receiver: int = 0) -> int | None:
+        """Get DSP IF filter width in Hz (Hz↔index translation handled by backend).
+
+        ``None`` when the radio's answer carries no Hz value for the current
+        mode (e.g. a Yaesu mode with no width-table row, or an out-of-table
+        code such as the FTX-1 code-00 "(Default)").
+        """
+        ...
+
+    async def set_nb(self, on: bool, receiver: int = 0) -> None: ...
+    async def set_nr(self, on: bool, receiver: int = 0) -> None: ...
+    async def set_digisel(self, on: bool, receiver: int = 0) -> None: ...
+    async def set_ip_plus(self, on: bool, receiver: int = 0) -> None: ...
+    async def set_agc(self, mode: int, receiver: int = 0) -> None: ...
+    async def get_agc(self, receiver: int = 0) -> int:
+        """Get AGC mode (numeric — backend-specific encoding)."""
+        ...
+
+    async def get_auto_notch(self, receiver: int = 0) -> bool: ...
+    async def set_auto_notch(self, on: bool, receiver: int = 0) -> None: ...
+    async def get_manual_notch(self, receiver: int = 0) -> bool: ...
+    async def set_manual_notch(self, on: bool, receiver: int = 0) -> None: ...
+
+    async def set_manual_notch_width(self, value: int, receiver: int = 0) -> None:
+        """Set manual notch filter width (0-255)."""
+        ...
+
+    async def get_manual_notch_width(self, receiver: int = 0) -> int:
+        """Get manual notch filter width (0-255)."""
+        ...
+
+    async def set_notch_filter(self, level: int, receiver: int = 0) -> None:
+        """Set notch filter level/position (0-255).
+
+        Maps to Icom CI-V ``0x14 0x0D`` and to the Yaesu BP01
+        ``set_manual_notch_freq`` alias on Yaesu CAT backends.
+        """
+        ...
+
+    async def get_notch_filter(self, receiver: int = 0) -> int:
+        """Get notch filter level/position (0-255)."""
+        ...
+
+    async def get_pbt_inner(self, receiver: int = 0) -> int: ...
+    async def set_pbt_inner(self, level: int, receiver: int = 0) -> None: ...
+    async def get_pbt_outer(self, receiver: int = 0) -> int: ...
+    async def set_pbt_outer(self, level: int, receiver: int = 0) -> None: ...
+
+    async def set_audio_peak_filter(self, mode: int, receiver: int = 0) -> None:
+        """Set Audio Peak Filter (APF) mode (0=off, 1=soft, 2=sharp)."""
+        ...
+
+    async def get_audio_peak_filter(self, receiver: int = 0) -> int:
+        """Get Audio Peak Filter (APF) mode."""
+        ...
+
+    async def set_twin_peak_filter(self, on: bool, receiver: int = 0) -> None:
+        """Enable or disable Twin Peak Filter (TPF)."""
+        ...
+
+    async def get_twin_peak_filter(self, receiver: int = 0) -> bool:
+        """Get Twin Peak Filter (TPF) on/off state."""
+        ...
+
+    async def set_nb_depth(self, level: int, receiver: int = 0) -> None:
+        """Set NB depth (0-255)."""
+        ...
+
+    async def get_nb_depth(self, receiver: int = 0) -> int:
+        """Get NB depth (0-255)."""
+        ...
+
+    async def set_nb_width(self, level: int, receiver: int = 0) -> None:
+        """Set NB width (0-255)."""
+        ...
+
+    async def get_nb_width(self, receiver: int = 0) -> int:
+        """Get NB width (0-255)."""
+        ...
+
+
+@runtime_checkable
+class FilterWidthRadioDefaultCapable(Protocol):
+    """Reset the DSP IF filter width to the radio's OWN default (MOR-2535).
+
+    Kept out of ``DspControlCapable`` on purpose: only radios whose CAT
+    dialect has a writeable "(Default)" width code (the FTX-1's ``SH`` code
+    00, declared as ``[filters].radio_default_code``) implement it, and
+    ``isinstance`` must answer False for the rest — Icom backends do not
+    implement it. The derived ``filter_width_radio_default`` capability tag
+    is the web-layer gate; this protocol is the runtime one.
+    """
+
+    async def reset_filter_width(self, receiver: int = 0) -> None:
+        """Write the profile's radio-default width code for ``receiver``.
+
+        The radio resolves the code to the current mode's default width, so
+        the width in Hz arrives through the ordinary post-write readback —
+        this method returns nothing. Raises ``CommandError`` when the active
+        profile declares no radio-default code.
+        """
+        ...
+
+
+@runtime_checkable
+class AttenuatorObservationProjectable(Protocol):
+    """Optional projection from a bound ATT input to its observation value."""
+
+    def project_attenuator_observation_value(self, db: int) -> int:
+        """Project an already-bound integer without validation or I/O."""
+        ...
+
+
+@runtime_checkable
+class AttenuatorStepsCapable(Protocol):
+    """Radio that publishes the attenuator dB steps it accepts."""
+
+    def attenuator_db_steps(self) -> tuple[int, ...] | None:
+        """Return the legal attenuator dB steps, or ``None`` when unpublished.
+
+        Steps are plain ints on the dB axis ``set_attenuator_level``
+        accepts. Synchronous; never touches the wire.
+        """
+        ...
+
+
+@runtime_checkable
+class AntennaControlCapable(Protocol):
+    """Attenuator, preamp, and antenna selection (ANT1/2, RX ANT)."""
+
+    async def set_attenuator_level(self, db: int, receiver: int = 0) -> None: ...
+    async def set_attenuator(self, on: bool, receiver: int = 0) -> None: ...
+    async def get_attenuator_level(self, receiver: int = 0) -> int: ...
+    async def get_attenuator(self, receiver: int = 0) -> bool: ...
+    async def set_preamp(self, level: int, receiver: int = 0) -> None: ...
+    async def get_preamp(self, receiver: int = 0) -> int: ...
+    async def set_antenna_1(self, on: bool) -> None: ...
+    async def set_antenna_2(self, on: bool) -> None: ...
+    async def set_rx_antenna_ant1(self, on: bool) -> None: ...
+    async def set_rx_antenna_ant2(self, on: bool) -> None: ...
+    async def get_antenna_1(self) -> bool: ...
+    async def get_antenna_2(self) -> bool: ...
+    async def get_rx_antenna_ant1(self) -> bool: ...
+    async def get_rx_antenna_ant2(self) -> bool: ...
+
+
+@runtime_checkable
+class CwControlCapable(Protocol):
+    """CW text, key speed, pitch, dash ratio, break-in mode/delay."""
+
+    async def send_cw_text(self, text: str) -> None: ...
+    async def stop_cw_text(self) -> None: ...
+
+    async def get_cw_pitch(self) -> int: ...
+    async def set_cw_pitch(self, freq: int) -> None: ...
+
+    async def get_break_in(self) -> BreakInMode:
+        """Get CW break-in mode (OFF/SEMI/FULL).
+
+        Backends that only expose binary on/off (e.g. Yaesu CAT) map
+        ``False`` to :attr:`BreakInMode.OFF` and ``True`` to
+        :attr:`BreakInMode.SEMI`. :class:`BreakInMode` is an :class:`IntEnum`
+        and remains bool-compatible at runtime.
+        """
+        ...
+
+    async def set_break_in(self, mode: BreakInMode | int) -> None:
+        """Set CW break-in mode (accepts :class:`BreakInMode` or int)."""
+        ...
+
+    async def set_break_in_delay(self, level: int) -> None:
+        """Set CW break-in delay (0-255)."""
+        ...
+
+    async def get_break_in_delay(self) -> int:
+        """Get CW break-in delay (0-255)."""
+        ...
+
+    async def set_dash_ratio(self, value: int) -> None:
+        """Set CW dash-to-dot ratio (0-255)."""
+        ...
+
+    async def get_dash_ratio(self) -> int:
+        """Get CW dash-to-dot ratio (0-255)."""
+        ...
+
+    async def set_key_speed(self, speed: int) -> None:
+        """Set CW keyer speed in WPM."""
+        ...
+
+    async def get_key_speed(self) -> int:
+        """Get CW keyer speed in WPM."""
+        ...
+
+
+@runtime_checkable
+class VoiceControlCapable(Protocol):
+    """VOX, compressor, monitor, modulation levels, SSB TX bandwidth."""
+
+    async def get_vox(self) -> bool: ...
+    async def set_vox(self, on: bool) -> None: ...
+
+    async def get_vox_gain(self) -> int: ...
+    async def set_vox_gain(self, level: int) -> None: ...
+    async def get_anti_vox_gain(self) -> int: ...
+    async def set_anti_vox_gain(self, level: int) -> None: ...
+
+    async def set_vox_delay(self, level: int) -> None:
+        """Set VOX hang delay (0-255)."""
+        ...
+
+    async def get_vox_delay(self) -> int:
+        """Get VOX hang delay (0-255)."""
+        ...
+
+    async def get_compressor(self) -> bool: ...
+    async def set_compressor(self, on: bool) -> None: ...
+
+    async def get_monitor(self) -> bool: ...
+    async def set_monitor(self, on: bool) -> None: ...
+    async def get_monitor_gain(self) -> int: ...
+    async def set_monitor_gain(self, level: int) -> None: ...
+
+    async def set_acc1_mod_level(self, level: int) -> None: ...
+    async def set_usb_mod_level(self, level: int) -> None: ...
+    async def set_lan_mod_level(self, level: int) -> None: ...
+
+    async def set_ssb_tx_bandwidth(self, value: int) -> None:
+        """Set SSB TX bandwidth (0-2 or vendor-specific index)."""
+        ...
+
+    async def get_ssb_tx_bandwidth(self) -> int:
+        """Get SSB TX bandwidth index."""
+        ...
+
+
+@runtime_checkable
+class SystemControlCapable(Protocol):
+    """System date/time, dual watch, tuner, dial lock, band select, scan."""
+
+    async def set_system_date(self, year: int, month: int, day: int) -> None: ...
+    async def get_system_date(self) -> tuple[int, int, int]: ...
+    async def set_system_time(self, hour: int, minute: int) -> None: ...
+    async def get_system_time(self) -> tuple[int, int]: ...
+    async def set_dual_watch(self, on: bool) -> None: ...
+    async def get_dual_watch(self) -> bool: ...
+    async def set_tuner_status(self, value: int) -> None: ...
+    async def get_tuner_status(self) -> int: ...
+    async def get_dial_lock(self) -> bool: ...
+    async def set_dial_lock(self, on: bool) -> None: ...
+
+    async def set_band(self, band_code: int) -> None:
+        """Select a band by vendor band code."""
+        ...
+
+    async def scan_start(self, mode: int = 0) -> None:
+        """Start scanning in the given mode (0 = programmed scan)."""
+        ...
+
+    async def scan_stop(self) -> None:
+        """Stop any active scan."""
+        ...
+
+    async def scan_set_df_span(self, span: int) -> None:
+        """Set ΔF scan span (0xA1=±5kHz .. 0xA7=±1MHz)."""
+        ...
+
+    async def scan_set_resume(self, mode: int) -> None:
+        """Set scan resume mode (0xD0=OFF, 0xD1=5s, 0xD2=10s, 0xD3=15s)."""
+        ...
+
+
+@runtime_checkable
+class RepeaterControlCapable(Protocol):
+    """Repeater tone (CTCSS) and tone squelch (TSQL) controls."""
+
+    async def set_repeater_tone(self, on: bool, receiver: int = 0) -> None:
+        """Enable or disable repeater tone (CTCSS) on TX."""
+        ...
+
+    async def get_repeater_tone(self, receiver: int = 0) -> bool:
+        """Get repeater tone (CTCSS) TX on/off state."""
+        ...
+
+    async def set_repeater_tsql(self, on: bool, receiver: int = 0) -> None:
+        """Enable or disable tone squelch (TSQL) on RX."""
+        ...
+
+    async def get_repeater_tsql(self, receiver: int = 0) -> bool:
+        """Get tone squelch (TSQL) RX on/off state."""
+        ...
+
+    async def set_tone_freq(self, freq_hz: int, receiver: int = 0) -> None:
+        """Set CTCSS tone TX frequency in hundredths of Hz (e.g. 8800 = 88.0 Hz)."""
+        ...
+
+    async def get_tone_freq(self, receiver: int = 0) -> int:
+        """Get CTCSS tone TX frequency in hundredths of Hz."""
+        ...
+
+    async def set_tsql_freq(self, freq_hz: int, receiver: int = 0) -> None:
+        """Set TSQL (tone squelch) RX frequency in hundredths of Hz."""
+        ...
+
+    async def get_tsql_freq(self, receiver: int = 0) -> int:
+        """Get TSQL (tone squelch) RX frequency in hundredths of Hz."""
+        ...
+
+
+@runtime_checkable
+class RepeaterShiftCapable(Protocol):
+    """Repeater shift DIRECTION control (simplex / plus / minus / automatic).
+
+    Sibling to :class:`RepeaterControlCapable` (MOR-2111), not a member of
+    it: that protocol covers CTCSS tone and TSQL; this one covers only the
+    direction a repeater offset is applied in, never its magnitude — shift
+    magnitude is a separate, not-yet-built surface.
+
+    This protocol expresses direction only, and that is a deliberate choice
+    between two documented wire shapes, not an oversight. The FTX-1 CAT
+    ``OS`` command matches this shape exactly: one register, direction only,
+    no magnitude parameter. Icom's shape differs: on the IC-7300, shift
+    magnitude and direction travel together in a single per-band register
+    (``1A 05 0031``/``0032``, BCD magnitude plus an explicit direction byte),
+    separate from a plain split on/off toggle (``0x0F``) that carries no
+    duplex information at all — and that radio has no ARS state. Neither
+    IC-7300 register is wired to this protocol. An implementer on that
+    combined-register shape must read-modify-write it to realize
+    ``set_repeater_shift`` alone — reading current magnitude, preserving it,
+    and writing only the direction — rather than assume this protocol hands
+    it a magnitude parameter to write.
+
+    :class:`RepeaterShiftDirection` is an :class:`IntEnum`; its ``ARS``
+    member is FTX-1's automatic-repeater-shift state, not a universal one.
+    """
+
+    async def get_repeater_shift(self, receiver: int = 0) -> RepeaterShiftDirection:
+        """Get repeater shift direction."""
+        ...
+
+    async def set_repeater_shift(
+        self, direction: RepeaterShiftDirection | int, receiver: int = 0
+    ) -> None:
+        """Set repeater shift direction."""
+        ...
+
+
+@runtime_checkable
+class AdvancedControlCapable(
+    DspControlCapable,
+    AntennaControlCapable,
+    CwControlCapable,
+    VoiceControlCapable,
+    SystemControlCapable,
+    RepeaterControlCapable,
+    Protocol,
+):
+    """Composed protocol — radio supports full advanced control surface."""
+
+    ...
+
+
+@runtime_checkable
+class RitXitCapable(Protocol):
+    """Radio supports RIT/XIT (a.k.a. clarifier) frequency offset and on/off control.
+
+    Cross-vendor surface: Icom calls this RIT/XIT, Yaesu calls it the
+    "clarifier" — semantically identical six-method contract on every HF
+    rig in the project (IC-7610, IC-7300, IC-705, IC-9700, FTX-1).
+    """
+
+    async def get_rit_frequency(self) -> int:
+        """Get RIT frequency offset in Hz."""
+        ...
+
+    async def set_rit_frequency(self, freq_hz: int) -> None:
+        """Set RIT frequency offset in Hz."""
+        ...
+
+    async def get_rit_status(self) -> bool:
+        """Get RIT on/off status."""
+        ...
+
+    async def set_rit_status(self, on: bool) -> None:
+        """Set RIT on/off status."""
+        ...
+
+    async def get_rit_tx_status(self) -> bool:
+        """Get RIT TX (XIT) on/off status."""
+        ...
+
+    async def set_rit_tx_status(self, on: bool) -> None:
+        """Set RIT TX (XIT) on/off status."""
+        ...
+
+
+@runtime_checkable
+class MemoryReadCapable(Protocol):
+    """Radio can read its stored memory channels without selecting them.
+
+    Read-only (MOR-3627): the write path is :class:`MemoryCapable`. ``group``
+    is the memory group or band code the profile's ``[memory]`` section names.
+    """
+
+    async def read_memory_entries(
+        self, group: int, channels: Sequence[int]
+    ) -> list[MemoryEntry]:
+        """Read the given channels of one group, in order."""
+        ...
+
+
+@runtime_checkable
+class MemoryCapable(Protocol):
+    """Radio supports memory channel operations.
+
+    Covers memory mode selection, VFO-to-memory write, memory-to-VFO recall,
+    memory clear, full memory channel programming, and band stacking register
+    write.  Read-back methods are omitted because the IC-7610 (and many Icom
+    radios) do not support GET variants for these commands.
+    """
+
+    async def set_memory_mode(self, channel: int, group: int | None = None) -> None:
+        """Select a memory channel (1-101); with ``group``, a listed one (profile-bounded)."""
+        ...
+
+    async def memory_write(self) -> None:
+        """Write the current VFO state to the selected memory channel."""
+        ...
+
+    async def memory_to_vfo(self, channel: int) -> None:
+        """Load a memory channel into the VFO (1-101)."""
+        ...
+
+    async def memory_clear(self, channel: int, group: int | None = None) -> None:
+        """Clear a memory channel; ``group`` is the required memory group
+        (IC-705) or band code (IC-9700), 0 on the channel-only radios."""
+        ...
+
+    async def set_memory_contents(self, mem: "MemoryChannel") -> None:
+        """Write full channel data to a memory channel."""
+        ...
+
+    async def set_bsr(self, bsr: "BandStackRegister") -> None:
+        """Write a band stacking register entry."""
+        ...

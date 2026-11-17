@@ -1,0 +1,331 @@
+"""Canonical Yaesu actuator contract for runtime-managed transmit effects."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+from unittest.mock import AsyncMock
+
+import pytest
+
+from rigplane.backends.yaesu_cat.parser import format_command
+from rigplane.backends.yaesu_cat.radio import YaesuCatRadio
+from rigplane.backends.yaesu_cat.transport import CatTimeoutError
+from rigplane.command_spec import CatCommandSpec
+from rigplane.core.priority_exchange import ExchangeTier
+from rigplane.runtime.managed_tx_effect_lane import ManagedTxActuator
+from rigplane.runtime.managed_tx_state import (
+    AbortOperation,
+    ActuationOperation,
+    ActuationResult,
+    EffectToken,
+)
+from rigplane.rig_loader import load_rig
+
+
+_RIGS_DIR = Path(__file__).parents[1] / "rigs"
+_PROFILE_TEMPLATES = {
+    "set_ptt": CatCommandSpec(write="ZP{state};"),
+    "send_cw": CatCommandSpec(write="ZC{type}{mem};"),
+    "set_tuner": CatCommandSpec(write="ZT{src}{type}{state};"),
+}
+
+
+def _token() -> EffectToken:
+    return EffectToken(7, 3, "yaesu-actuator")
+
+
+def _profile_radio(*, omit: str | None = None) -> YaesuCatRadio:
+    config = load_rig(_RIGS_DIR / "ftx1.toml")
+    commands = dict(config.commands)
+    commands.update(_PROFILE_TEMPLATES)
+    if omit is not None:
+        commands.pop(omit)
+    radio = YaesuCatRadio("/dev/null", profile=replace(config, commands=commands))
+    radio._transport._connected = True
+    radio._transport.write = AsyncMock()
+    return radio
+
+
+def test_yaesu_radio_satisfies_managed_tx_actuator_protocol() -> None:
+    assert isinstance(_profile_radio(), ManagedTxActuator)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    [ActuationOperation.PTT_ON, ActuationOperation.TRANSMIT_ON],
+    ids=lambda operation: operation.value,
+)
+async def test_managed_on_uses_profile_ptt_and_propagates_currency(
+    operation: ActuationOperation,
+) -> None:
+    radio = _profile_radio()
+    radio._transport.query = AsyncMock()
+
+    def current() -> bool:
+        return True
+
+    result = await radio.actuate(_token(), operation, is_current=current)
+
+    assert result is ActuationResult.ACCEPTED
+    radio._transport.write.assert_awaited_once_with(
+        format_command(_PROFILE_TEMPLATES["set_ptt"].write, state="1"),
+        is_current=current,
+        tier=ExchangeTier.ORDINARY,
+    )
+    # MOR-2862: an ON still returns right after the write, without a read.
+    radio._transport.query.assert_not_awaited()
+    assert radio.radio_state.ptt is False
+
+
+@pytest.mark.asyncio
+async def test_force_receive_uses_urgent_profile_ptt_without_claiming_observation() -> (
+    None
+):
+    radio = _profile_radio()
+    radio.radio_state.ptt = True
+    radio._transport.query = AsyncMock(return_value="TX0")
+
+    def current() -> bool:
+        return True
+
+    result = await radio.actuate(
+        _token(), ActuationOperation.FORCE_RECEIVE, is_current=current
+    )
+
+    assert result is ActuationResult.ACCEPTED
+    radio._transport.write.assert_awaited_once_with(
+        format_command(_PROFILE_TEMPLATES["set_ptt"].write, state="0"),
+        is_current=current,
+        tier=ExchangeTier.FORCE_RELEASE,
+    )
+    # MOR-2862: the confirming read rides the unkey's own tier and
+    # currency, so it is never queued behind ordinary polls.
+    radio._transport.query.assert_awaited_once_with(
+        "TX;", is_current=current, tier=ExchangeTier.FORCE_RELEASE
+    )
+    assert radio.radio_state.ptt is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        ("TX0", ActuationResult.ACCEPTED),
+        ("TX1", ActuationResult.UNCERTAIN),
+        (None, ActuationResult.UNCERTAIN),
+        ("ZZ9", ActuationResult.UNCERTAIN),
+    ],
+    ids=["rx", "tx", "silent", "malformed"],
+)
+async def test_force_receive_settles_on_the_confirmed_ptt_readback(
+    reply: str | None, expected: ActuationResult
+) -> None:
+    """MOR-2862: a Yaesu set is answered with silence, so the unkey counts
+    as done only when the actuation's own read-back says receive."""
+    radio = _profile_radio()
+    if reply is None:
+        radio._transport.query = AsyncMock(
+            side_effect=CatTimeoutError("CAT read timed out", command="TX;")
+        )
+    else:
+        radio._transport.query = AsyncMock(return_value=reply)
+
+    def current() -> bool:
+        return True
+
+    result = await radio.actuate(
+        _token(), ActuationOperation.FORCE_RECEIVE, is_current=current
+    )
+
+    assert result is expected
+    radio._transport.write.assert_awaited_once_with(
+        format_command(_PROFILE_TEMPLATES["set_ptt"].write, state="0"),
+        is_current=current,
+        tier=ExchangeTier.FORCE_RELEASE,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "profile_key", "params"),
+    [
+        # KY P1 P2 with P2 0 = STOP (CAT 2508-C printed p.18), MOR-3678.
+        (AbortOperation.STOP_CW, "send_cw", {"type": "0", "mem": "0"}),
+        (
+            AbortOperation.STOP_TUNE,
+            "set_tuner",
+            {"src": "0", "type": "0", "state": "0"},
+        ),
+    ],
+    ids=["stop_cw", "stop_tune"],
+)
+async def test_managed_abort_uses_urgent_profile_command(
+    operation: AbortOperation,
+    profile_key: str,
+    params: dict[str, str],
+) -> None:
+    radio = _profile_radio()
+
+    def current() -> bool:
+        return True
+
+    result = await radio.actuate(_token(), operation, is_current=current)
+
+    assert result is ActuationResult.ACCEPTED
+    radio._transport.write.assert_awaited_once()
+    call = radio._transport.write.await_args
+    assert call.args == (
+        format_command(_PROFILE_TEMPLATES[profile_key].write, **params),
+    )
+    assert call.kwargs["tier"] is ExchangeTier.ABORT
+    assert call.kwargs["is_current"] is current
+    if operation is AbortOperation.STOP_CW:
+        # MOR-3678: the CW stop ends earlier sends only once the transport
+        # lets it out (on_committed), never at issue.
+        assert call.kwargs["on_committed"] == radio._end_earlier_cw_text_sends
+    else:
+        assert "on_committed" not in call.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "missing_profile_key"),
+    [
+        (ActuationOperation.PTT_ON, "set_ptt"),
+        (ActuationOperation.TRANSMIT_ON, "set_ptt"),
+        (ActuationOperation.FORCE_RECEIVE, "set_ptt"),
+        (AbortOperation.STOP_CW, "send_cw"),
+        (AbortOperation.STOP_TUNE, "set_tuner"),
+    ],
+    ids=["ptt_on", "transmit_on", "force_receive", "stop_cw", "stop_tune"],
+)
+async def test_missing_profile_command_refuses_before_io(
+    operation: ActuationOperation | AbortOperation,
+    missing_profile_key: str,
+) -> None:
+    radio = _profile_radio(omit=missing_profile_key)
+
+    result = await radio.actuate(_token(), operation, is_current=lambda: True)
+
+    assert result is ActuationResult.REJECTED
+    radio._transport.write.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("memory_type", "frame"), [("text", "KY00;"), ("message", "KY10;")]
+)
+async def test_managed_cw_abort_stops_the_profile_memory_kind(
+    memory_type: str, frame: str
+) -> None:
+    # MOR-3678: the managed force-off / shutdown stop is a valid KY stop for
+    # the memory kind send_cw_text plays, never the old "KY ;".
+    config = load_rig(_RIGS_DIR / "ftx1.toml")
+    config = replace(config, cw_text=replace(config.cw_text, memory_type=memory_type))
+    radio = YaesuCatRadio("/dev/null", profile=config)
+    radio._transport._connected = True
+    radio._transport.write = AsyncMock()
+
+    def current() -> bool:
+        return True
+
+    result = await radio.actuate(_token(), AbortOperation.STOP_CW, is_current=current)
+
+    assert result is ActuationResult.ACCEPTED
+    radio._transport.write.assert_awaited_once()
+    call = radio._transport.write.await_args
+    assert call.args == (frame,)
+    assert call.kwargs["tier"] is ExchangeTier.ABORT
+    assert call.kwargs["is_current"] is current
+
+
+@pytest.mark.asyncio
+async def test_managed_cw_abort_ends_earlier_sends_only_once_accepted() -> None:
+    # MOR-3678 (#4317 review): issuing the stop changes nothing; only the
+    # transport running on_committed (after its final currency check)
+    # ends earlier sends.
+    radio = _profile_radio()
+    before = radio._cw_text_generation
+    result = await radio.actuate(
+        _token(), AbortOperation.STOP_CW, is_current=lambda: True
+    )
+    assert result is ActuationResult.ACCEPTED
+    assert radio._cw_text_generation == before
+
+    radio._transport.write.await_args.kwargs["on_committed"]()
+    assert radio._cw_text_generation != before
+
+
+@pytest.mark.asyncio
+async def test_abort_mapping_alone_drives_applicability_and_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MOR-4352 review round 1: one mapping for applicability AND actuation.
+
+    ``abort_applicable`` and ``actuate`` must both resolve the same
+    ``_ABORT_COMMANDS`` entry: redirecting the STOP_CW entry moves the
+    applicability answer and the dispatched frame together, and an entry
+    naming a command the profile does not declare is not applicable and
+    refuses before any write. RED before the round-1 fix: ``actuate``
+    hard-coded ``send_cw``, so redirecting the entry moved only the
+    applicability answer while the wire kept the old command.
+    """
+    config = load_rig(_RIGS_DIR / "ftx1.toml")
+    commands = dict(config.commands)
+    commands.update(_PROFILE_TEMPLATES)
+    # A second command with send_cw's parameter shape, so a redirected
+    # entry still formats; only the NAME resolution is under test.
+    commands["cw_halt"] = CatCommandSpec(write="ZH{type}{mem};")
+    radio = YaesuCatRadio("/dev/null", profile=replace(config, commands=commands))
+    radio._transport._connected = True
+    radio._transport.write = AsyncMock()
+    # ``supports_command`` requires a same-named callable besides the
+    # declaration; the fixture reuses the real send_cw callable so the
+    # redirected entry is fully supported, the way a second CW-stop
+    # command on a real profile would be.
+    radio.cw_halt = radio.send_cw  # type: ignore[method-assign]
+
+    # Shipped table: STOP_CW resolves to send_cw, which the profile declares.
+    assert radio.abort_applicable(AbortOperation.STOP_CW) is True
+    assert (
+        await radio.actuate(_token(), AbortOperation.STOP_CW, is_current=lambda: True)
+        is ActuationResult.ACCEPTED
+    )
+    assert radio._transport.write.await_args.args == ("ZC00;",)
+
+    # Redirect the entry: both the applicability answer (now over
+    # cw_halt's declaration) and the dispatched command follow the table.
+    monkeypatch.setattr(
+        YaesuCatRadio,
+        "_ABORT_COMMANDS",
+        {
+            AbortOperation.STOP_CW: "cw_halt",
+            AbortOperation.STOP_TUNE: "set_tuner",
+        },
+    )
+    assert radio.abort_applicable(AbortOperation.STOP_CW) is True
+    assert (
+        await radio.actuate(_token(), AbortOperation.STOP_CW, is_current=lambda: True)
+        is ActuationResult.ACCEPTED
+    )
+    assert radio._transport.write.await_args.args == ("ZH00;",)
+
+    # An entry naming a command the profile does not declare: not
+    # applicable, and actuate refuses before any write.
+    monkeypatch.setattr(
+        YaesuCatRadio,
+        "_ABORT_COMMANDS",
+        {
+            AbortOperation.STOP_CW: "undeclared_cw_stop",
+            AbortOperation.STOP_TUNE: "set_tuner",
+        },
+    )
+    assert radio.abort_applicable(AbortOperation.STOP_CW) is False
+    radio._transport.write.reset_mock()
+    assert (
+        await radio.actuate(_token(), AbortOperation.STOP_CW, is_current=lambda: True)
+        is ActuationResult.REJECTED
+    )
+    radio._transport.write.assert_not_awaited()

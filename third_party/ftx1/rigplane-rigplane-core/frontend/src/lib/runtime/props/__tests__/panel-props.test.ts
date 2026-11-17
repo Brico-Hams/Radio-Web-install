@@ -1,0 +1,1646 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  toAgcProps,
+  toAmberTelemetryProps,
+  toAntennaProps,
+  toAudioSpectrumProps,
+  toBandSelectorProps,
+  toCwProps,
+  toDspProps,
+  toFilterProps,
+  toMemoryPanelProps,
+  toMeterProps,
+  toModeProps,
+  toRfFrontEndProps,
+  toRitXitProps,
+  toRxAudioProps,
+  toScanProps,
+  rfPowerScale,
+  toTxProps,
+  toVfoControlProps,
+  toVfoProps,
+} from '../panel-props';
+import { findActiveBand } from '$lib/radio/band-plan';
+import type { FreqRange } from '$lib/types/capabilities';
+
+function fieldStatus(
+  availability: 'available' | 'missing' | 'stale' | 'unavailable' | 'undeclared',
+  observed = availability === 'available',
+) {
+  return {
+    storePath: 'test.path',
+    observed,
+    freshness:
+      availability === 'stale' ? 'stale' : availability === 'available' ? 'fresh' : 'unknown',
+    availability,
+  };
+}
+
+function makeState(overrides: Record<string, unknown> = {}) {
+  return {
+    revision: 1,
+    updatedAt: '2026-06-03T00:00:00Z',
+    active: 'MAIN',
+    ptt: false,
+    split: false,
+    dualWatch: false,
+    tunerStatus: 0,
+    main: {
+      freqHz: 14_074_000,
+      mode: 'USB',
+      filter: 1,
+      dataMode: 0,
+      sMeter: 50,
+      att: 0,
+      preamp: 0,
+      nb: false,
+      nr: false,
+      afLevel: 128,
+      rfGain: 255,
+      squelch: 0,
+      agc: 2,
+      nbLevel: 0,
+      nrLevel: 0,
+      autoNotch: false,
+      manualNotch: false,
+      agcTimeConstant: 0,
+    },
+    sub: {
+      freqHz: 7_074_000,
+      mode: 'LSB',
+      filter: 1,
+      dataMode: 0,
+      sMeter: 20,
+      att: 0,
+      preamp: 0,
+      nb: false,
+      nr: false,
+      afLevel: 128,
+      rfGain: 255,
+      squelch: 0,
+      agc: 2,
+      nbLevel: 0,
+      nrLevel: 0,
+      autoNotch: false,
+      manualNotch: false,
+      agcTimeConstant: 0,
+    },
+    connection: { rigConnected: true, radioReady: true, controlConnected: true },
+    powerLevel: 0.5,
+    micGain: 128,
+    voxOn: false,
+    compressorOn: false,
+    compressorLevel: 0,
+    monitorOn: false,
+    monitorGain: 128,
+    driveGain: 128,
+    ...overrides,
+  } as any;
+}
+
+describe('panel prop field availability', () => {
+  it('reports RF power as unread without state (MOR-2658 finishes the deferred A12 rfPower fix)', () => {
+    const props = toTxProps(null, { tx: true, capabilities: [] } as any);
+
+    expect(props.rfPower).toBeNaN();
+  });
+
+  it('defaults RF front-end normalized controls without state', () => {
+    const props = toRfFrontEndProps(null, {
+      capabilities: ['rf_gain', 'squelch'],
+    } as any);
+
+    expect(props.rfGain).toBe(1.0);
+    expect(props.squelch).toBe(0.0);
+  });
+
+  it('returns normalized AF level for local and live RX audio', () => {
+    const local = toRxAudioProps(
+      makeState({ main: { ...makeState().main, afLevel: 0.75 } }),
+      { capabilities: ['audio'] } as any,
+      { muted: false, rxEnabled: false, volume: 50 },
+      true,
+    );
+    const live = toRxAudioProps(
+      makeState({ main: { ...makeState().main, afLevel: 0.75 } }),
+      { capabilities: ['audio'] } as any,
+      { muted: false, rxEnabled: true, volume: 50 },
+      true,
+    );
+
+    expect(local.afLevel).toBe(0.75);
+    expect(live.afLevel).toBe(0.5);
+  });
+
+  it('marks top-level TX controls unavailable when fieldStatus is missing or stale', () => {
+    const props = toTxProps(
+      makeState({
+        fieldStatus: {
+          powerLevel: fieldStatus('missing', false),
+          micGain: fieldStatus('stale'),
+        },
+      }),
+      { tx: true, capabilities: ['tuner', 'monitor'] } as any,
+    );
+
+    expect(props.rfPower).toBe(0.5);
+    expect(props.rfPowerAvailable).toBe(false);
+    expect(props.micGainAvailable).toBe(false);
+  });
+
+  it('keeps observed TX controls available', () => {
+    const props = toTxProps(
+      makeState({
+        powerLevel: 0.75,
+        micGain: 90,
+        fieldStatus: {
+          powerLevel: fieldStatus('available'),
+          micGain: fieldStatus('available'),
+        },
+      }),
+      { tx: true, capabilities: [] } as any,
+    );
+
+    expect(props.rfPower).toBe(0.75);
+    expect(props.rfPowerAvailable).toBe(true);
+    expect(props.micGainAvailable).toBe(true);
+  });
+
+  it('shows RF front-end controls that are stale-but-known and hides only missing ones', () => {
+    const props = toRfFrontEndProps(
+      makeState({
+        fieldStatus: {
+          'main.rfGain': fieldStatus('missing', false),
+          'main.att': fieldStatus('stale'),
+          'main.preamp': fieldStatus('available'),
+        },
+      }),
+      {
+        capabilities: ['rf_gain', 'squelch', 'attenuator', 'preamp'],
+        attValues: [0, 6, 12],
+        preValues: [0, 1, 2],
+      } as any,
+    );
+
+    expect(props.showRfGain).toBe(false);
+    expect(props.showAtt).toBe(true);
+    expect(props.showPre).toBe(true);
+    expect(props.att).toBe(0);
+    expect(props.rfGain).toBe(255);
+  });
+
+  it('renders all four operator controls at last-known value when stale (no flap)', () => {
+    const props = toRfFrontEndProps(
+      makeState({
+        main: {
+          freqHz: 14_074_000,
+          mode: 'USB',
+          filter: 1,
+          dataMode: 0,
+          sMeter: 50,
+          rfGain: 100,
+          squelch: 40,
+          att: 6,
+          preamp: 1,
+          nb: false,
+          nr: false,
+          afLevel: 128,
+          agc: 2,
+          nbLevel: 0,
+          nrLevel: 0,
+          autoNotch: false,
+          manualNotch: false,
+          agcTimeConstant: 0,
+        },
+        fieldStatus: {
+          'main.rfGain': fieldStatus('stale'),
+          'main.squelch': fieldStatus('stale'),
+          'main.att': fieldStatus('stale'),
+          'main.preamp': fieldStatus('stale'),
+        },
+      }),
+      {
+        capabilities: ['rf_gain', 'squelch', 'attenuator', 'preamp'],
+        attValues: [0, 6, 12],
+        preValues: [0, 1, 2],
+      } as any,
+    );
+
+    expect(props.showRfGain).toBe(true);
+    expect(props.showSquelch).toBe(true);
+    expect(props.showAtt).toBe(true);
+    expect(props.showPre).toBe(true);
+    expect(props.rfGain).toBe(100);
+    expect(props.squelch).toBe(40);
+    expect(props.att).toBe(6);
+    expect(props.pre).toBe(1);
+  });
+
+  it('keeps preDisabled when preamp is stale and DIGI-SEL is on', () => {
+    const props = toRfFrontEndProps(
+      makeState({
+        main: {
+          freqHz: 14_074_000,
+          mode: 'USB',
+          filter: 1,
+          dataMode: 0,
+          sMeter: 50,
+          att: 0,
+          preamp: 0,
+          digisel: true,
+          nb: false,
+          nr: false,
+          afLevel: 128,
+          rfGain: 255,
+          squelch: 0,
+          agc: 2,
+          nbLevel: 0,
+          nrLevel: 0,
+          autoNotch: false,
+          manualNotch: false,
+          agcTimeConstant: 0,
+        },
+        fieldStatus: {
+          'main.preamp': fieldStatus('stale'),
+        },
+      }),
+      {
+        capabilities: ['preamp'],
+        preValues: [0, 1, 2],
+      } as any,
+    );
+
+    expect(props.showPre).toBe(true);
+    expect(props.preDisabled).toBe(true);
+    expect(props.preDisabledReason).toMatch(/DIGI-SEL/);
+  });
+
+  it('hides operator controls that were never observed (missing)', () => {
+    const props = toRfFrontEndProps(
+      makeState({
+        fieldStatus: {
+          'main.rfGain': fieldStatus('missing', false),
+          'main.squelch': fieldStatus('missing', false),
+          'main.att': fieldStatus('missing', false),
+          'main.preamp': fieldStatus('missing', false),
+        },
+      }),
+      {
+        capabilities: ['rf_gain', 'squelch', 'attenuator', 'preamp'],
+        attValues: [0, 6, 12],
+        preValues: [0, 1, 2],
+      } as any,
+    );
+
+    expect(props.showRfGain).toBe(false);
+    expect(props.showSquelch).toBe(false);
+    expect(props.showAtt).toBe(false);
+    expect(props.showPre).toBe(false);
+  });
+
+  // MOR-2425/T201: `unavailable` (declared, absent in this state) and
+  // `undeclared` (not declared for this radio) are absences too, and the
+  // backend now emits both. `activeFieldShown` gated on `!== 'missing'`
+  // before this change, which showed the control for either.
+  it.each(['unavailable', 'undeclared'] as const)(
+    'hides operator controls the backend has not read (%s)',
+    (availability) => {
+      const props = toRfFrontEndProps(
+        makeState({
+          fieldStatus: {
+            'main.rfGain': fieldStatus(availability, false),
+            'main.att': fieldStatus(availability, false),
+            'main.preamp': fieldStatus(availability, false),
+            'main.squelch': fieldStatus('available'),
+          },
+        }),
+        {
+          capabilities: ['rf_gain', 'squelch', 'attenuator', 'preamp'],
+          attValues: [0, 6, 12],
+          preValues: [0, 1, 2],
+        } as any,
+      );
+
+      expect(props.showRfGain).toBe(false);
+      expect(props.showAtt).toBe(false);
+      expect(props.showPre).toBe(false);
+      // Same call, same shape: the gate is not simply false for everything.
+      expect(props.showSquelch).toBe(true);
+    },
+  );
+
+  it('does not present missing AGC as the default MID mode', () => {
+    // A11 (MOR-1409): this assertion previously pinned the exact bug its own
+    // title disclaims — `agcMode` read back the fabricated MID (2) default
+    // even though the field was never observed. `hasAgc` gated the control's
+    // visibility, but the raw value underneath was still a lie. Now the
+    // value itself is unknown (NaN) whenever the field is not `available`,
+    // matching every other batch-A family.
+    const props = toAgcProps(
+      makeState({
+        fieldStatus: {
+          'main.agc': fieldStatus('missing', false),
+        },
+      }),
+      { capabilities: ['agc'] } as any,
+    );
+
+    expect(props.agcMode).toBeNaN();
+    expect(props.hasAgc).toBe(false);
+  });
+
+  it('treats stale DSP fields as unavailable controls', () => {
+    const props = toDspProps(
+      makeState({
+        fieldStatus: {
+          'main.nb': fieldStatus('stale'),
+          'main.nr': fieldStatus('available'),
+          'main.agcTimeConstant': fieldStatus('missing', false),
+        },
+      }),
+      { capabilities: ['nb', 'nr'] } as any,
+    );
+
+    expect(props.hasNb).toBe(false);
+    expect(props.hasNr).toBe(true);
+    expect(props.hasAgcTime).toBe(false);
+  });
+
+  it('scales the raw 0-255 NR wire value down to the 0-15 slider value (MOR-490)', () => {
+    // Store holds the raw CI-V wire value; the slider is 0-15.
+    expect(toDspProps(makeState({ main: { nrLevel: 0 } }), null).nrLevel).toBe(0);
+    expect(toDspProps(makeState({ main: { nrLevel: 128 } }), null).nrLevel).toBe(8);
+    expect(toDspProps(makeState({ main: { nrLevel: 255 } }), null).nrLevel).toBe(15);
+  });
+
+  it('offsets the 0-9 NB-depth wire value up to the 1-10 slider value (MOR-498)', () => {
+    // The conversion comes from the published `controls.nb_depth` domain
+    // (MOR-2475) — this caps shape is what `rigs/ic7610.toml` publishes.
+    const ic7610Caps = {
+      capabilities: ['nb'], receivers: 1,
+      controls: { nb_depth: { raw_min: 0, raw_max: 9, display_min: 1, display_max: 10 } },
+    } as any;
+    expect(toDspProps(makeState({ nbDepth: 0 }), ic7610Caps).nbDepth).toBe(1);
+    expect(toDspProps(makeState({ nbDepth: 5 }), ic7610Caps).nbDepth).toBe(6);
+    expect(toDspProps(makeState({ nbDepth: 9 }), ic7610Caps).nbDepth).toBe(10);
+  });
+
+  it('fabricates no 1-10 NB-depth reading when no nb_depth domain is published (MOR-2475)', () => {
+    // Without a published domain there is no conversion: the empty contract
+    // decodes nothing, and `hasNbDepth` hides the control. A version that
+    // kept the hardcoded fallback would report 1/6/10 here.
+    const noDepthCaps = {
+      capabilities: ['nb'], receivers: 1,
+      controls: { nb_level: { raw_min: 0, raw_max: 10 } },
+    } as any;
+    expect(toDspProps(makeState({ nbDepth: 0 }), noDepthCaps).nbDepth).toBe(0);
+    expect(toDspProps(makeState({ nbDepth: 9 }), noDepthCaps).nbDepth).toBe(0);
+    expect(toDspProps(makeState({ nbDepth: 9 }), noDepthCaps).hasNbDepth).toBe(false);
+    expect(toDspProps(makeState({ nbDepth: 9 }), null).nbDepth).toBe(0);
+  });
+
+  it('gates NB depth/width on the nb_depth control range (MOR-502)', () => {
+    const withDepth = toDspProps(
+      makeState(),
+      { capabilities: ['nb'], controls: { nb_depth: { raw_min: 0, raw_max: 9 } } } as any,
+    );
+    expect(withDepth.hasNbDepth).toBe(true);
+    expect(withDepth.hasNbWidth).toBe(true);
+
+    const withoutDepth = toDspProps(
+      makeState(),
+      { capabilities: ['nb'], controls: { nb_level: { raw_min: 0, raw_max: 10 } } } as any,
+    );
+    expect(withoutDepth.hasNbDepth).toBe(false);
+    expect(withoutDepth.hasNbWidth).toBe(false);
+
+    const noCaps = toDspProps(makeState(), null);
+    expect(noCaps.hasNbDepth).toBe(false);
+    expect(noCaps.hasNbWidth).toBe(false);
+  });
+
+  it('derives the NB-level scale from the nb_level control range (MOR-502)', () => {
+    const icom = toDspProps(
+      makeState(),
+      { capabilities: ['nb'], controls: { nb_level: { raw_min: 0, raw_max: 255 } } } as any,
+    );
+    expect(icom.nbLevelMax).toBe(255);
+    expect(icom.nbLevelPercent).toBe(true);
+
+    const ftx1 = toDspProps(makeState(), { capabilities: ['nb'], controls: {} } as any);
+    expect(ftx1.nbLevelMax).toBe(10);
+    expect(ftx1.nbLevelPercent).toBe(false);
+
+    const noCaps = toDspProps(makeState(), null);
+    expect(noCaps.nbLevelMax).toBe(10);
+    expect(noCaps.nbLevelPercent).toBe(false);
+  });
+});
+
+describe('RF front-end preamp/digisel mutex', () => {
+  it('disables the preamp control while DIGI-SEL is on but keeps the panel laid out', () => {
+    const props = toRfFrontEndProps(
+      makeState({
+        main: {
+          freqHz: 14_074_000,
+          mode: 'USB',
+          filter: 1,
+          dataMode: 0,
+          sMeter: 50,
+          att: 0,
+          preamp: 0,
+          digisel: true,
+          nb: false,
+          nr: false,
+          afLevel: 128,
+          rfGain: 255,
+          squelch: 0,
+          agc: 2,
+          nbLevel: 0,
+          nrLevel: 0,
+          autoNotch: false,
+          manualNotch: false,
+          agcTimeConstant: 0,
+        },
+        fieldStatus: {
+          'main.preamp': fieldStatus('available'),
+        },
+      }),
+      {
+        capabilities: ['preamp'],
+        preValues: [0, 1, 2],
+      } as any,
+    );
+
+    expect(props.showPre).toBe(true);
+    expect(props.preDisabled).toBe(true);
+    expect(props.preDisabledReason).toMatch(/DIGI-SEL/);
+  });
+
+  it('leaves the preamp control enabled while DIGI-SEL is off', () => {
+    const props = toRfFrontEndProps(
+      makeState({
+        fieldStatus: {
+          'main.preamp': fieldStatus('available'),
+        },
+      }),
+      {
+        capabilities: ['preamp'],
+        preValues: [0, 1, 2],
+      } as any,
+    );
+
+    expect(props.showPre).toBe(true);
+    expect(props.preDisabled).toBe(false);
+    expect(props.preDisabledReason).toBe('');
+  });
+});
+
+describe('CW panel APF/TPF mode gating (MOR-492)', () => {
+  const caps = {
+    capabilities: ['cw', 'break_in', 'apf', 'twin_peak'],
+  } as any;
+
+  function cwPropsForMode(mode: string) {
+    return toCwProps(makeState({ main: { mode } }), caps);
+  }
+
+  it('enables APF and disables TPF in CW', () => {
+    const props = cwPropsForMode('CW');
+    expect(props.apfDisabled).toBe(false);
+    expect(props.tpfDisabled).toBe(true);
+  });
+
+  it('enables APF in CW-R (reverse)', () => {
+    const props = cwPropsForMode('CW-R');
+    expect(props.apfDisabled).toBe(false);
+  });
+
+  it('enables TPF and disables APF in RTTY', () => {
+    const props = cwPropsForMode('RTTY');
+    expect(props.tpfDisabled).toBe(false);
+    expect(props.apfDisabled).toBe(true);
+  });
+
+  it('enables TPF in RTTY-R (reverse)', () => {
+    const props = cwPropsForMode('RTTY-R');
+    expect(props.tpfDisabled).toBe(false);
+  });
+
+  it('disables both APF and TPF in USB', () => {
+    const props = cwPropsForMode('USB');
+    expect(props.apfDisabled).toBe(true);
+    expect(props.tpfDisabled).toBe(true);
+  });
+
+  it('follows the SUB receiver mode when it is active', () => {
+    const props = toCwProps(
+      makeState({
+        active: 'SUB',
+        main: { mode: 'USB' },
+        sub: { mode: 'RTTY' },
+      }),
+      caps,
+    );
+    expect(props.tpfDisabled).toBe(false);
+    expect(props.apfDisabled).toBe(true);
+  });
+});
+
+describe('AmberTelemetry props (MOR-483: drop dead TEMP tile)', () => {
+  it('surfaces vd/id raw meter values', () => {
+    const props = toAmberTelemetryProps(makeState({ vdMeter: 157, idMeter: 151 }));
+    expect(props.vdRaw).toBe(157);
+    expect(props.idRaw).toBe(151);
+  });
+
+  it('does not expose a tempRaw field — IC-7610 has no CI-V temperature', () => {
+    const props = toAmberTelemetryProps(makeState({ vdMeter: 157, idMeter: 151 }));
+    expect('tempRaw' in props).toBe(false);
+  });
+
+  it('falls back to null raws when meters are absent', () => {
+    const props = toAmberTelemetryProps(makeState());
+    expect(props.vdRaw).toBeNull();
+    expect(props.idRaw).toBeNull();
+  });
+});
+
+describe('Mode panel MOD-input source (MOR-616)', () => {
+  const choices = [
+    { value: 0, label: 'MIC' }, { value: 1, label: 'ACC' },
+    { value: 2, label: 'MIC+ACC' }, { value: 3, label: 'USB' },
+    { value: 4, label: 'MIC+USB' }, { value: 5, label: 'LAN' },
+  ];
+  const caps = { capabilities: ['data_mode'], dataModeCount: 3, dataModeInputs: choices } as any;
+
+  function modInputState(overrides: Record<string, unknown> = {}) {
+    return makeState({
+      dataOffModInput: 0,
+      data1ModInput: 3,
+      data2ModInput: 1,
+      data3ModInput: 5,
+      fieldStatus: {
+        dataOffModInput: fieldStatus('available'),
+        data1ModInput: fieldStatus('available'),
+        data2ModInput: fieldStatus('available'),
+        data3ModInput: fieldStatus('available'),
+      },
+      ...overrides,
+    });
+  }
+
+  it('exposes the DATA OFF group source when data mode is off', () => {
+    const props = toModeProps(modInputState(), caps);
+    expect(props.modInputSource).toBe(0);
+    expect(props.hasModInput).toBe(true);
+    expect(props.modInputChoices).toEqual(choices);
+  });
+
+  it('follows the active receiver into its DATA group (D1 on SUB)', () => {
+    const state = modInputState({ active: 'SUB' });
+    state.sub.dataMode = 1;
+    const props = toModeProps(state, caps);
+    expect(props.modInputSource).toBe(3);
+  });
+
+  it('hides the control without the data_mode capability', () => {
+    const props = toModeProps(modInputState(), { capabilities: [] } as any);
+    expect(props.hasModInput).toBe(false);
+  });
+
+  it('hides the control when the profile does not declare a source domain', () => {
+    const props = toModeProps(modInputState(), { capabilities: ['data_mode'], dataModeCount: 1 } as any);
+    expect(props.hasModInput).toBe(false);
+    expect(props.modInputChoices).toEqual([]);
+  });
+
+  it('hides the control for a DATA group outside the profile count', () => {
+    const state = modInputState();
+    state.main.dataMode = 2;
+    expect(toModeProps(state, { ...caps, dataModeCount: 1 }).hasModInput).toBe(false);
+  });
+
+  it('hides the control while the active group is unread (missing)', () => {
+    const props = toModeProps(
+      modInputState({
+        dataOffModInput: null,
+        fieldStatus: { dataOffModInput: fieldStatus('missing', false) },
+      }),
+      caps,
+    );
+    expect(props.hasModInput).toBe(false);
+    expect(props.modInputSource).toBeNull();
+  });
+
+  it('keeps a stale-but-known source visible', () => {
+    const props = toModeProps(
+      modInputState({ fieldStatus: { dataOffModInput: fieldStatus('stale') } }),
+      caps,
+    );
+    expect(props.hasModInput).toBe(true);
+    expect(props.modInputSource).toBe(0);
+  });
+
+  // MOR-2425/T201: the same two new absences. On each of the seven
+  // `rigs/*.toml` profiles that carry a `[state_acquisition]` block the four
+  // `data*ModInput` paths project `undeclared` over an empty snapshot, so
+  // this gate is what stops a dead dropdown appearing.
+  it.each(['unavailable', 'undeclared'] as const)(
+    'hides the control while the active group is %s',
+    (availability) => {
+      const props = toModeProps(
+        modInputState({
+          dataOffModInput: null,
+          fieldStatus: { dataOffModInput: fieldStatus(availability, false) },
+        }),
+        caps,
+      );
+      expect(props.hasModInput).toBe(false);
+      expect(props.modInputSource).toBeNull();
+    },
+  );
+
+  it('defaults to hidden/null when state is missing', () => {
+    const props = toModeProps(null, caps);
+    expect(props.hasModInput).toBe(false);
+    expect(props.modInputSource).toBeNull();
+  });
+});
+
+/**
+ * A11 (MOR-1409, Core #2317) — batch-A projections stop fabricating a
+ * plausible-looking default (14.074 MHz / USB / FIL1 / 2400 Hz / AGC MID /
+ * one antenna) for missing/unsupported input. Every case below documents a
+ * value that panel-props.ts used to invent out of thin air on exact base;
+ * after the fix each one renders a value that cannot be mistaken for a real
+ * reading (`NaN` for numbers whose type stays `number`, `''` for strings
+ * whose type stays `string` — the same non-fabricating-sentinel convention,
+ * re-pointed from `'---'` to the empty string by MOR-2673 so the sentinel
+ * can never be drawn as a dash run; `''` never equals a real, non-empty
+ * mode/filter label, preserving every comparison consumer), never
+ * `null`/`undefined` (the prop type contracts are frozen —
+ * no fourth production file may be touched to accommodate a wider type).
+ */
+describe('A11 — batch-A projections do not fabricate defaults (MOR-1409)', () => {
+  describe('toVfoProps', () => {
+    it('does not invent 14.074 MHz / USB / FIL1 when state is entirely absent', () => {
+      const props = toVfoProps(null, 'main');
+      expect(props.freq).toBeNaN();
+      expect(props.mode).toBe('');
+      expect(props.filter).toBe('');
+    });
+
+    it('does not invent 14.074 MHz / USB / FIL1 when the addressed receiver is absent from a present state', () => {
+      const props = toVfoProps(makeState({ sub: undefined }), 'sub');
+      expect(props.freq).toBeNaN();
+      expect(props.mode).toBe('');
+      expect(props.filter).toBe('');
+    });
+
+    it('still reports the real value for a populated receiver', () => {
+      const props = toVfoProps(makeState(), 'main');
+      expect(props.freq).toBe(14_074_000);
+      expect(props.mode).toBe('USB');
+    });
+  });
+
+  describe('toBandSelectorProps', () => {
+    const HF_RANGES: FreqRange[] = [
+      {
+        start: 1_800_000,
+        end: 30_000_000,
+        label: 'HF',
+        bands: [
+          { name: '20m', start: 14_000_000, end: 14_350_000, default: 14_225_000 },
+        ],
+      },
+    ];
+
+    it('does not invent 14.074 MHz when state is absent', () => {
+      const props = toBandSelectorProps(null);
+      expect(props.currentFreq).toBeNaN();
+    });
+
+    it('the fabricated default used to resolve to a real "20m" band tab — the fix must not, at the consumer boundary', () => {
+      // Proven at findActiveBand (BandSelector.svelte's own consumer call),
+      // not merely as a raw-literal unit assertion: on exact base,
+      // toBandSelectorProps(null).currentFreq (14074000) sits inside 20m's
+      // 14.0-14.35 MHz range, so a real, populated band plan would highlight
+      // a "20m" tab from an operator no one has identified.
+      const props = toBandSelectorProps(null);
+      expect(findActiveBand(props.currentFreq, HF_RANGES)).toBeNull();
+    });
+
+    it('still reports the real value for a populated receiver', () => {
+      const props = toBandSelectorProps(makeState());
+      expect(props.currentFreq).toBe(14_074_000);
+      expect(findActiveBand(props.currentFreq, HF_RANGES)).toBe('20m');
+    });
+  });
+
+  describe('toFilterProps', () => {
+    // MOR-2497: twin PBT belongs to the mode, not only to the radio. The
+    // IC-7300 Advanced Manual p.40 heads its Twin PBT section "SSB, CW, RTTY
+    // and AM modes"; the profile carries that per mode as `pbtStepHz`, present
+    // for the modes that have PBT and absent for those that do not. Before
+    // this gate, `hasPbt` followed the radio-wide capability alone and the
+    // panel showed two live PBT controls in FM, commanding nothing.
+    describe('hasPbt follows the mode, not just the radio capability', () => {
+      const capsFor = (): any => ({
+        capabilities: ['pbt', 'filter_width'],
+        filterConfig: {
+          USB: { defaults: [3000, 2400, 1800], fixed: false, pbtStepHz: 50 },
+          AM: { defaults: [9000, 6000, 3000], fixed: false, stepHz: 200, pbtStepHz: 200 },
+          FM: { defaults: [15000, 10000, 7000], fixed: true },
+        },
+      });
+      const stateIn = (mode: string): any => ({
+        active: 'MAIN',
+        main: { mode, dataMode: 0, pbtInner: 128, pbtOuter: 128 },
+      });
+
+      it.each([['USB', true], ['AM', true], ['FM', false]])(
+        'in %s mode reports %s', (mode, expected) => {
+          expect(toFilterProps(stateIn(mode), capsFor()).hasPbt).toBe(expected);
+        });
+
+      it('stays false when the radio declares no pbt capability at all', () => {
+        const caps = { ...capsFor(), capabilities: ['filter_width'] };
+        expect(toFilterProps(stateIn('USB'), caps).hasPbt).toBe(false);
+      });
+
+      it('falls back to the radio capability when NO mode publishes a step', () => {
+        // An older server that does not publish `pbtStepHz` at all. Reading
+        // that as "no PBT anywhere" would take the controls away from a radio
+        // that has them, so the radio-wide capability decides, as it did
+        // before the field existed. The captured IC-7300 capabilities fixture
+        // under adapters/__tests__/fixtures/ is exactly this payload.
+        const legacy: any = {
+          capabilities: ['pbt', 'filter_width'],
+          filterConfig: {
+            USB: { defaults: [3000, 2400, 1800], fixed: false },
+            FM: { defaults: [15000], fixed: true },
+          },
+        };
+        expect(toFilterProps(stateIn('USB'), legacy).hasPbt).toBe(true);
+        // And even FM stays on there -- not because the radio has PBT in FM,
+        // but because that payload says nothing about modes, and inventing a
+        // refusal from silence is the failure this separation exists to avoid.
+        expect(toFilterProps(stateIn('FM'), legacy).hasPbt).toBe(true);
+      });
+
+      it('is false for a mode the profile does not describe', () => {
+        // No filterConfig entry and no fallback candidate: nothing says this
+        // radio has PBT there, so the controls stay off rather than guessing.
+        expect(toFilterProps(stateIn('PSK'), capsFor()).hasPbt).toBe(false);
+      });
+    });
+
+    // MOR-2497: the panel's PBT readings and slider bounds come off the
+    // measured lattice — step per mode from the profile (`pbtStepHz`), span
+    // +/-floor(width/(2*step))*step at the OBSERVED filter width — not the
+    // retired fixed +/-1200 proportional scale.
+    describe('PBT Hz readings and slider bounds follow the measured lattice', () => {
+      const pbtCaps = (): any => ({
+        capabilities: ['pbt', 'filter_width'],
+        filterConfig: {
+          USB: { defaults: [3600, 1800, 500], fixed: false, pbtStepHz: 50 },
+          AM: { defaults: [9000, 6000, 3000], fixed: false, pbtStepHz: 200 },
+          FM: { defaults: [15000, 10000, 7000], fixed: true },
+        },
+      });
+      const pbtState = (mode: string, filterWidth: number, raws: [number, number]): any => ({
+        active: 'MAIN',
+        main: { mode, dataMode: 0, filterWidth, pbtInner: raws[0], pbtOuter: raws[1] },
+      });
+
+      it('reads raw 254 at USB 3600 as +1800 Hz and offers the +/-1800/50 domain', () => {
+        const props = toFilterProps(pbtState('USB', 3600, [254, 128]), pbtCaps());
+        expect(props.pbtInner).toBe(1800);
+        expect(props.pbtOuter).toBe(0);
+        expect(props.pbtDomain).toEqual({ min: -1800, max: 1800, step: 50, origin: 0 });
+      });
+
+      it('reads raw 128 at width 250 as 0 Hz and offers only +/-100, not +/-125', () => {
+        const props = toFilterProps(pbtState('USB', 250, [128, 128]), pbtCaps());
+        expect(props.pbtInner).toBe(0);
+        expect(props.pbtDomain).toEqual({ min: -100, max: 100, step: 50, origin: 0 });
+      });
+
+      it('takes the 200 Hz AM step and the +/-3000 span at AM 6000', () => {
+        const props = toFilterProps(pbtState('AM', 6000, [128, 128]), pbtCaps());
+        expect(props.pbtDomain).toEqual({ min: -3000, max: 3000, step: 200, origin: 0 });
+      });
+
+      it('emits no domain and no Hz reading in FM, where the mode has no twin PBT', () => {
+        const props = toFilterProps(pbtState('FM', 9000, [128, 128]), pbtCaps());
+        expect(props.hasPbt).toBe(false);
+        expect(props.pbtDomain).toBeNull();
+        expect(props.pbtInner).toBeNull();
+      });
+
+      it('emits no domain and no Hz reading when the width is unobserved', () => {
+        const state = pbtState('USB', 3600, [254, 254]);
+        delete state.main.filterWidth;
+        const props = toFilterProps(state, pbtCaps());
+        expect(props.pbtDomain).toBeNull();
+        expect(props.pbtInner).toBeNull();
+        expect(props.pbtOuter).toBeNull();
+      });
+
+      it('legacy payload without pbtStepHz: hasPbt stays true, but no fabricated +/-1200 reading', () => {
+        const legacy: any = {
+          capabilities: ['pbt', 'filter_width'],
+          filterConfig: { USB: { defaults: [3600, 1800, 500], fixed: false } },
+        };
+        const props = toFilterProps(pbtState('USB', 3600, [200, 128]), legacy);
+        expect(props.hasPbt).toBe(true);
+        expect(props.pbtDomain).toBeNull();
+        expect(props.pbtInner).toBeNull();
+      });
+    });
+
+    it('does not invent USB / a three-filter FIL1-FIL3 catalog without state or capabilities', () => {
+      const props = toFilterProps(null, null);
+      expect(props.currentMode).toBe('');
+      expect(props.filterLabels).toEqual([]);
+    });
+
+    it('does not invent the 2400 Hz width fallback (MOR-1409 A12, adjudication 5245697359, Core #2317)', () => {
+      // A11 deliberately kept `?? 2400` here: a NaN sentinel renders as the
+      // literal "NaNkHz" in FilterPanel.svelte's BW readout and settings
+      // modal — a formatted-display consumer, unlike `findActiveBand`'s
+      // comparison consumer. A12 is granted FilterPanel.svelte as a fourth
+      // production file specifically to add the consumer-boundary guard
+      // (see FilterPanel.isolated.test.ts), so the fabricated default can
+      // now be removed at the source without leaking "NaN" into the UI.
+      const props = toFilterProps(null, null);
+      expect(props.filterWidth).toBeNaN();
+    });
+
+    it('still reports the real values for a populated receiver and capabilities', () => {
+      const props = toFilterProps(makeState(), { filters: ['FIL1', 'FIL2'] } as any);
+      expect(props.currentMode).toBe('USB');
+      expect(props.filterLabels).toEqual(['FIL1', 'FIL2']);
+    });
+
+    it('derives ifShiftDomain from the profile control entry with a 25 Hz legacy fallback step (MOR-1681)', () => {
+      const withControls = (controls: Record<string, unknown>) => ({
+        capabilities: ['if_shift'], controls,
+      }) as any;
+      expect(toFilterProps(null, withControls({
+        if_shift: {
+          mapping: 'identity', raw_min: -1200, raw_max: 1200, raw_step: 20, raw_origin: 0,
+          display_min: '-1200', display_max: '1200', display_step: '20', display_origin: '0',
+          display_unit: 'Hz', quantization: 'reject', restoration: 'exact',
+        },
+      })).ifShiftDomain).toEqual({ min: -1200, max: 1200, step: 20, origin: 0 });
+      expect(toFilterProps(null, withControls({
+        if_shift: { raw_min: -255, raw_max: 255, display_min: -1000, display_max: 1000, display_unit: 'Hz' },
+      })).ifShiftDomain).toEqual({ min: -1000, max: 1000, step: 25, origin: -1000 });
+      expect(toFilterProps(null, withControls({})).ifShiftDomain).toBeNull();
+      expect(toFilterProps(null, null).ifShiftDomain).toBeNull();
+    });
+  });
+
+  describe('toModeProps', () => {
+    it('does not invent USB when state is absent', () => {
+      const props = toModeProps(null, null);
+      expect(props.currentMode).toBe('');
+    });
+
+    it('still reports the real mode for a populated receiver', () => {
+      const props = toModeProps(makeState(), null);
+      expect(props.currentMode).toBe('USB');
+    });
+
+    it('lights the hyphen button when the store still holds the enum token (MOR-2508)', () => {
+      for (const [stored, label] of [['PSK_R', 'PSK-R'], ['CW_R', 'CW-R'], ['RTTY_R', 'RTTY-R']] as const) {
+        const props = toModeProps(makeState({ main: { ...makeState().main, mode: stored } }), null);
+        expect(props.currentMode).toBe(label);
+      }
+    });
+  });
+
+  describe('toAgcProps', () => {
+    it('does not invent a 3-mode [1,2,3] AGC catalog without capabilities', () => {
+      const props = toAgcProps(makeState(), null);
+      expect(props.agcModes).toEqual([]);
+    });
+
+    it('still reports the real AGC choice set from capabilities', () => {
+      const props = toAgcProps(makeState(), { capabilities: ['agc'], agcModes: [1, 3] } as any);
+      expect(props.agcModes).toEqual([1, 3]);
+    });
+
+    it('does not fabricate an IC-7610-shaped FAST/MID/SLOW label dict when the profile declares no agcLabels (MOR-1547)', () => {
+      // Companion to the `agcModes` fabrication fix above: `agcLabels`
+      // carried the same IC-7610-shaped hardcode
+      // `{ '1': 'FAST', '2': 'MID', '3': 'SLOW' }` as its fallback, applied
+      // to every radio's numeric AGC modes regardless of what that radio
+      // actually declares — a radio whose modes 1/2/3 mean something else
+      // (or a capabilities payload with no `agcLabels` at all) would get a
+      // plausible-looking but wrong label. `buildAgcOptions`
+      // (agc-utils.ts) already falls back to the raw mode number
+      // (`String(mode)`) per-entry when a label is missing — the honest
+      // behavior this fallback must defer to instead of inventing labels.
+      const props = toAgcProps(makeState(), { capabilities: ['agc'], agcModes: [1, 3] } as any);
+      expect(props.agcLabels).toEqual({});
+    });
+
+    it('still reports the real declared agcLabels from capabilities', () => {
+      const props = toAgcProps(makeState(), {
+        capabilities: ['agc'],
+        agcModes: [1, 3],
+        agcLabels: { '1': 'FAST', '3': 'SLOW' },
+      } as any);
+      expect(props.agcLabels).toEqual({ '1': 'FAST', '3': 'SLOW' });
+    });
+
+    it('reports the real observed agcMode value when the field IS available (symmetric positive pin)', () => {
+      // Companion to 'does not present missing AGC as the default MID mode':
+      // that test proves the missing-field side (agcAvailable === false =>
+      // NaN); this one proves the populated-field side. Together they kill
+      // the mutant class that forces `agcAvailable` to a constant in either
+      // direction — a `false`-forced mutant would wrongly turn this real,
+      // available AGC=1 reading into NaN; a `true`-forced mutant is already
+      // caught by the missing-field test. `agc: 1` (not the base fixture's
+      // default 2, and not the old fabricated MID default) makes the pin
+      // unambiguous — it cannot pass by coincidentally matching a stale
+      // literal.
+      const props = toAgcProps(
+        makeState({ main: { ...makeState().main, agc: 1 } }),
+        { capabilities: ['agc'] } as any,
+      );
+      expect(props.agcMode).toBe(1);
+      expect(props.hasAgc).toBe(true);
+    });
+  });
+
+  describe('toAntennaProps', () => {
+    it('does not invent a single declared antenna port without capabilities', () => {
+      const props = toAntennaProps(makeState(), null);
+      expect(props.antennaCount).toBe(0);
+    });
+
+    it('still reports the real declared antenna count', () => {
+      const props = toAntennaProps(makeState(), { antennas: 2 } as any);
+      expect(props.antennaCount).toBe(2);
+    });
+  });
+
+  describe('toRfFrontEndProps — preOptions (MOR-1523 R1)', () => {
+    it('does not invent a 3-level [0,1,2] preamp catalog without a declared preValues domain', () => {
+      // Last un-converted twin of A11's `toAgcProps` fix: pre-fix this
+      // fabricated an IC-7300-shaped [0,1,2] PRE button group even for a
+      // profile (or an entirely absent capabilities payload) that never
+      // declared it — an X6200 (declared [0,1], no P.AMP2 stage) would get
+      // an option it can't honor.
+      const props = toRfFrontEndProps(makeState(), {
+        capabilities: ['preamp'],
+      } as any);
+      expect(props.preValues).toEqual([]);
+      expect(props.preOptions).toEqual([]);
+    });
+
+    it('still reports the real declared preamp option set', () => {
+      const props = toRfFrontEndProps(makeState(), {
+        capabilities: ['preamp'],
+        preValues: [0, 1],
+      } as any);
+      expect(props.preValues).toEqual([0, 1]);
+      expect(props.preOptions).toEqual([
+        { value: 0, label: 'OFF' },
+        { value: 1, label: 'P1' },
+      ]);
+    });
+  });
+});
+
+/**
+ * A12 (MOR-1409, Core #2317) — batch-B projections stop fabricating a
+ * plausible-looking default for RIT/XIT, the mode catalog, CW pitch/speed/
+ * sidetone/keyer, meters, RX audio level, scan status, filter width (its
+ * `toFilterProps` twin), and the memory-panel "store VFO → channel" fields.
+ * Same non-fabricating-sentinel convention as A11: `NaN` for numbers whose
+ * type stays `number`, `''` for strings whose type stays `string` (re-pointed
+ * from `'---'` by MOR-2673),
+ * `null` for the two RIT/XIT booleans whose type widens to `boolean | null`
+ * per the A12 re-anchor plan's §5 consumer-boundary matrix (both feed only
+ * a `hasCap`-gated panel — see the matrix's golden-safety column — so the
+ * type widening carries no rendering risk). `toCwProps.keyerType` is
+ * removed entirely (dead output field, no consumer, per the matrix). Every
+ * case below documents a value `panel-props.ts` used to invent on exact
+ * base; A11's own §3.3 confirms each literal was still present at the A12
+ * anchor.
+ */
+describe('A12 — batch-B projections do not fabricate defaults (MOR-1409)', () => {
+  describe('toRitXitProps', () => {
+    it('does not invent a zero offset when state is entirely absent (offset only — active stays boolean, see below)', () => {
+      const props = toRitXitProps(null, null);
+      expect(props.ritOffset).toBeNaN();
+      expect(props.xitOffset).toBeNaN();
+    });
+
+    it('ritActive/xitActive keep a plain boolean contract (false when absent) — RitXitPanel.svelte is not an A12 owner, see panel-props.ts header comment', () => {
+      // `RitXitPanel.svelte`'s `HardwareButton active={…}` prop is typed
+      // `boolean | undefined`; widening `ritActive`/`xitActive` to
+      // `boolean | null` breaks that (non-A12-owned) consumer's compile — a
+      // fifth production file A12 is not granted. `false` is the
+      // conservative "off" reading and the panel is gated on `hasRit`/
+      // `hasXit` regardless.
+      const props = toRitXitProps(null, null);
+      expect(props.ritActive).toBe(false);
+      expect(props.xitActive).toBe(false);
+    });
+
+    it('still reports the real observed RIT/XIT state', () => {
+      const props = toRitXitProps(
+        makeState({ ritOn: true, ritFreq: 150, ritTx: true }),
+        { capabilities: ['rit', 'xit'] } as any,
+      );
+      expect(props.ritActive).toBe(true);
+      expect(props.ritOffset).toBe(150);
+      expect(props.xitActive).toBe(true);
+      expect(props.xitOffset).toBe(150);
+    });
+
+    // MOR-1574: unlike every other batch-A/batch-B family (`toAgcProps`'
+    // `agcAvailable`, `toRfFrontEndProps`' `digiSelAvailable`/
+    // `ipPlusAvailable`), `toRitXitProps` shipped with NO fieldStatus gate at
+    // all — `hasRit`/`hasXit` checked capability presence only, so a
+    // connected radio that declares the `rit`/`xit` capability but has never
+    // actually reported `ritOn`/`ritFreq`/`ritTx` (the live ic7300 fixture's
+    // exact shape — all three `observed: false`/`availability: "missing"`)
+    // still rendered a confirmed-looking "RIT OFF" reading. Mirrors the
+    // `toAgcProps` fix's own idiom exactly: gate `hasRit`/`hasXit` on field
+    // availability the same way `hasAgc` gates on `agcAvailable`, and gate
+    // the numeric offsets to the standard `NaN` sentinel the same way
+    // `agcMode` does. `ritActive`/`xitActive` keep the plain-`boolean`
+    // non-fabrication contract from the test above (see its own comment for
+    // why the type cannot widen) — they stay protected behind the now-honest
+    // `hasRit`/`hasXit` visibility gate instead.
+    it('does not present an unobserved RIT/XIT as a confirmed reading (MOR-1574)', () => {
+      const props = toRitXitProps(
+        makeState({
+          ritOn: false,
+          ritFreq: 0,
+          ritTx: false,
+          fieldStatus: {
+            ritOn: fieldStatus('missing', false),
+            ritFreq: fieldStatus('missing', false),
+            ritTx: fieldStatus('missing', false),
+          },
+        }),
+        { capabilities: ['rit', 'xit'] } as any,
+      );
+      expect(props.hasRit).toBe(false);
+      expect(props.hasXit).toBe(false);
+      expect(props.ritOffset).toBeNaN();
+      expect(props.xitOffset).toBeNaN();
+    });
+
+    it('discriminates: the SAME capabilities with fieldStatus forced observed reports the real reading (MOR-1574)', () => {
+      const props = toRitXitProps(
+        makeState({
+          ritOn: true,
+          ritFreq: 250,
+          ritTx: true,
+          fieldStatus: {
+            ritOn: fieldStatus('available'),
+            ritFreq: fieldStatus('available'),
+            ritTx: fieldStatus('available'),
+          },
+        }),
+        { capabilities: ['rit', 'xit'] } as any,
+      );
+      expect(props.hasRit).toBe(true);
+      expect(props.hasXit).toBe(true);
+      expect(props.ritActive).toBe(true);
+      expect(props.ritOffset).toBe(250);
+      expect(props.xitActive).toBe(true);
+      expect(props.xitOffset).toBe(250);
+    });
+
+    it('treats a stale RIT/XIT reading as unavailable, same as missing (MOR-1574)', () => {
+      const props = toRitXitProps(
+        makeState({
+          ritOn: true,
+          ritFreq: 250,
+          ritTx: true,
+          fieldStatus: {
+            ritOn: fieldStatus('stale'),
+            ritFreq: fieldStatus('stale'),
+            ritTx: fieldStatus('stale'),
+          },
+        }),
+        { capabilities: ['rit', 'xit'] } as any,
+      );
+      expect(props.hasRit).toBe(false);
+      expect(props.hasXit).toBe(false);
+      expect(props.ritOffset).toBeNaN();
+      expect(props.xitOffset).toBeNaN();
+    });
+  });
+
+  describe('toModeProps modes catalog', () => {
+    it('does not invent a 10-mode catalog without capabilities', () => {
+      const props = toModeProps(makeState(), null);
+      expect(props.modes).toEqual([]);
+    });
+
+    it('still reports the real capability-derived mode list', () => {
+      const props = toModeProps(makeState(), { modes: ['USB', 'LSB', 'CW'] } as any);
+      expect(props.modes).toEqual(['USB', 'LSB', 'CW']);
+    });
+  });
+
+  describe('toCwProps', () => {
+    it('does not invent pitch/speed/sidetone values when state is absent', () => {
+      const props = toCwProps(null, null);
+      expect(props.cwPitch).toBeNaN();
+      expect(props.keySpeed).toBeNaN();
+      expect(props.wpm).toBeNaN();
+      expect(props.sidetonePitch).toBeNaN();
+      expect(props.sidetoneLevel).toBeNaN();
+    });
+
+    it('twinPeak keeps a plain boolean contract (false when absent) — CwPanel.svelte is not an A12 owner, see panel-props.ts header comment', () => {
+      // `CwPanel.svelte`'s `HardwareButton active={…}` prop is typed
+      // `boolean | undefined`; widening `twinPeak` to `boolean | null`
+      // breaks that (non-A12-owned) consumer's compile — a fifth
+      // production file A12 is not granted. `false` is the conservative
+      // "off" reading and the panel is gated on `hasCw` regardless.
+      const props = toCwProps(null, null);
+      expect(props.twinPeak).toBe(false);
+    });
+
+    it('removes the dead keyerType output field entirely (no production consumer)', () => {
+      const props = toCwProps(makeState(), null);
+      expect('keyerType' in props).toBe(false);
+    });
+
+    it('still reports the real observed CW values', () => {
+      const props = toCwProps(
+        makeState({
+          cwPitch: 700,
+          keySpeed: 25,
+          main: { ...makeState().main, twinPeakFilter: true },
+        }),
+        null,
+      );
+      expect(props.cwPitch).toBe(700);
+      expect(props.keySpeed).toBe(25);
+      expect(props.wpm).toBe(25);
+      expect(props.sidetonePitch).toBe(700);
+      expect(props.twinPeak).toBe(true);
+    });
+
+    it('derives cwPitchDomain from the profile control entry with a 5 Hz legacy fallback step (MOR-1682)', () => {
+      const withControls = (controls: Record<string, unknown>) => ({
+        capabilities: ['cw'], controls,
+      }) as any;
+      expect(toCwProps(null, withControls({
+        cw_pitch: {
+          mapping: 'identity', raw_min: 300, raw_max: 1050, raw_step: 10, raw_origin: 300,
+          display_min: '300', display_max: '1050', display_step: '10', display_origin: '300',
+          display_unit: 'Hz', quantization: 'reject', restoration: 'exact',
+        },
+      })).cwPitchDomain).toEqual({ min: 300, max: 1050, step: 10, origin: 300 });
+      expect(toCwProps(null, withControls({
+        cw_pitch: { raw_min: 0, raw_max: 255, display_min: 300, display_max: 900, display_unit: 'Hz' },
+      })).cwPitchDomain).toEqual({ min: 300, max: 900, step: 5, origin: 300 });
+      expect(toCwProps(null, withControls({})).cwPitchDomain).toBeNull();
+      expect(toCwProps(null, null).cwPitchDomain).toBeNull();
+    });
+
+    it('derives keySpeedDomain from the profile control entry the same way as the pitch domain (MOR-2475 F1)', () => {
+      const withControls = (controls: Record<string, unknown>) => ({
+        capabilities: ['cw'], controls,
+      }) as any;
+      const x6100 = toCwProps(null, withControls({
+        key_speed: {
+          raw_min: 0, raw_max: 255, display_min: 5, display_max: 50,
+          display_unit: 'WPM', decode_quantum: 1,
+        },
+        cw_pitch: {
+          raw_min: 0, raw_max: 255, display_min: 400, display_max: 1200,
+          display_unit: 'Hz', decode_quantum: 10,
+        },
+      }));
+      expect(x6100.keySpeedDomain).toEqual({ min: 5, max: 50, step: 1, origin: 5 });
+      expect(x6100.cwPitchDomain).toEqual({ min: 400, max: 1200, step: 10, origin: 400 });
+      const icom = toCwProps(null, withControls({
+        key_speed: {
+          raw_min: 0, raw_max: 255, display_min: 6, display_max: 48,
+          display_unit: 'WPM', decode_quantum: 1,
+        },
+        cw_pitch: {
+          raw_min: 0, raw_max: 255, display_min: 300, display_max: 900,
+          display_unit: 'Hz', decode_quantum: 5,
+        },
+      }));
+      expect(icom.keySpeedDomain).toEqual({ min: 6, max: 48, step: 1, origin: 6 });
+      expect(icom.cwPitchDomain).toEqual({ min: 300, max: 900, step: 5, origin: 300 });
+      expect(toCwProps(null, withControls({})).keySpeedDomain).toBeNull();
+      expect(toCwProps(null, null).keySpeedDomain).toBeNull();
+    });
+  });
+
+  describe('toMeterProps', () => {
+    it('does not invent zero meter readings when state is absent', () => {
+      const props = toMeterProps(null, null);
+      expect(props.sValue).toBeNaN();
+      expect(props.signal).toBeNaN();
+      expect(props.rfPower).toBeNaN();
+      expect(props.swr).toBeNaN();
+      expect(props.alc).toBeNaN();
+      expect(props.comp).toBeNaN();
+      expect(props.vd).toBeNaN();
+      expect(props.id).toBeNaN();
+    });
+
+    it('still reports the real observed meter readings', () => {
+      const props = toMeterProps(
+        makeState({
+          powerMeter: 10,
+          swrMeter: 1.5,
+          alcMeter: 3,
+          compMeter: 4,
+          vdMeter: 137,
+          idMeter: 55,
+        }),
+        null,
+      );
+      expect(props.sValue).toBe(50);
+      expect(props.rfPower).toBe(10);
+      expect(props.swr).toBe(1.5);
+      expect(props.vd).toBe(137);
+      expect(props.id).toBe(55);
+    });
+  });
+
+  describe('toRxAudioProps afLevel', () => {
+    it('does not invent the 0.5 normalized AF level when state is absent (local mode)', () => {
+      const props = toRxAudioProps(null, null, { muted: false, rxEnabled: false, volume: 50 }, false);
+      expect(props.afLevel).toBeNaN();
+    });
+
+    it('still reports the real observed local AF level', () => {
+      const props = toRxAudioProps(
+        makeState({ main: { ...makeState().main, afLevel: 0.3 } }),
+        null,
+        { muted: false, rxEnabled: false, volume: 50 },
+        false,
+      );
+      expect(props.afLevel).toBe(0.3);
+    });
+  });
+
+  describe('toScanProps', () => {
+    it('does not invent scanType=0/scanResumeMode=0 when state is absent', () => {
+      const props = toScanProps(null);
+      expect(props.scanType).toBeNaN();
+      expect(props.scanResumeMode).toBeNaN();
+    });
+
+    it('scanning keeps a plain boolean contract (false when absent) — ScanPanel.svelte is not an A12 owner, see panel-props.ts header comment', () => {
+      // `ScanPanel.svelte`'s `HardwareButton active={…}` prop is typed
+      // `boolean | undefined`; widening `scanning` to `boolean | null`
+      // breaks that (non-A12-owned) consumer's compile — a fifth
+      // production file A12 is not granted. `false` is the conservative
+      // "not scanning" reading.
+      const props = toScanProps(null);
+      expect(props.scanning).toBe(false);
+    });
+
+    it('still reports the real observed scan state', () => {
+      const props = toScanProps(makeState({ scanning: true, scanType: 0x01, scanResumeMode: 0xd2 }));
+      expect(props.scanning).toBe(true);
+      expect(props.scanType).toBe(0x01);
+      expect(props.scanResumeMode).toBe(0x02);
+    });
+  });
+
+  describe('toAudioSpectrumProps filterWidth (toFilterProps twin)', () => {
+    it('does not invent the 2400 Hz width fallback when state is absent', () => {
+      const props = toAudioSpectrumProps(null, null);
+      expect(props.filterWidth).toBeNaN();
+    });
+
+    it('still reports the real observed filter width', () => {
+      const props = toAudioSpectrumProps(makeState({ main: { ...makeState().main, filterWidth: 1800 } }), null);
+      expect(props.filterWidth).toBe(1800);
+    });
+
+    it('still fabricates a centre contourFreq — explicit non-fix, distinct class (MOR-1409 A12)', () => {
+      // Per the A12 re-anchor plan §5: `contourFreq` is not yet exposed in
+      // `ServerState` at all — it is a placeholder for a feature not wired
+      // end-to-end, not a per-field "unobserved" case like every other
+      // literal in this file. Converting it to NaN was explicitly flagged
+      // as a distinct decision point, not folded into this mechanical sweep.
+      const props = toAudioSpectrumProps(null, null);
+      expect(props.contourFreq).toBe(128);
+    });
+  });
+
+  describe('toAudioSpectrumProps pbtRange (MOR-2475 PR-4)', () => {
+    it('carries the published pbt_inner range for the renderer', () => {
+      const props = toAudioSpectrumProps(
+        null,
+        {
+          capabilities: ['pbt'],
+          controls: {
+            pbt_inner: { raw_min: 0, raw_max: 255, raw_center: 128, display_min: -1200, display_max: 1200 },
+          },
+        } as any,
+      );
+      expect(props.pbtRange).toEqual({ rawCenter: 128, displayMin: -1200, displayMax: 1200 });
+    });
+
+    it('emits no pbtRange key when the radio publishes no usable pbt_inner range', () => {
+      const props = toAudioSpectrumProps(null, null);
+      expect(props).not.toHaveProperty('pbtRange');
+    });
+  });
+
+  describe('toAudioSpectrumProps pbtStepHz (MOR-2497)', () => {
+    // Pins the three-hop threading: server `pbtStepHz` ->
+    // `resolveFilterModeConfig` -> `SpectrumState.pbtStepHz` -> the
+    // renderer's lattice conversion. Deleting the emission, or reading the
+    // WIDTH-quantising `stepHz` instead of `pbtStepHz` (USB below has them
+    // deliberately different), must fail here.
+    const caps = {
+      capabilities: ['pbt'],
+      filterConfig: {
+        USB: { defaults: [2400], fixed: false, stepHz: 100, pbtStepHz: 50 },
+        AM: { defaults: [6000], fixed: false, stepHz: 250, pbtStepHz: 200 },
+        FM: { defaults: [15000], fixed: true },
+      },
+    } as any;
+    const inMode = (mode: string) => makeState({ main: { ...makeState().main, mode } });
+
+    it.each([['USB', 50], ['AM', 200]] as const)('emits the %s twin-PBT lattice step %s', (mode, step) => {
+      expect(toAudioSpectrumProps(inMode(mode), caps).pbtStepHz).toBe(step);
+    });
+
+    it('emits no pbtStepHz key in FM, where the mode has no twin PBT', () => {
+      expect(toAudioSpectrumProps(inMode('FM'), caps)).not.toHaveProperty('pbtStepHz');
+    });
+  });
+
+  describe('toMemoryPanelProps', () => {
+    it('does not invent activeFreqHz=0/activeMode stand-ins when state is absent', () => {
+      const props = toMemoryPanelProps(null, null);
+      expect(props.activeFreqHz).toBeNaN();
+      expect(props.activeMode).toBe('');
+    });
+
+    it('still reports the real observed active-receiver frequency/mode', () => {
+      const props = toMemoryPanelProps(makeState(), null);
+      expect(props.activeFreqHz).toBe(14_074_000);
+      expect(props.activeMode).toBe('USB');
+    });
+
+    it('MOR-2425/R40: a stale (not just fresh) observed activeSlot still resolves relative VFO identity', () => {
+      // Single-RX A/B radio declaring the provider readback contract
+      // explicitly (`vfoReadback: 'selected_unselected'`) — `activeSlot`
+      // being OBSERVED at all is what settles literal A/B identity, per
+      // `relativeVfoIdentityUnknown`'s own doc comment; `fieldObserved`
+      // (`panel-props.ts`) now admits a held-stale reading the same as a
+      // fresh one (R40), so a stale `activeSlot` must resolve identity too.
+      const state = makeState({
+        fieldStatus: { 'main.activeSlot': fieldStatus('stale', true) },
+      });
+      const caps = { capabilities: [], receivers: 1, vfoScheme: 'ab', vfoReadback: 'selected_unselected' } as any;
+      expect(toMemoryPanelProps(state, caps).vfoIdentityKnown).toBe(true);
+    });
+  });
+
+  describe('RF power scale follows the band (MOR-3634)', () => {
+    // IC-9700 manuals: 144 MHz 100 W, 430 MHz 75 W, 1.2 GHz 10 W; flat maximum 100 W.
+    const BANDS = [
+      { name: '2m', start: 144_000_000, end: 148_000_000, maxPowerW: 100 },
+      { name: '70cm', start: 430_000_000, end: 450_000_000, maxPowerW: 75 },
+      { name: '23cm', start: 1_240_000_000, end: 1_300_000_000, maxPowerW: 10 },
+    ];
+    // Icom: the level is a percentage of the CURRENT band's rated maximum.
+    const RAW_PERCENT_CAPS = {
+      tx: true, capabilities: [], maxPowerW: 100, powerUnit: 'raw_255', txBands: BANDS,
+    } as any;
+    // Watts-native radio (Yaesu CAT): the level is a fraction of the flat maximum.
+    const WATTS_CAPS = { ...RAW_PERCENT_CAPS, powerUnit: 'watts' } as any;
+    // Flat-maximum radios: no band row carries a maximum.
+    const FLAT_BANDS = [{ name: '20m', start: 14_000_000, end: 14_350_000 }];
+    const FULL = { max: 1, wattsAtFull: null };
+    const onFreq = (freqHz: number, extra: Record<string, unknown> = {}) =>
+      makeState({ main: { ...makeState().main, freqHz }, ...extra });
+
+    it.each([
+      [145_000_000, 100],
+      [435_000_000, 75],
+      [1_296_000_000, 10],
+    ])('raw-percent radio at %i Hz keeps the full range and labels in watts of %i W', (freqHz, watts) => {
+      const expected = { max: 1, wattsAtFull: watts };
+      expect(rfPowerScale(onFreq(freqHz), RAW_PERCENT_CAPS)).toEqual(expected);
+      expect(toTxProps(onFreq(freqHz), RAW_PERCENT_CAPS).rfPowerScale).toEqual(expected);
+    });
+
+    it.each([
+      [145_000_000, 1],
+      [435_000_000, 0.75],
+      [1_296_000_000, 0.1],
+    ])('watts-native radio at %i Hz scales the range to %f and keeps the percent label', (freqHz, max) => {
+      const expected = { max, wattsAtFull: null };
+      expect(rfPowerScale(onFreq(freqHz), WATTS_CAPS)).toEqual(expected);
+      expect(toTxProps(onFreq(freqHz), WATTS_CAPS).rfPowerScale).toEqual(expected);
+    });
+
+    it('keeps the unchanged scale when the frequency is unknown or outside every band', () => {
+      for (const caps of [RAW_PERCENT_CAPS, WATTS_CAPS]) {
+        expect(rfPowerScale(null, caps)).toEqual(FULL);
+        expect(rfPowerScale(onFreq(100_000_000), caps)).toEqual(FULL);
+        expect(rfPowerScale(onFreq(435_000_000, {
+          fieldStatus: { 'main.freqHz': fieldStatus('missing', false) },
+        }), caps)).toEqual(FULL);
+      }
+    });
+
+    it('follows the active receiver on a dual-receiver radio', () => {
+      const dual = makeState({
+        active: 'SUB',
+        main: { ...makeState().main, freqHz: 145_000_000 },
+        sub: { ...makeState().sub, freqHz: 435_000_000 },
+      });
+      expect(rfPowerScale(dual, RAW_PERCENT_CAPS)).toEqual({ max: 1, wattsAtFull: 75 });
+      expect(rfPowerScale(dual, WATTS_CAPS)).toEqual({ max: 0.75, wattsAtFull: null });
+    });
+
+    it('leaves flat-maximum radios unchanged, raw-percent and watts-native alike', () => {
+      for (const powerUnit of ['raw_255', 'watts']) {
+        const caps = { tx: true, capabilities: [], maxPowerW: 100, powerUnit, txBands: FLAT_BANDS } as any;
+        expect(rfPowerScale(onFreq(14_074_000), caps)).toEqual(FULL);
+      }
+      expect(rfPowerScale(onFreq(14_074_000), { tx: true, capabilities: [] } as any)).toEqual(FULL);
+      expect(rfPowerScale(onFreq(14_074_000), null)).toEqual(FULL);
+    });
+
+    it('does not guess the scale when the radio did not say how its level is scaled', () => {
+      const { powerUnit: _unit, ...undeclared } = RAW_PERCENT_CAPS;
+      expect(rfPowerScale(onFreq(435_000_000), undeclared as any)).toEqual(FULL);
+    });
+
+    it('ignores a malformed band maximum instead of changing the scale', () => {
+      for (const bad of [0, -5, Number.NaN, '75', null]) {
+        for (const caps of [RAW_PERCENT_CAPS, WATTS_CAPS]) {
+          const broken = {
+            ...caps,
+            txBands: [{ name: '70cm', start: 430_000_000, end: 450_000_000, maxPowerW: bad }],
+          };
+          expect(rfPowerScale(onFreq(435_000_000), broken)).toEqual(FULL);
+        }
+      }
+      expect(rfPowerScale(onFreq(435_000_000), { ...WATTS_CAPS, maxPowerW: undefined })).toEqual(FULL);
+      expect(rfPowerScale(onFreq(435_000_000), { ...WATTS_CAPS, maxPowerW: 50 })).toEqual(FULL);
+    });
+  });
+
+  describe('toTxProps — explicit non-fix (MOR-1409 A12)', () => {
+    // TxPanel.svelte (panel-props.ts's `toTxProps`' only production
+    // consumer) is entirely hidden on the desktop-v2 skin
+    // (`hideTxPanel={semanticRxTx}`, true for desktop-v2 — zero golden
+    // risk there) but IS reachable on the mobile skin. Its settings-modal
+    // `ValueControl` calls for rfPower/monLevel pass
+    // `displayFn={normalizedPercentDisplay}`/`rawToPercentDisplay`, neither
+    // of which guards a non-finite input — a `NaN` sentinel here would
+    // render the literal "NaN%" in a real, live, mobile-reachable surface
+    // (not covered by any committed golden — the only enforced
+    // `toHaveScreenshot` gate is the desktop-root capture, which always
+    // fixtures the receiver as populated). Fixing this cleanly needs a
+    // consumer-boundary guard in TxPanel.svelte, mirroring FilterPanel's
+    // fix in this same gate — but TxPanel.svelte is not one of A12's four
+    // granted production files. A12 defers the entire `toTxProps` batch-B
+    // family (rather than a partial boolean-only fix) rather than trade a
+    // plausible-looking-but-wrong value for a raw "NaN%" glitch in a file
+    // it cannot guard. This mirrors A11's own `toFilterProps.filterWidth`
+    // deferral to A12 exactly.
+    //
+    // MOR-2658 finished the rfPower member and MOR-2683 finished the
+    // compLevel / monLevel members: `toTxProps` now reports NaN for an
+    // unreported compressor / monitor level, and TxPanel.svelte (the `> 0`
+    // label gate) plus the amber faces (`Number.isFinite`) render the
+    // sentinel as the bare COMP/MON/PROC key. MOR-2685 deleted the
+    // micGain / driveGain value members whole (dead outputs with no
+    // production reader; their availability flags stay). The members
+    // below stay deferred for a future gate.
+    it('still fabricates the vox / comp defaults (rfPower MOR-2658, levels MOR-2683)', () => {
+      const props = toTxProps(null, null);
+      expect(props.rfPower).toBeNaN();
+      expect(props.monLevel).toBeNaN();
+      expect(props.compLevel).toBeNaN();
+      expect(props.voxActive).toBe(false);
+      expect(props.compActive).toBe(false);
+    });
+  });
+
+  // MOR-2683: an unread monitor / compressor level projects the NaN sentinel
+  // (the file's non-fabricating level sentinel, `rfPower`'s MOR-2658
+  // treatment) even when the toggle itself IS known — a rig that reports
+  // monitor or compressor ON with no level must not invent one. Red on the
+  // old code: the defaults were 128 / 0, and TxPanel rendered the invented
+  // "MON 50%" / "PROC 0".
+  describe('toTxProps — unread levels project NaN, never an invented number (MOR-2683)', () => {
+    it('reports NaN for a known-ON monitor with no reported level, and the real gain when it arrives', () => {
+      const unread = toTxProps({ ...makeState(), monitorOn: true, monitorGain: null } as any, null);
+      expect(unread.monActive).toBe(true);
+      expect(unread.monLevel).toBeNaN();
+      const read = toTxProps({ ...makeState(), monitorOn: true, monitorGain: 128 } as any, null);
+      expect(read.monLevel).toBe(128);
+    });
+
+    it('reports NaN for a known-ON compressor with no reported level, and the real level when it arrives', () => {
+      const unread = toTxProps({ ...makeState(), compressorOn: true, compressorLevel: null } as any, null);
+      expect(unread.compActive).toBe(true);
+      expect(unread.compLevel).toBeNaN();
+      const read = toTxProps({ ...makeState(), compressorOn: true, compressorLevel: 7 } as any, null);
+      expect(read.compLevel).toBe(7);
+    });
+  });
+
+  // MOR-2683: an unread filter projects the unread sentinel — the empty
+  // string for the VFO label (MOR-2673's string sentinel, so no comparison
+  // consumer can light a real choice) and `null` for the filter projection's
+  // 1-based index (never filter 1). Red on the old code: both fabricated
+  // FIL1 / 1.
+  describe('unread filter projects the sentinel, never FIL1 (MOR-2683)', () => {
+    it('toVfoProps reports the empty string for a present receiver whose filter is unread', () => {
+      const state = makeState({ main: { ...makeState().main, filter: null } });
+      expect(toVfoProps(state, 'main').filter).toBe('');
+    });
+
+    it('toVfoProps still reports the real label for a read filter', () => {
+      expect(toVfoProps(makeState(), 'main').filter).toBe('FIL1');
+      const state = makeState({ main: { ...makeState().main, filter: 2 } });
+      expect(toVfoProps(state, 'main').filter).toBe('FIL2');
+    });
+
+    it('toFilterProps reports null for an unread filter, never 1, and the real index when it arrives', () => {
+      const state = makeState({ main: { ...makeState().main, filter: null } });
+      expect(toFilterProps(state, null).currentFilter).toBeNull();
+      expect(toFilterProps(makeState(), null).currentFilter).toBe(1);
+      const read = makeState({ main: { ...makeState().main, filter: 2 } });
+      expect(toFilterProps(read, null).currentFilter).toBe(2);
+    });
+  });
+});
+
+describe('toVfoProps RFG badge (MOR-2546, owner ruling 2026-09-23)', () => {
+  // Same rule the VFO deck applies via `levelFormatsBelowMax`
+  // (semantic/format-level.ts): lit only when the reading is known and its
+  // displayed percentage is below 100 — a raw 254/255 rounds to 100% and
+  // counts as maximum. `true` keeps the lit lamp; `''` empties it (VfoPanel
+  // keeps the fixed-width slot, aria-hidden).
+  const stateWithRfGain = (rfGain: number | null) =>
+    makeState({ main: { ...makeState().main, rfGain } });
+
+  it('lights the badge when the reading is reduced', () => {
+    expect(toVfoProps(stateWithRfGain(0.6), 'main').badges['RFG']).toBe(true);
+    expect(toVfoProps(stateWithRfGain(253 / 255), 'main').badges['RFG']).toBe(true);
+  });
+
+  it('empties the badge at the displayed maximum and while unread', () => {
+    expect(toVfoProps(stateWithRfGain(1), 'main').badges['RFG']).toBe('');
+    expect(toVfoProps(stateWithRfGain(254 / 255), 'main').badges['RFG']).toBe('');
+    expect(toVfoProps(stateWithRfGain(null), 'main').badges['RFG']).toBe('');
+  });
+});
+
+describe('unread mode/filter sentinel is the empty string (MOR-2673)', () => {
+  // The old `'---'` sentinel reached the screen as a dash run. The empty
+  // string is the drawn form of an unlit LCD segment and — the property the
+  // comparison consumers rely on — never equals a real, non-empty
+  // mode/filter label, so an unread value can never light a real choice.
+  it('every string-shaped unread projection reports the empty string', () => {
+    expect(toVfoProps(null, 'main').mode).toBe('');
+    expect(toVfoProps(null, 'main').filter).toBe('');
+    expect(toFilterProps(null, null).currentMode).toBe('');
+    expect(toModeProps(null, null).currentMode).toBe('');
+    expect(toMemoryPanelProps(null, null).activeMode).toBe('');
+    expect(toVfoControlProps(null, null).mode).toBe('');
+  });
+
+  it('the sentinel never matches a real label at a comparison consumer', () => {
+    // `toVfoControlProps` compares `mode` against 'CW'/'CW-R' to gate the
+    // CW-only break-in control; an unread mode must not light it.
+    expect(toVfoControlProps(null, null).isCwMode).toBe(false);
+    // ModePanel/FilterPanel/EssentialsPanel match `currentMode === label`
+    // against the profile catalogs; the sentinel matches none of them.
+    const labels = ['USB', 'LSB', 'CW', 'CW-R', 'FM', 'AM', 'RTTY', 'FIL1'];
+    for (const label of labels) {
+      expect(toVfoProps(null, 'main').mode).not.toBe(label);
+      expect(toModeProps(null, null).currentMode).not.toBe(label);
+    }
+  });
+});

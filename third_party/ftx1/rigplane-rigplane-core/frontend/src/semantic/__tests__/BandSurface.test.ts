@@ -1,0 +1,1255 @@
+/**
+ * MOR-1307 — the semantic band + frequency-entry surface (vocabulary slice 7B).
+ *
+ * SAFETY-ADJACENT. This surface renders TX-PERMISSION information, so every
+ * test below names the mutation it kills:
+ *   (a) the band-scoped TX answer sourced from anything but the LIVE fact
+ *       `band.currentBandTx` — re-inheriting `defaultHzTxPermit` is the exact
+ *       fail-open defect MOR-1294's F1 round removed one layer down, and 7B's
+ *       carry-forward F3 forbids reintroducing it here;
+ *   (b) a point-sample permit presented as band-wide permission;
+ *   (c) a denial softened because `disabledReasons` carries no band entry (by
+ *       design it never does — the denial IS the field value);
+ *   (d) frequency entry accepted outside `tuneMinHz`/`tuneMaxHz`, or accepted
+ *       at all while those bounds are unknown;
+ *   (e) a receiver-scoped write dispatched while the active receiver is
+ *       unobserved (the MOR-1322 B1 wrong-VFO class).
+ *
+ * Fast-pool-safe by construction (MOR-1272): no `vi.mock`, no `vi.stubGlobal`,
+ * no global spy. The composed-tree pins for BandSurface's PROP wiring (how
+ * SemanticRadioSurfaces feeds it a view model and callbacks) live in the
+ * isolated-pool wiring file
+ * `components-v2/wiring/__tests__/semantic-band-wiring.component.test.ts`.
+ *
+ * One deliberate exception (MOR-1444 round-3 review): the last describe
+ * block below mounts the real `KeyboardHandler` alongside the real
+ * `BandSurface` to pin a DOM EVENT-BUBBLING contract between them (Escape
+ * must not propagate past this component into the window keyboard seam).
+ * That is not prop wiring — no store, no transport, no `vi.mock` — so it
+ * stays fast-pool-safe and belongs with the Escape behavior it guards.
+ */
+import { readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+import { SvelteMap } from 'svelte/reactivity';
+import BandSurface, {
+  activeReceiverUnconfirmedReason, reasonLabel, unnamedReason, unresolvedReason,
+  defaultPermitLabel, mhz,
+} from '../BandSurface.svelte';
+import {
+  defaultPermitPrefix, defaultPermitStatus, PERMIT_STATUS_TEXTS,
+} from '../band-instruments';
+import { t } from '$lib/i18n';
+import { topologyFixtures, withBand } from '../fixtures/topologies';
+import type { FrequencyPermit } from '$lib/utils/tx-permit';
+import type {
+  BandChoice, BandViewModel, DisabledReason, RadioViewModel,
+} from '../radio-view-model';
+import KeyboardHandler from '../../components-v2/layout/KeyboardHandler.svelte';
+import type { KeyboardConfig } from '../../components-v2/layout/keyboard-map';
+import BandInstrumentHostFixture from './fixtures/BandInstrumentHostFixture.svelte';
+
+const SOURCE = readFileSync('src/semantic/BandSurface.svelte', 'utf8');
+/** Comments stripped, so the file's own doctrine prose can never be what a
+ *  source-scanning test matches. */
+const CODE = SOURCE
+  .replace(/<!--[\s\S]*?-->/g, '')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^\s*\/\/.*$/gm, '');
+
+const ALLOWED: FrequencyPermit = { status: 'allowed', band: '20m' };
+const DENIED: FrequencyPermit = { status: 'denied', reason: 'outside-configured-ranges' };
+const AVAIL = { structural: true, operational: true } as const;
+
+const base = (): RadioViewModel => withBand(topologyFixtures['1/single']);
+
+/** Re-shape the band group of an otherwise fully-observed fixture. */
+function withB(over: Partial<BandViewModel>, view: RadioViewModel = base()): RadioViewModel {
+  return { ...view, band: { ...(view.band as BandViewModel), ...over } };
+}
+const knownBand = (name: string) =>
+  ({ reading: { status: 'known' as const, value: name }, availability: AVAIL });
+const unreadBand = () => ({ reading: { status: 'unknown' as const }, availability: AVAIL });
+
+let target: HTMLDivElement;
+beforeEach(() => { target = document.createElement('div'); document.body.appendChild(target); });
+afterEach(() => { target.remove(); });
+
+type Handlers = {
+  onSelectBand?: (name: string) => void;
+  onEnterFrequency?: (frequencyHz: number) => void;
+};
+
+function render(view: RadioViewModel, handlers: Handlers = {}) {
+  const component = mount(BandInstrumentHostFixture, {
+    target, props: { view, presentation: 'surface', ...handlers },
+  });
+  flushSync();
+  const q = <T extends HTMLElement>(sel: string) => target.querySelector(sel) as T | null;
+  return {
+    dispose: () => unmount(component),
+    root: () => q('[data-testid="band-surface"]'),
+    el: (id: string) => q<HTMLElement>(`[data-testid="band-${id}"]`),
+    btn: (id: string) => q<HTMLButtonElement>(`[data-testid="band-${id}"]`),
+    input: () => q<HTMLInputElement>('[data-testid="band-entry-input"]'),
+    text: (id: string) => q<HTMLElement>(`[data-testid="band-${id}"]`)?.textContent?.trim(),
+  };
+}
+
+/** The MOR-1304 F3 recipe: a real `.click()` is swallowed by `disabled`, so a
+ *  handler guard can only be pinned on its OWN by bypassing the attribute. */
+function bypassClick(node: HTMLElement): void {
+  node.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+function typeFrequency(input: HTMLInputElement, value: string): void {
+  input.value = value;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
+}
+
+/* ── purity: no second permit derivation can even be reachable ──── */
+
+describe('the band surface derives nothing (7B carry-forward 1)', () => {
+  // Kills: importing the permit function, the band plan, capabilities or the
+  // command bus — any of which would let a second permit derivation exist.
+  // MOR-1448: `$lib/i18n` joined the fact contract — pure
+  // operator-wording lookup (`t()`), never a second fact derivation. See
+  // the two tests below for the narrowed guard this replaces.
+  it('imports only facts, the field gate, i18n wording and Band instrument types', () => {
+    // MOR-1448 review F6: quote-agnostic — a double-quoted import must be
+    // caught exactly like a single-quoted one, not slip past a single-quote
+    // -only pattern.
+    const specifiers = [...CODE.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]);
+    expect(specifiers.length).toBeGreaterThan(0);
+    // MOR-2704 G3: `../primitives/control-instruments/control-instrument-behavior`
+    // joined the closure — the field gate `usable` (MOR-2704), in place of
+    // this file's former local copy. It has NO runtime import of its own,
+    // so it cannot reach the TX controller, the
+    // transport or the permit utility any more than the fact contract can.
+    expect([...new Set(specifiers)]).toEqual([
+      '$lib/i18n', './radio-view-model',
+      './band-instruments',
+      '../primitives/control-instruments/control-instrument-behavior',
+    ]);
+    expect(CODE).toContain('BandInstrumentHandles');
+  });
+
+  it('never mentions the permit derivation, the band plan or a capability read', () => {
+    for (const forbidden of [
+      'getFrequencyPermit', 'getTxPermit', 'txBands', 'freqRanges', 'flattenBands',
+      'findActiveBand', 'capabilities', 'hasCap', 'sendCommand',
+    ]) {
+      expect(CODE).not.toContain(forbidden);
+    }
+  });
+
+  // MOR-1448: the blanket `$lib/` ban above narrowed to name its one
+  // exception explicitly, rather than silently dropping the guard. Any
+  // OTHER `$lib/*` import (transport, capabilities, tx-permit, command
+  // bus, ...) still fails this test.
+  it('imports no $lib module except the i18n catalog lookup', () => {
+    // MOR-1448 review F6: same quote-agnostic fix as above.
+    const libSpecifiers = [...CODE.matchAll(/from\s+['"](\$lib\/[^'"]+)['"]/g)].map((m) => m[1]);
+    expect(new Set(libSpecifiers)).toEqual(new Set(['$lib/i18n']));
+  });
+
+  it('declares no lifecycle hook and no effect', () => {
+    for (const forbidden of ['onMount', 'onDestroy', '$effect', 'import(']) {
+      expect(CODE).not.toContain(forbidden);
+    }
+  });
+
+  it('declares only view and the shared Band instrument placement', () => {
+    const props = CODE.slice(CODE.indexOf('interface Props'), CODE.indexOf('}: Props'));
+    expect([...props.matchAll(/^\s{4}(\w+)[?]?:/gm)].map((m) => m[1]))
+      .toEqual(['view', 'handles', 'controlLayout']);
+    for (const displaced of ['entryText = $state', 'function commitFrequency', 'function parseMhzToHz']) {
+      expect(CODE).not.toContain(displaced);
+    }
+  });
+
+  it('renders nothing at all when the radio declares no band plan', () => {
+    const { band: _drop, ...noBand } = base();
+    const r = render(noBand as RadioViewModel);
+    expect(r.root()).toBeNull();
+    r.dispose();
+  });
+});
+
+/* ── (a) the band-scoped TX answer is the LIVE fact ─────────────── */
+
+/* ── MOR-2704 G3: the imported gate keeps the read-but-NOT-operational
+   refusal — the case the local copy handled, now pinned against the
+   shared `usable` (a mutation that drops its `operational` check dies
+   here). ── */
+describe('MOR-2704 G3: a KNOWN current band under operational:false fails closed', () => {
+  const READ_NOT_OPERATIONAL = { structural: true, operational: false } as const;
+
+  it('marks the band row unobserved while the known value keeps rendering', () => {
+    const r = render(withB({
+      currentBand: {
+        reading: { status: 'known' as const, value: '20m' },
+        availability: READ_NOT_OPERATIONAL,
+      },
+    }));
+    expect(r.el('current')!.dataset.observed).toBe('false');
+    // Behaviour-identical (MOR-2704): `textOf` follows the reading status
+    // alone, so the known value keeps rendering.
+    expect(r.text('current-value')).toBe('20m');
+    r.dispose();
+  });
+});
+
+
+describe('currentBandTx is the live-frequency answer (carry-forwards 1 + 2)', () => {
+  // THE F1/F3 REGRESSION PIN. The current band's own default-frequency permit
+  // says `allowed`; the live fact says `denied` (a txBands segment narrower
+  // than the plan band — 14.300 MHz against a 14.000–14.150 allocation). A
+  // surface that sourced the answer from `defaultHzTxPermit` renders
+  // "allowed" here and this test dies.
+  it('renders denied while the current band default-frequency permit reads allowed', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'denied' });
+    const current = (view.band as BandViewModel).bandChoices
+      .find((c) => c.name === '20m') as BandChoice;
+    expect(current.defaultHzTxPermit.status).toBe('allowed');
+    const r = render(view);
+    expect(r.text('tx-value')).toBe('denied');
+    expect(r.el('tx')!.dataset.tx).toBe('denied');
+    r.dispose();
+  });
+
+  // Kills: collapsing the branch the other way (allowed rendered as denied).
+  it('renders allowed when the live fact allows, on the same choice set', () => {
+    const r = render(withB({ currentBand: knownBand('20m'), currentBandTx: 'allowed' }));
+    expect(r.text('tx-value')).toBe('allowed');
+    expect(r.el('tx')!.dataset.tx).toBe('allowed');
+    r.dispose();
+  });
+
+  // Kills: dropping the whole TX readout while the band itself is unknown —
+  // "no answer" must never be how a denial is presented.
+  it('still states the denial while the current band is unreadable', () => {
+    const r = render(withB({ currentBand: unreadBand(), currentBandTx: 'denied' }));
+    expect(r.text('current-value')).toBe('');
+    expect(r.text('current-value')).not.toBe('—');
+    expect(r.text('tx-value')).toBe('denied');
+    r.dispose();
+  });
+
+  // Carry-forward 2: the tri-state nuance the binary collapse cannot carry is
+  // taken from the TOP-LEVEL txPermit + disabledReasons, not re-derived.
+  it.each([
+    ['out-of-band', reasonLabel('out-of-band')],
+    ['tx-target-unknown', reasonLabel('tx-target-unknown')],
+    ['capability-unavailable', reasonLabel('capability-unavailable')],
+  ])('explains a denial with the recorded %s reason', (code, label) => {
+    const view = withB({ currentBandTx: 'denied' });
+    const r = render({
+      ...view,
+      txPermit: DENIED,
+      disabledReasons: [{ field: 'txPermit', code }] as readonly DisabledReason[],
+    });
+    expect(r.text('tx-reason')).toBe(label);
+    r.dispose();
+  });
+
+  it('annotates the top-level tri-state without collapsing it', () => {
+    const view = withB({ currentBandTx: 'denied' });
+    const r = render({ ...view, txPermit: { status: 'unknown', reason: 'ranges-unconfigured' } });
+    expect(r.root()!.dataset.txPermitStatus).toBe('unknown');
+    r.dispose();
+  });
+
+  it('offers no reason line at all while TX is allowed', () => {
+    const r = render(withB({ currentBandTx: 'allowed' }));
+    expect(r.el('tx-reason')).toBeNull();
+    r.dispose();
+  });
+});
+
+/* ── fix-round F1: the band answer can disagree with the authoritative
+   TX-target permit, and that disagreement must be VISIBLE, not just a
+   `data-` attribute ────────────────────────────────────────────────── */
+
+describe('the TX-target permit caveat (fix-round F1)', () => {
+  // THE F1 REGRESSION PIN. `band.currentBandTx` answers for the ACTIVE
+  // RECEIVER's frequency; `view.txPermit` is the authoritative TX-TARGET
+  // permit and can disagree (e.g. under split). Before the fix this
+  // disagreement was visible only in `data-tx-permit-status` — an operator
+  // reading the text saw an unqualified "TX HERE: allowed".
+  it('renders a visible caveat when the band answer is allowed but the TX-target permit is denied', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'allowed' });
+    const r = render({
+      ...view,
+      txPermit: DENIED,
+      disabledReasons: [{ field: 'txPermit', code: 'out-of-band' }] as readonly DisabledReason[],
+    });
+    expect(r.text('tx-value')).toBe('allowed');
+    expect(r.el('tx-caveat')).not.toBeNull();
+    expect(r.text('tx-caveat')).toContain(reasonLabel('out-of-band'));
+    r.dispose();
+  });
+
+  // Same disagreement, `unknown` case — the far more common shape: an
+  // unobserved TX target. Every other TX-adjacent surface in the program
+  // treats `unknown` as fail-closed (MOR-1296 O2); this surface must not be
+  // the one place that prints an unqualified "allowed".
+  it('renders a visible caveat when the band answer is allowed but the TX-target permit is unknown', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'allowed' });
+    const r = render({
+      ...view,
+      txPermit: { status: 'unknown', reason: 'tx-target-unknown' },
+      disabledReasons: [{ field: 'txPermit', code: 'tx-target-unknown' }] as readonly DisabledReason[],
+    });
+    expect(r.text('tx-value')).toBe('allowed');
+    expect(r.el('tx-caveat')).not.toBeNull();
+    expect(r.text('tx-caveat')).toContain(reasonLabel('tx-target-unknown'));
+    r.dispose();
+  });
+
+  // Negative guard: when both permits agree on `allowed`, no caveat appears
+  // — the caveat is the DISAGREEMENT signal, not a permanent fixture.
+  it('renders no caveat when both the band answer and the TX-target permit are allowed', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'allowed' });
+    const r = render({ ...view, txPermit: ALLOWED, disabledReasons: [] });
+    expect(r.text('tx-value')).toBe('allowed');
+    expect(r.el('tx-caveat')).toBeNull();
+    r.dispose();
+  });
+});
+
+/* ── MOR-1448: operator-legible wording, pinned against a contract-speak
+   regression. The old strip read "TX target unknown: TX target frequency
+   was never observed" — internal field/code vocabulary leaked straight
+   into the operator UI. These tests pin (a) each readiness reason to its
+   catalog key, so the mapping — not just today's rendered text — is what
+   future edits must keep honest, and (b) that none of the old jargon
+   phrases can silently return. ──────────────────────────────────────── */
+
+describe('MOR-1448 — every TX readiness reason resolves to operator-legible copy', () => {
+  // Review round F1-F4 add specific phrases that must never come back:
+  //   F1 — 'press PTT' was a FABRICATED remedy for `targetUnknown`: on Icom
+  //        rigs the unconfirmed state is permanent (no CAT emitter for
+  //        txTarget at all), so telling the operator to press PTT was
+  //        actively wrong, not just jargon.
+  //   F3 — 'read from the radio' falsely implied a frequency reading was
+  //        attempted for the `bandUnresolved` fallback, which fires
+  //        precisely when the band was never read.
+  //   F4 — 'frequency is denied' / 'frequency is unknown' were the old
+  //        non-idiomatic, raw-enum-interpolated caveat construction
+  //        (`TX target {status}: …` and its English-word-in-ru-prose
+  //        successor) — the caveat is now assembled from a PER-STATUS
+  //        catalog key instead of an interpolated tri-state word.
+  const CONTRACT_SPEAK = [
+    'was never observed', 'TX target unknown', 'TX target allowed', 'TX target denied',
+    'field:', 'fieldStatus', 'press PTT', 'read from the radio',
+    'frequency is denied', 'frequency is unknown',
+  ];
+
+  it.each([
+    ['out-of-band', 'core.band.tx.reason.outOfBand'],
+    ['tx-target-unknown', 'core.band.tx.reason.targetUnknown'],
+    ['capability-unavailable', 'core.band.tx.reason.rangesNotConfigured'],
+  ] as const)('maps disabledReasons code %s to catalog key %s', (code, key) => {
+    expect(reasonLabel(code)).toBe(t(key));
+  });
+
+  it('maps the band-unresolved fallback to its catalog key', () => {
+    expect(unresolvedReason()).toBe(t('core.band.tx.reason.bandUnresolved'));
+  });
+
+  it('maps the unconfirmed-receiver fallback to its catalog key', () => {
+    expect(activeReceiverUnconfirmedReason()).toBe(t('core.band.tx.reason.receiverUnconfirmed'));
+  });
+
+  // MOR-1448 review F4: the caveat's tri-state status now selects a WHOLE
+  // catalog key (`.unknown` / `.denied`) instead of interpolating the raw
+  // English status word into (in particular) translated prose. Both
+  // branches are pinned below so swapping either key — or reintroducing a
+  // `{status}` placeholder — fails a test by name.
+  it('assembles the rendered caveat through the core.band.tx.caveat.unknown catalog key', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'allowed' });
+    const r = render({
+      ...view,
+      txPermit: { status: 'unknown', reason: 'tx-target-unknown' },
+      disabledReasons: [{ field: 'txPermit', code: 'tx-target-unknown' }] as readonly DisabledReason[],
+    });
+    expect(r.text('tx-caveat')).toBe(t('core.band.tx.caveat.unknown', {
+      reason: t('core.band.tx.reason.targetUnknown'),
+    }));
+    r.dispose();
+  });
+
+  it('assembles the rendered caveat through the core.band.tx.caveat.denied catalog key', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'allowed' });
+    const r = render({
+      ...view,
+      txPermit: DENIED,
+      disabledReasons: [{ field: 'txPermit', code: 'out-of-band' }] as readonly DisabledReason[],
+    });
+    expect(r.text('tx-caveat')).toBe(t('core.band.tx.caveat.denied', {
+      reason: t('core.band.tx.reason.outOfBand'),
+    }));
+    r.dispose();
+  });
+
+  it('never leaks the old field/code contract-speak into any reason or caveat string', () => {
+    const rendered = [
+      reasonLabel('out-of-band'), reasonLabel('tx-target-unknown'),
+      reasonLabel('capability-unavailable'), unresolvedReason(),
+      activeReceiverUnconfirmedReason(),
+      t('core.band.tx.caveat.unknown', { reason: reasonLabel('tx-target-unknown') }),
+      t('core.band.tx.caveat.denied', { reason: reasonLabel('out-of-band') }),
+    ];
+    for (const text of rendered) {
+      for (const phrase of CONTRACT_SPEAK) expect(text).not.toContain(phrase);
+    }
+  });
+});
+
+/* ── MOR-1474: the two remaining hardcoded-English strips (the point-sample
+   permit label and the frequency-entry gating reasons) routed through the
+   i18n catalog. Unlike the MOR-1448 caveat, `defaultHzTxPermit.status` here
+   is a genuinely per-choice tri-state fact (rule 2 — a point sample), so it
+   still gets the F4 per-status-key treatment rather than a raw `{status}`
+   interpolation. ──────────────────────────────────────────────────────── */
+
+describe('MOR-1474 — the default-permit label resolves each status through its own catalog key', () => {
+  it.each([
+    ['allowed', 'core.band.tx.defaultPermit.status.allowed'],
+    ['denied', 'core.band.tx.defaultPermit.status.denied'],
+  ] as const)('status %s maps to catalog key %s', (status, key) => {
+    const choice: BandChoice = {
+      name: '20m', startHz: 14000000, endHz: 14350000, defaultHz: 14074000, bsrCode: 4,
+      defaultHzTxPermit: status === 'allowed'
+        ? { status: 'allowed', band: '20m' }
+        : status === 'denied'
+          ? { status: 'denied', reason: 'outside-configured-ranges' }
+          : { status: 'unknown', reason: 'ranges-unconfigured' },
+    };
+    expect(defaultPermitLabel(choice)).toBe(
+      t('core.band.tx.defaultPermit.label', { frequency: mhz(choice.defaultHz), status: t(key) }),
+    );
+  });
+
+  // MOR-2655: an unread permit is not a value. The old pin mapped `unknown`
+  // through `core.band.tx.defaultPermit.status.unknown` ("unknown") and drew
+  // "TX at 14.074 MHz: unknown". The slot stays; the status word does not.
+  it('status unknown names the frequency and draws no status word', () => {
+    const choice: BandChoice = {
+      name: '20m', startHz: 14000000, endHz: 14350000, defaultHz: 14074000, bsrCode: 4,
+      defaultHzTxPermit: { status: 'unknown', reason: 'ranges-unconfigured' },
+    };
+    expect(defaultPermitLabel(choice)).toBe(
+      t('core.band.tx.defaultPermit.unread', { frequency: mhz(choice.defaultHz) }),
+    );
+    expect(t('core.band.tx.defaultPermit.unread', { frequency: '14.074 MHz' }))
+      .toBe('TX at 14.074 MHz:');
+    expect(defaultPermitLabel(choice)).not.toMatch(/unknown/i);
+    expect(defaultPermitLabel(choice)).not.toContain('—');
+  });
+});
+
+/* ── MOR-2684: no dash on the band row, and the permit caption keeps one
+   width. An unread value is an empty slot; an unnamable denial reason has
+   no visible text and a plain catalog accessible name; the status slot is
+   reserved at the measured widest catalog status word. ────────────────── */
+
+describe('MOR-2684 — the permit caption keeps one width across its states', () => {
+  const choice = (permit: BandChoice['defaultHzTxPermit']): BandChoice => ({
+    name: '20m', startHz: 14000000, endHz: 14350000, defaultHz: 14074000, bsrCode: 4,
+    defaultHzTxPermit: permit,
+  });
+  const ALLOWED_CHOICE = choice({ status: 'allowed', band: '20m' });
+  const DENIED_CHOICE = choice({ status: 'denied', reason: 'outside-configured-ranges' });
+  const UNREAD_CHOICE = choice({ status: 'unknown', reason: 'ranges-unconfigured' });
+
+  // The known texts stay EXACTLY as they were before the split — pinned
+  // literally, spaces included, so the reserved-slot refactor cannot change
+  // what the operator reads.
+  it('renders the known allowed and denied captions literally, spaces included', () => {
+    const view = withB({});
+    const r = render(view);
+    expect(r.el('choice-permit-20m')!.textContent).toBe('TX at 14.195 MHz: allowed');
+    expect(r.el('choice-permit-MW')!.textContent).toBe('TX at 1.000 MHz: denied');
+    r.dispose();
+  });
+
+  // The unread caption keeps its sentence and gains only the reserved EMPTY
+  // status slot. Red on the old code: the caption was the bare unread
+  // sentence with no slot (and no trailing separator space).
+  it('renders the unread caption with an empty reserved status slot, never a dash', () => {
+    const unreadChoice = {
+      ...view20m(base()),
+      defaultHzTxPermit: { status: 'unknown' as const, reason: 'ranges-unconfigured' as const },
+    };
+    const view = withB({ bandChoices: [unreadChoice] });
+    const r = render(view);
+    expect(r.el('choice-permit-20m')!.textContent).toBe('TX at 14.195 MHz: ');
+    expect(r.el('choice-permit-20m')!.textContent?.trim()).toBe('TX at 14.195 MHz:');
+    expect(r.el('choice-permit-20m')!.textContent).not.toContain('—');
+    // The accessible name keeps the full sentence from `defaultPermitLabel`.
+    expect(r.btn('choice-20m')!.getAttribute('aria-label')).toBe('20m — TX at 14.195 MHz:');
+    r.dispose();
+  });
+
+  it('splits the caption into the same prefix in every state and an empty or word status', () => {
+    expect(defaultPermitPrefix(ALLOWED_CHOICE)).toBe('TX at 14.074 MHz: ');
+    expect(defaultPermitPrefix(DENIED_CHOICE)).toBe('TX at 14.074 MHz: ');
+    expect(defaultPermitPrefix(UNREAD_CHOICE)).toBe('TX at 14.074 MHz: ');
+    expect(defaultPermitStatus(ALLOWED_CHOICE)).toBe('allowed');
+    expect(defaultPermitStatus(DENIED_CHOICE)).toBe('denied');
+    expect(defaultPermitStatus(UNREAD_CHOICE)).toBe('');
+    // The catalog keeps the known label exactly the unread sentence plus
+    // ' ' plus the status word, so the prefix text node keeps ONE width.
+    expect(t('core.band.tx.defaultPermit.label', { frequency: '14.074 MHz', status: '' }))
+      .toBe(`${t('core.band.tx.defaultPermit.unread', { frequency: '14.074 MHz' })} `);
+  });
+
+  it('reserves the status slot structurally against the widest catalog status word', () => {
+    const host = readFileSync('src/semantic/BandInstrumentHost.svelte', 'utf8');
+    expect(host).toMatch(/\.permit-status\s*\{[^}]*min-width:\s*var\(--band-permit-status-width\)/);
+    expect(host).toMatch(/style:--band-permit-status-width=\{permitStatusWidth\}/);
+    expect(host).toMatch(/class="permit-status-measure"[^>]*aria-hidden="true"/);
+  });
+
+  it('measures every status word the three catalogs can render', () => {
+    const readCatalog = (locale: string): Record<string, string> =>
+      JSON.parse(readFileSync(`src/lib/i18n/locales/${locale}.json`, 'utf8'));
+    const words = new Set<string>();
+    for (const locale of ['en-US', 'ru-RU', 'ja-JP']) {
+      for (const [key, value] of Object.entries(readCatalog(locale))) {
+        if (key.startsWith('core.band.tx.defaultPermit.status.')) words.add(value);
+      }
+    }
+    for (const word of words) expect(PERMIT_STATUS_TEXTS).toContain(word);
+    expect(new Set(PERMIT_STATUS_TEXTS).size).toBe(PERMIT_STATUS_TEXTS.length);
+  });
+
+  function view20m(view: RadioViewModel): BandChoice {
+    return (view.band as BandViewModel).bandChoices.find(c => c.name === '20m')!;
+  }
+});
+
+describe('MOR-2684 — an unnamed denial reason draws no dash and keeps a name', () => {
+  it('renders no visible text for an unrecognised reason code, never a dash', () => {
+    expect(reasonLabel('not-a-tx-reason-code')).toBe('');
+    // MOR-1448 F5's own hazard: an inherited `Object.prototype` key.
+    expect(reasonLabel('toString')).toBe('');
+  });
+
+  // Red on the old code: this state rendered '—' as the visible reason.
+  it('keeps the reason element empty with an accessible catalog sentence when no code explains the denial', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'denied' });
+    const r = render({
+      ...view,
+      txPermit: { status: 'unknown', reason: 'ranges-unconfigured' },
+      disabledReasons: [],
+    });
+    expect(r.text('tx-reason')).toBe('');
+    expect(r.el('tx-reason')!.getAttribute('aria-label'))
+      .toBe(t('core.band.tx.reason.unnamed'));
+    expect(r.el('tx-reason')!.textContent).not.toContain('—');
+    expect(unnamedReason()).not.toContain('—');
+    r.dispose();
+  });
+
+  // A caveat is a whole sentence: an empty reason would leave a dangling
+  // ': '. When no reason can be named it says so with the same sentence.
+  it('fills the caveat with the unnamed-reason sentence when no code explains the denial', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'allowed' });
+    const r = render({ ...view, txPermit: DENIED, disabledReasons: [] });
+    expect(r.text('tx-caveat')).toBe(t('core.band.tx.caveat.denied', {
+      reason: t('core.band.tx.reason.unnamed'),
+    }));
+    r.dispose();
+  });
+});
+
+describe('MOR-1474 — the frequency-entry gating reasons resolve through the catalog', () => {
+  it('names the bounds-unknown catalog key when tuneMinHz/tuneMaxHz are null', () => {
+    const r = render(withB({ tuneMinHz: null, tuneMaxHz: null }));
+    expect(r.text('entry-reason')).toBe(t('core.band.entry.reason.boundsUnknown'));
+    r.dispose();
+  });
+
+  it('names the receiver-unconfirmed catalog key when bounds are known but the active receiver is not', () => {
+    const view = { ...withB({ tuneMinHz: 30000, tuneMaxHz: 60000000 }), activeReceiver: { status: 'unknown' as const } };
+    const r = render(view);
+    expect(r.text('entry-reason')).toBe(t('core.band.entry.reason.receiverUnconfirmed'));
+    r.dispose();
+  });
+});
+
+/* ── (c) no band-scoped disabledReason exists, by design ────────── */
+
+describe('the denial signal is the field value itself (carry-forward 3)', () => {
+  // Kills: gating the denial readout on a `band.*` disabledReasons entry. No
+  // such entry is ever emitted (MOR-1294 §4), so a surface that waited for one
+  // would silently present a denied band as unremarkable.
+  it('states a denial with an EMPTY disabledReasons list', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'denied' });
+    const r = render({ ...view, txPermit: ALLOWED, disabledReasons: [] });
+    expect(r.text('tx-value')).toBe('denied');
+    expect(r.text('tx-reason')).toBe(unresolvedReason());
+    r.dispose();
+  });
+
+  it('never looks for a band-scoped reason code', () => {
+    expect(CODE).not.toContain("'band.");
+  });
+
+  // THE F2 REGRESSION PIN. `capability-unavailable` is NOT TX-exclusive — the
+  // adapter also emits it for `scope.hardwareScope`/`scope.audioFftScope` and
+  // each non-operational `receiver.<id>`. A denial explanation that matches
+  // on CODE ALONE (ignoring `field`) renders this scope-capability gap as a
+  // TX-configuration statement, which is false: `txPermit` here is allowed,
+  // so the real cause is that the band itself could not be resolved.
+  it('ignores a non-TX reason that happens to carry a TX code', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'denied' });
+    const r = render({
+      ...view,
+      txPermit: ALLOWED,
+      disabledReasons: [
+        { field: 'scope.audioFftScope', code: 'capability-unavailable' },
+      ] as readonly DisabledReason[],
+    });
+    expect(r.text('tx-reason')).toBe(unresolvedReason());
+    r.dispose();
+  });
+});
+
+/* ── three-way denial reason (MOR-1389, MOR-1356 verify §4.4) ──────
+   `deriveBand`'s MOR-1356 `activeConfirmed` gate can force `currentBandTx`
+   to 'denied' while the CURRENT BAND is resolved and rendered right above
+   the readout. Before this ticket, `txDeniedReason`'s F2 field==='txPermit'
+   match found no entry (the true reason is `field: 'activeReceiver'`) and
+   fell through to the "band could not be resolved" fallback — false, since
+   the band IS resolved. These three tests pin the resulting three-way
+   split; the middle one is the ticket's own repro. ────────────────── */
+
+describe('the three-way denial reason distinguishes an unconfirmed receiver (MOR-1389)', () => {
+  // Row 1 — genuinely out of band: band resolved, receiver confirmed, a
+  // recorded TX-scoped reason explains it. UNCHANGED by this ticket — F2's
+  // field==='txPermit' match still owns this text and must keep owning it.
+  it('keeps the recorded out-of-band explanation when the receiver IS confirmed', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'denied' });
+    const r = render({
+      ...view,
+      txPermit: DENIED,
+      disabledReasons: [{ field: 'txPermit', code: 'out-of-band' }] as readonly DisabledReason[],
+    });
+    expect(r.text('current-value')).toBe('20m');
+    expect(r.text('tx-reason')).toBe(reasonLabel('out-of-band'));
+    r.dispose();
+  });
+
+  // Row 2 — THE TICKET. `activeReceiver` is unknown, the band is resolved,
+  // and nothing in `disabledReasons` carries a `field: 'txPermit'` entry
+  // (`txPermit` itself reads allowed — MOR-1356's exact rendered repro).
+  // The old fallback said "current band could not be resolved" while
+  // `BAND` showed `20m` directly above it. The new text must be a TRUE
+  // sentence about the receiver, not the band.
+  it('names the unconfirmed receiver instead of the band-unresolved fallback', () => {
+    const view = withB({ currentBand: knownBand('20m'), currentBandTx: 'denied' });
+    const r = render({
+      ...view,
+      activeReceiver: { status: 'unknown' },
+      txPermit: ALLOWED,
+      disabledReasons: [
+        { field: 'activeReceiver', code: 'field-not-observed' },
+      ] as readonly DisabledReason[],
+    });
+    expect(r.text('current-value')).toBe('20m');
+    expect(r.text('tx-reason')).toBe(activeReceiverUnconfirmedReason());
+    expect(r.text('tx-reason')).not.toBe(unresolvedReason());
+    r.dispose();
+  });
+
+  // Row 3 — the band genuinely could not be resolved: receiver confirmed,
+  // no out-of-band code. The fallback text is TRUE here and must survive
+  // untouched.
+  it('keeps the band-unresolved fallback when the band itself is unread', () => {
+    const view = withB({ currentBand: unreadBand(), currentBandTx: 'denied' });
+    const r = render({ ...view, txPermit: ALLOWED, disabledReasons: [] });
+    expect(r.text('current-value')).toBe('');
+    expect(r.text('current-value')).not.toBe('—');
+    expect(r.text('tx-reason')).toBe(unresolvedReason());
+    r.dispose();
+  });
+
+  // ORDER PIN (added in verification). The two explanations can hold AT ONCE:
+  // a receiver that was never confirmed AND a recorded out-of-band fault. The
+  // F2 TX-scoped match must keep winning — it names a specific, actionable TX
+  // fault and is equally a cause of the denial, whereas the receiver sentence
+  // would bury it. Kills: hoisting the `activeReceiver` branch above the
+  // TX-scoped search. No other test in this file reaches that state — row 1
+  // above uses a CONFIRMED receiver — so without this the branch ORDER, which
+  // is what makes the three-way split safe, is unpinned.
+  it('lets a recorded out-of-band fault outrank an unconfirmed receiver', () => {
+    const r = render({
+      ...withB({ currentBand: knownBand('MW'), currentBandTx: 'denied' }),
+      activeReceiver: { status: 'unknown' },
+      txPermit: DENIED,
+      disabledReasons: [
+        { field: 'activeReceiver', code: 'field-not-observed' },
+        { field: 'txPermit', code: 'out-of-band' },
+      ] as readonly DisabledReason[],
+    });
+    expect(r.text('current-value')).toBe('MW');
+    expect(r.text('tx-reason')).toBe(reasonLabel('out-of-band'));
+    expect(r.text('tx-reason')).not.toBe(activeReceiverUnconfirmedReason());
+    r.dispose();
+  });
+
+  // The distinguishing signal named in rule (4) — band-choice buttons dim
+  // while the active receiver is unconfirmed — must still hold in exactly
+  // the state row 2 renders the new sentence for.
+  it('still dims every band-choice button in the unconfirmed-receiver denial state', () => {
+    const r = render({
+      ...withB({ currentBand: knownBand('20m'), currentBandTx: 'denied' }),
+      activeReceiver: { status: 'unknown' },
+      txPermit: ALLOWED,
+      disabledReasons: [
+        { field: 'activeReceiver', code: 'field-not-observed' },
+      ] as readonly DisabledReason[],
+    });
+    for (const name of ['40m', '20m', 'MW']) expect(r.btn(`choice-${name}`)!.disabled).toBe(true);
+    r.dispose();
+  });
+});
+
+/* ── (b) the point sample is labelled as one ────────────────────── */
+
+describe('defaultHzTxPermit is never presented as band-wide permission (carry-forward 1/F3)', () => {
+  // Kills: labelling the choice "TX allowed" with no frequency — the misread
+  // the MOR-1294 rename exists to prevent.
+  it('names the sampled frequency in every choice permit label', () => {
+    const view = base();
+    const r = render(view);
+    for (const choice of (view.band as BandViewModel).bandChoices) {
+      const label = r.text(`choice-permit-${choice.name}`)!;
+      expect(label).toContain(mhz(choice.defaultHz));
+      expect(label).toBe(defaultPermitLabel(choice));
+      expect(label).toContain(choice.defaultHzTxPermit.status);
+    }
+    r.dispose();
+  });
+
+  // Kills: reusing the point sample as the band-scoped answer. The MW choice
+  // is denied at its default while the live answer is allowed — the two are
+  // rendered by two different elements and must not agree by construction.
+  it('keeps the choice permits independent of the live TX answer', () => {
+    const r = render(withB({ currentBand: knownBand('20m'), currentBandTx: 'allowed' }));
+    expect(r.el('choice-MW')!.dataset.defaultPermit).toBe('denied');
+    expect(r.el('choice-20m')!.dataset.defaultPermit).toBe('allowed');
+    expect(r.text('tx-value')).toBe('allowed');
+    r.dispose();
+  });
+
+  // Kills: disabling a band whose default frequency has no TX permit. Picking
+  // a band is a TUNING action; a receive-only band stays perfectly selectable.
+  it('leaves a TX-denied band selectable, because tuning is not transmitting', () => {
+    const onSelectBand = vi.fn();
+    const r = render(base(), { onSelectBand });
+    expect(r.btn('choice-MW')!.disabled).toBe(false);
+    r.btn('choice-MW')!.click();
+    flushSync();
+    expect(onSelectBand).toHaveBeenCalledExactlyOnceWith('MW');
+    r.dispose();
+  });
+
+  it('marks the current band pressed and no other', () => {
+    const r = render(withB({ currentBand: knownBand('40m') }));
+    expect(r.el('choice-40m')!.getAttribute('aria-pressed')).toBe('true');
+    expect(r.el('choice-20m')!.getAttribute('aria-pressed')).toBe('false');
+    r.dispose();
+  });
+
+  it('presses nothing while the current band is unread', () => {
+    const onSelectBand = vi.fn();
+    const r = render(withB({ currentBand: unreadBand() }), { onSelectBand });
+    for (const name of ['40m', '20m', 'MW']) {
+      expect(r.el(`choice-${name}`)!.getAttribute('aria-pressed')).toBe('false');
+    }
+    r.btn('choice-20m')!.click();
+    flushSync();
+    expect(onSelectBand).toHaveBeenCalledExactlyOnceWith('20m');
+    r.dispose();
+  });
+
+  it('re-resolves the current offered payload when an existing band button invokes', () => {
+    const facts = new SvelteMap([['view', base()]]);
+    const onSelectBand = vi.fn();
+    const component = mount(BandInstrumentHostFixture, {
+      target, props: {
+        get view() { return facts.get('view')!; }, presentation: 'surface', onSelectBand,
+      },
+    });
+    flushSync();
+    const button = target.querySelector<HTMLButtonElement>('[data-testid="band-choice-20m"]')!;
+    const nextChoices = facts.get('view')!.band!.bandChoices.map((choice) => choice.name === '20m'
+      ? { ...choice, defaultHz: 14225000, bsrCode: 7 }
+      : choice);
+    facts.set('view', withB({ bandChoices: nextChoices }));
+    flushSync();
+    button.click();
+    flushSync();
+    expect(onSelectBand).toHaveBeenCalledExactlyOnceWith('20m');
+    unmount(component);
+  });
+});
+
+/* ── (d) frequency entry validates against the envelope ─────────── */
+
+describe('frequency entry validates against tuneMinHz/tuneMaxHz (carry-forward 5)', () => {
+  // MOR-1462: a realistic BAND-SCOPED range (20m), not the general-coverage
+  // 30 kHz … 60 MHz fixture used elsewhere in this file — every boundary
+  // value below is 8 digits, so its ×1000 kHz reading is always far outside
+  // this range and the smart-unit heuristic falls through to the Hz path
+  // unambiguously. That keeps this block a pin on the Hz BOUNDARY check
+  // itself, not on unit selection (MOR-1462 owns that, in its own block).
+  const BOUNDS = { tuneMinHz: 14000000, tuneMaxHz: 14350000 } as const;
+
+  it.each([
+    ['one hertz below the minimum', 13999999, false],
+    ['exactly the minimum', 14000000, true],
+    ['exactly the maximum', 14350000, true],
+    ['one hertz above the maximum', 14350001, false],
+  ])('%s is accepted=%s', (_label, hz, accepted) => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, String(hz));
+    expect(r.btn('entry-set')!.disabled).toBe(!accepted);
+    r.btn('entry-set')!.click();
+    flushSync();
+    if (accepted) expect(onEnterFrequency).toHaveBeenCalledExactlyOnceWith(hz);
+    else expect(onEnterFrequency).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // Kills: dropping the handler-side range check. `disabled` alone satisfies a
+  // `.click()`-based assertion, so the guard is bypassed here on its own.
+  it.each([13999999, 14350001])('refuses %i even when the disabled attribute is bypassed', (hz) => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, String(hz));
+    bypassClick(r.btn('entry-set')!);
+    expect(onEnterFrequency).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // MOR-1462: the input's native min/max is GONE — a kHz-scale keystroke
+  // (e.g. `7100`) is a valid, in-range reading despite sitting numerically
+  // far below a Hz-stated `tuneMinHz`, so a native constraint would flag it
+  // invalid for a reason this file's own JS-side interpretation disagrees
+  // with. `entry-range` still publishes the envelope in prose.
+  it('publishes the envelope in the entry-range text, with no native min/max to contradict unit-aware validation', () => {
+    const r = render(withB(BOUNDS));
+    expect(r.input()!.getAttribute('min')).toBeNull();
+    expect(r.input()!.getAttribute('max')).toBeNull();
+    expect(r.input()!.getAttribute('inputmode')).toBe('decimal');
+    expect(r.text('entry-range')).toBe(`${mhz(14000000)} … ${mhz(14350000)}`);
+    r.dispose();
+  });
+
+  // Kills: coercing an empty or malformed entry to 0 Hz and dispatching it.
+  it.each(['', '   ', 'abc'])('never dispatches the malformed entry %o', (typed) => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, typed);
+    expect(r.btn('entry-set')!.disabled).toBe(true);
+    bypassClick(r.btn('entry-set')!);
+    expect(onEnterFrequency).not.toHaveBeenCalled();
+    r.dispose();
+  });
+});
+
+/* ── smart kHz/MHz/Hz interpretation of a typed entry (MOR-1462) ──
+   Owner ruling B, the standard ham direct-entry heuristic: a decimal point
+   means MHz (exact decimal-string-to-Hz, no float round-trip); a bare
+   integer is kHz when ×1000 is in range, Hz when only the raw reading is,
+   and kHz wins the ambiguous case where both are. Commit still lands on the
+   MOR-1425 exact-jump path (`onEnterFrequency` receives the interpreted
+   Hz), and Enter/Set share the one `entryReady` guard, same as MOR-1444. */
+
+describe('smart kHz/MHz/Hz interpretation of a typed entry (MOR-1462, owner ruling B)', () => {
+  // General-coverage range (30 kHz … 60 MHz) — wide enough that a bare
+  // integer's kHz reading and its raw-Hz reading can BOTH be in range,
+  // which is exactly the ambiguity the ticket rules on.
+  const BOUNDS = { tuneMinHz: 30000, tuneMaxHz: 60000000 } as const;
+
+  it.each([
+    ['bare kHz-scale integer', '7100', 7100000],
+    ['another bare kHz-scale integer', '14074', 14074000],
+    ['MHz decimal, one fractional digit', '7.1', 7100000],
+    ['MHz decimal, exact to the Hz (no float round-trip)', '14.0741', 14074100],
+    // Verifier-flagged: `14.0741` alone does NOT distinguish digit-scaling
+    // from `Math.trunc(Number(text) * 1_000_000)` — `Number('14.0741') *
+    // 1e6 === 14074100` exactly in IEEE-754. `8.000001`/`1.000001` are
+    // witnesses where the float product genuinely lands a fraction below
+    // the integer (e.g. 8000000.999999999), so a truncating float
+    // round-trip is off by exactly 1 Hz. THESE are the exactness pin.
+    ['MHz decimal where float*1e6 truncates 1 Hz low', '8.000001', 8000001],
+    ['MHz decimal where float*1e6 truncates 1 Hz low (2)', '1.000001', 1000001],
+    ['already-Hz integer, out of kHz range', '7100000', 7100000],
+  ])('interprets %s (%s) as %i Hz and dispatches it exactly', (_label, typed, expectedHz) => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, typed);
+    expect(r.btn('entry-set')!.disabled).toBe(false);
+    r.btn('entry-set')!.click();
+    flushSync();
+    expect(onEnterFrequency).toHaveBeenCalledExactlyOnceWith(expectedHz);
+    r.dispose();
+  });
+
+  // THE AMBIGUITY PIN. Both readings of `40000` are in range (40 kHz raw,
+  // 40 MHz ×1000) — the ticket rules kHz wins.
+  it('resolves a kHz-vs-Hz ambiguous entry to kHz', () => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, '40000');
+    r.btn('entry-set')!.click();
+    flushSync();
+    expect(onEnterFrequency).toHaveBeenCalledExactlyOnceWith(40000000);
+    r.dispose();
+  });
+
+  it('refuses an entry that is out of range under every reading, dispatching nothing', () => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    // ~100 MHz raw, ~100 GHz ×1000 — both out of the 30 kHz … 60 MHz range.
+    typeFrequency(r.input()!, '99999999');
+    expect(r.btn('entry-set')!.disabled).toBe(true);
+    bypassClick(r.btn('entry-set')!);
+    expect(onEnterFrequency).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('refuses a decimal entry finer than 1 Hz (more than 6 fractional digits)', () => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, '14.1234567');
+    expect(r.btn('entry-set')!.disabled).toBe(true);
+    bypassClick(r.btn('entry-set')!);
+    expect(onEnterFrequency).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('refuses an in-progress decimal with no fractional digits yet', () => {
+    const r = render(withB(BOUNDS));
+    typeFrequency(r.input()!, '14.');
+    expect(r.btn('entry-set')!.disabled).toBe(true);
+    r.dispose();
+  });
+
+  it('shows the interpreted MHz value as a commit hint before Set is pressed', () => {
+    const r = render(withB(BOUNDS));
+    typeFrequency(r.input()!, '7100');
+    expect(r.text('entry-hint')).toBe(`→ ${mhz(7100000)}`);
+    r.dispose();
+  });
+
+  it('shows no hint while the entry cannot be resolved', () => {
+    const r = render(withB(BOUNDS));
+    typeFrequency(r.input()!, 'abc');
+    expect(r.el('entry-hint')).toBeNull();
+    r.dispose();
+  });
+
+  // Review hardening: the hint must not render a target next to a Set
+  // button the MOR-1322 receiver-known gate has disabled — an interpretable
+  // entry alone is not enough, `entryReady` (the SAME gate Set/Enter use)
+  // decides the hint too.
+  it('hides the hint when the entry parses but the active receiver is unknown', () => {
+    const r = render({ ...withB(BOUNDS), activeReceiver: { status: 'unknown' } });
+    typeFrequency(r.input()!, '7100');
+    expect(r.btn('entry-set')!.disabled).toBe(true);
+    expect(r.el('entry-hint')).toBeNull();
+    r.dispose();
+  });
+
+  // Commit still lands on the SAME MOR-1425 exact-jump path Enter/Set
+  // already share for an integer entry — no second dispatch shape for MHz.
+  it('commits an MHz decimal entry on Enter, exactly like Set', () => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, '14.0741');
+    r.input()!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+    );
+    flushSync();
+    expect(onEnterFrequency).toHaveBeenCalledExactlyOnceWith(14074100);
+    r.dispose();
+  });
+});
+
+describe('unknown tuning bounds fail closed (carry-forward 5, rule 5)', () => {
+  const NO_BOUNDS = { tuneMinHz: null, tuneMaxHz: null } as const;
+
+  // Kills: substituting `frequency-tuning.ts`'s fabricated 0 … 999 MHz, or
+  // accepting the entry unvalidated when the radio declared no range.
+  it('disables the entry field and the Set button, and says why', () => {
+    const r = render(withB(NO_BOUNDS));
+    expect(r.input()!.disabled).toBe(true);
+    expect(r.btn('entry-set')!.disabled).toBe(true);
+    expect(r.el('entry')!.dataset.bounds).toBe('false');
+    expect(r.text('entry-reason')).toContain('tuning limits unknown');
+    expect(r.text('entry-range')).toBe('');
+    r.dispose();
+  });
+
+  it('refuses the dispatch with the disabled attribute bypassed', () => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(NO_BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, '14250000');
+    bypassClick(r.btn('entry-set')!);
+    expect(onEnterFrequency).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it.each([
+    [{ tuneMinHz: null, tuneMaxHz: 60000000 }],
+    [{ tuneMinHz: 30000, tuneMaxHz: null }],
+  ])('fails closed on a half-declared envelope %o', (bounds) => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(bounds), { onEnterFrequency });
+    expect(r.input()!.disabled).toBe(true);
+    typeFrequency(r.input()!, '14250000');
+    bypassClick(r.btn('entry-set')!);
+    expect(onEnterFrequency).not.toHaveBeenCalled();
+    r.dispose();
+  });
+});
+
+/* ── (e) the wrong-VFO dispatch class ───────────────────────────── */
+
+describe('a receiver-scoped write needs a known active receiver (MOR-1322 B1 class)', () => {
+  const unknownRx = (view: RadioViewModel): RadioViewModel =>
+    ({ ...view, activeReceiver: { status: 'unknown' } });
+
+  // Kills: dropping the markup gate.
+  it('disables every band choice and the entry while the active receiver is unobserved', () => {
+    const r = render(unknownRx(withB({ tuneMinHz: 30000, tuneMaxHz: 60000000 })));
+    for (const name of ['40m', '20m', 'MW']) expect(r.btn(`choice-${name}`)!.disabled).toBe(true);
+    expect(r.input()!.disabled).toBe(true);
+    expect(r.btn('entry-set')!.disabled).toBe(true);
+    expect(r.text('entry-reason')).toBe(t('core.band.entry.reason.receiverUnconfirmed'));
+    r.dispose();
+  });
+
+  // Kills: dropping the band-select handler guard — independently of the
+  // attribute, which a `.click()` assertion alone would have satisfied.
+  it('refuses a band select with the disabled attribute bypassed', () => {
+    const onSelectBand = vi.fn();
+    const r = render(unknownRx(base()), { onSelectBand });
+    bypassClick(r.btn('choice-20m')!);
+    expect(onSelectBand).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // Kills: dropping the frequency-entry handler guard.
+  it('refuses a frequency entry with the disabled attribute bypassed', () => {
+    const onEnterFrequency = vi.fn();
+    const r = render(unknownRx(withB({ tuneMinHz: 30000, tuneMaxHz: 60000000 })),
+      { onEnterFrequency });
+    typeFrequency(r.input()!, '14250000');
+    bypassClick(r.btn('entry-set')!);
+    expect(onEnterFrequency).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('dispatches normally once the active receiver is observed', () => {
+    const onSelectBand = vi.fn();
+    const r = render(base(), { onSelectBand });
+    expect(r.btn('choice-20m')!.disabled).toBe(false);
+    r.btn('choice-20m')!.click();
+    flushSync();
+    expect(onSelectBand).toHaveBeenCalledExactlyOnceWith('20m');
+    r.dispose();
+  });
+});
+
+/* ── honest unknown, and the F2 standing convention ─────────────── */
+
+describe('unknown is rendered as unknown (and F2 gets no local workaround)', () => {
+  it('renders an unread current band empty and unobserved, in a reserved box', () => {
+    const r = render(withB({ currentBand: unreadBand() }));
+    expect(r.text('current-value')).toBe('');
+    expect(r.text('current-value')).not.toBe('—');
+    expect(r.el('current')!.dataset.observed).toBe('false');
+    const rule = /\.band-value\s*\{([^}]*)\}/.exec(SOURCE)?.[1] ?? '';
+    expect(rule).toMatch(/min-width:\s*8ch/);
+    r.dispose();
+  });
+
+  it('renders nothing for a structurally-absent current band', () => {
+    const r = render(withB({
+      currentBand: { reading: { status: 'unknown' }, availability: { structural: false, operational: false } },
+    }));
+    expect(r.el('current')).toBeNull();
+    expect(r.el('tx')).not.toBeNull();
+    r.dispose();
+  });
+
+  // Carry-forward 4 (F2): the permissive `topFieldAvailable` default for
+  // `main.freqHz` is a standing repo convention, deliberately not special-cased
+  // here. Kills: adding a local re-gate that second-guesses the fact.
+  it('takes the availability flags at face value, with no local freshness workaround', () => {
+    for (const forbidden of ['fieldStatus', 'topFieldAvailable', 'freqObserved', 'freshness']) {
+      expect(CODE).not.toContain(forbidden);
+    }
+    const r = render(withB({ currentBand: knownBand('20m'), currentBandTx: 'allowed' }));
+    expect(r.el('current')!.dataset.observed).toBe('true');
+    expect(r.text('current-value')).toBe('20m');
+    r.dispose();
+  });
+
+  it('renders no choice row at all for an empty band plan', () => {
+    const r = render(withB({ bandChoices: [] }));
+    expect(r.el('choices')).toBeNull();
+    expect(r.el('tx')).not.toBeNull();
+    r.dispose();
+  });
+});
+
+/* ── keyboard entry: Enter commits via the same path as Set, Escape
+   cancels without dispatch (MOR-1444) ──────────────────────────── */
+
+describe('keyboard entry commits on Enter and cancels on Escape (MOR-1444)', () => {
+  const BOUNDS = { tuneMinHz: 30000, tuneMaxHz: 60000000 } as const;
+
+  function keydown(el: HTMLElement, key: string): void {
+    el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    flushSync();
+  }
+
+  it('commits the typed frequency on Enter, exactly like clicking Set', () => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, '14250000');
+    keydown(r.input()!, 'Enter');
+    expect(onEnterFrequency).toHaveBeenCalledExactlyOnceWith(14250000);
+    r.dispose();
+  });
+
+  // Kills: an Enter-commit path that bypasses the entryReady guard the Set
+  // button already goes through (carry-forward 5 / rule 5). '29' is out of
+  // range under BOTH readings (29 Hz and 29 kHz = 29000 Hz both sit below
+  // `tuneMinHz`), so this stays a pure entryReady-guard pin, independent of
+  // MOR-1462's unit selection.
+  it('refuses to commit an out-of-range entry on Enter', () => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, '29');
+    keydown(r.input()!, 'Enter');
+    expect(onEnterFrequency).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('clears the entry on Escape without dispatching', () => {
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    typeFrequency(r.input()!, '14250000');
+    keydown(r.input()!, 'Escape');
+    expect(onEnterFrequency).not.toHaveBeenCalled();
+    expect(r.input()!.value).toBe('');
+    r.dispose();
+  });
+
+  // Round-2 review, recorder item 3: leaving focus in the (now-emptied)
+  // entry input keeps it an "ignored tag" for KeyboardHandler's
+  // shouldIgnoreEvent, so band hotkeys would stay suppressed until the
+  // operator tabs away. Escape blurs the input so hotkeys work again
+  // immediately — it does not attempt to return focus to whatever
+  // originated the gesture (BandSurface has no reference to that; the
+  // gesture may not even have come through the keyboard seam), so the next
+  // Tab starts from the document's normal order rather than resuming where
+  // the operator was. That's a documented, honest trade-off, not a claim of
+  // full focus restoration.
+  it('blurs the entry input on Escape so band hotkeys are no longer suppressed by it', () => {
+    const r = render(withB(BOUNDS));
+    const input = r.input()!;
+    typeFrequency(input, '14250000');
+    input.focus();
+    expect(document.activeElement).toBe(input);
+    keydown(input, 'Escape');
+    expect(document.activeElement).not.toBe(input);
+    r.dispose();
+  });
+});
+
+/**
+ * Round-3 review — REQUIRED PIN. preventDefault() never stops propagation:
+ * before this fix, Escape in the entry input blurred it (moving
+ * document.activeElement to <body>, an un-ignored tag) and then kept
+ * bubbling — reaching KeyboardHandler's window-level listener with nothing
+ * left to suppress it. Every rig profile SHIPS "Escape -> clear_rit_xit"
+ * (rigs/_keyboard-default.toml), a REAL radio write
+ * (makeRitXitHandlers().onClear()) — so cancelling a frequency entry could
+ * silently clear the operator's RIT/XIT offset. The fixture below carries
+ * that exact shipped binding: without it, a passing test would prove
+ * nothing about whether Escape leaks past this component, since there'd be
+ * nothing on the other end to (not) fire.
+ *
+ * This mounts the REAL KeyboardHandler alongside the REAL BandSurface (not
+ * a hand-simulated stand-in for either), so a future change that drops
+ * `stopPropagation()` from BandSurface's Escape branch — or reorders it
+ * after the blur — fails this test via actual DOM event bubbling, the same
+ * mechanism that carries the bug in production.
+ */
+describe('Escape does not leak past BandSurface into the window keyboard seam (MOR-1444, round-3 review)', () => {
+  const BOUNDS = { tuneMinHz: 30000, tuneMaxHz: 60000000 } as const;
+
+  const configWithClearRitXit: KeyboardConfig = {
+    leaderKey: 'g',
+    leaderTimeoutMs: 1000,
+    altHints: true,
+    helpTitle: 'Test Keyboard Help',
+    bindings: [
+      {
+        id: 'clear-rit-xit',
+        section: 'RIT/XIT',
+        label: 'Clear offset',
+        sequence: ['Escape'],
+        action: 'clear_rit_xit',
+      },
+    ],
+  };
+
+  it('fires zero window-level actions and stays blurred when Escape cancels the entry', () => {
+    const onAction = vi.fn();
+    const khTarget = document.createElement('div');
+    document.body.appendChild(khTarget);
+    const kh = mount(KeyboardHandler, {
+      target: khTarget,
+      props: { config: configWithClearRitXit, onAction },
+    });
+    flushSync();
+
+    const onEnterFrequency = vi.fn();
+    const r = render(withB(BOUNDS), { onEnterFrequency });
+    const input = r.input()!;
+    typeFrequency(input, '14250000');
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    flushSync();
+
+    // THE REGRESSION PIN: the shipped Escape -> clear_rit_xit binding must
+    // never fire from a frequency-entry cancel.
+    expect(onAction).not.toHaveBeenCalled();
+    // The ticket's own words: "Esc cancels entry without dispatch."
+    expect(onEnterFrequency).not.toHaveBeenCalled();
+    // Blur is retained (round-2 fix) — Escape still un-suppresses band
+    // hotkeys for whatever the operator does next.
+    expect(document.activeElement).not.toBe(input);
+
+    r.dispose();
+    unmount(kh);
+    khTarget.remove();
+  });
+});

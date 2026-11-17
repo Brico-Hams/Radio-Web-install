@@ -1,0 +1,1476 @@
+"""Observation adapter coverage for the external rigctld client backend."""
+# mypy: disable-error-code=untyped-decorator
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import replace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from fake_rigctld import FakeRigctldServer
+from rigplane._poller_types import (
+    CommandQueue,
+    EnableScope,
+    PttOn,
+    SetAfLevel,
+    SetAttenuator,
+    SetFreq,
+    SetMode,
+    SetNB,
+    SetNR,
+    SetPreamp,
+    SetRfGain,
+)
+from rigplane.backends.rigctld_client import RigctldClientRadio
+from rigplane.backends.rigctld_client.radio import RigctldClientObservationPoller
+from rigplane.backends.rigctld_client.observations import (
+    RigctldClientObservationAdapter,
+    build_external_rigctld_acquisition_profile,
+    resolve_external_rigctld_poll_intervals,
+)
+from rigplane.core.acquisition_scheduler import AcquisitionScheduler, AcquisitionStatus
+from rigplane.core.capabilities import CAP_POWER_CONTROL, CAP_TX
+from rigplane.core.radio_protocol import (
+    PhysicalWriteReadbackCapable,
+    PowerControlCapable,
+)
+from rigplane.core.state_acquisition_policy import FieldAvailability
+from rigplane.core.command_service import (
+    CommandExecutionResult,
+    CommandService,
+    command_intent_from_request,
+)
+from rigplane.core.state_pipeline_contracts import (
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from rigplane.core.state_store import FreshnessClock, StateStore
+from rigplane.core.tx_observation import (
+    OBSERVED_PTT_PATH,
+    ObservedPtt,
+    project_observed_ptt,
+)
+from rigplane.exceptions import CommandError
+
+
+_MEDIUM_INTERVAL, _SLOW_INTERVAL = resolve_external_rigctld_poll_intervals(
+    build_external_rigctld_acquisition_profile(vfo_supported=True)
+)
+
+
+def _clock() -> float:
+    return 50.0
+
+
+class _NoopCommandExecutor:
+    async def execute(self, intent: object) -> CommandExecutionResult:
+        del intent
+        return CommandExecutionResult(details={"queued": True})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["cancel", "replace", "error", "readback"])
+async def test_rigctld_drain_claims_live_pending_finite_turn(mode, monkeypatch):
+    from test_command_queue_execution import assert_live_pending_turn
+
+    queue = CommandQueue()
+    radio = RigctldClientRadio(host="127.0.0.1", port=4532)
+    poller = RigctldClientObservationPoller(
+        radio, lambda _: None, medium_interval=1, slow_interval=1, command_queue=queue
+    )
+
+    def install_readback(note):
+        original = poller._track_readback_entry
+
+        def track(command, correlation):
+            original(command, correlation)
+            if command == SetFreq(1):
+                note()
+
+        monkeypatch.setattr(poller, "_track_readback_entry", track)
+
+    await assert_live_pending_turn(
+        queue,
+        poller._drain_commands,
+        lambda leaf: monkeypatch.setattr(poller, "_execute_command", leaf),
+        mode=mode,
+        install_readback=install_readback,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_reads_emit_hamlib_observations() -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            adapter = RigctldClientObservationAdapter(radio, clock=_clock)
+
+            observations = await adapter.read_freq_mode_controls()
+
+            assert [str(item.path) for item in observations] == [
+                "receiver.main.active.freq_mode.freq_hz",
+                "receiver.main.active.freq_mode.mode",
+                "receiver.main.active.freq_mode.filter_width",
+                "receiver.main.operator_controls.rf_gain",
+                "receiver.main.operator_controls.af_level",
+            ]
+            assert [item.value for item in observations] == [
+                14_074_000,
+                "USB",
+                2400,
+                pytest.approx(128 / 255),
+                pytest.approx(76 / 255),
+            ]
+            assert all(item.source.source == "hamlib_response" for item in observations)
+            assert all(
+                item.source.provider == "external_rigctld" for item in observations
+            )
+            assert all(item.source.transport == "rigctld" for item in observations)
+            assert all(item.timestamp_monotonic == 50.0 for item in observations)
+            assert observations[0].max_age == 8.0
+            assert observations[-1].max_age == 120.0
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_observation_poller_drains_web_commands_before_readback() -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            queue = CommandQueue()
+            loop = asyncio.get_running_loop()
+            futures = []
+            for command in (
+                SetFreq(7_050_000),
+                SetMode("LSB", filter_width=1800),
+                PttOn(),
+                SetRfGain(200),
+                SetAfLevel(51),
+                SetPreamp(2),
+                SetAttenuator(18),
+                SetNB(True),
+                SetNR(True),
+            ):
+                future: asyncio.Future[None] = loop.create_future()
+                futures.append(future)
+                queue.put_ordered(future=future, cmd=command)
+
+            observations = []
+            poller = radio.create_observation_poller(
+                callback=observations.extend,
+                command_queue=queue,
+            )
+
+            await poller._poll_medium()  # noqa: SLF001
+            await poller._poll_slow()  # noqa: SLF001
+
+            assert all(future.done() and not future.cancelled() for future in futures)
+            assert all(future.result() is None for future in futures)
+            # MOR-4456: the answered freq/mode batch is published before
+            # `t` is asked (a silent `t` must not starve it), so it leads
+            # the cycle and the ptt readback follows it.
+            assert [str(item.path) for item in observations] == [
+                "receiver.main.active.freq_mode.freq_hz",
+                "receiver.main.active.freq_mode.mode",
+                "receiver.main.active.freq_mode.filter_width",
+                "receiver.main.operator_controls.rf_gain",
+                "receiver.main.operator_controls.af_level",
+                "global.tx_state.observed_ptt",
+                "global.tx_state.ptt",
+                "receiver.main.vfo.active_slot",
+                "receiver.main.operator_controls.preamp",
+                "receiver.main.operator_controls.att",
+                "receiver.main.operator_toggles.nb",
+                "receiver.main.operator_toggles.nr",
+                "receiver.main.operator_controls.rf_gain",
+                "receiver.main.operator_controls.af_level",
+                "receiver.main.operator_controls.preamp",
+                "receiver.main.operator_controls.att",
+                "receiver.main.operator_toggles.nb",
+                "receiver.main.operator_toggles.nr",
+            ]
+            assert [item.value for item in observations] == [
+                7_050_000,
+                "LSB",
+                1800,
+                pytest.approx(200 / 255),
+                pytest.approx(51 / 255),
+                ObservedPtt.ON,
+                True,
+                "A",
+                2,
+                18,
+                True,
+                True,
+                pytest.approx(200 / 255),
+                pytest.approx(51 / 255),
+                2,
+                18,
+                True,
+                True,
+            ]
+            assert all(item.source.source == "hamlib_response" for item in observations)
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_refused_ptt_cycle_completes_with_write_reconciled() -> None:
+    """MOR-4456: a refused `t` stays in-cycle across consecutive reads.
+
+    Three medium cycles against a rigctld that refuses `t`: no raise, no
+    reconnect (the transport stays connected), `t` is asked once per cycle,
+    PTT publishes unknown each cycle without the raw PTT path, the VFO
+    still arrives, and a queued control write is still reconciled.
+    """
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            server.behavior.unsupported_commands.add("t")
+            queue = CommandQueue()
+            loop = asyncio.get_running_loop()
+            future: asyncio.Future[None] = loop.create_future()
+            queue.put_ordered(future=future, cmd=SetPreamp(2))
+            observations = []
+            poller = radio.create_observation_poller(
+                callback=observations.extend,
+                command_queue=queue,
+            )
+            for _ in range(3):
+                await poller._poll_medium()  # noqa: SLF001
+            assert future.done() and future.result() is None
+            assert server.commands_seen.count("t") == 3
+            assert radio._transport.connected  # noqa: SLF001
+            assert radio._critical_read_timeouts == {}  # noqa: SLF001
+            by_path = [str(item.path) for item in observations]
+            assert "global.tx_state.ptt" not in by_path
+            assert by_path.count("global.tx_state.observed_ptt") == 3
+            assert [
+                item.value
+                for item in observations
+                if str(item.path).endswith("observed_ptt")
+            ] == [ObservedPtt.UNKNOWN] * 3
+            assert by_path.count("receiver.main.vfo.active_slot") == 3
+            # The queued write drains on the first cycle and its readback
+            # reconciles there; later cycles have an empty queue.
+            assert [
+                item.value for item in observations if str(item.path).endswith("preamp")
+            ] == [2]
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", (False, True))
+async def test_newer_physical_dispatch_supersedes_older_readback(
+    terminal: bool,
+) -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            queue = CommandQueue()
+            store = StateStore()
+            service = CommandService(
+                executor=_NoopCommandExecutor(),
+                state_store=store,
+            )
+            intent = command_intent_from_request(
+                "set_freq",
+                {"freq": 7_050_000, "receiver": 0},
+                source="websocket",
+                command_id="ws-rigctld-set-freq",
+            )
+            await service.execute(intent)
+            assert service.pending_overlays(
+                source="websocket",
+                session_id=None,
+                command_id="ws-rigctld-set-freq",
+            )
+
+            future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            queue.put_ordered(
+                SetFreq(7_050_000),
+                future=future,
+                command_id="ws-rigctld-set-freq",
+                source="websocket",
+                command_service=service,
+            )
+            observations = []
+            poller = radio.create_observation_poller(
+                callback=observations.extend,
+                command_queue=queue,
+            )
+            results = []
+            radio.set_physical_write_result_callback(results.append)
+
+            await poller._drain_commands()  # noqa: SLF001
+
+            assert future.done()
+            assert future.result() is None
+            with pytest.raises(KeyError):
+                store.snapshot().field("receiver.0.freq_mode.freq_hz")
+
+            if terminal:
+                service.fail_command(
+                    "ws-rigctld-set-freq", source="websocket", session_id=None
+                )
+            queue.put_ordered(
+                SetFreq(7_050_000),
+                command_id="ws-rigctld-set-freq" if terminal else None,
+                source="websocket",
+                command_service=service,
+            )
+            await poller._drain_commands()  # noqa: SLF001
+            assert poller._pending_readback_entries == []  # noqa: SLF001
+            assert results[-1].status == "superseded"
+
+            await poller._poll_medium()  # noqa: SLF001
+            for observation in observations:
+                service.apply_observation(observation)
+
+            freq_observation = next(
+                item
+                for item in observations
+                if str(item.path) == "receiver.main.active.freq_mode.freq_hz"
+            )
+            assert not any(
+                event.state == "reconciled" for event in service.lifecycle_events()
+            )
+            assert (
+                store.snapshot().field("receiver.main.active.freq_mode.freq_hz").value
+                == 7_050_000
+            )
+            assert freq_observation.source.source == "hamlib_response"
+            assert freq_observation.source.command_source is None
+            assert freq_observation.source.session_id is None
+            assert freq_observation.correlation_id is None
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_observation_poller_does_not_reconcile_nonmatching_readback() -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            queue = CommandQueue()
+            store = StateStore()
+            service = CommandService(
+                executor=_NoopCommandExecutor(),
+                state_store=store,
+            )
+            intent = command_intent_from_request(
+                "set_freq",
+                {"freq": 7_060_000, "receiver": 0},
+                source="websocket",
+                command_id="ws-rigctld-mismatch",
+            )
+            await service.execute(intent)
+            future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            queue.put_ordered(
+                SetFreq(7_050_000),
+                future=future,
+                command_id="ws-rigctld-mismatch",
+                source="websocket",
+                command_service=service,
+            )
+            observations = []
+            results = []
+            radio.set_physical_write_result_callback(results.append)
+            poller = radio.create_observation_poller(
+                callback=observations.extend,
+                command_queue=queue,
+            )
+
+            await poller._poll_medium()  # noqa: SLF001
+            for observation in observations:
+                service.apply_observation(observation)
+
+            assert service.pending_overlays(
+                source="websocket",
+                session_id=None,
+                command_id="ws-rigctld-mismatch",
+            )
+            assert [
+                event.state
+                for event in service.lifecycle_events()
+                if event.command_id == "ws-rigctld-mismatch"
+            ] == ["accepted", "queued", "sent", "acknowledged"]
+            freq_observation = next(
+                item
+                for item in observations
+                if str(item.path) == "receiver.main.active.freq_mode.freq_hz"
+            )
+            assert freq_observation.value == 7_050_000
+            assert freq_observation.correlation_id is None
+            result = results.pop()
+            assert result.status == "mismatched"
+            assert (
+                store.snapshot().field("receiver.main.active.freq_mode.freq_hz").value
+                == 7_050_000
+            )
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_observation_poller_discards_nonmatching_readback_expectation() -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            queue = CommandQueue()
+            clock = FreshnessClock(start=61.0)
+            store = StateStore(freshness_clock=clock)
+            service = CommandService(
+                executor=_NoopCommandExecutor(),
+                state_store=store,
+                clock=clock.now,
+            )
+            command_id = "ws-rigctld-stale-mismatch"
+            intent = command_intent_from_request(
+                "set_freq",
+                {"freq": 7_060_000, "receiver": 0},
+                source="websocket",
+                command_id=command_id,
+            )
+            await service.execute(intent)
+            queue.put_ordered(
+                SetFreq(7_050_000),
+                command_id=command_id,
+                source="websocket",
+                command_service=service,
+            )
+            observations = []
+            poller = radio.create_observation_poller(
+                callback=observations.extend,
+                command_queue=queue,
+            )
+
+            await poller._poll_medium()  # noqa: SLF001
+            for observation in observations:
+                service.apply_observation(observation)
+
+            assert (
+                service.readback_expectations(
+                    source="websocket",
+                    session_id=None,
+                    command_id=command_id,
+                )
+                == ()
+            )
+            clock.advance(2.01)
+            assert (
+                service.pending_overlays(
+                    source="websocket",
+                    session_id=None,
+                    command_id=command_id,
+                )
+                == ()
+            )
+            stale_matching_observation = next(
+                item
+                for item in observations
+                if str(item.path) == "receiver.main.active.freq_mode.freq_hz"
+            )
+            service.apply_observation(
+                Observation(
+                    path=stale_matching_observation.path,
+                    value=7_060_000,
+                    source=SourceMetadata(
+                        source="hamlib_response",
+                        provider="external_rigctld",
+                        transport="rigctld",
+                        command_source="websocket",
+                        session_id=None,
+                    ),
+                    timestamp_monotonic=clock.now(),
+                    correlation_id=command_id,
+                )
+            )
+
+            assert [
+                event.state
+                for event in service.lifecycle_events()
+                if event.command_id == command_id
+            ] == ["accepted", "queued", "sent", "acknowledged"]
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", (False, True))
+async def test_observation_poller_discards_expectation_when_readback_unavailable(
+    cancel: bool,
+) -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            queue = CommandQueue()
+            clock = FreshnessClock(start=70.0)
+            service = CommandService(
+                executor=_NoopCommandExecutor(),
+                state_store=StateStore(freshness_clock=clock),
+                clock=clock.now,
+            )
+            command_id = "ws-rigctld-no-readback"
+            intent = command_intent_from_request(
+                "set_preamp",
+                {"level": 2, "receiver": 0},
+                source="websocket",
+                command_id=command_id,
+            )
+            await service.execute(intent)
+            queue.put_ordered(
+                SetPreamp(2),
+                command_id=command_id,
+                source="websocket",
+                command_service=service,
+            )
+            results = []
+            radio.set_physical_write_result_callback(results.append)
+            poller = RigctldClientObservationPoller(
+                radio,
+                callback=lambda _observations: None,
+                command_queue=queue,
+                clock=clock.now,
+                medium_interval=_MEDIUM_INTERVAL,
+                slow_interval=_SLOW_INTERVAL,
+            )
+
+            await poller._drain_commands()  # noqa: SLF001
+            poller._annotate_readback_observations(())  # noqa: SLF001
+            assert not results and poller._pending_readback_entries  # noqa: SLF001
+            if cancel:
+                await poller.stop()
+            else:
+                clock.advance(20.0)
+                poller._annotate_readback_observations(())  # noqa: SLF001
+
+            assert (
+                service.readback_expectations(
+                    source="websocket",
+                    session_id=None,
+                    command_id=command_id,
+                )
+                == ()
+            )
+            assert results.pop().status == ("cancelled" if cancel else "timed_out")
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("command_name", "params", "queue_command", "path_text", "expected_value"),
+    (
+        (
+            "set_rf_gain",
+            {"level": 200, "receiver": 0},
+            SetRfGain(200),
+            "receiver.main.operator_controls.rf_gain",
+            pytest.approx(200 / 255),
+        ),
+        (
+            "set_af_level",
+            {"level": 51, "receiver": 0},
+            SetAfLevel(51),
+            "receiver.main.operator_controls.af_level",
+            pytest.approx(51 / 255),
+        ),
+        (
+            "set_preamp",
+            {"level": 2, "receiver": 0},
+            SetPreamp(2),
+            "receiver.main.operator_controls.preamp",
+            2,
+        ),
+        (
+            "set_attenuator",
+            {"db": 18, "receiver": 0},
+            SetAttenuator(18),
+            "receiver.main.operator_controls.att",
+            18,
+        ),
+        (
+            "set_nb",
+            {"on": True, "receiver": 0},
+            SetNB(True),
+            "receiver.main.operator_toggles.nb",
+            True,
+        ),
+        (
+            "set_nr",
+            {"on": True, "receiver": 0},
+            SetNR(True),
+            "receiver.main.operator_toggles.nr",
+            True,
+        ),
+        (
+            "set_mode",
+            {"mode": "USB"},
+            SetMode("USB"),
+            "receiver.main.active.freq_mode.mode",
+            "USB",
+        ),
+    ),
+)
+async def test_observation_poller_reconciles_slow_control_set_without_waiting_for_slow_poll(
+    command_name: str,
+    params: dict[str, object],
+    queue_command: object,
+    path_text: str,
+    expected_value: object,
+) -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            queue = CommandQueue()
+            store = StateStore()
+            service = CommandService(
+                executor=_NoopCommandExecutor(),
+                state_store=store,
+            )
+            command_id = f"ws-rigctld-{command_name}"
+            intent = command_intent_from_request(
+                command_name,
+                params,
+                source="websocket",
+                command_id=command_id,
+            )
+            await service.execute(intent)
+            assert service.pending_overlays(
+                source="websocket",
+                session_id=None,
+                command_id=command_id,
+            )
+            queue.put_ordered(
+                queue_command,
+                command_id=command_id,
+                source="websocket",
+                command_service=service,
+            )
+            observations = []
+            results = []
+            poller = radio.create_observation_poller(
+                callback=observations.extend,
+                command_queue=queue,
+            )
+
+            def collect_reentrantly(result) -> None:  # type: ignore[no-untyped-def]
+                results.append(result)
+                if len(results) == 1:
+                    poller._finish_readbacks(  # noqa: SLF001
+                        poller._pending_readback_entries,
+                        result.status,  # noqa: SLF001
+                    )
+
+            radio.set_physical_write_result_callback(collect_reentrantly)
+
+            await poller._poll_medium()  # noqa: SLF001
+            for observation in observations:
+                service.apply_observation(observation)
+
+            assert (
+                service.pending_overlays(
+                    source="websocket",
+                    session_id=None,
+                    command_id=command_id,
+                )
+                == ()
+            )
+            assert [
+                event.state
+                for event in service.lifecycle_events()
+                if event.command_id == command_id
+            ] == ["accepted", "queued", "sent", "acknowledged", "reconciled"]
+            readback = next(
+                item for item in observations if str(item.path) == path_text
+            )
+            assert readback.value == expected_value
+            assert readback.source.source == "hamlib_response"
+            assert readback.correlation_id == command_id
+            assert [result.status for result in results] == ["reconciled"]
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_observation_poller_correlates_slow_control_after_overlay_ttl_edge() -> (
+    None
+):
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            queue = CommandQueue()
+            clock = FreshnessClock(start=70.0)
+            store = StateStore(freshness_clock=clock)
+            service = CommandService(
+                executor=_NoopCommandExecutor(),
+                state_store=store,
+                clock=clock.now,
+            )
+            command_id = "ws-rigctld-preamp-ttl-edge"
+            intent = command_intent_from_request(
+                "set_preamp",
+                {"level": 2, "receiver": 0},
+                source="websocket",
+                command_id=command_id,
+            )
+            await service.execute(intent)
+            clock.advance(2.01)
+            assert (
+                service.pending_overlays(
+                    source="websocket",
+                    session_id=None,
+                    command_id=command_id,
+                )
+                == ()
+            )
+            queue.put_ordered(
+                SetPreamp(2),
+                command_id=command_id,
+                source="websocket",
+                command_service=service,
+            )
+            observations = []
+            poller = RigctldClientObservationPoller(
+                radio,
+                callback=observations.extend,
+                command_queue=queue,
+                clock=lambda: clock.advance(0.01),
+                medium_interval=_MEDIUM_INTERVAL,
+                slow_interval=_SLOW_INTERVAL,
+            )
+
+            await poller._poll_medium()  # noqa: SLF001
+            for observation in observations:
+                service.apply_observation(observation)
+
+            readback = next(
+                item
+                for item in observations
+                if str(item.path) == "receiver.main.operator_controls.preamp"
+            )
+            assert readback.source.source == "hamlib_response"
+            assert readback.source.command_source == "websocket"
+            assert readback.source.session_id is None
+            assert readback.correlation_id == command_id
+            assert [
+                event.state
+                for event in service.lifecycle_events()
+                if event.command_id == command_id
+            ] == ["accepted", "queued", "sent", "acknowledged", "reconciled"]
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_observation_poller_reconciles_only_matching_source_session() -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            queue = CommandQueue()
+            service = CommandService(
+                executor=_NoopCommandExecutor(),
+                state_store=StateStore(),
+            )
+            websocket_intent = command_intent_from_request(
+                "set_freq",
+                {"freq": 7_050_000, "receiver": 0},
+                source="websocket",
+                command_id="shared-rigctld-set",
+                session_id="ws-a",
+            )
+            http_intent = command_intent_from_request(
+                "set_freq",
+                {"freq": 7_050_000, "receiver": 0},
+                source="http",
+                command_id="shared-rigctld-set",
+            )
+            await service.execute(websocket_intent)
+            await service.execute(http_intent)
+            queue.put_ordered(
+                SetFreq(7_050_000),
+                command_id="shared-rigctld-set",
+                source="http",
+                command_service=service,
+            )
+            observations = []
+            poller = radio.create_observation_poller(
+                callback=observations.extend,
+                command_queue=queue,
+            )
+
+            await poller._poll_medium()  # noqa: SLF001
+            for observation in observations:
+                service.apply_observation(observation)
+
+            assert service.pending_overlays(source="http", session_id=None) == ()
+            assert service.pending_overlays(
+                source="websocket",
+                session_id="ws-a",
+                command_id="shared-rigctld-set",
+            )
+            reconciled = [
+                event
+                for event in service.lifecycle_events()
+                if event.state == "reconciled"
+            ]
+            assert [
+                (event.source, event.details.get("session_id")) for event in reconciled
+            ] == [
+                ("http", None),
+            ]
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_observation_poller_unsupported_command_fails_future() -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            queue = CommandQueue()
+            future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            queue.put_ordered(EnableScope(), future=future)
+            poller = radio.create_observation_poller(
+                callback=lambda _observations: None,
+                command_queue=queue,
+            )
+
+            await poller._drain_commands()  # noqa: SLF001
+
+            assert future.done()
+            with pytest.raises(CommandError, match="not supported"):
+                future.result()
+
+            service = CommandService(
+                executor=_NoopCommandExecutor(), state_store=StateStore()
+            )
+            make_intent = command_intent_from_request
+            await service.execute(
+                make_intent("set_freq", {"freq": 1}, source="http", command_id="r")
+            )
+            put = queue.put_ordered
+            put(SetFreq(1), command_id="r", source="http", command_service=service)
+            results = []
+            radio.set_physical_write_result_callback(
+                lambda result: (results.append(result), 1 / 0)
+            )
+            poller._execute_command = AsyncMock(  # type: ignore[method-assign]  # noqa: SLF001
+                side_effect=CommandError("RPRT -1")
+            )
+            await poller._drain_commands()  # noqa: SLF001
+            assert results.pop().status == "rejected"
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_radio_observation_poller_emits_adapter_covered_reads() -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            observations = []
+            poller = radio.create_observation_poller(callback=observations.extend)
+
+            await poller._poll_medium()  # noqa: SLF001
+
+            # MOR-4456: the answered freq/mode batch is published before
+            # `t` is asked (a silent `t` must not starve it), so it leads
+            # the cycle and the ptt readback follows it.
+            assert [str(item.path) for item in observations] == [
+                "receiver.main.active.freq_mode.freq_hz",
+                "receiver.main.active.freq_mode.mode",
+                "receiver.main.active.freq_mode.filter_width",
+                "receiver.main.operator_controls.rf_gain",
+                "receiver.main.operator_controls.af_level",
+                "global.tx_state.observed_ptt",
+                "global.tx_state.ptt",
+                "receiver.main.vfo.active_slot",
+            ]
+            assert [item.value for item in observations] == [
+                14_074_000,
+                "USB",
+                2400,
+                pytest.approx(128 / 255),
+                pytest.approx(76 / 255),
+                ObservedPtt.OFF,
+                False,
+                "A",
+            ]
+            assert all(item.source.source == "hamlib_response" for item in observations)
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slow", (False, True))
+async def test_stale_external_rigctld_poll_clears_correlation_at_generation_boundary(
+    slow: bool,
+) -> None:
+    async with FakeRigctldServer() as server:
+        async with RigctldClientRadio(host=server.host, port=server.port) as radio:
+            store = StateStore()
+            queue = CommandQueue()
+            service = CommandService(executor=_NoopCommandExecutor(), state_store=store)
+            command = SetPreamp(2) if slow else SetFreq(7_050_000)
+            intent = command_intent_from_request(
+                "set_preamp" if slow else "set_freq",
+                {"level": 2} if slow else {"freq": 7_050_000},
+                source="websocket",
+                command_id="g2",
+            )
+            await service.execute(intent)
+            queue.put_ordered(
+                command,
+                command_id="g2",
+                source="websocket",
+                command_service=service,
+            )
+            poller = radio.create_observation_poller(
+                callback=lambda batch: list(map(service.apply_observation, batch)),
+                command_queue=queue,
+            )
+            results = []
+            radio.set_physical_write_result_callback(results.append)
+            poller.bind_provider_generation(
+                capture=lambda: store.provider_generation,
+                advance=store.begin_provider_generation,
+            )
+            method = "read_slow_controls" if slow else "read_freq_mode_controls"
+            original = getattr(RigctldClientObservationAdapter, method)
+            started = asyncio.Event()
+            release = asyncio.Event()
+
+            async def delayed(
+                self: RigctldClientObservationAdapter,
+            ) -> tuple[Observation, ...]:
+                started.set()
+                await release.wait()
+                return await original(self)
+
+            with pytest.MonkeyPatch.context() as patch:
+                if slow:
+                    await poller._drain_commands()  # noqa: SLF001
+                patch.setattr(RigctldClientObservationAdapter, method, delayed)
+                poll = poller._poll_slow if slow else poller._poll_medium  # noqa: SLF001
+                task = asyncio.create_task(poll())
+                await started.wait()
+                assert len(poller._pending_readback_entries) == 1  # noqa: SLF001
+                await radio.disconnect()
+                assert poller._pending_readback_entries == []  # noqa: SLF001
+                assert results.pop().status == "provider_lost"
+                assert not service.readback_expectations(
+                    command_id="g2", source="websocket", session_id=None
+                )
+                await radio.connect()
+                release.set()
+                await task
+
+            assert poller._pending_readback_entries == []  # noqa: SLF001
+            assert not service.readback_expectations(
+                command_id="g2", source="websocket", session_id=None
+            )
+            assert service.pending_overlays(
+                source="websocket", command_id="g2", session_id=None
+            )
+            await poll()
+            assert poller._pending_readback_entries == []  # noqa: SLF001
+            assert not any(
+                event.state == "reconciled" for event in service.lifecycle_events()
+            )
+            await radio.disconnect()
+            await radio.connect()
+            assert store.provider_generation == 2
+
+
+def test_command_response_observations_use_external_rigctld_provider() -> None:
+    adapter = RigctldClientObservationAdapter(None, clock=_clock)
+    intent = command_intent_from_request(
+        "set_freq",
+        {"freq": 7_050_000},
+        source="rigctld",
+        command_id="rig-set-1",
+        session_id="client-1",
+    )
+
+    observation = adapter.command_response(intent)
+
+    assert str(observation.path) == "receiver.main.active.freq_mode.freq_hz"
+    assert observation.value == 7_050_000
+    assert observation.source.source == "command_response"
+    assert observation.source.provider == "external_rigctld"
+    assert observation.source.transport == "rigctld"
+    assert observation.source.command_source == "rigctld"
+    assert observation.source.session_id == "client-1"
+    assert observation.correlation_id == "rig-set-1"
+
+
+def test_command_response_normalizes_receiver_zero_control_paths() -> None:
+    adapter = RigctldClientObservationAdapter(None, clock=_clock)
+    intent = command_intent_from_request(
+        "set_preamp",
+        {"level": 2, "receiver": 0},
+        source="rigctld",
+        command_id="rig-preamp-1",
+    )
+
+    observation = adapter.command_response(intent)
+
+    assert str(observation.path) == "receiver.main.operator_controls.preamp"
+    assert observation.value == 2
+    assert observation.max_age == 120.0
+
+
+def test_capability_gaps_are_explicit_for_external_rigctld_profile() -> None:
+    profile = build_external_rigctld_acquisition_profile(vfo_supported=False)
+    power = FieldPath.global_("tx_state", "power_on")
+    active_slot = FieldPath.active_slot("main")
+    scheduler = AcquisitionScheduler(profile=profile)
+
+    power_result = scheduler.ensure_fresh(
+        power,
+        max_age=1.0,
+        priority="user",
+        reason="startup",
+    )
+    vfo_result = scheduler.ensure_fresh(
+        active_slot,
+        max_age=1.0,
+        priority="user",
+        reason="vfo-get",
+    )
+
+    assert power_result.status is AcquisitionStatus.UNAVAILABLE
+    assert "power state" in power_result.message
+    assert vfo_result.status is AcquisitionStatus.UNAVAILABLE
+    assert "VFO slot" in vfo_result.message
+
+
+@pytest.mark.asyncio
+async def test_tx_capability_excludes_power_control_with_unsupported_power() -> None:
+    """MOR-433: the rigctld-client TX capability never claims power control.
+
+    The backend advertises ``CAP_TX`` (PTT key/un-key) but deliberately
+    omits ``CAP_POWER_CONTROL`` and does not structurally satisfy
+    :class:`PowerControlCapable`, because external rigctld exposes no
+    power-state read/set surface. The acquisition profile mirrors this by
+    declaring the ``power_on`` field ``UNSUPPORTED`` rather than emitting a
+    synthesized/default observed value, so consumers see the gap explicitly
+    instead of a fabricated ``power_on=True``.
+    """
+    power_path = FieldPath.global_("tx_state", "power_on")
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            # Capability set advertises PTT TX but never power control.
+            assert CAP_TX in radio.capabilities
+            assert isinstance(radio, PhysicalWriteReadbackCapable)
+            assert CAP_POWER_CONTROL not in radio.capabilities
+            assert "power" not in radio.capabilities
+            # The backend cannot honor power-set/get, so it must not
+            # structurally satisfy the PowerControlCapable contract.
+            assert not isinstance(radio, PowerControlCapable)
+
+            # The acquisition profile surfaces power as UNSUPPORTED — not a
+            # default or observed value — and excludes it from polling.
+            profile = build_external_rigctld_acquisition_profile(vfo_supported=True)
+            power_capability = profile.capability_for(power_path)
+            assert power_capability.availability is FieldAvailability.UNSUPPORTED
+            assert power_capability.can_poll is False
+            assert power_capability.supported_controls == ()
+        finally:
+            await radio.disconnect()
+
+
+def test_filter_width_command_response_metadata_matches_adapter_behavior() -> None:
+    profile = build_external_rigctld_acquisition_profile(vfo_supported=True)
+    capability = profile.capability_for(
+        FieldPath.active("main", "freq_mode", "filter_width")
+    )
+
+    assert capability.can_poll is True
+    assert capability.command_response_observable is False
+    assert "poll" in capability.diagnostic.lower()
+
+
+@pytest.mark.asyncio
+async def test_vfo_observation_available_when_rigctld_supports_it() -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            adapter = RigctldClientObservationAdapter(radio, clock=_clock)
+
+            observation = await adapter.read_active_vfo()
+
+            assert observation is not None
+            assert str(observation.path) == "receiver.main.vfo.active_slot"
+            assert observation.value == "A"
+            assert observation.source.source == "hamlib_response"
+            assert observation.max_age == 8.0
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_ptt_and_slow_control_reads_cover_declared_rigctld_capabilities() -> None:
+    async with FakeRigctldServer() as server:
+        server.state.ptt = 1
+        server.state.preamp_db = 12
+        server.state.att_db = 18
+        server.state.nb = 1
+        server.state.nr = 0
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            adapter = RigctldClientObservationAdapter(radio, clock=_clock)
+
+            observations = (
+                await adapter.read_ptt(),
+                *(await adapter.read_slow_controls()),
+            )
+
+            assert [str(item.path) for item in observations] == [
+                "global.tx_state.ptt",
+                "receiver.main.operator_controls.rf_gain",
+                "receiver.main.operator_controls.af_level",
+                "receiver.main.operator_controls.preamp",
+                "receiver.main.operator_controls.att",
+                "receiver.main.operator_toggles.nb",
+                "receiver.main.operator_toggles.nr",
+            ]
+            assert [item.value for item in observations] == [
+                True,
+                pytest.approx(128 / 255),
+                pytest.approx(76 / 255),
+                1,
+                18,
+                True,
+                False,
+            ]
+            assert observations[0].max_age == 8.0
+            assert all(item.max_age == 120.0 for item in observations[1:])
+        finally:
+            await radio.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_rigctld_client_observation_poller_intervals_come_from_the_acquisition_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with FakeRigctldServer() as server:
+        radio = RigctldClientRadio(host=server.host, port=server.port)
+        await radio.connect()
+        try:
+            declared = build_external_rigctld_acquisition_profile(vfo_supported=True)
+            preamp = FieldPath.receiver("main", "operator_controls", "preamp")
+            # 3.5 and 41.0 replace the 2.0 and 30.0 this profile declares, so
+            # the assertion below fails if either loop period comes from
+            # anywhere but the profile.
+            retuned = replace(
+                declared,
+                default_policy=replace(declared.default_policy, cadence_seconds=3.5),
+                field_policies={
+                    path: (
+                        replace(policy, cadence_seconds=41.0)
+                        if path == preamp
+                        else policy
+                    )
+                    for path, policy in declared.field_policies.items()
+                },
+            )
+            monkeypatch.setattr(
+                "rigplane.backends.rigctld_client.observations"
+                ".build_external_rigctld_acquisition_profile",
+                lambda **_kwargs: retuned,
+            )
+            poller = radio.create_observation_poller(
+                callback=lambda _observations: None
+            )
+            started: list[tuple[str, float]] = []
+
+            def _record_loop(poll: object, interval: float) -> object:
+                started.append((getattr(poll, "__name__", repr(poll)), interval))
+                return asyncio.sleep(0)
+
+            monkeypatch.setattr(poller, "_run_loop", _record_loop)
+
+            await poller.start()
+            await poller.stop()
+
+            assert started == [
+                ("_poll_medium", retuned.default_policy.cadence_seconds),
+                ("_poll_slow", retuned.policy_for(preamp).cadence_seconds),
+            ]
+        finally:
+            await radio.disconnect()
+
+
+def test_external_rigctld_poll_intervals_reject_a_cadence_free_policy() -> None:
+    declared = build_external_rigctld_acquisition_profile(vfo_supported=True)
+    cadence_free = replace(
+        declared,
+        default_policy=replace(declared.default_policy, cadence_seconds=None),
+    )
+
+    with pytest.raises(ValueError, match="cadence_seconds is required"):
+        resolve_external_rigctld_poll_intervals(cadence_free)
+
+
+def _observed_ptt_poller(
+    radio: RigctldClientRadio, clock: FreshnessClock
+) -> tuple[StateStore, RigctldClientObservationPoller]:
+    store = StateStore(freshness_clock=clock)
+    poller = RigctldClientObservationPoller(
+        radio,
+        callback=lambda batch: [store.apply(item) for item in batch],
+        clock=clock.now,
+        medium_interval=_MEDIUM_INTERVAL,
+        slow_interval=_SLOW_INTERVAL,
+    )
+    poller.bind_provider_generation(
+        capture=lambda: store.provider_generation,
+        advance=store.begin_provider_generation,
+    )
+    return store, poller
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ptt", (0, 1), ids=("off", "on"))
+@pytest.mark.parametrize("vfo_error", (False, True), ids=("vfo-ok", "vfo-error"))
+async def test_observed_ptt_arrives_before_later_vfo_read(
+    ptt: int, vfo_error: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with FakeRigctldServer() as server:
+        server.state.ptt = ptt
+        async with RigctldClientRadio(host=server.host, port=server.port) as radio:
+            clock = FreshnessClock(start=50.0)
+            store, poller = _observed_ptt_poller(radio, clock)
+            expected = ObservedPtt.ON if ptt else ObservedPtt.OFF
+            original = RigctldClientObservationAdapter.read_active_vfo
+
+            async def later_read(
+                adapter: RigctldClientObservationAdapter,
+            ) -> Observation | None:
+                assert project_observed_ptt(store.snapshot()) is expected, (
+                    "PTT reply was not published before the next read"
+                )
+                clock.advance(3.0)
+                return await original(adapter)
+
+            monkeypatch.setattr(
+                RigctldClientObservationAdapter, "read_active_vfo", later_read
+            )
+            if vfo_error:
+                server.behavior.malformed_responses["v"] = b"invalid-vfo\n"
+                with pytest.raises(CommandError):
+                    await poller._poll_medium()  # noqa: SLF001
+            else:
+                await poller._poll_medium()  # noqa: SLF001
+            field = store.snapshot().field(OBSERVED_PTT_PATH)
+            assert field.value is expected
+            assert field.provider_generation == store.provider_generation == 0
+            assert field.last_observed_monotonic == 50.0
+            profile = build_external_rigctld_acquisition_profile(vfo_supported=True)
+            assert (
+                field.max_age
+                == profile.policy_for(OBSERVED_PTT_PATH).freshness_ttl_seconds
+            )
+            assert field.source.source == "hamlib_response"
+            assert field.source.provider == "external_rigctld"
+            assert field.source.transport == "rigctld"
+            assert field.source.native_id == "t"
+            assert server.commands_seen.count("t") == 1
+            reading = await radio.read_transmit_state()
+            assert reading.value is bool(ptt)
+            assert reading.source == "hamlib_response"
+            assert reading.verified_readback is False
+            assert field.max_age is not None
+            clock.advance(field.max_age)
+            store.mark_stale_due()
+            assert project_observed_ptt(store.snapshot()) is ObservedPtt.UNKNOWN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply",
+    (b"9\n", b"RPRT -4\n", b"RPRT -8\n"),
+    ids=("malformed", "unsupported", "read-error"),
+)
+async def test_observed_ptt_read_error_replaces_seeded_on_with_unknown(
+    reply: bytes,
+) -> None:
+    async with FakeRigctldServer() as server:
+        server.state.ptt = 1
+        async with RigctldClientRadio(host=server.host, port=server.port) as radio:
+            clock = FreshnessClock(start=50.0)
+            store, poller = _observed_ptt_poller(radio, clock)
+            adapter = RigctldClientObservationAdapter(radio, clock=clock.now)
+            seed = await adapter.read_ptt()
+            assert seed.value is True and str(seed.path) == "global.tx_state.ptt"
+            store.apply(replace(seed, path=OBSERVED_PTT_PATH, value=ObservedPtt.ON))
+            server.behavior.malformed_responses["t"] = reply
+            with pytest.raises(CommandError):
+                await adapter.read_ptt()
+            # MOR-4456: a refused `t` no longer raises out of the cycle — the
+            # unknown is published and the cycle continues past it.
+            await poller._poll_medium()  # noqa: SLF001
+            assert project_observed_ptt(store.snapshot()) is ObservedPtt.UNKNOWN, (
+                "failed current PTT read retained ON evidence"
+            )
+            field = store.snapshot().field(OBSERVED_PTT_PATH)
+            assert field.value is ObservedPtt.UNKNOWN
+            assert field.provider_generation == store.provider_generation == 0
+            assert radio.radio_state.ptt is True
+            assert "v" in server.commands_seen, (
+                "the cycle must continue to the VFO read past a refused `t`"
+            )
+
+
+@pytest.mark.asyncio
+async def test_disconnect_invalidates_observed_ptt_without_another_poll() -> None:
+    async with FakeRigctldServer() as server:
+        server.state.ptt = 1
+        async with RigctldClientRadio(host=server.host, port=server.port) as radio:
+            clock = FreshnessClock(start=50.0)
+            store, _poller = _observed_ptt_poller(radio, clock)
+            adapter = RigctldClientObservationAdapter(radio, clock=clock.now)
+            seed = await adapter.read_ptt()
+            store.apply(replace(seed, path=OBSERVED_PTT_PATH, value=ObservedPtt.ON))
+            assert project_observed_ptt(store.snapshot()) is ObservedPtt.ON
+            count = server.commands_seen.count("t")
+            await radio.disconnect()
+            assert store.provider_generation == 1
+            assert project_observed_ptt(store.snapshot()) is ObservedPtt.UNKNOWN
+            assert server.commands_seen.count("t") == count
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_error", (False, True), ids=("success", "error"))
+async def test_retired_ptt_completion_cannot_replace_current_observation(
+    read_error: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with FakeRigctldServer() as server:
+        server.state.ptt = 1
+        async with RigctldClientRadio(host=server.host, port=server.port) as radio:
+            clock = FreshnessClock(start=50.0)
+            store, poller = _observed_ptt_poller(radio, clock)
+            original = RigctldClientObservationAdapter.read_ptt
+            entered, release = asyncio.Event(), asyncio.Event()
+            held = False
+
+            async def delayed(adapter: RigctldClientObservationAdapter) -> Observation:
+                nonlocal held
+                if held:
+                    return await original(adapter)
+                held = True
+                try:
+                    outcome: Observation | CommandError = await original(adapter)
+                except CommandError as exc:
+                    outcome = exc
+                entered.set()
+                await release.wait()
+                if isinstance(outcome, CommandError):
+                    raise outcome
+                return outcome
+
+            monkeypatch.setattr(RigctldClientObservationAdapter, "read_ptt", delayed)
+            if read_error:
+                server.behavior.unsupported_commands.add("t")
+            task = asyncio.create_task(poller._poll_medium())  # noqa: SLF001
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=2.0)
+                await radio.disconnect()
+                assert store.provider_generation == 1
+                server.behavior.unsupported_commands.clear()
+                server.state.ptt = 0
+                await radio.connect()
+                await poller._poll_medium()  # noqa: SLF001
+                assert project_observed_ptt(store.snapshot()) is ObservedPtt.OFF
+                current = store.snapshot().field(OBSERVED_PTT_PATH)
+                assert current.provider_generation == 1
+                release.set()
+                # MOR-4456: a retired refused `t` completes as unknown without
+                # raising, so both arms await the task directly now.
+                await task
+                assert store.snapshot().field(OBSERVED_PTT_PATH) == current, (
+                    "retired PTT completion replaced current evidence"
+                )
+                server.state.ptt = 1
+                await poller._poll_medium()  # noqa: SLF001
+                assert project_observed_ptt(store.snapshot()) is ObservedPtt.ON
+            finally:
+                release.set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_ptt_read_does_not_publish_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with FakeRigctldServer() as server:
+        server.state.ptt = 1
+        async with RigctldClientRadio(host=server.host, port=server.port) as radio:
+            clock = FreshnessClock(start=50.0)
+            store, poller = _observed_ptt_poller(radio, clock)
+            original = RigctldClientObservationAdapter.read_ptt
+            adapter = RigctldClientObservationAdapter(radio, clock=clock.now)
+            seed = await original(adapter)
+            store.apply(replace(seed, path=OBSERVED_PTT_PATH, value=ObservedPtt.ON))
+            current = store.snapshot().field(OBSERVED_PTT_PATH)
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def delayed(adapter: RigctldClientObservationAdapter) -> Observation:
+                result = await original(adapter)
+                entered.set()
+                await release.wait()
+                return result
+
+            monkeypatch.setattr(RigctldClientObservationAdapter, "read_ptt", delayed)
+            task = asyncio.create_task(poller._poll_medium())  # noqa: SLF001
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=2.0)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert task.cancelled()
+                assert store.snapshot().field(OBSERVED_PTT_PATH) == current
+            finally:
+                release.set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
+def test_observed_ptt_profile_declares_polling_without_write_controls() -> None:
+    profile = build_external_rigctld_acquisition_profile(vfo_supported=True)
+    capability = profile.capability_for(OBSERVED_PTT_PATH)
+
+    assert capability.path == OBSERVED_PTT_PATH
+    assert capability.availability is FieldAvailability.SUPPORTED, (
+        "canonical observed PTT is missing supported capability metadata"
+    )
+    assert capability.polling is True
+    assert capability.can_poll is True
+    assert OBSERVED_PTT_PATH in profile.pollable_paths()
+    assert capability.supported_controls == ()
+    assert capability.command_response_observable is False

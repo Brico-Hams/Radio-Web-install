@@ -1,0 +1,454 @@
+"""Provider-neutral execution lane for managed-transmit effects."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any, Protocol, TypeAlias, runtime_checkable
+
+from rigplane.runtime.managed_tx_state import (
+    AbortFailed,
+    AbortOperation,
+    ActuationOperation,
+    ActuationResult,
+    ActuationSettled,
+    EffectToken,
+    ManagedTxEffect,
+)
+
+_Operation: TypeAlias = ActuationOperation | AbortOperation
+_ClaimKey: TypeAlias = tuple[EffectToken, _Operation]
+_Slot: TypeAlias = str | AbortOperation
+_Clock: TypeAlias = Callable[[], float]
+_PoisonGeneration: TypeAlias = Callable[[int], Awaitable[None]]
+_ON_OPERATIONS = frozenset({ActuationOperation.PTT_ON, ActuationOperation.TRANSMIT_ON})
+_ON_SLOT = "on"
+_FORCE_SLOT = "force_receive"
+
+
+@runtime_checkable
+class ManagedTxActuator(Protocol):
+    """Execute one runtime-tokened semantic operation."""
+
+    async def actuate(
+        self,
+        token: EffectToken,
+        operation: _Operation,
+        *,
+        is_current: Callable[[], bool],
+    ) -> ActuationResult: ...
+
+
+@runtime_checkable
+class AbortApplicability(Protocol):
+    """Optional actuator surface declaring which abort operations apply.
+
+    MOR-4352: an abort the actuator cannot execute is NOT APPLICABLE --
+    ``ManagedTxEffectLane.settle_abort`` returns without claiming or
+    dispatching it, so it never reaches the radio and never surfaces as
+    an ``abortErrors`` entry (unsupported is not failed). An actuator
+    answers from the same profile-command declaration its ``actuate``
+    dispatches on, so there is one notion of "supported", not two.
+    Actuators without this surface keep the previous behaviour: every
+    scheduled abort is attempted, and one the radio refuses settles as a
+    reported failure, never a silent skip.
+    """
+
+    def abort_applicable(self, operation: AbortOperation) -> bool: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _Outcome:
+    result: ActuationResult
+    error: str | None
+    timed_out: bool = False
+
+
+@dataclass(slots=True)
+class _Claim:
+    token: EffectToken
+    operation: _Operation
+    deadline: float
+    result: asyncio.Future[_Outcome]
+    is_current: Callable[[], bool] | None = None
+    driver: asyncio.Task[None] | None = None
+    provider: asyncio.Task[ActuationResult] | None = None
+    started: bool = False
+    poisoned: bool = False
+    isolation: tuple[asyncio.Task[None], ...] = ()
+
+
+class ManagedTxEffectLane:
+    """Claim, prioritize, and normalize managed actuator attempts."""
+
+    def __init__(
+        self,
+        actuator: ManagedTxActuator,
+        *,
+        clock: _Clock | None = None,
+        poison_generation: _PoisonGeneration | None = None,
+    ) -> None:
+        self._actuator = actuator
+        self._clock = clock or time.monotonic
+        self._poison_generation = poison_generation
+        self._lock = asyncio.Lock()
+        self._on_lane = asyncio.Lock()
+        self._claims: dict[_ClaimKey, _Claim] = {}
+        self._slots: dict[_Slot, tuple[EffectToken, _Operation]] = {}
+        self._scope = (-1, -1)
+        self._latest_on_epoch = 0
+        self._release_token: EffectToken | None = None
+        self._isolation: tuple[int, asyncio.Task[None], bool] | None = None
+        self._displaced: dict[asyncio.Task[None], _Claim] = {}
+
+    async def settle(
+        self,
+        effect: ManagedTxEffect,
+        *,
+        deadline_monotonic: float,
+        is_current: Callable[[], bool] | None = None,
+    ) -> ActuationSettled | None:
+        outcome = await self._settle(
+            effect.token, effect.operation, deadline_monotonic, is_current
+        )
+        if outcome is None:
+            return None
+        return ActuationSettled(
+            effect.token, effect.operation, outcome.result, outcome.error
+        )
+
+    async def settle_abort(
+        self,
+        token: EffectToken,
+        operation: AbortOperation,
+        *,
+        deadline_monotonic: float,
+        is_current: Callable[[], bool] | None = None,
+    ) -> AbortFailed | None:
+        """Settle one abort; an inapplicable abort settles as no failure.
+
+        MOR-4352: an abort the actuator declares inapplicable (the radio
+        has no command for it) is not attempted at all, so it never lands
+        in ``abortErrors`` -- unsupported is not failed.
+        """
+        if not self._abort_applicable(operation):
+            return None
+        outcome = await self._settle(token, operation, deadline_monotonic, is_current)
+        if outcome is None:
+            return None
+        if outcome.result is ActuationResult.ACCEPTED:
+            return None
+        return AbortFailed(token, operation, outcome.error or outcome.result.value)
+
+    def _abort_applicable(self, operation: AbortOperation) -> bool:
+        """Whether the actuator declares *operation* executable (default True)."""
+        if isinstance(self._actuator, AbortApplicability):
+            return self._actuator.abort_applicable(operation)
+        return True
+
+    async def _settle(
+        self,
+        token: EffectToken,
+        operation: _Operation,
+        deadline: float,
+        is_current: Callable[[], bool] | None,
+    ) -> _Outcome | None:
+        claim = await self._claim(token, operation, deadline, is_current)
+        if claim is None:
+            return None
+        try:
+            return await asyncio.shield(claim.result)
+        except asyncio.CancelledError:
+            return await self._cancel_waiter(claim)
+
+    async def _claim(
+        self,
+        token: EffectToken,
+        operation: _Operation,
+        deadline: float,
+        is_current: Callable[[], bool] | None,
+    ) -> _Claim | None:
+        async with self._lock:
+            if is_current is not None and not is_current():
+                return None
+            if (
+                operation is ActuationOperation.FORCE_RECEIVE
+                and token.effect_epoch < self._latest_on_epoch
+            ):
+                return None
+            scope = (token.provider_generation, token.effect_epoch)
+            stale_release = (
+                scope < self._scope and operation is ActuationOperation.FORCE_RECEIVE
+            )
+            if scope < self._scope and not stale_release:
+                return None
+            if (token, operation) in self._claims:
+                return None
+            if scope > self._scope:
+                self._scope = scope
+                self._slots.clear()
+                self._release_token = None
+                for active in tuple(self._claims.values()):
+                    active_scope = (
+                        active.token.provider_generation,
+                        active.token.effect_epoch,
+                    )
+                    if (
+                        active_scope < scope
+                        and active.operation is not ActuationOperation.FORCE_RECEIVE
+                    ):
+                        self._displace_locked(active)
+            slot = _slot(operation)
+            if not stale_release:
+                if slot in self._slots or not self._bind_family_locked(
+                    token, operation
+                ):
+                    return None
+                self._slots[slot] = (token, operation)
+            if operation in _ON_OPERATIONS:
+                self._latest_on_epoch = max(self._latest_on_epoch, token.effect_epoch)
+            loop = asyncio.get_running_loop()
+            claim = _Claim(token, operation, deadline, loop.create_future(), is_current)
+            self._claims[(token, operation)] = claim
+            if operation is ActuationOperation.FORCE_RECEIVE:
+                active_ons = tuple(
+                    active
+                    for active in self._claims.values()
+                    if active is not claim and active.operation in _ON_OPERATIONS
+                )
+                claim.isolation = tuple(self._displaced)
+                for active in active_ons:
+                    if barrier := self._displace_locked(active):
+                        claim.isolation += (barrier,)
+                if self._isolation is not None:
+                    _, task, _ = self._isolation
+                    if task not in claim.isolation:
+                        claim.isolation += (task,)
+            claim.driver = asyncio.create_task(self._drive(claim))
+            claim.driver.add_done_callback(self._harvest)
+            return claim
+
+    def _bind_family_locked(self, token: EffectToken, operation: _Operation) -> bool:
+        if operation in _ON_OPERATIONS:
+            return self._release_token is None
+        if (
+            operation is ActuationOperation.FORCE_RECEIVE
+            and (primary := self._slots.get(_ON_SLOT))
+            and primary[0] == token
+        ):
+            return False
+        if self._release_token is None:
+            if _ON_SLOT in self._slots and isinstance(operation, AbortOperation):
+                return False
+            self._release_token = token
+        return bool(self._release_token == token)
+
+    async def _drive(self, claim: _Claim) -> None:
+        try:
+            if claim.operation in _ON_OPERATIONS:
+                async with self._on_lane:
+                    await self._invoke(claim)
+            else:
+                await self._invoke(claim)
+        except asyncio.CancelledError:
+            pass
+
+    async def _invoke(self, claim: _Claim) -> None:
+        if claim.result.done():
+            return
+        if claim.deadline <= self._clock():
+            await self._finish(
+                claim,
+                _Outcome(ActuationResult.REJECTED, "deadline expired before dispatch"),
+            )
+            return
+        repeat = any(not task.done() for task in claim.isolation)
+        outcome = await self._actuate(claim)
+        if claim.isolation:
+            error = await self._await_isolation(claim.isolation, claim.deadline)
+            if error is not None:
+                async with self._lock:
+                    for task in claim.isolation:
+                        if (
+                            (displaced := self._displaced.get(task)) is not None
+                            and not task.done()
+                            and not displaced.poisoned
+                            and displaced.provider is not None
+                            and not displaced.provider.done()
+                        ):
+                            self._isolate_locked(displaced)
+            if repeat:
+                outcome = await self._actuate(claim)
+            if error is not None:
+                outcome = _Outcome(ActuationResult.UNCERTAIN, error)
+        await self._finish(
+            claim,
+            outcome,
+            poison=claim.operation in _ON_OPERATIONS and outcome.timed_out,
+        )
+
+    async def _actuate(self, claim: _Claim) -> _Outcome:
+        async with self._lock:
+            if not self._is_current(claim):
+                return _Outcome(ActuationResult.REJECTED, "stale before dispatch")
+            claim.started = True
+            claim.provider = asyncio.create_task(
+                self._actuator.actuate(
+                    claim.token,
+                    claim.operation,
+                    is_current=lambda: self._is_current(claim),
+                )
+            )
+            provider = claim.provider
+        done, _ = await asyncio.wait(
+            (provider,), timeout=max(0.0, claim.deadline - self._clock())
+        )
+        if not done:
+            provider.cancel()
+            provider.add_done_callback(self._harvest)
+            return _Outcome(ActuationResult.UNCERTAIN, "attempt deadline expired", True)
+        try:
+            result = provider.result()
+            if not isinstance(result, ActuationResult):
+                raise TypeError("actuator returned a non-normalized result")
+        except BaseException as error:
+            return _Outcome(ActuationResult.UNCERTAIN, _error_text(error))
+        return _Outcome(
+            result,
+            None if result is ActuationResult.ACCEPTED else result.value,
+        )
+
+    def _is_current(self, claim: _Claim) -> bool:
+        if claim.operation is ActuationOperation.FORCE_RECEIVE:
+            return claim.token.effect_epoch >= self._latest_on_epoch and (
+                claim.is_current is None or claim.is_current()
+            )
+        return (
+            self._claims.get((claim.token, claim.operation)) is claim
+            and not claim.result.done()
+            and self._clock() < claim.deadline
+            and (claim.is_current is None or claim.is_current())
+        )
+
+    async def _finish(
+        self, claim: _Claim, outcome: _Outcome, *, poison: bool = False
+    ) -> None:
+        isolation: asyncio.Task[None] | None = None
+        async with self._lock:
+            if claim.result.done():
+                return
+            self._claims.pop((claim.token, claim.operation), None)
+            if poison:
+                isolation = self._isolate_locked(claim)
+        if isolation is not None:
+            await self._await_isolation((isolation,), claim.deadline)
+        async with self._lock:
+            if claim.result.done():
+                return
+            claim.result.set_result(outcome)
+
+    async def _cancel_waiter(self, claim: _Claim) -> _Outcome:
+        async with self._lock:
+            if not claim.result.done():
+                self._displace_locked(
+                    claim,
+                    before="attempt cancelled before dispatch",
+                    after="attempt cancelled after dispatch",
+                )
+            return claim.result.result()
+
+    def _displace_locked(
+        self,
+        claim: _Claim,
+        *,
+        before: str = "superseded before dispatch",
+        after: str = "superseded after dispatch",
+    ) -> asyncio.Task[None] | None:
+        if claim.result.done():
+            return None
+        self._claims.pop((claim.token, claim.operation), None)
+        if claim.provider is not None:
+            claim.provider.cancel()
+            claim.provider.add_done_callback(self._harvest)
+        if claim.driver is not None:
+            claim.driver.cancel()
+        result = (
+            ActuationResult.UNCERTAIN if claim.started else ActuationResult.REJECTED
+        )
+        claim.result.set_result(_Outcome(result, after if claim.started else before))
+        if claim.started and claim.operation in _ON_OPERATIONS:
+            return self._isolate_locked(claim, poison=False)
+        return None
+
+    def _isolate_locked(
+        self, claim: _Claim, *, poison: bool = True
+    ) -> asyncio.Task[None]:
+        provider_generation = claim.token.provider_generation
+        if poison:
+            claim.poisoned = True
+            for displaced in self._displaced.values():
+                if displaced.token.provider_generation == provider_generation:
+                    displaced.poisoned = True
+        if (
+            poison
+            and self._poison_generation is not None
+            and self._isolation is not None
+            and self._isolation[2]
+            and self._isolation[0] == provider_generation
+        ):
+            return self._isolation[1]
+        previous = None if self._isolation is None else self._isolation[1]
+        task = asyncio.create_task(
+            self._isolate_provider(claim, previous, poison=poison)
+        )
+        task.add_done_callback(self._harvest)
+        if not poison:
+            self._displaced[task] = claim
+            task.add_done_callback(self._displaced.pop)
+        self._isolation = (provider_generation, task, poison)
+        return task
+
+    async def _isolate_provider(
+        self, claim: _Claim, previous: asyncio.Task[None] | None, *, poison: bool
+    ) -> None:
+        if poison and self._poison_generation is not None:
+            await self._poison_generation(claim.token.provider_generation)
+        assert claim.provider is not None
+        pending: list[asyncio.Future[Any]] = [asyncio.shield(claim.provider)]
+        if previous is not None:
+            pending.append(asyncio.shield(previous))
+        await asyncio.gather(*pending, return_exceptions=True)
+
+    async def _await_isolation(
+        self, tasks: tuple[asyncio.Task[None], ...], deadline: float
+    ) -> str | None:
+        done, pending = await asyncio.wait(
+            tasks, timeout=max(0.0, deadline - self._clock())
+        )
+        if pending:
+            return "isolation deadline expired"
+        for task in done:
+            if task.cancelled():
+                return "CancelledError"
+            if error := task.exception():
+                return _error_text(error)
+        return None
+
+    @staticmethod
+    def _harvest(task: asyncio.Future[Any]) -> None:
+        if not task.cancelled():
+            task.exception()
+
+
+def _error_text(error: BaseException) -> str:
+    return str(error) or type(error).__name__
+
+
+def _slot(operation: _Operation) -> _Slot:
+    if operation in _ON_OPERATIONS:
+        return _ON_SLOT
+    if operation is ActuationOperation.FORCE_RECEIVE:
+        return _FORCE_SLOT
+    return operation

@@ -1,0 +1,1022 @@
+"""Pin docs-only, CI-only, backend, frontend, and visual selection."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CLASSIFIER_PATH = Path(__file__).with_name("classify-quick-paths.py")
+SPEC = importlib.util.spec_from_file_location("classify_quick_paths", CLASSIFIER_PATH)
+assert SPEC and SPEC.loader
+CLASSIFIER = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(CLASSIFIER)
+
+QUICK_YML = ROOT / ".github" / "workflows" / "quick.yml"
+DOCS_QUICK_YML = ROOT / ".github" / "workflows" / "docs-only-quick.yml"
+DOCS_PATHS_JS = ROOT / ".github" / "scripts" / "docs-only-paths.js"
+BASE_POLICY_JS = ROOT / ".github" / "scripts" / "base-gate-policy-v1.js"
+VISUAL_YML = ROOT / ".github" / "workflows" / "visual.yml"
+QUICK_WORKER = ROOT / ".github" / "scripts" / "quick-v2-worker-v1.sh"
+DOC_CITATION_YML = ROOT / ".github" / "workflows" / "doc-citation-gate.yml"
+REBRAND_YML = ROOT / ".github" / "workflows" / "rebrand-gate.yml"
+BASE_GATES_TEST = ROOT / ".github" / "scripts" / "base-controlled-gates-v1.test.js"
+
+
+class QuickPathFilterContractTest(unittest.TestCase):
+    def test_base_controlled_gate_contracts(self) -> None:
+        subprocess.run(
+            ["node", "--test", str(BASE_GATES_TEST)],
+            cwd=ROOT,
+            check=True,
+        )
+
+    def quick_ignore_blocks(self) -> list[list[str]]:
+        blocks: list[list[str]] = []
+        lines = QUICK_YML.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            if line != "    paths-ignore:":
+                continue
+            block: list[str] = []
+            for candidate in lines[index + 1 :]:
+                if candidate.startswith("      #"):
+                    continue  # comments may sit between list entries
+                if not candidate.startswith('      - "'):
+                    break
+                block.append(candidate.removeprefix('      - "').removesuffix('"'))
+            blocks.append(block)
+        return blocks
+
+    @staticmethod
+    def ignored_by_block(path: str, patterns: list[str]) -> bool:
+        # Ordered semantics like GitHub path filters: every matching pattern
+        # re-decides, a leading "!" re-includes, the last match wins.
+        ignored = False
+        for raw in patterns:
+            negated = raw.startswith("!")
+            pattern = raw[1:] if negated else raw
+            matched = path == pattern
+            if pattern.endswith("/**") and path.startswith(pattern[:-2]):
+                matched = True
+            if pattern.startswith("**/*.") and path.endswith(pattern[4:]):
+                matched = True
+            if "/**/" in pattern:
+                prefix, _, rest = pattern.partition("/**/")
+                if (
+                    rest.startswith("*.")
+                    and path.startswith(prefix + "/")
+                    and path.endswith(rest[1:])
+                ):
+                    matched = True
+            if matched:
+                ignored = not negated
+        return ignored
+
+    @staticmethod
+    def js_set_literals(source: str, name: str) -> set[str]:
+        match = re.search(rf"const {name} = new Set\(\[(.*?)\]\)", source, re.DOTALL)
+        assert match is not None
+        return set(re.findall(r'["\']([^"\']+)["\']', match.group(1)))
+
+    def docs_quick_script(self) -> str:
+        workflow = DOCS_QUICK_YML.read_text(encoding="utf-8")
+        marker = "          script: |\n"
+        start = workflow.index(marker) + len(marker)
+        lines = []
+        for line in workflow[start:].splitlines():
+            if line and not line.startswith("            "):
+                break
+            lines.append(line[12:] if line.startswith("            ") else "")
+        return "\n".join(lines)
+
+    def run_docs_quick_script(
+        self,
+        *,
+        heads: list[str],
+        files: list[dict[str, str]],
+        changed_files: int | None = None,
+        bases: list[str] | None = None,
+    ) -> dict[str, object]:
+        runner = r"""
+const script = process.argv[1];
+const scenario = JSON.parse(process.argv[2]);
+const statuses = [];
+const info = [];
+const contents = [];
+const github = {
+  paginate: async () => scenario.files,
+  rest: {
+    pulls: {
+      get: async () => ({data: {head: {sha: scenario.heads.shift()}, base: {sha: scenario.bases.shift()}, changed_files: scenario.changedFiles}}),
+      listFiles: async () => undefined,
+    },
+    repos: {
+      getContent: async (request) => { contents.push(request); return {data: {type: 'file', encoding: 'base64', content: Buffer.from(require('fs').readFileSync('.github/scripts/docs-only-paths.js')).toString('base64')}}; },
+      createCommitStatus: async (status) => statuses.push(status),
+    },
+  },
+};
+const context = {repo: {owner: 'rigplane', repo: 'rigplane-core'}, payload: {pull_request: {number: 3132}}, serverUrl: 'https://github.test', runId: 1};
+const core = {info: (message) => info.push(message)};
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+new AsyncFunction('github', 'context', 'core', script)(github, context, core)
+  .then(() => process.stdout.write(JSON.stringify({statuses, info, contents})))
+  .catch((error) => { console.error(error); process.exitCode = 1; });
+"""
+        completed = subprocess.run(
+            [
+                "node",
+                "-e",
+                runner,
+                self.docs_quick_script(),
+                json.dumps(
+                    {
+                        "heads": heads,
+                        "files": files,
+                        "changedFiles": len(files)
+                        if changed_files is None
+                        else changed_files,
+                        "bases": bases or ["c" * 40] * len(heads),
+                    }
+                ),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(completed.stdout)
+
+    def assert_docs_only(self, paths: list[str]) -> None:
+        self.assertEqual(
+            CLASSIFIER.classify(paths),
+            {"core": False, "frontend": False, "ci": False, "docs": True},
+        )
+
+    def test_historical_docs_only_shapes_select_zero_product_checks(self) -> None:
+        cases = {
+            "pr3102": [
+                ".github/scripts/doc-citation-baseline.txt",
+                "docs/plans/2026-08-20-transmit-authority.md",
+            ],
+            "pr3116": ["frontend/fixtures/approved-baselines/README.md"],
+            "pr3117": [".claude/agents/verifier.md"],
+            "pr3118": ["frontend/fixtures/approved-baselines/README.md"],
+        }
+        for name, paths in cases.items():
+            with self.subTest(name=name):
+                self.assert_docs_only(paths)
+
+    def test_mixed_docs_and_code_select_only_relevant_product_classes(self) -> None:
+        self.assertEqual(
+            CLASSIFIER.classify(["docs/guide.md", "frontend/src/radio.test.ts"]),
+            {"core": False, "frontend": True, "ci": False, "docs": False},
+        )
+        self.assertEqual(
+            CLASSIFIER.classify(["README.md", "src/rigplane/web/server.py"]),
+            {"core": True, "frontend": True, "ci": False, "docs": False},
+        )
+        self.assertEqual(
+            CLASSIFIER.classify([".github/workflows/quick.yml"]),
+            {"core": False, "frontend": False, "ci": True, "docs": False},
+        )
+        self.assertEqual(
+            CLASSIFIER.classify(["tests/test_ci_path_filters.py"]),
+            {"core": False, "frontend": False, "ci": True, "docs": False},
+        )
+        for unsafe in ("/tmp/README.md", "docs/../src/radio.py"):
+            with (
+                self.subTest(unsafe=unsafe),
+                self.assertRaises(CLASSIFIER.ClassificationError),
+            ):
+                CLASSIFIER.classify([unsafe])
+
+    def test_browser_environment_contract_is_ci_selected_and_invoked(self) -> None:
+        for path in (
+            ".github/workflows/quick.yml",
+            ".github/workflows/new-browser.yaml",
+            ".github/scripts/playwright-browser-env.test.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    CLASSIFIER.classify([path]),
+                    {"core": False, "frontend": False, "ci": True, "docs": False},
+                )
+        quick = QUICK_YML.read_text(encoding="utf-8")
+        self.assertIn(
+            "      - name: Quick path and event contract tests\n"
+            "        if: needs.classify.outputs.ci == 'true'\n"
+            "        run: python3 .github/scripts/quick-path-filters.test.py\n"
+            "\n"
+            "      - name: Playwright browser environment contract test\n"
+            "        if: needs.classify.outputs.ci == 'true'\n"
+            "        run: python3 .github/scripts/playwright-browser-env.test.py\n",
+            quick,
+        )
+
+    def test_runner_label_validation_runs_for_workflow_only_changes(self) -> None:
+        for path in (
+            ".github/workflows/artifact-cleanup.yml",
+            ".github/workflows/new-ci.yaml",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    CLASSIFIER.classify([path]),
+                    {"core": False, "frontend": False, "ci": True, "docs": False},
+                )
+        quick = QUICK_YML.read_text(encoding="utf-8")
+        self.assertIn(
+            "      - name: Runner label validation\n"
+            "        if: needs.classify.outputs.ci == 'true'\n"
+            "        run: uv run --no-project --with 'pyyaml>=6' python3 "
+            ".github/scripts/check-workflow-runs-on.py\n",
+            quick,
+        )
+        self.assertIn(
+            "      - name: Install uv\n"
+            "        if: needs.classify.outputs.core == 'true' || "
+            "needs.classify.outputs.web == 'true' || "
+            "needs.classify.outputs.ci == 'true'\n",
+            quick,
+        )
+
+    def test_test_heavy_jobs_stay_off_the_two_gib_gate_pool(self) -> None:
+        # MOR-4214 / MOR-4280: the gate pool is 2 GiB containers sized for short
+        # guard jobs; the full suite and the Playwright jobs belong on build pools.
+        workflows = ROOT / ".github" / "workflows"
+        for name, pools in (
+            (
+                "full.yml",
+                [
+                    "[self-hosted, Linux, X64, build]",
+                    "[self-hosted, Linux, ARM64, build]",
+                ],
+            ),
+            ("visual.yml", ["[self-hosted, Linux, ARM64, build]"]),
+        ):
+            with self.subTest(workflow=name):
+                text = (workflows / name).read_text(encoding="utf-8")
+                self.assertNotIn("ARM64, gate", text)
+                found = re.findall(r"(?m)^    runs-on: (\[.*\])$", text)
+                self.assertEqual([pool for pool in found if "light" not in pool], pools)
+
+    def test_frontend_check_step_sets_the_node_heap_svelte_check_needs(self) -> None:
+        quick = QUICK_YML.read_text(encoding="utf-8")
+        step = quick.split(
+            "      - name: Frontend install + check + tests + build\n", 1
+        )[1]
+        step = step.split("      - name:", 1)[0]
+        self.assertIn("NODE_OPTIONS: --max-old-space-size=3072", step)
+        self.assertIn("npm run check", step)
+
+    def test_release_gate_changes_select_the_route_that_runs_receipt_tests(
+        self,
+    ) -> None:
+        # MOR-3839 pre-review: the publish-path radio-smoke gate is pinned by
+        # tests/test_check_radio_smoke.py and
+        # tests/test_publish_radio_smoke_gate.py, and only the core route's
+        # full tests/ run executes them. A change confined to the checker, to
+        # publish.yml, or to either test module must select that route;
+        # otherwise a regression to the production publish gate can receive
+        # green required CI without its receipt tests ever running.
+        receipt_test_modules = (
+            "tests/test_check_radio_smoke.py",
+            "tests/test_publish_radio_smoke_gate.py",
+        )
+        for path in (
+            "scripts/release/check_radio_smoke.py",
+            *receipt_test_modules,
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    CLASSIFIER.classify([path]),
+                    {"core": True, "frontend": False, "ci": False, "docs": False},
+                )
+        # publish.yml stays CI-selected too: the workflow contract tests must
+        # still run for a publish.yml-only change.
+        self.assertEqual(
+            CLASSIFIER.classify([".github/workflows/publish.yml"]),
+            {"core": True, "frontend": False, "ci": True, "docs": False},
+        )
+        # The core route's test step runs the whole tests/ tree, which is
+        # where both receipt test modules live.
+        for module in receipt_test_modules:
+            with self.subTest(module=module):
+                self.assertTrue((ROOT / module).is_file())
+                self.assertEqual(Path(module).parts[0], "tests")
+        quick = QUICK_YML.read_text(encoding="utf-8")
+        run_tests = quick.index("      - name: Run tests\n")
+        step_end = quick.index("\n      - name: ", run_tests + 1)
+        run_tests_step = quick[run_tests:step_end]
+        self.assertIn("if: needs.classify.outputs.core == 'true'", run_tests_step)
+        self.assertIn("uv run pytest tests/ ", run_tests_step)
+
+    def test_docs_data_files_select_core_by_suffix_rule(self) -> None:
+        # The rule covers any *.json/*.toml/*.yaml/*.yml under docs/, including
+        # files not in the hand-maintained CORE_DOCS_TEST_INPUT_EXACT list: a
+        # machine-readable docs data file must select core and must never take
+        # the docs-only fast path (MOR-2580).
+        for path in (
+            "docs/internals/ui-radio-control-contract.toml",
+            "docs/parity/ic7610_command_matrix.json",
+            "docs/validation/templates/x6200.json",
+            "docs/validation/templates/future-radio.json",
+            "docs/internals/future-contract.yaml",
+            "docs/guide/data.YML",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    CLASSIFIER.classify([path]),
+                    {"core": True, "frontend": False, "ci": False, "docs": False},
+                )
+        # Prose and images under docs/ stay documentation-only, and the rule
+        # is scoped to docs/: .claude data files keep the docs-only path.
+        self.assert_docs_only(["docs/guide.md"])
+        self.assert_docs_only(["docs/assets/front-panel.png"])
+        self.assert_docs_only([".claude/settings.json"])
+        # A Markdown sibling of a CORE_DOCS_TEST_INPUT_EXACT file that tests
+        # do not read keeps the docs-only path (MOR-2589 keeps the list exact).
+        self.assert_docs_only(["docs/api/unlisted.md"])
+        self.assert_docs_only(["docs/internals/unlisted.md"])
+
+    def test_docs_test_input_files_classify_as_core(self) -> None:
+        # Every path here is read by name (Path(...)/open()/read_text()) by a
+        # test under tests/ at test time — not merely cited in a comment or
+        # docstring. A diff touching only one of these must not take the
+        # docs-only fast path.
+        test_input_paths = (
+            "docs/internals/ui-radio-control-contract.toml",
+            "docs/parity/ic7610_command_matrix.json",
+            "docs/PROJECT.md",
+            "docs/parity/README.md",
+            "docs/operations/managed-runtime-packaging.md",
+            "docs/api/web.md",
+            "docs/guide/web-ui.md",
+            "docs/api/command-catalog.md",
+            "docs/api/radio.md",
+            "docs/guide/connection.md",
+            "docs/api/audio.md",
+            "docs/guide/audio-recipes.md",
+            "docs/guide/diagnostic-reports.md",
+            "docs/internals/audio-capture-health.md",
+            "docs/validation/templates/ftx1.json",
+            "docs/validation/templates/ic7300.json",
+            "docs/validation/templates/icom_ic7610.json",
+            "docs/validation/templates/tx500.json",
+            "docs/validation/templates/x6200.json",
+            "docs/validation/templates/xiegu_x6200.json",
+        )
+        for path in test_input_paths:
+            with self.subTest(path=path):
+                self.assertEqual(
+                    CLASSIFIER.classify([path]),
+                    {"core": True, "frontend": False, "ci": False, "docs": False},
+                )
+        # A mix with an unrelated doc must not fall back to docs-only either.
+        self.assertEqual(
+            CLASSIFIER.classify(
+                ["docs/internals/ui-radio-control-contract.toml", "docs/guide.md"]
+            ),
+            {"core": True, "frontend": False, "ci": False, "docs": False},
+        )
+
+    def test_rename_from_docs_data_to_markdown_selects_core(self) -> None:
+        # git diff --name-only pairs renames and lists only the new name, so
+        # the deleted docs data side of a rename escaped classification;
+        # changed_paths must report both sides (MOR-2589).
+        with tempfile.TemporaryDirectory() as scratch:
+            repo = Path(scratch) / "repo"
+            (repo / "docs" / "data").mkdir(parents=True)
+
+            def git(*args: str) -> str:
+                completed = subprocess.run(
+                    ["git", "-C", str(repo), *args],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                return completed.stdout.strip()
+
+            git("init")
+            git("config", "user.email", "ci@example.invalid")
+            git("config", "user.name", "ci")
+            (repo / "docs" / "data" / "x.json").write_text("payload", encoding="utf-8")
+            git("add", "-A")
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            git("mv", "docs/data/x.json", "docs/data/x.md")
+            git("commit", "-m", "rename")
+            head = git("rev-parse", "HEAD")
+
+            paths = CLASSIFIER.changed_paths(repo, base=base, head=head)
+            self.assertEqual(set(paths), {"docs/data/x.json", "docs/data/x.md"})
+            self.assertEqual(
+                CLASSIFIER.classify(paths),
+                {"core": True, "frontend": False, "ci": False, "docs": False},
+            )
+
+    def test_frontend_input_paths_select_frontend_checks(self) -> None:
+        # Payloads the frontend parses are produced here; a change must run
+        # the frontend checks even though no frontend/ file changed.
+        for path in (
+            "src/rigplane/runtime/radio.py",
+            "src/rigplane/core/state_store.py",
+            "src/rigplane/core/_state_cache.py",
+            "src/rigplane/core/radio_state.py",
+            "contracts/consumer-expectations/example.json",
+            "rigs/ftx1.toml",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    CLASSIFIER.classify([path]),
+                    {"core": True, "frontend": True, "ci": False, "docs": False},
+                )
+        # Controls: core paths that are not frontend inputs, and rig prose.
+        self.assertFalse(CLASSIFIER.classify(["src/rigplane/core/civ.py"])["frontend"])
+        self.assertFalse(
+            CLASSIFIER.classify(["src/rigplane/commands/x.py"])["frontend"]
+        )
+        self.assertFalse(CLASSIFIER.classify(["src/rigplane/cli/x.py"])["frontend"])
+        self.assertFalse(CLASSIFIER.classify(["tests/test_radio.py"])["frontend"])
+        self.assert_docs_only(["rigs/_schema.md"])
+        self.assert_docs_only(["docs/internals/runtime-notes.md"])
+
+    def test_frontend_changes_select_the_web_python_subset(self) -> None:
+        for paths, expected in (
+            (["frontend/src/lib/transport/ws.ts"], True),
+            (["frontend/package.json", "docs/guide.md"], True),
+            (["src/rigplane/web/server.py"], False),
+            (["src/rigplane/runtime/radio.py"], False),
+            (["frontend/README.md"], False),
+            (["docs/guide.md"], False),
+        ):
+            with self.subTest(paths=paths):
+                self.assertEqual(CLASSIFIER.selects_web_python_subset(paths), expected)
+        # frontend-only: no core, so quick.yml must run the subset itself.
+        self.assertEqual(
+            CLASSIFIER.classify(["frontend/src/lib/transport/ws.ts"]),
+            {"core": False, "frontend": True, "ci": False, "docs": False},
+        )
+        # The subset target exists and quick.yml wires the output.
+        self.assertTrue((ROOT / "tests" / "web").is_dir())
+        self.assertTrue(list((ROOT / "tests").glob("test_web_*.py")))
+        quick = QUICK_YML.read_text(encoding="utf-8")
+        self.assertIn("web: ${{ steps.paths.outputs.web }}", quick)
+        self.assertIn(
+            "needs.classify.outputs.web == 'true' && needs.classify.outputs.core != 'true'",
+            quick,
+        )
+        self.assertIn("uv run pytest tests/web tests/test_web_*.py", quick)
+
+    def test_quick_halves_run_in_parallel_behind_the_required_aggregator(
+        self,
+    ) -> None:
+        # MOR-3875: in one job the frontend chain and the full pytest suite ran
+        # in series (~28-30 min). The halves now run on separate build runners,
+        # each inside 25 minutes, and the required `quick` context is a light
+        # aggregator, so branch protection keeps the same context name.
+        # MOR-4373: each half additionally has a sharded matrix tier
+        # (`quick-python-tests`, `quick-frontend-e2e`) for the heavy test runs.
+        quick = QUICK_YML.read_text(encoding="utf-8")
+        body = quick.split("\njobs:\n", 1)[1]
+        jobs = dict(re.findall(r"(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)", body))
+        self.assertEqual(
+            set(jobs),
+            {
+                "classify",
+                "quick-frontend",
+                "quick-frontend-e2e",
+                "quick-python",
+                "quick-python-tests",
+                "quick",
+            },
+        )
+        # MOR-4214: both halves need more memory than the 2 GiB gate pool gives.
+        pools = {
+            "quick-frontend": "[self-hosted, Linux, ARM64, build]",
+            "quick-frontend-e2e": "[self-hosted, Linux, ARM64, build]",
+            "quick-python": "[self-hosted, Linux, X64, build]",
+            "quick-python-tests": "[self-hosted, Linux, X64, build]",
+        }
+        for half in pools:
+            with self.subTest(job=half):
+                block = jobs[half]
+                self.assertIn("    needs: classify\n", block)
+                self.assertIn(f"    runs-on: {pools[half]}\n", block)
+                self.assertIn("    timeout-minutes: 25\n", block)
+                self.assertIn("needs.classify.outputs.docs != 'true'", block)
+                self.assertIn("needs.classify.outputs.reuse != 'true'", block)
+        self.assertIn("npm ci", jobs["quick-frontend"])
+        self.assertNotIn("uv run pytest tests/ ", jobs["quick-frontend"])
+        # vitest shells out to `uv run python tests/liveness_ws_trace.py`
+        # (ws-client-store.integration.isolated.test.ts), so quick-frontend
+        # keeps uv, Python 3.11 and the synced environment (trial PR #4557
+        # showed the failure when they were dropped).
+        for needle in (
+            '      UV_PYTHON: "3.11"\n',
+            "      - name: Install uv\n",
+            "        run: uv python install 3.11\n",
+            "        run: uv sync --all-extras\n",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, jobs["quick-frontend"])
+        # The Playwright tiers moved to quick-frontend-e2e (MOR-4373); the
+        # lint/check/vitest/build job keeps no e2e step.
+        self.assertNotIn("test:e2e:i18n", jobs["quick-frontend"])
+        self.assertNotIn("playwright.journey.config.ts", jobs["quick-frontend"])
+        self.assertIn("test:e2e:i18n", jobs["quick-frontend-e2e"])
+        self.assertIn("playwright.journey.config.ts", jobs["quick-frontend-e2e"])
+        # The full pytest suite moved to quick-python-tests (MOR-4373).
+        self.assertNotIn("uv run pytest tests/ ", jobs["quick-python"])
+        self.assertIn("uv run pytest tests/ ", jobs["quick-python-tests"])
+        self.assertNotIn("npm ci", jobs["quick-python"])
+        aggregator = jobs["quick"]
+        self.assertIn(
+            "    needs: [classify, quick-frontend, quick-frontend-e2e, "
+            "quick-python, quick-python-tests]\n",
+            aggregator,
+        )
+        self.assertIn("    runs-on: [self-hosted, Linux, ARM64, light]\n", aggregator)
+        self.assertIn("    timeout-minutes: 5\n", aggregator)
+        self.assertIn("needs.classify.outputs.reuse != 'true'", aggregator)
+        self.assertNotIn("actions/checkout", aggregator)
+        for result in (
+            "quick-frontend.result",
+            "quick-frontend-e2e.result",
+            "quick-python.result",
+            "quick-python-tests.result",
+        ):
+            self.assertIn(f"${{{{ needs.{result} }}}}", aggregator)
+
+    def test_sharded_tiers_are_pinned_to_the_workflow_constants(self) -> None:
+        # MOR-4373: the matrix lists are literal, so this pin ties them to the
+        # single workflow-level constant each; the quick-v2 observer's expected
+        # leg names (base-controlled-gates-v1.test.js) must move with them.
+        quick = QUICK_YML.read_text(encoding="utf-8")
+        shards = re.search(r'^  QUICK_PYTHON_SHARDS: "(\d+)"$', quick, re.M)
+        self.assertIsNotNone(shards, "quick.yml must define QUICK_PYTHON_SHARDS")
+        legs = re.search(r'^  QUICK_FRONTEND_E2E_LEGS: "([a-z0-9- ]+)"$', quick, re.M)
+        self.assertIsNotNone(legs, "quick.yml must define QUICK_FRONTEND_E2E_LEGS")
+        body = quick.split("\njobs:\n", 1)[1]
+        jobs = dict(re.findall(r"(?ms)^  ([\w-]+):\n(.*?)(?=^  [\w-]+:\n|\Z)", body))
+        shard_matrix = re.search(
+            r"^        shard: \[([\d, ]+)\]$", jobs["quick-python-tests"], re.M
+        )
+        self.assertIsNotNone(shard_matrix)
+        assert shards is not None and shard_matrix is not None
+        self.assertEqual(
+            [int(value) for value in shard_matrix.group(1).split(",")],
+            list(range(1, int(shards.group(1)) + 1)),
+        )
+        group_matrix = re.search(
+            r"^        group: \[([a-z0-9-, ]+)\]$", jobs["quick-frontend-e2e"], re.M
+        )
+        self.assertIsNotNone(group_matrix)
+        assert legs is not None and group_matrix is not None
+        self.assertEqual(
+            [value.strip() for value in group_matrix.group(1).split(",")],
+            legs.group(1).split(),
+        )
+        for job in ("quick-python-tests", "quick-frontend-e2e"):
+            with self.subTest(job=job):
+                self.assertIn("      fail-fast: false\n", jobs[job])
+                # No `name:` template: GitHub names the legs `<job-id> (<leg>)`
+                # and a job-level skip collapses to one bare entry, which the
+                # quick-v2 observer's topology rules depend on.
+                self.assertNotIn("\n    name:", jobs[job])
+        tests_job = jobs["quick-python-tests"]
+        self.assertIn(
+            '-p pytest_shard --shard "$SHARD/$QUICK_PYTHON_SHARDS"', tests_job
+        )
+        self.assertIn("SHARD: ${{ matrix.shard }}", tests_job)
+        self.assertIn("worker-diagnostics-quick-${{ matrix.shard }}", tests_job)
+        # upload-artifact v7 rejects duplicate names, so every upload in the
+        # sharded jobs carries its leg suffix.
+        for job in ("quick-python-tests", "quick-frontend-e2e"):
+            for artifact_name in re.findall(r"^          name: (.+)$", jobs[job], re.M):
+                with self.subTest(job=job, artifact=artifact_name):
+                    self.assertIn("${{ matrix.", artifact_name)
+        # quick-python-tests is selected by the core route alone; the CI-only
+        # route still runs quick-python's control tests without the suite.
+        self.assertIn("needs.classify.outputs.core == 'true'", tests_job)
+        # The python legs keep xdist capped (MOR-2830) and the shard plugin
+        # rides the same PYTHONPATH as the worker diagnostics.
+        self.assertIn("PYTHONPATH: ${{ github.workspace }}/.github/scripts", tests_job)
+        self.assertIn("--maxprocesses 4", tests_job)
+
+    def test_workflows_pin_docs_skip_ready_guard_and_visual_exclusions(self) -> None:
+        quick = QUICK_YML.read_text(encoding="utf-8")
+        visual = VISUAL_YML.read_text(encoding="utf-8")
+        event_types = "types: [opened, reopened, synchronize, ready_for_review]"
+
+        self.assertIn(event_types, quick)
+        self.assertIn(event_types, visual)
+        self.assertIn("runs-on: [self-hosted, Linux, ARM64, light]", quick)
+        self.assertIn("needs: classify", quick)
+        self.assertIn("needs.classify.outputs.docs != 'true'", quick)
+        self.assertIn("needs.classify.outputs.ci == 'true'", quick)
+        self.assertIn("needs.classify.outputs.core == 'true'", quick)
+        self.assertIn("needs.classify.outputs.frontend == 'true'", quick)
+        self.assertNotIn("timeout-minutes: 40", quick)
+        self.assertIn('      - "frontend/**"', visual)
+        self.assertIn('      - "!frontend/**/*.md"', visual)
+        self.assertIn('      - "!frontend/**/*.rst"', visual)
+        self.assertNotIn('      - ".github/workflows/visual.yml"', visual)
+        # No push trigger (MOR-3878): the merge queue tested the tree that
+        # lands, and full.yml calls this workflow for the scheduled run on main.
+        self.assertNotIn("\n  push:\n", visual)
+        self.assertIn("\n  workflow_call:\n", visual)
+
+    def test_visual_unfiltered_run_is_wired_and_dispatch_has_its_own_concurrency(
+        self,
+    ) -> None:
+        visual = VISUAL_YML.read_text(encoding="utf-8")
+        visual_job_start = "\n  visual:\n"
+        self.assertIn(visual_job_start, visual)
+        visual_job = visual[visual.index(visual_job_start) :]
+
+        # Without a paths filter (a dispatch, or full.yml calling this
+        # workflow) the `changes` job must select the run and the `visual` job
+        # must let it through, or the run would be all-skipped and green.
+        self.assertIn(
+            "      frontend: ${{ steps.filter.outputs.frontend"
+            " || steps.manual.outputs.frontend }}",
+            visual,
+        )
+        manual_step_start = "      - name: Select unfiltered visual run\n"
+        self.assertIn(manual_step_start, visual)
+        manual_step = visual[
+            visual.index(manual_step_start) : visual.index(visual_job_start)
+        ]
+        self.assertIn("        id: manual\n", manual_step)
+        self.assertIn("        if: github.event_name != 'pull_request'\n", manual_step)
+        self.assertIn(
+            '        run: echo "frontend=true" >> "$GITHUB_OUTPUT"', manual_step
+        )
+        self.assertIn(
+            "    if: >-\n"
+            "      needs.changes.outputs.frontend == 'true' &&\n"
+            "      (github.event_name != 'pull_request' ||\n"
+            "      github.event.pull_request.draft == false)\n",
+            visual_job,
+        )
+
+        # The event name is part of the group key, so a scheduled run on main and a
+        # workflow_dispatch on main are different groups.
+        self.assertIn(
+            "concurrency:\n"
+            "  group: visual-${{ github.workflow }}-${{ github.event_name }}"
+            "-${{ github.ref }}\n"
+            "  cancel-in-progress: true\n",
+            visual,
+        )
+
+    def test_component_kit_api_proof_is_frontend_selected_and_mirrored(self) -> None:
+        quick = QUICK_YML.read_text(encoding="utf-8")
+        worker = QUICK_WORKER.read_text(encoding="utf-8")
+        command = "npm run verify:component-kit-api"
+
+        for path in (
+            "frontend/component-kit-api/src/index.ts",
+            "frontend/src/components-v2/controls/value-control/skin.ts",
+            "frontend/src/primitives/frequency/frequency-readout.ts",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    CLASSIFIER.classify([path]),
+                    {"core": False, "frontend": True, "ci": False, "docs": False},
+                )
+
+        self.assertEqual(quick.count(command), 1)
+        self.assertEqual(worker.count(command), 1)
+        npm_install = quick.index("npm ci")
+        browser_install = quick.index("npx playwright install chromium")
+        system_dependencies = quick.index("npx playwright install-deps chromium")
+        portable_verifier = quick.index(command)
+        self.assertLess(npm_install, browser_install)
+        self.assertLess(browser_install, system_dependencies)
+        self.assertLess(system_dependencies, portable_verifier)
+        self.assertLess(portable_verifier, quick.index("Frontend i18n visual smoke"))
+        self.assertLess(worker.index("npm ci"), worker.index(command))
+
+    def test_docs_only_routes_match_predicate_and_are_base_controlled(self) -> None:
+        quick = QUICK_YML.read_text(encoding="utf-8")
+        docs_quick = DOCS_QUICK_YML.read_text(encoding="utf-8")
+        docs_paths = DOCS_PATHS_JS.read_text(encoding="utf-8")
+        exact = (
+            ".github/scripts/doc-citation-baseline.txt",
+            ".github/scripts/doc-citation-dangling-baseline.txt",
+            ".github/scripts/doc-link-baseline.txt",
+            "AUTHORS",
+            "COPYING",
+            "LICENSE",
+            "LICENSE.txt",
+            "NOTICE",
+            "mkdocs.yml",
+        )
+        suffix_patterns = (
+            "**/*.md",
+            "**/*.mD",
+            "**/*.Md",
+            "**/*.MD",
+            "**/*.rst",
+            "**/*.rsT",
+            "**/*.rSt",
+            "**/*.rST",
+            "**/*.RsT",
+            "**/*.Rst",
+            "**/*.RSt",
+            "**/*.RST",
+        )
+        for path in exact:
+            with self.subTest(path=path):
+                self.assertIn(f'"{path}"', docs_paths)
+                self.assertEqual(quick.count(f'      - "{path}"'), 1)
+        for pattern in ("docs/**", ".claude/**", *suffix_patterns):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(quick.count(f'      - "{pattern}"'), 1)
+        # docs/ data files are re-included after "docs/**" in the
+        # paths-ignore block so a data-only diff still runs quick (MOR-2580).
+        for pattern in (
+            "!docs/**/*.toml",
+            "!docs/**/*.json",
+            "!docs/**/*.yaml",
+            "!docs/**/*.yml",
+        ):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(quick.count(f'      - "{pattern}"'), 1)
+        # The publisher predicate and the base route policy mirror the
+        # classifier's docs data suffixes and test-read docs Markdown list;
+        # comparing parsed set contents fails when any mirror diverges.
+        base_policy = BASE_POLICY_JS.read_text(encoding="utf-8")
+        for name, expected in (
+            ("DOCS_DATA_SUFFIXES", set(CLASSIFIER.DOCS_DATA_SUFFIXES)),
+            ("CORE_DOCS_TEST_INPUT_EXACT", set(CLASSIFIER.CORE_DOCS_TEST_INPUT_EXACT)),
+        ):
+            with self.subTest(mirror=name):
+                self.assertEqual(self.js_set_literals(docs_paths, name), expected)
+                self.assertEqual(self.js_set_literals(base_policy, name), expected)
+        # quick.yml re-includes every test-read docs Markdown file in its
+        # paths-ignore block so such a diff reaches the classifier (MOR-2589).
+        for path in sorted(CLASSIFIER.CORE_DOCS_TEST_INPUT_EXACT):
+            with self.subTest(test_read_negation=path):
+                self.assertEqual(quick.count(f'      - "!{path}"'), 1)
+
+        self.assertIn("pull_request_target:", docs_quick)
+        self.assertNotIn("\n  pull_request:\n", docs_quick)
+        self.assertIn("contents: read", docs_quick)
+        self.assertIn("ref: baseSha", docs_quick)
+        self.assertNotIn("github.workflow_sha", docs_quick)
+        self.assertNotIn("actions/checkout", docs_quick)
+
+    def test_docs_only_quick_concurrency_is_per_pull_request(self) -> None:
+        docs_quick = DOCS_QUICK_YML.read_text(encoding="utf-8")
+        self.assertIn(
+            "concurrency:\n"
+            "  group: docs-only-quick-${{ github.event.pull_request.number }}\n"
+            "  cancel-in-progress: true\n",
+            docs_quick,
+        )
+
+    def test_docs_only_publisher_succeeds_only_for_complete_stable_docs(self) -> None:
+        head = "a" * 40
+        base = "c" * 40
+        docs = [
+            {"filename": "docs/guide.md"},
+            {"filename": "docs/operations/unlisted.md"},
+            {"filename": ".claude/agents/verifier.md"},
+            {"filename": "frontend/README.MD"},
+            {"filename": "guide.RsT"},
+            {"filename": "mkdocs.yml"},
+            {
+                "filename": "docs/new.md",
+                "previous_filename": "docs/old.md",
+            },
+        ]
+        stable = self.run_docs_quick_script(
+            heads=[head, head], bases=[base, base], files=docs
+        )
+        self.assertEqual([status["sha"] for status in stable["statuses"]], [head])
+        self.assertEqual(stable["contents"][0]["ref"], base)
+
+        scenarios = (
+            ({"files": [{"filename": "CODEOWNERS"}]}, "unknown"),
+            ({"files": [{"filename": "docs"}]}, "docs-root-file"),
+            ({"files": [{"filename": ".claude"}]}, "claude-root-file"),
+            ({"files": [{"filename": "frontend/README.rſt"}]}, "unicode-fold"),
+            ({"files": [{"filename": "frontend/README.md\n"}]}, "newline-suffix"),
+            ({"files": [{"filename": "frontend/README.rst\r\n"}]}, "crlf-suffix"),
+            (
+                {
+                    "files": [
+                        {"filename": "docs/guide.md"},
+                        {"filename": "src/rigplane/radio.py"},
+                    ]
+                },
+                "mixed",
+            ),
+            (
+                {
+                    "files": [
+                        {
+                            "filename": "docs/guide.md",
+                            "previous_filename": "src/rigplane/radio.py",
+                        }
+                    ]
+                },
+                "rename",
+            ),
+            (
+                {"files": [{"filename": "docs/guide.md"}], "changed_files": 2},
+                "incomplete",
+            ),
+            (
+                {
+                    "files": [
+                        {"filename": "docs/internals/ui-radio-control-contract.toml"}
+                    ]
+                },
+                "docs-data-toml",
+            ),
+            (
+                {"files": [{"filename": "docs/validation/templates/x6200.json"}]},
+                "docs-data-json",
+            ),
+            (
+                {
+                    "files": [
+                        {"filename": "docs/guide.md"},
+                        {"filename": "docs/parity/ic7610_command_matrix.json"},
+                    ]
+                },
+                "docs-mixed-data",
+            ),
+            (
+                {"files": [{"filename": "docs/PROJECT.md"}]},
+                "docs-test-input-md",
+            ),
+            (
+                {
+                    "files": [
+                        {"filename": "docs/guide.md"},
+                        {"filename": "docs/api/web.md"},
+                    ]
+                },
+                "docs-mixed-test-input",
+            ),
+            (
+                {
+                    "files": [
+                        {
+                            "filename": "docs/guide.md",
+                            "previous_filename": "docs/api/radio.md",
+                        }
+                    ]
+                },
+                "rename-old-side-test-input",
+            ),
+            (
+                {
+                    "files": [{"filename": "docs/guide.md"}],
+                    "changed_files": 3000,
+                },
+                "capped",
+            ),
+            (
+                {
+                    "files": [{"filename": "docs/guide.md"}],
+                    "heads": [head, "b" * 40],
+                },
+                "head-race",
+            ),
+            (
+                {
+                    "files": [{"filename": "docs/guide.md"}],
+                    "bases": [base, "d" * 40],
+                },
+                "base-race",
+            ),
+        )
+        for overrides, name in scenarios:
+            with self.subTest(name=name):
+                result = self.run_docs_quick_script(
+                    heads=overrides.get("heads", [head, head]),
+                    bases=overrides.get("bases", [base, base]),
+                    files=overrides["files"],
+                    changed_files=overrides.get("changed_files"),
+                )
+                self.assertEqual(result["statuses"], [])
+
+    def test_rejected_publisher_paths_select_the_normal_quick_route(self) -> None:
+        blocks = self.quick_ignore_blocks()
+        self.assertEqual(len(blocks), 1)
+        for path in (
+            "docs",
+            ".claude",
+            "frontend/README.rſt",
+            "frontend/README.md\n",
+            "frontend/README.rst\r\n",
+            # docs/ data files are re-included by the ordered "!docs/**"
+            # negations, so the quick.yml trigger fires for them (MOR-2580).
+            # Test-read Markdown under docs/ is re-included the same way by
+            # exact "!<path>" negations (MOR-2589).
+            "docs/internals/ui-radio-control-contract.toml",
+            "docs/parity/ic7610_command_matrix.json",
+            "docs/validation/templates/x6200.json",
+            "docs/internals/future-contract.yaml",
+            "docs/PROJECT.md",
+            "docs/parity/README.md",
+            "docs/api/web.md",
+            "docs/internals/audio-capture-health.md",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    all(not self.ignored_by_block(path, block) for block in blocks)
+                )
+        # Prose under docs/ that tests do not read stays ignored by the
+        # trigger.
+        for path in (
+            "docs/guide.md",
+            "docs/operations/other.md",
+            "docs/internals/unlisted.md",
+        ):
+            with self.subTest(path=path):
+                self.assertTrue(
+                    all(self.ignored_by_block(path, block) for block in blocks)
+                )
+
+    def test_docs_only_does_not_trigger_citation_job(self) -> None:
+        citation = DOC_CITATION_YML.read_text(encoding="utf-8")
+
+        self.assertNotIn('      - "**/*.md"', citation)
+        self.assertNotIn('      - "docs/**"', citation)
+        self.assertEqual(
+            citation.count('      - ".github/scripts/check-doc-citations.sh"'), 1
+        )
+        self.assertEqual(
+            citation.count('      - ".github/workflows/doc-citation-gate.yml"'), 1
+        )
+
+    def test_rebrand_gate_reports_on_every_pr_and_merge_group(self) -> None:
+        # grep-gate is meant to be a required context on main: a path filter
+        # would leave the context missing on docs/CI-only PRs, and a missing
+        # merge_group trigger would stall the merge queue.
+        rebrand = REBRAND_YML.read_text(encoding="utf-8")
+        on_block = "\n" + rebrand.split("\non:\n", 1)[1].split("\nconcurrency:", 1)[0]
+
+        self.assertNotIn("paths:", on_block)
+        self.assertNotIn("paths-ignore:", on_block)
+        self.assertIn("\n  pull_request:\n    branches: [main]\n", on_block)
+        self.assertIn("\n  merge_group:\n    types: [checks_requested]\n", on_block)
+        self.assertIn("\n  workflow_call:\n", on_block)
+        self.assertNotIn("\n  push:", on_block)
+        self.assertIn("\n  grep-gate:\n", rebrand)
+
+    def test_rebrand_gate_merge_queue_checkout_recovery_contract(self) -> None:
+        # merge_group run 43649024650: hung checkout + short job timeout ejected a
+        # PR from the queue. The gate pins job/checkout timeouts, merge_queue
+        # concurrency, checkout retry keyed on outcome (not conclusion — a step
+        # with continue-on-error keeps conclusion success on failure), and a grep
+        # step that cannot run without a successful checkout attempt.
+        rebrand = REBRAND_YML.read_text(encoding="utf-8")
+        full = (ROOT / ".github" / "workflows" / "full.yml").read_text(encoding="utf-8")
+
+        self.assertIn("    timeout-minutes: 10\n", rebrand)
+        self.assertIn(
+            "concurrency:\n"
+            "  group: rebrand-gate-${{ github.workflow }}-${{ github.ref }}\n"
+            "  cancel-in-progress: ${{ github.event_name != 'merge_group' }}\n",
+            rebrand,
+        )
+        grep_job = rebrand.split("\n  grep-gate:\n", 1)[1]
+        self.assertIn("        id: checkout\n", grep_job)
+        self.assertIn("        timeout-minutes: 4\n", grep_job)
+        self.assertIn("        continue-on-error: true\n", grep_job)
+        self.assertIn("        id: checkout_retry\n", grep_job)
+        self.assertIn("        if: steps.checkout.outcome == 'failure'\n", grep_job)
+        self.assertNotIn("steps.checkout.conclusion", grep_job)
+        self.assertNotIn("failure() && steps.checkout", grep_job)
+        self.assertIn(
+            "      - name: Wave 2 rebrand grep gate\n"
+            "        if: >-\n"
+            "          steps.checkout.outcome == 'success' ||\n"
+            "          steps.checkout_retry.outcome == 'success'\n"
+            "        run: .github/scripts/check-rebrand-allowlist.sh",
+            rebrand,
+        )
+        self.assertIn(
+            "  rebrand-gate:\n"
+            "    needs: fresh\n"
+            "    if: needs.fresh.outputs.run == 'true'\n"
+            "    uses: ./.github/workflows/rebrand-gate.yml\n",
+            full,
+        )
+        self.assertNotIn("cancel-in-progress", full[full.index("rebrand-gate:") :])
+
+if __name__ == "__main__":
+    unittest.main()

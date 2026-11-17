@@ -1,0 +1,1805 @@
+from __future__ import annotations
+
+import copy
+import datetime
+import functools
+import time
+from collections.abc import Callable, Collection, Mapping
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any, Final, cast
+
+from ..core.acquisition_scheduler import resolve_available_when
+from ..core.state_acquisition_policy import RadioAcquisitionProfile
+from ..core.state_pipeline_contracts import FieldFamily, FieldScope, FieldPath, VfoSlot
+from ..core.state_store import (
+    FieldSnapshot,
+    FreshnessState,
+    StateSnapshot,
+    StateStore,
+    is_immutable_value,
+)
+from ..core.tx_target import TxTarget, tx_target_from_dict, validate_tx_target
+from ..profiles import RadioProfile, resolve_radio_profile
+from ..radio_protocol import (
+    AudioCapable,
+    DualReceiverCapable,
+    RepeaterShiftCapable,
+    ScopeCapable,
+    UsbAudioCapable,
+)
+from ..radio_state import RadioState
+
+if TYPE_CHECKING:
+    from ..radio_protocol import Radio
+
+__all__ = [
+    "runtime_capabilities",
+    "radio_ready",
+    "classify_radio_health",
+    "store_has_radio_observation",
+    "build_public_state_payload",
+    "build_public_state_payload_from_snapshot",
+    "snapshot_field_status_inputs",
+    "primary_receiver_snapshot_ids",
+    "VFO_CAPABILITY_TAGS",
+    "projected_af_level_sub_tag",
+    "projected_receiver_control_tags",
+    "projected_vfo_capability_tags",
+]
+
+# Reserved runtime capability tags for the VFO-primitive commands
+# (``vfo_swap``, ``vfo_equalize``). These are never trusted from
+# ``radio.capabilities`` directly — see ``projected_vfo_capability_tags``.
+VFO_CAPABILITY_TAGS: frozenset[str] = frozenset(
+    {"vfo_swap", "vfo_equalize", "vfo_freq_direct"}
+)
+
+_RECEIVER_KEY_MAP = {"freq": "freqHz"}
+_SNAPSHOT_RECEIVER_IDS = {
+    "0": "main",
+    "1": "sub",
+    "main": "main",
+    "sub": "sub",
+}
+_EMPTY_STATE_DICT = RadioState().to_dict()
+_RECEIVER_FREQ_MODE_FIELDS = {
+    "freq_hz": "freq",
+    "mode": "mode",
+    "filter": "filter",
+    "filter_num": "filter",
+    "data_mode": "data_mode",
+    "filter_width": "filter_width",
+    "filter_width_radio_default": "filter_width_radio_default",
+}
+_VFO_SLOT_FIELDS = {
+    "freq_hz": "freq_hz",
+    "mode": "mode",
+    "filter_num": "filter_num",
+    "data_mode": "data_mode",
+}
+_RECEIVER_OPERATOR_CONTROL_FIELDS = {
+    "af_level",
+    "rf_gain",
+    "squelch",
+    "att",
+    "preamp",
+    "pbt_inner",
+    "pbt_outer",
+    "nr_level",
+    "nb_level",
+    "filter_width",
+    "if_shift",
+    "agc",
+    "agc_time_constant",
+    "audio_peak_filter",
+    "apf_type_level",
+    "apf_freq",
+    "filter_shape",
+    "manual_notch_freq",
+    "manual_notch_width",
+    # notch_filter (MOR-1548): reclassified from global to receiver-scoped,
+    # matching the ic7610.toml cmd29 route's own per-receiver rationale.
+    "notch_filter",
+    "digisel_shift",
+    "tone_freq",
+    "tsql_freq",
+    "repeater_shift",
+    "tone_squelch_type",
+    "key_speed",
+    "cw_pitch",
+    "monitor_gain",
+    "mic_gain",
+    "compressor_level",
+    "break_in_delay",
+    "vox_gain",
+    "anti_vox_gain",
+    "vox_delay",
+}
+_NORMALIZED_RECEIVER_OPERATOR_CONTROL_FIELDS = {
+    "af_level",
+    "rf_gain",
+    "squelch",
+}
+_RECEIVER_OPERATOR_TOGGLE_FIELDS = {
+    "nb",
+    "nr",
+    "digisel",
+    "manual_notch",
+    "auto_notch",
+    "audio_peak_filter",
+    "twin_peak_filter",
+    "af_mute",
+    "ipplus",
+    "dcd",
+    "apf_on",
+    "narrow",
+    "repeater_tone",
+    "repeater_tsql",
+}
+_RECEIVER_SLOW_STATE_FIELDS = {
+    "vfo_a",
+    "vfo_b",
+    "active_slot",
+    "filter",
+    "contour",
+}
+_GLOBAL_TX_FIELDS = {
+    "ptt",
+    "power_on",
+    "split",
+    "dual_watch",
+    "rit_on",
+    "rit_tx",
+    "monitor_on",
+    "vox_on",
+    "compressor_on",
+    "main_sub_tracking",
+    "dial_lock",
+    "tx_target",
+}
+_GLOBAL_OPERATOR_CONTROL_FIELDS = {
+    "power_level",
+    "tuner_status",
+    "rit_freq",
+    "cw_pitch",
+    "mic_gain",
+    "key_speed",
+    "compressor_level",
+    "break_in_delay",
+    "break_in",
+    "drive_gain",
+    "monitor_gain",
+    "vox_gain",
+    "anti_vox_gain",
+    "vox_delay",
+    "ssb_tx_bandwidth",
+    "ref_adjust",
+    "dash_ratio",
+    "nb_depth",
+    "nb_width",
+    "tx_antenna",
+}
+_NORMALIZED_GLOBAL_OPERATOR_CONTROL_FIELDS = {"power_level"}
+_GLOBAL_METER_FIELDS = {
+    "alc",
+    "power",
+    "swr",
+    "comp",
+    "vd",
+    "id",
+}
+_GLOBAL_SLOW_STATE_FIELDS = {
+    "active",
+    "scanning",
+    "scan_type",
+    "scan_resume_mode",
+    "tuning_step",
+    "overflow",
+    "cw_spot",
+    "rx_antenna_1",
+    "rx_antenna_2",
+    "tx_band_edges",
+    "scope_controls",
+    "yaesu",
+    # Per-DATA-group MOD-input sources (IC-7610 0x1A 05 00 0x91-0x94, MOR-615).
+    "data_off_mod_input",
+    "data1_mod_input",
+    "data2_mod_input",
+    "data3_mod_input",
+}
+_CONNECTION_PUBLIC_PATHS = {
+    "connected": "connection.rigConnected",
+    "radio_ready": "connection.radioReady",
+    "control_connected": "connection.controlConnected",
+    "status": "radioDetail.status",
+}
+_HEALTH_PUBLIC_PATHS = {
+    "server_reachable": "radioHealth.serverReachable",
+    "radio_link": "radioHealth.radioLink",
+    "readiness": "radioHealth.readiness",
+    "likely_cause": "radioHealth.likelyCause",
+    "since_ms": "radioHealth.sinceMs",
+    "last_error": "radioHealth.lastError",
+}
+# Public ``scopeControls.<suffix>`` leaves the toolbar/LCD gate on, mapped to
+# their backend scope-control field name. The whole group is unobserved until
+# a real scope-control observation lands, so every leaf is seeded as
+# unobserved in the default snapshot — otherwise an absent leaf would resolve
+# to ``available`` on the frontend and render its default (CTR / MID / …) as
+# confirmed (MOR-429).
+_SCOPE_CONTROL_PUBLIC_FIELDS = {
+    "mode": "mode",
+    "edge": "edge",
+    "span": "span",
+    "speed": "speed",
+    "hold": "hold",
+    "refDb": "ref_db",
+    "dual": "dual",
+    "receiver": "receiver",
+    # MOR-1302: ScopeSettingsPopover leaves (registered FieldSpecs added in
+    # state_pipeline_contracts.py alongside the eight above).
+    "duringTx": "during_tx",
+    "centerType": "center_type",
+    "vbwNarrow": "vbw_narrow",
+    "rbw": "rbw",
+    "fixedEdge": "fixed_edge",
+}
+# Inverse map: backend scope-control leaf name → public ``scopeControls.``
+# suffix, used to project store snapshot fields back out (MOR-557).
+_SCOPE_CONTROL_PUBLIC_SUFFIXES = {
+    control_name: public_suffix
+    for public_suffix, control_name in _SCOPE_CONTROL_PUBLIC_FIELDS.items()
+}
+
+
+def _receiver_public_key(name: str) -> str:
+    return _RECEIVER_KEY_MAP.get(name, _to_camel(name))
+
+
+def _public_field_path(*parts: str) -> str:
+    return ".".join(parts)
+
+
+def _snapshot_field_public_paths(path: FieldPath) -> tuple[str, ...]:
+    if path.scope is FieldScope.RECEIVER:
+        receiver_key = _snapshot_receiver_key(path.receiver_id)
+        if receiver_key is None:
+            return ()
+        if path.family is FieldFamily.FREQ_MODE:
+            if path.slot in (VfoSlot.A, VfoSlot.B):
+                slot_key = "vfoA" if path.slot is VfoSlot.A else "vfoB"
+                target = _VFO_SLOT_FIELDS.get(path.name)
+                if target is None:
+                    return ()
+                return (
+                    _public_field_path(
+                        receiver_key,
+                        slot_key,
+                        _receiver_public_key(target),
+                    ),
+                )
+            if path.slot is VfoSlot.UNSELECTED:
+                target = _VFO_SLOT_FIELDS.get(path.name)
+                if target is None:
+                    return ()
+                return (
+                    _public_field_path(
+                        receiver_key,
+                        "unselectedVfo",
+                        _receiver_public_key(target),
+                    ),
+                )
+            if path.slot not in (None, VfoSlot.ACTIVE):
+                return ()
+            target = _RECEIVER_FREQ_MODE_FIELDS.get(path.name)
+            if target is None:
+                return ()
+            return (_public_field_path(receiver_key, _receiver_public_key(target)),)
+        if path.family is FieldFamily.VFO and path.name == "active_slot":
+            return (_public_field_path(receiver_key, "activeSlot"),)
+        if path.family is FieldFamily.METERS and path.name == "s_meter":
+            return (_public_field_path(receiver_key, "sMeter"),)
+        if (
+            path.family is FieldFamily.OPERATOR_CONTROLS
+            and path.name in _RECEIVER_OPERATOR_CONTROL_FIELDS
+        ):
+            return (_public_field_path(receiver_key, _receiver_public_key(path.name)),)
+        if (
+            path.family is FieldFamily.OPERATOR_TOGGLES
+            and path.name in _RECEIVER_OPERATOR_TOGGLE_FIELDS
+        ):
+            public_key = _public_field_path(
+                receiver_key, _receiver_public_key(path.name)
+            )
+            if path.name == "dcd":
+                # DEPRECATED alias (MOR-466): remove after migration window.
+                # ``dcd`` is the neutral promotion of the legacy squelch-open
+                # status; project it under both ``dcd`` and the old
+                # ``sMeterSqlOpen`` public key (same value + same availability)
+                # so existing frontend consumers keep working during migration.
+                return (
+                    public_key,
+                    _public_field_path(receiver_key, "sMeterSqlOpen"),
+                )
+            return (public_key,)
+        if (
+            path.family is FieldFamily.SLOW_STATE
+            and path.name in _RECEIVER_SLOW_STATE_FIELDS
+        ):
+            return (_public_field_path(receiver_key, _receiver_public_key(path.name)),)
+        return ()
+
+    if path.scope is FieldScope.GLOBAL:
+        if path.family is FieldFamily.TX_STATE and path.name in _GLOBAL_TX_FIELDS:
+            return (_to_camel(path.name),)
+        if (
+            path.family is FieldFamily.OPERATOR_CONTROLS
+            and path.name in _GLOBAL_OPERATOR_CONTROL_FIELDS
+        ):
+            return (_to_camel(path.name),)
+        if path.family is FieldFamily.METERS and path.name in _GLOBAL_METER_FIELDS:
+            return (_to_camel(f"{path.name}_meter"),)
+        if (
+            path.family is FieldFamily.SLOW_STATE
+            and path.name in _GLOBAL_SLOW_STATE_FIELDS
+        ):
+            if path.name == "active":
+                return ("active", "vfoSelect")
+            return (_to_camel(path.name),)
+        return ()
+
+    if path.scope is FieldScope.CONNECTION and path.family is FieldFamily.CONNECTION:
+        public_path = _CONNECTION_PUBLIC_PATHS.get(path.name)
+        return () if public_path is None else (public_path,)
+
+    if path.scope is FieldScope.HEALTH and path.family is FieldFamily.HEALTH:
+        public_path = _HEALTH_PUBLIC_PATHS.get(path.name)
+        return () if public_path is None else (public_path,)
+
+    if path.scope is FieldScope.SCOPE_CONTROLS and path.family is FieldFamily.DISPLAY:
+        paths: list[str] = []
+        if path.receiver_id is not None and _snapshot_receiver_key(path.receiver_id):
+            paths.append("scopeControls.receiver")
+        public_suffix = _SCOPE_CONTROL_PUBLIC_SUFFIXES.get(path.name)
+        if public_suffix is not None:
+            public_path = f"scopeControls.{public_suffix}"
+            if public_path not in paths:
+                paths.append(public_path)
+        return tuple(paths)
+
+    return ()
+
+
+def _freshness_availability(freshness: FreshnessState) -> str:
+    if freshness is FreshnessState.FRESH:
+        return "available"
+    if freshness is FreshnessState.STALE:
+        return "stale"
+    return "missing"
+
+
+def _absence_availability(
+    path: FieldPath,
+    *,
+    availability: Mapping[FieldPath, bool | None] | None,
+    declared: Collection[FieldPath] | None,
+) -> str:
+    """Return why an unobserved ``path`` carries no reading.
+
+    ``undeclared`` when ``declared`` does not carry the path,
+    ``unavailable`` when ``availability`` reads the path's clauses as
+    ``False`` or ``None``, ``missing`` otherwise. Both arguments are
+    ``None`` for a caller with no profile acquisition metadata, and every
+    entry is then ``missing`` — the only value this returned before
+    MOR-2425/T201.
+    """
+
+    if declared is not None and path not in declared:
+        return "undeclared"
+    if availability is not None and path in availability:
+        if availability[path] is not True:
+            return "unavailable"
+    return "missing"
+
+
+def _missing_field_status(path: FieldPath, absence: str) -> dict[str, Any]:
+    return {
+        "storePath": str(path),
+        "observed": False,
+        "freshness": FreshnessState.UNKNOWN.value,
+        "availability": absence,
+    }
+
+
+def _observed_field_status(field: FieldSnapshot) -> dict[str, Any]:
+    return {
+        "storePath": str(field.path),
+        "observed": True,
+        "freshness": field.freshness.value,
+        "availability": _freshness_availability(field.freshness),
+        "lastObservedMonotonic": field.last_observed_monotonic,
+        "maxAge": field.max_age,
+        "source": field.source.to_dict(),
+        "quality": list(field.quality),
+    }
+
+
+def _set_missing_field_status(
+    statuses: dict[str, FieldPath],
+    public_path: str,
+    path: FieldPath,
+) -> None:
+    statuses.setdefault(public_path, path)
+
+
+def _default_receiver_field_status(
+    statuses: dict[str, FieldPath],
+    receiver_key: str,
+) -> None:
+    for name, state_key in _RECEIVER_FREQ_MODE_FIELDS.items():
+        _set_missing_field_status(
+            statuses,
+            _public_field_path(receiver_key, _receiver_public_key(state_key)),
+            FieldPath.active(receiver_key, "freq_mode", name),
+        )
+    for slot_name, slot_key in (("A", "vfoA"), ("B", "vfoB")):
+        for name, state_key in _VFO_SLOT_FIELDS.items():
+            _set_missing_field_status(
+                statuses,
+                _public_field_path(
+                    receiver_key,
+                    slot_key,
+                    _receiver_public_key(state_key),
+                ),
+                FieldPath.vfo_slot(receiver_key, slot_name, "freq_mode", name),
+            )
+    for name, state_key in _VFO_SLOT_FIELDS.items():
+        _set_missing_field_status(
+            statuses,
+            _public_field_path(
+                receiver_key,
+                "unselectedVfo",
+                _receiver_public_key(state_key),
+            ),
+            FieldPath.unselected(receiver_key, "freq_mode", name),
+        )
+    _set_missing_field_status(
+        statuses,
+        _public_field_path(receiver_key, "activeSlot"),
+        FieldPath.active_slot(receiver_key),
+    )
+    _set_missing_field_status(
+        statuses,
+        _public_field_path(receiver_key, "sMeter"),
+        FieldPath.receiver(receiver_key, "meters", "s_meter"),
+    )
+    for name in _RECEIVER_OPERATOR_CONTROL_FIELDS:
+        _set_missing_field_status(
+            statuses,
+            _public_field_path(receiver_key, _receiver_public_key(name)),
+            FieldPath.receiver(receiver_key, "operator_controls", name),
+        )
+    for name in _RECEIVER_OPERATOR_TOGGLE_FIELDS:
+        _set_missing_field_status(
+            statuses,
+            _public_field_path(receiver_key, _receiver_public_key(name)),
+            FieldPath.receiver(receiver_key, "operator_toggles", name),
+        )
+        if name == "dcd":
+            # DEPRECATED alias (MOR-466): remove after migration window. Seed the
+            # legacy ``sMeterSqlOpen`` public key as unobserved from the same
+            # ``dcd`` FieldPath so an absent observation does not resolve to
+            # ``available``.
+            _set_missing_field_status(
+                statuses,
+                _public_field_path(receiver_key, "sMeterSqlOpen"),
+                FieldPath.receiver(receiver_key, "operator_toggles", "dcd"),
+            )
+    for name in _RECEIVER_SLOW_STATE_FIELDS:
+        if name in {"vfo_a", "vfo_b"}:
+            # Slot observations project to ``<receiver>.vfoA/B.<leaf>``.
+            # No store writer emits the bare slow-state group paths, so
+            # seeding them would let the frontend parent-veto hide real leaves
+            # (MOR-558). Keep the leaf seeds above as the actual gate.
+            continue
+        _set_missing_field_status(
+            statuses,
+            _public_field_path(receiver_key, _receiver_public_key(name)),
+            FieldPath.receiver(receiver_key, "slow_state", name),
+        )
+
+
+@functools.lru_cache(maxsize=4)
+def _field_status_seeds(receiver_count: int) -> tuple[tuple[str, FieldPath], ...]:
+    """Every public path seeded as unobserved, with its store path, in order.
+
+    The list depends only on the receiver count, so it is built once
+    (MOR-4212); ``_default_snapshot_field_status`` fills in the absence.
+    """
+
+    statuses: dict[str, FieldPath] = {}
+    _default_receiver_field_status(statuses, "main")
+    if receiver_count >= 2:
+        _default_receiver_field_status(statuses, "sub")
+    for name in _GLOBAL_TX_FIELDS:
+        _set_missing_field_status(
+            statuses,
+            _to_camel(name),
+            FieldPath.global_("tx_state", name),
+        )
+    for name in _GLOBAL_OPERATOR_CONTROL_FIELDS:
+        _set_missing_field_status(
+            statuses,
+            _to_camel(name),
+            FieldPath.global_("operator_controls", name),
+        )
+    for name in _GLOBAL_METER_FIELDS:
+        _set_missing_field_status(
+            statuses,
+            _to_camel(f"{name}_meter"),
+            FieldPath.global_("meters", name),
+        )
+    for name in _GLOBAL_SLOW_STATE_FIELDS:
+        if name == "scope_controls":
+            # No observation ever writes ``global.slow_state.scope_controls``
+            # (scope-control observations land under
+            # ``scope_controls.global.display.*``), so a group-level
+            # ``scopeControls`` entry would stay unobserved forever and the
+            # frontend MOR-429 parent-veto rule would disable every observed
+            # ``scopeControls.<leaf>`` (MOR-557). The eight per-leaf entries
+            # seeded below are the real gate.
+            continue
+        _set_missing_field_status(
+            statuses,
+            _to_camel(name),
+            FieldPath.global_("slow_state", name),
+        )
+    # PR-A compatibility fallback: until PR B publishes lifecycle observations,
+    # an empty snapshot keeps the legacy alias seed. An observed canonical
+    # ``active`` field replaces this status through ``_snapshot_field_public_paths``.
+    _set_missing_field_status(
+        statuses,
+        "vfoSelect",
+        FieldPath.global_("slow_state", "vfo_select"),
+    )
+    for public_suffix, control_name in _SCOPE_CONTROL_PUBLIC_FIELDS.items():
+        _set_missing_field_status(
+            statuses,
+            f"scopeControls.{public_suffix}",
+            FieldPath.scope_control("display", control_name),
+        )
+    return tuple(statuses.items())
+
+
+def _default_snapshot_field_status(
+    receiver_count: int,
+    absence: Callable[[FieldPath], str],
+) -> dict[str, dict[str, Any]]:
+    return {
+        public_path: _missing_field_status(path, absence(path))
+        for public_path, path in _field_status_seeds(receiver_count)
+    }
+
+
+def _build_snapshot_field_status(
+    snapshot: StateSnapshot,
+    *,
+    receiver_count: int,
+    availability: Mapping[FieldPath, bool | None] | None = None,
+    declared: Collection[FieldPath] | None = None,
+) -> dict[str, dict[str, Any]]:
+    def absence(path: FieldPath) -> str:
+        return _absence_availability(path, availability=availability, declared=declared)
+
+    statuses = _default_snapshot_field_status(receiver_count, absence)
+    # An OBSERVED field keeps the availability its freshness gives it, even
+    # where ``availability`` reads its clauses as False: removing it is
+    # ``acquisition_scheduler.StateFreshnessService._discard_declared_absent``'s
+    # job, and only then does this seed the absence again (``tests/
+    # test_web_runtime_helpers.py::
+    # test_field_status_reports_unavailable_after_the_freshness_tick_discards``,
+    # ``::test_observed_meter_stays_available_while_its_clause_reads_false``).
+    for field in snapshot.fields:
+        observed_status = _observed_field_status(field)
+        for public_path in _snapshot_field_public_paths(field.path):
+            previous_at = None
+            previous = statuses.get(public_path)
+            if previous is not None:
+                raw_previous_at = previous.get("lastObservedMonotonic")
+                if isinstance(raw_previous_at, (int, float)) and not isinstance(
+                    raw_previous_at, bool
+                ):
+                    previous_at = float(raw_previous_at)
+            if (
+                previous is not None
+                and previous.get("observed") is True
+                and previous_at is not None
+                and previous_at > field.last_observed_monotonic
+            ):
+                continue
+            statuses[public_path] = dict(observed_status)
+    return statuses
+
+
+def runtime_capabilities(radio: "Radio | None") -> set[str]:
+    """Return conservative runtime capabilities for the active radio.
+
+    Semantics:
+    - If ``radio`` is ``None`` → empty set.
+    - If ``radio.capabilities`` is a set (including the empty set), use it as the
+      starting point and *do not* fall back to Protocol checks, but drop tags
+      that contradict the runtime Protocols (e.g. tag ``"scope"`` without
+      :class:`ScopeCapable`).
+    - If ``radio.capabilities`` is missing or not a set, derive tags purely from
+      the capability Protocols implemented by the instance.
+    """
+    if radio is None:
+        return set()
+
+    raw_caps = getattr(radio, "capabilities", None)
+    if isinstance(raw_caps, set):
+        caps = set(raw_caps)
+        if "scope" in caps and not isinstance(radio, ScopeCapable):
+            caps.discard("scope")
+        if "audio" in caps and not isinstance(radio, AudioCapable | UsbAudioCapable):
+            # Radios that don't implement in-band ``AudioCapable`` and
+            # don't expose OS-level USB Audio Class devices (via the
+            # ``UsbAudioCapable`` marker) cannot deliver audio to the
+            # frontend — drop the tag so the UI doesn't render dead
+            # controls.
+            caps.discard("audio")
+        # ``dual_rx`` is deliberately not gated on ``DualReceiverCapable``:
+        # owner ruling, 2026-09-08. Structural existence of the second
+        # receiver follows the rig profile; the swap and equalize actions
+        # are gated separately, by ``projected_vfo_capability_tags``.
+        if "repeater_shift" in caps and not isinstance(radio, RepeaterShiftCapable):
+            caps.discard("repeater_shift")
+        return caps
+
+    result: set[str] = set()
+    if isinstance(radio, ScopeCapable):
+        result.add("scope")
+    if isinstance(radio, AudioCapable | UsbAudioCapable):
+        result.add("audio")
+    if isinstance(radio, DualReceiverCapable):
+        result.add("dual_rx")
+    if isinstance(radio, RepeaterShiftCapable):
+        result.add("repeater_shift")
+    return result
+
+
+def projected_af_level_sub_tag(
+    radio: "Radio | None", caps: Collection[str]
+) -> frozenset[str]:
+    """Return ``{"af_level_sub"}`` when ``caps`` has ``dual_rx`` and ``radio``
+    admits ``set_af_level`` for receiver 1 (MOR-2579).
+
+    Admission is :meth:`~rigplane.core.radio_protocol.Radio.supports_command`
+    with an explicit receiver: the receiver is in the radio's topology and has
+    an executable write route. No observed reading enters the answer.
+    """
+    supports = getattr(radio, "supports_command", None)
+    if "dual_rx" not in caps or not callable(supports):
+        return frozenset()
+    admitted = supports("set_af_level", receiver=1) is True
+    return frozenset({"af_level_sub"}) if admitted else frozenset()
+
+
+# Per-receiver control tags (MOR-2588) and the declared field path each one
+# is backed by. The bare ``attenuator``/``preamp`` names are already the
+# radio-wide CAPABILITY tags (a radio declares the command without declaring
+# the polled MAIN field — tx500/x6100/x6200), so att/preamp need an explicit
+# scope suffix on BOTH sides, unlike ``agc_time_constant`` whose bare name is
+# free for MAIN.
+_RECEIVER_CONTROL_TAG_PATHS: tuple[tuple[str, FieldPath], ...] = (
+    ("attenuator_main", FieldPath.parse("receiver.main.operator_controls.att")),
+    ("preamp_main", FieldPath.parse("receiver.main.operator_controls.preamp")),
+    ("attenuator_sub", FieldPath.parse("receiver.sub.operator_controls.att")),
+    ("preamp_sub", FieldPath.parse("receiver.sub.operator_controls.preamp")),
+    (
+        "agc_time_constant",
+        FieldPath.parse("receiver.main.operator_controls.agc_time_constant"),
+    ),
+    (
+        "agc_time_constant_sub",
+        FieldPath.parse("receiver.sub.operator_controls.agc_time_constant"),
+    ),
+    (
+        "manual_notch_width",
+        FieldPath.parse("receiver.main.operator_controls.manual_notch_width"),
+    ),
+    (
+        "manual_notch_width_sub",
+        FieldPath.parse("receiver.sub.operator_controls.manual_notch_width"),
+    ),
+)
+
+
+def projected_receiver_control_tags(radio: "Radio | None") -> frozenset[str]:
+    """Return the per-receiver control tags the profile itself declares
+    (MOR-2588), following ``projected_af_level_sub_tag``'s serving pattern.
+
+    The fact is the profile's declared acquisition paths, not
+    ``supports_command`` receiver admission: admission under-admits declared
+    fields (FTX-1 declares ``receiver.main.operator_controls.preamp`` with no
+    receiver-admitted write) and over-admits undeclared ones (IC-9700/IC-705
+    declare the 0x1A 04 command pair without declaring the polled field).
+    Fail-closed: no profile or acquisition state means no tags. No observed
+    reading enters the answer.
+    """
+    acquisition = getattr(getattr(radio, "profile", None), "state_acquisition", None)
+    if not isinstance(acquisition, RadioAcquisitionProfile):
+        return frozenset()
+    declared = declared_field_paths(acquisition)
+    return frozenset(
+        tag for tag, path in _RECEIVER_CONTROL_TAG_PATHS if path in declared
+    )
+
+
+def projected_vfo_capability_tags(
+    radio: "Radio | None", configured_model: str | None
+) -> frozenset[str]:
+    """Return the reserved VFO tags (:data:`VFO_CAPABILITY_TAGS`) this radio backs.
+
+    Fail-closed contract. Each bullet names the test in
+    ``tests/test_web_capability_guards.py`` that fails if that bullet stops
+    being true:
+
+    - A resolved :class:`~rigplane.profiles.RadioProfile` on ``radio.profile``
+      is used as-is, and each tag is included only when its profile
+      declaration is present, through the single shared rule
+      ``RadioProfile.supports_vfo_command`` (opcode bytes for the CI-V
+      families; the declared ``vfo_swap``/``vfo_equalize`` CAT command
+      entries for the Yaesu CAT family — with Yaesu ``ab`` admitting
+      ``vfo_equalize`` exactly when the profile declares the ``vfo_a_to_b``
+      copy primitive (MOR-4433 follow-up A) — pinned by
+      ``test_vfo_tags_match_across_consumers_for_real_profiles`` and
+      ``test_vfo_tags_keep_partial_and_mismatched_schemes_in_parity``.
+    - Otherwise exactly one candidate model string is tried: ``radio.model``
+      if it is a non-empty (after ``.strip()``) string, else
+      ``configured_model``. There is no second candidate — a radio-reported
+      model that fails to resolve (``KeyError`` from
+      :func:`~rigplane.profiles.resolve_radio_profile`) yields no tags
+      without falling back to ``configured_model`` — pinned by
+      ``test_ws_hello_and_http_capability_payloads_agree_for_non_resolving_runtime_model``
+      and
+      ``test_unknown_runtime_model_fails_closed_for_reserved_vfo_tags_across_consumers``.
+    - A candidate that is not a non-empty string (``radio.model`` absent or
+      blank and ``configured_model`` likewise) never reaches
+      ``resolve_radio_profile`` and instead yields no tags — pinned by
+      ``test_reserved_vfo_tags_absent_when_no_usable_candidate_model_exists``.
+    """
+    profile = getattr(radio, "profile", None)
+    if not isinstance(profile, RadioProfile):
+        raw_model = getattr(radio, "model", None) if radio is not None else None
+        candidate = (
+            raw_model
+            if isinstance(raw_model, str) and raw_model.strip()
+            else configured_model
+        )
+        if not isinstance(candidate, str) or not candidate.strip():
+            return frozenset()
+        try:
+            profile = resolve_radio_profile(model=candidate)
+        except KeyError:
+            return frozenset()
+
+    if not isinstance(profile, RadioProfile):
+        return frozenset()
+
+    # One shared rule — ``RadioProfile.supports_vfo_command`` — so
+    # projection cannot disagree with command admission
+    # (``web/handlers/control.py: _enqueue_rc_frequency``). The Yaesu
+    # single-transceiver ``ab`` scheme admits ``vfo_equalize`` exactly when
+    # the profile declares the ``vfo_a_to_b`` copy primitive (MOR-4433
+    # follow-up A): equalize is that A→B copy.
+    tags = {
+        tag for tag in ("vfo_swap", "vfo_equalize") if profile.supports_vfo_command(tag)
+    }
+    from ..core.radio_protocol import RelativeVfoFrequencyWritable
+
+    cmd_map = profile.command_map
+    if (
+        isinstance(getattr(radio, "profile", None), RadioProfile)
+        and isinstance(radio, RelativeVfoFrequencyWritable)
+        and profile.receiver_count == 1
+        and profile.vfo_scheme == "ab"
+        and profile.vfo_readback == "selected_unselected"
+        and cmd_map is not None
+        and all(
+            cmd_map.has(key)
+            for key in (
+                "set_selected_freq",
+                "get_selected_freq",
+                "set_unselected_freq",
+                "get_unselected_freq",
+            )
+        )
+    ):
+        tags.add("vfo_freq_direct")
+    return frozenset(tags)
+
+
+def radio_ready(radio: "Radio | None") -> bool:
+    """Return backend radio readiness (CI-V healthy), with fallback.
+
+    Rules:
+    - ``None`` → ``False``.
+    - If ``radio.radio_ready`` is a bool, use it.
+    - Otherwise fall back to ``bool(radio.connected)`` when the attribute is a
+      proper bool; non-bool truthy values do not count as connected.
+    """
+    if radio is None:
+        return False
+    ready: Any = getattr(radio, "radio_ready", None)
+    if isinstance(ready, bool):
+        return ready
+    connected: Any = getattr(radio, "connected", False)
+    return connected if isinstance(connected, bool) else False
+
+
+def _bool_attr(obj: Any, name: str, default: bool = False) -> bool:
+    raw = getattr(obj, name, default)
+    return raw if isinstance(raw, bool) else default
+
+
+def _conn_state_value(radio: Any) -> str | None:
+    conn_state = getattr(radio, "conn_state", None)
+    raw = getattr(conn_state, "value", conn_state)
+    return raw if isinstance(raw, str) else None
+
+
+def _civ_stats(radio: Any) -> dict[str, Any]:
+    stats_fn = getattr(radio, "civ_stats", None)
+    if not callable(stats_fn):
+        return {}
+    try:
+        stats = stats_fn()
+    except Exception:
+        return {}
+    return stats if isinstance(stats, dict) else {}
+
+
+def store_has_radio_observation(store: "StateStore") -> bool:
+    """Whether *store* holds any field the radio itself produced.
+
+    The startup gate's own "no field observed from the radio" computation
+    (``web/web_startup.py: _link_answers_nothing``, MOR-2841), kept here so
+    the gate and :meth:`WebServer._build_radio_health` share one predicate:
+    a locally reconciled structural fact (``local_reconcile`` source, e.g.
+    the single-receiver topology's ``active`` written at construction) is
+    not a radio answer and does not break the silence.
+    """
+
+    return any(
+        field.source.source != "local_reconcile" for field in store.snapshot().fields
+    )
+
+
+def classify_radio_health(
+    radio: "Radio | None",
+    *,
+    server_reachable: bool = True,
+    now_monotonic: float | None = None,
+    served_with_silent_link: bool = False,
+    served_without_port: bool = False,
+    operator_disconnected: bool = False,
+) -> dict[str, Any]:
+    """Classify server/radio health from runtime evidence.
+
+    The web server can only assert its own reachability when it is answering
+    the request; browser-side failures should override this to
+    ``server_unreachable``. Radio classification is intentionally conservative:
+    short CI-V gaps are ``delayed``, longer gaps are ``stalled``, and
+    ``radio_powered_off_likely`` requires prior availability plus repeated
+    timeout/recovery evidence — or ``served_with_silent_link``: the startup
+    gate released for a completely silent link (MOR-2841) and the store still
+    holds no radio observation. The caller recomputes the observation half
+    from the gate's own predicate on every call, so the verdict clears at the
+    radio's first answer. While it holds, the verdict is ``stalled`` /
+    ``radio_powered_off_likely`` whatever the live link state reports — the
+    stand (2026-09-28) showed the serial watchdog reopening a present-but-
+    silent port back to ``CONNECTED``, which the live-state branches would
+    misreport as ``ready``.
+
+    ``served_without_port`` (MOR-2876) is the same hold for a server that
+    started while the radio's serial port could not be opened: the verdict
+    is ``radio_not_connected`` while the latest port open failed
+    (``last_error`` set), otherwise ``radio_powered_off_likely``.
+
+    ``operator_disconnected`` (MOR-3452) is the web server's record of an
+    intentional operator disconnect: the verdict is ``idle`` /
+    ``operator_disconnected`` with the link held at ``disconnected``,
+    whatever the live link state infers.
+    """
+    now = time.monotonic() if now_monotonic is None else now_monotonic
+    if not server_reachable:
+        return {
+            "serverReachable": False,
+            "radioLink": "unknown",
+            "readiness": "stalled",
+            "likelyCause": "server_unreachable",
+            "sinceMs": 0,
+            "lastError": None,
+        }
+    if radio is None:
+        return {
+            "serverReachable": True,
+            "radioLink": "unknown",
+            "readiness": "stalled",
+            "likelyCause": "unknown",
+            "sinceMs": 0,
+            "lastError": None,
+        }
+
+    connected = _bool_attr(radio, "connected")
+    ready = radio_ready(radio)
+    conn_state = _conn_state_value(radio)
+    if conn_state in {"connecting", "reconnecting"}:
+        radio_link = "reconnecting"
+    elif connected or conn_state == "connected":
+        radio_link = "connected"
+    elif conn_state == "disconnected":
+        radio_link = "disconnected"
+    else:
+        radio_link = "unknown"
+
+    stats = _civ_stats(radio)
+    last_error = getattr(radio, "last_error", None)
+    last_error_value = last_error if isinstance(last_error, str) else None
+
+    if operator_disconnected:
+        # MOR-3452: the operator disconnected on purpose — not a dead
+        # network and not a missing radio. The link stays reported as
+        # ``disconnected``; readiness is the ``idle`` literal, never
+        # ``stalled`` or ``recovering``. No severity is reported.
+        return {
+            "serverReachable": True,
+            "radioLink": "disconnected",
+            "readiness": "idle",
+            "likelyCause": "operator_disconnected",
+            "sinceMs": 0,
+            "lastError": last_error_value,
+        }
+
+    serial_error = getattr(radio, "serial_open_error", None)
+    if isinstance(serial_error, str):
+        return {
+            "serverReachable": True,
+            "radioLink": radio_link,
+            "readiness": "stalled",
+            "likelyCause": "radio_not_connected",
+            "sinceMs": 0,
+            "lastError": serial_error,
+        }
+
+    if served_without_port and last_error_value is not None:
+        return {
+            "serverReachable": True,
+            "radioLink": radio_link,
+            "readiness": "stalled",
+            "likelyCause": "radio_not_connected",
+            "sinceMs": 0,
+            "lastError": last_error_value,
+        }
+
+    if served_with_silent_link or served_without_port:
+        # MOR-2841: a link the startup gate served as silent, or (MOR-2876)
+        # a port that opened after a missing-port start, with no radio
+        # observation yet. This precedes the ready branch — the watchdog's
+        # reopen makes the live state (and ``radio_ready``) say
+        # connected/ready again within seconds on a present-but-silent
+        # port. ``radioLink`` keeps reporting the live link; only the
+        # verdict is held until the radio actually answers.
+        return {
+            "serverReachable": True,
+            "radioLink": radio_link,
+            "readiness": "stalled",
+            "likelyCause": "radio_powered_off_likely",
+            "sinceMs": 0,
+            "lastError": last_error_value,
+        }
+
+    if ready:
+        return {
+            "serverReachable": True,
+            "radioLink": "connected",
+            "readiness": "ready",
+            "likelyCause": "unknown",
+            "sinceMs": 0,
+            "lastError": last_error_value,
+        }
+
+    if radio_link in {"reconnecting", "disconnected"}:
+        # Distinguish "host reachable but the radio's CI-V/remote-control
+        # server is not listening" (e.g. right after a power-cycle, before the
+        # network server comes up: ICMP port-unreachable / EPIPE on a connected
+        # UDP socket, no "Are You There" answer) from a full network loss.
+        # The former is actionable — the user can enable Network/Remote control
+        # on the radio — so surface a distinct cause.
+        remote_unreachable = _bool_attr(radio, "remote_control_unreachable")
+        likely_cause = (
+            "radio_remote_control_unreachable"
+            if remote_unreachable
+            else "radio_network_lost"
+        )
+        return {
+            "serverReachable": True,
+            "radioLink": radio_link,
+            "readiness": "recovering" if radio_link == "reconnecting" else "stalled",
+            "likelyCause": likely_cause,
+            "sinceMs": 0,
+            "lastError": last_error_value,
+        }
+
+    last_civ = getattr(radio, "_last_civ_data_received", None)
+    last_civ_value: float | None = None
+    if isinstance(last_civ, (int, float)) and not isinstance(last_civ, bool):
+        last_civ_value = float(last_civ)
+    has_civ_evidence = last_civ_value is not None
+    had_success = _bool_attr(radio, "_has_connected_once") or has_civ_evidence
+    if radio_link == "unknown" and not had_success and not stats:
+        return {
+            "serverReachable": True,
+            "radioLink": "unknown",
+            "readiness": "stalled",
+            "likelyCause": "unknown",
+            "sinceMs": 0,
+            "lastError": last_error_value,
+        }
+
+    idle_s = 0.0
+    if last_civ_value is not None:
+        idle_s = max(0.0, now - last_civ_value)
+    ready_timeout = getattr(radio, "_civ_ready_idle_timeout", 2.0)
+    if not isinstance(ready_timeout, (int, float)) or isinstance(ready_timeout, bool):
+        ready_timeout = 2.0
+    delayed_limit = max(float(ready_timeout) * 2.0, 2.0)
+    readiness = "delayed" if idle_s <= delayed_limit else "stalled"
+
+    timeouts = stats.get("timeouts", 0)
+    timeout_count = timeouts if isinstance(timeouts, int) else 0
+    recovering = _bool_attr(radio, "_civ_recovering")
+    powered_off_likely = (
+        had_success
+        and readiness == "stalled"
+        and (timeout_count >= 3 or recovering)
+        and idle_s >= max(delayed_limit, 10.0)
+    )
+
+    return {
+        "serverReachable": True,
+        "radioLink": radio_link,
+        "readiness": readiness,
+        "likelyCause": (
+            "radio_powered_off_likely" if powered_off_likely else "radio_not_responding"
+        ),
+        "sinceMs": int(idle_s * 1000),
+        "lastError": last_error_value,
+    }
+
+
+#: MOR-3845: fallback ``staleAfterMs`` for a radio object that does not
+#: declare ``liveness_stale_after_ms`` (test doubles; every shipping
+#: backend declares its own). Matches the CI-V ready/idle default ladder.
+_DEFAULT_LIVENESS_STALE_AFTER_MS: Final = 2000
+
+#: MOR-3845: values a backend may declare for ``liveness_source``.
+_LIVENESS_SOURCES: Final = frozenset({"radio", "daemon", "simulator"})
+
+
+def connection_liveness_payload(
+    radio: "Radio | None", *, now: float | None = None
+) -> dict[str, Any] | None:
+    """MOR-3845: the ``connection.liveness`` block for /api/v1/info and WS state.
+
+    ``None`` when no radio is attached. Otherwise the age is computed at
+    call (response) time from the backend's decode-point stamp
+    (:attr:`rigplane.core.radio_protocol.Radio.last_valid_frame_monotonic`);
+    ``lastFrameAgeMs`` is ``None`` when the radio has never answered on this
+    connection generation. ``staleAfterMs``/``source`` are backend-declared
+    data (``liveness_stale_after_ms``/``liveness_source``) with duck-typed
+    fallbacks, so no per-backend branch lives here.
+    """
+    if radio is None:
+        return None
+    stamp = getattr(radio, "last_valid_frame_monotonic", None)
+    age_ms: int | None = None
+    if isinstance(stamp, (int, float)) and not isinstance(stamp, bool):
+        current = time.monotonic() if now is None else now
+        age_ms = int(max(0.0, current - float(stamp)) * 1000)
+    stale_after = getattr(radio, "liveness_stale_after_ms", None)
+    if (
+        not isinstance(stale_after, (int, float))
+        or isinstance(stale_after, bool)
+        or stale_after <= 0
+    ):
+        stale_after = _DEFAULT_LIVENESS_STALE_AFTER_MS
+    source = getattr(radio, "liveness_source", None)
+    if not isinstance(source, str) or source not in _LIVENESS_SOURCES:
+        source = "radio"
+    return {
+        "lastFrameAgeMs": age_ms,
+        "staleAfterMs": int(stale_after),
+        "source": source,
+    }
+
+
+def _radio_infers_power_on_from_liveness(radio: "Radio | None") -> bool:
+    """Whether the radio's profile infers power state from liveness (MOR-2544).
+
+    Reads the profile-data predicate
+    (:attr:`rigplane.profiles.RadioProfile.infers_power_on_from_liveness`);
+    anything without a real profile (``None``, fakes) answers False so no
+    power value is ever fabricated for it.
+    """
+    profile = getattr(radio, "_profile", None) if radio is not None else None
+    return getattr(profile, "infers_power_on_from_liveness", False) is True
+
+
+@functools.lru_cache(maxsize=4096)
+def _to_camel(s: str) -> str:
+    parts = s.split("_")
+    return parts[0] + "".join(p.capitalize() for p in parts[1:])
+
+
+def _camel_keys(d: dict[str, Any]) -> dict[str, Any]:
+    return {
+        _to_camel(k): (_camel_keys(v) if isinstance(v, dict) else v)
+        for k, v in d.items()
+    }
+
+
+def _camel_case_state(d: dict[str, Any]) -> dict[str, Any]:
+    connection = {
+        "rigConnected": d.get("connected", False),
+        "radioReady": d.get("radio_ready", False),
+        "controlConnected": d.get("control_connected", False),
+    }
+    skip = {"connected", "radio_ready", "control_connected"}
+    result: dict[str, Any] = {}
+    for key, value in d.items():
+        if key in skip:
+            continue
+        if key in ("main", "sub") and isinstance(value, dict):
+            inner = {}
+            for inner_key, inner_value in value.items():
+                new_key = _RECEIVER_KEY_MAP.get(inner_key, _to_camel(inner_key))
+                inner[new_key] = (
+                    _camel_keys(inner_value)
+                    if isinstance(inner_value, dict)
+                    else inner_value
+                )
+            result[key] = inner
+        elif isinstance(value, dict):
+            result[_to_camel(key)] = _camel_keys(value)
+        else:
+            result[_to_camel(key)] = value
+    result["connection"] = connection
+    return result
+
+
+def _null_unobserved_public_leaves(payload: dict[str, Any]) -> None:
+    """Null every public leaf whose ``fieldStatus`` entry says unobserved —
+    ``txTarget`` excepted: it encodes absence in-band (an unknown-status
+    object), not as null.
+
+    The key stays present with value ``null`` whatever the absence
+    reason; an observed leaf keeps its value when stale (MOR-2513,
+    pinned by ``tests/test_web_runtime_helpers.py::
+    test_unobserved_leaves_publish_null_with_keys_present`` and
+    ``test_observed_value_stays_published_after_the_freshness_tick_marks_it_stale``).
+    """
+
+    field_status = payload.get("fieldStatus")
+    if not isinstance(field_status, dict):
+        return
+    for public_path, status in field_status.items():
+        if status.get("observed") is not False or public_path == "txTarget":
+            continue
+        parts = public_path.split(".")
+        holder: dict[str, Any] | None = payload
+        for part in parts[:-1]:
+            nested = holder.get(part) if holder is not None else None
+            holder = nested if isinstance(nested, dict) else None
+            if holder is None:
+                break
+        if holder is not None and parts[-1] in holder:
+            holder[parts[-1]] = None
+
+
+def _snapshot_receiver_key(receiver_id: str | None) -> str | None:
+    if receiver_id is None:
+        return None
+    return _SNAPSHOT_RECEIVER_IDS.get(receiver_id)
+
+
+def primary_receiver_snapshot_ids() -> tuple[str, ...]:
+    """Return the backend-native receiver-ids for the primary receiver.
+
+    Snapshots key the primary receiver under different ids depending on the
+    backend: the legacy Icom state poller uses ``"0"`` while Yaesu CAT and
+    rigctld backends use ``"main"``. Both normalize to the canonical public
+    key ``"main"`` via :data:`_SNAPSHOT_RECEIVER_IDS`.
+
+    Consumers that need a single freq/mode (e.g. the audio FFT scope center
+    frequency) should try these ids in order and use the first one present in
+    the snapshot, rather than hardcoding a scheme-specific id.
+
+    The order is significant: ``"0"`` precedes ``"main"`` to preserve the
+    historical Icom-first lookup behavior.
+    """
+    return tuple(
+        receiver_id
+        for receiver_id, canonical in _SNAPSHOT_RECEIVER_IDS.items()
+        if canonical == "main"
+    )
+
+
+def _set_receiver_value(
+    state: dict[str, Any],
+    receiver_key: str,
+    name: str,
+    value: Any,
+) -> None:
+    receiver = state.get(receiver_key)
+    if not isinstance(receiver, dict):
+        return
+    receiver[name] = value
+
+
+def _normalize_public_level_snapshot_value(
+    value: Any, *, max_value: float = 255.0
+) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float) and 0.0 <= value <= 1.0:
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) / max_value
+    return value
+
+
+def _power_level_max_value(field: FieldSnapshot, radio: "Radio | None") -> float:
+    if field.source.provider != "yaesu_cat":
+        return 255.0
+    profile = getattr(radio, "profile", None) if radio is not None else None
+    max_watts = getattr(profile, "max_watts", None)
+    if isinstance(max_watts, (int, float)) and not isinstance(max_watts, bool):
+        if max_watts > 0:
+            return float(max_watts)
+    return 255.0
+
+
+def _project_tx_target(field: FieldSnapshot) -> dict[str, object]:
+    if field.freshness is FreshnessState.STALE:
+        return {"status": "unknown", "reason": "stale"}
+    if field.freshness is not FreshnessState.FRESH:
+        return {"status": "unknown", "reason": "not-observed"}
+    try:
+        target: TxTarget = (
+            tx_target_from_dict(field.value)
+            if isinstance(field.value, Mapping)
+            else validate_tx_target(field.value)
+        )
+    except (TypeError, ValueError):
+        return {"status": "unknown", "reason": "contradiction"}
+    projected: dict[str, object] = target.to_dict()
+    return projected
+
+
+def _project_scope_fixed_edge(value: Any) -> dict[str, int]:
+    """Serialise a ``ScopeFixedEdge``-shaped observation value to a dict.
+
+    MOR-1302: the observation value may be a ``ScopeFixedEdge`` dataclass
+    (the 0x1E parse helper's return type) or a plain mapping (tests); either
+    way ``_camel_case_state`` needs a snake_case dict to recurse into for the
+    nested public ``scopeControls.fixedEdge`` leaf.
+    """
+
+    def _int_field(name: str) -> int:
+        raw = (
+            value.get(name)
+            if isinstance(value, Mapping)
+            else getattr(value, name, None)
+        )
+        return raw if isinstance(raw, int) and not isinstance(raw, bool) else 0
+
+    return {
+        "range_index": _int_field("range_index"),
+        "edge": _int_field("edge"),
+        "start_hz": _int_field("start_hz"),
+        "end_hz": _int_field("end_hz"),
+    }
+
+
+def _canonical_snapshot_fields(snapshot: StateSnapshot) -> tuple[FieldSnapshot, ...]:
+    # Receiver IDs and slotless/ACTIVE paths can name the same public leaf.
+    # Resolve that leaf once so its value and fieldStatus retain one sample.
+    aliases: dict[str, FieldSnapshot] = {}
+    alias_paths: dict[FieldPath, str] = {}
+    for field in snapshot.fields:
+        if (
+            field.path.scope is not FieldScope.RECEIVER
+            or field.path.family is not FieldFamily.FREQ_MODE
+            or field.path.slot not in (None, VfoSlot.ACTIVE)
+        ):
+            continue
+        public_paths = _snapshot_field_public_paths(field.path)
+        if len(public_paths) != 1:
+            continue
+        public_path = public_paths[0]
+        alias_paths[field.path] = public_path
+        previous = aliases.get(public_path)
+        if previous is None or (field.last_observed_monotonic, str(field.path)) >= (
+            previous.last_observed_monotonic,
+            str(previous.path),
+        ):
+            aliases[public_path] = field
+    fields = tuple(
+        field
+        for field in snapshot.fields
+        if field.path not in alias_paths or field is aliases[alias_paths[field.path]]
+    )
+    path = FieldPath.global_("tx_state", "tx_target")
+    targets = tuple(field for field in fields if field.path == path)
+    if len(targets) < 2:
+        return fields
+    newest_at = max(field.last_observed_monotonic for field in targets)
+    newest = tuple(f for f in targets if f.last_observed_monotonic == newest_at)
+    rank = (FreshnessState.FRESH, FreshnessState.UNKNOWN, FreshnessState.STALE)
+    winner = max(newest, key=lambda f: (rank.index(f.freshness), repr(f.to_dict())))
+    if winner.freshness is FreshnessState.FRESH and any(
+        field.value != winner.value for field in newest
+    ):
+        winner = replace(winner, value={"status": "unknown", "reason": "contradiction"})
+    return tuple(field for field in fields if field.path != path) + (winner,)
+
+
+def _apply_snapshot_field(
+    state: dict[str, Any],
+    field: FieldSnapshot,
+    *,
+    radio: "Radio | None",
+) -> None:
+    path = field.path
+    value = field.value
+    if path.scope is FieldScope.RECEIVER:
+        receiver_key = _snapshot_receiver_key(path.receiver_id)
+        if receiver_key is None:
+            return
+        if path.family is FieldFamily.FREQ_MODE:
+            if path.slot in (VfoSlot.A, VfoSlot.B):
+                receiver = state.get(receiver_key)
+                if not isinstance(receiver, dict):
+                    return
+                slot_key = "vfo_a" if path.slot is VfoSlot.A else "vfo_b"
+                slot_state = receiver.get(slot_key)
+                if not isinstance(slot_state, dict):
+                    return
+                target = _VFO_SLOT_FIELDS.get(path.name)
+                if target is not None:
+                    slot_state[target] = value
+                return
+            if path.slot is VfoSlot.UNSELECTED:
+                receiver = state.get(receiver_key)
+                if not isinstance(receiver, dict):
+                    return
+                relative = receiver.setdefault("unselected_vfo", {})
+                if not isinstance(relative, dict):
+                    return
+                target = _VFO_SLOT_FIELDS.get(path.name)
+                if target is not None:
+                    relative[target] = value
+                return
+            if path.slot not in (None, VfoSlot.ACTIVE):
+                return
+            target = _RECEIVER_FREQ_MODE_FIELDS.get(path.name)
+            if target is not None:
+                _set_receiver_value(state, receiver_key, target, value)
+            return
+        if path.family is FieldFamily.VFO and path.name == "active_slot":
+            _set_receiver_value(state, receiver_key, "active_slot", value)
+            return
+        if path.family is FieldFamily.METERS and path.name == "s_meter":
+            _set_receiver_value(state, receiver_key, "s_meter", value)
+            return
+        if (
+            path.family is FieldFamily.OPERATOR_CONTROLS
+            and path.name in _RECEIVER_OPERATOR_CONTROL_FIELDS
+        ):
+            if path.name in _NORMALIZED_RECEIVER_OPERATOR_CONTROL_FIELDS:
+                value = _normalize_public_level_snapshot_value(value)
+            _set_receiver_value(state, receiver_key, path.name, value)
+            return
+        if (
+            path.family is FieldFamily.OPERATOR_TOGGLES
+            and path.name in _RECEIVER_OPERATOR_TOGGLE_FIELDS
+        ):
+            if path.name == "audio_peak_filter":
+                _set_receiver_value(state, receiver_key, "audio_peak_filter", value)
+            elif path.name == "twin_peak_filter":
+                _set_receiver_value(state, receiver_key, "twin_peak_filter", value)
+            elif path.name == "auto_notch":
+                _set_receiver_value(state, receiver_key, "auto_notch", value)
+            elif path.name == "af_mute":
+                _set_receiver_value(state, receiver_key, "af_mute", value)
+            elif path.name == "dcd":
+                _set_receiver_value(state, receiver_key, "dcd", value)
+                # DEPRECATED alias (MOR-466): remove after migration window. Also
+                # publish the value under the legacy ``s_meter_sql_open`` key
+                # (camel-cased to ``sMeterSqlOpen``) so existing frontend
+                # consumers keep working during migration.
+                _set_receiver_value(state, receiver_key, "s_meter_sql_open", value)
+            else:
+                _set_receiver_value(state, receiver_key, path.name, value)
+            return
+        if (
+            path.family is FieldFamily.SLOW_STATE
+            and path.name in _RECEIVER_SLOW_STATE_FIELDS
+        ):
+            _set_receiver_value(state, receiver_key, path.name, value)
+            return
+
+    if path.scope is FieldScope.GLOBAL:
+        if path.family is FieldFamily.TX_STATE and path.name == "tx_target":
+            state[path.name] = _project_tx_target(field)
+            return
+        if path.family is FieldFamily.TX_STATE and path.name in _GLOBAL_TX_FIELDS:
+            state[path.name] = value
+            return
+        if (
+            path.family is FieldFamily.OPERATOR_CONTROLS
+            and path.name in _GLOBAL_OPERATOR_CONTROL_FIELDS
+        ):
+            if path.name in _NORMALIZED_GLOBAL_OPERATOR_CONTROL_FIELDS:
+                value = _normalize_public_level_snapshot_value(
+                    value,
+                    max_value=_power_level_max_value(field, radio),
+                )
+            state[path.name] = value
+            return
+        if path.family is FieldFamily.METERS and path.name in _GLOBAL_METER_FIELDS:
+            state[f"{path.name}_meter"] = value
+            return
+        if (
+            path.family is FieldFamily.SLOW_STATE
+            and path.name in _GLOBAL_SLOW_STATE_FIELDS
+        ):
+            state[path.name] = value
+            if path.name == "active" and value in {"MAIN", "SUB"}:
+                state["vfo_select"] = 0 if value == "MAIN" else 1
+            return
+
+    if path.scope is FieldScope.CONNECTION and path.family is FieldFamily.CONNECTION:
+        if path.name in {"connected", "radio_ready", "control_connected"}:
+            state[path.name] = value
+        elif path.name == "status":
+            state["radio_detail"] = {"status": value}
+        return
+
+    if path.scope is FieldScope.HEALTH and path.family is FieldFamily.HEALTH:
+        if path.name in _HEALTH_PUBLIC_PATHS:
+            health = state.setdefault("radio_health", {})
+            if isinstance(health, dict):
+                health[path.name] = value
+        return
+
+    if path.scope is FieldScope.SCOPE_CONTROLS and path.family is FieldFamily.DISPLAY:
+        scope_controls = state.get("scope_controls")
+        if not isinstance(scope_controls, dict):
+            return
+        if path.receiver_id is not None:
+            receiver_key = _snapshot_receiver_key(path.receiver_id)
+            if receiver_key == "main":
+                scope_controls["receiver"] = 0
+            elif receiver_key == "sub":
+                scope_controls["receiver"] = 1
+        if path.name == "fixed_edge":
+            scope_controls["fixed_edge"] = _project_scope_fixed_edge(value)
+        elif path.name in _SCOPE_CONTROL_PUBLIC_SUFFIXES:
+            scope_controls[path.name] = value
+
+
+def _project_snapshot_state_dict(
+    snapshot: StateSnapshot,
+    *,
+    radio: "Radio | None",
+) -> dict[str, Any]:
+    state = copy.deepcopy(_EMPTY_STATE_DICT)
+    for field in snapshot.fields:
+        if not is_immutable_value(field.value):
+            # The payload owns its containers: a caller editing it must not
+            # reach the snapshot, whose immutable values are shared (MOR-4212).
+            field = replace(field, value=copy.deepcopy(field.value))
+        _apply_snapshot_field(state, field, radio=radio)
+    required_relative_fields = frozenset(_VFO_SLOT_FIELDS.values())
+    for receiver_key in ("main", "sub"):
+        receiver = state.get(receiver_key)
+        if not isinstance(receiver, dict):
+            continue
+        relative = receiver.get("unselected_vfo")
+        if (
+            not isinstance(relative, dict)
+            or frozenset(relative) != required_relative_fields
+        ):
+            receiver.pop("unselected_vfo", None)
+    return cast(dict[str, Any], state)
+
+
+def _build_public_state_payload_from_dict(
+    state: dict[str, Any],
+    *,
+    radio: "Radio | None",
+    revision: int,
+    state_revision: int,
+    freshness_revision: int,
+    observation_seq: int,
+    receiver_count: int,
+    updated_at: str | None = None,
+    scope_clients: int = 0,
+    control_clients: int = 0,
+    audio_clients: int = 0,
+    radio_health: dict[str, Any] | None = None,
+    health_revision: int = 0,
+    monitor_mute: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the public payload from ``state``, which it takes over and edits.
+
+    Callers pass a dict of their own: the snapshot projection builds a new
+    one per call, so it is not deep-copied again here (MOR-4212).
+    """
+    for receiver in (state.get("main"), state.get("sub")):
+        if not isinstance(receiver, dict):
+            continue
+        for holder in (
+            receiver,
+            receiver.get("vfo_a"),
+            receiver.get("vfo_b"),
+            receiver.get("unselected_vfo"),
+        ):
+            if isinstance(holder, dict) and isinstance(holder.get("mode"), str):
+                holder["mode"] = holder["mode"].replace("_", "-")
+    state.setdefault(
+        "tx_target",
+        {"status": "unknown", "reason": "not-observed"},
+    )
+    runtime_connected = getattr(radio, "connected", False) if radio else False
+    raw_connected = state.get("connected")
+    state["connected"] = (
+        raw_connected
+        if isinstance(raw_connected, bool)
+        else runtime_connected
+        if isinstance(runtime_connected, bool)
+        else False
+    )
+    stored_ready = state.get("radio_ready")
+    state["radio_ready"] = (
+        stored_ready if isinstance(stored_ready, bool) else radio_ready(radio)
+    )
+    runtime_control_connected = (
+        getattr(radio, "control_connected", False) if radio else False
+    )
+    raw_control_connected = state.get("control_connected")
+    state["control_connected"] = (
+        raw_control_connected
+        if isinstance(raw_control_connected, bool)
+        else runtime_control_connected
+        if isinstance(runtime_control_connected, bool)
+        else False
+    )
+    state["revision"] = revision
+    state["state_revision"] = state_revision
+    state["freshness_revision"] = freshness_revision
+    state["observation_seq"] = observation_seq
+    state["health_revision"] = health_revision
+    state["updated_at"] = (
+        updated_at or datetime.datetime.now(datetime.timezone.utc).isoformat()
+    )
+    if receiver_count < 2:
+        state.pop("sub", None)
+
+    conn_state_val = getattr(radio, "conn_state", None) if radio else None
+    radio_status: str = "disconnected"
+    if conn_state_val is not None and hasattr(conn_state_val, "value"):
+        raw_val = conn_state_val.value
+        if isinstance(raw_val, str):
+            radio_status = raw_val
+    elif state["connected"]:
+        radio_status = "connected"
+    stored_detail = state.get("radio_detail")
+    stored_status = (
+        stored_detail.get("status") if isinstance(stored_detail, dict) else None
+    )
+    state["radio_detail"] = {
+        "status": stored_status if isinstance(stored_status, str) else radio_status,
+    }
+    public_health = dict(radio_health or classify_radio_health(radio))
+    stored_health = state.get("radio_health")
+    if isinstance(stored_health, dict) and not isinstance(
+        getattr(radio, "serial_open_error", None), str
+    ):
+        for name in _HEALTH_PUBLIC_PATHS:
+            if name in stored_health:
+                public_health[_to_camel(name)] = stored_health[name]
+    state["radio_health"] = public_health
+    state["ws_clients"] = {
+        "scope": scope_clients,
+        "control": control_clients,
+        "audio": audio_clients,
+    }
+
+    public = _camel_case_state(state)
+    # MOR-3845: computed at payload-build (response) time; additive next to
+    # the existing connection scalars.
+    public["connection"]["liveness"] = connection_liveness_payload(radio)
+    _null_unobserved_public_leaves(public)
+    _publish_last_commanded_power_off(public, radio)
+    if monitor_mute is not None:
+        public["monitorMute"] = copy.deepcopy(dict(monitor_mute))
+    return public
+
+
+def _publish_last_commanded_power_off(
+    public: dict[str, Any], radio: "Radio | None"
+) -> None:
+    """Publish the retained last-commanded power-off when the store is silent.
+
+    MOR-2544 (Option B): ``IcomRadio._last_commanded_powerstat`` records the
+    power command the radio ACKed (0xFB) and lives outside the StateStore, so
+    it survives ``advance_generation`` (watchdog timeout, reconnect attempts,
+    soft reconnects — all clear the store). While the store's ``power_on``
+    field is unobserved and the last command was OFF, publish
+    ``powerOn: false`` with a ``fieldStatus.powerOn`` entry the frontend
+    accepts (``isFieldAvailable`` resolves ``availability: "available"``),
+    so the powered-off overlay and the Power-ON button survive every
+    generation clear for as long as the radio stays off. The evidence is the
+    radio's own ACK, so the entry reads observed — but ``True`` is never
+    published from the attribute: only fresh answers prove power on, and any
+    observed store field wins over the retained command. Applied after
+    ``_null_unobserved_public_leaves`` so the value is never nulled back.
+    """
+    last_commanded = (
+        getattr(radio, "_last_commanded_powerstat", None) if radio is not None else None
+    )
+    if last_commanded is not False or not _radio_infers_power_on_from_liveness(radio):
+        return
+    field_status = public.get("fieldStatus")
+    existing = field_status.get("powerOn") if isinstance(field_status, dict) else None
+    if isinstance(existing, dict) and existing.get("observed") is True:
+        return  # fresh store truth (including a stale last value) wins
+    public["powerOn"] = False
+    if isinstance(field_status, dict):
+        field_status["powerOn"] = {
+            "storePath": "global.tx_state.power_on",
+            "observed": True,
+            "freshness": "fresh",
+            "availability": "available",
+            "source": {
+                "source": "command_response",
+                "provider": "icom_civ",
+                "transport": "civ",
+                "nativeId": "last_commanded_powerstat",
+                "capabilityId": "global.tx_state.power_on",
+                "commandSource": None,
+                "sessionId": None,
+            },
+        }
+
+
+def build_public_state_payload(
+    radio_state: RadioState,
+    *,
+    radio: "Radio | None",
+    revision: int,
+    state_revision: int | None = None,
+    freshness_revision: int = 0,
+    observation_seq: int = 0,
+    receiver_count: int,
+    updated_at: str | None = None,
+    scope_clients: int = 0,
+    control_clients: int = 0,
+    audio_clients: int = 0,
+    radio_health: dict[str, Any] | None = None,
+    health_revision: int = 0,
+    monitor_mute: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the canonical public web state payload from RadioState.
+
+    This is the single web-facing state contract used by HTTP and WebSocket
+    consumers. During the migration away from StateCache, all public state
+    should be derived here.
+    """
+    return _build_public_state_payload_from_dict(
+        copy.deepcopy(radio_state.to_dict()),
+        radio=radio,
+        revision=revision,
+        state_revision=revision if state_revision is None else state_revision,
+        freshness_revision=freshness_revision,
+        observation_seq=observation_seq,
+        receiver_count=receiver_count,
+        updated_at=updated_at,
+        scope_clients=scope_clients,
+        control_clients=control_clients,
+        audio_clients=audio_clients,
+        radio_health=radio_health,
+        health_revision=health_revision,
+        monitor_mute=monitor_mute,
+    )
+
+
+def declared_field_paths(
+    acquisition: RadioAcquisitionProfile,
+) -> frozenset[FieldPath]:
+    """Return every field path the profile declares: ``field_policies`` keys
+    plus the capability paths it does not mark unavailable.
+
+    This is the same ``declared`` set ``snapshot_field_status_inputs``
+    reports, kept as one function so the served tags and the field-status
+    absence seed can never disagree on what "declared" means.
+    """
+    return frozenset(acquisition.field_policies) | frozenset(
+        capability.path
+        for capability in acquisition.capabilities
+        if not capability.is_unavailable
+    )
+
+
+def snapshot_field_status_inputs(
+    acquisition: RadioAcquisitionProfile,
+    snapshot: StateSnapshot,
+) -> tuple[dict[FieldPath, bool | None], frozenset[FieldPath]]:
+    """Return the ``availability`` / ``declared`` pair for one profile.
+
+    ``declared`` is every ``field_policies`` key plus every capability path
+    the profile does NOT mark unavailable
+    (:attr:`~rigplane.core.state_acquisition_policy.FieldCapability.is_unavailable`,
+    which covers both ``unsupported`` and ``unknown``).
+    """
+
+    return resolve_available_when(acquisition, snapshot), declared_field_paths(
+        acquisition
+    )
+
+
+def build_public_state_payload_from_snapshot(
+    snapshot: StateSnapshot,
+    *,
+    radio: "Radio | None",
+    receiver_count: int,
+    availability: Mapping[FieldPath, bool | None] | None = None,
+    declared: Collection[FieldPath] | None = None,
+    updated_at: str | None = None,
+    scope_clients: int = 0,
+    control_clients: int = 0,
+    audio_clients: int = 0,
+    radio_health: dict[str, Any] | None = None,
+    health_revision: int = 0,
+    monitor_mute: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the public web payload from one StateStore snapshot."""
+
+    snapshot = replace(snapshot, fields=_canonical_snapshot_fields(snapshot))
+    state = _project_snapshot_state_dict(snapshot, radio=radio)
+    state["field_status"] = _build_snapshot_field_status(
+        snapshot,
+        receiver_count=receiver_count,
+        availability=availability,
+        declared=declared,
+    )
+    return _build_public_state_payload_from_dict(
+        state,
+        radio=radio,
+        revision=snapshot.state_revision,
+        state_revision=snapshot.state_revision,
+        freshness_revision=snapshot.freshness_revision,
+        observation_seq=snapshot.observation_seq,
+        receiver_count=receiver_count,
+        updated_at=updated_at,
+        scope_clients=scope_clients,
+        control_clients=control_clients,
+        audio_clients=audio_clients,
+        radio_health=radio_health,
+        health_revision=health_revision,
+        monitor_mute=monitor_mute,
+    )

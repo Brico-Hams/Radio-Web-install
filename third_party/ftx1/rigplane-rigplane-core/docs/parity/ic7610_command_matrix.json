@@ -1,0 +1,3074 @@
+{
+  "format_version": 1,
+  "radio_model": "IC-7610",
+  "reference": {
+    "wfview_rig": "references/wfview/rigs/IC-7610.rig",
+    "wfview_commander": "references/wfview/src/radio/icomcommander.cpp"
+  },
+  "status_totals": {
+    "implemented": 134,
+    "partial": 0,
+    "missing": 0,
+    "not_applicable": 0
+  },
+  "families": {
+    "baseline_core": {
+      "title": "Baseline core and already-exposed parity",
+      "owner_issue": null,
+      "summary": "Pre-M4 baseline commands already backed by maintained library/runtime surfaces or by the internal primitives that those surfaces depend on.",
+      "counts": {
+        "implemented": 38,
+        "partial": 0,
+        "missing": 0,
+        "not_applicable": 0
+      }
+    },
+    "dsp_levels": {
+      "title": "DSP and level controls",
+      "owner_issue": 130,
+      "summary": "Missing APF/PBT/NB/monitor/VOX/mod-level style controls tracked by issue #130.",
+      "counts": {
+        "implemented": 21,
+        "partial": 0,
+        "missing": 0,
+        "not_applicable": 0
+      }
+    },
+    "operator_toggles": {
+      "title": "Operator toggles and status flags",
+      "owner_issue": 131,
+      "summary": "AGC/ANF/compressor/VOX/break-in and related toggle/status parity completed by issue #131.",
+      "counts": {
+        "implemented": 15,
+        "partial": 0,
+        "missing": 0,
+        "not_applicable": 0
+      }
+    },
+    "vfo_dualwatch_scan": {
+      "title": "VFO, dual-watch, and scan control",
+      "owner_issue": 132,
+      "summary": "Remaining dual-watch/scanning/VFO parity tracked by issue #132.",
+      "counts": {
+        "implemented": 10,
+        "partial": 0,
+        "missing": 0,
+        "not_applicable": 0
+      }
+    },
+    "memory_bandstack": {
+      "title": "Memory and band-stacking",
+      "owner_issue": 133,
+      "summary": "Memory register, recall, and band-stacking work tracked by issue #133.",
+      "counts": {
+        "implemented": 6,
+        "partial": 0,
+        "missing": 0,
+        "not_applicable": 0
+      }
+    },
+    "tone_repeater": {
+      "title": "Tone and repeater controls",
+      "owner_issue": 134,
+      "summary": "Repeater tone/TSQL frequency family tracked by issue #134.",
+      "counts": {
+        "implemented": 4,
+        "partial": 0,
+        "missing": 0,
+        "not_applicable": 0
+      }
+    },
+    "system_config": {
+      "title": "System and configuration",
+      "owner_issue": 135,
+      "summary": "Antenna, CI-V config, mod routing, and date/time/UTC work tracked by issue #135.",
+      "counts": {
+        "implemented": 16,
+        "partial": 0,
+        "missing": 0,
+        "not_applicable": 0
+      }
+    },
+    "transceiver_status": {
+      "title": "Transceiver, telemetry, and RIT/TX status",
+      "owner_issue": 136,
+      "summary": "RIT/TX status and remaining telemetry parity tracked by issue #136.",
+      "counts": {
+        "implemented": 11,
+        "partial": 0,
+        "missing": 0,
+        "not_applicable": 0
+      }
+    },
+    "advanced_scope": {
+      "title": "Advanced scope controls",
+      "owner_issue": 137,
+      "summary": "Remaining scope configuration controls tracked by issue #137.",
+      "counts": {
+        "implemented": 13,
+        "partial": 0,
+        "missing": 0,
+        "not_applicable": 0
+      }
+    }
+  },
+  "commands": [
+    {
+      "id": 1,
+      "name": "Freq (TRX)",
+      "wire": "\\\\x00",
+      "command29": false,
+      "get": false,
+      "set": false,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane._civ_rx:_CivRxMixin._update_state_cache_from_frame",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_civ_rx_coverage.py::cmd 0x00"
+      ],
+      "notes": "Unsolicited transceive updates are projected into StateCache and RadioState."
+    },
+    {
+      "id": 2,
+      "name": "Mode (TRX)",
+      "wire": "\\\\x01",
+      "command29": false,
+      "get": false,
+      "set": false,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane._civ_rx:_CivRxMixin._update_state_cache_from_frame",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_civ_rx_coverage.py::cmd 0x01"
+      ],
+      "notes": "Unsolicited transceive updates are projected into StateCache and RadioState."
+    },
+    {
+      "id": 3,
+      "name": "Band Edge Freq",
+      "wire": "\\\\x02",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_band_edge_freq",
+        "rigplane.commands:parse_frequency_response",
+        "rigplane.radio:IcomRadio.get_band_edge_freq"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_band_edge_freq",
+        "tests/test_commands.py::test_parse_frequency_response_band_edge",
+        "tests/test_radio.py::test_get_band_edge_freq"
+      ],
+      "notes": "Read-only builder; response uses standard frequency BCD parsing."
+    },
+    {
+      "id": 4,
+      "name": "Freq Get",
+      "wire": "\\\\x03",
+      "command29": false,
+      "get": true,
+      "set": false,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_frequency",
+        "rigplane.radio:CoreRadio.get_frequency"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_frequency"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Mode Get",
+      "wire": "\\\\x04",
+      "command29": false,
+      "get": true,
+      "set": false,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_mode",
+        "rigplane.radio:CoreRadio.get_mode"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_mode"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Freq Set",
+      "wire": "\\\\x05",
+      "command29": false,
+      "get": false,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:set_frequency",
+        "rigplane.radio:CoreRadio.set_frequency"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_set_frequency_14mhz"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Mode Set",
+      "wire": "\\\\x06",
+      "command29": false,
+      "get": false,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:set_mode",
+        "rigplane.radio:CoreRadio.set_mode"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_set_mode_usb"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "VFO Mode Select",
+      "wire": "\\\\x07",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:set_vfo",
+        "rigplane.radio:CoreRadio.set_vfo_slot"
+      ],
+      "test_patterns": [
+        "tests/test_commands_extended.py::test_code_reaches_the_wire_unchanged"
+      ]
+    },
+    {
+      "id": 9,
+      "name": "VFO Swap M/S",
+      "wire": "\\\\x07\\\\xb0",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.runtime._dual_rx_runtime:DualRxRuntimeMixin.swap_main_sub",
+        "rigplane.radio:CoreRadio.swap_main_sub"
+      ],
+      "test_patterns": [
+        "tests/test_vfo_dual_watch.py::test_ic7610_swap_main_sub_sends_0x07_0xb0"
+      ]
+    },
+    {
+      "id": 10,
+      "name": "VFO Equal MS",
+      "wire": "\\\\x07\\\\xb1",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.runtime._dual_rx_runtime:DualRxRuntimeMixin.equalize_main_sub",
+        "rigplane.radio:CoreRadio.equalize_main_sub"
+      ],
+      "test_patterns": [
+        "tests/test_vfo_dual_watch.py::test_ic7610_equalize_main_sub_sends_0x07_0xb1"
+      ]
+    },
+    {
+      "id": 11,
+      "name": "VFO Dual Watch Off",
+      "wire": "\\\\x07\\\\xc0",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "vfo_dualwatch_scan",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_civ_rx_coverage.py::dual_watch"
+      ],
+      "notes": "Dual-watch off is only observed through CI-V receive-state projection; there is no dedicated public API yet."
+    },
+    {
+      "id": 12,
+      "name": "VFO Dual Watch On",
+      "wire": "\\\\x07\\\\xc1",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "vfo_dualwatch_scan",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_civ_rx_coverage.py::dual_watch"
+      ],
+      "notes": "Dual-watch on is only observed through CI-V receive-state projection; there is no dedicated public API yet."
+    },
+    {
+      "id": 13,
+      "name": "VFO Dual Watch",
+      "wire": "\\\\x07\\\\xc2",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "vfo_dualwatch_scan",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_civ_rx_coverage.py::dual_watch"
+      ],
+      "notes": "Dual-watch status is tracked in RadioState, but not exposed through a maintained public method/CLI/Web command family yet."
+    },
+    {
+      "id": 14,
+      "name": "VFO Main Select",
+      "wire": "\\\\x07\\\\xd0",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:set_vfo",
+        "rigplane.radio:CoreRadio.select_receiver"
+      ],
+      "test_patterns": [
+        "tests/test_radio_extended.py::test_set_vfo_wire_sends_the_profile_code"
+      ]
+    },
+    {
+      "id": 15,
+      "name": "VFO Sub Select",
+      "wire": "\\\\x07\\\\xd1",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:set_vfo",
+        "rigplane.radio:CoreRadio.select_receiver"
+      ],
+      "test_patterns": [
+        "tests/test_radio_extended.py::test_set_vfo_wire_sends_the_profile_code"
+      ]
+    },
+    {
+      "id": 16,
+      "name": "VFO Main/Sub Band",
+      "wire": "\\\\x07\\\\xd2",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "vfo_dualwatch_scan",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_civ_rx_coverage.py::active_receiver"
+      ],
+      "notes": "Active MAIN/SUB receiver state is projected into RadioState, but there is no dedicated parity API for the 0x07/0xD2 family yet."
+    },
+    {
+      "id": 17,
+      "name": "Memory Mode",
+      "wire": "\\\\x08",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "memory_bandstack",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:build_memory_mode_set",
+        "rigplane.radio:IcomRadio.set_memory_mode"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_build_memory_mode"
+      ]
+    },
+    {
+      "id": 18,
+      "name": "Memory Write",
+      "wire": "\\\\x09",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "memory_bandstack",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:build_memory_write",
+        "rigplane.radio:IcomRadio.memory_write"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_build_memory_write"
+      ]
+    },
+    {
+      "id": 19,
+      "name": "Memory to VFO",
+      "wire": "\\\\x0a",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "memory_bandstack",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:build_memory_to_vfo",
+        "rigplane.radio:IcomRadio.memory_to_vfo"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_build_memory_to_vfo"
+      ]
+    },
+    {
+      "id": 20,
+      "name": "Memory Clear",
+      "wire": "\\\\x0b",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "memory_bandstack",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:build_memory_clear",
+        "rigplane.radio:IcomRadio.memory_clear"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_build_memory_clear"
+      ]
+    },
+    {
+      "id": 21,
+      "name": "Scanning",
+      "wire": "\\\\x0e",
+      "command29": false,
+      "get": false,
+      "set": true,
+      "admin": false,
+      "family": "vfo_dualwatch_scan",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:start_scan",
+        "rigplane.commands:stop_scan",
+        "rigplane.radio:IcomRadio.start_scan"
+      ],
+      "test_patterns": [
+        "tests/test_vfo_dual_watch.py::test_start_scan_builds_correct_frame"
+      ]
+    },
+    {
+      "id": 22,
+      "name": "Split/Duplex",
+      "wire": "\\\\x0f",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:set_split",
+        "rigplane.radio:CoreRadio.set_split",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands_extended.py::test_split_on",
+        "tests/test_civ_rx_coverage.py::cmd 0x0F"
+      ]
+    },
+    {
+      "id": 23,
+      "name": "Tuning Step",
+      "wire": "\\\\x10",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "vfo_dualwatch_scan",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_tuning_step",
+        "rigplane.commands:set_tuning_step",
+        "rigplane.radio:IcomRadio.get_tuning_step"
+      ],
+      "test_patterns": [
+        "tests/test_vfo_dual_watch.py::test_get_tuning_step_builds_correct_frame"
+      ]
+    },
+    {
+      "id": 24,
+      "name": "Attenuator Status",
+      "wire": "\\\\x11",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_attenuator",
+        "rigplane.commands:set_attenuator_level",
+        "rigplane.radio:CoreRadio.get_attenuator_level",
+        "rigplane.radio:CoreRadio.set_attenuator_level"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::get_attenuator",
+        "tests/test_radio_coverage.py::get_attenuator_level"
+      ]
+    },
+    {
+      "id": 25,
+      "name": "Antenna",
+      "wire": "\\\\x12",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_antenna_1",
+        "rigplane.commands:set_antenna_1",
+        "rigplane.radio:IcomRadio.get_antenna_1"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_antenna_1"
+      ]
+    },
+    {
+      "id": 26,
+      "name": "Speech",
+      "wire": "\\\\x13",
+      "command29": false,
+      "get": false,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "notes": "Speech voice synthesizer (0x13). Fire-and-forget SET only (0=all, 1=freq, 2=mode).",
+      "runtime_symbols": [
+        "rigplane.commands:speech",
+        "rigplane.radio:IcomRadio.speech"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_speech_all",
+        "tests/test_commands.py::test_speech_freq",
+        "tests/test_commands.py::test_speech_mode",
+        "tests/test_commands.py::test_speech_invalid",
+        "tests/test_radio.py::test_speech_sends_packet"
+      ]
+    },
+    {
+      "id": 27,
+      "name": "AF Gain",
+      "wire": "\\\\x14\\\\x01",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_af_level",
+        "rigplane.commands:set_af_level",
+        "rigplane.radio:CoreRadio.get_af_level",
+        "rigplane.radio:CoreRadio.set_af_level"
+      ],
+      "test_patterns": [
+        "tests/test_rf_gain_af_level.py::get_af_level",
+        "tests/test_radio_coverage.py::get_af_level"
+      ]
+    },
+    {
+      "id": 28,
+      "name": "RF Gain",
+      "wire": "\\\\x14\\\\x02",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_rf_gain",
+        "rigplane.commands:set_rf_gain",
+        "rigplane.radio:CoreRadio.get_rf_gain",
+        "rigplane.radio:CoreRadio.set_rf_gain"
+      ],
+      "test_patterns": [
+        "tests/test_rf_gain_af_level.py::get_rf_gain",
+        "tests/test_radio_coverage.py::get_rf_gain"
+      ]
+    },
+    {
+      "id": 29,
+      "name": "Squelch",
+      "wire": "\\\\x14\\\\x03",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:set_squelch",
+        "rigplane.radio:CoreRadio.set_squelch",
+        "rigplane._civ_rx:_CivRxMixin._update_state_cache_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_radio_coverage.py::set_squelch"
+      ]
+    },
+    {
+      "id": 30,
+      "name": "APF Type Level",
+      "wire": "\\\\x14\\\\x05",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_apf_type_level",
+        "rigplane.commands:set_apf_type_level",
+        "rigplane.radio:CoreRadio.get_apf_type_level",
+        "rigplane.radio:CoreRadio.set_apf_type_level",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_level_builders",
+        "tests/test_radio.py::test_get_cmd29_dsp_level",
+        "tests/test_radio.py::test_set_cmd29_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_receiver_dsp_levels"
+      ]
+    },
+    {
+      "id": 31,
+      "name": "NR Level",
+      "wire": "\\\\x14\\\\x06",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_nr_level",
+        "rigplane.commands:set_nr_level",
+        "rigplane.radio:CoreRadio.get_nr_level",
+        "rigplane.radio:CoreRadio.set_nr_level",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_level_builders",
+        "tests/test_radio.py::test_get_cmd29_dsp_level",
+        "tests/test_radio.py::test_set_cmd29_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_receiver_dsp_levels"
+      ]
+    },
+    {
+      "id": 32,
+      "name": "PBT Inner",
+      "wire": "\\\\x14\\\\x07",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_pbt_inner",
+        "rigplane.commands:set_pbt_inner",
+        "rigplane.radio:CoreRadio.get_pbt_inner",
+        "rigplane.radio:CoreRadio.set_pbt_inner",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_level_builders",
+        "tests/test_radio.py::test_get_cmd29_dsp_level",
+        "tests/test_radio.py::test_set_cmd29_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_receiver_dsp_levels"
+      ]
+    },
+    {
+      "id": 33,
+      "name": "PBT Outer",
+      "wire": "\\\\x14\\\\x08",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_pbt_outer",
+        "rigplane.commands:set_pbt_outer",
+        "rigplane.radio:CoreRadio.get_pbt_outer",
+        "rigplane.radio:CoreRadio.set_pbt_outer",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_level_builders",
+        "tests/test_radio.py::test_get_cmd29_dsp_level",
+        "tests/test_radio.py::test_set_cmd29_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_receiver_dsp_levels"
+      ]
+    },
+    {
+      "id": 34,
+      "name": "CW Pitch",
+      "wire": "\\\\x14\\\\x09",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_cw_pitch",
+        "rigplane.commands:set_cw_pitch",
+        "rigplane.radio:CoreRadio.get_cw_pitch",
+        "rigplane.radio:CoreRadio.set_cw_pitch",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_level_builders",
+        "tests/test_radio.py::test_get_cw_pitch_converts_raw_level",
+        "tests/test_radio.py::test_set_cw_pitch_sends_scaled_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_global_dsp_levels"
+      ]
+    },
+    {
+      "id": 35,
+      "name": "RF Power",
+      "wire": "\\\\x14\\\\x0a",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_rf_power",
+        "rigplane.commands:set_rf_power",
+        "rigplane.radio:CoreRadio.get_rf_power",
+        "rigplane.radio:CoreRadio.set_rf_power"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_power",
+        "tests/test_commands.py::test_set_power"
+      ]
+    },
+    {
+      "id": 36,
+      "name": "Mic Gain",
+      "wire": "\\\\x14\\\\x0b",
+      "command29": false,
+      "cmd29_supported": false,
+      "cmd29_rationale": "Transceiver-global microphone gain. Per IC-7610 CI-V Reference p.3, the row carries no Command29 marker; verified against wfview IC-7610.rig (Mic Gain, Command29=false). Excluded from rigs/ic7610.toml cmd29 routes.",
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_mic_gain",
+        "rigplane.commands:set_mic_gain",
+        "rigplane.radio:CoreRadio.get_mic_gain",
+        "rigplane.radio:CoreRadio.set_mic_gain",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_level_builders",
+        "tests/test_radio.py::test_get_direct_dsp_level",
+        "tests/test_radio.py::test_set_direct_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_global_dsp_levels"
+      ]
+    },
+    {
+      "id": 37,
+      "name": "Key Speed",
+      "wire": "\\\\x14\\\\x0c",
+      "command29": false,
+      "cmd29_supported": false,
+      "cmd29_rationale": "Transceiver-global CW key speed. PDF p.3 shows no Command29 marker; wfview IC-7610.rig sets Command29=false. Excluded from rigs/ic7610.toml cmd29 routes.",
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_key_speed",
+        "rigplane.commands:set_key_speed",
+        "rigplane.radio:CoreRadio.get_key_speed",
+        "rigplane.radio:CoreRadio.set_key_speed",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_level_builders",
+        "tests/test_radio.py::test_get_key_speed_converts_raw_level",
+        "tests/test_radio.py::test_set_key_speed_sends_scaled_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_global_dsp_levels"
+      ]
+    },
+    {
+      "id": 38,
+      "name": "Notch Filter",
+      "wire": "\\\\x14\\\\x0d",
+      "command29": false,
+      "cmd29_supported": true,
+      "cmd29_rationale": "IC-7610 CI-V Reference Guide Rev.4 p.3 renders the Command29 glyph on this row; the PDF is the primary IC-7610 reference and takes precedence over wfview IC-7610.rig (which records Command29=false, mirrored in `command29` above as the raw wfview snapshot). Routed in rigs/ic7610.toml cmd29 routes so each receiver keeps an independent notch position on dual-RX — otherwise MAIN and SUB would share a single notch, a real functional limitation (issue #708 review).",
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_notch_filter",
+        "rigplane.commands:set_notch_filter",
+        "rigplane.radio:CoreRadio.get_notch_filter",
+        "rigplane.radio:CoreRadio.set_notch_filter",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_level_builders",
+        "tests/test_radio.py::test_get_direct_dsp_level",
+        "tests/test_radio.py::test_set_direct_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_global_dsp_levels"
+      ]
+    },
+    {
+      "id": 39,
+      "name": "Compressor Level",
+      "wire": "\\\\x14\\\\x0e",
+      "command29": false,
+      "cmd29_supported": false,
+      "cmd29_rationale": "Transceiver-global speech-compressor gain. PDF p.3 shows no Command29 marker; wfview IC-7610.rig sets Command29=false. Excluded from rigs/ic7610.toml cmd29 routes.",
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_compressor_level",
+        "rigplane.commands:set_compressor_level",
+        "rigplane.radio:CoreRadio.get_compressor_level",
+        "rigplane.radio:CoreRadio.set_compressor_level",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_level_builders",
+        "tests/test_radio.py::test_get_direct_dsp_level",
+        "tests/test_radio.py::test_set_direct_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_global_dsp_levels"
+      ]
+    },
+    {
+      "id": 40,
+      "name": "Break-In Delay",
+      "wire": "\\\\x14\\\\x0f",
+      "command29": false,
+      "cmd29_supported": false,
+      "cmd29_rationale": "Transceiver-global CW break-in delay. PDF p.3 shows no Command29 marker; wfview IC-7610.rig sets Command29=false. Excluded from rigs/ic7610.toml cmd29 routes.",
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_break_in_delay",
+        "rigplane.commands:set_break_in_delay",
+        "rigplane.radio:CoreRadio.get_break_in_delay",
+        "rigplane.radio:CoreRadio.set_break_in_delay",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_level_builders",
+        "tests/test_radio.py::test_get_direct_dsp_level",
+        "tests/test_radio.py::test_set_direct_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_global_dsp_levels"
+      ]
+    },
+    {
+      "id": 41,
+      "name": "NB Level",
+      "wire": "\\\\x14\\\\x12",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_nb_level",
+        "rigplane.commands:set_nb_level",
+        "rigplane.radio:CoreRadio.get_nb_level",
+        "rigplane.radio:CoreRadio.set_nb_level",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_level_builders",
+        "tests/test_radio.py::test_get_cmd29_dsp_level",
+        "tests/test_radio.py::test_set_cmd29_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_receiver_dsp_levels"
+      ]
+    },
+    {
+      "id": 42,
+      "name": "DIGI-SEL Shift",
+      "wire": "\\\\x14\\\\x13",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_digisel_shift",
+        "rigplane.commands:set_digisel_shift",
+        "rigplane.radio:CoreRadio.get_digisel_shift",
+        "rigplane.radio:CoreRadio.set_digisel_shift",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_level_builders",
+        "tests/test_radio.py::test_get_cmd29_dsp_level",
+        "tests/test_radio.py::test_set_cmd29_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_receiver_dsp_levels"
+      ]
+    },
+    {
+      "id": 43,
+      "name": "Drive Gain",
+      "wire": "\\\\x14\\\\x14",
+      "command29": false,
+      "cmd29_supported": false,
+      "cmd29_rationale": "Transceiver-global DRIVE gain (TX path). PDF p.3 shows no Command29 marker; wfview IC-7610.rig sets Command29=false. Excluded from rigs/ic7610.toml cmd29 routes.",
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_drive_gain",
+        "rigplane.commands:set_drive_gain",
+        "rigplane.radio:CoreRadio.get_drive_gain",
+        "rigplane.radio:CoreRadio.set_drive_gain",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_level_builders",
+        "tests/test_radio.py::test_get_direct_dsp_level",
+        "tests/test_radio.py::test_set_direct_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_global_dsp_levels"
+      ]
+    },
+    {
+      "id": 44,
+      "name": "Monitor Gain",
+      "wire": "\\\\x14\\\\x15",
+      "command29": false,
+      "cmd29_supported": false,
+      "cmd29_rationale": "Transceiver-global MONI audio level. PDF p.3 shows no Command29 marker; wfview IC-7610.rig sets Command29=false. Excluded from rigs/ic7610.toml cmd29 routes.",
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_monitor_gain",
+        "rigplane.commands:set_monitor_gain",
+        "rigplane.radio:CoreRadio.get_monitor_gain",
+        "rigplane.radio:CoreRadio.set_monitor_gain",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_level_builders",
+        "tests/test_radio.py::test_get_direct_dsp_level",
+        "tests/test_radio.py::test_set_direct_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_global_dsp_levels"
+      ]
+    },
+    {
+      "id": 45,
+      "name": "Vox Gain",
+      "wire": "\\\\x14\\\\x16",
+      "command29": false,
+      "cmd29_supported": false,
+      "cmd29_rationale": "Transceiver-global VOX gain (TX path). PDF p.3 shows no Command29 marker; wfview IC-7610.rig sets Command29=false. Excluded from rigs/ic7610.toml cmd29 routes.",
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_vox_gain",
+        "rigplane.commands:set_vox_gain",
+        "rigplane.radio:CoreRadio.get_vox_gain",
+        "rigplane.radio:CoreRadio.set_vox_gain",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_level_builders",
+        "tests/test_radio.py::test_get_direct_dsp_level",
+        "tests/test_radio.py::test_set_direct_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_global_dsp_levels"
+      ]
+    },
+    {
+      "id": 46,
+      "name": "Anti-Vox Gain",
+      "wire": "\\\\x14\\\\x17",
+      "command29": false,
+      "cmd29_supported": false,
+      "cmd29_rationale": "Transceiver-global Anti-VOX gain (TX path). PDF p.3 shows no Command29 marker; wfview IC-7610.rig sets Command29=false. Excluded from rigs/ic7610.toml cmd29 routes.",
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_anti_vox_gain",
+        "rigplane.commands:set_anti_vox_gain",
+        "rigplane.radio:CoreRadio.get_anti_vox_gain",
+        "rigplane.radio:CoreRadio.set_anti_vox_gain",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_level_builders",
+        "tests/test_radio.py::test_get_direct_dsp_level",
+        "tests/test_radio.py::test_set_direct_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd14_global_dsp_levels"
+      ]
+    },
+    {
+      "id": 47,
+      "name": "S Meter Sql Status",
+      "wire": "\\\\x15\\\\x01",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_s_meter_sql_status",
+        "rigplane.commands:parse_bool_response",
+        "rigplane.radio:CoreRadio.get_s_meter_sql_status",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_operator_getters",
+        "tests/test_radio.py::test_get_bool_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ],
+      "notes": "Official IC-7610 CI-V guide documents this wire as a read-only status response despite wfview marking set=true."
+    },
+    {
+      "id": 48,
+      "name": "S Meter",
+      "wire": "\\\\x15\\\\x02",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_s_meter",
+        "rigplane.commands:parse_meter_response",
+        "rigplane.radio:CoreRadio.get_s_meter"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_s_meter",
+        "tests/test_civ_rx_coverage.py::s_meter"
+      ]
+    },
+    {
+      "id": 49,
+      "name": "Various Squelch",
+      "wire": "\\\\x15\\\\x05",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_various_squelch",
+        "rigplane.radio:IcomRadio.get_various_squelch",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_various_squelch_main",
+        "tests/test_radio.py::test_get_various_squelch",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd15_dcd_observation_backed"
+      ],
+      "notes": ""
+    },
+    {
+      "id": 50,
+      "name": "Overflow Status",
+      "wire": "\\\\x15\\\\x07",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_overflow_status",
+        "rigplane.commands:parse_bool_response",
+        "rigplane.radio:CoreRadio.get_overflow_status",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_direct_operator_getters",
+        "tests/test_radio.py::test_get_bool_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ],
+      "notes": "Official IC-7610 CI-V guide documents this wire as a read-only status response despite wfview marking set=true."
+    },
+    {
+      "id": 51,
+      "name": "Power Meter",
+      "wire": "\\\\x15\\\\x11",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_power_meter",
+        "rigplane.radio:IcomRadio.get_power_meter",
+        "rigplane.web.server:WebServer._on_radio_state_change"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_power_meter"
+      ],
+      "notes": ""
+    },
+    {
+      "id": 52,
+      "name": "SWR Meter",
+      "wire": "\\\\x15\\\\x12",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_swr",
+        "rigplane.radio:CoreRadio.get_swr"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_swr"
+      ]
+    },
+    {
+      "id": 53,
+      "name": "ALC Meter",
+      "wire": "\\\\x15\\\\x13",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_alc",
+        "rigplane.radio:CoreRadio.get_alc_meter"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_alc"
+      ]
+    },
+    {
+      "id": 54,
+      "name": "Comp Meter",
+      "wire": "\\\\x15\\\\x14",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_comp_meter",
+        "rigplane.radio:IcomRadio.get_comp_meter",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_comp_meter",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_comp_meter"
+      ],
+      "notes": ""
+    },
+    {
+      "id": 55,
+      "name": "Vd Meter",
+      "wire": "\\\\x15\\\\x15",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_vd_meter",
+        "rigplane.radio:IcomRadio.get_vd_meter",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame",
+        "rigplane.web.server:WebServer._on_radio_state_change"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_vd_meter",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_vd_meter"
+      ],
+      "notes": ""
+    },
+    {
+      "id": 56,
+      "name": "Id Meter",
+      "wire": "\\\\x15\\\\x16",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_id_meter",
+        "rigplane.radio:IcomRadio.get_id_meter",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_id_meter",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_id_meter"
+      ],
+      "notes": ""
+    },
+    {
+      "id": 57,
+      "name": "Preamp Status",
+      "wire": "\\\\x16\\\\x02",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_preamp",
+        "rigplane.commands:set_preamp",
+        "rigplane.radio:CoreRadio.get_preamp",
+        "rigplane.radio:CoreRadio.set_preamp"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::get_preamp",
+        "tests/test_radio_coverage.py::get_preamp"
+      ]
+    },
+    {
+      "id": 58,
+      "name": "AGC Status",
+      "wire": "\\\\x16\\\\x12",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_agc",
+        "rigplane.commands:set_agc",
+        "rigplane.commands:parse_level_response",
+        "rigplane.radio:CoreRadio.get_agc",
+        "rigplane.radio:CoreRadio.set_agc",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_direct_operator_getters",
+        "tests/test_commands.py::test_direct_operator_setters",
+        "tests/test_commands.py::test_parse_single_byte_bcd_operator_values",
+        "tests/test_radio.py::test_get_enum_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ],
+      "notes": "wfview labels 0x16 0x12 as AGC status; the IC-7610 CI-V guide defines the payload as AGC mode (FAST/MID/SLOW)."
+    },
+    {
+      "id": 59,
+      "name": "Noise Blanker",
+      "wire": "\\\\x16\\\\x22",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_nb",
+        "rigplane.commands:set_nb",
+        "rigplane.radio:CoreRadio.get_nb",
+        "rigplane.radio:CoreRadio.set_nb"
+      ],
+      "test_patterns": [
+        "tests/test_radio_coverage.py::get_nb"
+      ]
+    },
+    {
+      "id": 60,
+      "name": "Audio Peak Filter",
+      "wire": "\\\\x16\\\\x32",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_audio_peak_filter",
+        "rigplane.commands:set_audio_peak_filter",
+        "rigplane.commands:parse_level_response",
+        "rigplane.radio:CoreRadio.get_audio_peak_filter",
+        "rigplane.radio:CoreRadio.set_audio_peak_filter",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_operator_getters",
+        "tests/test_commands.py::test_cmd29_operator_setters",
+        "tests/test_radio.py::test_get_enum_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 61,
+      "name": "Noise Reduction",
+      "wire": "\\\\x16\\\\x40",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_nr",
+        "rigplane.commands:set_nr",
+        "rigplane.radio:CoreRadio.get_nr",
+        "rigplane.radio:CoreRadio.set_nr"
+      ],
+      "test_patterns": [
+        "tests/test_radio_coverage.py::get_nr"
+      ]
+    },
+    {
+      "id": 62,
+      "name": "Auto Notch",
+      "wire": "\\\\x16\\\\x41",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_auto_notch",
+        "rigplane.commands:set_auto_notch",
+        "rigplane.commands:parse_bool_response",
+        "rigplane.radio:CoreRadio.get_auto_notch",
+        "rigplane.radio:CoreRadio.set_auto_notch",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_operator_getters",
+        "tests/test_commands.py::test_cmd29_operator_setters",
+        "tests/test_commands.py::test_parse_operator_bool_response",
+        "tests/test_radio.py::test_get_bool_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 63,
+      "name": "Repeater Tone",
+      "wire": "\\\\x16\\\\x42",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "tone_repeater",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_repeater_tone",
+        "rigplane.commands:set_repeater_tone",
+        "rigplane.radio:IcomRadio.get_repeater_tone"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_repeater_tone"
+      ]
+    },
+    {
+      "id": 64,
+      "name": "Repeater TSQL",
+      "wire": "\\\\x16\\\\x43",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "tone_repeater",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_repeater_tsql",
+        "rigplane.commands:set_repeater_tsql",
+        "rigplane.radio:IcomRadio.get_repeater_tsql"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_repeater_tsql"
+      ]
+    },
+    {
+      "id": 65,
+      "name": "Compressor Status",
+      "wire": "\\\\x16\\\\x44",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_compressor",
+        "rigplane.commands:set_compressor",
+        "rigplane.commands:parse_bool_response",
+        "rigplane.radio:CoreRadio.get_compressor",
+        "rigplane.radio:CoreRadio.set_compressor",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_direct_operator_getters",
+        "tests/test_commands.py::test_direct_operator_setters",
+        "tests/test_commands.py::test_parse_operator_bool_response",
+        "tests/test_radio.py::test_get_bool_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 66,
+      "name": "Monitor Status",
+      "wire": "\\\\x16\\\\x45",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_monitor",
+        "rigplane.commands:set_monitor",
+        "rigplane.commands:parse_bool_response",
+        "rigplane.radio:CoreRadio.get_monitor",
+        "rigplane.radio:CoreRadio.set_monitor",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_direct_operator_getters",
+        "tests/test_commands.py::test_direct_operator_setters",
+        "tests/test_radio.py::test_get_bool_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 67,
+      "name": "Vox Status",
+      "wire": "\\\\x16\\\\x46",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_vox",
+        "rigplane.commands:set_vox",
+        "rigplane.commands:parse_bool_response",
+        "rigplane.radio:CoreRadio.get_vox",
+        "rigplane.radio:CoreRadio.set_vox",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_direct_operator_getters",
+        "tests/test_commands.py::test_direct_operator_setters",
+        "tests/test_radio.py::test_get_bool_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 68,
+      "name": "Break-In Status",
+      "wire": "\\\\x16\\\\x47",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_break_in",
+        "rigplane.commands:set_break_in",
+        "rigplane.commands:parse_level_response",
+        "rigplane.radio:CoreRadio.get_break_in",
+        "rigplane.radio:CoreRadio.set_break_in",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_direct_operator_getters",
+        "tests/test_commands.py::test_direct_operator_setters",
+        "tests/test_radio.py::test_get_enum_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 69,
+      "name": "Manual Notch",
+      "wire": "\\\\x16\\\\x48",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_manual_notch",
+        "rigplane.commands:set_manual_notch",
+        "rigplane.commands:parse_bool_response",
+        "rigplane.radio:CoreRadio.get_manual_notch",
+        "rigplane.radio:CoreRadio.set_manual_notch",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_operator_getters",
+        "tests/test_commands.py::test_cmd29_operator_setters",
+        "tests/test_radio.py::test_get_bool_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 70,
+      "name": "DIGI-Sel Status",
+      "wire": "\\\\x16\\\\x4e",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_digisel",
+        "rigplane.commands:set_digisel",
+        "rigplane.radio:CoreRadio.get_digisel",
+        "rigplane.radio:CoreRadio.set_digisel"
+      ],
+      "test_patterns": [
+        "tests/test_radio_coverage.py::get_digisel"
+      ]
+    },
+    {
+      "id": 71,
+      "name": "Twin Peak Filter",
+      "wire": "\\\\x16\\\\x4f",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_twin_peak_filter",
+        "rigplane.commands:set_twin_peak_filter",
+        "rigplane.commands:parse_bool_response",
+        "rigplane.radio:CoreRadio.get_twin_peak_filter",
+        "rigplane.radio:CoreRadio.set_twin_peak_filter",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_operator_getters",
+        "tests/test_commands.py::test_cmd29_operator_setters",
+        "tests/test_radio.py::test_get_bool_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 72,
+      "name": "Dial Lock Status",
+      "wire": "\\\\x16\\\\x50",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_dial_lock",
+        "rigplane.commands:set_dial_lock",
+        "rigplane.commands:parse_bool_response",
+        "rigplane.radio:CoreRadio.get_dial_lock",
+        "rigplane.radio:CoreRadio.set_dial_lock",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_direct_operator_getters",
+        "tests/test_commands.py::test_direct_operator_setters",
+        "tests/test_radio.py::test_get_bool_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 73,
+      "name": "RX Antenna",
+      "wire": "\\\\x16\\\\x53",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_rx_antenna_ant1",
+        "rigplane.commands:set_rx_antenna_ant1",
+        "rigplane.radio:IcomRadio.get_rx_antenna_ant1"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_rx_antenna"
+      ]
+    },
+    {
+      "id": 74,
+      "name": "Filter Shape",
+      "wire": "\\\\x16\\\\x56",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_filter_shape",
+        "rigplane.commands:set_filter_shape",
+        "rigplane.commands:parse_level_response",
+        "rigplane.radio:CoreRadio.get_filter_shape",
+        "rigplane.radio:CoreRadio.set_filter_shape",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_operator_getters",
+        "tests/test_commands.py::test_cmd29_operator_setters",
+        "tests/test_radio.py::test_get_enum_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ],
+      "notes": "wfview advertises a broader numeric range, but the IC-7610 CI-V guide defines 0x16 0x56 as a two-state SHARP/SOFT selector."
+    },
+    {
+      "id": 75,
+      "name": "SSB TX Bandwidth",
+      "wire": "\\\\x16\\\\x58",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_ssb_tx_bandwidth",
+        "rigplane.commands:set_ssb_tx_bandwidth",
+        "rigplane.commands:parse_level_response",
+        "rigplane.radio:CoreRadio.get_ssb_tx_bandwidth",
+        "rigplane.radio:CoreRadio.set_ssb_tx_bandwidth",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_direct_operator_getters",
+        "tests/test_commands.py::test_direct_operator_setters",
+        "tests/test_radio.py::test_get_enum_operator_toggle",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 76,
+      "name": "Main/Sub Tracking",
+      "wire": "\\\\x16\\\\x5e",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "vfo_dualwatch_scan",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_main_sub_tracking",
+        "rigplane.commands:set_main_sub_tracking",
+        "rigplane.radio:IcomRadio.get_main_sub_tracking"
+      ],
+      "test_patterns": [
+        "tests/test_main_sub_tracking.py::TestGetMainSubTracking"
+      ]
+    },
+    {
+      "id": 77,
+      "name": "IP Plus Status",
+      "wire": "\\\\x16\\\\x65",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_ip_plus",
+        "rigplane.commands:set_ip_plus",
+        "rigplane.radio:CoreRadio.get_ip_plus",
+        "rigplane.radio:CoreRadio.set_ip_plus"
+      ],
+      "test_patterns": [
+        "tests/test_radio_coverage.py::get_ip_plus"
+      ]
+    },
+    {
+      "id": 78,
+      "name": "Send CW",
+      "wire": "\\\\x17",
+      "command29": false,
+      "get": false,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:send_cw",
+        "rigplane.commands:stop_cw",
+        "rigplane.radio:CoreRadio.send_cw_text",
+        "rigplane.radio:CoreRadio.stop_cw_text"
+      ],
+      "test_patterns": [
+        "tests/test_commands_extended.py::test_send_short",
+        "tests/test_commands_extended.py::test_stop_cw"
+      ]
+    },
+    {
+      "id": 79,
+      "name": "Power Control",
+      "wire": "\\\\x18",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:power_on",
+        "rigplane.commands:power_off",
+        "rigplane.radio:CoreRadio.power_control"
+      ],
+      "test_patterns": [
+        "tests/test_commands_extended.py::test_power_on",
+        "tests/test_commands_extended.py::test_power_off"
+      ]
+    },
+    {
+      "id": 80,
+      "name": "Transceiver ID",
+      "wire": "\\\\x19\\\\x00",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "notes": "Transceiver ID (0x19 0x00). GET only, returns 1-byte model ID (IC-7610=0x98).",
+      "runtime_symbols": [
+        "rigplane.commands:get_transceiver_id",
+        "rigplane.radio:IcomRadio.get_transceiver_id"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_transceiver_id",
+        "tests/test_radio.py::test_get_transceiver_id"
+      ]
+    },
+    {
+      "id": 81,
+      "name": "Memory Contents",
+      "wire": "\\\\x1a\\\\x00",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "memory_bandstack",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:build_memory_contents_set",
+        "rigplane.radio:IcomRadio.set_memory_contents"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_build_memory_contents"
+      ]
+    },
+    {
+      "id": 82,
+      "name": "Band Stacking Reg",
+      "wire": "\\\\x1a\\\\x01",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "memory_bandstack",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:build_band_stack_set",
+        "rigplane.radio:IcomRadio.set_band_stack"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_build_band_stack"
+      ]
+    },
+    {
+      "id": 83,
+      "name": "Filter Width",
+      "wire": "\\\\x1a\\\\x03",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.radio:CoreRadio.get_filter",
+        "rigplane.radio:CoreRadio.set_filter"
+      ],
+      "test_patterns": [
+        "tests/test_radio_coverage.py::get_filter",
+        "tests/test_radio_coverage.py::set_filter"
+      ]
+    },
+    {
+      "id": 84,
+      "name": "Quick Dual Watch",
+      "wire": "\\\\x1a\\\\x05\\\\x00\\\\x32",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "vfo_dualwatch_scan",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_quick_dual_watch",
+        "rigplane.commands:set_quick_dual_watch",
+        "rigplane.radio:CoreRadio.get_quick_dual_watch",
+        "rigplane.radio:CoreRadio.set_quick_dual_watch"
+      ],
+      "test_patterns": [
+        "tests/test_vfo_dual_watch.py::test_get_quick_dual_watch_builds_correct_frame",
+        "tests/test_vfo_dual_watch.py::test_set_quick_dual_watch_true_appends_data_byte"
+      ]
+    },
+    {
+      "id": 85,
+      "name": "Quick Split",
+      "wire": "\\\\x1a\\\\x05\\\\x00\\\\x33",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "vfo_dualwatch_scan",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_quick_split",
+        "rigplane.commands:set_quick_split",
+        "rigplane.radio:CoreRadio.get_quick_split",
+        "rigplane.radio:CoreRadio.set_quick_split"
+      ],
+      "test_patterns": [
+        "tests/test_vfo_dual_watch.py::test_get_quick_split_builds_correct_frame",
+        "tests/test_vfo_dual_watch.py::test_set_quick_split_true_appends_data_byte"
+      ]
+    },
+    {
+      "id": 86,
+      "name": "REF Adjust",
+      "wire": "\\\\x1a\\\\x05\\\\x00\\\\x70",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_ref_adjust",
+        "rigplane.commands:set_ref_adjust",
+        "rigplane.commands:parse_level_response",
+        "rigplane.radio:CoreRadio.get_ref_adjust",
+        "rigplane.radio:CoreRadio.set_ref_adjust",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_ctl_mem_level_builders",
+        "tests/test_radio.py::test_get_ctl_mem_dsp_level",
+        "tests/test_radio.py::test_set_ctl_mem_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd1a_ctl_mem_dsp_levels"
+      ]
+    },
+    {
+      "id": 87,
+      "name": "ACC1 Mod Level",
+      "wire": "\\\\x1A\\\\x05\\\\x00\\\\x88",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_acc1_mod_level",
+        "rigplane.commands:set_acc1_mod_level",
+        "rigplane.radio:IcomRadio.get_acc1_mod_level"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_acc1_mod_level"
+      ]
+    },
+    {
+      "id": 88,
+      "name": "USB Mod Level",
+      "wire": "\\\\x1a\\\\x05\\\\x00\\\\x89",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_usb_mod_level",
+        "rigplane.commands:set_usb_mod_level",
+        "rigplane.radio:IcomRadio.get_usb_mod_level"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_usb_mod_level"
+      ]
+    },
+    {
+      "id": 89,
+      "name": "LAN Mod Level",
+      "wire": "\\\\x1a\\\\x05\\\\x00\\\\x90",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_lan_mod_level",
+        "rigplane.commands:set_lan_mod_level",
+        "rigplane.radio:IcomRadio.get_lan_mod_level"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_lan_mod_level"
+      ]
+    },
+    {
+      "id": 90,
+      "name": "Data Off Mod Input",
+      "wire": "\\\\x1a\\\\x05\\\\x00\\\\x91",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_data_off_mod_input",
+        "rigplane.commands:set_data_off_mod_input",
+        "rigplane.radio:IcomRadio.get_data_off_mod_input"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_data_off_mod_input"
+      ]
+    },
+    {
+      "id": 91,
+      "name": "DATA1 Mod Input",
+      "wire": "\\\\x1a\\\\x05\\\\x00\\\\x92",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_data1_mod_input",
+        "rigplane.commands:set_data1_mod_input",
+        "rigplane.radio:IcomRadio.get_data1_mod_input"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_data1_mod_input"
+      ]
+    },
+    {
+      "id": 92,
+      "name": "DATA2 Mod Input",
+      "wire": "\\\\x1a\\\\x05\\\\x00\\\\x93",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_data2_mod_input",
+        "rigplane.commands:set_data2_mod_input",
+        "rigplane.radio:IcomRadio.get_data2_mod_input"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_data2_mod_input"
+      ]
+    },
+    {
+      "id": 93,
+      "name": "DATA3 Mod Input",
+      "wire": "\\\\x1a\\\\x05\\\\x00\\\\x94",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_data3_mod_input",
+        "rigplane.commands:set_data3_mod_input",
+        "rigplane.radio:IcomRadio.get_data3_mod_input"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_data3_mod_input"
+      ]
+    },
+    {
+      "id": 94,
+      "name": "CIV Transceive",
+      "wire": "\\\\x1a\\\\x05\\\\x01\\\\x12",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_civ_transceive",
+        "rigplane.commands:set_civ_transceive",
+        "rigplane.radio:IcomRadio.get_civ_transceive"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_civ_transceive"
+      ]
+    },
+    {
+      "id": 95,
+      "name": "System Date",
+      "wire": "\\\\x1a\\\\x05\\\\x01\\\\x58",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_system_date",
+        "rigplane.commands:set_system_date",
+        "rigplane.radio:IcomRadio.get_system_date"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_system_date"
+      ]
+    },
+    {
+      "id": 96,
+      "name": "System Time",
+      "wire": "\\\\x1a\\\\x05\\\\x01\\\\x59",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_system_time",
+        "rigplane.commands:set_system_time",
+        "rigplane.radio:IcomRadio.get_system_time"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_system_time"
+      ]
+    },
+    {
+      "id": 97,
+      "name": "UTC Offset",
+      "wire": "\\\\x1a\\\\x05\\\\x01\\\\x62",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_utc_offset",
+        "rigplane.commands:set_utc_offset",
+        "rigplane.radio:IcomRadio.get_utc_offset"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_utc_offset"
+      ]
+    },
+    {
+      "id": 98,
+      "name": "Dash Ratio",
+      "wire": "\\\\x1a\\\\x05\\\\x02\\\\x28",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_dash_ratio",
+        "rigplane.commands:set_dash_ratio",
+        "rigplane.commands:parse_level_response",
+        "rigplane.radio:CoreRadio.get_dash_ratio",
+        "rigplane.radio:CoreRadio.set_dash_ratio",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_ctl_mem_level_builders",
+        "tests/test_radio.py::test_get_ctl_mem_dsp_level",
+        "tests/test_radio.py::test_set_ctl_mem_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd1a_ctl_mem_dsp_levels"
+      ]
+    },
+    {
+      "id": 99,
+      "name": "NB Depth",
+      "wire": "\\\\x1a\\\\x05\\\\x02\\\\x90",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_nb_depth",
+        "rigplane.commands:set_nb_depth",
+        "rigplane.commands:parse_level_response",
+        "rigplane.radio:CoreRadio.get_nb_depth",
+        "rigplane.radio:CoreRadio.set_nb_depth",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_ctl_mem_level_builders",
+        "tests/test_radio.py::test_get_ctl_mem_dsp_level",
+        "tests/test_radio.py::test_set_ctl_mem_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd1a_ctl_mem_dsp_levels"
+      ]
+    },
+    {
+      "id": 100,
+      "name": "NB Width",
+      "wire": "\\\\x1a\\\\x05\\\\x02\\\\x91",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_nb_width",
+        "rigplane.commands:set_nb_width",
+        "rigplane.commands:parse_level_response",
+        "rigplane.radio:CoreRadio.get_nb_width",
+        "rigplane.radio:CoreRadio.set_nb_width",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_ctl_mem_level_builders",
+        "tests/test_radio.py::test_get_ctl_mem_dsp_level",
+        "tests/test_radio.py::test_set_ctl_mem_dsp_level",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd1a_ctl_mem_dsp_levels",
+        "tests/test_commands.py::test_set_nb_width_rejects_out_of_range",
+        "tests/test_radio.py::test_set_nb_width_rejects_out_of_range"
+      ]
+    },
+    {
+      "id": 101,
+      "name": "Data Mode Filter",
+      "wire": "\\\\x1a\\\\x06",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_data_mode",
+        "rigplane.commands:set_data_mode",
+        "rigplane.radio:CoreRadio.get_data_mode",
+        "rigplane.radio:CoreRadio.set_data_mode"
+      ],
+      "test_patterns": [
+        "tests/test_data_mode.py::get_data_mode",
+        "tests/test_radio_coverage.py::set_data_mode"
+      ]
+    },
+    {
+      "id": 102,
+      "name": "AF Mute Status",
+      "wire": "\\\\x1a\\\\x09",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "dsp_levels",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_af_mute",
+        "rigplane.commands:set_af_mute",
+        "rigplane.commands:parse_bool_response",
+        "rigplane.radio:CoreRadio.get_af_mute",
+        "rigplane.radio:CoreRadio.set_af_mute",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_af_mute_builders",
+        "tests/test_radio.py::test_get_af_mute_reads_bool",
+        "tests/test_radio.py::test_set_af_mute_sends_cmd29_bool",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_cmd1a_af_mute"
+      ]
+    },
+    {
+      "id": 103,
+      "name": "AGC Time Constant",
+      "wire": "\\\\x1a04",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "operator_toggles",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_agc_time_constant",
+        "rigplane.commands:set_agc_time_constant",
+        "rigplane.commands:parse_level_response",
+        "rigplane.radio:CoreRadio.get_agc_time_constant",
+        "rigplane.radio:CoreRadio.set_agc_time_constant",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_cmd29_operator_getters",
+        "tests/test_commands.py::test_cmd29_operator_setters",
+        "tests/test_commands.py::test_parse_single_byte_bcd_operator_values",
+        "tests/test_radio.py::test_get_agc_time_constant_reads_single_byte_bcd",
+        "tests/test_radio.py::test_set_operator_toggle",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_operator_toggle_family"
+      ]
+    },
+    {
+      "id": 104,
+      "name": "Tone Frequency",
+      "wire": "\\\\x1b\\\\x00",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "tone_repeater",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_tone_freq",
+        "rigplane.commands:set_tone_freq",
+        "rigplane.radio:IcomRadio.get_tone_freq"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_tone_freq"
+      ]
+    },
+    {
+      "id": 105,
+      "name": "TSQL Frequency",
+      "wire": "\\\\x1b\\\\x01",
+      "command29": true,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "tone_repeater",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_tsql_freq",
+        "rigplane.commands:set_tsql_freq",
+        "rigplane.radio:IcomRadio.get_tsql_freq"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_tsql_freq"
+      ]
+    },
+    {
+      "id": 106,
+      "name": "Transceiver Status",
+      "wire": "\\\\x1c\\\\x00",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:ptt_on",
+        "rigplane.commands:ptt_off",
+        "rigplane.radio:CoreRadio.set_ptt",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_ptt_on",
+        "tests/test_civ_rx_coverage.py::cmd1c",
+        "tests/test_radio.py::test_set_ptt_on"
+      ]
+    },
+    {
+      "id": 107,
+      "name": "Tuner/ATU Status",
+      "wire": "\\\\x1c\\\\x01",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_tuner_status",
+        "rigplane.commands:set_tuner_status",
+        "rigplane.radio:IcomRadio.get_tuner_status",
+        "rigplane.radio:IcomRadio.set_tuner_status",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame",
+        "rigplane.runtime._state_queries:build_state_queries"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_tuner_status",
+        "tests/test_commands.py::test_set_tuner_status_on",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_tuner_status",
+        "tests/test_radio_poller_coverage.py::test_state_queries_include_transceiver_status_reads_for_ic7610"
+      ],
+      "notes": ""
+    },
+    {
+      "id": 108,
+      "name": "XFC Status",
+      "wire": "\\\\x1c\\\\x02",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "vfo_dualwatch_scan",
+      "status": "implemented",
+      "notes": "XFC Status (0x1C 0x02). GET/SET boolean (0=off, 1=on).",
+      "runtime_symbols": [
+        "rigplane.commands:get_xfc_status",
+        "rigplane.commands:set_xfc_status",
+        "rigplane.radio:IcomRadio.get_xfc_status",
+        "rigplane.radio:IcomRadio.set_xfc_status"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_xfc_status",
+        "tests/test_commands.py::test_set_xfc_status_on",
+        "tests/test_commands.py::test_set_xfc_status_off",
+        "tests/test_radio.py::test_get_xfc_status_on",
+        "tests/test_radio.py::test_get_xfc_status_off",
+        "tests/test_radio.py::test_set_xfc_status_on",
+        "tests/test_radio.py::test_set_xfc_status_off"
+      ]
+    },
+    {
+      "id": 109,
+      "name": "TX Freq",
+      "wire": "\\\\x1c\\\\x03",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane._civ_rx:CivRuntime._observations_from_frame",
+        "rigplane.core.types:bcd_decode",
+        "rigplane.core.tx_target:KnownTxTarget"
+      ],
+      "test_patterns": [
+        "tests/test_civ_rx_coverage.py::test_direct_tx_frequency_coexists_with_ic7300_derived_target"
+      ],
+      "notes": "The official IC-7610 CI-V guide documents 1C 03 as a read-only five-byte transmit-frequency payload despite wfview marking set=true. Runtime decodes it into the existing tx_target state with finite profile freshness (rigplane.runtime._civ_rx: the frame.command == 0x1C, frame.sub == 0x03 branch, model-agnostic). XFC boolean read/write remains 1C 02."
+    },
+    {
+      "id": 110,
+      "name": "CI-V Output (ANT)",
+      "wire": "\\\\x1c\\\\x04",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "system_config",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_civ_output_ant",
+        "rigplane.commands:set_civ_output_ant",
+        "rigplane.radio:IcomRadio.get_civ_output_ant"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_civ_output_ant"
+      ]
+    },
+    {
+      "id": 111,
+      "name": "RIT Frequency",
+      "wire": "\\\\x21\\\\x00",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_rit_frequency",
+        "rigplane.commands:set_rit_frequency",
+        "rigplane.commands:parse_rit_frequency_response",
+        "rigplane.radio:IcomRadio.get_rit_frequency",
+        "rigplane.radio:IcomRadio.set_rit_frequency",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame",
+        "rigplane.runtime._state_queries:build_state_queries"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_rit_frequency",
+        "tests/test_commands.py::test_set_rit_frequency_positive",
+        "tests/test_commands.py::TestRitFrequencyParser",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_rit_frequency",
+        "tests/test_radio_poller_coverage.py::test_state_queries_include_transceiver_status_reads_for_ic7610"
+      ],
+      "notes": ""
+    },
+    {
+      "id": 112,
+      "name": "RIT Status",
+      "wire": "\\\\x21\\\\x01",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_rit_status",
+        "rigplane.commands:set_rit_status",
+        "rigplane.radio:IcomRadio.get_rit_status",
+        "rigplane.radio:IcomRadio.set_rit_status",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame",
+        "rigplane.runtime._state_queries:build_state_queries"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_rit_status",
+        "tests/test_commands.py::test_set_rit_status_on",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_rit_status",
+        "tests/test_radio_poller_coverage.py::test_state_queries_include_transceiver_status_reads_for_ic7610"
+      ],
+      "notes": ""
+    },
+    {
+      "id": 113,
+      "name": "RIT TX Status",
+      "wire": "\\\\x21\\\\x02",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "transceiver_status",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_rit_tx_status",
+        "rigplane.commands:set_rit_tx_status",
+        "rigplane.radio:IcomRadio.get_rit_tx_status",
+        "rigplane.radio:IcomRadio.set_rit_tx_status",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame",
+        "rigplane.runtime._state_queries:build_state_queries"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::test_get_rit_tx_status",
+        "tests/test_commands.py::test_set_rit_tx_status_on",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_rit_tx_status",
+        "tests/test_radio_poller_coverage.py::test_state_queries_include_transceiver_status_reads_for_ic7610"
+      ],
+      "notes": ""
+    },
+    {
+      "id": 114,
+      "name": "RX Frequency",
+      "wire": "\\\\x25",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_civ_rx_coverage.py::cmd25"
+      ],
+      "notes": "Dual-receiver RX frequency responses are consumed by RadioState/web runtime rather than a standalone public getter."
+    },
+    {
+      "id": 115,
+      "name": "RX Mode",
+      "wire": "\\\\x26",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_civ_rx_coverage.py::cmd26"
+      ],
+      "notes": "Dual-receiver RX mode responses are consumed by RadioState/web runtime rather than a standalone public getter."
+    },
+    {
+      "id": 116,
+      "name": "Scope Wave Data",
+      "wire": "\\\\x27\\\\x00",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.scope:ScopeAssembler",
+        "rigplane.radio:CoreRadio.scope_stream"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::assembles_complete_frame",
+        "tests/test_radio_coverage.py::capture_scope_frame"
+      ]
+    },
+    {
+      "id": 117,
+      "name": "Scope On/Off",
+      "wire": "\\\\x27\\\\x10",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:scope_on",
+        "rigplane.commands:scope_off",
+        "rigplane.radio:CoreRadio.enable_scope",
+        "rigplane.radio:CoreRadio.disable_scope"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_scope_on",
+        "tests/test_scope.py::test_scope_off",
+        "tests/test_radio_coverage.py::enable_scope"
+      ],
+      "notes": "High-level scope lifecycle covers this family; disable is currently implemented via data-output gating rather than a dedicated hard-off workflow."
+    },
+    {
+      "id": 118,
+      "name": "Scope Data Output",
+      "wire": "\\\\x27\\\\x11",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:scope_data_output",
+        "rigplane.radio:CoreRadio.enable_scope",
+        "rigplane.radio:CoreRadio.disable_scope"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_scope_output_enabled",
+        "tests/test_scope.py::test_scope_output_disabled"
+      ]
+    },
+    {
+      "id": 119,
+      "name": "Scope Main/Sub",
+      "wire": "\\\\x27\\\\x12",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_main_sub",
+        "rigplane.commands:scope_main_sub",
+        "rigplane.commands:parse_scope_main_sub_response",
+        "rigplane.radio:CoreRadio.get_scope_receiver",
+        "rigplane.radio:CoreRadio.set_scope_receiver",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_main_sub",
+        "tests/test_scope.py::test_scope_main_sub_sub",
+        "tests/test_radio.py::test_get_scope_receiver",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 120,
+      "name": "Scope Single/Dual",
+      "wire": "\\\\x27\\\\x13",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_single_dual",
+        "rigplane.commands:scope_single_dual",
+        "rigplane.commands:parse_scope_single_dual_response",
+        "rigplane.radio:CoreRadio.get_scope_dual",
+        "rigplane.radio:CoreRadio.set_scope_dual",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_single_dual",
+        "tests/test_scope.py::test_scope_single_dual_dual",
+        "tests/test_radio.py::test_get_scope_variants_update_radio_state",
+        "tests/test_radio.py::test_set_scope_variants_update_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 121,
+      "name": "Scope Mode",
+      "wire": "\\\\x27\\\\x14",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_mode",
+        "rigplane.commands:scope_set_mode",
+        "rigplane.commands:parse_scope_mode_response",
+        "rigplane.radio:CoreRadio.get_scope_mode",
+        "rigplane.radio:CoreRadio.set_scope_mode",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_mode",
+        "tests/test_scope.py::test_scope_set_mode",
+        "tests/test_commands.py::test_parse_scope_mode_response_with_receiver_prefix",
+        "tests/test_radio.py::test_get_scope_mode",
+        "tests/test_radio.py::test_set_scope_variants_update_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 122,
+      "name": "Scope Span",
+      "wire": "\\\\x27\\\\x15",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_span",
+        "rigplane.commands:scope_set_span",
+        "rigplane.commands:parse_scope_span_response",
+        "rigplane.radio:CoreRadio.get_scope_span",
+        "rigplane.radio:CoreRadio.set_scope_span",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_span",
+        "tests/test_scope.py::test_scope_set_span",
+        "tests/test_commands.py::test_parse_scope_span_response_from_bcd_frequency",
+        "tests/test_radio.py::test_get_scope_variants_update_radio_state",
+        "tests/test_radio.py::test_set_scope_variants_update_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 123,
+      "name": "Scope Edge",
+      "wire": "\\\\x27\\\\x16",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_edge",
+        "rigplane.commands:scope_set_edge",
+        "rigplane.commands:parse_scope_edge_response",
+        "rigplane.radio:CoreRadio.get_scope_edge",
+        "rigplane.radio:CoreRadio.set_scope_edge",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_edge",
+        "tests/test_scope.py::test_scope_set_edge",
+        "tests/test_radio.py::test_get_scope_variants_update_radio_state",
+        "tests/test_radio.py::test_set_scope_variants_update_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 124,
+      "name": "Scope Hold",
+      "wire": "\\\\x27\\\\x17",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_hold",
+        "rigplane.commands:scope_set_hold",
+        "rigplane.commands:parse_scope_hold_response",
+        "rigplane.radio:CoreRadio.get_scope_hold",
+        "rigplane.radio:CoreRadio.set_scope_hold",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_hold",
+        "tests/test_scope.py::test_scope_set_hold",
+        "tests/test_radio.py::test_get_scope_variants_update_radio_state",
+        "tests/test_radio.py::test_set_scope_variants_update_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 125,
+      "name": "Scope Ref",
+      "wire": "\\\\x27\\\\x19",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_ref",
+        "rigplane.commands:scope_set_ref",
+        "rigplane.commands:parse_scope_ref_response",
+        "rigplane.radio:CoreRadio.get_scope_ref",
+        "rigplane.radio:CoreRadio.set_scope_ref",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_ref",
+        "tests/test_scope.py::test_scope_set_ref",
+        "tests/test_commands.py::test_parse_scope_ref_response",
+        "tests/test_radio.py::test_get_scope_variants_update_radio_state",
+        "tests/test_radio.py::test_set_scope_variants_update_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 126,
+      "name": "Scope Speed",
+      "wire": "\\\\x27\\\\x1a",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_speed",
+        "rigplane.commands:scope_set_speed",
+        "rigplane.commands:parse_scope_speed_response",
+        "rigplane.radio:CoreRadio.get_scope_speed",
+        "rigplane.radio:CoreRadio.set_scope_speed",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_speed",
+        "tests/test_scope.py::test_scope_set_speed",
+        "tests/test_radio.py::test_get_scope_variants_update_radio_state",
+        "tests/test_radio.py::test_set_scope_variants_update_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 127,
+      "name": "Scope During TX",
+      "wire": "\\\\x27\\\\x1b",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_during_tx",
+        "rigplane.commands:scope_set_during_tx",
+        "rigplane.commands:parse_scope_during_tx_response",
+        "rigplane.radio:CoreRadio.get_scope_during_tx",
+        "rigplane.radio:CoreRadio.set_scope_during_tx",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_during_tx",
+        "tests/test_scope.py::test_scope_set_during_tx",
+        "tests/test_commands.py::test_parse_scope_during_tx_response",
+        "tests/test_radio.py::test_get_scope_variants_update_radio_state",
+        "tests/test_radio.py::test_set_scope_during_tx_updates_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 128,
+      "name": "Scope Center Type",
+      "wire": "\\\\x27\\\\x1c",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_center_type",
+        "rigplane.commands:scope_set_center_type",
+        "rigplane.commands:parse_scope_center_type_response",
+        "rigplane.radio:CoreRadio.get_scope_center_type",
+        "rigplane.radio:CoreRadio.set_scope_center_type",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_center_type",
+        "tests/test_scope.py::test_scope_set_center_type",
+        "tests/test_commands.py::test_parse_scope_center_type_response",
+        "tests/test_radio.py::test_get_scope_center_type",
+        "tests/test_radio.py::test_set_scope_variants_update_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 129,
+      "name": "Scope VBW",
+      "wire": "\\\\x27\\\\x1d",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_vbw",
+        "rigplane.commands:scope_set_vbw",
+        "rigplane.commands:parse_scope_vbw_response",
+        "rigplane.radio:CoreRadio.get_scope_vbw",
+        "rigplane.radio:CoreRadio.set_scope_vbw",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_vbw",
+        "tests/test_scope.py::test_scope_set_vbw",
+        "tests/test_radio.py::test_get_scope_variants_update_radio_state",
+        "tests/test_radio.py::test_set_scope_variants_update_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 130,
+      "name": "Scope Fixed Edge Freq",
+      "wire": "\\\\x27\\\\x1e",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_fixed_edge",
+        "rigplane.commands:scope_set_fixed_edge",
+        "rigplane.commands:parse_scope_fixed_edge_response",
+        "rigplane.radio:CoreRadio.get_scope_fixed_edge",
+        "rigplane.radio:CoreRadio.set_scope_fixed_edge",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_fixed_edge",
+        "tests/test_scope.py::test_scope_set_fixed_edge",
+        "tests/test_commands.py::test_parse_scope_fixed_edge_response",
+        "tests/test_radio.py::test_get_scope_fixed_edge",
+        "tests/test_radio.py::test_set_scope_fixed_edge_updates_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 131,
+      "name": "Scope RBW",
+      "wire": "\\\\x27\\\\x1f",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "advanced_scope",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:get_scope_rbw",
+        "rigplane.commands:scope_set_rbw",
+        "rigplane.commands:parse_scope_rbw_response",
+        "rigplane.radio:CoreRadio.get_scope_rbw",
+        "rigplane.radio:CoreRadio.set_scope_rbw",
+        "rigplane._civ_rx:_CivRxMixin._update_radio_state_from_frame"
+      ],
+      "test_patterns": [
+        "tests/test_scope.py::test_get_scope_rbw",
+        "tests/test_scope.py::test_scope_set_rbw",
+        "tests/test_commands.py::test_parse_scope_rbw_response",
+        "tests/test_radio.py::test_get_scope_variants_update_radio_state",
+        "tests/test_radio.py::test_set_scope_variants_update_radio_state",
+        "tests/test_civ_rx_coverage.py::test_update_radio_state_advanced_scope_family"
+      ]
+    },
+    {
+      "id": 132,
+      "name": "Main/Sub Prefix",
+      "wire": "\\\\x29",
+      "command29": false,
+      "get": true,
+      "set": true,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:build_cmd29_frame",
+        "rigplane.radio:CoreRadio._require_cmd29_route"
+      ],
+      "test_patterns": [
+        "tests/test_commands.py::build_cmd29_frame",
+        "tests/test_cmd29_parsing.py::build_cmd29_frame"
+      ],
+      "notes": "Command29 prefixing is a maintained internal primitive used by exposed dual-receiver commands."
+    },
+    {
+      "id": 133,
+      "name": "Command Error FA",
+      "wire": "\\\\xfa",
+      "command29": false,
+      "get": false,
+      "set": false,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:parse_ack_nak"
+      ],
+      "test_patterns": [
+        "tests/test_commands_extended.py::test_nak"
+      ]
+    },
+    {
+      "id": 134,
+      "name": "Command OK FB",
+      "wire": "\\\\xfb",
+      "command29": false,
+      "get": false,
+      "set": false,
+      "admin": false,
+      "family": "baseline_core",
+      "status": "implemented",
+      "runtime_symbols": [
+        "rigplane.commands:parse_ack_nak"
+      ],
+      "test_patterns": [
+        "tests/test_commands_extended.py::test_ack"
+      ]
+    }
+  ],
+  "pdf_only_cmd29_rows": [
+    {
+      "wire": "\\\\x1a\\\\x0a",
+      "name": "OVF Status (per-Rx)",
+      "pdf_page": 8,
+      "pdf_glyph_29": true,
+      "wfview_present": false,
+      "cmd29_supported": "ambiguous",
+      "cmd29_rationale": "IC-7610 CI-V Reference p.8 renders the Command29 glyph on 0x1A 0x0A (per-receiver Overflow indicator), but wfview IC-7610.rig has no matching entry (only 0x1A 0x09 AF Mute carries Command29=true). Not mirrored in the commands array because the wfview-parity invariant requires 1:1 ID alignment. Library currently reads the transceiver-global OVF flag via 0x15 0x07 (command id 50); no route added to rigs/ic7610.toml pending hardware verification."
+    }
+  ],
+  "updated": "2026-04-16",
+  "coverage_percent": 100.0,
+  "total_commands": 134
+}

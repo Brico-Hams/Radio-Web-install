@@ -1,0 +1,1292 @@
+# Rig Configuration — IC-9700
+# This file defines the IC-9700 radio profile in TOML format.
+# See _schema.md for field documentation.
+#
+# Source: IC-9700 CI-V Reference Guide (PDF)
+#         wfview IC-9700.rig
+#         Dual-receiver capable, LAN + serial backends supported
+
+[radio]
+id = "icom_ic9700"
+model = "IC-9700"
+civ_addr = 0xA2
+default_baud = 115200  # Required for scope data over serial CI-V
+receiver_count = 2  # Dual receiver capable (unique to IC-9700)
+has_lan = true  # LAN-capable transceiver
+has_wifi = false
+
+[spectrum]
+seq_max = 11
+amp_max = 160
+data_len_max = 475
+
+# Pin mono-first codec (#797). IC-9700 is dual-receiver (receiver_count=2) but
+# no hardware has been available to validate stereo rx_codec negotiation;
+# default to mono until proven. ``_control_phase`` retry-with-mono fallback
+# provides a secondary safety net.
+[audio]
+codec_preference = ["PCM_1CH_16BIT", "ULAW_1CH"]
+tx_codec = "PCM_1CH_16BIT"
+browser_rx_transport = "auto"
+browser_rx_transcode_to_opus = true
+
+[scope]
+span_presets_hz = [2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000]
+# MOR-4385: the 27 15 numbers (IC-9700 CI-V Reference's 27 15 row) are
+# ±half-widths: the scope display spans center ± value, and the
+# center-mode waveform payload carries that same value (IC-7610 CI-V
+# Reference Guide p.14, "Scope waveform data", quoted in
+# runtime/_civ_rx.py: CivRuntime._publish_scope_span_observation).
+span_preset_semantics = "half_width"
+# 27 19: adjustable range -20.0 ~ +20.0 dB in 0.5 dB steps (MOR-3694;
+# the IC-9700 CI-V Reference's 27 19 row — the same 3-byte BCD format and
+# family range as the IC-7300/IC-7300MK2, see ic7300mk2.toml's citation).
+ref_min_db = -20.0
+ref_max_db = 20.0
+ref_step_db = 0.5
+
+# ── Capabilities ─────────────────────────────────────────────────
+# Feature tags determine which UI panels and controls are rendered.
+# Grouped by functional area.
+
+[capabilities]
+features = [
+    # Receiver
+    "audio",
+    "dual_rx",
+    "dual_watch",
+    "af_level",
+    "rf_gain",
+    "squelch",
+    # RF front end
+    "attenuator",
+    "preamp",
+    "ip_plus",
+    # NOTE: no digisel on IC-9700 -- IC-9700 CI-V Reference Guide (Icom,
+    # 2019): 0x16 family has no 0x4E row (D2, MOR-2015)
+    # Antenna
+    "antenna",
+    # NOTE: no rx_antenna on IC-9700 -- fixed per-band 144/430/1200M antenna
+    # connectors, no software-selectable ANT; IC-9700 CI-V Reference Guide
+    # (Icom, 2019) has no antenna-selection command at all (D2, MOR-2015)
+    # DSP / Noise
+    "nb",
+    "nr",
+    "notch",
+    "apf",
+    "twin_peak",
+    # Filter
+    "pbt",
+    "filter_width",
+    "filter_shape",
+    # TX
+    "tx",
+    "split",
+    "vox",
+    "compressor",
+    "monitor",
+    # NOTE: no drive_gain on IC-9700 -- IC-9700 CI-V Reference Guide (Icom,
+    # 2019): 0x14 family has no 0x14 row (D2, MOR-2015)
+    "ssb_tx_bw",
+    # CW
+    "cw",
+    "break_in",
+    # RIT / XIT
+    "rit",
+    "xit",
+    # Tuner
+    "tuner",
+    # Metering
+    "meters",
+    # Scope
+    "scope",
+    # Tone
+    "repeater_tone",
+    "tsql",
+    # MOR-3623: simplex / DUP− / DUP+ over 0F (guide p.4), the same code
+    # table as the IC-705 (MOR-2930). 0F 13 (RPS) exists only in DD mode
+    # and is not a shift direction, so there is no "repeater_shift_ars".
+    # Tier B-: not hardware-verified.
+    "repeater_shift",
+    # Data
+    "data_mode",
+    # System
+    "power_control",
+    "dial_lock",
+    "scan",
+    "bsr",
+    # AGC
+    "agc",
+    "tuning_step",
+    "band_edge",
+    "memory_read",
+    "xfc",
+    # System
+    "system_settings",
+    # Built-in CI-V 0x13 announcement write (set_speech below).
+    "speech",
+]
+
+# MOR-1983: initial and legacy periodic state acquisition is declared here,
+# using getters sourced to the IC-9700 CI-V Reference Guide below. Receiver
+# routing remains data-driven through this profile's cmd29 declarations.
+[state_acquisition]
+provider = "icom_civ"
+default_cadence_seconds = 2.0
+default_freshness_ttl_seconds = 8.0
+default_reconciliation_priority = "poll"
+adaptive_decay = true
+adaptive_decay_idle_multiplier = 4.0
+adaptive_decay_max_cadence_seconds = 30.0
+external_cat_pause = "pause_polling"
+meter_coalescing_window_seconds = 0.2
+
+[state_acquisition.capabilities]
+polling_only = [
+    # 0x07 0xD2 (get_main_sub_band): IC-9700 CI-V Reference Guide p.4, "Send/read
+    # main band selection". Pinned by
+    # test_state_queries.py: test_main_sub_profiles_poll_active_receiver.
+    "global.slow_state.active",
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "receiver.main.operator_controls.af_level",
+    "receiver.main.operator_controls.rf_gain",
+    "receiver.main.operator_controls.squelch",
+    "receiver.main.operator_controls.att",
+    "receiver.main.operator_controls.preamp",
+    "receiver.main.operator_controls.agc",
+    "receiver.main.operator_toggles.nb",
+    "receiver.main.operator_toggles.nr",
+    # MOR-3623: the three tone-squelch paths ride one 16 5D selector read,
+    # as on the IC-705 (MOR-2131).
+    "receiver.main.operator_toggles.repeater_tone",
+    "receiver.main.operator_toggles.repeater_tsql",
+    "receiver.main.operator_controls.tone_squelch_type",
+    "global.operator_controls.power_level",
+    "global.tx_state.compressor_on",
+    "global.operator_controls.compressor_level",
+    "global.tx_state.ptt",
+    "global.tx_state.split",
+    # MOR-3623: read by the same 0F query as split.
+    "receiver.main.operator_controls.repeater_shift",
+    "scope_controls.global.display.receiver",
+    "scope_controls.global.display.dual",
+    "scope_controls.global.display.mode",
+    "scope_controls.global.display.span",
+    "scope_controls.global.display.edge",
+    "scope_controls.global.display.hold",
+    "scope_controls.global.display.ref_db",
+    "scope_controls.global.display.speed",
+    "scope_controls.global.display.during_tx",
+    "scope_controls.global.display.center_type",
+    "scope_controls.global.display.vbw_narrow",
+    "scope_controls.global.display.fixed_edge",
+]
+stream_like_meters = [
+    "receiver.main.meters.s_meter",
+    "global.meters.power",
+    "global.meters.swr",
+    "global.meters.alc",
+    "global.meters.comp",
+    "global.meters.vd",
+    "global.meters.id",
+]
+command_response_observable = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "receiver.sub.active.freq_mode.freq_hz",
+    "receiver.sub.active.freq_mode.mode",
+    "global.tx_state.ptt",
+]
+supported_controls = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "receiver.sub.active.freq_mode.freq_hz",
+    "receiver.sub.active.freq_mode.mode",
+    "global.tx_state.ptt",
+]
+
+# MOR-2540: Po/SWR/ALC/COMP are TX-only 0x15 meters, gated exactly as
+# rigs/ic7610.toml (same Icom LAN link family) and rigs/ic7300.toml's
+# MOR-1485 block: `tx_only = true` keeps AcquisitionScheduler from polling
+# them while PTT reads false (before this entry they inherited the 2.0s/8.0s
+# default and were polled during RX), and the `available_when` clause lets
+# StateFreshnessService.tick discard the last TX values on dekey. They keep
+# their stream_like_meters membership and coalescing window, so the stream
+# meter cadence class (tests/test_state_acquisition_policy.py) binds them to
+# <=0.4s: 0.2s/2.0s only ever fires while the key is down. The S-meter
+# stays the unconditional RX meter.
+[state_acquisition.field_policies."global.meters.power"]
+cadence_seconds = 0.2
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.2
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.swr"]
+cadence_seconds = 0.2
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.2
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.alc"]
+cadence_seconds = 0.2
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.2
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+[state_acquisition.field_policies."global.meters.comp"]
+cadence_seconds = 0.2
+freshness_ttl_seconds = 2.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.2
+tx_only = true
+available_when = [
+    { field = "global.tx_state.ptt", equals = true },
+]
+
+# ── Parameterized Capabilities ───────────────────────────────────
+
+[attenuator]
+# CI-V 0x11: IC-9700 CI-V Reference Guide p.4 -- "00" OFF, "10" 10 dB.
+values = [0, 10]
+
+[preamp]
+# CI-V 0x16 0x02: IC-9700 CI-V Reference Guide p.5 -- 00 both OFF, 01 P.AMP ON,
+# 02 EXT-P.AMP ON, 03 both ON.
+values = [0, 1, 2, 3]
+labels = { "0" = "OFF", "1" = "INT", "2" = "EXT", "3" = "INT+EXT" }
+
+[agc]
+# CI-V 0x16 0x12: 1=FAST, 2=MID, 3=SLOW (wfview IC-7300.rig lists Min/Max 0-2 for UI)
+modes = [1, 2, 3]
+labels = { "1" = "FAST", "2" = "MID", "3" = "SLOW" }
+
+[scan_types]
+# CI-V 0x0E family: source IC-9700 CI-V Reference Guide (Icom, 2019) p.4,
+# cross-checked against IC-7300/IC-7610's identical table (MOR-2007
+# ruling 4). 0x13 = fine dF scan, absent from the old code-level
+# VALID_SCAN_TYPES frozenset this domain replaces.
+values = [0x01, 0x02, 0x03, 0x12, 0x13, 0x22, 0x23]
+
+[scan_resume]
+# CI-V 0x0E family: source IC-9700 CI-V Reference Guide (Icom, 2019) p.4 --
+# only D0 (Scan resume OFF) and D3 (Scan resume ON, "Close&Delay") are
+# documented; no D1/D2 rows exist, unlike the old code-level
+# VALID_SCAN_RESUME frozenset which accepted 0xD0-0xD3 on every radio
+# (MOR-2007 ruling 4).
+values = [0xD0, 0xD3]
+
+[antenna]
+# CI-V 0x12: single antenna, no RX antenna
+tx_count = 1
+has_rx_ant = false
+
+[apf]
+# CI-V 0x16 0x32: 0=OFF, 1=ON (simple toggle, no WIDE/MID/NAR)
+# Different from IC-7610 which has 0-3!
+values = [0, 1]
+labels = { "0" = "OFF", "1" = "ON" }
+
+[notch]
+# CI-V 0x16 0x57: Manual notch width
+# 0=WIDE, 1=MID, 2=NAR (same as IC-7610)
+width_values = [0, 1, 2]
+width_labels = { "0" = "WIDE", "1" = "MID", "2" = "NAR" }
+
+[ssb_tx_bw]
+# CI-V 0x16 0x58: SSB TX bandwidth
+# 0=WIDE, 1=MID, 2=NAR
+values = [0, 1, 2]
+labels = { "0" = "WIDE", "1" = "MID", "2" = "NAR" }
+
+[filter_shape]
+# CI-V 0x16 0x56: DSP IF filter type. No dedicated IC-9700 cat-audit exists
+# in-repo; SHARP/SOFT = 0/1 is the same domain the runtime's shared
+# `FilterShape` enum (src/rigplane/core/types.py) has always assumed for
+# this command across the whole IC-7610-family profile set, IC-9700 included
+# (MOR-1534 — not independently live-verified for this specific profile).
+values = [0, 1]
+labels = { "0" = "SHARP", "1" = "SOFT" }
+
+[break_in]
+# CI-V 0x16 0x47: 0=OFF, 1=Semi, 2=Full (wfview rig lists Max=1; CI-V supports three levels)
+values = [0, 1, 2]
+labels = { "0" = "OFF", "1" = "SEMI", "2" = "FULL" }
+
+[rit]
+# CI-V 0x21 0x00: wfview RIT Min/Max ±999. [controls.rit] is the operator-
+# facing authority and preserves this same ±999 verbatim (MOR-1883), but
+# in 1 Hz steps per the shared CI-V builder. Nothing reads range_hz.
+range_hz = 999
+
+[cw]
+# CI-V 0x14 0x09: CW pitch 300-900 Hz
+# CI-V 0x14 0x0C: Key speed 6-48 WPM
+pitch_min_hz = 300
+pitch_max_hz = 900
+speed_min_wpm = 6
+speed_max_wpm = 48
+# dash_ratio: control 0224, IC-9700 CI-V Reference Guide (Icom, 2019) p.9
+# (CW-KEY SET>Dot/Dash Ratio). Refutes the earlier "no dash_ratio" note --
+# see get_dash_ratio / set_dash_ratio in [commands.overrides] (D2, MOR-2015).
+# The hardcoded fallback that used to send 0x0228 for this command was
+# itself wrong for this radio (0228 = CW-KEY SET>MIC Up/Down Keyer, not
+# Dot/Dash Ratio) -- that fallback and its `_CTL_MEM_DASH_RATIO` constant
+# were deleted in MOR-2006 Steps 5..N module 2, so this profile's 0224 is
+# now the only address any builder can send.
+
+[nb]
+# NB depth 1-10, NB width 0-255 (wfview NB Depth Min/Max). NOTE (D2,
+# MOR-2015): these bounds are NOT backed by CI-V 0x1A 0x05 0x01 0x89 on
+# IC-9700 -- that subcmd is "SCOPE>CENTER Type Display" on this radio, not
+# NB depth (see get_nb_depth / get_nb_width declared absent below: no
+# single global NB depth/width control exists, only per-band ones at
+# 0322/0325/0328 resp. 0323/0326/0329). These domain values are retained
+# as display bounds only; not tied to any single IC-9700 CI-V command.
+depth_min = 1
+depth_max = 10
+width_min = 0
+width_max = 255
+
+[power]
+max_watts = 100
+
+# ── Memory channels (MOR-3627) ───────────────────────────────────
+# CI-V 1A 00 reads a channel by band code (01 144, 02 430 MHz, 03 1.2 GHz) and
+# channel 0001-0099 (guide p.14); scan edges, call channels and satellite
+# memories are not listed. No recording of this model exists (tier B-).
+[memory]
+addressing = "band_channel"
+first_group = 1
+last_group = 3
+first_channel = 1
+last_channel = 99
+# CI-V Reference Guide rev 4, 1A 00 offset digit; Advanced manual, DD mode: 1.2 GHz only.
+dd_groups = [3]
+offset_10mhz_groups = [3]
+frequency_ranges = [
+  { group = 1, min_hz = 144_000_000, max_hz = 148_000_000 },
+  { group = 2, min_hz = 430_000_000, max_hz = 450_000_000 },
+  { group = 3, min_hz = 1_240_000_000, max_hz = 1_300_000_000 },
+]
+
+# The verified 1A 00 write record (MOR-3644), field by field from the
+# IC-9700 CI-V Reference Guide (2019, rev. 4) p.14 "Memory content". The
+# guide's table prints the channel block's position labels (5~51) TWICE,
+# with the name (52~67) after them, and its NOTE spells it out: the
+# second block is the TX data used when Split is ON, and even with Split
+# OFF the same data should be entered -- so the record is select byte +
+# the 47-byte block x copies + the 16-byte name, the same shape the read
+# reply carries (parse_memory_entry). The field table below declares ONE
+# copy: offsets are relative to the record after the address (guide bytes
+# 1-3: frequency band 1 byte + channel 2-byte BCD); the guide's position
+# labels map as: 4 -> 0 (select), 5-9 -> 1-5 (frequency), 10 -> 6 (mode),
+# 11 -> 7 (filter), 12 -> 8 (data mode), 13 -> 9 (duplex|tone), 14 -> 10
+# (digital squelch), 15-17 -> 11-13 (tone), 18-20 -> 14-16 (tsql), 21-23
+# -> 17-19 (DTCS), 24 -> 20 (DV code), 25-27 -> 21-23 (duplex offset),
+# 28-51 -> 24-47 (UR/R1/R2); the name (16 characters) is declared at
+# 48-63 and lands after the last block copy. Mode and filter are
+# the raw bytes of the read block (the guide's 2-byte "operating mode
+# setting" is the read block's mode + filter pair); the tone fields use
+# the 1B 00 encoding (guide p.19). The select byte's high nibble is fixed
+# 0 (guide: "Fixed"); duplex nibble 3 is RPS, valid in DD mode only
+# (guide p.14). Fields the write API does not expose yet carry their
+# documented OFF value (as on the IC-705 above).
+[memory.write_layout]
+clear = "1a00_ff"  # guide p.14: 1A 00 + the address + FF
+record_length = 64  # one copy: select + 47-byte block + 16-byte name
+copies = 2  # guide p.14 NOTE: the block is stored twice (TX copy = RX values when not split)
+default_tone_centihz = 8850  # an unset tone/tsql writes the default tone (88.5 Hz); zeros are not a valid CTCSS value
+fields = [
+  { field = "select", offset = 0, length = 1, encoding = "select" },                                # 4
+  { field = "frequency", offset = 1, length = 5, encoding = "frequency", max_hz = 1_499_999_999 },  # 5-9: GHz <= 1, 100 MHz <= 4 (read-side rules)
+  { field = "mode", offset = 6, length = 1, encoding = "mode" },                                    # 10
+  { field = "filter", offset = 7, length = 1, encoding = "filter" },                                # 11
+  { field = "data_mode", offset = 8, length = 1, encoding = "data_mode" },                          # 12
+  { field = "duplex_tone", offset = 9, length = 1, encoding = "duplex_tone" },                      # 13: duplex 0-3 (3 = RPS, DD only)
+  { field = "digital_squelch", offset = 10, length = 1, encoding = "fixed", value = "00" },         # 14: 00 = off
+  { field = "tone", offset = 11, length = 3, encoding = "tone" },                                   # 15-17
+  { field = "tsql", offset = 14, length = 3, encoding = "tsql" },                                   # 18-20
+  { field = "dtcs", offset = 17, length = 3, encoding = "fixed", value = "000023" },                # 21-23: polarity NN, code 023 (the same record shape as the IC-705)
+  { field = "dv_code", offset = 20, length = 1, encoding = "fixed", value = "00" },                 # 24
+  { field = "duplex_offset", offset = 21, length = 3, encoding = "fixed", value = "000000" },       # 25-27: 0 Hz (not exposed, MOR-3644 slice)
+  { field = "callsigns", offset = 24, length = 24, encoding = "fixed", value = "202020202020202020202020202020202020202020202020" },  # 28-51: UR/R1/R2 blank
+  { field = "name", offset = 48, length = 16, encoding = "name" },                                  # 52-67
+]
+
+[ctcss]
+table = "standard_50"
+
+# What each 16 5D tone squelch selector code means (MOR-3623): the same
+# selector command and codes as the IC-705 (MOR-2131). Tier B-: no hardware
+# verified this table.
+[tone_squelch_types]
+0 = "off"
+1 = "tone"
+2 = "tsql"
+3 = "dtcs"
+6 = "dtcs_t"
+7 = "tone_t_dtcs_r"
+8 = "dtcs_t_tsql_r"
+9 = "tone_t_tsql_r"
+
+[modes]
+# D-STAR DV (CI-V 0x17) on every band. DD (0x22) is not listed: it runs on
+# the 1.2 GHz band only, and without band-aware mode admission the radio
+# would silently refuse it on 2 m / 70 cm. DD needs band-aware mode
+# admission (follow-up).
+list = ["USB", "LSB", "CW", "CW-R", "AM", "FM", "RTTY", "RTTY-R", "DV"]
+# MOR-3679: the CW modes, named once here for every client.
+families = { cw = ["CW", "CW-R"] }
+
+[data_mode]
+# CI-V 0x1A 0x06: DATA sub-mode (0=OFF, 1=DATA1)
+# IC-9700 has only 1 DATA mode
+count = 1
+labels = { "0" = "OFF", "1" = "DATA" }
+
+# Modulation input sources
+# CI-V 0x1A 0x05 0x01 0x15-0x16: get/set mod input per DATA mode (source:
+# IC-9700 CI-V Reference Guide (Icom, 2019) p.7; corrected from the
+# IC-7300-copied 0x00 0x66-0x67 addresses, D2, MOR-2015)
+inputs = [
+    { value = 0, name = "MIC" },
+    { value = 1, name = "ACC" },
+    { value = 2, name = "MIC+ACC" },
+    { value = 3, name = "USB" },
+    { value = 4, name = "MIC+USB" },
+]
+
+[filters]
+list = ["FIL1", "FIL2", "FIL3"]
+# CI-V 0x1A 0x03: width is a 1-byte BCD index, not raw Hz.
+# wfview's funcFilterWidth handler (icomcommander.cpp:1131) decodes a single
+# BCD byte using the same segmented formula for all Icom rigs:
+#   non-AM: pass 0..10 → 50..550 Hz step 50; pass 11..40 → 700..3600 Hz step 100
+#   AM:     pass 0..49 → 200..10000 Hz step 200
+# Matches IC-7610 / IC-7300 (issue #1156).
+encoding = "segmented_bcd_index"
+width_min_hz = 50
+width_max_hz = 9999
+
+# Twin PBT step, per mode. Source: IC-7300 Advanced Manual p.40 (page 4-5 in
+# its own numbering), "Using the Twin PBT" -- its heading names the modes that
+# have it, "SSB, CW, RTTY and AM modes", and its text reads "The PBT is
+# adjustable in 50 Hz steps in the SSB, CW, and RTTY modes, and 200 Hz in the
+# AM mode." A mode with no twin PBT declares no pbt_step_hz: the absence is the
+# statement, not an omission awaiting a default.
+#
+# INFERENCE, not measurement, for this radio. The manual quoted above is the
+# IC-7300's; this rig was never on the bench and has no manual of its own here.
+# The values are carried across on the strength of two radios agreeing exactly
+# on two transports in SSB (MOR-2497), and of this rig declaring the same PBT
+# commands. Nothing has confirmed its AM step.
+#
+# The -D and -R variants take the SSB/CW/RTTY figure by the same reasoning:
+# the manual names the base modes, not each variant.
+#
+# Do not confuse with step_hz in the same tables, which quantises the WIDTH.
+[filters.width.USB]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [3000, 2400, 1800]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.LSB]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [3000, 2400, 1800]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.CW]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [1200, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.CW-R]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 3600
+defaults = [1200, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 3600, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.RTTY]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 2700
+defaults = [2400, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 2700, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.RTTY-R]
+pbt_step_hz = 50
+min_hz = 50
+max_hz = 2700
+defaults = [2400, 500, 250]
+segments = [
+    { hz_min = 50, hz_max = 500, step_hz = 50, index_min = 0 },
+    { hz_min = 600, hz_max = 2700, step_hz = 100, index_min = 10 },
+]
+
+[filters.width.AM]
+pbt_step_hz = 200
+min_hz = 200
+max_hz = 10000
+step_hz = 200
+defaults = [9000, 6000, 3000]
+segments = [
+    { hz_min = 200, hz_max = 10000, step_hz = 200, index_min = 0 },
+]
+
+[filters.width.FM]
+fixed = true
+defaults = [15000, 10000, 7000]
+
+# DV (MOR-3623), the fixed-width shape the IC-705 uses for DV. INFERENCE,
+# not measurement, for this radio: no IC-9700 has been on the bench; the DV
+# slots ride the IC-705's own DV table (same D-STAR codec and filter
+# behaviour, MOR-3591 phase-1 research). DV has no twin PBT (the Twin PBT
+# manual heading names "SSB, CW, RTTY and AM modes" only). Tier B-.
+[filters.width.DV]
+fixed = true
+defaults = [7000, 7000, 7000]
+
+[vfo]
+# IC-9700 has MAIN/SUB receiver banks; normal split uses A/B within MAIN.
+# CI-V 25/26 selector 01 addresses unselected MAIN A/B, not the SUB bank.
+# CI-V 0x07 0xD0 = select MAIN receiver, 0x07 0xD1 = select SUB receiver.
+# CI-V 0x07 0xB0 = swap MAIN/SUB, 0x07 0xB1 = equal MAIN=SUB.
+# Bytes match the Icom CI-V dual-receiver convention also used by IC-7610.
+# (wfview IC-9700.rig exposes only "VFO Equal AB" = 0x07 0xA0; the 0x07 0xB1
+#  "Equal M/S" opcode is documented in the IC-9700 CI-V reference guide and
+#  mirrors IC-7610 behaviour — untested on hardware for this file.)
+scheme = "main_sub"
+split_tx_target = "main_unselected"
+main_select = [0xD0]
+sub_select = [0xD1]
+swap_main_sub = [0xB0]
+equal_main_sub = [0xB1]
+
+# ── Frequency Ranges ─────────────────────────────────────────────
+# USA version: IC-9700
+# Basic Manual, Specifications, "Frequency coverage (unit: MHz)",
+# USA Version Receiver/Transmitter: 144.000000 ~ 148.000000,
+# 430.000000 ~ 450.000000, 1240.000000 ~ 1300.000000. Other versions
+# (EUR/ITR/TPE/KOR) differ.
+# The IC-9700 is a VHF/UHF/SHF transceiver: no HF, no 6 m (MOR-2567).
+# bsr_code: IC-9700 CI-V Reference Guide, "Band stacking register"
+# (command 1A 01), Frequency band codes: 01=VHF 144.000000~148.000000,
+# 02=UHF 430.000000~450.000000, 03=1.2GHz 1240.000000~1300.000000.
+# default_hz: the manuals state no per-band default tuning frequency,
+# and _schema.md makes the key required, so each band carries a
+# BSR-recall fallback frequency chosen as a suitable in-band FM
+# operating frequency with bandwidth clearance from the band edges
+# (MOR-4373): 2m/70cm mirror the US national FM simplex calling
+# frequencies also used by the IC-705 profile; 23cm uses the ARRL
+# 23 cm national FM simplex calling frequency.
+
+[[freq_ranges.ranges]]
+label = "2m"
+start_hz = 144_000_000
+end_hz = 148_000_000
+repeater = true
+
+# Per-band rated TX power in watts (MOR-3634), from the IC-9700 manuals:
+# 144 MHz 100 W, 430 MHz 75 W, 1.2 GHz 10 W. Tier B- -- not hardware-verified;
+# no recording of this model exists. Data only: the capabilities txBands
+# payload publishes it. The IC-9700 level is a percentage of the current
+# band's maximum, so the power slider shows watts for the band the radio is
+# on and keeps its full range. It never changes a power value that is written.
+[[freq_ranges.ranges.bands]]
+name = "2m"
+start_hz = 144_000_000
+end_hz = 148_000_000
+default_hz = 146_520_000
+bsr_code = 0x01
+default_mode = "FM"
+max_power_w = 100
+
+[[freq_ranges.ranges]]
+label = "70cm"
+start_hz = 430_000_000
+end_hz = 450_000_000
+repeater = true
+
+[[freq_ranges.ranges.bands]]
+name = "70cm"
+start_hz = 430_000_000
+end_hz = 450_000_000
+default_hz = 446_000_000
+bsr_code = 0x02
+default_mode = "FM"
+max_power_w = 75
+
+[[freq_ranges.ranges]]
+# The CI-V guide names this band "1.2GHz".
+label = "23cm"
+start_hz = 1_240_000_000
+end_hz = 1_300_000_000
+repeater = true
+
+[[freq_ranges.ranges.bands]]
+name = "23cm"
+start_hz = 1_240_000_000
+end_hz = 1_300_000_000
+default_hz = 1_294_500_000
+bsr_code = 0x03
+default_mode = "FM"
+max_power_w = 10
+
+# ── Command 29 Routes ───────────────────────────────────────────
+# The IC-9700 uses the MAIN/SUB receiver-select scheme (0x07 0xD0/0xD1)
+# to target per-receiver commands, NOT the cmd29 prefix used by the
+# IC-7610 / IC-7760 / IC-785x. wfview's IC-9700.rig sets
+# `HasCommand29=false` at the file level and marks every individual
+# command `Command29=false`, matching the published CI-V reference
+# guide. Keep this list empty so supports_cmd29() returns False and
+# the command layer falls back to the MAIN/SUB receiver-switch path.
+
+[cmd29]
+routes = []
+
+# ── CI-V Commands ────────────────────────────────────────────────
+# Grouped by capability area. Wire bytes as integer arrays.
+# Source: IC-9700 CI-V Reference Guide + wfview IC-9700.rig.
+
+[commands]
+
+# PROVENANCE OPEN (D2, MOR-2015): the following 7 declared base-family
+# entries were NOT covered by this ticket's documentary audit (Part 3 of
+# the audit report was a spot-check, not exhaustive, over the base-opcode
+# families) and are not independently confirmed against the IC-9700 CI-V
+# Reference Guide (Icom, 2019). Recorded here so the next D2 pass on this
+# profile sees them without having to rediscover them by re-auditing the
+# whole file:
+#   - get_antenna / set_antenna            [0x12]
+#   - get_apf_type_level / set_apf_type_level [0x14, 0x05]
+#   - get_s_meter_sql_status_04             [0x15, 0x04]
+#   - get_tuner_status / set_tuner_status   [0x1C, 0x01] (name looks
+#     suspect in kind, not just address -- IC-9700 has no internal ATU)
+#   - get_rit_tx_status / set_rit_tx_status [0x21, 0x02]
+#   - get_audio_peak_filter / set_audio_peak_filter [0x16, 0x32]
+#   - get_scope_single_dual                 [0x27, 0x13]
+#
+# Added (D2, MOR-2008 batch 4), left deliberately undeclared rather than
+# guessed:
+#   - get_memory_mode [0x08]: this guide's own 0x08 row reads "Select the
+#     Memory mode" (imperative), not "Send/read" like the table's other
+#     bidirectional rows -- no live-bench probe has settled whether it
+#     answers a bare read.
+#   - set_selected_mode [0x26, 0x00]: the opcode's GET direction is
+#     declared below (get_selected_mode), but this guide's own p.23 detail
+#     page for the SET direction's exact (mode, data_mode, filter) payload
+#     convention was not independently opened before this batch.
+
+# ── Frequency / Mode ──
+get_freq = [0x03]
+set_freq = [0x05]
+get_mode = [0x04]
+set_mode = [0x06]
+get_band_edge_freq = [0x02]
+get_selected_freq = [0x25, 0x00]          # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.11 (detail p.23)
+get_unselected_freq = [0x25, 0x01]        # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.11 (detail p.23)
+get_selected_mode = [0x26, 0x00]          # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.11 (detail p.23)
+get_unselected_mode = [0x26, 0x01]        # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.11 (detail p.23)
+# MOR-3754: IC-9700 CI-V Reference Guide (2019) p.11/p.23: 01 is unselected MAIN A/B, never SUB.
+set_unselected_freq = [0x25, 0x01]
+set_unselected_mode = [0x26, 0x01]
+# set_selected_mode -- PROVENANCE OPEN above, left undeclared
+
+# ── TX Band Edge ──
+get_tx_band_count = [0x1E, 0x00]          # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.11
+get_tx_band_edge = [0x1E, 0x01]           # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.11 (detail p.13)
+
+# ── VFO / Dual Receiver ──
+get_vfo = [0x07]
+set_vfo = [0x07]
+get_split = [0x0F]
+set_split = [0x0F]
+# MOR-3623: the repeater shift direction rides the same 0F command (guide
+# p.4: sets 10 = simplex, 11 = DUP−, 12 = DUP+), like the IC-705 (MOR-2930).
+# 13 (RPS) is a DD-mode duplex, not a shift direction. Tier B-.
+get_repeater_shift = [0x0F]              # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.4
+set_repeater_shift = [0x0F]              # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.4
+# Dual Watch on/off: previously declared at 0x07 0xC2/0xC1/0xC0 (read/ON/OFF)
+# citing "Icom CI-V reference guide" as authority -- this guide's own
+# cmd-0x07 table has no C0/C1/C2 rows at all (only 00/01/A0/B0/D0/D1/D2).
+# The real, guide-confirmed Dualwatch toggle is 0x16 0x59 ("Send/read the
+# sub band (the Dualwatch function)"), IC-9700 CI-V Reference Guide (Icom,
+# 2019) p.5 (D2, MOR-2015). The vfo.py fallback still builds the old 0x07
+# 0xCx family (fallback bytes are out of this documentary ticket's scope),
+# so this map entry now diverges from the fallback by design -- see
+# tests/command_map_parity_divergences.txt and the MOR-2015 PR body.
+get_dual_watch = [0x16, 0x59]              # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.5
+set_dual_watch_on = [0x16, 0x59, 0x01]     # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.5
+set_dual_watch_off = [0x16, 0x59, 0x00]    # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.5
+# main_sub_tracking: no such function in this guide -- 0x16 family jumps
+# 5C -> 65 (no 0x5E row) and a doc-wide search for "tracking" returns zero
+# hits (D2, MOR-2015).
+get_main_sub_tracking = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) pp.5-6: 0x16 family has no 0x5E row; doc-wide search for 'tracking' returns zero hits" }
+set_main_sub_tracking = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) pp.5-6: 0x16 family has no 0x5E row; doc-wide search for 'tracking' returns zero hits" }
+# 0x07 0xD2: read/write which band is bound to MAIN/SUB (0=MAIN, 1=SUB).
+get_main_sub_band = [0x07, 0xD2]
+
+# ── Tuning ──
+get_tuning_step = [0x10]
+set_tuning_step = [0x10]
+
+# ── RF Front End (Attenuator / Preamp) ──
+get_attenuator = [0x11]
+set_attenuator = [0x11]
+get_preamp = [0x16, 0x02]
+set_preamp = [0x16, 0x02]
+get_ip_plus = [0x16, 0x65]
+set_ip_plus = [0x16, 0x65]
+# digisel (0x16 0x4E) and digisel_shift (0x14 0x13): no such rows in the
+# IC-9700 CI-V Reference Guide (Icom, 2019) command table (D2, MOR-2015)
+get_digisel = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) pp.5-6: 0x16 family sub-list (02,12,22,40,41,42,43,44,45,46,47,48,4A,4B,4F,50,56,57,58,59,5A,5B,5C,65) has no 0x4E" }
+set_digisel = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) pp.5-6: 0x16 family sub-list (02,12,22,40,41,42,43,44,45,46,47,48,4A,4B,4F,50,56,57,58,59,5A,5B,5C,65) has no 0x4E" }
+get_digisel_shift = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.4: 0x14 family sub-list (01,02,03,06,07,08,09,0A,0B,0C,0D,0E,0F,12,15,16,17,19) has no 0x13" }
+set_digisel_shift = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.4: 0x14 family sub-list (01,02,03,06,07,08,09,0A,0B,0C,0D,0E,0F,12,15,16,17,19) has no 0x13" }
+
+# ── Antenna ──
+# NOTE (D2, MOR-2015): "Single antenna" here means no antenna-*selection*
+# CI-V function, not one physical jack -- IC-9700 has fixed per-band
+# 144/430/1200M connectors. Base opcode 0x12 itself is provenance open,
+# see the block comment at the top of [commands].
+get_antenna = [0x12]
+set_antenna = [0x12]
+# rx_antenna_ant2 (0x16 0x53): no antenna-connector-selection command exists
+# on this radio at all -- IC-9700 has fixed per-band 144/430/1200M antenna
+# connectors, no software-selectable ANT (D2, MOR-2015)
+get_rx_antenna_ant2 = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019): fixed per-band 144/430/1200M antenna connectors; no antenna-connector-selection command exists on this radio" }
+set_rx_antenna_ant2 = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019): fixed per-band 144/430/1200M antenna connectors; no antenna-connector-selection command exists on this radio" }
+
+# ── Audio / AF ──
+get_af_level = [0x14, 0x01]
+set_af_level = [0x14, 0x01]
+get_rf_gain = [0x14, 0x02]
+set_rf_gain = [0x14, 0x02]
+get_squelch = [0x14, 0x03]
+set_squelch = [0x14, 0x03]
+# af_mute (0x1A 0x09): guide's 1A/09 sub-command is "Read NTP server access
+# result", an unrelated function; a doc-wide "mute" search finds only
+# "Sub Band Mute (TX)" (0033-0035, unrelated dualwatch-audio feature)
+# (D2, MOR-2015)
+get_af_mute = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.11: 1A/09 = 'Read NTP server access result', not AF mute; doc-wide 'mute' search finds only Sub Band Mute (TX) 0033-0035" }
+set_af_mute = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.11: 1A/09 = 'Read NTP server access result', not AF mute; doc-wide 'mute' search finds only Sub Band Mute (TX) 0033-0035" }
+
+# ── DSP / Noise (NB, NR, Notch, APF, Twin Peak) ──
+get_nb = [0x16, 0x22]
+set_nb = [0x16, 0x22]
+get_nb_level = [0x14, 0x12]
+set_nb_level = [0x14, 0x12]
+get_nr = [0x16, 0x40]
+set_nr = [0x16, 0x40]
+get_nr_level = [0x14, 0x06]
+set_nr_level = [0x14, 0x06]
+get_auto_notch = [0x16, 0x41]
+set_auto_notch = [0x16, 0x41]
+get_manual_notch = [0x16, 0x48]
+set_manual_notch = [0x16, 0x48]
+get_notch_filter = [0x14, 0x0D]           # Notch position 0-255
+set_notch_filter = [0x14, 0x0D]
+get_manual_notch_width = [0x16, 0x57]     # 0=WIDE, 1=MID, 2=NAR
+set_manual_notch_width = [0x16, 0x57]
+get_audio_peak_filter = [0x16, 0x32]      # 0x16 0x32 not in the IC-9700 CI-V guide's 0x16 table -- declared value inherited, provenance open (see the block comment at the top of [commands], D2, MOR-2015)
+set_audio_peak_filter = [0x16, 0x32]
+get_apf_type_level = [0x14, 0x05]         # NOT_IMPLEMENTED — APF position; provenance open, see the block comment at the top of [commands] (D2, MOR-2015)
+set_apf_type_level = [0x14, 0x05]
+get_twin_peak_filter = [0x16, 0x4F]
+set_twin_peak_filter = [0x16, 0x4F]
+
+# ── Filter (PBT, IF width, shape) ──
+get_pbt_inner = [0x14, 0x07]
+set_pbt_inner = [0x14, 0x07]
+get_pbt_outer = [0x14, 0x08]
+set_pbt_outer = [0x14, 0x08]
+get_filter_width = [0x1A, 0x03]           # 50-10000 Hz
+set_filter_width = [0x1A, 0x03]
+get_filter_shape = [0x16, 0x56]
+set_filter_shape = [0x16, 0x56]
+get_agc = [0x16, 0x12]
+set_agc = [0x16, 0x12]
+get_agc_time_constant = [0x1A, 0x04]
+set_agc_time_constant = [0x1A, 0x04]
+
+# ── TX Controls (Power, Mic, Compressor, Monitor, VOX) ──
+ptt_on = [0x1C, 0x00, 0x01]
+ptt_off = [0x1C, 0x00, 0x00]
+get_transceiver_status = [0x1C, 0x00]      # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.10, S/R transceiver status
+get_rf_power = [0x14, 0x0A]
+set_rf_power = [0x14, 0x0A]
+get_mic_gain = [0x14, 0x0B]
+set_mic_gain = [0x14, 0x0B]
+# drive_gain (0x14 0x14): no such row in the IC-9700 CI-V Reference Guide
+# (Icom, 2019); doc-wide "drive" search only hits "USB driver" (D2, MOR-2015)
+get_drive_gain = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.4: 0x14 family has no 0x14; doc-wide 'drive' search only hits 'USB driver'" }
+set_drive_gain = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.4: 0x14 family has no 0x14; doc-wide 'drive' search only hits 'USB driver'" }
+get_compressor = [0x16, 0x44]
+set_compressor = [0x16, 0x44]
+get_compressor_level = [0x14, 0x0E]
+set_compressor_level = [0x14, 0x0E]
+get_monitor = [0x16, 0x45]
+set_monitor = [0x16, 0x45]
+get_monitor_gain = [0x14, 0x15]
+set_monitor_gain = [0x14, 0x15]
+get_vox = [0x16, 0x46]
+set_vox = [0x16, 0x46]
+get_vox_gain = [0x14, 0x16]
+set_vox_gain = [0x14, 0x16]
+get_anti_vox_gain = [0x14, 0x17]
+set_anti_vox_gain = [0x14, 0x17]
+get_ssb_tx_bandwidth = [0x16, 0x58]
+set_ssb_tx_bandwidth = [0x16, 0x58]
+
+# ── Split ──
+get_xfc_status = [0x1C, 0x02]             # XFC = transmit frequency monitor
+set_xfc_status = [0x1C, 0x02]
+
+# ── CW ──
+send_cw = [0x17]
+stop_cw = [0x17]
+get_cw_pitch = [0x14, 0x09]
+set_cw_pitch = [0x14, 0x09]
+get_key_speed = [0x14, 0x0C]
+set_key_speed = [0x14, 0x0C]
+get_break_in = [0x16, 0x47]
+set_break_in = [0x16, 0x47]
+get_break_in_delay = [0x14, 0x0F]
+set_break_in_delay = [0x14, 0x0F]
+
+# ── RIT / ∂TX (XIT) ──
+get_rit_frequency = [0x21, 0x00]
+set_rit_frequency = [0x21, 0x00]
+get_rit_status = [0x21, 0x01]
+set_rit_status = [0x21, 0x01]
+get_rit_tx_status = [0x21, 0x02]          # ∂TX on/off
+set_rit_tx_status = [0x21, 0x02]
+
+# ── Tuner / ATU ──
+get_tuner_status = [0x1C, 0x01]
+set_tuner_status = [0x1C, 0x01]
+
+# ── Meters ──
+get_s_meter = [0x15, 0x02]
+get_s_meter_sql_status = [0x15, 0x01]
+get_s_meter_sql_status_04 = [0x15, 0x04]
+get_various_squelch = [0x15, 0x05]
+get_overflow_status = [0x15, 0x07]
+get_power_meter = [0x15, 0x11]
+get_swr = [0x15, 0x12]
+get_alc = [0x15, 0x13]
+get_comp_meter = [0x15, 0x14]
+get_vd_meter = [0x15, 0x15]
+get_id_meter = [0x15, 0x16]
+
+# ── Tone / TSQL ──
+get_repeater_tone = [0x16, 0x42]
+set_repeater_tone = [0x16, 0x42]
+get_repeater_tsql = [0x16, 0x43]
+set_repeater_tsql = [0x16, 0x43]
+get_tone_freq = [0x1B, 0x00]
+set_tone_freq = [0x1B, 0x00]
+get_tsql_freq = [0x1B, 0x01]
+set_tsql_freq = [0x1B, 0x01]
+# MOR-3623: 16 5D tone squelch type selector — the same command and codes
+# as the IC-705 (MOR-2131/MOR-2955). Tier B-: not hardware-verified; the
+# older MOR-2015 0x16-family sub-list cited by the digisel rows above does
+# not name 5D — see the MOR-3623 PR body for the reconciliation.
+get_tone_squelch_type = [0x16, 0x5D]     # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.5; MOR-3591 phase-1 research (2026-10-21) table 1.3
+set_tone_squelch_type = [0x16, 0x5D]     # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.5; MOR-3591 phase-1 research (2026-10-21) table 1.3
+
+# ── Data Mode ──
+get_data_mode = [0x1A, 0x06]
+set_data_mode = [0x1A, 0x06]
+
+# ── Scope ──
+get_scope_wave = [0x27, 0x00]
+set_scope_wave = [0x27, 0x00]
+scope_on = [0x27, 0x10]
+scope_off = [0x27, 0x10]
+scope_data_output = [0x27, 0x11]
+# scope_main_sub (0x27 0x12) exists on the wire: "Send/read the Main or Sub
+# scope setting (00=Main, 01=Sub)" -- an exact name-and-function match. The
+# old "single receiver" note above was factually wrong for IC-9700, which
+# is a dual-receiver (MAIN/SUB) radio; that reasoning was evidently ported
+# unchanged from IC-7300 (genuinely single-receiver) (D2, MOR-2015).
+get_scope_main_sub = [0x27, 0x12]         # source: IC-9700 CI-V Reference Guide p.12
+set_scope_main_sub = [0x27, 0x12]         # source: IC-9700 CI-V Reference Guide p.12 (Cmd 27 Sub 12* "Send/read the Main or Sub scope setting (00=Main, 01=Sub)" -- MOR-2106)
+get_scope_single_dual = [0x27, 0x13]
+get_scope_mode = [0x27, 0x14]
+get_scope_span = [0x27, 0x15]
+get_scope_edge = [0x27, 0x16]
+get_scope_hold = [0x27, 0x17]
+get_scope_ref = [0x27, 0x19]
+get_scope_speed = [0x27, 0x1A]
+get_scope_during_tx = [0x27, 0x1B]
+get_scope_center_type = [0x27, 0x1C]
+get_scope_vbw = [0x27, 0x1D]
+get_scope_fixed_edge = [0x27, 0x1E]
+get_scope_rbw = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.12: the 0x27 scope table ends at 1E, with no 1F RBW command" }
+set_scope_rbw = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.12: the 0x27 scope table ends at 1E, with no 1F RBW command" }
+
+# ── Scan ──
+scan_start = [0x0E]
+scan_stop = [0x0E]
+scan_set_df_span = [0x0E]                 # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.4 ("Ax (x=1 to 7)" table matches the code's own 7-value table)
+scan_start_type = [0x0E]                  # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.4 (0x0E family incl. Programmed/dF/Fine programmed/Memory/Select memory scan)
+scan_set_resume = [0x0E]                  # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.4; domain resolved below (D2 residual closed, MOR-2007 ruling 4)
+
+# ── System / Power ──
+power_on = [0x18]
+power_off = [0x18]
+# powerstat: guide's cmd 0x18 table is SET-only (00=Turn OFF, 01=Turn ON) --
+# no read/query row exists at all for this command (D2, MOR-2015)
+get_powerstat = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.5: cmd 0x18 table is SET-only (00=Turn OFF, 01=Turn ON); no read/query row exists" }
+get_transceiver_id = [0x19, 0x00]
+set_speech = [0x13]
+get_dial_lock = [0x16, 0x50]
+set_dial_lock = [0x16, 0x50]
+
+# ── Band Stacking Register ──
+get_bsr = [0x1A, 0x01]                    # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.5 (detail p.15)
+set_bsr = [0x1A, 0x01]                    # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.5 (detail p.15)
+
+# ── Memory ──
+# get_memory_mode -- PROVENANCE OPEN above, left undeclared
+set_memory_mode = [0x08]                  # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.4
+memory_write = [0x09]                     # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.4
+memory_to_vfo = [0x0A]                    # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.4 -- payload MOR-2055, see commands/memory.py: build_memory_to_vfo
+memory_clear = [0x1A, 0x00]               # the declared 1a00_ff clear form's command bytes (guide p.14: 1A 00 + the address + FF, MOR-3644); the radio's bare 0x0B clear (guide p.4) is not the form this package sends -- MOR-2055 keeps the IC-7610 on 0x0B
+get_memory_contents = [0x1A, 0x00]        # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.5 (detail pp.14,15)
+set_memory_contents = [0x1A, 0x00]        # source: IC-9700 CI-V Reference Guide (Icom, 2019) p.5 (detail pp.14,15)
+
+# Menu 0x1A 0x05 sub-addresses: see [commands.overrides] (source: IC-9700
+# CI-V Reference Guide (Icom, 2019); corrected/absent per the MOR-2015
+# documentary audit, superseding the IC-7300-copied addresses this file
+# used to carry)
+
+[commands.overrides]
+# 0x1A 0x05 menu: RX/TX EQ. Source: IC-9700 CI-V Reference Guide (Icom,
+# 2019). MOR-2015 documentary audit found IC-7300's addresses had been
+# copied wholesale into this file. Of the 82 copied 1A/05 addresses: 9
+# (this RX-side tone block) happened to be byte-identical; 18 were
+# CORRECTED below to this radio's own address; 52 (the HF-band
+# scope-edge block) do not exist on this VHF/UHF-only radio at all and
+# were deleted; 1 (civ_output_ant) also has no real counterpart but is
+# resolved by a live builder, so it is declared absent below rather than
+# deleted; and 2 (nb_depth/nb_width) are ambiguous -- no single global
+# control exists, only per-band ones -- so they too are declared absent
+# rather than guessed. 9 + 18 + 52 + 1 + 2 = 82. Full verdict table in
+# the MOR-2015 PR body.
+get_ssb_rx_hpflpf = [0x1A, 0x05, 0x00, 0x01]  # source: IC-9700 CI-V Reference Guide p.5
+set_ssb_rx_hpflpf = [0x1A, 0x05, 0x00, 0x01]  # source: IC-9700 CI-V Reference Guide p.5
+get_ssb_rx_bass = [0x1A, 0x05, 0x00, 0x02]    # source: IC-9700 CI-V Reference Guide p.5
+set_ssb_rx_bass = [0x1A, 0x05, 0x00, 0x02]    # source: IC-9700 CI-V Reference Guide p.5
+get_ssb_rx_treble = [0x1A, 0x05, 0x00, 0x03]  # source: IC-9700 CI-V Reference Guide p.5
+set_ssb_rx_treble = [0x1A, 0x05, 0x00, 0x03]  # source: IC-9700 CI-V Reference Guide p.5
+get_am_rx_hpflpf = [0x1A, 0x05, 0x00, 0x04]   # source: IC-9700 CI-V Reference Guide p.5
+set_am_rx_hpflpf = [0x1A, 0x05, 0x00, 0x04]   # source: IC-9700 CI-V Reference Guide p.5
+get_am_rx_bass = [0x1A, 0x05, 0x00, 0x05]     # source: IC-9700 CI-V Reference Guide p.5
+set_am_rx_bass = [0x1A, 0x05, 0x00, 0x05]     # source: IC-9700 CI-V Reference Guide p.5
+get_am_rx_treble = [0x1A, 0x05, 0x00, 0x06]   # source: IC-9700 CI-V Reference Guide p.5
+set_am_rx_treble = [0x1A, 0x05, 0x00, 0x06]   # source: IC-9700 CI-V Reference Guide p.5
+get_fm_rx_hpflpf = [0x1A, 0x05, 0x00, 0x07]   # source: IC-9700 CI-V Reference Guide p.5
+set_fm_rx_hpflpf = [0x1A, 0x05, 0x00, 0x07]   # source: IC-9700 CI-V Reference Guide p.5
+get_fm_rx_bass = [0x1A, 0x05, 0x00, 0x08]     # source: IC-9700 CI-V Reference Guide p.5
+set_fm_rx_bass = [0x1A, 0x05, 0x00, 0x08]     # source: IC-9700 CI-V Reference Guide p.5
+get_fm_rx_treble = [0x1A, 0x05, 0x00, 0x09]   # source: IC-9700 CI-V Reference Guide p.5
+set_fm_rx_treble = [0x1A, 0x05, 0x00, 0x09]   # source: IC-9700 CI-V Reference Guide p.5
+# cw_rx_hpflpf: copied 0010 = "DV RX HPF/LPF" on IC-9700 (D-STAR, which
+# IC-7300 lacks); real CW RX HPF/LPF = 0013 (D2, MOR-2015)
+get_cw_rx_hpflpf = [0x1A, 0x05, 0x00, 0x13]   # source: IC-9700 CI-V Reference Guide p.5
+set_cw_rx_hpflpf = [0x1A, 0x05, 0x00, 0x13]   # source: IC-9700 CI-V Reference Guide p.5
+# ssb_tx_bass/treble, am_tx_bass/treble, fm_tx_bass/treble: IC-9700 inserts
+# DV RX HPF/LPF+Bass+Treble (0010-0012) and four SSB-bandwidth slots
+# (0017-0020) ahead of these, pushing every TX-side slot down 3-4 positions
+# relative to IC-7300's own numbering (D2, MOR-2015)
+get_ssb_tx_bass = [0x1A, 0x05, 0x00, 0x15]    # source: IC-9700 CI-V Reference Guide p.5
+set_ssb_tx_bass = [0x1A, 0x05, 0x00, 0x15]    # source: IC-9700 CI-V Reference Guide p.5
+get_ssb_tx_treble = [0x1A, 0x05, 0x00, 0x16]  # source: IC-9700 CI-V Reference Guide p.5
+set_ssb_tx_treble = [0x1A, 0x05, 0x00, 0x16]  # source: IC-9700 CI-V Reference Guide p.5
+get_am_tx_bass = [0x1A, 0x05, 0x00, 0x21]     # source: IC-9700 CI-V Reference Guide p.5
+set_am_tx_bass = [0x1A, 0x05, 0x00, 0x21]     # source: IC-9700 CI-V Reference Guide p.5
+get_am_tx_treble = [0x1A, 0x05, 0x00, 0x22]   # source: IC-9700 CI-V Reference Guide p.5
+set_am_tx_treble = [0x1A, 0x05, 0x00, 0x22]   # source: IC-9700 CI-V Reference Guide p.5
+get_fm_tx_bass = [0x1A, 0x05, 0x00, 0x23]     # source: IC-9700 CI-V Reference Guide p.5
+set_fm_tx_bass = [0x1A, 0x05, 0x00, 0x23]     # source: IC-9700 CI-V Reference Guide p.5
+get_fm_tx_treble = [0x1A, 0x05, 0x00, 0x24]   # source: IC-9700 CI-V Reference Guide p.5
+set_fm_tx_treble = [0x1A, 0x05, 0x00, 0x24]   # source: IC-9700 CI-V Reference Guide p.5
+
+# scope_edge1..4_{1p6,2,6,8,11,15,20,22,26,30,45,60,74}mhz (52 addresses):
+# DELETED (D2, MOR-2015). These keys named the HF-band-edge concept copied
+# from IC-7300 (13 HF ham-band segments x up to 4 edge slots); IC-9700 is
+# VHF/UHF-only (144/430/1200M) and has no such concept -- its own
+# "SCOPE > Fixed Edges" function lives at a structurally different set of
+# subcmds (0202-0210, 3 slots x 3 bands). No builder in src/rigplane/commands/
+# ever resolved any of these 52 specific key names -- the scope-edge base
+# family builder in scope.py resolves the unrelated bare "get_scope_edge"
+# key at [0x27, 0x16] (declared in [commands] above), a single query/set
+# command, not 52 per-band-edge keys -- so these were unused wrong data, not
+# merely wrong-address data: every one of the 52 numeric addresses is
+# assigned to a real, unrelated IC-9700 function (ACC/USB/LAN MOD level,
+# ACC SEND/USB SEND/Keying, External Keypad, CI-V settings, Network
+# settings, SCOPE Fixed Edges, AUDIO SCOPE SET, VOICE TX -- full collision
+# table in the MOR-2015 PR body), so sending any of them to a real radio
+# would have silently hit that other function instead of erroring.
+
+# IC-9700-specific menu sub-addresses. Source: IC-9700 CI-V Reference Guide
+# (Icom, 2019), pp.6-11. MOR-2015 documentary audit corrected 11 of these
+# from IC-7300-copied addresses, declared civ_output_ant and the
+# nb_depth/nb_width pair absent, and filled dash_ratio/lan_mod_input gap
+# rows with this menu family's real addresses.
+get_acc1_mod_level = [0x1A, 0x05, 0x01, 0x12]  # source: IC-9700 CI-V Reference Guide p.7
+set_acc1_mod_level = [0x1A, 0x05, 0x01, 0x12]  # source: IC-9700 CI-V Reference Guide p.7
+get_usb_mod_level = [0x1A, 0x05, 0x01, 0x13]   # source: IC-9700 CI-V Reference Guide p.7
+set_usb_mod_level = [0x1A, 0x05, 0x01, 0x13]   # source: IC-9700 CI-V Reference Guide p.7
+# lan_mod_level: real gap-list address in this menu family (D2, MOR-2015)
+get_lan_mod_level = [0x1A, 0x05, 0x01, 0x14]   # source: IC-9700 CI-V Reference Guide p.7
+set_lan_mod_level = [0x1A, 0x05, 0x01, 0x14]   # source: IC-9700 CI-V Reference Guide p.7
+get_data_off_mod_input = [0x1A, 0x05, 0x01, 0x15]  # source: IC-9700 CI-V Reference Guide p.7
+set_data_off_mod_input = [0x1A, 0x05, 0x01, 0x15]  # source: IC-9700 CI-V Reference Guide p.7
+get_data1_mod_input = [0x1A, 0x05, 0x01, 0x16]     # source: IC-9700 CI-V Reference Guide p.7
+set_data1_mod_input = [0x1A, 0x05, 0x01, 0x16]     # source: IC-9700 CI-V Reference Guide p.7
+# data2_mod_input/data3_mod_input: guide's MOD-input list has only
+# ACC/USB/LAN/"DATA OFF"/"DATA" (0112-0116) -- no DATA1/2/3 distinction
+# anywhere in the document (D2, MOR-2015)
+get_data2_mod_input = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019): MOD-input list has only ACC/USB/LAN/DATA OFF/DATA (0112-0116); no DATA1/2/3 distinction anywhere in the document" }
+set_data2_mod_input = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019): MOD-input list has only ACC/USB/LAN/DATA OFF/DATA (0112-0116); no DATA1/2/3 distinction anywhere in the document" }
+get_data3_mod_input = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019): MOD-input list has only ACC/USB/LAN/DATA OFF/DATA (0112-0116); no DATA1/2/3 distinction anywhere in the document" }
+set_data3_mod_input = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019): MOD-input list has only ACC/USB/LAN/DATA OFF/DATA (0112-0116); no DATA1/2/3 distinction anywhere in the document" }
+get_civ_transceive = [0x1A, 0x05, 0x01, 0x27]  # source: IC-9700 CI-V Reference Guide p.7
+set_civ_transceive = [0x1A, 0x05, 0x01, 0x27]  # source: IC-9700 CI-V Reference Guide p.7
+# civ_output_ant: copied 0061 = "MAIN DIAL Auto TS" on IC-9700; searched the
+# whole document for "antenna"/"ant"/cmd 0x12/0x1C 0x04 -- no
+# antenna-output/selection CI-V function exists anywhere in this guide
+# (D2, MOR-2015)
+get_civ_output_ant = { absent = "IC-9700 CI-V Reference Guide (2019): no antenna-output/selection CI-V function; fixed per-band antenna connectors" }
+set_civ_output_ant = { absent = "IC-9700 CI-V Reference Guide (2019): no antenna-output/selection CI-V function; fixed per-band antenna connectors" }
+get_system_date = [0x1A, 0x05, 0x01, 0x79]  # source: IC-9700 CI-V Reference Guide p.8
+set_system_date = [0x1A, 0x05, 0x01, 0x79]  # source: IC-9700 CI-V Reference Guide p.8
+get_system_time = [0x1A, 0x05, 0x01, 0x80]  # source: IC-9700 CI-V Reference Guide p.8
+set_system_time = [0x1A, 0x05, 0x01, 0x80]  # source: IC-9700 CI-V Reference Guide p.8
+get_utc_offset = [0x1A, 0x05, 0x01, 0x84]   # source: IC-9700 CI-V Reference Guide p.8
+set_utc_offset = [0x1A, 0x05, 0x01, 0x84]   # source: IC-9700 CI-V Reference Guide p.8
+get_quick_split = [0x1A, 0x05, 0x00, 0x43]  # source: IC-9700 CI-V Reference Guide p.6
+set_quick_split = [0x1A, 0x05, 0x00, 0x43]  # source: IC-9700 CI-V Reference Guide p.6
+# The bare quick_split/quick_dual_watch keys that used to live in base
+# [commands] (── Split ── section) are deleted outright (MOR-2008 batch 1):
+# no builder has resolved either since vfo.py's one-shot quick_split()/
+# quick_dual_watch() triggers were replaced by real get_/set_ pairs
+# (MOR-2007 ruling 2), so they had no reader left, only a dead D2 source
+# to preserve -- carried forward onto these get_/set_ rows instead of a
+# now-pointless bare row (D2, MOR-2015).
+# quick_dual_watch: guide's 0032 = "Beep Sound(SUB)"; a doc-wide "quick"
+# search returns exactly one hit -- "Quick SPLIT" (0043); no "Quick Dual
+# Watch" concept exists in this document at all (D2, MOR-2015)
+get_quick_dual_watch = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.6: 0032 = Beep Sound(SUB); doc-wide 'quick' search returns only Quick SPLIT (0043); no Quick Dual Watch concept exists" }
+set_quick_dual_watch = { absent = "IC-9700 CI-V Reference Guide (Icom, 2019) p.6: 0032 = Beep Sound(SUB); doc-wide 'quick' search returns only Quick SPLIT (0043); no Quick Dual Watch concept exists" }
+# dash_ratio: control 0224, CW-KEY SET>Dot/Dash Ratio; real gap-list
+# address (D2, MOR-2015). The hardcoded fallback that used to send 0228 for
+# this command was itself wrong for this radio (0228 = CW-KEY SET>MIC
+# Up/Down Keyer, not Dot/Dash Ratio) -- that fallback and its
+# `_CTL_MEM_DASH_RATIO` constant were deleted in MOR-2006 Steps 5..N module
+# 2, so this profile's 0224 is now the only address any builder can send.
+get_dash_ratio = [0x1A, 0x05, 0x02, 0x24]  # source: IC-9700 CI-V Reference Guide p.9
+set_dash_ratio = [0x1A, 0x05, 0x02, 0x24]  # source: IC-9700 CI-V Reference Guide p.9
+# nb_depth/nb_width: AMBIGUOUS -- no single global NB depth/width; per-band
+# only. Declared absent rather than guessing a band (D2, MOR-2015).
+get_nb_depth = { absent = "IC-9700 CI-V Reference Guide p.11: no single global NB depth/width; per-band only (0322/0325/0328 resp. 0323/0326/0329), unreachable by this single-key command" }
+set_nb_depth = { absent = "IC-9700 CI-V Reference Guide p.11: no single global NB depth/width; per-band only (0322/0325/0328 resp. 0323/0326/0329), unreachable by this single-key command" }
+get_nb_width = { absent = "IC-9700 CI-V Reference Guide p.11: no single global NB depth/width; per-band only (0322/0325/0328 resp. 0323/0326/0329), unreachable by this single-key command" }
+set_nb_width = { absent = "IC-9700 CI-V Reference Guide p.11: no single global NB depth/width; per-band only (0322/0325/0328 resp. 0323/0326/0329), unreachable by this single-key command" }
+get_vox_delay = [0x1A, 0x05, 0x03, 0x30]     # source: IC-9700 CI-V Reference Guide p.11, control 0330 (0.0-2.0 sec, 0.1-sec steps)
+set_vox_delay = [0x1A, 0x05, 0x03, 0x30]     # source: IC-9700 CI-V Reference Guide p.11, control 0330 (0.0-2.0 sec, 0.1-sec steps)
+get_ref_adjust = [0x1A, 0x05, 0x00, 0x72]    # source: IC-9700 CI-V Reference Guide p.6, control 0072 (a separate REF Adjust (FINE) exists at 0073, not represented here)
+set_ref_adjust = [0x1A, 0x05, 0x00, 0x72]    # source: IC-9700 CI-V Reference Guide p.6, control 0072 (a separate REF Adjust (FINE) exists at 0073, not represented here)
+
+[protocol]
+type = "civ"
+
+[controls.attenuator]
+style = "toggle"
+
+[controls.nb]
+style = "toggle_and_level"
+
+[controls.nr]
+style = "toggle_and_level"
+
+# Level control ranges — raw CI-V values and display mapping
+# IC-9700: dual receiver (MAIN/SUB), no cmd29; receiver targeting via
+# 0x07 0xD0/0xD1 receiver-select before per-receiver commands.
+
+[controls.pbt_inner]
+raw_min = 0
+raw_max = 255
+raw_center = 128
+display_min = -1200
+display_max = 1200
+display_unit = "Hz"
+
+[controls.pbt_outer]
+raw_min = 0
+raw_max = 255
+raw_center = 128
+display_min = -1200
+display_max = 1200
+display_unit = "Hz"
+
+[controls.af_level]
+raw_min = 0
+raw_max = 255
+
+[controls.rf_gain]
+raw_min = 0
+raw_max = 255
+
+[controls.squelch]
+raw_min = 0
+raw_max = 255
+
+[controls.nr_level]
+raw_min = 0
+raw_max = 255
+
+[controls.nb_level]
+raw_min = 0
+raw_max = 255
+
+[controls.mic_gain]
+raw_min = 0
+raw_max = 255
+
+[controls.rf_power]
+raw_min = 0
+raw_max = 255
+
+[controls.monitor_gain]
+raw_min = 0
+raw_max = 255
+
+[controls.compressor_level]
+raw_min = 0
+raw_max = 255
+
+[controls.cw_pitch]
+raw_min = 0
+raw_max = 255
+display_min = 300
+display_max = 900
+display_unit = "Hz"
+decode_quantum = 5  # reproduces the pre-existing CW-pitch decode for every raw level (pinned by tests/test_control_domain_math.py::test_ci_v_cw_pitch_decode_matches_the_deleted_formula_vectors)
+encode_rounding = "ceil"  # reproduces the pre-existing CW-pitch encode for every Hz in 300-900 (pinned by tests/test_control_domain_math.py::test_ci_v_cw_pitch_encode_matches_the_deleted_formula_vectors)
+
+[controls.key_speed]
+raw_min = 0
+raw_max = 255
+display_min = 6
+display_max = 48
+display_unit = "WPM"
+decode_quantum = 1  # reproduces the pre-existing key-speed decode for every raw level (pinned by tests/test_control_domain_math.py::test_ci_v_key_speed_decode_matches_the_deleted_formula_vectors)
+encode_rounding = "nearest_half_down"  # reproduces the pre-existing key-speed encode for every WPM in 6-48 (pinned by tests/test_control_domain_math.py::test_ci_v_key_speed_encode_matches_the_deleted_formula_vectors)
+
+[controls.rit]
+# MOR-1883: exact-form translation of the previously declared range,
+# preserved verbatim (wfview cites RIT Min/Max +/-999; no hardware to
+# verify against, so no new range claim is made here).
+mapping = "identity"
+raw_min = -999
+raw_max = 999
+raw_step = 1
+raw_origin = 0
+display_min = -999
+display_max = 999
+display_step = 1
+display_origin = 0
+display_unit = "Hz"
+quantization = "reject"
+restoration = "exact"
+
+# SWR meter calibration — piecewise-linear lookup from raw 0–255 to SWR ratio.
+# First four points (0=1.0, 48=1.5, 80=2.0, 120=3.0) match the firmware-anchored
+# Icom curve documented for sibling models. Fifth point (240, 6.0) follows
+# wfview IC-9700.rig. See P3-01 (issue #1173) and the R1 research note.
+[meters.swr]
+redline_raw = 120
+
+[[meters.swr.calibration]]
+raw = 0
+actual = 1.0
+label = "1.0"
+
+[[meters.swr.calibration]]
+raw = 48
+actual = 1.5
+label = "1.5"
+
+[[meters.swr.calibration]]
+raw = 80
+actual = 2.0
+label = "2.0"
+
+[[meters.swr.calibration]]
+raw = 120
+actual = 3.0
+label = "3.0"
+
+[[meters.swr.calibration]]
+raw = 240
+actual = 6.0
+label = "6.0+"
+
+[tx_policy]
+# Not bench-measured — inherited (MOR-1947). The backend factory routes IC-9700 onto Ic9700SerialRadio.
+# That is the same transmit-state read the measured IC-7300 uses: the
+# solicited CI-V 0x1C/0x00 request in runtime/radio.py, decoded through the
+# 0x00/0x01 allowlist in runtime/_civ_rx.py. The decode is shared, so the
+# ruling is the same ruling, and it is written here rather than left absent
+# because an absent section and an empty one load identically — only a
+# written section records that this was decided.
+# Nothing on this radio's path reads this map today: the CI-V reply is
+# decoded natively in runtime/radio.py into the canonical
+# core/tx_observation.py TxStateReading contract. The section records the
+# profile ruling even though the current Icom read path does not consult it.
+# No write-during-transmit battery was run on this radio, so no radio-side
+# refusal is claimed. Empty means "nothing measured", not "nothing refuses".
+refused_during_tx = []
+# Positive-RX rule (§3.7): the receiving byte only. This wire carries no
+# keying attribution, so nothing else is mapped and the transmitting byte
+# is not-receiving without an invented source.
+tx_state_map = { "0" = "rx" }

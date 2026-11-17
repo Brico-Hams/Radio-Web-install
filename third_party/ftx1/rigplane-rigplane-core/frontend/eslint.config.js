@@ -1,0 +1,625 @@
+/**
+ * ESLint flat config — frontend architecture guardrails.
+ *
+ * Enforces import boundaries from ADR 2026-04-12 and the v3 composition ADR
+ * (2026-07-25, MOR-1061). MOR-1061 additions:
+ *   - semantic/ must not import skins/ (skins depend on semantic, not vice
+ *     versa) or the runtime barrel/frontend-runtime (aggregates transport,
+ *     audioManager, stores — April ADR's "runtime/" ban, review cycle 1 F1).
+ *   - presentation/ (layouts, design languages) must not import transport,
+ *     commands, stores/raw-capabilities, or the runtime barrel.
+ *   - presentation/workspace/ additionally must not reference component
+ *     module paths (stable IDs only).
+ *   - primitives/ may import only themes/Svelte/types (April ADR, F3).
+ *   - lib/runtime/** must not import from components-v2/, presentation/, or
+ *     semantic/ (ADR invariant 1, F2; adapters keep full runtime access).
+ *
+ * @see docs/plans/2026-04-12-target-frontend-architecture.md
+ * @see docs/plans/2026-07-25-ui-composition-architecture-v3.md
+ */
+
+import tsParser from '@typescript-eslint/parser';
+import tsPlugin from '@typescript-eslint/eslint-plugin';
+import sveltePlugin from 'eslint-plugin-svelte';
+import svelteParser from 'svelte-eslint-parser';
+import radioAuthorityPlugin from './scripts/radio-authority-eslint-plugin.mjs';
+import controlFeedbackOwnershipPlugin from './scripts/control-feedback-ownership-eslint-plugin.mjs';
+
+/** Modules that only the runtime/wiring layer may import. */
+const FORBIDDEN_RUNTIME_IMPORTS = {
+  paths: [
+    {
+      name: '$lib/audio/audio-manager',
+      message:
+        'Presentation components must not import audioManager directly. ' +
+        'Use callback props from the adapter/wiring layer instead. ' +
+        'See ADR 2026-04-12.',
+    },
+  ],
+  patterns: [
+    {
+      group: ['$lib/transport/*', '**/lib/transport/*'],
+      message:
+        'Presentation components must not import transport modules (sendCommand, getChannel). ' +
+        'Use callback props from the adapter/wiring layer instead. ' +
+        'See ADR 2026-04-12.',
+    },
+    {
+      group: ['**/lib/audio/audio-manager'],
+      message:
+        'Presentation components must not import audioManager directly (relative paths included). ' +
+        'Use callback props from the adapter/wiring layer instead. ' +
+        'See ADR 2026-04-12.',
+    },
+  ],
+};
+
+/**
+ * Runtime-internals lockdown (MOR-1061 review cycles 1-2, F1/C1-A/C1-B;
+ * MOR-1237 adds browser-dependencies + resource-host; app-authority.ts was
+ * retired by MOR-2168 and stays UNNAMED — do not re-add it).
+ * The barrel, frontend-runtime, system-controller, scope-controller,
+ * resource-host, tx-controller/managed-app-host (the sole TX facade — v3
+ * ADR invariant 11), and tx-controller/browser-dependencies (terminal WS
+ * PTT delivery + managed projection) all aggregate transport/audioManager/
+ * stores or own exclusive state behind one import, so banning only the
+ * individual specifiers (transport, stores, audioManager) is bypassable
+ * through them. NOT applied to lib/runtime/** itself — adapters/props keep
+ * full access (see "lib/runtime isolation" below).
+ *
+ * SPECIFIER-FORM LIMIT, OWNED BY REVIEW (MOR-1237 R2): this rule matches the
+ * literal specifier text, so trailing-slash (`$lib/runtime/`), explicit-
+ * extension (`scope-controller.svelte.ts`), and dot-segment
+ * (`tx-controller/../system-controller`) forms evade ANY finite entry list.
+ * Per-form regex growth is whack-a-mole — review owns evasions of this
+ * shape; the entries below pin every CANONICAL form.
+ *
+ * The relative-path form uses `regex`, not `group`: ESLint's gitignore-style
+ * `group` glob matches a bare final segment as a DIRECTORY prefix, so
+ * `**\/lib/runtime` also matched `lib/runtime/adapters/*` and
+ * `lib/runtime/props/*` — the exact paths this ban must NOT touch (cycle-1
+ * finding C1-A). `regex` with a `$`-anchored alternation avoids that; `!`
+ * negation on `group` does not fix it.
+ */
+const RUNTIME_INTERNALS_MSG =
+  'Must not import runtime internals directly (barrel, frontend-runtime, controllers, or the ' +
+  'managed TX app-host) — alias or relative. Consume adapters/view models instead. ' +
+  'See v3 ADR invariants 5, 6, 11.';
+const FORBIDDEN_RUNTIME_BARREL = {
+  paths: [
+    { name: '$lib/runtime', message: RUNTIME_INTERNALS_MSG },
+    { name: '$lib/runtime/index', message: RUNTIME_INTERNALS_MSG },
+    { name: '$lib/runtime/frontend-runtime', message: RUNTIME_INTERNALS_MSG },
+    { name: '$lib/runtime/system-controller', message: RUNTIME_INTERNALS_MSG },
+    { name: '$lib/runtime/scope-controller.svelte', message: RUNTIME_INTERNALS_MSG },
+    { name: '$lib/runtime/resource-host', message: RUNTIME_INTERNALS_MSG },
+    { name: '$lib/runtime/tx-controller/managed-app-host', message: RUNTIME_INTERNALS_MSG },
+    { name: '$lib/runtime/tx-controller/browser-dependencies', message: RUNTIME_INTERNALS_MSG },
+  ],
+  patterns: [
+    {
+      regex:
+        '(^|/)lib/runtime(/index|/frontend-runtime|/system-controller|' +
+        '/scope-controller\\.svelte|/resource-host|' +
+        '/tx-controller/managed-app-host|/tx-controller/browser-dependencies)?$',
+      message: RUNTIME_INTERNALS_MSG,
+    },
+  ],
+};
+
+/**
+ * Semantic-specific lockdown (MOR-1061). Semantic UI depends on adapter
+ * view models and primitives, never on a concrete skin — skins depend on
+ * semantic, not the reverse. See v3 ADR invariant 3.
+ */
+const FORBIDDEN_SEMANTIC_IMPORTS = {
+  paths: [...FORBIDDEN_RUNTIME_IMPORTS.paths, ...FORBIDDEN_RUNTIME_BARREL.paths],
+  patterns: [
+    ...FORBIDDEN_RUNTIME_IMPORTS.patterns,
+    ...FORBIDDEN_RUNTIME_BARREL.patterns,
+    {
+      group: ['$lib/skins/*', '**/skins/**'],
+      message:
+        'Semantic UI must not import skins/manufacturer modules — skins depend on ' +
+        'semantic, never the reverse. See v3 ADR.',
+    },
+  ],
+};
+
+/**
+ * Panel-specific lockdown (Tier 2 — issue #1241).
+ *
+ * After all 18 panels migrated to adapters across batches 1-5
+ * (#1244, #1245, #1246, #1247, #1248), the boundary is enforced at lint time.
+ * Panels must route store reads through `lib/runtime/adapters/*` (state + commands).
+ *
+ * Note: this is panel-only on purpose. Other presentation layers (layout, display,
+ * meters, vfo, controls) have their own Tier-N migrations tracked under #1063;
+ * skins got its own store ban under MOR-2039 (FORBIDDEN_SKINS_IMPORTS below).
+ */
+const FORBIDDEN_PANEL_IMPORTS = {
+  patterns: [
+    {
+      group: ['$lib/stores/*', '$lib/stores', '**/lib/stores/*', '**/lib/stores'],
+      message:
+        'Panels must not import from $lib/stores/* — route via lib/runtime/adapters/* instead. ' +
+        'See docs/plans/2026-04-29-panel-adapter-migration.md and ADR 2026-04-12.',
+    },
+    {
+      group: ['$lib/transport/*', '**/lib/transport/*'],
+      message:
+        'Presentation components must not import transport modules (sendCommand, getChannel). ' +
+        'Use callback props from the adapter/wiring layer instead. ' +
+        'See ADR 2026-04-12.',
+    },
+    {
+      group: ['**/lib/audio/audio-manager'],
+      message:
+        'Presentation components must not import audioManager directly (relative paths included). ' +
+        'Use callback props from the adapter/wiring layer instead. ' +
+        'See ADR 2026-04-12.',
+    },
+  ],
+  paths: [
+    {
+      name: '$lib/audio/audio-manager',
+      message:
+        'Presentation components must not import audioManager directly. ' +
+        'Use callback props from the adapter/wiring layer instead. ' +
+        'See ADR 2026-04-12.',
+    },
+  ],
+};
+
+/**
+ * Skins lockdown (MOR-2039 — tightens skins to the panels-tier lockdown
+ * above). Extends the presentation-components ban (transport, audioManager)
+ * with the same `$lib/stores/*` ban FORBIDDEN_PANEL_IMPORTS applies to
+ * panels: skins are the outermost composition layer and, like panels, must
+ * route state through `lib/runtime/adapters/*` instead of reading stores
+ * directly.
+ */
+const FORBIDDEN_SKINS_IMPORTS = {
+  paths: FORBIDDEN_RUNTIME_IMPORTS.paths,
+  patterns: [
+    {
+      group: ['$lib/stores/*', '$lib/stores', '**/lib/stores/*', '**/lib/stores'],
+      message:
+        'Skins must not import from $lib/stores/* — route via lib/runtime/adapters/* instead. ' +
+        'See docs/plans/2026-04-29-panel-adapter-migration.md and ADR 2026-04-12.',
+    },
+    ...FORBIDDEN_RUNTIME_IMPORTS.patterns,
+  ],
+};
+
+/** Shared: no direct command-module calls — consume bound adapter callbacks instead. */
+const FORBIDDEN_COMMANDS_PATTERN = {
+  group: ['$lib/runtime/commands/*', '**/lib/runtime/commands/*', '**/wiring/command-bus'],
+  message:
+    'Must not call command modules directly — consume bound callbacks from ' +
+    'adapters/view models instead. See v3 ADR.',
+};
+
+/**
+ * Wiring-slicer purity (MOR-1248). dual-receiver-strips.ts is a pure view-model
+ * filter: its only legal import is the semantic contract, type-only.
+ */
+const SLICER_PURITY_MSG =
+  'dual-receiver-strips.ts is a pure view-model filter — no runtime, transport, ' +
+  'audio, stores, commands, or value imports from semantic/. Only `import type` ' +
+  'from semantic/radio-view-model. See MOR-1248.';
+
+/**
+ * Presentation lockdown — layouts and design languages (MOR-1061). No
+ * transport, stores (incl. raw capabilities), audioManager, runtime
+ * internals (F1/C1-A/C1-B), or direct command calls — consume bound
+ * callbacks from adapters/view models instead. See "Target ownership" in
+ * the v3 ADR for what lives under presentation/ (layouts, design
+ * languages, themes, workspace).
+ */
+const FORBIDDEN_PRESENTATION_IMPORTS = {
+  paths: [...FORBIDDEN_PANEL_IMPORTS.paths, ...FORBIDDEN_RUNTIME_BARREL.paths],
+  patterns: [
+    ...FORBIDDEN_PANEL_IMPORTS.patterns,
+    ...FORBIDDEN_RUNTIME_BARREL.patterns,
+    FORBIDDEN_COMMANDS_PATTERN,
+  ],
+};
+
+/**
+ * Primitives lockdown (MOR-1061 review cycle 1 F3; cycle 2 minor 1 adds the
+ * commands/semantic/components-v2 bans to match the row this zone cites).
+ * April ADR: primitives are shared visual atoms and may import only
+ * "Themes, Svelte, types" — forbidden from runtime, adapters, transport,
+ * audio, stores. Also forbidden from commands (same reasoning as
+ * presentation) and from semantic/components-v2, which depend on
+ * primitives, never the reverse.
+ *
+ * MOR-1238: the theme path really lives at components-v2/theme/
+ * (tokens.css, themes/*, fonts*, theme-switcher.ts), so the ban covers
+ * every components-v2 path EXCEPT the theme/ subtree — a single `regex`
+ * with a theme negative-lookahead, so unlisted and future sibling subtrees
+ * fail too (a finite `group` list leaves every omitted name legal). Both
+ * alias and relative spellings match; bare `components-v2` itself is
+ * banned, bare `components-v2/theme` stays allowed.
+ */
+const FORBIDDEN_PRIMITIVES_IMPORTS = {
+  paths: [...FORBIDDEN_PANEL_IMPORTS.paths, ...FORBIDDEN_RUNTIME_BARREL.paths],
+  patterns: [
+    ...FORBIDDEN_PANEL_IMPORTS.patterns,
+    ...FORBIDDEN_RUNTIME_BARREL.patterns,
+    FORBIDDEN_COMMANDS_PATTERN,
+    {
+      group: ['$lib/runtime/adapters/*', '**/lib/runtime/adapters/**'],
+      message:
+        'Primitives are shared visual atoms — no adapters, runtime, transport, audio, or ' +
+        'stores. Only themes, Svelte, and types. See ADR 2026-04-12 ("Primitives" row).',
+    },
+    {
+      group: ['**/semantic/**'],
+      message:
+        'Primitives must not import semantic/ — semantic depends on ' +
+        'primitives, never the reverse. See ADR 2026-04-12 ("Primitives" row).',
+    },
+    {
+      // MOR-1238: allow ONLY components-v2/theme/* (the ADR "Themes" row).
+      // A regex with a theme negative-lookahead, because a finite `group`
+      // list leaves every OMITTED sibling subtree legal — the masking Q2
+      // caught: `stray-module` passed while only `panels` was asserted.
+      // NOTE: a bare `group` `**/components-v2` entry is NOT listed — the
+      // same directory-prefix C1-A trap: it would also match theme/
+      // children. The regex covers the bare segment explicitly instead.
+      regex: '(^|/)components-v2(?!/theme(/|$))',
+      message:
+        'Primitives must not import components-v2/ outside theme/ — components ' +
+        'depend on primitives, never the reverse. Only components-v2/theme/* ' +
+        'is allowed. See ADR 2026-04-12 ("Primitives" row, MOR-1238).',
+    },
+  ],
+};
+
+/**
+ * Workspace lockdown (MOR-1061). Workspace preferences "reference stable
+ * IDs, never component module paths" (v3 ADR invariant 6) — ID-to-component
+ * resolution belongs to the layout/skin registry, not persisted workspace
+ * data. Inherits the full presentation ban since workspace lives under
+ * presentation/.
+ */
+const FORBIDDEN_WORKSPACE_IMPORTS = {
+  paths: FORBIDDEN_PRESENTATION_IMPORTS.paths,
+  patterns: [
+    ...FORBIDDEN_PRESENTATION_IMPORTS.patterns,
+    {
+      group: ['**/skins/**', '**/semantic/**', '**/primitives/**', '**/components-v2/**'],
+      message:
+        'Workspace must reference stable layout/design-language IDs, never component ' +
+        'module paths. See v3 ADR.',
+    },
+  ],
+};
+
+export default [
+  // ── Global ignores ──
+  {
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      '.svelte-kit/**',
+      '**/*.config.js',
+      '**/*.config.ts',
+    ],
+  },
+
+  // ── TypeScript files ──
+  {
+    files: ['src/**/*.ts'],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tsPlugin,
+    },
+    linterOptions: {
+      reportUnusedDisableDirectives: 'off',
+    },
+    rules: {},
+  },
+
+  // ── Svelte files ──
+  {
+    files: ['src/**/*.svelte'],
+    languageOptions: {
+      parser: svelteParser,
+      parserOptions: {
+        parser: tsParser,
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+      },
+    },
+    plugins: {
+      svelte: sveltePlugin,
+    },
+    linterOptions: {
+      reportUnusedDisableDirectives: 'off',
+    },
+    rules: {},
+  },
+
+  // ── Radio authority capability/sink boundary (MOR-1406) ──
+  // Finite structural ownership plus authority-sensitive sinks. This does
+  // not attempt whole-program provenance through arbitrary JavaScript.
+  {
+    files: ['src/**/*.ts', 'src/**/*.svelte', 'src/**/*.svelte.ts'],
+    plugins: {
+      'radio-authority': radioAuthorityPlugin,
+    },
+    rules: {
+      'radio-authority/structural-boundary': 'error',
+      'radio-authority/authority-sink': 'error',
+      'radio-authority/scope-metadata': 'error',
+      'radio-authority/recurring-control': 'error',
+    },
+  },
+
+  // ── Import boundary: presentation components ──
+  // Panels, layouts, LCD, skins, and app entry — must NOT import runtime/transport directly.
+  {
+    files: [
+      'src/App.svelte',
+      'src/components-v2/panels/**/*.svelte',
+      'src/components-v2/panels/**/*.ts',
+      'src/components-v2/layout/**/*.svelte',
+      'src/components-v2/layout/**/*.ts',
+      'src/components-v2/display/**/*.svelte',
+      'src/components-v2/display/**/*.ts',
+      'src/components-v2/meters/**/*.svelte',
+      'src/components-v2/meters/**/*.ts',
+      'src/components-v2/vfo/**/*.svelte',
+      'src/components-v2/vfo/**/*.ts',
+      'src/components-v2/controls/**/*.svelte',
+      'src/components-v2/controls/**/*.ts',
+      // semantic and primitives get their own stricter blocks below (MOR-1061):
+      'src/skins/**/*.svelte',
+    ],
+    rules: {
+      'no-restricted-imports': ['error', FORBIDDEN_RUNTIME_IMPORTS],
+    },
+  },
+
+  // ── Import boundary: semantic (MOR-1061; F1 adds the runtime-barrel ban) ──
+  // No skins/manufacturer modules (skins depend on semantic, never reverse).
+  {
+    files: ['src/semantic/**/*.svelte', 'src/semantic/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', FORBIDDEN_SEMANTIC_IMPORTS],
+    },
+  },
+
+  // ── Import boundary: primitives (MOR-1061 review cycle 1, F3) ──
+  // Shared visual atoms — themes/Svelte/types only. See ADR 2026-04-12.
+  {
+    files: ['src/primitives/**/*.svelte', 'src/primitives/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', FORBIDDEN_PRIMITIVES_IMPORTS],
+    },
+  },
+
+  // ── Normalized ownership boundary: pure control-feedback consumers (MOR-1712) ──
+  {
+    files: [
+      'src/primitives/control-feedback/**/*.ts', 'src/primitives/control-feedback/**/*.svelte',
+      'src/semantic/controls/**/*.ts', 'src/semantic/controls/**/*.svelte',
+    ],
+    plugins: { 'control-feedback-ownership': controlFeedbackOwnershipPlugin },
+    rules: { 'control-feedback-ownership/normalized-import-boundary': 'error' },
+  },
+
+  // ── Import boundary: presentation — layouts, design languages (MOR-1061) ──
+  // No transport, stores/capabilities, audioManager, runtime barrel/
+  // frontend-runtime (F1), or direct command calls.
+  {
+    files: ['src/presentation/**/*.svelte', 'src/presentation/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', FORBIDDEN_PRESENTATION_IMPORTS],
+    },
+  },
+
+  // ── Import boundary: workspace (MOR-1061; cycle 2 minor 2 adds .svelte
+  // and the plural workspaces/ variant — cycle-0 finding F5) ──
+  // Adds a module-path ban on top of the presentation ban above. Ordered
+  // after the presentation block so this fully-merged rule wins for the
+  // overlapping file set (flat config replaces, not merges, per rule key).
+  {
+    files: [
+      'src/presentation/workspace/**/*.ts',
+      'src/presentation/workspace/**/*.svelte',
+      'src/presentation/workspaces/**/*.ts',
+      'src/presentation/workspaces/**/*.svelte',
+    ],
+    rules: {
+      'no-restricted-imports': ['error', FORBIDDEN_WORKSPACE_IMPORTS],
+    },
+  },
+
+  // ── Import boundary: panels (Tier 2 lockdown — issue #1241) ──
+  // Adds `$lib/stores/*` to the panel-specific ban list. All 18 panels were migrated
+  // to adapters across batches 1-5 (#1244, #1245, #1246, #1247, #1248); this block
+  // freezes the boundary so it cannot regress. Other presentation layers retain the
+  // looser FORBIDDEN_RUNTIME_IMPORTS rule until their own tier migrates (#1063).
+  {
+    files: [
+      'src/components-v2/panels/**/*.svelte',
+      'src/components-v2/panels/**/*.ts',
+    ],
+    rules: {
+      'no-restricted-imports': ['error', FORBIDDEN_PANEL_IMPORTS],
+    },
+  },
+
+  // ── Import boundary: skins (MOR-2039 — matches the panels-tier lockdown) ──
+  // Adds `$lib/stores/*` to the skins ban and extends coverage to `.ts`
+  // files — the base "presentation components" block above only globs
+  // `src/skins/**/*.svelte`, so a `.ts` file under skins/ (e.g. registry.ts)
+  // matched no skins-specific rule at all before this. Ordered after that
+  // base block so this fully-merged rule wins for the overlapping `.svelte`
+  // file set (flat config replaces, not merges, per rule key — same idiom
+  // as the panels block above). The two direct store imports this ban
+  // exposed (registry.ts's `normalizeLayoutMode`, SdrVfoScreen.svelte's
+  // `getAgcLabels`/`getAttValues`) were migrated to `lib/runtime/adapters/`
+  // in the same change (`layout-mode-adapter.ts`, `capabilities-adapter.ts`).
+  {
+    files: [
+      'src/skins/**/*.svelte',
+      'src/skins/**/*.ts',
+    ],
+    rules: {
+      'no-restricted-imports': ['error', FORBIDDEN_SKINS_IMPORTS],
+    },
+  },
+
+  // ── Import boundary: lib/runtime isolation ──
+  // lib/runtime must NOT import from components-v2 (circular deps, ADR
+  // 2026-04-12, issue #1005) or from presentation/semantic (v3 ADR
+  // invariant 1, MOR-1061 review cycle 1 F2).
+  {
+    files: [
+      'src/lib/runtime/**/*.ts',
+      'src/lib/runtime/**/*.svelte',
+      'src/lib/runtime/**/*.svelte.ts',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/components-v2/**', '**/components-v2'],
+              message:
+                'lib/runtime must not import from components-v2. ' +
+                'Use lib/runtime/props/ or lib/runtime/commands/ instead. ' +
+                'See ADR 2026-04-12.',
+            },
+            {
+              group: ['**/presentation/**', '**/presentation', '**/semantic/**', '**/semantic'],
+              message:
+                'lib/runtime must not import from presentation/ or semantic/. ' +
+                'See v3 ADR invariant 1 (MOR-1061 F2).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ── Narrow exception: adapters may reference the view-model CONTRACT ──
+  // MOR-1065 review ruling 2. The v3 ADR's dependency diagram is
+  // `runtime -> adapters/view models -> semantic radio UI`, i.e. the view
+  // model belongs to the ADAPTER side of the seam, but MOR-1062 physically
+  // placed `RadioViewModel` under `src/semantic/`. The base
+  // `no-restricted-imports` rule has no `allowTypeImports`, so the block
+  // above blocks type-only references too and an adapter cannot annotate the
+  // contract it produces. This zone swaps in the typescript-eslint variant so
+  // a TYPE-only import is permitted and a VALUE import stays an error — the
+  // producer-side compile-time link, without a runtime dependency on
+  // presentation. Pinned by `__tests__/architecture-boundaries.test.ts`.
+  //
+  // `ignores` is REQUIRED: without it this `files` glob also captures
+  // `adapters/**/__tests__/**`, and the "tests may import anything" block
+  // below only disables the BASE rule — the typescript-eslint rule would stay
+  // live and reject the adapter tests' legitimate value imports of
+  // `validateRadioViewModel` and the topology fixtures.
+  {
+    files: ['src/lib/runtime/adapters/**/*.ts'],
+    ignores: ['src/lib/runtime/adapters/**/__tests__/**'],
+    plugins: { '@typescript-eslint': tsPlugin },
+    rules: {
+      'no-restricted-imports': 'off',
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/components-v2/**', '**/components-v2'],
+              message:
+                'lib/runtime must not import from components-v2. ' +
+                'Use lib/runtime/props/ or lib/runtime/commands/ instead. ' +
+                'See ADR 2026-04-12.',
+            },
+            {
+              group: ['**/presentation/**', '**/presentation'],
+              message:
+                'lib/runtime must not import from presentation/. ' +
+                'See v3 ADR invariant 1 (MOR-1061 F2).',
+            },
+            {
+              group: ['**/semantic/**', '**/semantic'],
+              allowTypeImports: true,
+              message:
+                'Adapters may import the view-model CONTRACT type-only (v3 ADR: adapters ' +
+                'emit view models). No value imports from semantic/ — a runtime dependency ' +
+                'on presentation is still invariant-1 forbidden.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ── Import boundary: wiring slicer purity (MOR-1248) ──
+  // dual-receiver-strips.ts filters RadioViewModels only (import type from
+  // semantic/radio-view-model is its sole legal import). wiring/ is the seam
+  // that IS allowed to reach the runtime, so no zone covers it — this
+  // file-scoped rule is the sole purity guard for this file.
+  {
+    files: ['src/components-v2/wiring/dual-receiver-strips.ts'],
+    plugins: { '@typescript-eslint': tsPlugin },
+    rules: {
+      'no-restricted-imports': 'off',
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '$lib/transport/*',
+                '**/lib/transport/*',
+                '$lib/stores/*',
+                '**/lib/stores/*',
+                '$lib/runtime',
+                '$lib/runtime/*',
+                '**/lib/runtime',
+                '**/lib/runtime/*',
+                '$lib/audio/*',
+                '**/lib/audio/*',
+                '$lib/runtime/commands/*',
+                '**/lib/runtime/commands/*',
+              ],
+              message: SLICER_PURITY_MSG,
+            },
+            {
+              group: ['**/semantic/**', '**/semantic'],
+              allowTypeImports: true,
+              message: SLICER_PURITY_MSG,
+            },
+          ],
+        },
+      ],
+    },
+  },
+
+  // ── Tests may import anything (mocking is legitimate) ──
+  {
+    files: ['src/**/__tests__/**', 'src/**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': 'off',
+      'radio-authority/structural-boundary': 'off',
+      'radio-authority/authority-sink': 'off',
+      'radio-authority/scope-metadata': 'off',
+      'radio-authority/recurring-control': 'off',
+    },
+  },
+];

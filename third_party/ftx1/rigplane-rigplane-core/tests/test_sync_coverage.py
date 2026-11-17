@@ -1,0 +1,454 @@
+"""Additional coverage tests for rigplane.sync."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from rigplane.core.capabilities import CAP_POWER_CONTROL
+from rigplane.profiles import resolve_radio_profile
+from rigplane.sync import IcomRadio
+from rigplane_testkit.leaked_radio_guard import fake_connected
+
+
+def _radio() -> IcomRadio:
+    r = IcomRadio("127.0.0.1")
+    r._radio.connect = AsyncMock()
+    r._radio.disconnect = AsyncMock()
+    return r
+
+
+def test_connect_disconnect_and_context_manager() -> None:
+    r = _radio()
+    r.connect()
+    r.disconnect()
+    r._radio.connect.assert_awaited_once()
+    r._radio.disconnect.assert_awaited_once()
+    r._loop.close()
+
+    r2 = _radio()
+    with r2 as entered:
+        assert entered is r2
+    assert r2._loop.is_closed()
+    r2._radio.connect.assert_awaited_once()
+    r2._radio.disconnect.assert_awaited_once()
+
+
+def test_sync_wrappers_delegate_and_return_values() -> None:
+    r = _radio()
+    # Make radio appear connected so send_civ_raw / recovery paths do not raise
+    r._radio._ctrl_transport = MagicMock()
+    r._radio._ctrl_transport._udp_transport = MagicMock()
+    r._radio._civ_transport = MagicMock()
+    fake_connected(r._radio)
+    r._radio.get_freq = AsyncMock(return_value=7_100_000)
+    r._radio.get_mode = AsyncMock(return_value=("USB", 2))
+    r._radio.get_mode_info = AsyncMock(return_value=("USB", 2))
+    r._radio.get_filter = AsyncMock(return_value=2)
+    r._radio.get_data_mode = AsyncMock(return_value=True)
+    r._radio.get_rf_power = AsyncMock(return_value=200)
+    r._radio.get_s_meter = AsyncMock(return_value=99)
+    r._radio.get_swr = AsyncMock(return_value=10)
+    r._radio.get_attenuator_level = AsyncMock(return_value=18)
+    r._radio.get_attenuator = AsyncMock(return_value=True)
+    r._radio.get_preamp = AsyncMock(return_value=1)
+    r._radio.get_digisel = AsyncMock(return_value=False)
+    r._radio.get_data_off_mod_input = AsyncMock(return_value=3)
+    r._radio.get_data1_mod_input = AsyncMock(return_value=4)
+    r._radio.get_vox = AsyncMock(return_value=True)
+    r._radio.snapshot_state = AsyncMock(return_value={"freq": 7100000})
+
+    r._radio.set_freq = AsyncMock()
+    r._radio.set_filter = AsyncMock()
+    r._radio.set_mode = AsyncMock()
+    r._radio.set_data_mode = AsyncMock()
+    r._radio.set_rf_power = AsyncMock()
+    r._radio.set_ptt = AsyncMock()
+    r._radio.equalize_main_sub = AsyncMock()
+    r._radio.swap_main_sub = AsyncMock()
+    r._radio.set_split = AsyncMock()
+    r._radio.set_attenuator_level = AsyncMock()
+    r._radio.set_attenuator = AsyncMock()
+    r._radio.set_preamp = AsyncMock()
+    r._radio.set_digisel = AsyncMock()
+    r._radio.set_squelch = AsyncMock()
+    r._radio.set_data_off_mod_input = AsyncMock()
+    r._radio.set_data1_mod_input = AsyncMock()
+    r._radio.set_vox = AsyncMock()
+    r._radio.restore_state = AsyncMock()
+    r._radio.send_cw_text = AsyncMock()
+    r._radio.stop_cw_text = AsyncMock()
+    r._radio.set_powerstat = AsyncMock()
+    r._radio.enable_scope = AsyncMock()
+    r._radio.set_scope_mode = AsyncMock()
+    r._radio.set_scope_span = AsyncMock()
+
+    assert r.get_freq() == 7_100_000
+    assert r.get_mode() == ("USB", 2)
+    assert r.get_mode_info() == ("USB", 2)
+    assert r.get_filter() == 2
+    assert r.get_data_mode() is True
+    assert r.get_rf_power() == 200
+    assert r.get_s_meter() == 99
+    assert r.get_swr() == 10
+    assert r.get_attenuator_level() == 18
+    assert r.get_attenuator() is True
+    assert r.get_preamp() == 1
+    assert r.get_digisel() is False
+    assert r.get_data_off_mod_input() == 3
+    assert r.get_data1_mod_input() == 4
+    assert r.get_vox() is True
+    assert r.snapshot_state() == {"freq": 7100000}
+
+    r.set_freq(7100000)
+    r.set_filter(2)
+    r.set_mode("LSB", 1)
+    r.set_data_mode(True)
+    r.set_rf_power(150)
+    r.set_ptt(True)
+    r.vfo_equalize()
+    r.vfo_exchange()
+    r.set_split(True)
+    r.set_attenuator_level(18)
+    r.set_attenuator(True)
+    r.set_preamp(2)
+    r.set_digisel(True)
+    r.set_squelch(100, receiver=1)
+    r.set_data_off_mod_input(2)
+    r.set_data1_mod_input(1)
+    r.set_vox(True)
+    r.restore_state({"freq": 7000000})
+    r.send_cw_text("TEST")
+    r.stop_cw_text()
+    r.power_control(False)
+    r.enable_scope(output=False, policy="fast", timeout=1.5)
+    r.set_scope_mode(3)
+    r.set_scope_span(6)
+
+    r._radio.set_freq.assert_awaited_once_with(7100000)
+    r._radio.set_filter.assert_awaited_once_with(2)
+    r._radio.set_mode.assert_awaited_once_with("LSB", 1)
+    r._radio.set_data_mode.assert_awaited_once_with(True, receiver=0)
+    r._radio.set_rf_power.assert_awaited_once_with(150)
+    r._radio.set_ptt.assert_awaited_once_with(True)
+    # IC-7610 (default profile, receiver_count=2) → canonical dual-RX methods
+    r._radio.equalize_main_sub.assert_awaited_once()
+    r._radio.swap_main_sub.assert_awaited_once()
+    r._radio.set_split.assert_awaited_once_with(True)
+    r._radio.set_attenuator_level.assert_awaited_once_with(18, receiver=0)
+    r._radio.set_attenuator.assert_awaited_once_with(True)
+    r._radio.set_preamp.assert_awaited_once_with(2, receiver=0)
+    r._radio.set_digisel.assert_awaited_once_with(True)
+    r._radio.set_squelch.assert_awaited_once_with(100, receiver=1)
+    r._radio.set_data_off_mod_input.assert_awaited_once_with(2)
+    r._radio.set_data1_mod_input.assert_awaited_once_with(1)
+    r._radio.set_vox.assert_awaited_once_with(True)
+    r._radio.restore_state.assert_awaited_once_with({"freq": 7000000})
+    r._radio.send_cw_text.assert_awaited_once_with("TEST")
+    r._radio.stop_cw_text.assert_awaited_once()
+    r._radio.set_powerstat.assert_awaited_once_with(False)
+    r._radio.enable_scope.assert_awaited_once_with(
+        output=False, policy="fast", timeout=1.5
+    )
+    r._radio.set_scope_mode.assert_awaited_once_with(3)
+    r._radio.set_scope_span.assert_awaited_once_with(6)
+    events = r._command_service.lifecycle_events()  # noqa: SLF001
+    assert any(
+        event.source == "public_api"
+        and event.target is not None
+        and str(event.target) == "receiver.0.freq_mode.freq_hz"
+        for event in events
+    )
+    assert any(
+        event.source == "public_api"
+        and event.target is not None
+        and str(event.target) == "global.tx_state.ptt"
+        for event in events
+    )
+    assert any(
+        event.source == "public_api"
+        and event.target is not None
+        and str(event.target) == "global.tx_state.split"
+        for event in events
+    )
+    assert any(
+        event.source == "public_api"
+        and event.target is not None
+        and str(event.target) == "global.tx_state.power_on"
+        for event in events
+    )
+    assert any(
+        event.source == "public_api"
+        and event.target is not None
+        and str(event.target) == "receiver.0.operator_controls.att"
+        for event in events
+    )
+    assert any(
+        event.source == "public_api"
+        and event.target is not None
+        and str(event.target) == "receiver.0.operator_controls.preamp"
+        for event in events
+    )
+    assert any(
+        event.source == "public_api"
+        and event.target is not None
+        and str(event.target) == "receiver.1.operator_controls.squelch"
+        for event in events
+    )
+    assert (
+        r._state_store.snapshot().field("receiver.0.freq_mode.freq_hz").value  # noqa: SLF001
+        == 7100000
+    )
+    assert (
+        r._state_store.snapshot().field("global.tx_state.ptt").value  # noqa: SLF001
+        is True
+    )
+    assert (
+        r._state_store.snapshot().field("global.tx_state.split").value  # noqa: SLF001
+        is True
+    )
+    assert (
+        r._state_store.snapshot().field("global.tx_state.power_on").value  # noqa: SLF001
+        is False
+    )
+    assert (
+        r._state_store.snapshot().field("receiver.0.operator_controls.att").value  # noqa: SLF001
+        == 18
+    )
+    assert (
+        r._state_store.snapshot().field("receiver.0.operator_controls.preamp").value  # noqa: SLF001
+        == 2
+    )
+    assert (
+        r._state_store.snapshot().field("receiver.1.operator_controls.squelch").value  # noqa: SLF001
+        == 100 / 255
+    )
+    r._loop.close()
+
+
+def test_set_rf_power_expects_the_whole_watt_readback_on_a_quantized_radio() -> None:
+    """MOR-4352: the wrapper forwards the backend's native power unit.
+
+    A G7250-profiled raw_255 radio with the declared whole-watt quantum:
+    the public API's documented raw byte (13) goes out as written, and the
+    wrapper's expected readback is the radio's own answer for the stored
+    watt (floor(13 * 100 / 255) = 5 W -> raw 12 -> 12/255) — not the
+    watts-native 13/100 a resolver guess without the unit would record.
+    """
+    from rigplane.profiles import get_radio_profile
+
+    r = _radio()
+    r._radio._profile = get_radio_profile("G7250")  # noqa: SLF001
+    r._radio.set_rf_power = AsyncMock()
+
+    r.set_rf_power(13)
+
+    r._radio.set_rf_power.assert_awaited_once_with(13)
+    assert (
+        r._state_store.snapshot()
+        .field(  # noqa: SLF001
+            "global.operator_controls.power_level"
+        )
+        .value
+        == 12 / 255
+    )
+    r._loop.close()
+
+
+def _power_sync_radio(
+    *,
+    native_power_unit: str,
+    max_watts: int | None,
+) -> IcomRadio:
+    r = _radio()
+    profile = resolve_radio_profile(model="FTX-1")
+    r._radio._profile = replace(  # noqa: SLF001
+        profile,
+        max_watts=max_watts,
+        capabilities=frozenset({*profile.capabilities, CAP_POWER_CONTROL}),
+    )
+    r._radio.native_power_unit = native_power_unit
+    r._radio.set_rf_power = AsyncMock()
+    return r
+
+
+@pytest.mark.parametrize("method_name", ["set_rf_power", "set_power"])
+def test_sync_watts_power_expectation_uses_profile_max_watts(
+    method_name: str,
+) -> None:
+    """The sync power command actuates watts and publishes the same fraction."""
+    r = _power_sync_radio(native_power_unit="watts", max_watts=100)
+    try:
+        getattr(r, method_name)(50)
+
+        r._radio.set_rf_power.assert_awaited_once_with(50)
+        field = r._state_store.snapshot().field(  # noqa: SLF001
+            "global.operator_controls.power_level"
+        )
+        assert field.value == pytest.approx(0.5)
+    finally:
+        r._loop.close()
+
+
+@pytest.mark.parametrize(
+    ("native_power_unit", "max_watts", "expected"),
+    [
+        ("watts", 200, 0.25),
+        ("raw_255", 100, 50 / 255),
+        ("watts", None, 50 / 255),
+        ("watts", 0, 50 / 255),
+    ],
+)
+def test_sync_power_expectation_unit_gate_and_safe_fallback(
+    native_power_unit: str,
+    max_watts: int | None,
+    expected: float,
+) -> None:
+    """Only a positive watts-native profile changes the raw expectation scale."""
+    r = _power_sync_radio(
+        native_power_unit=native_power_unit,
+        max_watts=max_watts,
+    )
+    try:
+        r.set_rf_power(50)
+
+        r._radio.set_rf_power.assert_awaited_once_with(50)
+        field = r._state_store.snapshot().field(  # noqa: SLF001
+            "global.operator_controls.power_level"
+        )
+        assert field.value == pytest.approx(expected)
+    finally:
+        r._loop.close()
+
+
+def test_vfo_dispatch_single_rx_uses_ab_methods() -> None:
+    """On single-RX profiles (e.g. IC-7300, addr=0x94), ``vfo_equalize`` /
+    ``vfo_exchange`` route to ``equalize_vfo_ab(0)`` / ``swap_vfo_ab(0)``.
+    """
+    r = IcomRadio("127.0.0.1", radio_addr=0x94)  # IC-7300 → receiver_count=1
+    r._radio.connect = AsyncMock()
+    r._radio.disconnect = AsyncMock()
+    # Make radio appear connected so guards do not raise
+    r._radio._ctrl_transport = MagicMock()
+    r._radio._ctrl_transport._udp_transport = MagicMock()
+    r._radio._civ_transport = MagicMock()
+    fake_connected(r._radio)
+    r._radio.equalize_vfo_ab = AsyncMock()
+    r._radio.swap_vfo_ab = AsyncMock()
+    # Canonical dual-RX methods must NOT be touched on a single-RX rig
+    r._radio.equalize_main_sub = AsyncMock()
+    r._radio.swap_main_sub = AsyncMock()
+
+    assert r._radio.profile.receiver_count == 1
+    r.vfo_equalize()
+    r.vfo_exchange()
+
+    r._radio.equalize_vfo_ab.assert_awaited_once_with(0)
+    r._radio.swap_vfo_ab.assert_awaited_once_with(0)
+    r._radio.equalize_main_sub.assert_not_awaited()
+    r._radio.swap_main_sub.assert_not_awaited()
+    r._loop.close()
+
+
+def test_audio_wrappers_canonical_only() -> None:
+    r = _radio()
+
+    def cb(_pkt: object) -> None:
+        return None
+
+    r._radio.start_audio_rx_opus = AsyncMock()
+    r._radio.stop_audio_rx_opus = AsyncMock()
+    r._radio.start_audio_tx_opus = AsyncMock()
+    r._radio.push_audio_tx_opus = AsyncMock()
+    r._radio.stop_audio_tx_opus = AsyncMock()
+
+    r.start_audio_rx_opus(cb, jitter_depth=7)
+    r.stop_audio_rx_opus()
+    r.start_audio_tx_opus()
+    r.push_audio_tx_opus(b"\xaa\xbb")
+    r.stop_audio_tx_opus()
+
+    r._radio.start_audio_rx_opus.assert_awaited_once_with(cb, jitter_depth=7)
+    r._radio.stop_audio_rx_opus.assert_awaited_once()
+    r._radio.start_audio_tx_opus.assert_awaited_once()
+    r._radio.push_audio_tx_opus.assert_awaited_once_with(b"\xaa\xbb")
+    r._radio.stop_audio_tx_opus.assert_awaited_once()
+    r._loop.close()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "start_audio_rx",
+        "stop_audio_rx",
+        "start_audio_tx",
+        "push_audio_tx",
+        "stop_audio_tx",
+    ],
+)
+def test_removed_audio_aliases_raise_attribute_error(name: str) -> None:
+    """Sync aliases removed in #1111 must not exist on rigplane.sync.IcomRadio."""
+    r = _radio()
+    try:
+        assert not hasattr(r, name)
+    finally:
+        r._loop.close()
+
+
+def test_sync_get_alc_meter_returns_int() -> None:
+    """``sync.IcomRadio.get_alc_meter`` returns the raw 0-255 BCD value
+    from the async ``MetersCapable.get_alc_meter`` (refs #1226)."""
+    r = _radio()
+    r._radio._ctrl_transport = MagicMock()
+    r._radio._ctrl_transport._udp_transport = MagicMock()
+    r._radio._civ_transport = MagicMock()
+    fake_connected(r._radio)
+    r._radio.get_alc_meter = AsyncMock(return_value=128)
+
+    try:
+        result = r.get_alc_meter()
+        assert result == 128
+        assert isinstance(result, int)
+        r._radio.get_alc_meter.assert_awaited_once()
+    finally:
+        r._loop.close()
+
+
+def test_sync_get_swr_meter_returns_int() -> None:
+    """``sync.IcomRadio.get_swr_meter`` returns the raw 0-255 BCD value
+    from the async ``MetersCapable.get_swr_meter`` (refs #1183)."""
+    r = _radio()
+    r._radio._ctrl_transport = MagicMock()
+    r._radio._ctrl_transport._udp_transport = MagicMock()
+    r._radio._civ_transport = MagicMock()
+    fake_connected(r._radio)
+    r._radio.get_swr_meter = AsyncMock(return_value=120)
+
+    try:
+        result = r.get_swr_meter()
+        assert result == 120
+        assert isinstance(result, int)
+        r._radio.get_swr_meter.assert_awaited_once()
+    finally:
+        r._loop.close()
+
+
+def test_sync_get_swr_returns_float() -> None:
+    """Regression guard for #1177: ``sync.IcomRadio.get_swr`` returns a
+    calibrated float (>= 1.0), not the raw 0-255 BCD reading."""
+    r = _radio()
+    r._radio._ctrl_transport = MagicMock()
+    r._radio._ctrl_transport._udp_transport = MagicMock()
+    r._radio._civ_transport = MagicMock()
+    fake_connected(r._radio)
+    r._radio.get_swr = AsyncMock(return_value=1.7)
+
+    try:
+        result = r.get_swr()
+        assert result == 1.7
+        assert isinstance(result, float)
+        r._radio.get_swr.assert_awaited_once()
+    finally:
+        r._loop.close()

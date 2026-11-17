@@ -1,0 +1,212 @@
+namespace FTX1RemoteWindows.Models;
+
+/// Subset of Sources/FTX1Core/RigState/RigState.swift's struct: core rig
+/// control (VFO A/B, mode, PTT, power, SWR, band) plus the MENU grid pages
+/// ported so far. Add fields here only as the corresponding feature
+/// actually gets built, per Apps/Windows/README.md's Mac parity plan.
+public sealed class RigState
+{
+    public long FrequencyHz { get; set; }
+    public RigMode? Mode { get; set; }
+    public string? Band { get; set; }
+    public double? PowerWatts { get; set; }
+    public double? Swr { get; set; }
+    public bool Ptt { get; set; }
+
+    /// Main's signal strength in dB relative to S9 (hamlib's STRENGTH).
+    /// Unlike the text fields, a failed read clears it, so the meter falls
+    /// to rest instead of freezing — same as the Mac.
+    public double? SmeterDb { get; set; }
+    /// Sub's, from raw "RM2" via SMeterScale.StrengthDb — hamlib's STRENGTH
+    /// only reads the active side.
+    public double? SubSmeterDb { get; set; }
+    /// COMP/ALC/ID/VDD, read only while transmitting.
+    public TxMeterReadings? TxMeters { get; set; }
+    public DateTimeOffset LastUpdated { get; set; } = DateTimeOffset.Now;
+
+    /// The other VFO's frequency — see RigctldClient.GetSecondaryFrequencyAsync().
+    public long? SecondaryFrequencyHz { get; set; }
+
+    /// The RFPOWER *setting* (0.0-1.0, relative), not the metered output —
+    /// that's PowerWatts. Same distinction as RigState.swift's powerLevel.
+    public double? PowerLevel { get; set; }
+
+    /// The lowest RFPOWER the FTX-1 accepts: 5 W (0.05 of its 100 W scale).
+    /// Below that it just stays at 5 W, so no control offers less and
+    /// RigctldClient.SetPowerLevelAsync clamps anything lower — same as
+    /// RigState.swift's minimumPowerLevel.
+    public const double MinimumPowerLevel = 0.05;
+
+    // V/M memory mode (RigState.swift's vfoMemoryMode/memoryChannel/
+    // memoryChannelTag and their sub* counterparts).
+
+    /// Main's raw "VM0" P2: 0 VFO, 11 Memory, anything else one of the rig's
+    /// other sub-modes (PMS, 5 MHz band, EMG...). Null until read.
+    public int? VfoMemoryRaw { get; set; }
+    /// "MC0", only while Main is in plain Memory mode; null otherwise
+    /// rather than a stale number from the last time it was.
+    public int? MemoryChannel { get; set; }
+    /// "MT" for MemoryChannel; null when untagged or not in Memory mode.
+    public string? MemoryChannelTag { get; set; }
+    /// Sub's "VM1"/"MC1"/"MT", display-only like the Mac.
+    public int? SubVfoMemoryRaw { get; set; }
+    public int? SubMemoryChannel { get; set; }
+    public string? SubMemoryChannelTag { get; set; }
+
+    /// The rig's own memory scan (raw "SC", state from "RI0" P7 — one state
+    /// for the whole radio), RigState.swift's memoryScan: read only while
+    /// either side is in Memory mode or a scan was last seen running, null
+    /// otherwise. While Scanning the rig steps ~10 channels a second,
+    /// faster than any poll, so the scanning side's frequency/channel/mode
+    /// keep their last values and the box hides them; they're read again
+    /// the moment the scan pauses or stops.
+    public MemoryScanState? MemoryScan { get; set; }
+    /// Which side MemoryScan is about (the app runs one side's scan at a
+    /// time): true SUB, false MAIN.
+    public bool MemoryScanSub { get; set; }
+    public bool MemoryScanActive => MemoryScan is MemoryScanState.Scanning or MemoryScanState.Paused;
+    /// MemoryScan if it's about that side, null otherwise.
+    public MemoryScanState? MemoryScanOn(bool sub) => MemoryScanSub == sub ? MemoryScan : null;
+
+    /// Plain VFO mode. The V/M toggle compares against this, not "is
+    /// Memory": in the rig's other sub-modes a "not Memory" test would
+    /// keep re-entering Memory instead of ever leaving (the Mac's
+    /// 2026-09-17 5 MHz band-memory bug).
+    public bool InVfoMode => VfoMemoryRaw == 0;
+    public bool InMemoryMode => VfoMemoryRaw == 11;
+
+    // C4FM, from raw "MD0"/"MD1" (RigctldClient.IsC4fmAsync), and what the
+    // WPSD hotspot says about it (Services/WpsdCallsignMonitor.cs) —
+    // RigState.swift's c4fmCallsign/c4fmReflector. Null until read.
+
+    public bool? MainIsC4fm { get; set; }
+    public bool? SubIsC4fm { get; set; }
+    /// The station transmitting through the hotspot right now; null when
+    /// nobody is, or the lookup is off.
+    public string? C4fmCallsign { get; set; }
+    /// The YSF reflector the hotspot is linked to.
+    public string? C4fmReflector { get; set; }
+
+    // MENU grid, SSB page (Controls/MenuGrid.cs). Raw CAT settings, null
+    // until first read; same names and encodings as RigState.swift.
+
+    /// "SS04" spectrum scope level, -30.0 to +30.0 dB.
+    public double? DisplayLevel { get; set; }
+    /// "SS01" peak hold, 0-4 (shown LV1-LV5).
+    public int? DisplayPeak { get; set; }
+    /// "SS02" marker.
+    public bool? DisplayMarker { get; set; }
+    /// "DA" P2, 0-20.
+    public int? DisplayContrast { get; set; }
+    /// "DA" P3 (TFT brightness), 0-20.
+    public int? DisplayDimmer { get; set; }
+    /// "MX".
+    public bool? MoxEnabled { get; set; }
+    /// "RA0".
+    public bool? AttEnabled { get; set; }
+    /// "PA0": 0 IPO, 1 AMP1, 2 AMP2.
+    public int? PreampMode { get; set; }
+    /// "BC0" auto notch.
+    public bool? DnfEnabled { get; set; }
+    /// "GT0" as read: 0 OFF, 1 FAST, 2 MID, 3 SLOW, 4-6 AUTO (the read side
+    /// reports AUTO's sub-states; the set side takes 0-4 only).
+    public int? AgcMode { get; set; }
+    /// "PR1" parametric mic EQ (plain 0/1, not the manual's 1/2).
+    public bool? MicEqEnabled { get; set; }
+    /// "PL", 0-100, 0 = OFF.
+    public int? ProcLevel { get; set; }
+    /// "AC" P3.
+    public bool? TunerEnabled { get; set; }
+    /// "NL0", 0-10, 0 = OFF.
+    public int? NbLevel { get; set; }
+    /// "RL0", 0-10, 0 = OFF.
+    public int? DnrLevel { get; set; }
+    /// "EX030704" HF ANT SELECT: 0 ANT1, 1 ANT2.
+    public int? AntSelect { get; set; }
+    /// "MG", 0-100.
+    public int? MicGain { get; set; }
+    /// "AO", 1-100.
+    public int? AmcLevel { get; set; }
+    /// "VX".
+    public bool? VoxEnabled { get; set; }
+    /// "VG", 0-100.
+    public int? VoxGain { get; set; }
+    /// "VD" in milliseconds (decoded from its 00-33 code, see RigDelayCode).
+    public int? VoxDelayMs { get; set; }
+
+    // MENU grid, CW page.
+
+    /// "ML1" MONI level, 0-100, 0 = OFF.
+    public int? MoniLevel { get; set; }
+    /// "KR" electronic keyer.
+    public bool? KeyerEnabled { get; set; }
+    /// "BI" break-in.
+    public bool? BreakIn { get; set; }
+    /// "KS", 4-60 WPM.
+    public int? CwSpeedWpm { get; set; }
+    /// "KP" in Hz, 300-1050 (decoded from its 00-75 code: 300 + 10 × code).
+    public int? CwPitchHz { get; set; }
+    /// "SD" in milliseconds (same 00-33 code as "VD", see RigDelayCode).
+    public int? BkDelayMs { get; set; }
+    /// "CS" CW spot tone.
+    public bool? CwSpot { get; set; }
+
+    // MENU grid, FM/C4FM page.
+
+    /// "OS0": 0 SIMPLEX, 1 +, 2 -, 3 ARS.
+    public int? RepeaterShiftMode { get; set; }
+    /// "EX070101" APRS BEACON TYPE: 0 OFF, 1 AUTO, 2 SMART.
+    public int? AprsBeaconType { get; set; }
+    /// "EX030606" FM CH STEP: 0-5 = 5, 6.25, 10, 12.5, 20, 25 kHz.
+    public int? FmChannelStep { get; set; }
+    /// "CT0": 0 OFF, 1 ENC, 2 TSQ, 3 DCS, 4 PR FREQ, 5 REV TONE.
+    public int? SquelchType { get; set; }
+    /// "CN00" index into RigCtcssTone.AllValuesHz (0-49).
+    public int? CtcssToneIndex { get; set; }
+    /// "CN01" index into RigDcsCode.AllValues (0-103).
+    public int? DcsCodeIndex { get; set; }
+
+    // Filter row (Controls/FilterPanel.cs), RigState.swift's filter fields.
+
+    /// Sub's mode from raw "MD1" (hamlib's "m" only reads the active side);
+    /// null until read or for a code this RigMode has no case for.
+    public RigMode? SubMode { get; set; }
+
+    /// The receiver the ten filter fields below hold values for and the
+    /// filter controls address. A switch clears them until the new side's
+    /// values are read.
+    public FilterSide FilterSide { get; set; } = FilterSide.Main;
+    /// "SH<side>" raw WIDTH index, 0-23 — the Hz depends on the mode, see
+    /// FilterWidthTable.
+    public int? FilterWidthIndex { get; set; }
+    /// "IS<side>0", -1200..1200 Hz.
+    public int? IfShiftHz { get; set; }
+    /// "BP<side>0" manual notch (a 3-digit on/off field).
+    public bool? NotchEnabled { get; set; }
+    /// "BP<side>1", 10-3200 Hz.
+    public int? NotchHz { get; set; }
+    /// "CO<side>0".
+    public bool? ContourEnabled { get; set; }
+    /// "CO<side>1", 10-3200 Hz.
+    public int? ContourHz { get; set; }
+    /// "CO<side>2", CW only.
+    public bool? ApfEnabled { get; set; }
+    /// "CO<side>3", offset from the CW pitch, -250..250 Hz.
+    public int? ApfHz { get; set; }
+    /// "NA<side>".
+    public bool? NarrowEnabled { get; set; }
+    /// The mode's NAR WIDTH preset in Hz (see NarrowWidthPreset); null in
+    /// modes without one.
+    public int? NarrowWidthHz { get; set; }
+
+    public FilterSide ActiveFilterSide => FilterSide;
+
+    /// The mode of the receiver the filter controls address; null in C4FM
+    /// or before it's known (no IF filter to show). Every filter control
+    /// gates on this, not Mode.
+    public RigMode? FilterMode => FilterModeFor(FilterSide);
+
+    public RigMode? FilterModeFor(FilterSide side) => side == FilterSide.Sub
+        ? (SubIsC4fm == true ? null : SubMode)
+        : (MainIsC4fm == true ? null : Mode);
+}

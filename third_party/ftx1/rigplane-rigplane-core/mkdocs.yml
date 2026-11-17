@@ -1,0 +1,167 @@
+site_name: RigPlane Docs
+site_description: RigPlane documentation — Python library and Web UI for controlling Icom, Yaesu, Xiegu and Lab599 ham transceivers over LAN or USB serial on macOS, Linux and Windows.
+site_url: https://rigplane.dev/
+repo_url: https://github.com/rigplane/rigplane-core
+repo_name: rigplane/rigplane-core
+
+# Exclude internal working docs from the published site and sitemap.
+# These pages exist in the repo for contributors but are not meant for
+# end users or search indexing.
+exclude_docs: |
+  EXTENDED_PROTOCOL_RESEARCH.md
+  architecture/
+  contracts/
+  operations/
+  parity/
+  plans/
+  internals/rfc-audio-v1-mini.md
+  overrides/
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+# MkDocs hooks. See hooks/ directory.
+hooks:
+  - hooks/sitemap_noindex.py
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_heading: true
+            heading_level: 3
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: guide/installation.md
+      - Migrating to 3.0: migrate.md
+      - What's New in 3.0: whats-new.md
+      - Quick Start: guide/quickstart.md
+      - CLI Reference: guide/cli.md
+      - Configuration: guide/configuration.md
+  - User Guide:
+      - Connection Lifecycle: guide/connection.md
+      - Supported Radios: guide/radios.md
+      - Hamlib / external rigctld provider: guide/hamlib-rigctld-provider.md
+      - Rig Profiles: guide/rig-profiles.md
+      - Radio Setup Guides:
+          - IC-7610 USB Serial: guide/ic7610-usb-setup.md
+          - IC-705 USB Serial: guide/ic705-usb-setup.md
+          - IC-7300 USB Serial: guide/ic7300-usb-setup.md
+          - IC-9700 USB & LAN: guide/ic9700-usb-setup.md
+          - FTX-1 USB Serial: guide/ftx1-usb-setup.md
+          - FT-991A USB Serial: guide/ft991a-usb-setup.md
+          - G7250 USB & Network: guide/g7250-setup.md
+          - opuslib macOS Fix: opuslib-macos-fix.md
+      - Radio Profiles: guide/profiles.md
+      - WSJT-X / Digital Modes: guide/wsjtx-setup.md
+      - TCI Setup (Control Phase): guide/tci-setup.md
+      - Audio Recipes: guide/audio-recipes.md
+      - Web UI: guide/web-ui.md
+      - Operating Away From Home: guide/remote-operation.md
+      - Diagnostic Reports: guide/diagnostic-reports.md
+      - Radio Probe: guide/radio-probe.md
+      - CI-V Commands: guide/commands.md
+      - Troubleshooting: guide/troubleshooting.md
+  - Localization:
+      - Translator guide: i18n/translating.md
+      - Core string inventory: i18n/core-string-inventory.md
+      - Locale preference contract: i18n/locale-contract.md
+      - Faceplate locale-invariance policy: i18n/faceplate-locale-invariance.md
+  - API Reference:
+      - Public API Surface: api/public-api-surface.md
+      - IcomRadio: api/radio.md
+      - Sync API: api/sync.md
+      - Audio: api/audio.md
+      - Radio Models: api/radios.md
+      - Transport: api/transport.md
+      - Commander: api/commander.md
+      - Commands: api/commands.md
+      - Types & Enums: api/types.md
+      - Authentication: api/auth.md
+      - Exceptions: api/exceptions.md
+      - Backends: api/backends.md
+      - Icom 7610 Backend: api/backends-icom7610.md
+      - Icom 7610 Drivers: api/backends-icom7610-drivers.md
+      - Rig Loader: api/rig-loader.md
+      - rigctld: api/rigctld.md
+      - TCI: api/tci.md
+      - Scope: api/scope.md
+      - Web: api/web.md
+      - Command Catalog: api/command-catalog.md
+  - Internals:
+      - Architecture: internals/architecture.md
+      - Hamlib provider rollout: internals/hamlib-provider-rollout.md
+      - Project Overview: PROJECT.md
+      - Protocol Deep Dive: internals/protocol.md
+      - Radio Protocol: radio-protocol.md
+      - Reliability semantics: internals/reliability-semantics.md
+      - Raw CI-V transactions: internals/raw-civ-transactions.md
+      - GitHub Project workflow: internals/github-project-workflow.md
+      - Capabilities Matrix: capabilities-matrix.md
+      - Running validation: validation/running-validation.md
+      - Universal validation matrix: validation/universal-matrix.md
+      - CLI design: internals/cli-design.md
+      - Performance: PERFORMANCE.md
+      - Audio Streaming Profile: AUDIO_STREAMING_PROFILE.md
+      - Contributing: internals/contributing.md
+      - Changelog: CHANGELOG.md
+      - Security: SECURITY.md
+
+extra:
+  social_image: https://rigplane.com/assets/og-image.png
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/rigplane/rigplane-core

@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# Wave 2 final grep gate: fail CI if any new icom-lan / icom_lan / IcomLanError
+# reference appears outside the allow-list of preserved-by-design files.
+#
+# Why this exists: the v2.0.0 rebrand from icom-lan -> rigplane (epic
+# docs/roadmap/2026-05-04-rigplane-rebrand-epic.md) intentionally PRESERVES a
+# small set of brand references — backwards-compat shims, wire contracts (v1
+# diagnostic-bundle, LAN discovery magic, local-extensions deprecation
+# alias), platformdirs / localStorage migration logic, and a vendor-protocol
+# diagram label parallel to IcomSerial / YaesuCAT. Everything else must be
+# rebranded. This gate codifies that distinction.
+#
+# To add a new exception: append the path to ALLOWLIST below with a comment
+# explaining WHY the reference is intentional. Anything NOT on the list that
+# matches the pattern fails CI.
+#
+# The same script also carries the MOR-3533 shipped-code guards below (single
+# definition of the report endpoint, no internal hosts).
+#
+# Usage: run from the repository root with no arguments.
+
+set -euo pipefail
+
+# MOR-3533 guards (shipped code only: src/ and frontend/src). The diagnostic
+# upload endpoint reached external users as a tailnet-only host because the
+# address was written out in two places. These two checks keep that class of
+# bug out: the endpoint lives in exactly one constant, and no internal domain
+# is named in shipped code. Arguments after the hint are the allowed paths;
+# the internal-host guard allows none.
+SHIPPED_CODE=(src frontend/src)
+
+check_shipped_code() {
+    local label="$1" pattern="$2" hint="$3"
+    shift 3
+    local found file allowed skip leaks=""
+    found=$(git grep -lEi "$pattern" -- "${SHIPPED_CODE[@]}" || true)
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        skip=false
+        for allowed in "$@"; do
+            if [ "$file" = "$allowed" ]; then
+                skip=true
+            fi
+        done
+        if [ "$skip" = false ]; then
+            leaks="${leaks}${file}"$'\n'
+        fi
+    done <<LISTEOF
+$found
+LISTEOF
+    if [ -n "$(printf '%s' "$leaks" | tr -d '[:space:]')" ]; then
+        {
+            echo "::error::${label} - found in shipped code:"
+            printf '%s' "$leaks"
+            echo "$hint"
+        } >&2
+        exit 1
+    fi
+}
+
+# Single definition: only DEFAULT_ENDPOINT may spell the report address.
+check_shipped_code "MOR-3533 single-definition guard: report endpoint written out" \
+    'reports\.(rigplane\.app|msmsoft\.net)|/v1/diagnostics/upload' \
+    "Import DEFAULT_ENDPOINT from rigplane.diagnostics.endpoint instead of repeating the address." \
+    src/rigplane/diagnostics/endpoint.py
+
+# Internal hosts are reachable only inside the maintainer's network.
+# Examples and comments use example.com / example.net.
+check_shipped_code "MOR-3533 internal-host guard: internal domain named" \
+    'msmsoft\.net|\.ts\.net' \
+    "Use an example.com / example.net name; internal hosts must not ship."
+
+ALLOWLIST=(
+    # Shim package (PR-2B) — re-exports rigplane with DeprecationWarning.
+    'src/icom_lan/'
+    # PR-2C: persistent-state migration logic.
+    'src/rigplane/_platformdirs_migration.py'
+    'frontend/src/lib/migrate-legacy-storage.ts'
+    'frontend/src/lib/__tests__/migrate-legacy-storage.test.ts'
+    # Wire contracts (handled per spec — schema v2 in PR-2G; LAN discovery
+    # magic stays for backwards-compat with v1 clients until Wave 4).
+    'src/rigplane/diagnostics/_manifest.py'
+    'src/rigplane/diagnostics/bundle.py'
+    'src/rigplane/web/discovery.py'
+    'docs/contracts/diagnostic-bundle-v1.md'
+    'docs/contracts/diagnostic-bundle-v2.md'
+    # Local-extensions deprecation alias (cross-repo Pro contract).
+    'frontend/src/lib/local-extensions/host-api.ts'
+    'frontend/src/lib/local-extensions/__tests__/host-api.isolated.test.ts'
+    'frontend/src/lib/api/diagnostics.ts'
+    'frontend/src/lib/api/__tests__/diagnostics.test.ts'
+    # Vendor-protocol diagram label (parallel to IcomSerial / YaesuCAT —
+    # NOT a product brand reference; describes the transport family).
+    'src/rigplane/core/radio_protocol.py'
+    'docs/radio-protocol.md'
+    # Intentional historical / migration references.
+    'README.md'
+    'docs/CHANGELOG.md'
+    # User-facing migration guide for v1.x icom-lan -> v2.x rigplane;
+    # the legacy names are the literal subject of the page.
+    'docs/migrate.md'
+    # mkdocs nav label for the migration guide reads
+    # "Migration from icom-lan" -- legacy name is intentional.
+    'mkdocs.yml'
+    'tests/golden/wsjtx_dual_rx_session.txt'
+    # pyproject.toml — preserved console-script alias `icom-lan` (line 43),
+    # hatch packages list keeping `src/icom_lan` shim, ruff per-file-ignores
+    # for the shim, and mypy override for the shim module.
+    'pyproject.toml'
+    # Pre-rebrand and historical plans.
+    'docs/plans/discovery-artifacts/'
+    'docs/plans/archive/'
+    'docs/plans/2026-03-'
+    'docs/plans/2026-04-'
+    'docs/plans/2026-05-01-'
+    'docs/plans/2026-05-02-'
+    'docs/plans/2026-05-03-'
+    # Consumer contract expectation for Pro discovery — the service enum
+    # includes "icom-lan" because the discovery responder still emits that
+    # value for legacy Icom LAN adapters (wire backwards-compat, Wave 4
+    # migration). Consumers must accept it; renaming the JSON field would
+    # break the contract itself.
+    'contracts/consumer-expectations/pro/discovery_datagram.json'
+    # Tests of preserved / migration code.
+    'tests/test_icom_lan_shim.py'
+    # generated list of existing test node ids (MOR-4075), names historical test paths
+    'tests/realtime_baseline.txt'
+    'tests/test_platformdirs_migration.py'
+    'tests/test_diagnostics_bundle.py'                # asserts SCHEMA_VERSION_V1 backwards-compat
+    'tests/test_diagnostics_contributors_batch1.py'   # asserts v1 system.json key absence
+    'tests/test_discovery_responder.py'               # tests wire magic
+    'tests/test_backend_factory.py'                   # cosmetic test fn name (PR-2A)
+    'tests/test_diagnostics_logging.py'               # cosmetic test fn name
+    'tests/test_compat_v211_witnesses.py'             # asserts the preserved icom-lan console-script alias (2.11 compat witness)
+    # Imports helpers from the existing test_icom_lan_identity_gate module;
+    # the import line is the only brand reference in the file.
+    'tests/test_owner_reconnect_audio_demand.py'
+    'tests/test_memory_identity_guard.py'  # same: imports from test_icom_lan_identity_gate
+    # This script itself: contains literal pattern in its grep regex and
+    # docstring.
+    '.github/scripts/check-rebrand-allowlist.sh'
+    # Workflow definition for the gate: references the pattern in its
+    # job description.
+    '.github/workflows/rebrand-gate.yml'
+    # Release skill documents src/icom_lan/__init__.py shim as DO-NOT-TOUCH
+    # (deprecation shim — must not be modified during version bumps).
+    '.claude/skills/release/SKILL.md'
+    # Doc-citation-gate baseline (MOR: doc-citation-gate) mechanically
+    # mirrors every code citation already present under docs/**, including
+    # citations inside docs/plans/2026-04-* (already allowlisted above,
+    # pre-rebrand). It introduces no new brand reference of its own — the
+    # prose still lives only in the already-permitted source documents — so
+    # exempting the derived index here, rather than the individually-allowed
+    # docs, is the correct fix.
+    '.github/scripts/doc-citation-baseline.txt'
+    # MOR-2065: the dangling-citation floor baseline is a strict subset of
+    # doc-citation-baseline.txt above, derived from the same docs/**
+    # citations; it introduces no new brand reference of its own.
+    '.github/scripts/doc-citation-dangling-baseline.txt'
+    # MOR-1078: legacy workspace migration layer must name historical
+    # localStorage keys verbatim (e.g. `rigplane:storage-migrated-from-icom-lan`)
+    # to classify and read them correctly. Read-only — the module never writes
+    # or renames these keys, it only routes them.
+    'frontend/src/presentation/workspace/legacy-readers.ts'
+    # MOR-1080/MOR-1081: workspace adoption tests assert the legacy-key
+    # routing behavior (reconciliation, retain-outside, sentinel names) and
+    # must therefore spell the historical key names verbatim. Test-only.
+    'frontend/src/presentation/workspace/__tests__/selection-adoption.test.ts'
+    # MOR-1083: the workspace verification gate seeds historical pre-v2
+    # localStorage snapshots (`icom-lan:*` keys) verbatim to prove the
+    # migration reads/retains them byte-for-byte. Test-only, read-only.
+    'frontend/src/presentation/workspace/__tests__/workspace-compatibility-verification.test.ts'
+)
+
+# Collect all files matching brand pattern.
+MATCHES=$(git grep -lEi 'icom[-_]?lan|IcomLanError' || true)
+
+LEAKS=""
+while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    SKIP=false
+    for allowed in "${ALLOWLIST[@]}"; do
+        case "$file" in
+            "$allowed"*)
+                SKIP=true
+                break
+                ;;
+        esac
+    done
+    if [ "$SKIP" = false ]; then
+        LEAKS="${LEAKS}${file}"$'\n'
+    fi
+done <<EOF
+$MATCHES
+EOF
+
+if [ -n "$(printf '%s' "$LEAKS" | tr -d '[:space:]')" ]; then
+    {
+        echo "::error::Wave 2 rebrand leak — files contain icom-lan / icom_lan / IcomLanError but are not in the allow-list:"
+        printf '%s' "$LEAKS"
+        echo ""
+        echo "Either:"
+        echo "  1. Rename the brand reference (preferred)."
+        echo "  2. If the reference is intentional (wire contract / migration / historical), add the"
+        echo "     path to the ALLOWLIST in .github/scripts/check-rebrand-allowlist.sh with a comment"
+        echo "     explaining why."
+    } >&2
+    exit 1
+fi
+
+echo "Wave 2 rebrand grep gate: clean."

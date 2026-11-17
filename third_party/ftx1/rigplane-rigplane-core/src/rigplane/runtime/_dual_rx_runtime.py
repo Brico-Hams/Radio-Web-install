@@ -1,0 +1,1143 @@
+"""DualRxRuntimeMixin — dual-receiver routing methods extracted from CoreRadio.
+
+Part of the radio.py decomposition (#505). All methods are accessed via
+``IcomRadio`` which inherits this mixin.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
+
+from rigplane.audio.route import profile_data_mode_count
+
+if TYPE_CHECKING:
+    from typing import Any, Callable, Iterator
+
+    from rigplane.commands.command_map import CommandMap
+    from rigplane.commands.commander import InterferenceScope
+
+    from .radio import CoreRadio as _MixinBase  # type: ignore[attr-defined]
+else:
+    _MixinBase = object
+
+from rigplane.commands import (
+    CONTROLLER_ADDR,
+    RECEIVER_MAIN,
+    build_civ_frame,
+    parse_frequency_response,
+    parse_ack_nak,
+    parse_mode_response,
+)
+from rigplane.commands._frame import decode_wire_tuple
+from rigplane.core.radio_protocol import RelativeVfoState
+from rigplane.commands import (
+    parse_selected_freq_response as _parse_selected_freq_response,
+)
+from rigplane.commands import (
+    parse_selected_mode_response as _parse_selected_mode_response,
+)
+from rigplane.core.exceptions import (
+    CommandError,
+    CommandRejectedError,
+    ConnectionError,
+    RadioNotReadyError,
+    ReceiverNotSelectedError,
+    StaleBeforeWireError,
+    TimeoutError,
+)
+from rigplane.core.types import Mode, bcd_encode
+from rigplane.profiles import RadioProfile
+from rigplane.runtime.callable_support import (
+    split_tx_routes_unselected_selector,
+    unselected_selector_is_sub,
+)
+
+# CI-V command byte for VFO select / equal / swap (0x07).
+_CMD_VFO = 0x07
+# Bound on the connect-time / on-demand 0x07 0xD2 selection read (MOR-3591).
+_SELECTION_READ_TIMEOUT_S = 1.0
+
+logger = logging.getLogger(__name__)
+
+
+def _relative_vfo_routing_available(
+    profile: RadioProfile, cmd_map: CommandMap | None, required: tuple[str, ...]
+) -> bool:
+    """Whether relative-role 0x25/0x26 I/O is routable for this profile.
+
+    Two profile-declared schemes route the selected/unselected
+    selector commands, and neither mutates the operator's RX
+    selection (MOR-3754):
+
+    * a single-RX ``ab`` profile with ``selected_unselected``
+      readback — selector 01 names the unselected A/B slot;
+    * a dual-RX profile with an explicit ``split_tx_target``
+      (``sub_receiver``: selector 01 is the SUB band;
+      ``main_unselected``: selector 01 is the unselected VFO inside
+      MAIN) — a fixed physical address for the split-TX role.
+
+    Anything else — including a dual-RX profile that declares no
+    ``split_tx_target`` — fails closed. Every name in ``required``
+    must be declared in the command map: a GET declaration never
+    licenses the matching SET.
+    """
+    if cmd_map is None or not all(cmd_map.has(key) for key in required):
+        return False
+    if split_tx_routes_unselected_selector(profile):
+        return True
+    return (
+        profile.receiver_count == 1
+        and profile.vfo_scheme == "ab"
+        and profile.vfo_readback == "selected_unselected"
+    )
+
+
+def _receiver_name(receiver: int) -> str:
+    return "MAIN" if receiver == RECEIVER_MAIN else "SUB"
+
+
+@dataclass(frozen=True, slots=True)
+class ReceiverAdmission:
+    """A plain receiver-scoped command admitted for the selected receiver.
+
+    ``_require_cmd29_route`` records it for the calling task; the next CI-V
+    send of the same command (``CoreRadio._send_civ_raw``) consumes it and
+    re-checks the selection at wire dispatch, inside the serialized send,
+    so a selection change between admission and the wire refuses the frame
+    instead of sending it to the other receiver (MOR-3591).
+    """
+
+    receiver: int
+    command: int
+    sub: int | None
+    operation: str
+
+    def matches(self, command: int, sub: int | None) -> bool:
+        return command == self.command and (self.sub is None or sub == self.sub)
+
+
+RECEIVER_ADMISSION: ContextVar[ReceiverAdmission | None] = ContextVar(
+    "rigplane_receiver_admission", default=None
+)
+
+
+def receiver_not_selected(
+    operation: str, receiver: int, model: str, detail: str
+) -> ReceiverNotSelectedError:
+    return ReceiverNotSelectedError(
+        f"{operation} receiver={receiver} refused for profile {model}: {detail}"
+        f"{_receiver_name(receiver)} is not the selected receiver; "
+        "select that receiver first"
+    )
+
+
+def radio_not_ready(operation: str, model: str) -> RadioNotReadyError:
+    """The retriable answer for a radio silent since the link came up."""
+    return RadioNotReadyError(
+        f"{operation}: radio {model} has not answered CI-V since the link "
+        "was established; it is not ready yet -- retry shortly"
+    )
+
+
+def require_receiver_for_profile(
+    profile: RadioProfile, receiver: int, *, operation: str
+) -> None:
+    """Refuse ``receiver`` when ``profile`` does not serve it (MOR-2484)."""
+    if profile.supports_receiver(receiver):
+        return
+    raise CommandError(
+        f"{operation} does not support receiver={receiver} for profile "
+        f"{profile.model} (receivers={profile.receiver_count})"
+    )
+
+
+class DualRxRuntimeMixin(_MixinBase):  # type: ignore[misc]
+    """Dual-receiver routing methods for CoreRadio (mixin)."""
+
+    # Selection bookkeeping, initialised by CoreRadio.__init__ (MOR-3591).
+    _last_vfo: str | None
+    _receiver_select_inflight: int
+    _selection_known_since: float | None
+    # CI-V liveness, owned by CoreRadio and declared by the Radio protocol:
+    # cleared on every generation advance, stamped on every valid
+    # radio-originated frame (see ``_never_answered_since_connect``).
+    last_valid_frame_monotonic: float | None
+
+    def _never_answered_since_connect(self) -> bool:
+        """Whether this CI-V generation has not heard the radio at all.
+
+        ``last_valid_frame_monotonic`` is cleared on every generation
+        advance (connect, reconnect, release) and stamped by the CI-V RX
+        path on every valid radio-originated frame, identity answers
+        included. ``None`` therefore means the link is up but the radio has
+        answered nothing since it was established: the post-connect tail is
+        still pending, ``radio_ready`` is False and the receiver selection
+        cannot be known. A receiver-scoped command in that window cannot be
+        answered and must say so instead of claiming a receiver is not
+        selected (MOR-4382 follow-up).
+        """
+        return self.last_valid_frame_monotonic is None
+
+    @contextmanager
+    def _vfo_selection_change(self) -> Iterator[None]:
+        # One integer encodes (2 * revision + 1) << in_flight. Odd means idle;
+        # every entry adds a factor of two, and every exit removes one while
+        # advancing the revision. Overlapping/nested changes stay even until
+        # ALL have exited, including on cancellation or an uncertain failure.
+        self._vfo_selection_epoch <<= 1
+        try:
+            yield
+        finally:
+            epoch = self._vfo_selection_epoch
+            self._vfo_selection_epoch = (epoch >> 1) + (epoch & -epoch)
+
+    def _vfo_selection_epoch_moved(self, selection_epoch: int | None) -> bool:
+        """True when the pinned selection epoch changed or a change is in flight.
+
+        Shared by the pre-attempt, pre-SET and post-readback checks of
+        ``write_relative_vfo_mode`` (MOR-3743): ``selection_epoch`` is
+        the topology pin captured before the first attempt; an even
+        epoch means a selection operation is still in flight.
+        """
+        return selection_epoch is not None and (
+            self._vfo_selection_epoch != selection_epoch
+            or self._vfo_selection_epoch % 2 == 0
+        )
+
+    def _require_receiver(self, receiver: int, *, operation: str) -> None:
+        """Validate receiver index against active profile."""
+        require_receiver_for_profile(self._profile, receiver, operation=operation)
+
+    def _require_capability(self, capability: str, *, operation: str) -> None:
+        """Ensure a profile capability exists before executing operation."""
+        if self._profile.supports_capability(capability):
+            return
+        raise CommandError(
+            f"{operation} is not supported by profile {self._profile.model} "
+            f"(missing capability: {capability})"
+        )
+
+    def _require_cmd29_route(
+        self,
+        command: int,
+        sub: int | None,
+        *,
+        receiver: int,
+        operation: str,
+    ) -> None:
+        """Admit a receiver-scoped command for ``receiver`` (MOR-3591).
+
+        The single receiver-addressing guard of the command layer, driven by
+        profile data: a declared cmd29 route addresses either receiver
+        explicitly; without one the plain command reaches only the receiver
+        the operator has selected, so it is admitted only for that receiver.
+        Core never switches the selection to reach the other one: a command
+        for a receiver that is not selected -- or for either receiver while
+        the selection is unknown -- raises :class:`ReceiverNotSelectedError`.
+        """
+        if self._profile.supports_cmd29(command, sub):
+            RECEIVER_ADMISSION.set(None)
+            return
+        if self._selected_receiver() == receiver:
+            if self._profile.receiver_count > 1:
+                RECEIVER_ADMISSION.set(
+                    ReceiverAdmission(receiver, command, sub, operation)
+                )
+            return
+        RECEIVER_ADMISSION.set(None)
+        if self._never_answered_since_connect():
+            # The selection is unknown only because the radio has not
+            # answered anything since the link came up: the command cannot
+            # be answered yet, which is a retriable not-ready outcome, not
+            # a receiver refusal (MOR-4382 follow-up).
+            raise radio_not_ready(operation, self._profile.model)
+        raise receiver_not_selected(
+            operation,
+            receiver,
+            self._profile.model,
+            f"command 0x{command:02X}"
+            + (f"/0x{sub:02X}" if sub is not None else "")
+            + " has no cmd29 route and ",
+        )
+
+    def _selected_receiver(self) -> int | None:
+        """Index of the receiver the radio has selected, or ``None`` if unknown.
+
+        A single-receiver profile always has receiver 0 selected. On a
+        dual-receiver profile the selection is known only from the radio's
+        own 0x07 0xD2 answer or from an acknowledged select this runtime
+        sent (both recorded in ``_last_vfo``); never from a defaulted cache.
+        It is unknown before either happens, after a new CI-V generation,
+        and while a receiver select is in flight or after one failed: fail
+        closed.
+        """
+        if self._profile.receiver_count <= 1:
+            return RECEIVER_MAIN
+        if self._receiver_select_inflight:
+            return None
+        if self._last_vfo == "MAIN":
+            return RECEIVER_MAIN
+        if self._last_vfo == "SUB":
+            return 1
+        return None
+
+    def _record_selection(self, name: str) -> None:
+        """Record a selection the radio reported or acknowledged (MOR-3591).
+
+        Ignored while a receiver select is in flight (an answer may predate
+        it). The first known selection of a CI-V generation starts the
+        window in which plain frequency/mode answers are owned by a known
+        receiver (see ``CoreRadio._observed_freq_mode``).
+        """
+        if self._receiver_select_inflight or name not in ("MAIN", "SUB"):
+            return
+        self._last_vfo = name
+        if self._selection_known_since is None:
+            self._selection_known_since = time.monotonic()
+
+    async def _establish_receiver_selection(self) -> int | None:
+        """Read the selected receiver (0x07 0xD2) when it is not known.
+
+        Bounded and non-fatal: a dual-receiver profile that declares the
+        read asks the radio once (at most ``_SELECTION_READ_TIMEOUT_S``) and
+        records the answer; on silence or any failure the selection stays
+        unknown and receiver-scoped plain commands keep failing closed
+        (MOR-3591). Never selects anything.
+        """
+        selected = self._selected_receiver()
+        cmd_map = self._profile.command_map
+        if (
+            selected is not None
+            or cmd_map is None
+            or not cmd_map.has("get_main_sub_band")
+        ):
+            return selected
+        civ = self._commands.get_main_sub_band(to_addr=self._radio_addr)
+        try:
+            resp = await self._send_civ_expect(
+                civ,
+                label="get_main_sub_band",
+                timeout=_SELECTION_READ_TIMEOUT_S,
+            )
+        except Exception:
+            logger.debug("receiver selection read failed", exc_info=True)
+            return self._selected_receiver()
+        data = resp.data if resp.sub is None else bytes([resp.sub]) + resp.data
+        if resp.command == _CMD_VFO and len(data) >= 2 and data[0] == 0xD2:
+            if data[1] in (0, 1):
+                self._record_selection("SUB" if data[1] else "MAIN")
+        return self._selected_receiver()
+
+    def _forget_selection(self) -> None:
+        """A new CI-V generation: selection and its ownership window reset."""
+        self._last_vfo = None
+        self._selection_known_since = None
+
+    def _sub_direct_route(self, receiver: int, *command_names: str) -> bool:
+        """Whether profile data address SUB directly via the 0x25/0x26 selector.
+
+        True only for ``receiver`` 1 on a profile whose selector 01 is the
+        physical SUB receiver (:func:`unselected_selector_is_sub`) and that
+        declares every named command.
+        """
+        cmd_map = self._profile.command_map
+        return (
+            receiver != RECEIVER_MAIN
+            and unselected_selector_is_sub(self._profile)
+            and cmd_map is not None
+            and all(cmd_map.has(name) for name in command_names)
+        )
+
+    async def _get_frequency_main(
+        self, *, bypass_cache: bool = False, update_cache: bool = True
+    ) -> int:
+        """Read MAIN receiver frequency with optional cache updates."""
+        civ = self._commands.get_freq(to_addr=self._radio_addr)
+        try:
+            resp = await self._send_civ_expect(
+                civ,
+                key="get_frequency",
+                dedupe=not bypass_cache,
+                label="get_frequency",
+            )
+            freq = parse_frequency_response(resp)
+            if (
+                update_cache
+                and self._civ_runtime._operating_frequency_path(resp) is not None
+            ):
+                self._state_cache.update_freq(freq)
+            return freq
+        except TimeoutError:
+            if update_cache and self._state_cache.is_fresh(
+                "freq", self._cache_ttl_freq
+            ):
+                logger.debug(
+                    "get_frequency: timeout, returning cached %d Hz",
+                    self._state_cache.freq,
+                )
+                return self._state_cache.freq  # type: ignore[no-any-return]
+            raise
+
+    async def _set_frequency_main(
+        self, freq_hz: int, *, update_cache: bool = True
+    ) -> None:
+        """Set MAIN receiver frequency with optional cache updates."""
+        civ = self._commands.set_freq(
+            freq_hz, to_addr=self._radio_addr, receiver=RECEIVER_MAIN
+        )
+        resp = await self._send_civ_expect(civ, label="set_frequency_main")
+        if parse_ack_nak(resp) is False:
+            raise CommandRejectedError(f"Radio rejected MAIN set_frequency({freq_hz})")
+
+    async def _get_mode_info_main(
+        self, *, update_cache: bool = True
+    ) -> tuple[Mode, int | None]:
+        """Read MAIN receiver mode/filter with optional cache updates."""
+        civ = self._commands.get_mode(to_addr=self._radio_addr)
+        try:
+            resp = await self._send_civ_expect(civ, label="get_mode_info_main")
+            mode, filt = parse_mode_response(resp)
+            if update_cache:
+                if filt is not None:
+                    self._filter_width = filt
+                self._state_cache.update_mode(mode.name, filt)
+            return mode, filt
+        except TimeoutError:
+            if update_cache and self._state_cache.is_fresh(
+                "mode", self._cache_ttl_mode
+            ):
+                logger.debug(
+                    "get_mode_info: timeout, returning cached %s",
+                    self._state_cache.mode,
+                )
+                return Mode[self._state_cache.mode], self._state_cache.filter_width
+            raise
+
+    def _data_mode_for_mode(self, mode: Mode, current: int) -> int:
+        """The DATA flag to send for ``mode`` given the receiver's ``current``.
+
+        MOR-4036: a mode change must not carry DATA into a mode that cannot
+        have it (the IC-705 NAKs ``26 00 03 01 01``, CW+DATA, and stays in
+        the old mode). When the profile declares ``[data_mode].modes``, the
+        flag survives only into a mode named there; undeclared (``None``)
+        keeps the old preserve-the-flag behaviour. Profile names are the
+        hyphenated ``[modes].list`` strings ("CW-R"), so the enum name's
+        underscores map onto them the same way ``commands/memory.py`` does.
+        """
+        allowed = self._profile.data_mode_modes
+        if allowed is None or mode.name.replace("_", "-") in allowed:
+            return current
+        return 0
+
+    async def _set_mode_main(
+        self,
+        mode: Mode,
+        *,
+        filter_width: int | None = None,
+        update_cache: bool = True,
+    ) -> None:
+        """Set MAIN receiver mode/filter with optional cache updates."""
+        if self._profile.set_mode_via_selected:
+            # Rigs declaring ``set_selected_mode`` (e.g. X6200) ignore the bare
+            # 0x06 mode-set; route through CI-V 0x26 0x00 with the full
+            # (mode, data_mode, filter) tuple so a mode-only change preserves
+            # the radio's current data-mode and filter. A mode that cannot
+            # carry DATA gets data_mode 0 instead (MOR-4036).
+            target = self._radio_state.receiver("MAIN")
+            data_mode = self._data_mode_for_mode(
+                mode, int(getattr(target, "data_mode", 0) or 0)
+            )
+            resolved_filter = (
+                filter_width
+                if filter_width is not None
+                else (self._filter_width if self._filter_width is not None else 1)
+            )
+            civ = self._commands.set_selected_mode(
+                mode, data_mode, resolved_filter, to_addr=self._radio_addr
+            )
+        else:
+            civ = self._commands.set_mode(
+                mode,
+                filter_width=filter_width,
+                to_addr=self._radio_addr,
+                receiver=RECEIVER_MAIN,
+            )
+        await self._send_civ_raw(civ, wait_response=False)
+        if update_cache:
+            if filter_width is not None:
+                self._filter_width = filter_width
+
+    # ------------------------------------------------------------------
+    # Selected / Unselected receiver freq & mode (0x25 / 0x26)
+    # ------------------------------------------------------------------
+
+    async def _get_selected_freq(self) -> int:
+        """Read the selected (active) receiver frequency via CI-V 0x25 0x00."""
+        civ = self._commands.get_selected_freq(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_selected_freq")
+        _rcvr, freq = _parse_selected_freq_response(resp)
+        return freq
+
+    async def _get_unselected_freq(self) -> int:
+        """Read the selector-01 frequency via CI-V 0x25 0x01.
+
+        The reply must echo selector 01; any other selector is refused
+        instead of being reported as this value (MOR-3591).
+        """
+        civ = self._commands.get_unselected_freq(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_unselected_freq")
+        rcvr, freq = _parse_selected_freq_response(resp)
+        if rcvr != 1:
+            raise CommandError("unselected frequency readback selector mismatch")
+        return freq
+
+    async def _get_selected_mode(self) -> tuple[Mode, int | None]:
+        """Read the selected (active) receiver mode via CI-V 0x26 0x00."""
+        civ = self._commands.get_selected_mode(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_selected_mode")
+        _rcvr, mode, _data_mode, filt = _parse_selected_mode_response(resp)
+        return mode, filt
+
+    async def _get_unselected_mode(self) -> tuple[Mode, int | None]:
+        """Read the selector-01 mode via CI-V 0x26 0x01.
+
+        The reply must echo selector 01; any other selector is refused
+        instead of being reported as this value (MOR-3591).
+        """
+        civ = self._commands.get_unselected_mode(to_addr=self._radio_addr)
+        resp = await self._send_civ_expect(civ, label="get_unselected_mode")
+        rcvr, mode, _data_mode, filt = _parse_selected_mode_response(resp)
+        if rcvr != 1:
+            raise CommandError("unselected mode readback selector mismatch")
+        return mode, filt
+
+    async def read_relative_vfo(self, *, selected: bool) -> RelativeVfoState:
+        """Read one Selected/Unselected tuple without changing radio state."""
+
+        role = "selected" if selected else "unselected"
+        cmd_map = self._profile.command_map
+        if cmd_map is None or not _relative_vfo_routing_available(
+            self._profile, cmd_map, (f"get_{role}_freq", f"get_{role}_mode")
+        ):
+            raise CommandError("direct VFO read is unavailable")
+
+        freq_cmd = (
+            self._commands.get_selected_freq
+            if selected
+            else self._commands.get_unselected_freq
+        )
+        mode_cmd = (
+            self._commands.get_selected_mode
+            if selected
+            else self._commands.get_unselected_mode
+        )
+        freq_resp = await self._send_civ_expect(
+            freq_cmd(to_addr=self._radio_addr), label=f"get_{role}_freq"
+        )
+        receiver, freq = _parse_selected_freq_response(freq_resp)
+        if receiver != (0 if selected else 1):
+            raise CommandError("relative VFO frequency readback selector mismatch")
+        mode_resp = await self._send_civ_expect(
+            mode_cmd(to_addr=self._radio_addr), label=f"get_{role}_mode"
+        )
+        receiver, mode, data_mode, filt = _parse_selected_mode_response(mode_resp)
+        if receiver != (0 if selected else 1):
+            raise CommandError("relative VFO mode readback selector mismatch")
+        if data_mode is None:
+            raise CommandError("relative VFO mode readback is missing DATA")
+        return RelativeVfoState(
+            freq_hz=freq,
+            mode=mode.name,
+            filter_num=filt,
+            data_mode=int(data_mode),
+        )
+
+    async def write_relative_vfo_frequency(
+        self,
+        freq_hz: int,
+        *,
+        selected: bool,
+        before_set: Callable[[], None] | None = None,
+        after_ack: Callable[[], None] | None = None,
+        after_readback: Callable[[], None] | None = None,
+    ) -> int:
+        """Write a profile-declared relative frequency and return its readback Hz.
+
+        SET currency reuses the synchronous before_set validator at dispatch.
+        Other hooks run after a positive ACK and after readback I/O.
+        """
+        role = "selected" if selected else "unselected"
+        cmd_map = self._profile.command_map
+        if cmd_map is None or not _relative_vfo_routing_available(
+            self._profile, cmd_map, (f"set_{role}_freq", f"get_{role}_freq")
+        ):
+            raise CommandError("direct VFO frequency is unavailable")
+
+        def is_current() -> bool:
+            if before_set is not None:
+                before_set()
+            return True
+
+        opcode, sub, prefix = decode_wire_tuple(cmd_map.get(f"set_{role}_freq"))
+        if before_set is not None:
+            before_set()
+        try:
+            response = await self.send_civ(
+                opcode,
+                sub,
+                data=prefix + bcd_encode(freq_hz),
+                wait_response=True,
+                is_current=is_current if before_set is not None else None,
+            )
+        except ConnectionError:
+            if before_set is not None:
+                before_set()
+            raise
+        ack = None if response is None else parse_ack_nak(response)
+        if ack is False:
+            raise CommandRejectedError("Radio rejected direct VFO frequency")
+        if ack is not True:
+            raise CommandError("direct VFO frequency was not acknowledged")
+        if after_ack is not None:
+            after_ack()
+        opcode, sub, data = decode_wire_tuple(cmd_map.get(f"get_{role}_freq"))
+        readback = await self.send_civ(opcode, sub, data=data, wait_response=True)
+        if after_readback is not None:
+            after_readback()
+        if readback is None:
+            raise CommandError("direct VFO frequency readback unavailable")
+        selector, observed_freq = _parse_selected_freq_response(readback)
+        if selector != (0 if selected else 1):
+            raise CommandError("direct VFO readback selector mismatch")
+        return observed_freq
+
+    async def write_relative_vfo_mode(
+        self,
+        mode: int,
+        *,
+        selected: bool,
+        data: bool | int | None = None,
+        filter_width: int | None = None,
+        before_set: Callable[[], None] | None = None,
+    ) -> RelativeVfoState:
+        """Preserve omitted fields; carry before_set validation through dispatch.
+
+        The whole preservation read → SET → readback runs inside a
+        commander interference scope (MOR-3743): a concurrent command
+        dispatched by another task between the preservation read and the
+        SET marks the scope, the SET is refused before the wire — a
+        ``StaleBeforeWireError``, the only retryable refusal — and the
+        operation retries from the preservation read — up to three
+        attempts, then a retryable ``CommandError``.  A SET that already
+        reached the wire is never retried: a currency failure behind the
+        send (interference detected while its ACK was pending)
+        propagates as the plain ``ConnectionError``, and interference
+        behind an acknowledged SET is decided by the readback, not by a
+        second SET.  The VFO selection epoch is pinned before the first
+        attempt; a selection change during the write — including one
+        that completes during the readback — fails it with a
+        ``CommandError`` even though the SET was already applied; the
+        caller must re-read.  Nothing is ever delayed or reordered.
+        Without a commander the write runs once, exactly as before.
+        """
+        role = "selected" if selected else "unselected"
+        cmd_map = self._profile.command_map
+        if cmd_map is None or not _relative_vfo_routing_available(
+            self._profile,
+            cmd_map,
+            (f"set_{role}_mode", f"get_{role}_mode", f"get_{role}_freq"),
+        ):
+            raise CommandError("direct VFO mode is unavailable")
+        try:
+            mode_code = int(Mode(mode))
+        except (TypeError, ValueError) as exc:
+            raise CommandError(f"Unsupported direct VFO mode: {mode!r}") from exc
+        if data is not None and not isinstance(data, int):
+            raise CommandError(
+                "direct VFO DATA must be a boolean or a DATA sub-mode number"
+            )
+        if filter_width is not None and (
+            type(filter_width) is not int or filter_width not in (1, 2, 3)
+        ):
+            raise CommandError("direct VFO filter number must be 1, 2 or 3")
+
+        commander = self._commander
+        if commander is None:
+            return await self._write_relative_vfo_mode_once(
+                mode_code,
+                selected=selected,
+                data=data,
+                filter_width=filter_width,
+                before_set=before_set,
+                scope=None,
+                selection_epoch=None,
+            )
+        # MOR-3743: pin the VFO topology once for every attempt.  A
+        # selection change between attempts would silently redirect the
+        # retry at a different physical VFO, so each attempt re-validates
+        # this epoch and the write fails instead of retrying across it.
+        selection_epoch = self._vfo_selection_epoch
+        if selection_epoch % 2 == 0:
+            raise CommandRejectedError("VFO selection is changing; retry mode write")
+        for _ in range(3):
+            async with commander.interference_scope() as scope:
+                observed = await self._write_relative_vfo_mode_once(
+                    mode_code,
+                    selected=selected,
+                    data=data,
+                    filter_width=filter_width,
+                    before_set=before_set,
+                    scope=scope,
+                    selection_epoch=selection_epoch,
+                )
+            if observed is not None:
+                return observed
+            # Only a proven pre-wire refusal (``StaleBeforeWireError``
+            # with the scope marked) returns ``None``; every other
+            # failure raises out of the attempt untouched.
+        raise CommandError(
+            "split-mode write interfered with a concurrent command; retry"
+        )
+
+    async def _write_relative_vfo_mode_once(
+        self,
+        mode_code: int,
+        *,
+        selected: bool,
+        data: bool | int | None,
+        filter_width: int | None,
+        before_set: Callable[[], None] | None,
+        scope: InterferenceScope | None,
+        selection_epoch: int | None,
+    ) -> RelativeVfoState | None:
+        """One preservation read → SET → readback attempt (MOR-3743).
+
+        Returns ``None`` only when the SET was refused before the wire
+        (``StaleBeforeWireError``) because ``scope`` reported
+        interference; every other failure raises exactly as it would
+        without a scope — a currency failure behind the send propagates
+        as the plain ``ConnectionError``, never a retry.
+        ``selection_epoch`` is the topology pin captured before the
+        first attempt (or the per-attempt capture on a commander-less
+        single shot): a move, an in-flight selection change, or one that
+        lands during the readback fails the attempt instead of
+        redirecting its SET at a different physical VFO or reporting
+        success for a topology the caller no longer holds.
+        """
+        role = "selected" if selected else "unselected"
+        cmd_map = self._profile.command_map
+        count = profile_data_mode_count(cast("Any", self))
+        if data is not None and not isinstance(data, bool):
+            # Numbered DATA sub-modes exist only where the profile numbers
+            # more than one (MOR-3821 P0e): a count-1 profile is bool-only,
+            # and sub-modes are 1-based. Refused before any IO — ahead of
+            # the preservation read below and any wire SET.
+            if type(data) is not int or count < 2 or not 1 <= data <= count:
+                raise CommandError(
+                    "direct VFO DATA sub-mode "
+                    f"{data!r} is not numbered by this profile "
+                    f"(data_mode_count {count})"
+                )
+        if self._vfo_selection_epoch_moved(selection_epoch):
+            raise CommandRejectedError(
+                "VFO selection changed during preservation; retry"
+            )
+        if data is None or filter_width is None:
+            if selection_epoch is None:
+                # Commander-less single shot: pin per attempt.
+                selection_epoch = self._vfo_selection_epoch
+                if selection_epoch % 2 == 0:
+                    raise CommandRejectedError(
+                        "VFO selection is changing; retry mode write"
+                    )
+            try:
+                current = await self.read_relative_vfo(selected=selected)
+            except ValueError as exc:
+                raise CommandError(
+                    "Invalid direct VFO mode preservation readback"
+                ) from exc
+            # Explicit fields do not depend on the preservation read. In
+            # particular, clearing DATA must work from IC-7610 DATA2/3.
+            if data is None:
+                if not 0 <= current.data_mode <= count:
+                    raise CommandError(
+                        "direct VFO mode preservation readback is unavailable"
+                    )
+                data = int(current.data_mode)
+            if filter_width is None:
+                if current.filter_num not in (1, 2, 3):
+                    raise CommandError(
+                        "direct VFO mode preservation readback is unavailable"
+                    )
+                filter_width = current.filter_num
+        if data is None or filter_width is None or filter_width not in (1, 2, 3):
+            raise CommandError("direct VFO filter readback is unavailable")
+        if not 0 <= int(data) <= count:
+            raise CommandError(
+                "direct VFO DATA sub-mode "
+                f"{data!r} is outside the profile's data_mode_count of {count}"
+            )
+        opcode, sub, prefix = decode_wire_tuple(cmd_map.get(f"set_{role}_mode"))
+
+        def is_current() -> bool:
+            if before_set is not None:
+                before_set()
+            return scope is None or scope.is_current()
+
+        if before_set is not None:
+            before_set()
+        if self._vfo_selection_epoch_moved(selection_epoch):
+            raise CommandRejectedError(
+                "VFO selection changed during preservation; retry"
+            )
+        try:
+            response = await self.send_civ(
+                opcode,
+                sub,
+                data=prefix + bytes([mode_code, int(data), filter_width]),
+                wait_response=True,
+                is_current=is_current
+                if (before_set is not None or scope is not None)
+                else None,
+            )
+        except StaleBeforeWireError:
+            if before_set is not None:
+                before_set()
+            if scope is not None and scope.interfered:
+                # The wire seam refused the SET before the transport
+                # because a concurrent command dispatched since the
+                # preservation read: discard the attempt and re-read
+                # (MOR-3743).  This proven pre-wire refusal is the ONLY
+                # retryable outcome — the SET never reached the wire.
+                return None
+            raise
+        except ConnectionError:
+            if before_set is not None:
+                before_set()
+            # A currency failure raised behind the send — interference
+            # detected while the SET's ACK was pending (MOR-3743): the
+            # SET may already be applied, so never repeat it; surface
+            # the error and let the caller re-read.
+            raise
+        ack = None if response is None else parse_ack_nak(response)
+        if ack is False:
+            raise CommandRejectedError("Radio rejected direct VFO mode")
+        if ack is not True:
+            raise CommandError("direct VFO mode was not acknowledged")
+        try:
+            observed = await self.read_relative_vfo(selected=selected)
+        except ValueError as exc:
+            raise CommandError("Invalid direct VFO mode readback") from exc
+        # The SET is already applied and this attempt can never retry,
+        # but success must not be reported against a topology the caller
+        # pinned: a selection change that completed during the write —
+        # including during this readback — fails the write even though
+        # the SET was applied, and the caller must re-read (MOR-3743).
+        if self._vfo_selection_epoch_moved(selection_epoch):
+            raise CommandError("VFO selection changed during the write; retry")
+        # The SET already reached the wire: never send a second one
+        # (MOR-3743).  Interference behind it is not a retry trigger —
+        # the readback below is the verdict: consistent means success,
+        # contradictory raises the readback error.
+        if not 0 <= observed.data_mode <= count or observed.filter_num not in (1, 2, 3):
+            raise CommandError("direct VFO mode readback is unavailable")
+        # ACK alone is not success: a valid but contradictory readback
+        # means the radio did not end up in the requested state.
+        if (
+            Mode[observed.mode] != Mode(mode_code)
+            or observed.data_mode != int(data)
+            or observed.filter_num != filter_width
+        ):
+            raise CommandError(
+                "direct VFO mode readback contradicts the requested "
+                f"{Mode(mode_code).name} data={int(data)} filter={filter_width}"
+            )
+        return observed
+
+    # ------------------------------------------------------------------
+    # Explicit swap/equalize — MAIN/SUB vs A/B (issue #714)
+    # ------------------------------------------------------------------
+
+    async def swap_main_sub(self) -> None:
+        """Swap MAIN and SUB VFO frequencies. Requires a dual-RX profile."""
+        self._check_connected()
+        if self._profile.receiver_count < 2:
+            raise CommandError(
+                f"swap_main_sub not supported by profile {self._profile.model}: "
+                "not dual-RX"
+            )
+        code = self._profile.swap_main_sub_code
+        if code is None:
+            raise CommandError(
+                f"swap_main_sub not supported by profile {self._profile.model}: "
+                "no swap_main_sub_code"
+            )
+        civ = build_civ_frame(
+            self._radio_addr, CONTROLLER_ADDR, _CMD_VFO, data=bytes([code])
+        )
+        with self._vfo_selection_change():
+            await self._send_civ_raw(civ, wait_response=False)
+
+    async def equalize_main_sub(self) -> None:
+        """Copy MAIN VFO state to SUB. Requires a dual-RX profile."""
+        self._check_connected()
+        if self._profile.receiver_count < 2:
+            raise CommandError(
+                f"equalize_main_sub not supported by profile "
+                f"{self._profile.model}: not dual-RX"
+            )
+        code = self._profile.equal_main_sub_code
+        if code is None:
+            raise CommandError(
+                f"equalize_main_sub not supported by profile "
+                f"{self._profile.model}: no equal_main_sub_code"
+            )
+        civ = build_civ_frame(
+            self._radio_addr, CONTROLLER_ADDR, _CMD_VFO, data=bytes([code])
+        )
+        with self._vfo_selection_change():
+            await self._send_civ_raw(civ, wait_response=False)
+
+    async def swap_vfo_ab(self, receiver: int = 0) -> None:
+        """Swap VFO A and VFO B within ``receiver``.
+
+        The opcode acts on the selected receiver, so on a dual-RX profile
+        ``receiver`` must be the selected one; otherwise the call raises
+        :class:`ReceiverNotSelectedError` and nothing is sent.
+
+        Raises ``CommandError`` when the profile does not declare a
+        dedicated ``swap_ab_code``.  We do NOT silently fall back to
+        ``swap_main_sub_code`` because on IC-7610 / IC-9700 that opcode
+        exchanges MAIN↔SUB — a different semantic than A↔B within a
+        single receiver.  Callers wanting MAIN↔SUB must use
+        ``swap_main_sub()`` explicitly.
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="swap_vfo_ab")
+        code = self._profile.swap_ab_code
+        if code is None:
+            raise CommandError(
+                f"swap_vfo_ab not supported by {self._profile.model}: "
+                "profile declares no swap_ab_code. "
+                "For MAIN↔SUB exchange use swap_main_sub()."
+            )
+        # The A/B opcode acts on the selected receiver: admitted only for it,
+        # never by selecting ``receiver`` first (MOR-3591).
+        self._require_cmd29_route(
+            _CMD_VFO, None, receiver=receiver, operation="swap_vfo_ab"
+        )
+        civ = build_civ_frame(
+            self._radio_addr, CONTROLLER_ADDR, _CMD_VFO, data=bytes([code])
+        )
+        with self._vfo_selection_change():
+            await self._send_civ_raw(civ, wait_response=False)
+
+    async def equalize_vfo_ab(self, receiver: int = 0) -> None:
+        """Copy the active VFO's state to the inactive VFO on ``receiver``.
+
+        Raises ``CommandError`` when the profile does not declare a
+        dedicated ``equal_ab_code``.  We do NOT silently fall back to
+        ``equal_main_sub_code``: on dual-RX rigs that opcode copies
+        MAIN→SUB, not A→B within a receiver.
+        """
+        self._check_connected()
+        self._require_receiver(receiver, operation="equalize_vfo_ab")
+        code = self._profile.equal_ab_code
+        if code is None:
+            raise CommandError(
+                f"equalize_vfo_ab not supported by {self._profile.model}: "
+                "profile declares no equal_ab_code. "
+                "For MAIN→SUB copy use equalize_main_sub()."
+            )
+        # The A/B opcode acts on the selected receiver: admitted only for it,
+        # never by selecting ``receiver`` first (MOR-3591).
+        self._require_cmd29_route(
+            _CMD_VFO, None, receiver=receiver, operation="equalize_vfo_ab"
+        )
+        civ = build_civ_frame(
+            self._radio_addr, CONTROLLER_ADDR, _CMD_VFO, data=bytes([code])
+        )
+        with self._vfo_selection_change():
+            await self._send_civ_raw(civ, wait_response=False)
+
+    # ------------------------------------------------------------------
+    # ReceiverBankCapable — Transceiver → Receiver tier (issue #1170)
+    # ------------------------------------------------------------------
+
+    @property
+    def receiver_count(self) -> int:
+        """Number of independent receivers exposed by this transceiver.
+
+        Profile-driven via ``[radio] receiver_count`` in the rig TOML.
+        IC-7610 / IC-9700 report ``2`` (MAIN + SUB); IC-7300 / IC-705
+        report ``1``.
+        """
+        return int(self._profile.receiver_count)
+
+    @staticmethod
+    def _normalize_receiver_index(which: int | str) -> int:
+        """Normalize a ``select_receiver`` argument to a 0-based index.
+
+        Accepts integer indices (``0`` / ``1``) or case-insensitive names
+        (``"main"`` / ``"sub"``).  Raises :class:`ValueError` on any other
+        value.
+        """
+        if isinstance(which, bool):
+            # ``bool`` is a subclass of ``int`` but is never a valid receiver
+            # index — reject explicitly to avoid silent ``True``→1 conversion.
+            raise ValueError(
+                f"select_receiver: which must be int or str, got {type(which).__name__}"
+            )
+        if isinstance(which, str):
+            key = which.strip().lower()
+            if key == "main":
+                return 0
+            if key == "sub":
+                return 1
+            raise ValueError(
+                f"select_receiver: unknown receiver name {which!r} "
+                "(expected 'main' or 'sub')"
+            )
+        if isinstance(which, int):
+            return int(which)
+        raise ValueError(
+            f"select_receiver: which must be int or str, got {type(which).__name__}"
+        )
+
+    async def select_receiver(self, which: int | str) -> None:
+        """Make ``which`` the active receiver for subsequent commands.
+
+        On dual-RX Icom rigs (IC-7610 / IC-9700) issues the profile's
+        ``main_select`` / ``sub_select`` opcode (``0x07 0xD0`` /
+        ``0x07 0xD1``) and updates :attr:`RadioState.active`.  On single-RX
+        profiles only ``which == 0`` is accepted and the call is a no-op
+        (matching the :class:`~rigplane.radio_protocol.ReceiverBankCapable`
+        contract).  Out-of-range indices and unknown names raise
+        :class:`ValueError`.
+        """
+        self._check_connected()
+        index = self._normalize_receiver_index(which)
+        count = self.receiver_count
+        if index < 0 or index >= count:
+            raise ValueError(
+                f"select_receiver: receiver index {index} out of range "
+                f"for receiver_count={count}"
+            )
+        if count <= 1:
+            # Single-RX: nothing to switch.
+            return
+        target = "MAIN" if index == 0 else "SUB"
+        await self._set_vfo_wire(target)
+        self._radio_state.active = target
+
+    async def get_active_receiver(self) -> int:
+        """Return the index of the currently active receiver.
+
+        Returns ``0`` for MAIN, ``1`` for SUB.  Reads the cached
+        :attr:`RadioState.active` value (poller-populated on dual-RX rigs).
+        Single-RX profiles always return ``0``.
+        """
+        if self.receiver_count <= 1:
+            return 0
+        active = getattr(self._radio_state, "active", "MAIN")
+        return 1 if active == "SUB" else 0
+
+    # ------------------------------------------------------------------
+    # VfoSlotCapable — per-receiver A/B slot ops (issue #1170)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_vfo_slot(slot: str) -> str:
+        """Validate and upper-case a VFO slot argument (``"A"`` or ``"B"``)."""
+        if not isinstance(slot, str):
+            raise ValueError(f"slot must be str, got {type(slot).__name__}")
+        norm = slot.strip().upper()
+        if norm not in {"A", "B"}:
+            raise ValueError(f"slot must be 'A' or 'B', got {slot!r}")
+        return norm
+
+    def _check_vfo_slot_receiver(self, receiver: int, *, operation: str) -> None:
+        """Raise ``ValueError`` when ``receiver`` is out of range for the profile."""
+        count = self.receiver_count
+        if receiver < 0 or receiver >= count:
+            raise ValueError(
+                f"{operation}: receiver index {receiver} out of range "
+                f"for receiver_count={count}"
+            )
+
+    async def get_vfo_slot(self, receiver: int = 0) -> str:
+        """Return the active VFO slot (``"A"`` or ``"B"``) for ``receiver``.
+
+        Reads cached :attr:`ReceiverState.active_slot` (poller-populated).
+        Single-RX rigs only accept ``receiver == 0``; out-of-range indices
+        raise :class:`ValueError`.
+        """
+        self._check_vfo_slot_receiver(receiver, operation="get_vfo_slot")
+        if self.receiver_count > 1:
+            rx_state = (
+                self._radio_state.sub if receiver == 1 else self._radio_state.main
+            )
+        else:
+            rx_state = self._radio_state.main
+        slot = getattr(rx_state, "active_slot", "A")
+        return "B" if str(slot).upper() == "B" else "A"
+
+    async def set_vfo_slot(self, slot: str, receiver: int = 0) -> None:
+        """Make ``slot`` (``"A"`` or ``"B"``) the active VFO on ``receiver``.
+
+        Wire bytes: CI-V ``0x07 0x00`` (A) or ``0x07 0x01`` (B).  The
+        opcode acts on the selected receiver: on dual-RX rigs ``receiver``
+        must be the selected one, otherwise
+        :class:`ReceiverNotSelectedError` is raised and nothing is sent
+        (the selection is never switched to reach it, MOR-3591).
+
+        Raises :class:`ValueError` for an invalid slot or out-of-range
+        receiver index.
+        """
+        await self._set_vfo_slot_impl(slot, receiver=receiver, confirmed=False)
+
+    async def _set_vfo_slot_confirmed(self, slot: str, receiver: int = 0) -> None:
+        """Private ACK-confirmed path; public ``set_vfo_slot`` stays fire-and-forget."""
+
+        await self._set_vfo_slot_impl(slot, receiver=receiver, confirmed=True)
+
+    async def _set_vfo_slot_impl(
+        self, slot: str, *, receiver: int, confirmed: bool
+    ) -> None:
+        operation = "set_vfo_slot_confirmed" if confirmed else "set_vfo_slot"
+
+        self._check_connected()
+        self._check_vfo_slot_receiver(receiver, operation=operation)
+        norm_slot = self._normalize_vfo_slot(slot)
+        slot_code = 0x00 if norm_slot == "A" else 0x01
+
+        async def emit() -> None:
+            civ = build_civ_frame(
+                self._radio_addr,
+                CONTROLLER_ADDR,
+                _CMD_VFO,
+                data=bytes([slot_code]),
+            )
+            if confirmed:
+                response = await self._send_civ_expect(civ, label=operation)
+                if parse_ack_nak(response) is not True:
+                    raise CommandError(f"Radio rejected VFO slot {norm_slot}")
+            else:
+                await self._send_civ_raw(civ, wait_response=False)
+            rx_state = (
+                self._radio_state.sub
+                if (receiver == 1 and self.receiver_count > 1)
+                else self._radio_state.main
+            )
+            rx_state.active_slot = norm_slot
+
+        self._require_cmd29_route(
+            _CMD_VFO, None, receiver=receiver, operation=operation
+        )
+        with self._vfo_selection_change():
+            await emit()

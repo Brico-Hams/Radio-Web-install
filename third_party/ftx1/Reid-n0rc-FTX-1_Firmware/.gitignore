@@ -1,0 +1,22 @@
+# Yaesu firmware download (see AGENTS.md → Sources)
+Firmware/
+
+# Decoded/raw binaries derived from Yaesu firmware — regenerate locally
+/build/
+*.bin
+*.SFL
+*.sfl
+
+# Manuals and Ghidra projects stay local unless the owner decides otherwise (AGENTS.md)
+Manuals/
+/ghidra/
+*.lock
+*.lock~
+
+# OS / editor
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+.claude/worktrees/
+logs/

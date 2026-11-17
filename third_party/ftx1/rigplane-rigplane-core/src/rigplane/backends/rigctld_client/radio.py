@@ -1,0 +1,1424 @@
+"""RigPlane Radio adapter for an external Hamlib ``rigctld`` server."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Sequence
+
+from ...exceptions import CommandError
+from ...exceptions import ConnectionError as RadioConnectionError
+from ...exceptions import TimeoutError as RadioTimeoutError
+from ...core.command_dispatch import ManagedWriteAdmission, execute_command_intent
+from ...core.radio_protocol import (
+    PhysicalWriteReadbackResult,
+    PhysicalWriteReadbackStatus,
+)
+from ...core.state_pipeline_contracts import (
+    CommandIntent,
+    CommandSource,
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from ...core.tx_observation import TxStateReading
+from ...radio_state import RadioState
+from ...runtime._poller_types import (
+    canonicalize_level_command,
+    execute_command_queue_entry,
+    execute_positive_tx_queue_entry,
+    validate_command_queue_entry_currency,
+)
+from ...runtime.callable_support import supports_explicit_callable
+from ...runtime.managed_tx_state import (
+    AbortOperation,
+    ActuationOperation,
+    ActuationResult,
+    EffectToken,
+)
+from .transport import RigctldCommandError, RigctldTransport
+
+if TYPE_CHECKING:
+    from ..._poller_types import CommandQueue, CommandQueueEntry
+    from ...core.command_service import CommandService
+    from .observations import RigctldClientObservationAdapter
+
+logger = logging.getLogger(__name__)
+
+_SUPPORTED_COMMANDS = {
+    "get_freq",
+    "set_freq",
+    "get_mode",
+    "set_mode",
+    "get_ptt",
+    "set_ptt",
+    "get_rf_gain",
+    "set_rf_gain",
+    "get_af_level",
+    "set_af_level",
+    "get_preamp",
+    "set_preamp",
+    "get_attenuator",
+    "set_attenuator",
+    "get_attenuator_level",
+    "set_attenuator_level",
+    "get_nb",
+    "set_nb",
+    "get_nr",
+    "set_nr",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _ReadbackCorrelation:
+    command_id: str
+    source: CommandSource
+    session_id: str | None
+    path: FieldPath
+    value: Any
+    command_service: "CommandService"
+    provider_generation: int | None
+    dispatched_at_monotonic: float
+    expires_at_monotonic: float
+
+
+class RigctldClientObservationPoller:
+    """Production observation poller for external Hamlib rigctld reads."""
+
+    def __init__(
+        self,
+        radio: "RigctldClientRadio",
+        callback: Callable[[Sequence["Observation"]], None],
+        *,
+        medium_interval: float,
+        slow_interval: float,
+        command_queue: "CommandQueue | None" = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._radio = radio
+        self._callback = callback
+        self._command_queue = command_queue
+        self._medium_interval = medium_interval
+        self._slow_interval = slow_interval
+        self._tasks: list[asyncio.Task[None]] = []
+        self._stop_requested = False
+        self._pending_readback_entries: list[_ReadbackCorrelation] = []
+        self._capture_provider_generation: Callable[[], int] | None = None
+        self._clock = clock
+        self._managed_tx_authority: ManagedWriteAdmission | None = None
+        self._connection_generation_capture = self._current_connection_generation
+        self._connection_generation_bound = False
+        self._bind_connection_generation()
+
+    def bind_managed_tx_authority(self, authority: ManagedWriteAdmission) -> None:
+        if self._managed_tx_authority is not None:
+            raise RuntimeError("managed transmit authority is already bound")
+        self._managed_tx_authority = authority
+
+    def _current_connection_generation(self) -> object | None:
+        transport = self._radio._transport
+        return transport._writer if transport.connected else None
+
+    def _bind_connection_generation(self) -> None:
+        if self._command_queue is None or self._connection_generation_bound:
+            return
+        self._command_queue.bind_connection_generation(
+            self._connection_generation_capture
+        )
+        self._connection_generation_bound = True
+
+    def bind_provider_generation(
+        self,
+        *,
+        capture: Callable[[], int],
+        advance: Callable[[], int] | None = None,
+    ) -> None:
+        self._capture_provider_generation = capture
+        if advance is None:
+            self._radio.bind_provider_generation()
+            return
+
+        def retire_and_advance() -> int:
+            self._finish_readbacks(self._pending_readback_entries, "provider_lost")
+            return advance()
+
+        self._radio.bind_provider_generation(advance=retire_and_advance)
+
+    def _stamp_provider_generation(
+        self, observations: Sequence[Observation], generation: int | None
+    ) -> tuple[Observation, ...]:
+        if generation is None:
+            return tuple(observations)
+        return tuple(
+            replace(observation, provider_generation=generation)
+            for observation in observations
+        )
+
+    def _provider_generation_is_current(self, generation: int | None) -> bool:
+        capture = self._capture_provider_generation
+        return capture is None or generation == capture()
+
+    async def start(self) -> None:
+        if self._tasks:
+            return
+        self._bind_connection_generation()
+        self._stop_requested = False
+        loop = asyncio.get_running_loop()
+        self._tasks = [
+            loop.create_task(self._run_loop(self._poll_medium, self._medium_interval)),
+            loop.create_task(self._run_loop(self._poll_slow, self._slow_interval)),
+        ]
+
+    async def stop(self) -> None:
+        self._stop_requested = True
+        for task in self._tasks:
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
+        if self._command_queue is not None and self._connection_generation_bound:
+            self._command_queue.unbind_connection_generation(
+                self._connection_generation_capture
+            )
+            self._connection_generation_bound = False
+        self._finish_readbacks(self._pending_readback_entries, "cancelled")
+
+    async def _run_loop(
+        self,
+        poll: Callable[[], Awaitable[None]],
+        interval: float,
+    ) -> None:
+        while not self._stop_requested:
+            try:
+                await poll()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if self._stop_requested:
+                    return
+                logger.warning("rigctld-client observation poll failed", exc_info=True)
+                await self._reconnect_transport()
+            if self._stop_requested:
+                return
+            await asyncio.sleep(interval)
+
+    async def _reconnect_transport(self) -> None:
+        """Reopen the transport a failed poll cycle left closed (MOR-2757).
+
+        A read timeout retires the connection
+        (``RigctldTransport._read_line`` → ``_close_connection``), and
+        nothing else in production reopens it — the reconnect loops in
+        ``runtime/radio_reconnect.py`` are Icom-only and the HTTP
+        ``/api/v1/radio/connect`` endpoint is operator-triggered — so
+        without this the next cycle would fail in ``_write_line`` without
+        ever querying rigctld again: one timeout ended polling for good.
+        Reuse the transport's own ``connect()`` — the same open path
+        startup uses — rather than a second reconnect mechanism; both
+        loops may race here, and its lifecycle lock plus the ``connected``
+        short-circuit make that safe. An *intentional* disconnect
+        (``RigctldClientRadio.disconnect``, e.g. the operator's
+        ``/api/v1/radio/disconnect``) is never undone here: the radio's
+        ``_intentional_disconnect`` flag — the IcomRadio idiom — makes
+        this return without reopening; the next ``connect()`` clears the
+        flag and polling resumes.
+        """
+
+        if self._radio._intentional_disconnect:
+            return
+        transport = self._radio._transport
+        if transport.connected:
+            return
+        try:
+            await transport.connect()
+        except Exception:
+            logger.warning("rigctld-client transport reconnect failed", exc_info=True)
+
+    async def _poll_medium(self) -> None:
+        from .observations import RigctldClientObservationAdapter
+
+        capture = self._capture_provider_generation
+        provider_generation = None if capture is None else capture()
+        drained_entries = await self._drain_commands()
+        adapter = RigctldClientObservationAdapter(self._radio, clock=self._clock)
+        observations: list["Observation"] = list(
+            await adapter.read_freq_mode_controls()
+        )
+        # MOR-4456: publish the answered critical reads BEFORE asking `t` —
+        # a `t` timeout retires the transport and the raise below would
+        # discard these unpublished observations, starving the startup
+        # gate of the freq/mode answers it still blocks on. The batch
+        # below then carries only what is read after `t`; every
+        # observation keeps its single annotated publication and its
+        # correlation id.
+        if self._provider_generation_is_current(provider_generation):
+            self._callback(
+                self._annotate_readback_observations(
+                    self._stamp_provider_generation(
+                        tuple(observations), provider_generation
+                    )
+                )
+            )
+        observations = []
+
+        def _publish_unknown_ptt() -> None:
+            if not self._provider_generation_is_current(provider_generation):
+                return
+            unknown = adapter.observed_ptt_observation(None)
+            try:
+                self._callback(
+                    self._stamp_provider_generation((unknown,), provider_generation)
+                )
+            except Exception:
+                logger.warning(
+                    "rigctld-client PTT error observation publication failed",
+                    exc_info=True,
+                )
+
+        ptt: Observation | None = None
+        if self._radio._ptt_read_demoted:  # noqa: SLF001
+            # MOR-4456: the transmit-state read demoted itself after its
+            # first timeout — publish unknown without asking ``t``, so a
+            # silent ``t`` reconnects exactly once for the life of this
+            # radio object. A refused ``t`` never demotes (below).
+            _publish_unknown_ptt()
+        else:
+            try:
+                ptt = await adapter.read_ptt()
+            except (asyncio.TimeoutError, RadioTimeoutError):
+                self._radio._demote_ptt_read_after_timeout()  # noqa: SLF001
+                _publish_unknown_ptt()
+                raise
+            except RadioConnectionError:
+                _publish_unknown_ptt()
+                raise
+            except CommandError:
+                # MOR-4456: a refused (or malformed) `t` is an answer, not a
+                # link failure — publish unknown for this cycle and keep the
+                # cycle: the VFO and web-command readbacks still run and
+                # publish below. Only timeouts and transport errors raise, as
+                # before (a `t` timeout still closes the connection and still
+                # reconnects; PTT left the critical set, so it no longer
+                # counts in `_critical_read_timeouts`).
+                _publish_unknown_ptt()
+        if ptt is not None and self._provider_generation_is_current(
+            provider_generation
+        ):
+            observed_ptt = adapter.observed_ptt_observation(
+                ptt.value, timestamp_monotonic=ptt.timestamp_monotonic
+            )
+            self._callback(
+                self._stamp_provider_generation((observed_ptt,), provider_generation)
+            )
+        if ptt is not None:
+            observations.append(ptt)
+        active_vfo = await adapter.read_active_vfo()
+        if active_vfo is not None:
+            observations.append(active_vfo)
+        observations.extend(
+            await _read_drained_slow_control_readbacks(adapter, drained_entries)
+        )
+        if not self._provider_generation_is_current(provider_generation):
+            self._finish_readbacks(self._pending_readback_entries, "provider_lost")
+            return
+        self._callback(
+            self._annotate_readback_observations(
+                self._stamp_provider_generation(observations, provider_generation)
+            )
+        )
+
+    async def _poll_slow(self) -> None:
+        from .observations import RigctldClientObservationAdapter
+
+        capture = self._capture_provider_generation
+        provider_generation = None if capture is None else capture()
+        adapter = RigctldClientObservationAdapter(self._radio, clock=self._clock)
+        observations = await adapter.read_slow_controls()
+        if not self._provider_generation_is_current(provider_generation):
+            self._finish_readbacks(self._pending_readback_entries, "provider_lost")
+            return
+        self._callback(
+            self._annotate_readback_observations(
+                self._stamp_provider_generation(observations, provider_generation)
+            )
+        )
+
+    async def _drain_commands(self) -> tuple["CommandQueueEntry", ...]:
+        """Process pending Web command queue entries before rigctld readback."""
+        if self._command_queue is None or not self._command_queue.has_commands:
+            return ()
+
+        successful: list["CommandQueueEntry"] = []
+
+        def validate_currency(entry: "CommandQueueEntry") -> None:
+            assert self._command_queue is not None
+            capture = self._capture_provider_generation
+            validate_command_queue_entry_currency(
+                entry,
+                now=self._clock(),
+                provider_generation=None if capture is None else capture(),
+                connection_generation=self._current_connection_generation(),
+                session_is_live=self._command_queue.session_is_live,
+                require_connection_generation=(
+                    self._managed_tx_authority is not None
+                    and (
+                        entry.positive_tx_submission is not None
+                        or isinstance(entry.command, CommandIntent)
+                    )
+                ),
+            )
+
+        async def execute_entry(entry: "CommandQueueEntry") -> None:
+            cmd = entry.command
+            capture = self._capture_provider_generation
+            correlation = _readback_correlation_for_entry(
+                entry,
+                dispatched_at=self._clock(),
+                provider_generation=None if capture is None else capture(),
+            )
+            try:
+                validate_currency(entry)
+                if entry.positive_tx_submission is not None:
+                    await execute_positive_tx_queue_entry(entry)
+                    return
+                await self._execute_command(
+                    cmd, validate_currency=lambda: validate_currency(entry)
+                )
+            except Exception as exc:
+                if correlation is not None:
+                    self._finish_readbacks((correlation,), "rejected")
+                self._mark_queued_command_failed(entry, exc)
+                raise
+            successful.append(entry)
+            self._track_readback_entry(cmd, correlation)
+
+        for _ in range(self._command_queue.pending_count):
+            entry = self._command_queue.take_entry()
+            if entry is None:
+                break
+            cmd = entry.command
+            if entry.future is not None and entry.future.cancelled():
+                logger.debug(
+                    "rigctld-client observation poller: skipping cancelled command %s",
+                    type(cmd).__name__,
+                )
+                continue
+            try:
+                await execute_command_queue_entry(entry, execute_entry)
+            except Exception:
+                logger.warning(
+                    "rigctld-client observation poller: command %s failed",
+                    type(cmd).__name__,
+                    exc_info=True,
+                )
+        return tuple(successful)
+
+    def _track_readback_entry(
+        self, command: Any, correlation: _ReadbackCorrelation | None
+    ) -> None:
+        replaced = [
+            entry
+            for entry in self._pending_readback_entries
+            if _physical_command_targets_path(command, entry.path)
+        ]
+        self._finish_readbacks(replaced, "superseded")
+        if correlation is not None:
+            self._pending_readback_entries.append(correlation)
+
+    def _finish_readbacks(
+        self,
+        entries: Sequence[_ReadbackCorrelation],
+        status: PhysicalWriteReadbackStatus,
+        observation: Observation | None = None,
+    ) -> None:
+        self._pending_readback_entries = [
+            entry for entry in self._pending_readback_entries if entry not in entries
+        ]
+        if status != "reconciled":
+            _discard_readback_correlations(entries)
+        for entry in entries:
+            self._radio._publish_physical_write_result(  # noqa: SLF001
+                PhysicalWriteReadbackResult(
+                    status=status,
+                    command_id=entry.command_id,
+                    source=entry.source,
+                    session_id=entry.session_id,
+                    path=entry.path,
+                    expected_value=entry.value,
+                    observed_value=None if observation is None else observation.value,
+                    provider_generation=entry.provider_generation,
+                )
+            )
+
+    def _annotate_readback_observations(
+        self,
+        observations: Sequence[Observation],
+    ) -> tuple[Observation, ...]:
+        if not self._pending_readback_entries:
+            return tuple(observations)
+
+        unmatched = list(self._pending_readback_entries)
+        annotated: list[Observation] = []
+        for observation in observations:
+            match_index = _matching_readback_entry_index(
+                observation, unmatched, now=self._clock()
+            )
+            if match_index is None:
+                annotated.append(observation)
+                continue
+            entry = unmatched.pop(match_index)
+            self._finish_readbacks((entry,), "reconciled", observation)
+            annotated.append(_with_command_metadata(observation, entry))
+        now = self._clock()
+        for entry in unmatched:
+            if not _correlation_is_live(entry, now, entry.provider_generation):
+                self._finish_readbacks(
+                    (entry,),
+                    "timed_out" if now >= entry.expires_at_monotonic else "cancelled",
+                )
+                continue
+            mismatch = next(
+                (
+                    item
+                    for item in observations
+                    if _is_external_rigctld_readback(item.source)
+                    and _correlation_is_live(entry, now, item.provider_generation)
+                    and entry.dispatched_at_monotonic
+                    < item.timestamp_monotonic
+                    < entry.expires_at_monotonic
+                    and _readback_paths_match(item.path, entry.path)
+                ),
+                None,
+            )
+            if mismatch is not None:
+                self._finish_readbacks((entry,), "mismatched", mismatch)
+        return tuple(annotated)
+
+    async def _execute_command(
+        self, cmd: Any, *, validate_currency: Callable[[], None] | None = None
+    ) -> None:
+        cmd = canonicalize_level_command(cmd, self._radio)
+        if isinstance(cmd, CommandIntent):
+            await execute_command_intent(
+                self._radio,
+                cmd,
+                managed_tx_authority=self._managed_tx_authority,
+                validate_currency=validate_currency,
+            )
+            return
+        from ..._poller_types import (
+            PttOff,
+            PttOn,
+            SelectVfo,
+            SetAttenuator,
+            SetFreq,
+            SetMode,
+            SetNB,
+            SetNR,
+            SetPreamp,
+        )
+
+        match cmd:
+            case SetFreq(freq=freq, receiver=rx):
+                await self._radio.set_freq(freq, receiver=rx)
+            case SetMode(mode=mode, filter_width=filter_width, receiver=rx):
+                await self._radio.set_mode(
+                    mode,
+                    filter_width=filter_width,
+                    receiver=rx,
+                )
+            case PttOn():
+                if self._managed_tx_authority is not None:
+                    raise CommandError(
+                        "managed PTT ON requires a positive TX queue submission"
+                    )
+                await self._radio.set_ptt(True)
+            case PttOff():
+                await self._radio.set_ptt(False)
+            case SelectVfo(vfo=vfo):
+                await self._radio.set_vfo_slot(vfo)
+            case SetPreamp(level=level, receiver=rx):
+                await self._radio.set_preamp(level, receiver=rx)
+            case SetAttenuator(db=db, receiver=rx):
+                await self._radio.set_attenuator_level(db, receiver=rx)
+            case SetNB(on=on, receiver=rx):
+                await self._radio.set_nb(on, receiver=rx)
+            case SetNR(on=on, receiver=rx):
+                await self._radio.set_nr(on, receiver=rx)
+            case _:
+                raise CommandError(
+                    f"{type(cmd).__name__} is not supported by external rigctld"
+                )
+
+    @staticmethod
+    def _mark_queued_command_failed(
+        entry: "CommandQueueEntry",
+        exc: BaseException,
+    ) -> None:
+        if entry.command_service is None or entry.command_id is None:
+            return
+        params: dict[str, Any] = {
+            "message": str(exc) or None,
+            "session_id": entry.session_id,
+        }
+        if entry.source is not None:
+            params["source"] = entry.source
+        entry.command_service.fail_command(entry.command_id, **params)
+
+
+async def _read_drained_slow_control_readbacks(
+    adapter: "RigctldClientObservationAdapter",
+    entries: Sequence["CommandQueueEntry"],
+) -> tuple[Observation, ...]:
+    from ..._poller_types import SetAttenuator, SetNB, SetNR, SetPreamp
+
+    commands = tuple(entry.command for entry in entries)
+    observations: list[Observation] = []
+    if any(isinstance(command, SetPreamp) for command in commands):
+        observations.append(await adapter.read_preamp())
+    if any(isinstance(command, SetAttenuator) for command in commands):
+        observations.append(await adapter.read_attenuator())
+    if any(isinstance(command, SetNB) for command in commands):
+        observations.append(await adapter.read_nb())
+    if any(isinstance(command, SetNR) for command in commands):
+        observations.append(await adapter.read_nr())
+    return tuple(observations)
+
+
+def _readback_correlation_for_entry(
+    entry: "CommandQueueEntry",
+    *,
+    dispatched_at: float,
+    provider_generation: int | None,
+) -> _ReadbackCorrelation | None:
+    if (
+        entry.command_service is None
+        or entry.command_id is None
+        or entry.source is None
+    ):
+        return None
+    expectations = entry.command_service.retain_readback_expectations_for_dispatch(
+        source=entry.source,
+        session_id=entry.session_id,
+        command_id=entry.command_id,
+    )
+    if not expectations:
+        return None
+    expectation = expectations[0]
+    return _ReadbackCorrelation(
+        command_id=entry.command_id,
+        source=entry.source,
+        session_id=entry.session_id,
+        path=expectation.path,
+        value=expectation.value,
+        command_service=entry.command_service,
+        provider_generation=provider_generation,
+        dispatched_at_monotonic=dispatched_at,
+        expires_at_monotonic=expectation.expires_at_monotonic,
+    )
+
+
+def _discard_readback_correlations(entries: Sequence[_ReadbackCorrelation]) -> None:
+    for entry in entries:
+        entry.command_service.discard_readback_expectations(
+            source=entry.source,
+            session_id=entry.session_id,
+            command_id=entry.command_id,
+            path=entry.path,
+        )
+
+
+def _matching_readback_entry_index(
+    observation: Observation,
+    entries: Sequence[_ReadbackCorrelation],
+    *,
+    now: float,
+) -> int | None:
+    for index, entry in enumerate(entries):
+        if _entry_matches_observation(entry, observation, now=now):
+            return index
+    return None
+
+
+def _entry_matches_observation(
+    entry: _ReadbackCorrelation,
+    observation: Observation,
+    *,
+    now: float,
+) -> bool:
+    if not _is_external_rigctld_readback(
+        observation.source
+    ) or not _correlation_is_live(entry, now, observation.provider_generation):
+        return False
+    return (
+        entry.dispatched_at_monotonic
+        < observation.timestamp_monotonic
+        < entry.expires_at_monotonic
+        and type(entry.value) is type(observation.value)
+        and entry.value == observation.value
+        and _readback_paths_match(observation.path, entry.path)
+    )
+
+
+def _correlation_is_live(
+    entry: _ReadbackCorrelation, now: float, provider_generation: int | None
+) -> bool:
+    if (
+        now >= entry.expires_at_monotonic
+        or entry.provider_generation is not None
+        and provider_generation != entry.provider_generation
+    ):
+        return False
+    return any(
+        item.path == entry.path
+        and item.expires_at_monotonic == entry.expires_at_monotonic
+        and type(item.value) is type(entry.value)
+        and item.value == entry.value
+        for item in entry.command_service.readback_expectations(
+            source=entry.source,
+            session_id=entry.session_id,
+            command_id=entry.command_id,
+        )
+    )
+
+
+def _with_command_metadata(
+    observation: Observation,
+    entry: _ReadbackCorrelation,
+) -> Observation:
+    source = observation.source
+    return Observation(
+        path=observation.path,
+        value=observation.value,
+        source=SourceMetadata(
+            source=source.source,
+            provider=source.provider,
+            transport=source.transport,
+            native_id=source.native_id,
+            capability_id=source.capability_id,
+            command_source=entry.source,
+            session_id=entry.session_id,
+        ),
+        timestamp_monotonic=observation.timestamp_monotonic,
+        quality=observation.quality,
+        correlation_id=entry.command_id,
+        max_age=observation.max_age,
+        provider_generation=observation.provider_generation,
+        clock_domain=observation.clock_domain,
+    )
+
+
+def _readback_paths_match(readback_path: FieldPath, overlay_path: FieldPath) -> bool:
+    if readback_path == overlay_path:
+        return True
+    return _external_rigctld_main_alias(readback_path) == (
+        _external_rigctld_main_alias(overlay_path)
+    )
+
+
+def _physical_command_targets_path(command: Any, path: FieldPath) -> bool:
+    if isinstance(command, CommandIntent):
+        return command.target is not None and _readback_paths_match(
+            command.target, path
+        )
+    command_name = type(command).__name__.lower()
+    target_name = path.name.replace("_", "")
+    return target_name in command_name or (target_name, command_name) in (
+        ("freqhz", "setfreq"),
+        ("activeslot", "selectvfo"),
+    )
+
+
+def _external_rigctld_main_alias(path: FieldPath) -> FieldPath:
+    if path.scope.value != "receiver" or path.receiver_id != "0":
+        return path
+    if path.family.value == "freq_mode" and path.slot is None:
+        return FieldPath.active("main", path.family.value, path.name)
+    return FieldPath.receiver("main", path.family.value, path.name)
+
+
+def _is_external_rigctld_readback(source: SourceMetadata) -> bool:
+    return (
+        source.source == "hamlib_response"
+        and source.provider == "external_rigctld"
+        and source.transport == "rigctld"
+    )
+
+
+class RigctldClientRadio:
+    """Minimal Radio implementation backed by external Hamlib ``rigctld``."""
+
+    # Provider-owned state contract (MOR-2901): this backend reports its
+    # capabilities and every observed value itself, so the web layer may
+    # serve it with no RigPlane profile. Backends without this marker keep
+    # the MOR-2012 resolve-or-refuse path for unidentified radios.
+    has_provider_owned_state: bool = True
+
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int = 4532,
+        timeout: float = 5.0,
+        model: str | None = None,
+        transport: RigctldTransport | None = None,
+    ) -> None:
+        self._transport = transport or RigctldTransport(
+            host=host,
+            port=port,
+            timeout=timeout,
+        )
+        self._model = model or "External rigctld"
+        self._state = RadioState()
+        self._vfo_supported = False
+        # MOR-2757: consecutive unanswered reads per safety-critical path,
+        # kept by the observation adapter (rebuilt every poll cycle) across
+        # cycles — the same "state lives on the radio" idiom as the Yaesu
+        # backend's tally. On the 3rd unanswered read the adapter records
+        # the declared-command defect that ends startup.
+        self._critical_read_timeouts: dict[FieldPath, int] = {}
+        # MOR-4456: the medium-lane transmit-state read demotes itself
+        # after its first timeout — a radio that never answers ``t`` must
+        # not take the receive state down with it every cycle. The flag
+        # lives here (not on the per-cycle adapter or poller) so it
+        # survives the reconnect the first timeout causes; only a fresh
+        # radio object (server restart, explicit reconnect/reconfigure)
+        # asks ``t`` again. A refused ``t`` never demotes: ``RPRT``
+        # answers keep being asked every cycle — the refusal is tracked
+        # separately below (``_ptt_read_refused``), and the single
+        # ``_ptt_read_answerable`` property is the one concept both
+        # facts feed.
+        self._ptt_read_demoted = False
+        # MOR-4456 #4607: the most recent ``t`` was REFUSED (an ``RPRT``
+        # error answer, not silence). Unlike the timeout demotion this is
+        # not sticky: any answered ``t`` clears it, so the managed unkey
+        # verification returns to the read as soon as the rig answers.
+        self._ptt_read_refused = False
+        # The same intentional-disconnect idiom as IcomRadio: set by
+        # disconnect(), cleared by connect(), checked by the poller's
+        # reconnect so an operator's disconnect is never undone.
+        self._intentional_disconnect = False
+        self._physical_write_result_callback: (
+            Callable[[PhysicalWriteReadbackResult], None] | None
+        ) = None
+
+    def set_physical_write_result_callback(
+        self, callback: Callable[[PhysicalWriteReadbackResult], None] | None
+    ) -> None:
+        self._physical_write_result_callback = callback
+
+    def _publish_physical_write_result(
+        self, result: PhysicalWriteReadbackResult
+    ) -> None:
+        try:
+            if self._physical_write_result_callback is not None:
+                self._physical_write_result_callback(result)
+        except Exception:
+            logger.warning("rigctld-client write-result callback failed", exc_info=True)
+
+    def bind_provider_generation(
+        self, *, advance: Callable[[], int] | None = None
+    ) -> None:
+        """Let the Web fallback Store fence transport lifecycle edges."""
+
+        self._transport.bind_provider_generation(advance=advance)
+
+    async def connect(self) -> None:
+        await self._transport.connect()
+        self._intentional_disconnect = False
+        # MOR-4456 P2: an explicit (re)connect — the operator's HTTP
+        # disconnect/connect, power-on, or a fresh ``__aenter__`` — retires
+        # the transmit-state demotion, so the next poll cycle asks ``t``
+        # again. The client's own recovery (``_reconnect_transport``) and
+        # the probe-timeout reopen (``read_transmit_state``) reuse
+        # ``transport.connect()`` and never touch this latch.
+        # MOR-4456 #4607: the refusal latch resets with it — one
+        # answerability, one reset.
+        self._ptt_read_demoted = False
+        self._ptt_read_refused = False
+        await self._probe_vfo_support()
+
+    async def disconnect(self) -> None:
+        self._intentional_disconnect = True
+        await self._transport.close()
+
+    async def __aenter__(self) -> "RigctldClientRadio":
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.disconnect()
+
+    @property
+    def connected(self) -> bool:
+        return self._transport.connected
+
+    @property
+    def radio_ready(self) -> bool:
+        return self.connected
+
+    @property
+    def radio_state(self) -> RadioState:
+        return self._state
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def backend_id(self) -> str:
+        return "rigctld"
+
+    #: MOR-3845: liveness source label for the ``connection.liveness`` web
+    #: field — evidence comes through the daemon, so daemon reachability is
+    #: never shown as radio liveness.
+    liveness_source = "daemon"
+
+    @property
+    def last_valid_frame_monotonic(self) -> float | None:
+        """Physical freshness only with an optional trusted provenance provider."""
+        return self._transport.last_valid_frame_monotonic
+
+    @property
+    def liveness_stale_after_ms(self) -> int:
+        """The medium observation cadence plus one request timeout, in ms."""
+        from .observations import (
+            build_external_rigctld_acquisition_profile,
+            resolve_external_rigctld_poll_intervals,
+        )
+
+        medium_interval, _slow = resolve_external_rigctld_poll_intervals(
+            build_external_rigctld_acquisition_profile(
+                vfo_supported=self._vfo_supported
+            )
+        )
+        return int((medium_interval + self._transport.timeout) * 1000)
+
+    @property
+    def capabilities(self) -> set[str]:
+        # ``"tx"`` here advertises PTT key/un-key only (``get_ptt`` /
+        # ``set_ptt``). It deliberately does NOT imply power control:
+        # external rigctld exposes no power-state read/set surface, so
+        # ``"power_control"`` is omitted and this backend does not
+        # implement ``PowerControlCapable``. The acquisition profile
+        # mirrors the gap by declaring ``power_on`` UNSUPPORTED rather
+        # than synthesizing a default value (MOR-433).
+        caps = {"tx", "rf_gain", "af_level", "preamp", "attenuator", "nb", "nr"}
+        if self._vfo_supported:
+            caps.add("vfo")
+        return caps
+
+    def supports_command(self, command: str, *, receiver: int | None = None) -> bool:
+        if receiver is not None and (
+            command
+            not in {
+                "set_af_level",
+                "set_rf_gain",
+                "set_squelch",
+                "set_attenuator_level",
+            }
+            or isinstance(receiver, bool)
+            or not isinstance(receiver, int)
+            or receiver != 0
+        ):
+            return False
+        supported = set(_SUPPORTED_COMMANDS)
+        if self._vfo_supported:
+            supported.update({"get_vfo_slot", "set_vfo_slot"})
+        return supports_explicit_callable(
+            command,
+            supported,
+            lambda name: callable(getattr(self, name, None)),
+        )
+
+    def create_observation_poller(
+        self,
+        *,
+        callback: Callable[[Sequence["Observation"]], None],
+        command_queue: "CommandQueue | None" = None,
+    ) -> RigctldClientObservationPoller:
+        """Construct a backend-neutral observation poller for Web startup."""
+        from .observations import (
+            build_external_rigctld_acquisition_profile,
+            resolve_external_rigctld_poll_intervals,
+        )
+
+        medium_interval, slow_interval = resolve_external_rigctld_poll_intervals(
+            build_external_rigctld_acquisition_profile(
+                vfo_supported=self._vfo_supported
+            )
+        )
+        return RigctldClientObservationPoller(
+            self,
+            callback=callback,
+            command_queue=command_queue,
+            medium_interval=medium_interval,
+            slow_interval=slow_interval,
+        )
+
+    async def get_freq(self, receiver: int = 0) -> int:
+        self._require_main_receiver(receiver, "get_freq")
+        freq = await self._transport.query_decoded(
+            "f", response_lines=1, decode=_decode_frequency
+        )
+        self._state.main.freq = freq
+        return freq
+
+    async def set_freq(self, freq: int, receiver: int = 0) -> None:
+        self._require_main_receiver(receiver, "set_freq")
+        if freq <= 0:
+            raise ValueError("freq must be > 0 Hz")
+        await self._transport.command(f"F {int(freq)}")
+
+    async def get_mode(self, receiver: int = 0) -> tuple[str, int | None]:
+        self._require_main_receiver(receiver, "get_mode")
+        mode, passband_hz = await self._transport.query_decoded(
+            "m", response_lines=2, decode=_decode_mode
+        )
+        self._state.main.mode = mode
+        self._state.main.filter_width = passband_hz
+        return mode, passband_hz
+
+    async def set_mode(
+        self,
+        mode: str,
+        filter_width: int | None = None,
+        receiver: int = 0,
+    ) -> None:
+        self._require_main_receiver(receiver, "set_mode")
+        normalized = mode.strip().upper()
+        if not normalized:
+            raise ValueError("mode must be non-empty")
+        command = f"M {normalized}"
+        if filter_width is not None:
+            if filter_width < 0:
+                raise ValueError("filter_width must be >= 0")
+            command = f"{command} {int(filter_width)}"
+        await self._transport.command(command)
+
+    async def get_data_mode(self) -> bool:
+        # Flat unavailable value — external rigctld has no data-mode read.
+        # Deliberately does NOT synthesize or mutate ``self._state``: the
+        # consumer pipeline is fed by ``RigctldClientObservationAdapter``,
+        # and the private ``_state`` mirror is legacy compat only (MOR-434).
+        return False
+
+    async def set_data_mode(self, on: int | bool, receiver: int = 0) -> None:
+        self._require_main_receiver(receiver, "set_data_mode")
+        if on:
+            raise CommandError(
+                "External rigctld backend does not support RigPlane data mode."
+            )
+
+    @property
+    def _ptt_read_answerable(self) -> bool:
+        """One transmit-state answerability (MOR-4456 #4607).
+
+        False while the read is demoted after a TIMEOUT (sticky until an
+        explicit connect) OR while the most recent ``t`` was REFUSED (an
+        ``RPRT`` error — an answer, not silence). A refused ``t`` keeps
+        being asked every poll cycle, so the first answered ``t`` flips
+        this back with no reconnect. Malformed ``t`` values, transport
+        errors and stale reads leave the refusal fact untouched: only an
+        ``RPRT`` refusal sets it, only an answered ``t`` clears it.
+        """
+        return not self._ptt_read_demoted and not self._ptt_read_refused
+
+    def _demote_ptt_read_after_timeout(self) -> None:
+        """Latch the medium-lane transmit-state read off (MOR-4456).
+
+        Called once, on the first unanswered ``t``: further medium cycles
+        publish PTT as unknown without sending ``t``. Idempotent, so the
+        single named warning below fires exactly once per radio object.
+        Solicited reads (:meth:`get_ptt`, :meth:`read_transmit_state`)
+        still ask — only the poll cycle stops asking — with one B3/#4607
+        exception: the managed-TX unkey verification read
+        (:meth:`actuate`) is skipped while the read is not answerable
+        (demoted here, or the most recent ``t`` refused) and settles
+        from the ``T 0`` answer instead.
+        """
+        if self._ptt_read_demoted:
+            return
+        self._ptt_read_demoted = True
+        logger.warning(
+            "rigctld-client transmit-state read demoted: field %s command %s "
+            "cause %s; further 't' reads are skipped for the life of this client",
+            FieldPath.global_("tx_state", "ptt"),
+            "t",
+            "timed out",
+        )
+
+    async def get_ptt(self) -> bool:
+        ptt = await self._read_ptt()
+        self._state.ptt = ptt
+        return ptt
+
+    async def _read_ptt(
+        self,
+        *,
+        is_current: Callable[[], bool] | None = None,
+        urgent: bool = False,
+    ) -> bool:
+        # MOR-4456 #4607: every ``t`` outcome lands here — the poll-cycle
+        # read (via ``get_ptt``), the solicited probes and the managed
+        # unkey verification below — so the single answerability tracks
+        # the latest outcome wherever it was observed.
+        try:
+            value = await self._transport.query_decoded(
+                "t",
+                response_lines=1,
+                decode=_decode_ptt,
+                is_current=is_current,
+                urgent=urgent,
+            )
+        except RigctldCommandError:
+            # An ``RPRT`` refusal: an answer, not silence — polling keeps
+            # asking every cycle, but the unkey verification skips the
+            # read while refused. Narrow: a malformed ``t`` (plain
+            # ``CommandError`` from the decode) or a stale read leaves
+            # the refusal fact untouched.
+            self._ptt_read_refused = True
+            raise
+        except (asyncio.TimeoutError, RadioTimeoutError):
+            self._demote_ptt_read_after_timeout()
+            raise
+        self._ptt_read_refused = False
+        return value
+
+    async def set_ptt(self, on: bool) -> None:
+        await self._set_ptt(on)
+
+    async def _set_ptt(
+        self,
+        on: bool,
+        *,
+        is_current: Callable[[], bool] | None = None,
+        urgent: bool = False,
+    ) -> None:
+        await self._transport.command(
+            f"T {1 if on else 0}", is_current=is_current, urgent=urgent
+        )
+
+    def abort_applicable(self, operation: AbortOperation) -> bool:
+        """No rigctld abort primitive exists (MOR-4352).
+
+        ``actuate`` answers every :class:`AbortOperation` with REJECTED
+        without emitting a command -- the daemon protocol has no CW-keying
+        or tuner abort form -- so no abort operation is applicable and
+        the managed-release lane never schedules one.
+        """
+        del operation
+        return False
+
+    async def actuate(
+        self,
+        token: EffectToken,
+        operation: ActuationOperation | AbortOperation,
+        *,
+        is_current: Callable[[], bool],
+    ) -> ActuationResult:
+        if operation in (ActuationOperation.PTT_ON, ActuationOperation.TRANSMIT_ON):
+            await self._set_ptt(True, is_current=is_current, urgent=False)
+            return ActuationResult.ACCEPTED
+        if operation is not ActuationOperation.FORCE_RECEIVE:
+            return ActuationResult.REJECTED
+        # MOR-2862: ``RPRT 0`` answers from the daemon, not from the
+        # radio, so ACCEPTED after the write alone would mean only
+        # "written". The same actuation reads ``t`` back once, on the
+        # unkey's own urgency and currency; only a read that says
+        # receive confirms the unkey. TX, silence, a malformed answer,
+        # or a raised read is UNCERTAIN, which keeps the release owed
+        # (``managed_tx_state.py: _settle``). A refused write keeps
+        # propagating for the lane to normalize, as today.
+        # MOR-4456 B3 + #4607: while the transmit-state read is not
+        # answerable — demoted after its first unanswered ``t``, or with
+        # the most recent ``t`` REFUSED (``_ptt_read_answerable`` is the
+        # one concept) — this solicited verification read is NOT sent.
+        # On a rigctld whose ``t`` is silent it would time out, retire
+        # the transport, advance the provider generation and strand the
+        # owed release; on one refusing ``t`` it would settle
+        # ``UNCERTAIN`` and strand the release the same way. The release
+        # settles from the radio's own answer to the unkey command
+        # instead: the ``RPRT 0`` above already confirmed the unkey
+        # reached the daemon. A refused ``t`` keeps being asked by the
+        # poll cycle, so verification returns to the read as soon as the
+        # rig answers. A failed or unanswered ``T 0`` keeps today's path
+        # (the write raises before this line, the lane normalizes to
+        # UNCERTAIN, the release stays owed) — never a silent success.
+        await self._set_ptt(False, is_current=is_current, urgent=True)
+        if not self._ptt_read_answerable:
+            return ActuationResult.ACCEPTED
+        try:
+            transmitting = await self._read_ptt(is_current=is_current, urgent=True)
+        except Exception:
+            return ActuationResult.UNCERTAIN
+        return (
+            ActuationResult.ACCEPTED if not transmitting else ActuationResult.UNCERTAIN
+        )
+
+    async def read_transmit_state(self) -> TxStateReading:
+        """One solicited transmit-state observation.
+
+        It adapts :meth:`get_ptt`; ``verified_readback`` remains ``False``
+        because the rigctld ``t`` reply carries no proof that the value came
+        from a fresh physical-radio read. Errors return a ``failure`` tag.
+        """
+        try:
+            value = await self.get_ptt()
+        except (asyncio.TimeoutError, RadioTimeoutError):
+            # Both are real outcomes here: ``asyncio.TimeoutError`` is the
+            # builtin/stdlib one; ``RadioTimeoutError`` is this module's own
+            # ``core.exceptions.TimeoutError`` (MRO: TimeoutError ->
+            # RigplaneError -> Exception -- it does NOT subclass the
+            # builtin), and it is exactly what the rigctld-client transport
+            # raises on a read timeout (``transport.py:64-66,214-216,233-235``).
+            # A narrower catch here silently reported every real timeout as
+            # ``failure="read-error"`` instead -- the same pattern already
+            # caught and fixed in ``runtime/radio.py``'s Icom primitive.
+            # MOR-4456: the timeout retired the transport and nothing reopens it
+            # before the web/station readiness check (managed startup probes
+            # PTT in ``bind_state_store``): heal the link with the poller's own
+            # ``_reconnect_transport`` idiom; PTT stays unobserved.
+            # The probe timeout also latches the medium-lane demotion, so
+            # the first poll cycle does not ask ``t`` again (a second
+            # unanswered request whose timeout would retire the provider
+            # the probe just published). This solicited read itself still
+            # asks; only the poll cycle and (B3/#4607) the managed-TX
+            # unkey verification stop asking while unanswerable
+            # (demoted, or the most recent ``t`` refused).
+            if not self._intentional_disconnect and not self._transport.connected:
+                try:
+                    await self._transport.connect()
+                except Exception:
+                    logger.warning(
+                        "rigctld-client transport reconnect failed", exc_info=True
+                    )
+            self._demote_ptt_read_after_timeout()
+            return TxStateReading(value=None, failure="timeout")
+        except Exception:
+            return TxStateReading(value=None, failure="read-error")
+        return TxStateReading(
+            value=value,
+            attributed=None,
+            source="hamlib_response",
+            verified_readback=False,
+        )
+
+    async def get_vfo_slot(self, receiver: int = 0) -> str:
+        self._require_main_receiver(receiver, "get_vfo_slot")
+        slot = await self._transport.query_decoded(
+            "v", response_lines=1, decode=lambda lines: _normalize_vfo_slot(lines[0])
+        )
+        self._state.main.active_slot = slot
+        return slot
+
+    async def set_vfo_slot(self, slot: str, receiver: int = 0) -> None:
+        self._require_main_receiver(receiver, "set_vfo_slot")
+        normalized = _normalize_vfo_slot(slot)
+        await self._transport.command(f"V VFO{normalized}")
+
+    async def get_rf_gain(self, receiver: int = 0) -> int:
+        self._require_main_receiver(receiver, "get_rf_gain")
+        return await self._transport.query_decoded(
+            "l RF",
+            response_lines=1,
+            decode=lambda lines: _parse_level_255(lines[0], "RF gain"),
+        )
+
+    async def set_rf_gain(self, level: int, receiver: int = 0) -> None:
+        self._require_main_receiver(receiver, "set_rf_gain")
+        await self._transport.command(f"L RF {_level_255_to_float(level)}")
+
+    async def get_af_level(self, receiver: int = 0) -> int:
+        self._require_main_receiver(receiver, "get_af_level")
+        return await self._transport.query_decoded(
+            "l AF",
+            response_lines=1,
+            decode=lambda lines: _parse_level_255(lines[0], "AF level"),
+        )
+
+    async def set_af_level(self, level: int, receiver: int = 0) -> None:
+        self._require_main_receiver(receiver, "set_af_level")
+        await self._transport.command(f"L AF {_level_255_to_float(level)}")
+
+    async def get_preamp(self, receiver: int = 0) -> int:
+        self._require_main_receiver(receiver, "get_preamp")
+        return await self._transport.query_decoded(
+            "l PREAMP",
+            response_lines=1,
+            decode=lambda lines: _preamp_db_to_level(
+                _parse_int_level(lines[0], "preamp")
+            ),
+        )
+
+    async def set_preamp(self, level: int, receiver: int = 0) -> None:
+        self._require_main_receiver(receiver, "set_preamp")
+        await self._transport.command(f"L PREAMP {_preamp_level_to_db(level)}")
+
+    async def get_attenuator(self, receiver: int = 0) -> bool:
+        self._require_main_receiver(receiver, "get_attenuator")
+        return await self.get_attenuator_level(receiver) > 0
+
+    async def set_attenuator(self, on: bool, receiver: int = 0) -> None:
+        self._require_main_receiver(receiver, "set_attenuator")
+        await self._transport.command(f"L ATT {'6' if on else '0'}")
+
+    async def get_attenuator_level(self, receiver: int = 0) -> int:
+        self._require_main_receiver(receiver, "get_attenuator_level")
+        return await self._transport.query_decoded(
+            "l ATT",
+            response_lines=1,
+            decode=lambda lines: _parse_int_level(lines[0], "attenuator"),
+        )
+
+    def project_attenuator_observation_value(self, db: int) -> int:
+        return db
+
+    async def set_attenuator_level(self, db: int, receiver: int = 0) -> None:
+        self._require_main_receiver(receiver, "set_attenuator_level")
+        await self._transport.command(f"L ATT {int(db)}")
+
+    async def get_nb(self) -> bool:
+        return await self._transport.query_decoded(
+            "u NB",
+            response_lines=1,
+            decode=lambda lines: _parse_func(lines[0], "noise blanker"),
+        )
+
+    async def set_nb(self, on: bool, receiver: int = 0) -> None:
+        self._require_main_receiver(receiver, "set_nb")
+        await self._transport.command(f"U NB {1 if on else 0}")
+
+    async def get_nr(self) -> bool:
+        return await self._transport.query_decoded(
+            "u NR",
+            response_lines=1,
+            decode=lambda lines: _parse_func(lines[0], "noise reduction"),
+        )
+
+    async def set_nr(self, on: bool, receiver: int = 0) -> None:
+        self._require_main_receiver(receiver, "set_nr")
+        await self._transport.command(f"U NR {1 if on else 0}")
+
+    async def _probe_vfo_support(self) -> None:
+        try:
+            await self.get_vfo_slot()
+        except CommandError:
+            self._vfo_supported = False
+        else:
+            self._vfo_supported = True
+
+    @staticmethod
+    def _require_main_receiver(receiver: int, operation: str) -> None:
+        if receiver != 0:
+            raise ValueError(
+                f"{operation}: external rigctld backend only supports receiver 0"
+            )
+
+
+def _decode_frequency(lines: list[str]) -> int:
+    line = lines[0]
+    try:
+        freq = int(line)
+    except ValueError as exc:
+        raise CommandError(
+            f"External rigctld returned malformed frequency: {line!r}."
+        ) from exc
+    if freq < 0:
+        raise CommandError(
+            f"External rigctld returned invalid negative frequency: {freq}."
+        )
+    return freq
+
+
+def _decode_mode(lines: list[str]) -> tuple[str, int]:
+    mode, passband = lines
+    mode = mode.strip().upper()
+    if not mode:
+        raise CommandError("External rigctld returned an empty mode.")
+    try:
+        passband_hz = int(passband)
+    except ValueError as exc:
+        raise CommandError(
+            f"External rigctld returned malformed passband: {passband!r}."
+        ) from exc
+    return mode, passband_hz
+
+
+def _decode_ptt(lines: list[str]) -> bool:
+    line = lines[0]
+    if line not in {"0", "1"}:
+        raise CommandError(f"External rigctld returned malformed PTT: {line!r}.")
+    return line == "1"
+
+
+def _normalize_vfo_slot(value: str) -> str:
+    normalized = value.strip().upper()
+    if normalized in {"A", "VFOA"}:
+        return "A"
+    if normalized in {"B", "VFOB"}:
+        return "B"
+    raise CommandError(f"External rigctld returned unsupported VFO: {value!r}.")
+
+
+def _level_255_to_float(level: int) -> str:
+    """Format a RigPlane 0..255 level as a rigctl 0.0..1.0 string (3 decimals)."""
+    clamped = max(0, min(255, int(level)))
+    return f"{clamped / 255:.3f}"
+
+
+def _float_to_level_255(value: float) -> int:
+    """Convert a rigctl 0.0..1.0 level to a clamped RigPlane 0..255 integer."""
+    return max(0, min(255, round(value * 255)))
+
+
+def _parse_level_255(line: str, name: str) -> int:
+    try:
+        value = float(line)
+    except ValueError as exc:
+        raise CommandError(
+            f"External rigctld returned malformed {name}: {line!r}."
+        ) from exc
+    return _float_to_level_255(value)
+
+
+def _parse_int_level(line: str, name: str) -> int:
+    try:
+        return int(float(line))
+    except ValueError as exc:
+        raise CommandError(
+            f"External rigctld returned malformed {name}: {line!r}."
+        ) from exc
+
+
+def _parse_func(line: str, name: str) -> bool:
+    stripped = line.strip()
+    if stripped not in {"0", "1"}:
+        raise CommandError(f"External rigctld returned malformed {name}: {line!r}.")
+    return stripped == "1"
+
+
+def _preamp_level_to_db(level: int) -> str:
+    """Map a RigPlane preamp level (0/1/2) to a rigctl dB string.
+
+    Raises ``ValueError`` for any other level. This backend talks to an
+    already-running external rigctld daemon and has no ``RigProfile`` to
+    validate against (unlike ``IcomRadio``/``YaesuCatRadio``, MOR-1522/
+    MOR-1523) — an unrecognized level must fail loud, not be silently
+    misrepresented on the wire as "preamp off" (MOR-1529).
+    """
+    table = {0: "0", 1: "10", 2: "20"}
+    if int(level) not in table:
+        raise ValueError(f"preamp level must be one of {sorted(table)}, got {level}")
+    return table[int(level)]
+
+
+def _preamp_db_to_level(db: int) -> int:
+    """Map a rigctl preamp dB reading to a RigPlane preamp level (0/1/2)."""
+    if db <= 0:
+        return 0
+    if db <= 15:
+        return 1
+    return 2

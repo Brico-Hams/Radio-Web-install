@@ -1,0 +1,866 @@
+/**
+ * MOR-1305 — the semantic DSP surface (vocabulary slice 5B).
+ *
+ * Carry-forward pins from the MOR-1290 fact-layer decisions this surface must
+ * not relax (see `DspSurface.svelte`'s header for the full statement):
+ *  (1) DSP display metadata arrives as plain host/surface props, never read
+ *      off a capabilities import inside this family — block 5.
+ *  (2) a structurally-present, never-observed `agcTimeConstant` renders like
+ *      any other unobserved present field — no special-casing — block 2.
+ *  (3) every reading renders exactly as the fact group states it — no local
+ *      rescale of `nrLevel`/`nbDepth` — block 6.
+ *  (4) `unknown` renders as EMPTY value text (MOR-2527), never a `?` and
+ *      never a v2 fabricated default — block 2.
+ */
+import { readFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+import { DSP_LEVELS, DSP_TOGGLES, type DspLevelField, type DspToggleField } from '../DspSurface.svelte';
+import type { DspNotchMode } from '../dsp-instruments';
+import { topologyFixtures, withDsp } from '../fixtures/topologies';
+import type { Availability, DspViewModel, RadioViewModel } from '../radio-view-model';
+import DspScalarHostFixture from './fixtures/DspScalarHostFixture.svelte';
+
+/** `1/single` + a fully-observed dsp group (nrActive true, nbActive false —
+ *  both toggles exercised at least once by the base fixture). */
+const LEGACY_NR_DOMAIN = { min: 0, max: 15, step: 1, origin: 0 } as const;
+const EXACT_NR_DOMAIN = { min: 0, max: 10, step: 1, origin: 0 } as const;
+
+const base = (): RadioViewModel => {
+  const view = withDsp(topologyFixtures['1/single']);
+  return {
+    ...view,
+    dsp: {
+      ...view.dsp!,
+      nrLevelProjection: { value: 8, domain: LEGACY_NR_DOMAIN, adjustable: true },
+    },
+  };
+};
+
+type AnyField = keyof DspViewModel;
+const NUMERIC_FIELDS: readonly AnyField[] = [
+  ...DSP_TOGGLES.map(([f]) => f), ...DSP_LEVELS.map(([f]) => f), 'nbLevel',
+] as readonly AnyField[];
+const NATIVE_LEVELS = DSP_LEVELS.filter(([field]) => field !== 'nbWidth');
+/** The thumb position an unread level control MUST claim (MOR-1304/1305 F2)
+ *  — `numberOf`'s own fallback, verbatim, so a fallback-value mutation is
+ *  pinned rather than left free to claim any position. `nbLevel` falls back
+ *  to `0` (its own literal in `DspSurface.svelte`), not its declared min. */
+const LEVEL_FALLBACK: Partial<Record<AnyField, number>> = {
+  ...Object.fromEntries(DSP_LEVELS.map(([f, , min]) => [f, min])),
+  nbLevel: 0,
+};
+
+/** Re-shape ONE dsp field of an otherwise fully-available fixture. */
+function withField(
+  view: RadioViewModel, field: AnyField,
+  over: { availability?: Availability; unknown?: boolean },
+): RadioViewModel {
+  const dsp = view.dsp!;
+  const current = dsp[field] as { reading: unknown; availability: Availability };
+  return {
+    ...view,
+    dsp: {
+      ...dsp,
+      [field]: {
+        reading: over.unknown ? { status: 'unknown' } : current.reading,
+        availability: over.availability ?? current.availability,
+      },
+    } as DspViewModel,
+  };
+}
+
+function withNrProjection(
+  value: number,
+  projection: DspViewModel['nrLevelProjection'],
+): RadioViewModel {
+  const view = base();
+  return {
+    ...view,
+    dsp: {
+      ...view.dsp!,
+      nrLevel: { ...view.dsp!.nrLevel, reading: { status: 'known', value } },
+      ...(projection === undefined ? {} : { nrLevelProjection: projection }),
+    },
+  };
+}
+
+let target: HTMLDivElement;
+beforeEach(() => { target = document.createElement('div'); document.body.appendChild(target); });
+afterEach(() => { target.remove(); });
+
+type Handlers = {
+  onToggle?: (field: DspToggleField, next: boolean) => void;
+  onLevelChange?: (field: DspLevelField, value: number) => void;
+  onNotchModeChange?: (mode: 'off' | 'auto' | 'manual') => void;
+  onAgcModeChange?: (mode: number) => void;
+};
+type Props = Handlers & {
+  agcLabels?: Record<string, string>; nbLevelMax?: number; nbLevelPercent?: boolean;
+  pendingNb?: boolean | null; pendingNr?: boolean | null;
+  pendingNotch?: DspNotchMode | null;
+  compactAgcTime?: boolean;
+};
+
+function render(view: RadioViewModel, props: Props = {}) {
+  const component = mount(DspScalarHostFixture, {
+    target, props: { view, presentation: 'grouped', ...props },
+  });
+  flushSync();
+  const q = <T extends HTMLElement>(sel: string) => target.querySelector(sel) as T | null;
+  return {
+    dispose: () => unmount(component),
+    root: () => q('[data-testid="dsp-surface"]'),
+    control: (field: string) => q<HTMLElement>(`[data-testid="dsp-${field}"]`),
+    input: (field: string) => q<HTMLInputElement>(`[data-testid="dsp-${field}"] input`),
+    slider: (field: string) => q<HTMLElement>(`[data-testid="dsp-${field}"] [role="slider"]`),
+    notchButton: (mode: string) => q<HTMLButtonElement>(`[data-testid="dsp-notchMode-${mode}"]`),
+    agcButton: (mode: number) => q<HTMLButtonElement>(`[data-testid="dsp-agcMode-${mode}"]`),
+  };
+}
+
+function withSurface(view: RadioViewModel, fn: (s: ReturnType<typeof render>) => void, props: Props = {}): void {
+  const s = render(view, props);
+  try { fn(s); } finally { s.dispose(); }
+}
+
+/** `disabled` for a <button>, or for the <input> a level control wraps. */
+function isDisabled(s: ReturnType<typeof render>, field: string): boolean {
+  const el = s.control(field)!;
+  if (el instanceof HTMLButtonElement) return el.disabled;
+  const input = s.input(field);
+  return input ? input.disabled : s.slider(field)?.getAttribute('aria-disabled') === 'true';
+}
+
+// ── 1. Structural gating: absent, never a disabled promise ─────────────────
+
+describe('structural availability decides whether a control EXISTS', () => {
+  it.each(NUMERIC_FIELDS)('renders no control at all for a structurally absent "%s"', (field) => {
+    const view = withField(base(), field, { availability: { structural: false, operational: false } });
+    withSurface(view, (s) => {
+      expect(s.control(field)).toBeNull();
+      expect(s.root()).not.toBeNull();
+    });
+  });
+
+  it.each(NUMERIC_FIELDS)('renders an enabled control for a fully available "%s"', (field) => {
+    withSurface(base(), (s) => {
+      expect(s.control(field)).not.toBeNull();
+      expect(isDisabled(s, field)).toBe(false);
+    });
+  });
+
+  it('renders nothing for a view model carrying no dsp group', () => {
+    const view = { ...topologyFixtures['1/single'] };
+    withSurface(view as RadioViewModel, (s) => {
+      expect(s.root()).toBeNull();
+      expect(target.querySelectorAll('button, input')).toHaveLength(0);
+    });
+  });
+
+  it('renders no notchMode/agcMode control when structurally absent', () => {
+    const view = withField(withField(base(), 'notchMode', {
+      availability: { structural: false, operational: false },
+    }), 'agcMode', { availability: { structural: false, operational: false } });
+    withSurface(view, (s) => {
+      expect(s.notchButton('off')).toBeNull();
+      expect(s.agcButton(1)).toBeNull();
+    });
+  });
+});
+
+// ── 2. Operational gating + unknown-honesty (carry-forwards 2 and 4) ───────
+
+describe('operational availability decides whether a control is USABLE', () => {
+  it.each(NUMERIC_FIELDS)('keeps "%s" present but disabled when only operationally unavailable', (field) => {
+    const view = withField(base(), field, { availability: { structural: true, operational: false } });
+    withSurface(view, (s) => {
+      expect(s.control(field)).not.toBeNull();
+      expect(isDisabled(s, field)).toBe(true);
+      expect(s.control(field)!.dataset.disabledReason).toBe('field-not-observed');
+    });
+  });
+
+  // Carry-forward (4), MOR-2527: an unobserved level renders NO value text —
+  // never a `?` stand-in, never a v2 default (0 dB, OFF, WIDE) — and never
+  // enables the control either. `fmt` here owns the native level outputs,
+  // `formatValue` in `DspScalarHost.svelte` owns nbLevel/nbWidth.
+  it.each([...DSP_LEVELS.map(([f]) => f), 'nbLevel'] as const)(
+    'renders no value text and disables "%s" on an unobserved reading',
+    (field) => {
+      const view = withField(base(), field, { unknown: true });
+      withSurface(view, (s) => {
+        expect(isDisabled(s, field)).toBe(true);
+        const text = s.control(field)!.textContent ?? '';
+        expect(text).not.toContain('?');
+        expect(text).not.toMatch(/[?—–]|UNKNOWN|N\/A/);
+        // MOR-1304/1305 F2: the rendered slider THUMB of an unread level is not
+        // free to claim any position — it must sit at the field's declared
+        // fallback (`numberOf`'s own default), never a mutated stand-in value.
+        const input = s.input(field);
+        if (input) expect(input.value).toBe(String(LEVEL_FALLBACK[field]));
+      });
+    },
+  );
+
+  // MOR-2527 remainder, retired in this slice: the DSP finite toggles
+  // (NR/NB) are KEYS like the RF front-end's — label only, lit by
+  // `aria-pressed`; an unobserved toggle draws the unlit label with no
+  // `: ?`/`: on`/`: off` text at all.
+  it.each(DSP_TOGGLES.map(([f]) => f))(
+    'renders the unobserved toggle "%s" as the unlit key — no value text',
+    (field) => {
+      const view = withField(base(), field, { unknown: true });
+      withSurface(view, (s) => {
+        expect(isDisabled(s, field)).toBe(true);
+        expect(s.control(field)!.textContent).toBe(field === 'nrActive' ? 'NR' : 'NB');
+        expect(s.control(field)!.textContent).not.toMatch(/[—–?]|UNKNOWN|:\s*(on|off)/i);
+      });
+    },
+  );
+
+  // MOR-1304/1305 N1/MD7: the toggle binding must return `undefined` — never `false`
+  // — for an unobserved toggle reading, so Svelte OMITS `aria-pressed`
+  // entirely. `aria-pressed="false"` is not the absence of a claim, it is the
+  // claim "this control is OFF" about a reading the radio never reported —
+  // carry-forward 4's exact prohibition, applied to the attribute as well as
+  // the visible text.
+  it.each(DSP_TOGGLES.map(([f]) => f))(
+    'never fabricates aria-pressed=false for an unobserved toggle "%s"',
+    (field) => {
+      const view = withField(base(), field, { unknown: true });
+      withSurface(view, (s) => {
+        expect(s.control(field)!.getAttribute('aria-pressed')).toBeNull();
+      });
+    },
+  );
+
+  // Carry-forward (2): `agcTimeConstant` structurally present but never
+  // observed renders exactly like any other honest present-unobserved field —
+  // no special-casing for the borrowed-capability optimism.
+  it('renders agcTimeConstant present-and-disabled, not hidden, when unobserved', () => {
+    const view = withField(base(), 'agcTimeConstant', { unknown: true });
+    withSurface(view, (s) => {
+      expect(s.control('agcTimeConstant')).not.toBeNull();
+      expect(isDisabled(s, 'agcTimeConstant')).toBe(true);
+    });
+  });
+
+  it('disables notchMode/agcMode buttons on an unobserved reading', () => {
+    const view = withField(withField(base(), 'notchMode', { unknown: true }), 'agcMode', { unknown: true });
+    withSurface(view, (s) => {
+      expect(s.notchButton('off')!.disabled).toBe(true);
+      expect(s.agcButton(1)!.disabled).toBe(true);
+    });
+  });
+
+  it('does not light unobserved DSP choices', () => {
+    const view = withField(withField(base(), 'notchMode', { unknown: true }), 'agcMode', { unknown: true });
+    withSurface(view, (s) => {
+      expect(s.notchButton('off')!.getAttribute('aria-pressed')).toBeNull();
+      expect(s.agcButton(2)!.dataset.active).toBe('false');
+    });
+  });
+});
+
+// ── 3. Toggle intents: nrActive/nbActive compute their own next value ──────
+
+describe('toggle intents compute the next boolean from the current reading', () => {
+  it('emits (field, next) flipping the current value', () => {
+    const onToggle = vi.fn();
+    // base(): nrActive known(true), nbActive known(false).
+    withSurface(base(), (s) => {
+      s.control('nrActive')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      flushSync();
+      expect(onToggle).toHaveBeenCalledExactlyOnceWith('nrActive', false);
+      s.control('nbActive')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      flushSync();
+      expect(onToggle).toHaveBeenNthCalledWith(2, 'nbActive', true);
+    }, { onToggle });
+  });
+
+  // MUTATION KILLED: toggling from an unobserved reading — the next value
+  // would be a coin flip presented as a confirmed command.
+  it('emits nothing when the reading is unobserved', () => {
+    const onToggle = vi.fn();
+    const view = withField(base(), 'nrActive', { unknown: true });
+    withSurface(view, (s) => {
+      s.control('nrActive')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      flushSync();
+      expect(onToggle).not.toHaveBeenCalled();
+    }, { onToggle });
+  });
+});
+
+// ── 4. Level intents carry the field and the raw value ─────────────────────
+
+describe('level intents reach the caller with the field and the raw value', () => {
+  it.each(NATIVE_LEVELS)('emits (%s, value) on input with the declared range', (field, _label, min, max, step, _fmt?) => {
+    const onLevelChange = vi.fn();
+    withSurface(base(), (s) => {
+      const input = s.input(field)!;
+      expect(input.min).toBe(String(min));
+      expect(input.max).toBe(String(max));
+      expect(input.step).toBe(String(step));
+      input.value = String(min);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onLevelChange).toHaveBeenCalledExactlyOnceWith(field, min);
+    }, { onLevelChange });
+  });
+
+  it('passes reading values through unrescaled (carry-forward 3)', () => {
+    // withDsp(): nrLevel 8, nbDepth 5 — the adapter's own display-scaled
+    // values; this surface must show them verbatim, never re-derive a scale.
+    withSurface(base(), (s) => {
+      expect(s.input('nrLevel')!.valueAsNumber).toBe(8);
+      expect(s.input('nbDepth')!.valueAsNumber).toBe(5);
+    });
+  });
+
+  /**
+   * MOR-1304/1305 F3: the `level()` handler guard must reject an unusable
+   * field on its OWN, independently of the `disabled` attribute. A plain
+   * `.click()`/native interaction never reaches a disabled control's handler
+   * at all, which would let this test pass even if the in-component guard
+   * were deleted — so the input event is dispatched directly, the same
+   * bypass a determined operator's assistive tech or a stray event listener
+   * could still trigger.
+   */
+  it('emits nothing when the level reading is unobserved, even bypassing disabled', () => {
+    const onLevelChange = vi.fn();
+    const view = withField(base(), 'nrLevel', { unknown: true });
+    withSurface(view, (s) => {
+      const input = s.input('nrLevel')!;
+      expect(input.disabled).toBe(true);
+      input.value = '9';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onLevelChange).not.toHaveBeenCalled();
+    }, { onLevelChange });
+  });
+
+  /**
+   * MOR-2704 G1: the KNOWN-reading, not-operational half of the gate, pinned
+   * against the imported `usable` (a mutation that drops its `operational`
+   * check re-enables the slider and this dies).
+   */
+  it('emits nothing for a KNOWN level under operational:false, keeping the disabled reason', () => {
+    const onLevelChange = vi.fn();
+    const view = withField(base(), 'notchFreq', {
+      availability: { structural: true, operational: false },
+    });
+    withSurface(view, (s) => {
+      const input = s.input('notchFreq')!;
+      expect(input.disabled).toBe(true);
+      expect(s.control('notchFreq')!.dataset.disabledReason).toBe('field-not-observed');
+      input.value = '100';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onLevelChange).not.toHaveBeenCalled();
+    }, { onLevelChange });
+  });
+});
+
+describe('exact NR-level projection (MOR-1737)', () => {
+  it.each([0, 1, 4, 10])('renders exact FTX-1 display value %i in its native domain', (value) => {
+    const view = withNrProjection(value, { value, domain: EXACT_NR_DOMAIN, adjustable: true });
+    withSurface(view, (s) => {
+      const input = s.input('nrLevel')!;
+      expect(input.min).toBe('0');
+      expect(input.max).toBe('10');
+      expect(input.step).toBe('1');
+      expect(input.valueAsNumber).toBe(value);
+      expect(s.control('nrLevel')!.textContent).toContain(String(value));
+      expect(input.disabled).toBe(false);
+    });
+  });
+
+  it('emits exact display value 4 without re-projection', () => {
+    const onLevelChange = vi.fn();
+    const view = withNrProjection(4, { value: 4, domain: EXACT_NR_DOMAIN, adjustable: true });
+    withSurface(view, (s) => {
+      const input = s.input('nrLevel')!;
+      input.value = '4';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onLevelChange).toHaveBeenCalledExactlyOnceWith('nrLevel', 4);
+    }, { onLevelChange });
+  });
+
+  it('uses the projection origin for an unread thumb position', () => {
+    const view = withField(withNrProjection(4, {
+      value: null,
+      domain: { min: 0, max: 10, step: 1, origin: 4 },
+      adjustable: false,
+    }), 'nrLevel', { unknown: true });
+    withSurface(view, (s) => {
+      expect(s.input('nrLevel')!.valueAsNumber).toBe(4);
+      expect(s.input('nrLevel')!.disabled).toBe(true);
+    });
+  });
+
+  it.each([
+    ['malformed projection', withNrProjection(4, {
+      value: 4, domain: { min: 0, max: 10, step: 0, origin: 0 }, adjustable: true,
+    })],
+    ['stale projection', withField(withNrProjection(4, {
+      value: null, domain: EXACT_NR_DOMAIN, adjustable: false,
+    }), 'nrLevel', { availability: { structural: true, operational: false } })],
+    ['unread projection', withField(withNrProjection(4, {
+      value: null, domain: EXACT_NR_DOMAIN, adjustable: false,
+    }), 'nrLevel', { unknown: true })],
+    ['out-of-domain projection', withNrProjection(11, {
+      value: 11, domain: EXACT_NR_DOMAIN, adjustable: true,
+    })],
+    ['absent projection', withDsp(topologyFixtures['1/single'])],
+  ] as const)('fails closed for %s and guards the callback independently of disabled', (_label, view) => {
+    const onLevelChange = vi.fn();
+    withSurface(view, (s) => {
+      const input = s.input('nrLevel')!;
+      expect(input.disabled).toBe(true);
+      input.value = '4';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onLevelChange).not.toHaveBeenCalled();
+    }, { onLevelChange });
+  });
+
+  it.each([
+    ['endpoints off the origin lattice', {
+      value: 5,
+      domain: { min: 0, max: 10, step: 2, origin: 1 },
+      adjustable: true,
+    }],
+    ['overflow-sensitive endpoint delta', {
+      value: Number.MIN_SAFE_INTEGER,
+      domain: {
+        min: Number.MIN_SAFE_INTEGER,
+        max: Number.MAX_SAFE_INTEGER - 1,
+        step: 5,
+        origin: Number.MIN_SAFE_INTEGER,
+      },
+      adjustable: true,
+    }],
+  ] as const)('rejects a projection with %s', (_label, projection) => {
+    const onLevelChange = vi.fn();
+    const view = withNrProjection(projection.value, projection);
+    withSurface(view, (s) => {
+      const input = s.input('nrLevel')!;
+      expect(input.disabled).toBe(true);
+      input.value = String(projection.value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onLevelChange).not.toHaveBeenCalled();
+    }, { onLevelChange });
+  });
+});
+
+/* ── MOR-2704 T1 (option A): a read NR level's text and thumb are shown even
+   when the field is not operational; the slider stays on the `usable` gate. ── */
+describe('MOR-2704 T1: a read NR level stays visible while its slider is unavailable', () => {
+  it('shows the read NR level and its thumb, keeps the slider disabled with its reason, and emits nothing', () => {
+    const onLevelChange = vi.fn();
+    // base(): nrLevel known(8), projection { value: 8, LEGACY_NR_DOMAIN, adjustable }.
+    const view = withField(base(), 'nrLevel', { availability: { structural: true, operational: false } });
+    withSurface(view, (s) => {
+      expect(s.control('nrLevel')!.querySelector('output')!.textContent).toBe('8');
+      const input = s.input('nrLevel')!;
+      expect(input.valueAsNumber).toBe(8);
+      expect(input.disabled).toBe(true);
+      expect(s.control('nrLevel')!.dataset.disabledReason).toBe('field-not-observed');
+      input.value = '9';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onLevelChange).not.toHaveBeenCalled();
+    }, { onLevelChange });
+  });
+});
+
+// ── 4b. Manual-notch position is the CI-V raw 0..255 domain ───────────────
+
+describe('manual-notch position stays in the documented raw domain', () => {
+  it.each([0, 128, 255])('renders and emits raw notch position %i unchanged', (position) => {
+    const onLevelChange = vi.fn();
+    const view = {
+      ...base(),
+      dsp: {
+        ...base().dsp!,
+        notchFreq: {
+          ...base().dsp!.notchFreq,
+          reading: { status: 'known' as const, value: position },
+        },
+      },
+    } as RadioViewModel;
+
+    withSurface(view, (s) => {
+      const input = s.input('notchFreq')!;
+      expect(s.control('notchFreq')!.textContent).toContain('Notch position');
+      expect(input.min).toBe('0');
+      expect(input.max).toBe('255');
+      expect(input.valueAsNumber).toBe(position);
+      input.value = String(position);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onLevelChange).toHaveBeenCalledExactlyOnceWith('notchFreq', position);
+    }, { onLevelChange });
+  });
+});
+
+// ── 4c. A published manual-notch display domain overrides the row bounds ────
+
+describe('manual-notch position follows a published display domain (MOR-2475)', () => {
+  // The FTX-1's `controls.manual_notch_freq` (`rigs/ftx1.toml`) projected by
+  // the view-model adapter: raw 1..320 -> display 10..3200 Hz step 10.
+  const FTX1_NOTCH_DOMAIN = { min: 10, max: 3200, step: 10, origin: 10 } as const;
+  const ftx1View = (hz: number): RadioViewModel => ({
+    ...base(),
+    dsp: {
+      ...base().dsp!,
+      notchFreq: {
+        ...base().dsp!.notchFreq,
+        reading: { status: 'known' as const, value: hz },
+      },
+      notchFreqDomain: FTX1_NOTCH_DOMAIN,
+    },
+  });
+
+  it.each([10, 1600, 3200])('renders the decoded %i Hz value in the published domain', (hz) => {
+    withSurface(ftx1View(hz), (s) => {
+      const input = s.input('notchFreq')!;
+      expect(s.control('notchFreq')!.textContent).toContain('Notch position');
+      expect(input.min).toBe('10');
+      expect(input.max).toBe('3200');
+      expect(input.step).toBe('10');
+      expect(input.valueAsNumber).toBe(hz);
+    });
+  });
+
+  it('emits the display-unit value verbatim for the command layer to encode', () => {
+    const onLevelChange = vi.fn();
+    withSurface(ftx1View(1600), (s) => {
+      const input = s.input('notchFreq')!;
+      input.value = '1610';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+      expect(onLevelChange).toHaveBeenCalledExactlyOnceWith('notchFreq', 1610);
+    }, { onLevelChange });
+  });
+});
+
+// ── 5. Range-parameterisation: nbLevel takes its ceiling from caps-echo props ─
+
+describe('nbLevel is range-parameterised by the caps-echoed nbLevelMax/nbLevelPercent props', () => {
+  it('uses the default 0..255 raw range when no props are supplied', () => {
+    withSurface(base(), (s) => {
+      expect(s.slider('nbLevel')!.getAttribute('aria-valuemax')).toBe('255');
+      expect(s.slider('nbLevel')!.getAttribute('aria-valuenow')).toBe('64');
+      expect(s.control('nbLevel')!.textContent).toContain('64');
+    });
+  });
+
+  it('uses a caller-supplied ceiling (FTX-1-shaped: native 0..10, raw display)', () => {
+    withSurface(base(), (s) => {
+      expect(s.slider('nbLevel')!.getAttribute('aria-valuemax')).toBe('10');
+      // Raw pass-through display (carry-forward 3): the fixture's raw
+      // reading (64) renders verbatim, regardless of the ceiling prop.
+      expect(s.control('nbLevel')!.textContent).toContain('64');
+    }, { nbLevelMax: 10, nbLevelPercent: false });
+  });
+
+  it('renders a percent display when nbLevelPercent is true', () => {
+    withSurface(base(), (s) => {
+      // 64 / 255 rounds to 25%.
+      expect(s.control('nbLevel')!.textContent).toContain('25%');
+    }, { nbLevelMax: 255, nbLevelPercent: true });
+  });
+
+  it('emits the raw nbLevel value unrescaled regardless of display mode', () => {
+    const onLevelChange = vi.fn();
+    const view = base();
+    const withLevelFive = { ...view, dsp: { ...view.dsp!, nbLevel: {
+      ...view.dsp!.nbLevel, reading: { status: 'known' as const, value: 5 },
+    } } };
+    withSurface(withLevelFive, (s) => {
+      s.slider('nbLevel')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      flushSync();
+      expect(onLevelChange).toHaveBeenCalledExactlyOnceWith('nbLevel', 6);
+    }, { onLevelChange, nbLevelMax: 10, nbLevelPercent: false });
+  });
+});
+
+// ── 6. notchMode: a three-way choice, not a boolean toggle ──────────────────
+
+describe('notchMode renders as a three-way choice', () => {
+  it('marks the current value pressed and the others not', () => {
+    // withDsp(): notchMode 'off'.
+    withSurface(base(), (s) => {
+      expect(s.notchButton('off')!.getAttribute('aria-pressed')).toBe('true');
+      expect(s.notchButton('auto')!.getAttribute('aria-pressed')).toBe('false');
+      expect(s.notchButton('manual')!.getAttribute('aria-pressed')).toBe('false');
+    });
+  });
+
+  it('emits the clicked mode verbatim', () => {
+    const onNotchModeChange = vi.fn();
+    withSurface(base(), (s) => {
+      s.notchButton('manual')!.click();
+      flushSync();
+      expect(onNotchModeChange).toHaveBeenCalledExactlyOnceWith('manual');
+    }, { onNotchModeChange });
+  });
+
+  it('does not select an offered mode for a known out-of-offered reading', () => {
+    const onNotchModeChange = vi.fn();
+    const view = {
+      ...base(),
+      dsp: {
+        ...base().dsp!,
+        notchMode: { ...base().dsp!.notchMode, reading: { status: 'known' as const, value: 'other' } },
+      },
+    } as unknown as RadioViewModel;
+    withSurface(view, (s) => {
+      for (const mode of ['off', 'auto', 'manual']) {
+        expect(s.notchButton(mode)!.getAttribute('aria-pressed')).toBeNull();
+      }
+      s.notchButton('manual')!.click();
+      flushSync();
+      expect(onNotchModeChange).toHaveBeenCalledExactlyOnceWith('manual');
+      expect(s.notchButton('manual')!.getAttribute('aria-pressed')).toBeNull();
+    }, { onNotchModeChange });
+  });
+
+  /**
+   * MOR-1304/1305 F3: `.click()` on a disabled button never reaches its
+   * `onclick` handler at all — a no-op that would pass this assertion even
+   * with the choice binding's guard deleted. Dispatching the click event directly
+   * proves the GUARD rejects it, not merely that `disabled` suppressed the
+   * interaction.
+   */
+  it('emits nothing when clicked on an unobserved reading, even bypassing disabled', () => {
+    const onNotchModeChange = vi.fn();
+    const view = withField(base(), 'notchMode', { unknown: true });
+    withSurface(view, (s) => {
+      const btn = s.notchButton('auto')!;
+      expect(btn.disabled).toBe(true);
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      flushSync();
+      expect(onNotchModeChange).not.toHaveBeenCalled();
+    }, { onNotchModeChange });
+  });
+});
+
+// ── 7. agcMode: capability-derived settable choice set ──────────────────
+
+describe('agcMode renders the capability-derived settable choice set', () => {
+  it('renders exactly the declared agcModes entries, labelled from agcLabels — no invented OFF', () => {
+    // MOR-1522: withDsp()'s agcModes [1, 2, 3] is the IC-7300/IC-7610 domain
+    // (FAST/MID/SLOW, no OFF at all) — the surface must not synthesize one.
+    withSurface(base(), (s) => {
+      expect(s.control('agcMode')!.getAttribute('role')).toBe('radiogroup');
+      expect(s.control('agcMode')!.getAttribute('aria-label')).toBe('AGC');
+      expect(s.agcButton(0)).toBeNull();
+      expect(s.agcButton(1)!.textContent?.trim()).toBe('FAST');
+      expect(s.agcButton(2)!.textContent?.trim()).toBe('MID');
+      expect(s.agcButton(3)!.textContent?.trim()).toBe('SLOW');
+      expect(s.agcButton(2)!.dataset.active).toBe('true');
+      expect(s.agcButton(1)!.dataset.active).toBe('false');
+    }, { agcLabels: { '1': 'FAST', '2': 'MID', '3': 'SLOW' } });
+  });
+
+  it('keeps a declared key honest with its raw code when no label is supplied', () => {
+    withSurface(base(), (s) => {
+      expect(s.agcButton(1)!.textContent?.trim()).toBe('1');
+    }, { agcLabels: {} });
+  });
+
+  it('emits the clicked mode verbatim', () => {
+    const onAgcModeChange = vi.fn();
+    withSurface(base(), (s) => {
+      s.agcButton(1)!.click();
+      flushSync();
+      expect(onAgcModeChange).toHaveBeenCalledExactlyOnceWith(1);
+    }, { onAgcModeChange });
+  });
+
+  /**
+   * MOR-1304/1305 F3: same bypass discipline as notchMode's guard test — the
+   * event is dispatched directly so a deleted choice-binding guard is what this
+   * assertion catches, not merely `disabled` suppressing a plain `.click()`.
+   */
+  it('emits nothing when clicked on an unobserved reading, even bypassing disabled', () => {
+    const onAgcModeChange = vi.fn();
+    const view = withField(base(), 'agcMode', { unknown: true });
+    withSurface(view, (s) => {
+      const btn = s.agcButton(1)!;
+      expect(btn.disabled).toBe(true);
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      flushSync();
+      expect(onAgcModeChange).not.toHaveBeenCalled();
+    }, { onAgcModeChange });
+  });
+});
+
+// ── 7b. Pending-target affordance (MOR-1441 leg 2) ──────────────────────────
+
+describe('pending-target affordance (MOR-1441 leg 2)', () => {
+  // base(): nrActive known(true), nbActive known(false).
+  it('marks the pending toggle distinctly, leaves aria-pressed reading CONFIRMED', () => {
+    withSurface(base(), (s) => {
+      expect(s.control('nrActive')!.dataset.pendingStatus).toBe('pending');
+      expect(s.control('nrActive')!.getAttribute('aria-pressed')).toBe('true'); // confirmed, unchanged
+      expect(s.control('nbActive')!.dataset.pendingStatus).toBe('confirmed');
+      expect(s.control('nbActive')!.getAttribute('aria-pressed')).toBe('false'); // confirmed, unchanged
+    }, { pendingNr: false });
+  });
+
+  it('renders confirmed status and no announcement for both toggles when nothing is pending', () => {
+    withSurface(base(), (s) => {
+      expect(s.control('nrActive')!.dataset.pendingStatus).toBe('confirmed');
+      expect(s.control('nbActive')!.dataset.pendingStatus).toBe('confirmed');
+      expect(target.querySelector('.sr-only')).toBeNull();
+    });
+  });
+
+  it('renders a screen-reader announcement only for the field that is pending', () => {
+    withSurface(base(), (s) => {
+      expect(s.control('nbActive')!.parentElement!.querySelector('.sr-only')).not.toBeNull();
+      expect(target.querySelectorAll('.sr-only')).toHaveLength(1);
+    }, { pendingNb: true });
+  });
+
+  // THE seam test — the exact class of defect leg 1's runaway bug belonged
+  // to, applied to a toggle: the toggle binding computes the NEXT boolean from
+  // `dsp[field].reading.value` (CONFIRMED), never from the pending prop. If
+  // it instead read pending, an in-flight "turn NR on" (confirmed still
+  // false, pending true) would compute `!true = false` and dispatch a
+  // cancelling `set_nr(false)` the instant the operator clicks again —
+  // silently reversing their own in-flight command instead of repeating it.
+  it('SEAM: toggling while pending computes the next value from CONFIRMED, never from pending', () => {
+    const onToggle = vi.fn();
+    // Confirmed nrActive=true, but an in-flight "turn OFF" is pending
+    // (pendingNr=false) — reading pending would compute `!false=true`
+    // (re-affirming ON); reading confirmed correctly computes `!true=false`.
+    withSurface(base(), (s) => {
+      s.control('nrActive')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      flushSync();
+      expect(onToggle).toHaveBeenCalledExactlyOnceWith('nrActive', false);
+    }, { onToggle, pendingNr: false });
+  });
+
+  it('SEAM: the mirror case — confirmed nbActive=false, pending "turn ON" (true), still flips from confirmed', () => {
+    const onToggle = vi.fn();
+    withSurface(base(), (s) => {
+      s.control('nbActive')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      flushSync();
+      expect(onToggle).toHaveBeenCalledExactlyOnceWith('nbActive', true);
+    }, { onToggle, pendingNb: true });
+  });
+});
+
+// ── 7c. Notch-mode pending target (MOR-2236 remainder) ──────────────────────
+
+describe('notchMode pending target (MOR-2236 remainder)', () => {
+  // withDsp(): notchMode known('off').
+  it('marks the requested choice pending while keeping aria-pressed on CONFIRMED', () => {
+    withSurface(base(), (s) => {
+      const group = s.control('notchMode')!;
+      expect(group.dataset.notchStatus).toBe('pending');
+      expect(s.notchButton('auto')!.dataset.pending).toBe('true');
+      expect(s.notchButton('off')!.dataset.pending).toBe('false');
+      expect(s.notchButton('off')!.getAttribute('aria-pressed')).toBe('true');
+      expect(s.notchButton('auto')!.getAttribute('aria-pressed')).toBe('false');
+    }, { pendingNotch: 'auto' });
+  });
+
+  it('renders confirmed status and no announcement when nothing is pending', () => {
+    withSurface(base(), (s) => {
+      expect(s.control('notchMode')!.dataset.notchStatus).toBe('confirmed');
+      expect(s.control('notchMode')!.querySelector('.sr-only')).toBeNull();
+    });
+  });
+
+  it('renders a screen-reader announcement while a choice is pending', () => {
+    withSurface(base(), (s) => {
+      expect(s.control('notchMode')!.querySelector('.sr-only')).not.toBeNull();
+    }, { pendingNotch: 'manual' });
+  });
+
+  it('SEAM: choosing while pending dispatches the CLICKED mode, never derived from pending', () => {
+    const onNotchModeChange = vi.fn();
+    withSurface(base(), (s) => {
+      s.notchButton('manual')!.click();
+      flushSync();
+      expect(onNotchModeChange).toHaveBeenCalledExactlyOnceWith('manual');
+    }, { onNotchModeChange, pendingNotch: 'auto' });
+  });
+});
+
+// ── 8. Presentation-only: no store, transport or command import ────────────
+
+describe('this surface stays presentation-only', () => {
+  const withoutComments = (source: string): string => source
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  const source = withoutComments(readFileSync('src/semantic/DspSurface.svelte', 'utf8'));
+  const hostSource = withoutComments(readFileSync('src/semantic/DspInstrumentHost.svelte', 'utf8'));
+
+  it('imports no transport, store or command-bus module', () => {
+    for (const text of [source, hostSource]) {
+      expect(text).not.toMatch(/\$lib\/transport/);
+      expect(text).not.toMatch(/\$lib\/stores/);
+      expect(text).not.toMatch(/command-bus/);
+    }
+  });
+
+  // MOR-2527: jsdom computes no layout; this checks the width-floor
+  // declarations are written, not that they guarantee no shift. The scalar
+  // host's own floor lives beside it (see DspScalarHost.isolated.test.ts).
+  it('keeps the native level value slot width floor in the surface CSS', () => {
+    expect(source).toMatch(/\.dsp-level > output \{[^}]*min-width: 6ch/);
+  });
+});
+
+/* ── 9. MOR-2688 S2: literal pins for the migrated `fmt`/AGC-T formatter
+ *  sites (default- and row-formatter branches of `readingText`) ────────── */
+describe('fmt formatter contract (MOR-2688)', () => {
+  it.each([
+    ['nbDepth', '5'], ['notchFreq', '0'], ['agcTimeConstant', '0.1'],
+  ] as const)('native level %s renders the literal output %s', (field, expected) => {
+    const r = render(base());
+    expect(r.control(field)!.querySelector('output')?.textContent).toBe(expected);
+    r.dispose();
+  });
+
+  // The pin value must sit inside `NOTCH_WIDTH_LABELS`' keys (0–2): the
+  // fixture's fallback value 10 renders '10' under the formatter AND under
+  // `String`, so a format→`String` mutation would stay green. Value 2 maps
+  // to 'NARROW' under the formatter, '2' under `String` — the mutation goes
+  // red (verified on the mini, noted in the PR body).
+  it('manualNotchWidth renders the label the row formatter maps', () => {
+    const view = base();
+    const labelled = {
+      ...view,
+      dsp: {
+        ...view.dsp!,
+        manualNotchWidth: {
+          ...view.dsp!.manualNotchWidth,
+          reading: { status: 'known' as const, value: 2 },
+        },
+      } as DspViewModel,
+    };
+    const r = render(labelled);
+    expect(r.control('manualNotchWidth')!.querySelector('output')?.textContent).toBe('NARROW');
+    r.dispose();
+  });
+
+  // Literal pin for the compact AGC-T span — under a format→`String`
+  // mutation '0.1s' becomes '0s' (verified on the mini, noted in the PR
+  // body).
+  it('compact AGC-T span renders the literal formatted time', () => {
+    const r = render(base(), { compactAgcTime: true });
+    expect(r.root()!.querySelector('.dsp-agc-time-value')?.textContent).toBe('0.1s');
+    r.dispose();
+  });
+});

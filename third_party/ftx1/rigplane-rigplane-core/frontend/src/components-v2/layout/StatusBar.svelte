@@ -1,0 +1,923 @@
+<script module lang="ts">
+  import type { DefaultScopeStatus } from '$lib/runtime/frontend-runtime';
+
+  export type ScopeIndicatorState =
+    | 'inactive'
+    | 'starting'
+    | 'connecting'
+    | 'waiting'
+    | 'reconnecting'
+    | 'failed'
+    | 'disconnected'
+    | 'connected';
+  export type IndicatorTone = 'green' | 'yellow' | 'red' | 'neutral';
+
+  // MOR-3753: the audio chip reads browser-audio DEMAND plus the latched
+  // request outcome — never the bare socket. No demand (idle, or a Pro
+  // embedding served by the companion bridge with browser monitoring off)
+  // is 'inactive' even with the socket absent; a refused/died request stays
+  // 'failed' after stopRx/stopTx cleared the demand, until an explicit stop
+  // or a new attempt. indicatorTone() already maps these: inactive →
+  // neutral, connecting → yellow, connected → green, failed/disconnected →
+  // red.
+  export type AudioIndicatorState =
+    | 'inactive'
+    | 'connecting'
+    | 'connected'
+    | 'failed'
+    | 'disconnected';
+
+  export function deriveAudioIndicatorState(
+    audio: { rxEnabled: boolean; txEnabled: boolean; rxError: boolean; txError: boolean },
+    audioConnected: boolean,
+    isPoweredOff: boolean,
+  ): AudioIndicatorState {
+    // A latched request failure stays visible, including while powered off.
+    // Without demand there is nothing failing: idle power-off is neutral.
+    if (audio.rxError || audio.txError) return 'failed';
+    if (!audio.rxEnabled && !audio.txEnabled) return 'inactive';
+    if (isPoweredOff) return 'disconnected';
+    return audioConnected ? 'connected' : 'connecting';
+  }
+
+  export function deriveScopeIndicatorState(
+    status: DefaultScopeStatus,
+    isPoweredOff: boolean,
+  ): ScopeIndicatorState {
+    if (isPoweredOff) return 'disconnected';
+    if (
+      status.source === null
+      || !status.available
+      || !status.resourceSelected
+      || status.demand === 0
+    ) return 'inactive';
+    if (status.lifecycle === 'failed') return 'failed';
+    if (status.lifecycle === 'starting') return 'starting';
+    if (status.transport === 'connecting') return 'connecting';
+    if (status.transport === 'reconnecting') return 'reconnecting';
+    if (status.transport === 'disconnected') return 'disconnected';
+    if (!status.frameSeen) return 'waiting';
+    return status.lifecycle === 'streaming' ? 'connected' : 'inactive';
+  }
+
+  export function indicatorTone(state: string): IndicatorTone {
+    switch (state) {
+      case 'connected':
+        return 'green';
+      case 'connecting':
+      case 'starting':
+      case 'waiting':
+      case 'reconnecting':
+      case 'partial':
+      case 'degraded':
+        return 'yellow';
+      case 'disconnected':
+      case 'failed':
+        return 'red';
+      default:
+        return 'neutral';
+    }
+  }
+
+  // MOR-1240: the current owner of the document-level
+  // `--rp-status-bar-bottom` property. Module-level so every StatusBar
+  // instance sees the same token: whoever published last owns the
+  // property, and a destroying instance removes it only while it is
+  // still the owner (see the instance script).
+  let owner: symbol | null = null;
+</script>
+
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { Radio, Cable, Activity, Volume2, ArrowDownUp, Power, Unplug, Palette, Monitor, Tv, SlidersHorizontal, Bug } from 'lucide-svelte';
+  import { bindHostRadioControls, getHostUi, getLayoutOptions, readHostDeclaration } from '$lib/local-extensions/host-ui';
+  import ThemePicker from '../controls/ThemePicker.svelte';
+  import ManagedTotStatusControl from '../controls/ManagedTotStatusControl.svelte';
+  import SendReportDialog from '../dialogs/SendReportDialog.svelte';
+  import { runtime } from '$lib/runtime';
+  import { t } from '$lib/i18n';
+  import {
+    getRadioLinkState,
+    getConnectionStatus,
+    isAudioConnected,
+    getWsConnected,
+    getRadioPowerOn,
+    getRigConnected,
+    getRadioReady,
+    getRadioHealth,
+  } from '$lib/stores/connection.svelte';
+  import { getActiveFrequencyHz } from '$lib/runtime/adapters/panel-adapters';
+  import { deriveRadioHealthLabel } from '$lib/runtime/adapters/radio-health-label';
+  import { getAudioState } from '$lib/stores/audio.svelte';
+  import { hasAnyScope, hasAudio, hasSpectrum, hasCapability } from '$lib/stores/capabilities.svelte';
+  import { getLayoutMode, setLayoutMode, type LayoutMode } from '$lib/stores/layout.svelte';
+  import type { SemanticSurfaceName } from '../../presentation/layouts/contract';
+
+  interface Props {
+    onSettings?: () => void;
+    /**
+     * The App-root managed-TX facade remains the only authority. This shell
+     * merely decides whether its existing presentation consumer is visible.
+     */
+    showManagedTotControl?: boolean;
+    /** MOR-1364 (v3-rework S6-pre) — the manifest-driven legacy-twin
+     *  suppression channel, reaching the status bar for its one twin: the
+     *  scope indicator, whose semantic replacement is `ScopeDisplaySurface`
+     *  (MOR-1312). Same doctrine as the sidebars': the MANIFEST decides, never
+     *  the resolved SurfacePlan (S5 ruling), and it is safe only because
+     *  MOR-1336's `zoned()` degrades to a bare render for an unzoned surface
+     *  (S5-N3). Default empty set ⇒ no-op, so mobile/LCD and every caller that
+     *  omits the prop keep the indicator. Radio/control/audio/http have no
+     *  semantic twin; embedding-host health ownership gates them separately. */
+    declared?: ReadonlySet<SemanticSurfaceName>;
+  }
+  let {
+    onSettings,
+    showManagedTotControl = false,
+    declared = new Set<SemanticSurfaceName>(),
+  }: Props = $props();
+
+  // Canonicalize legacy 'lcd' to 'lcd-cockpit' for UI binding — the persisted
+  // value may still be 'lcd' (from pre-#889 installs), but the dropdown only
+  // exposes 'lcd-cockpit' / 'lcd-scope'. Without normalization the <select>
+  // would show no highlighted option for legacy users (codex P2 on PR #913).
+  let layoutMode = $derived.by<LayoutMode>(() => {
+    const raw = getLayoutMode();
+    return raw === 'lcd' ? 'lcd-cockpit' : raw;
+  });
+  // Shared catalogue keeps release filtering identical to the extension API.
+  const skinOptions = getLayoutOptions();
+  const hostDeclaration = readHostDeclaration();
+
+  function handleSkinChange(ev: Event) {
+    const value = (ev.currentTarget as HTMLSelectElement).value as LayoutMode;
+    setLayoutMode(value);
+  }
+
+  let radioPowerOn = $derived(getRadioPowerOn());
+  let isPoweredOff = $derived(radioPowerOn === false);
+  // MOR-1673: radios without power_control (e.g. FTX-1) cannot toggle
+  // power — no power control is rendered at all, rather than a disabled
+  // button that still advertises an unusable action.
+  let powerControlSupported = $derived(hasCapability('power_control'));
+
+  let powerTooltip = $derived(
+    radioPowerOn === true
+      ? t('core.statusbar.power.toggleOn')
+      : radioPowerOn === false
+        ? t('core.statusbar.power.toggleOff')
+        : ''
+  );
+
+  let powerLabel = $derived(
+    radioPowerOn === true
+      ? t('core.statusbar.power.labelOff')
+      : radioPowerOn === false
+        ? t('core.statusbar.power.labelOn')
+        : t('core.statusbar.power.labelUnknown')
+  );
+
+  // When radio is powered off, override statuses that depend on the radio.
+  // MOR-1526: `radioState` is the "Radio ↔ Server" chip's steady state,
+  // derived from live per-field facts (rigConnected/radioReady/radioHealth),
+  // overlaid by the reconnect-edge event stream only while a reconnect is
+  // actively in flight — see `getRadioLinkState` in connection.svelte.ts for
+  // the precedence rationale. Fixes: a fresh, healthy, no-reconnect session
+  // used to read the event-only default ('disconnected') forever.
+  let radioState = $derived(isPoweredOff ? 'disconnected' : getRadioLinkState());
+  let controlState = $derived(getConnectionStatus()); // server link — always real
+  let scopeState = $derived(
+    deriveScopeIndicatorState(runtime.defaultScopeStatus, isPoweredOff),
+  );
+  // MOR-3753: demand-gated, not socket-gated — an absent browser socket with
+  // no demand is idle (neutral), not a fault (red).
+  let audioState = $derived(
+    deriveAudioIndicatorState(getAudioState(), isAudioConnected(), isPoweredOff),
+  );
+  let audioTooltip = $derived(t(`core.statusbar.audio.${audioState}`));
+  // MOR-1791: the server cannot decode Opus, so browser TX runs on the PCM16
+  // capture path. Transmission works — this is a quiet hint next to the audio
+  // indicator, deliberately not a fault chip and not a modal.
+  let txCodecFallback = $derived(!isPoweredOff && getAudioState().txCodecFallback);
+  // MOR-1419: derived from the same live WS transport signal as `controlState`
+  // (there is no separate HTTP transport anymore, post A10) refined by
+  // `radioHealth.serverReachable` when that's been observed — honest, not a
+  // stale flag that only a successful state commit ever flipped true.
+  let httpState = $derived(
+    getWsConnected() && getRadioHealth()?.serverReachable !== false ? 'connected' : 'disconnected',
+  ); // server link — always real
+  // MOR-2425 R29(3): connection.svelte.ts already computes staleness from
+  // state_update timing (`isStale()`, exposed here as `runtime.connectionStale`)
+  // but had zero consumers before this chip. `getWsConnected()` is required
+  // because `setWsConnected(false)` (ws-client.ts's disconnect/reconnect
+  // path) is the only writer that clears it — `staleState` itself is never
+  // reset on disconnect — so gating on it here is what keeps this chip and
+  // the existing disconnected indicators from ever doubling up on one root
+  // cause: the WS transport can only be 'connected' (true) once it is fully
+  // up, never while connecting/reconnecting/disconnected.
+  let badLink = $derived(getWsConnected() && runtime.connectionStale);
+  let rigConnected = $derived(getRigConnected());
+  let radioReady = $derived(getRadioReady());
+  let radioHealth = $derived(getRadioHealth());
+  // Effective radio indicator: downgrade to 'disconnected' when rigCtld reports radio offline
+  let radioIndicatorState = $derived.by(() => {
+    if (radioHealth?.likelyCause === 'radio_network_lost' || radioHealth?.likelyCause === 'radio_powered_off_likely' || radioHealth?.likelyCause === 'operator_disconnected') {
+      return 'disconnected';
+    }
+    if (radioHealth?.readiness === 'delayed' || radioHealth?.readiness === 'stalled') {
+      return 'degraded';
+    }
+    // MOR-620's "connected but not radio-ready" downgrade now lives in the
+    // store's own steady-state derivation (getRadioLinkState in
+    // connection.svelte.ts) — `radioState` already reads 'degraded' for
+    // that combination, so there is nothing left to downgrade here.
+    return radioState;
+  });
+  let radioHealthLabel = $derived(
+    deriveRadioHealthLabel({ health: radioHealth, rigConnected, radioReady, radioState }),
+  );
+
+  let connectionTooltip = $derived(
+    controlState === 'connected'
+      ? t('core.statusbar.connection.toggleActive')
+      : t('core.statusbar.connection.toggleInactive')
+  );
+
+  function stateColor(state: string): string {
+    switch (indicatorTone(state)) {
+      case 'green':
+        return 'var(--v2-accent-green, #4ade80)';
+      case 'yellow':
+        return 'var(--v2-accent-yellow, #facc15)';
+      case 'red':
+        return 'var(--v2-accent-red, #ef4444)';
+      default:
+        return 'var(--v2-text-dim, #666)';
+    }
+  }
+
+  function handleConnectionToggle() {
+    const ui = getHostUi();
+    if (controlState === "connected") ui?.disconnect(); else ui?.connect();
+  }
+  function handlePowerToggle() {
+    if (radioPowerOn !== null) getHostUi()?.setRadioPower(!radioPowerOn);
+  }
+  onMount(() => bindHostRadioControls(onSettings));
+
+  // ── Send-Report dialog (issue #1397) ──
+  let reportOpen = $state(false);
+
+  // ── Now Playing (EiBi identification) ──
+  let nowPlaying = $state<any>(null);
+  let nowPlayingExpanded = $state(false);
+  let identifyTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastIdentifiedFreq = 0;
+
+  // MOR-4213: a derived number, so the effect below re-runs only when the
+  // active frequency changes. Read directly, every state delivery re-ran the
+  // effect, whose cleanup cleared the 800 ms debounce and re-armed it: the
+  // timer never fired while the radio streamed state.
+  let activeFrequencyHz = $derived(getActiveFrequencyHz());
+
+  // Poll frequency and identify station
+  $effect(() => {
+    const freq = activeFrequencyHz;
+    // Don't update while the popup is expanded (prevents flicker). Read here,
+    // not inside the timer, so closing the popup re-runs this effect and
+    // identifies whatever frequency is tuned by then (MOR-4213).
+    if (nowPlayingExpanded) return;
+    // `null` is "not observed"; `0` was never a real tuned frequency. Both
+    // mean "nothing to identify" — the same short-circuit this guard applied
+    // before A15 replaced the store read, so the idle render is unchanged.
+    if (!freq || Math.abs(freq - lastIdentifiedFreq) < 500) return;
+
+    // Debounce: wait 800ms after freq stops changing
+    if (identifyTimer) clearTimeout(identifyTimer);
+    identifyTimer = setTimeout(async () => {
+      lastIdentifiedFreq = freq;
+      const result = await runtime.system.identifyFrequency(freq);
+      nowPlaying = result?.stations?.length ? result.stations[0] : null;
+    }, 800);
+
+    return () => {
+      if (identifyTimer) clearTimeout(identifyTimer);
+    };
+  });
+
+  // ── MOR-1240: publish this bar's bottom edge ──
+  // The powered-off overlay (AppGlobalHost) no longer measures the DOM
+  // looking for a status bar: that host-side lookup raced the lazily
+  // loaded presentation (power-off could be known before the skin chunk
+  // mounted this bar) and missed moves that resize nothing (the link-lost
+  // row above the bar shifts it without changing its box). Instead, while
+  // mounted, this bar PUBLISHES its own bottom edge as a document-level
+  // CSS custom property and the overlay only consumes it in CSS:
+  //   top: var(--rp-status-bar-bottom, 0px)
+  // A layout without a StatusBar (phone, cockpit, probe) never sets the
+  // property, so its overlay stays full-screen with no per-layout list
+  // anywhere.
+  const BOTTOM_EDGE_PROPERTY = '--rp-status-bar-bottom';
+
+  // Ownership is by token, not by value: two skins can publish the same
+  // bottom string, so the published value can never decide whose cleanup
+  // may remove the property. Each instance mints its own token (the
+  // module-level `owner` above records the last publisher), and a
+  // destroying instance removes the property only while it is still the
+  // owner.
+  const mine = Symbol('status-bar-bottom-edge');
+  let barEl: HTMLElement | undefined = $state();
+
+  function publishBottomEdge(): void {
+    if (!barEl) return;
+    owner = mine;
+    document.documentElement.style.setProperty(
+      BOTTOM_EDGE_PROPERTY,
+      `${Math.ceil(barEl.getBoundingClientRect().bottom)}px`,
+    );
+  }
+
+  // Mount and every appearance/disappearance of the link-lost row (which
+  // moves the bar without resizing it) republish, after the DOM update.
+  $effect(() => {
+    void (controlState === 'disconnected');
+    publishBottomEdge();
+  });
+
+  onMount(() => {
+    window.addEventListener('resize', publishBottomEdge);
+    let observer: ResizeObserver | null = null;
+    // jsdom has no ResizeObserver; the guard keeps the publish path testable.
+    if (typeof ResizeObserver !== 'undefined' && barEl) {
+      observer = new ResizeObserver(() => publishBottomEdge());
+      observer.observe(barEl);
+    }
+    return () => {
+      window.removeEventListener('resize', publishBottomEdge);
+      observer?.disconnect();
+      // Remove the property only while THIS instance still owns it: on a
+      // skin switch the next bar may already have published its own edge,
+      // and wiping the property then would re-cover the new bar's strip.
+      if (owner === mine) {
+        document.documentElement.style.removeProperty(BOTTOM_EDGE_PROPERTY);
+        owner = null;
+      }
+    };
+  });
+
+</script>
+
+{#if !hostDeclaration.health && controlState === 'disconnected'}
+  <div class="control-link-lost">{t('core.statusbar.controlLinkLost')}</div>
+{/if}
+<!-- MOR-1240: this bar publishes `--rp-status-bar-bottom` while mounted;
+     AppGlobalHost's powered-off overlay consumes it in CSS. -->
+<div class="status-bar" bind:this={barEl}>
+  <div class="status-indicators">
+    {#if !hostDeclaration.health}
+    <span class="indicator" role="status" title={radioHealthLabel ? t('core.statusbar.indicator.radioWithReason', { state: radioHealth?.likelyCause === 'operator_disconnected' ? radioIndicatorState : radioState, reason: radioHealthLabel }) : t('core.statusbar.indicator.radio', { state: radioState })} style="--indicator-color: {stateColor(radioIndicatorState)}">
+      <span class="indicator-dot"></span>
+      <Radio size={12} color="currentColor" strokeWidth={2.5} />
+    </span>
+    <span class="indicator" role="status" title={t('core.statusbar.indicator.control', { state: controlState })} style="--indicator-color: {stateColor(controlState)}">
+      <span class="indicator-dot"></span>
+      <Cable size={12} color="currentColor" strokeWidth={2.5} />
+    </span>
+    {#if badLink}
+      <span class="indicator" role="status" data-testid="bad-link-chip" title={t('core.statusbar.badLink.tooltip')} style="--indicator-color: {stateColor('degraded')}">
+        <span class="indicator-dot"></span>
+        <Unplug size={12} color="currentColor" strokeWidth={2.5} />
+        <span class="bad-link-label">{t('core.statusbar.badLink.label')}</span>
+      </span>
+    {/if}
+    {/if}
+    {#if hasAnyScope() && !declared.has('scopeDisplay')}
+      <span class="indicator" role="status" title={t('core.statusbar.indicator.scope', { state: scopeState })} style="--indicator-color: {stateColor(scopeState)}">
+        <span class="indicator-dot"></span>
+        <Activity size={12} color="currentColor" strokeWidth={2.5} />
+      </span>
+    {/if}
+    {#if hasAudio()}
+      {#if !hostDeclaration.health}
+      <span class="indicator" role="status" data-testid="audio-chip" title={audioTooltip} style="--indicator-color: {stateColor(audioState)}">
+        <span class="indicator-dot"></span>
+        <Volume2 size={12} color="currentColor" strokeWidth={2.5} />
+      </span>
+      {/if}
+      {#if txCodecFallback}
+        <span class="indicator tx-codec-fallback" role="status" data-testid="tx-codec-fallback" title={t('core.statusbar.txCodecFallback.tooltip')} style="--indicator-color: {stateColor('degraded')}">
+          <span class="codec-fallback-label">{t('core.statusbar.txCodecFallback.label')}</span>
+        </span>
+      {/if}
+    {/if}
+    {#if !hostDeclaration.health}
+    <span class="indicator" role="status" title={t('core.statusbar.indicator.http', { state: httpState })} style="--indicator-color: {stateColor(httpState)}">
+      <span class="indicator-dot"></span>
+      <ArrowDownUp size={12} color="currentColor" strokeWidth={2.5} />
+      {#if httpState === 'disconnected'}
+        <span class="http-lost-label">{t('core.statusbar.offline')}</span>
+      {/if}
+    </span>
+    {/if}
+  </div>
+
+  <div class="status-info">
+    {#if nowPlaying}
+      <button type="button" class="now-playing" onclick={() => (nowPlayingExpanded = !nowPlayingExpanded)} onkeydown={(e) => { if (e.key === 'Escape') nowPlayingExpanded = false; }} aria-expanded={nowPlayingExpanded} aria-haspopup="dialog">
+        <span class="np-icon">📻</span>
+        <span class="np-station">{nowPlaying.station}</span>
+        <span class="np-lang">{nowPlaying.city ? `${nowPlaying.city}, ${nowPlaying.state}` : nowPlaying.language_name}</span>
+        {#if nowPlaying.on_air}<span class="np-live">{t('core.statusbar.nowPlaying.live')}</span>{/if}
+      </button>
+      {#if nowPlayingExpanded}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="np-backdrop" onclick={() => (nowPlayingExpanded = false)} onkeydown={(e) => { if (e.key === 'Escape') nowPlayingExpanded = false; }}>
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="np-detail" role="dialog" tabindex="-1" aria-modal="true" aria-label={t('core.statusbar.nowPlaying.dialogLabel')} onclick={(e) => e.stopPropagation()} onkeydown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); nowPlayingExpanded = false; } }}>
+            <div class="np-detail-header">
+              <span>📻 {nowPlaying.station}</span>
+              <button class="np-close" onclick={() => (nowPlayingExpanded = false)}>✕</button>
+            </div>
+            <div class="np-detail-grid">
+              <span class="np-label">{t('core.statusbar.nowPlaying.frequency')}</span><span>{nowPlaying.freq_khz} kHz</span>
+              {#if nowPlaying.city}
+                <span class="np-label">{t('core.statusbar.nowPlaying.location')}</span><span>{nowPlaying.city}, {nowPlaying.state}</span>
+              {/if}
+              <span class="np-label">{t('core.statusbar.nowPlaying.language')}</span><span>{nowPlaying.language_name}</span>
+              {#if !nowPlaying.city}
+                <span class="np-label">{t('core.statusbar.nowPlaying.country')}</span><span>{nowPlaying.country}</span>
+                <span class="np-label">{t('core.statusbar.nowPlaying.target')}</span><span>{nowPlaying.target}</span>
+              {/if}
+              {#if nowPlaying.time_str !== 'local'}
+                <span class="np-label">{t('core.statusbar.nowPlaying.schedule')}</span><span>{nowPlaying.time_str} UTC {nowPlaying.days || '(daily)'}</span>
+              {/if}
+              <span class="np-label">{t('core.statusbar.nowPlaying.band')}</span><span>{nowPlaying.band}</span>
+              {#if nowPlaying.remarks}
+                <span class="np-label">{t('core.statusbar.nowPlaying.details')}</span><span>{nowPlaying.remarks}</span>
+              {/if}
+              {#if nowPlaying.source}
+                <span class="np-label">{t('core.statusbar.nowPlaying.source')}</span><span class="np-source">{nowPlaying.source}</span>
+              {/if}
+            </div>
+          </div>
+        </div>
+      {/if}
+    {/if}
+  </div>
+
+  <div class="status-controls">
+    {#if showManagedTotControl}
+      <ManagedTotStatusControl />
+    {/if}
+    {#if !runtime.remoteController && !hostDeclaration.report}
+    <button
+      type="button"
+      class="control-btn report-btn"
+      onclick={() => (reportOpen = true)}
+      title={t('core.statusbar.report.tooltip')}
+      aria-label={t('core.statusbar.report.tooltip')}
+    >
+      <Bug size={14} strokeWidth={2} />
+      <span class="btn-label">{t('core.statusbar.report.button')}</span>
+    </button>
+    {/if}
+    {#if onSettings && !runtime.remoteController}
+      <button
+        type="button"
+        class="control-btn settings-btn"
+        onclick={onSettings}
+        title={t('core.statusbar.settings.tooltip')}
+        aria-label={t('core.statusbar.settings.tooltip')}
+      >
+        <SlidersHorizontal size={14} strokeWidth={2} />
+      </button>
+    {/if}
+    <label class="skin-switcher" title={t('core.statusbar.skin.selectorLabel')}>
+      {#if layoutMode === 'lcd-cockpit' || layoutMode === 'lcd-scope'}
+        <Tv size={14} strokeWidth={2} aria-hidden="true" />
+      {:else}
+        <Monitor size={14} strokeWidth={2} aria-hidden="true" />
+      {/if}
+      <span class="sr-only">{t('core.statusbar.skin.srLabel')}</span>
+      <select
+        class="skin-select"
+        aria-label={t('core.statusbar.skin.selectorLabel')}
+        value={layoutMode}
+        onchange={handleSkinChange}
+      >
+        {#each skinOptions as opt (opt.value)}
+          <option value={opt.value}>{opt.label}</option>
+        {/each}
+      </select>
+    </label>
+    <ThemePicker />
+    {#if !hostDeclaration.health}
+    <button
+      type="button"
+      class="control-btn"
+      onclick={handleConnectionToggle}
+      title={connectionTooltip}
+    >
+      <Unplug size={14} strokeWidth={2} />
+      <span class="btn-label">{controlState === 'connected' ? t('core.statusbar.connection.actionDisconnect') : t('core.statusbar.connection.actionConnect')}</span>
+    </button>
+    {/if}
+    {#if powerControlSupported && !runtime.remoteController}
+      <button
+        type="button"
+        class="control-btn power-toggle-btn"
+        class:is-on={radioPowerOn === true}
+        class:power-unknown={radioPowerOn === null}
+        disabled={radioPowerOn === null}
+        onclick={handlePowerToggle}
+        title={powerTooltip || undefined}
+        aria-label={radioPowerOn === null ? undefined : powerTooltip}
+      >
+        <Power size={14} strokeWidth={2} />
+        <span class="btn-label">{powerLabel}</span>
+      </button>
+    {/if}
+  </div>
+</div>
+
+<SendReportDialog open={reportOpen && !runtime.remoteController} onClose={() => (reportOpen = false)} />
+
+
+<style>
+  .control-link-lost {
+    background: var(--v2-accent-red, #ef4444);
+    color: #fff;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    text-align: center;
+    padding: 2px 0;
+    user-select: none;
+  }
+
+  .http-lost-label {
+    font-size: 9px;
+    color: var(--v2-accent-red, #ef4444);
+    font-weight: 700;
+    margin-left: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* MOR-2425 R29(3): bad-link chip — the WS transport is up but state
+     updates have stalled, so it borrows the yellow "degraded" tone rather
+     than the red fault tone used for a real disconnect. */
+  .bad-link-label {
+    font-size: 9px;
+    color: var(--v2-accent-yellow, #facc15);
+    font-weight: 700;
+    margin-left: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* MOR-1791: TX codec fallback — a working state, so it borrows the
+     yellow "degraded" tone rather than the red fault tone. */
+  .codec-fallback-label {
+    font-size: 9px;
+    color: var(--v2-accent-yellow, #facc15);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 28px;
+    padding: 0 10px;
+    background: var(--v2-bg-darkest, #0a0a0f);
+    border-bottom: 1px solid var(--v2-border-darker, #1a1a2e);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 11px;
+    color: var(--v2-text-primary, #fff);
+    user-select: none;
+  }
+
+  .status-indicators {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .indicator {
+    position: relative;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    color: var(--indicator-color);
+    transition: transform 0.15s;
+  }
+
+  .indicator:hover {
+    transform: scale(1.15);
+  }
+
+  .indicator-dot {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--indicator-color);
+    box-shadow: 0 0 8px var(--indicator-color);
+    top: -2px;
+    right: -2px;
+    pointer-events: none;
+  }
+
+  .status-info {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .status-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .control-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: var(--v2-bg-input, #1a1a2e);
+    border: 1px solid var(--v2-border, #2a2a3e);
+    border-radius: 3px;
+    color: var(--v2-text-primary, #fff);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .btn-label {
+    white-space: nowrap;
+  }
+
+  /* Skin switcher (replaces the old STD/LCD cycle button) */
+  .skin-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 6px 3px 8px;
+    background: var(--v2-bg-input, #1a1a2e);
+    border: 1px solid var(--v2-border, #2a2a3e);
+    border-radius: 3px;
+    color: var(--v2-text-primary, #fff);
+    transition: all 0.15s ease;
+    cursor: pointer;
+  }
+
+  .skin-switcher:hover {
+    background: var(--v2-bg-card, #252540);
+    border-color: var(--v2-accent-cyan, #06b6d4);
+  }
+
+  .skin-select {
+    appearance: none;
+    box-sizing: border-box;
+    inline-size: 128px;
+    background: transparent;
+    border: none;
+    color: inherit;
+    font: inherit;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0 14px 0 2px;
+    cursor: pointer;
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+      linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position: calc(100% - 7px) 50%, calc(100% - 3px) 50%;
+    background-size: 4px 4px;
+    background-repeat: no-repeat;
+  }
+
+
+  .skin-select option {
+    background: var(--v2-bg-input, #1a1a2e);
+    color: var(--v2-text-primary, #fff);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .control-btn:hover {
+    background: var(--v2-bg-card, #252540);
+    border-color: var(--v2-accent-cyan, #06b6d4);
+    color: var(--v2-text-primary, #fff);
+  }
+
+  .control-btn:active {
+    transform: scale(0.95);
+  }
+
+  .control-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+
+  .power-toggle-btn {
+    border-color: var(--v2-accent-green, #4ade80);
+    color: var(--v2-accent-green, #4ade80);
+  }
+
+  :global(.desktop-control-face.standard-face) .status-bar .status-controls .power-toggle-btn {
+    --indicator-color: var(--v2-accent-green, #4ade80);
+    --glow-color: var(--v2-accent-green, #4ade80);
+    border-color: var(--v2-accent-green, #4ade80);
+    color: var(--v2-accent-green, #4ade80);
+  }
+
+  .power-toggle-btn:hover {
+    border-color: var(--v2-accent-green, #4ade80);
+    background: rgba(74, 222, 128, 0.1);
+  }
+
+  .power-toggle-btn.is-on {
+    border-color: var(--v2-accent-red, #ef4444);
+    color: var(--v2-accent-red, #ef4444);
+  }
+
+  :global(.desktop-control-face.standard-face) .status-bar .status-controls .power-toggle-btn.is-on {
+    --indicator-color: var(--v2-accent-red, #ef4444);
+    --glow-color: var(--v2-accent-red, #ef4444);
+    border-color: var(--v2-accent-red, #ef4444);
+    color: var(--v2-accent-red, #ef4444);
+  }
+
+  .power-toggle-btn.is-on:hover {
+    border-color: var(--v2-accent-red, #ef4444);
+    background: rgba(239, 68, 68, 0.1);
+  }
+
+  :global(.desktop-control-face.standard-face) .status-bar .status-controls .power-toggle-btn.power-toggle-btn:hover:not(:disabled) {
+    border-color: var(--v2-accent-green, #4ade80);
+    color: var(--v2-accent-green, #4ade80);
+  }
+
+  :global(.desktop-control-face.standard-face) .status-bar .status-controls .power-toggle-btn.power-toggle-btn.is-on:hover:not(:disabled) {
+    border-color: var(--v2-accent-red, #ef4444);
+    color: var(--v2-accent-red, #ef4444);
+  }
+
+  /* MOR-1673: unknown power state renders neutral — no green/red toggle
+     styling, just the plain control-button border and dimmed text. */
+  .power-toggle-btn.power-unknown {
+    border-color: var(--v2-border, #2a2a3e);
+    color: var(--v2-text-dim, #666);
+  }
+
+  :global(.desktop-control-face.standard-face) .status-bar .status-controls .power-toggle-btn.power-unknown {
+    --indicator-color: var(--v2-text-dim, #666);
+    --glow-color: var(--v2-text-dim, #666);
+    border-color: var(--v2-border, #2a2a3e);
+    color: var(--v2-text-dim, #666);
+  }
+
+  /* Now Playing badge */
+  .status-info {
+    position: relative;
+  }
+
+  .now-playing {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    background: rgba(192, 132, 252, 0.08);
+    border: 1px solid rgba(192, 132, 252, 0.2);
+    border-radius: 4px;
+    cursor: pointer;
+    max-width: 350px;
+    overflow: hidden;
+    transition: background 0.15s;
+    font-family: 'Roboto Mono', monospace;
+    color: inherit;
+  }
+
+  .now-playing:hover {
+    background: rgba(192, 132, 252, 0.15);
+    border-color: rgba(192, 132, 252, 0.4);
+  }
+
+  .np-icon {
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  .np-station {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--v2-text-primary, #e0e0e0);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .np-lang {
+    font-size: 9px;
+    color: var(--v2-text-dim, #888);
+    white-space: nowrap;
+  }
+
+  .np-live {
+    font-size: 8px;
+    font-weight: 700;
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.15);
+    padding: 1px 4px;
+    border-radius: 2px;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+
+  .np-backdrop {
+    position: fixed;
+    inset: 0;
+    top: var(--rp-chrome-top, 0px); /* MOR-3845 */
+    z-index: 999;
+  }
+
+  .np-detail {
+    position: fixed;
+    top: calc(var(--rp-chrome-top, 0px) + 36px); /* MOR-3845 */
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--v2-bg-primary, #0f0f1a);
+    border: 1px solid rgba(192, 132, 252, 0.4);
+    border-radius: 8px;
+    padding: 0;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    min-width: 280px;
+    max-width: 400px;
+  }
+
+  .np-detail-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(192, 132, 252, 0.2);
+    font-size: 13px;
+    font-weight: 600;
+    color: #C084FC;
+  }
+
+  .np-close {
+    background: none;
+    border: none;
+    color: var(--v2-text-dim, #666);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0 2px;
+  }
+
+  .np-close:hover {
+    color: #ff4444;
+  }
+
+  .np-source {
+    font-size: 9px;
+    color: var(--v2-text-dim, #555);
+  }
+
+  .np-detail-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    padding: 10px 12px;
+    font-size: 11px;
+    color: var(--v2-text-primary, #ccc);
+  }
+
+  .np-label {
+    color: var(--v2-text-dim, #666);
+    font-weight: 600;
+  }
+</style>

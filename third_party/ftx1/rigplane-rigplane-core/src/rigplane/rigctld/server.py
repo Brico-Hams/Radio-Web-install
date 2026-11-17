@@ -1,0 +1,1590 @@
+"""Rigctld TCP server — asyncio.start_server transport layer.
+
+Responsibilities:
+- TCP listener on configurable host:port
+- Per-client asyncio.Task with isolated StreamReader/StreamWriter
+- Connection lifecycle (accept, timeout, graceful close)
+- Max client limit
+- Structured logging (client connect/disconnect/errors)
+- CLI entry point integration
+
+This module handles only I/O. It delegates parsing to protocol.py
+and command execution to handler.py.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import datetime
+import inspect
+import logging
+import re
+import time
+from collections.abc import Callable, Coroutine, Sequence
+from typing import TYPE_CHECKING, Any, cast
+
+from ..core.acquisition_drain import AcquisitionDrain
+from ..core.acquisition_scheduler import (
+    AcquisitionExecutor,
+    AcquisitionPriority,
+    AcquisitionRequest,
+    AcquisitionScheduler,
+    AcquisitionQuery,
+    MeterObservationCoalescer,
+    RadioStateModelService,
+    StateFreshnessService,
+    civ_acquisition_executor_for_provider,
+    civ_transport_budget_hz,
+    provider_uses_civ_acquisition,
+)
+from ..audio.route import apply_wsjtx_data_mod_input, profile_data_mode_count
+from ..commands.commander import Priority
+from ..profiles import RadioProfile
+from ..core.state_diagnostics import StateDiagnosticsRecorder
+from ..core.state_pipeline_contracts import AcquisitionClass, FieldPath
+from ..core.state_acquisition_policy import RadioAcquisitionProfile
+from ..core.state_store import StateStore
+from ..radio_protocol import (
+    CivCommandCapable,
+    StateModelCapable,
+    StateModelService,
+    StateStoreCapable,
+)
+from ..runtime._state_queries import (
+    acquisition_query_resolver_for_profile,
+    scope_fixed_edge_slot,
+    wire_parts_for_query,
+)
+from ..runtime._poller_types import CommandQueue
+from ..runtime.managed_tx_authority import ATTEMPT_TIMEOUT_S, RETRY_DELAY_S
+from ..runtime.managed_tx_submission import (
+    ManagedPttTracker,
+    release_managed_session_tx,
+)
+from ..startup_checks import _radio_details, assert_radio_startup_ready
+from . import audit as _audit  # noqa: TID251
+from .circuit_breaker import CircuitBreaker, CircuitState  # noqa: TID251
+from .contract import ClientSession, HamlibError, RigctldConfig  # noqa: TID251
+from .protocol import ArgumentCountError  # noqa: TID251
+from .utils import get_mode_reader  # noqa: TID251
+
+if TYPE_CHECKING:
+    from ..core.command_service import CommandService
+    from ..radio_protocol import Radio
+    from ..runtime.managed_tx_authority import ManagedTxAuthority
+
+logger = logging.getLogger(__name__)
+
+__all__ = ["RigctldServer", "run_rigctld_server"]
+
+# ``AcquisitionScheduler.due_requests`` stamps every profile-cadence request
+# with this reason. ``AcquisitionScheduler._coalesce`` appends to ``reasons``
+# and leaves the scalar ``reason`` at the first writer's value, so the scalar
+# cannot tell a merged request from an unmerged one; a ``reasons`` tuple equal
+# to this one alone can. Pinned by
+# ``test_external_cat_session_stands_the_cadence_down_but_not_a_user_read``.
+_POLICY_CADENCE_REASON = "policy-cadence"
+_MAX_PENDING_CLIENT_RESPONSES = 64
+
+# MOR-2890: cross-protocol HTTP guard. A web page can issue a no-cors POST
+# to the rigctld port; without this check the request line and headers each
+# earn an ENIMPL and the body line after them executes as a rigctld command
+# (``T 1`` keys the transmitter). A first non-blank line shaped like an
+# HTTP request line therefore closes the connection before anything is
+# parsed or executed. Real rigctld clients (WSJT-X, fldigi, ``rigctl``)
+# never send such a line; the same pattern as Pro's MOR-2888.
+_HTTP_REQUEST_LINE_RE = re.compile(rb"^[A-Z]+ \S+ HTTP/\d(\.\d)?$")
+# One WARNING per refused connection, but rate-limited per peer so a page
+# hammering the port with fresh connections cannot flood the log.
+_HTTP_REFUSAL_LOG_WINDOW_S = 10.0
+_HTTP_REFUSAL_LOG_MAX_PEERS = 128
+
+# MOR-2875: the bound on each wait for a departing session's managed-TX
+# handback (one ManagedTxAuthority attempt, plus its retry delay as slack),
+# and on stop()'s wait for the listener to close. STOP_TIMEOUT_S sums the
+# waits of _release_session_tx (a second one follows a cancellation) and
+# stop() (pinned by test_stop_timeout_is_the_sum_of_its_timed_waits).
+SESSION_TX_HANDBACK_TIMEOUT_S: float = ATTEMPT_TIMEOUT_S + RETRY_DELAY_S
+LISTENER_CLOSE_TIMEOUT_S: float = 2.0
+STOP_TIMEOUT_S: float = 2 * SESSION_TX_HANDBACK_TIMEOUT_S + LISTENER_CLOSE_TIMEOUT_S
+
+
+class _AcquisitionExecutorUnavailable(RuntimeError):
+    """Raised when a configured acquisition executor cannot run on this radio."""
+
+
+def _wsjtx_data_mode_value(radio: "Radio", config: RigctldConfig) -> int | bool:
+    if config.wsjtx_data_mode is not None:
+        return int(config.wsjtx_data_mode)
+    return True
+
+
+def _mode_to_name(mode: object) -> str:
+    """Normalize backend mode values to an uppercase mode name."""
+    name = getattr(mode, "name", None)
+    if isinstance(name, str):
+        return name.upper()
+    if isinstance(mode, str):
+        return mode.upper()
+    value = getattr(mode, "value", None)
+    if isinstance(value, int):
+        return getattr(mode, "name", "USB").upper()
+    return str(mode).upper()
+
+
+def _settle_retirement(
+    predecessor: asyncio.Future[None], retirement: asyncio.Future[None]
+) -> None:
+    def settle(_completed: asyncio.Future[None]) -> None:
+        if not retirement.done():
+            retirement.set_result(None)
+
+    if predecessor.done():
+        settle(predecessor)
+    else:
+        predecessor.add_done_callback(settle)
+
+
+class RigctldServer:
+    """Asyncio TCP server implementing the hamlib NET rigctld protocol.
+
+    Args:
+        radio: Connected IcomRadio instance.
+        config: Server configuration; defaults to RigctldConfig().
+        allow_not_ready: a failed start-up readiness check is logged
+            as a warning instead of aborting, so the listener binds
+            while the radio is not ready (the bundled seat shared by
+            ``web`` and ``station``, whose own start-up gate already
+            serves a radio in its connect-time identity hold). Default
+            False keeps the fail-hard check for standalone use.
+        _protocol: Override the protocol module (for testing).
+        _handler: Override the handler instance (for testing).
+        _circuit_breaker: Override the circuit breaker (for testing).
+        clock: Monotonic clock for the rate-limit and refusal-throttle
+            windows; defaults to ``time.monotonic``.
+    """
+
+    def __init__(
+        self,
+        radio: "Radio",
+        config: RigctldConfig | None = None,
+        *,
+        allow_not_ready: bool = False,
+        managed_tx_authority: ManagedTxAuthority | None = None,
+        command_queue: CommandQueue | None = None,
+        command_service: CommandService | None = None,
+        _protocol: Any = None,
+        _handler: Any = None,
+        _circuit_breaker: Any = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        supplied = (
+            managed_tx_authority is not None,
+            command_queue is not None,
+            command_service is not None,
+        )
+        if any(supplied) and not all(supplied):
+            raise ValueError(
+                "managed authority, command queue, and service must be supplied together"
+            )
+        if all(supplied) and _handler is not None:
+            raise ValueError("managed references cannot be combined with _handler")
+        self._managed_tx_authority = managed_tx_authority
+        self._command_queue = command_queue
+        self._command_service = command_service
+        self._radio = radio
+        self._allow_not_ready = allow_not_ready
+        self._config = config or RigctldConfig()
+        self._clock = clock
+        self._server: asyncio.Server | None = None
+        self._client_tasks: set[asyncio.Task[None]] = set()
+        self._client_count = 0
+        self._next_client_id = 0
+        # Injected for testing; populated lazily in start() if None.
+        self._protocol: Any = _protocol
+        self._rig_handler: Any = _handler
+        self._circuit_breaker: CircuitBreaker | None = _circuit_breaker
+        self._server_was_running: bool = False
+        self._state_store: StateStore | None = None
+        self._uses_fallback_state_store = False
+        self._fallback_state_store_attached = False
+        self._acquisition_scheduler: AcquisitionScheduler | None = None
+        self._state_model_service: StateModelService | None = None
+        self._state_freshness_service: StateFreshnessService | None = None
+        self._state_store_freshness_task: asyncio.Task[None] | None = None
+        self._acquisition_executor: AcquisitionExecutor | None = None
+        self._state_acquisition_drain_task: asyncio.Task[None] | None = None
+        self._acquisition_in_flight: dict[str, tuple[frozenset[FieldPath], float]] = {}
+        self._acquisition_drain: AcquisitionDrain | None = None
+        self._state_diagnostics = getattr(radio, "_state_diagnostics", None)
+        # Per-client sliding window for rate limiting: client_id → timestamps
+        self._rate_windows: dict[int, list[float]] = {}
+        # MOR-3536: owners with a live open_channel connection.
+        self._channel_owners: set[str] = set()
+        # MOR-2890: peer host → monotonic time of its last logged HTTP
+        # refusal; throttles the per-connection WARNING below.
+        self._http_refusal_logged_at: dict[str, float] = {}
+        # prevent GC of fire-and-forget tasks
+        self._bg_tasks: set[asyncio.Task[Any]] = set()
+
+    def _spawn(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+        """Create a background task and prevent GC from collecting it."""
+        task = asyncio.get_running_loop().create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return task
+
+    def _handler_execute_call(
+        self,
+        cmd: Any,
+        *,
+        session_id: str,
+        predecessor: asyncio.Future[None],
+        ptt_submission: asyncio.Task[Any] | None = None,
+        ptt_ready: asyncio.Future[None] | None = None,
+    ) -> Coroutine[Any, Any, Any]:
+        execute = getattr(self._rig_handler, "execute")
+        try:
+            signature = inspect.signature(execute)
+        except (TypeError, ValueError):
+            signature = None
+
+        if signature is not None:
+            parameters = signature.parameters.values()
+            accepts_kwargs = any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+            kwargs: dict[str, Any] = {}
+            if accepts_kwargs or "session_id" in signature.parameters:
+                kwargs["session_id"] = session_id
+            if accepts_kwargs or "predecessor" in signature.parameters:
+                kwargs["predecessor"] = predecessor
+            if ptt_submission is not None and (
+                accepts_kwargs or "ptt_submission" in signature.parameters
+            ):
+                kwargs["ptt_submission"] = ptt_submission
+            if ptt_ready is not None and (
+                accepts_kwargs or "ptt_ready" in signature.parameters
+            ):
+                kwargs["ptt_ready"] = ptt_ready
+            return cast(Coroutine[Any, Any, Any], execute(cmd, **kwargs))
+        return cast(Coroutine[Any, Any, Any], execute(cmd))
+
+    def _is_managed_off(self, cmd: Any) -> bool:
+        if (
+            self._managed_tx_authority is None
+            or cmd.long_cmd != "set_ptt"
+            or not cmd.args
+        ):
+            return False
+        try:
+            return int(cmd.args[0]) == 0
+        except ValueError:
+            return False
+
+    def _is_managed_ptt(self, cmd: Any) -> bool:
+        return bool(
+            self._managed_tx_authority is not None and cmd.long_cmd == "set_ptt"
+        )
+
+    async def _release_session_tx(self, session_id: str) -> None:
+        """Give a departing client's managed TX lease back at teardown.
+
+        The connection id is the owner identity the handler keys under
+        (MOR-1014), and this is the teardown hook that makes it releasable: a
+        client that drops mid-over would otherwise leave its lease standing
+        until the max key-down watchdog expires, blocking every other client
+        meanwhile.
+
+        Probed rather than called outright, and never allowed to raise an
+        ordinary exception, for the same reason ``_handler_execute_call``
+        probes ``session_id``: ``_rig_handler`` is an injected ``Any``, and a
+        handler that predates this hook must keep working. Failure here cannot
+        be reported to a socket that is already gone, and must not skip the
+        rest of teardown.
+
+        Cancellation is the one thing it does not absorb twice: the handback
+        survives the cancellation ``stop()`` sends, and a second one ends it.
+        Nothing recovers from that by itself — the lease stays held with its
+        release obligation unsettled (``RELEASE_REQUIRED``) and no watchdog
+        re-arms behind it, so it is a condition for the uncertain-shutdown
+        diagnostics to surface (MOR-1015), not one that times itself out. The
+        caller's teardown is written to close the socket either way.
+
+        Each wait on the handback lasts at most
+        ``SESSION_TX_HANDBACK_TIMEOUT_S`` (MOR-2875); past it the wait is
+        abandoned, not the handback, and the unconfirmed unkey is logged at
+        ERROR.
+        """
+        # Shared with a future TCI adapter (MOR-3821 P0c): the probe of the
+        # injected handler stays here so a handler predating the release
+        # hook keeps working; the shield / cancel-twice / fail-soft
+        # choreography lives in ``runtime.managed_tx_submission``.
+        # ``SESSION_TX_HANDBACK_TIMEOUT_S`` is read at call time so tests
+        # pinning the bound keep patching this module.
+        await release_managed_session_tx(
+            getattr(self._rig_handler, "release_session_tx", None),
+            session_id,
+            handback_timeout_s=SESSION_TX_HANDBACK_TIMEOUT_S,
+        )
+
+    def __del__(self) -> None:
+        """Emit WARN if instance is collected while TCP server/poller is still active."""
+        try:
+            still_running = self._server is not None or self._server_was_running
+            if still_running:
+                logger.warning(
+                    "RigctldServer collected while still running; "
+                    "ensure stop() or async context manager is used."
+                )
+        except Exception:
+            pass  # avoid raising in destructor
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
+    @property
+    def circuit_breaker_state(self) -> CircuitState | None:
+        """Current circuit breaker state, or ``None`` if not yet initialised."""
+        if self._circuit_breaker is None:
+            return None
+        return self._circuit_breaker.state
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def _resolved_radio_profile(self) -> Any | None:
+        """Return the attached or model-resolved radio profile, if any."""
+        raw_profile = getattr(self._radio, "profile", None)
+        if raw_profile is not None:
+            return raw_profile
+
+        model = getattr(self._radio, "model", None)
+        if not isinstance(model, str):
+            return None
+
+        try:
+            from ..profiles import resolve_radio_profile  # noqa: PLC0415
+
+            profile = resolve_radio_profile(model=model)
+        except Exception:
+            logger.debug(
+                "rigctld state acquisition: failed to resolve profile", exc_info=True
+            )
+            return None
+        return profile
+
+    def _profile_state_acquisition(self) -> RadioAcquisitionProfile | None:
+        """Return profile acquisition metadata for the attached radio, if any."""
+        profile = self._resolved_radio_profile()
+        acquisition_profile = getattr(profile, "state_acquisition", None)
+        if acquisition_profile is None:
+            return None
+        return cast(RadioAcquisitionProfile, acquisition_profile)
+
+    def _radio_state_store(self) -> StateStore | None:
+        if isinstance(self._radio, StateStoreCapable):
+            store = self._radio.state_store
+            return store if isinstance(store, StateStore) else None
+        # MOR-2557: a non-protocol radio can still carry a StateStore another
+        # seat (the web server) attached as ``_state_store``. Reuse it: an
+        # attaching seat must never replace — or displace via a fresh
+        # fallback — acquisition services a first seat already attached.
+        attached = getattr(self._radio, "_state_store", None)
+        return attached if isinstance(attached, StateStore) else None
+
+    def _radio_state_model_service(self) -> StateModelService | None:
+        if isinstance(self._radio, StateModelCapable):
+            service = self._radio.state_model_service
+            return service if isinstance(service, StateModelService) else None
+        # MOR-2557: seats attach the model service as a plain attribute on
+        # non-protocol radios, so resolve it the same duck-typed way the
+        # freshness service below already is. Found here, the bootstrap
+        # takes its reuse branch and never calls
+        # ``_attach_state_acquisition_services`` over the first seat's set.
+        attached = getattr(self._radio, "state_model_service", None)
+        return attached if isinstance(attached, StateModelService) else None
+
+    def _radio_state_freshness_service(self) -> StateFreshnessService | None:
+        service = getattr(self._radio, "_state_freshness_service", None)
+        return service if isinstance(service, StateFreshnessService) else None
+
+    def _provided_acquisition_executor(self) -> AcquisitionExecutor | None:
+        raw_executor = getattr(self._radio, "__dict__", {}).get("_acquisition_executor")
+        execute = getattr(raw_executor, "execute", None)
+        if callable(execute):
+            return cast(AcquisitionExecutor, raw_executor)
+        return None
+
+    def _provider_uses_civ_executor(self, provider: str) -> bool:
+        return provider_uses_civ_acquisition(provider)
+
+    def _default_acquisition_executor_for_scheduler(
+        self,
+        scheduler: AcquisitionScheduler,
+    ) -> AcquisitionExecutor | None:
+        if not self._provider_uses_civ_executor(scheduler.provider):
+            return None
+        if not isinstance(self._radio, CivCommandCapable):
+            return None
+        profile = self._resolved_radio_profile()
+        if not isinstance(profile, RadioProfile):
+            return None
+        supports_cmd29 = getattr(profile, "supports_cmd29", None)
+        store = self._state_store
+        return civ_acquisition_executor_for_provider(
+            scheduler.provider,
+            self._send_one_state_query,
+            resolve_query=acquisition_query_resolver_for_profile(
+                profile,
+                fixed_edge_slot=lambda: (
+                    scope_fixed_edge_slot(profile, store.snapshot())
+                    if store is not None
+                    else None
+                ),
+            ),
+            supports_cmd29=supports_cmd29 if callable(supports_cmd29) else None,
+        )
+
+    def _attach_state_acquisition_services(
+        self,
+        *,
+        store: StateStore,
+        scheduler: AcquisitionScheduler,
+        model_service: StateModelService,
+        freshness_service: StateFreshnessService,
+    ) -> None:
+        for name, value in (
+            ("_state_store", store),
+            ("_acquisition_scheduler", scheduler),
+            ("state_model_service", model_service),
+            ("_state_freshness_service", freshness_service),
+            # MOR-2280 F14: standalone rigctld coalesces meter bursts as the
+            # web seat does. ``_bootstrap_state_acquisition`` returns before
+            # calling this when the radio already carries a
+            # ``state_model_service``, so a coalescer another seat attached
+            # over the same radio is never replaced here.
+            ("_meter_observation_coalescer", MeterObservationCoalescer()),
+        ):
+            try:
+                setattr(self._radio, name, value)
+            except Exception:
+                logger.debug(
+                    "rigctld state acquisition: failed to attach %s",
+                    name,
+                    exc_info=True,
+                )
+
+    def _bootstrap_state_acquisition(self) -> None:
+        """Prepare StateStore-backed acquisition services for this server.
+
+        Services another seat already attached to the radio — via the
+        ``StateStoreCapable`` / ``StateModelCapable`` protocols or as plain
+        attributes (the web seat's shape on non-protocol radios, MOR-2557) —
+        are reused, never replaced. Only a radio carrying no store at all
+        gets this server's own fallback.
+        """
+        self._state_store = self._radio_state_store()
+        self._uses_fallback_state_store = self._state_store is None
+        if self._state_store is None:
+            # The standalone server owns one fallback Store and passes that
+            # exact instance to its default handler. It is never handler-local.
+            self._state_store = StateStore()
+        self._state_model_service = self._radio_state_model_service()
+        self._state_freshness_service = self._radio_state_freshness_service()
+        self._acquisition_executor = self._provided_acquisition_executor()
+
+        acquisition_profile = self._profile_state_acquisition()
+        if acquisition_profile is None:
+            return
+        if self._state_model_service is not None:
+            scheduler = getattr(self._radio, "_acquisition_scheduler", None)
+            if isinstance(scheduler, AcquisitionScheduler):
+                self._acquisition_scheduler = scheduler
+                if self._acquisition_executor is None:
+                    self._acquisition_executor = (
+                        self._default_acquisition_executor_for_scheduler(scheduler)
+                    )
+            return
+
+        scheduler = AcquisitionScheduler(
+            profile=acquisition_profile,
+            transport_budget_hz=civ_transport_budget_hz(self._radio),
+        )
+        model_service = RadioStateModelService(
+            store=self._state_store,
+            scheduler=scheduler,
+        )
+        freshness_service = StateFreshnessService(
+            store=self._state_store,
+            scheduler=scheduler,
+            radio=self._radio,
+        )
+        self._acquisition_scheduler = scheduler
+        self._state_model_service = model_service
+        self._state_freshness_service = freshness_service
+        if self._acquisition_executor is None:
+            self._acquisition_executor = (
+                self._default_acquisition_executor_for_scheduler(scheduler)
+            )
+        self._attach_state_acquisition_services(
+            store=self._state_store,
+            scheduler=scheduler,
+            model_service=model_service,
+            freshness_service=freshness_service,
+        )
+
+    def _start_state_freshness_task(self) -> None:
+        if (
+            self._state_freshness_service is None
+            or self._acquisition_scheduler is None
+            or self._state_store_freshness_task is not None
+        ):
+            return
+        self._state_store_freshness_task = asyncio.get_running_loop().create_task(
+            self._state_freshness_service.run(),
+            name="rigctld-state-freshness",
+        )
+
+    def _start_state_acquisition_drain_task(self) -> None:
+        if (
+            self._acquisition_scheduler is None
+            or self._state_acquisition_drain_task is not None
+        ):
+            return
+        self._state_acquisition_drain_task = asyncio.get_running_loop().create_task(
+            self._run_state_acquisition_drain(),
+            name="rigctld-state-acquisition",
+        )
+
+    async def _send_one_state_query(
+        self,
+        query: AcquisitionQuery,
+        priority: AcquisitionPriority = AcquisitionPriority.BACKGROUND,
+        acquisition_class: AcquisitionClass | None = None,
+    ) -> None:
+        """Send a single acquisition-scheduler CI-V state query.
+
+        This seat sends every read on the radio's default lane, in order, so
+        the class that lets the web seat lift KEYING reads ahead of its
+        background lane (MOR-3863) has nothing to change here.
+
+        Wire-frame assembly (cmd29 wrap, 0x27 scope-receiver substitution)
+        is shared with the other two acquisition senders via
+        ``wire_parts_for_query``; the live scope receiver comes from the
+        radio's own ``RadioState`` mirror, matching what the web sender
+        (``RadioPoller._send_one_state_query``) and the initial fetch
+        (``runtime.radio_initial_state.fetch_initial_state``) read.
+        """
+        radio = self._radio
+        if not isinstance(radio, CivCommandCapable):
+            raise _AcquisitionExecutorUnavailable(
+                "radio does not support CI-V state acquisition sends"
+            )
+        command, sub, data = wire_parts_for_query(
+            query, self._radio.radio_state.scope_controls.receiver
+        )
+        # A COMMAND or USER request goes out at NORMAL so a post-write
+        # confirmation does not wait behind the poll burst; everything else
+        # stays BACKGROUND so background polls yield to user commands —
+        # the same mapping the web seat uses in
+        # ``RadioPoller._send_one_state_query``. Dropping the acquisition
+        # priority here (always NORMAL) also bypassed the commander's
+        # drop-newest cap for BACKGROUND fire-and-forget sends (MOR-3888).
+        lane = (
+            Priority.NORMAL
+            if priority in (AcquisitionPriority.COMMAND, AcquisitionPriority.USER)
+            else Priority.BACKGROUND
+        )
+        await radio.send_civ(
+            command,
+            sub=sub,
+            data=data,
+            wait_response=False,
+            priority=lane,
+        )
+
+    def _record_state_diagnostic(
+        self,
+        kind: str,
+        source: str,
+        **details: Any,
+    ) -> None:
+        if isinstance(self._state_diagnostics, StateDiagnosticsRecorder):
+            self._state_diagnostics.record(kind, source, **details)
+
+    @staticmethod
+    def _acquisition_request_expired(
+        request: AcquisitionRequest,
+        *,
+        sent_at: float,
+        now: float,
+    ) -> bool:
+        deadlines = [request.deadline_monotonic]
+        if request.timeout is not None:
+            deadlines.append(sent_at + request.timeout)
+        deadline = min(float(value) for value in deadlines)
+        return now >= deadline
+
+    async def _run_state_acquisition_drain(self) -> None:
+        while True:
+            try:
+                await self._drain_state_acquisition_once()
+                await asyncio.sleep(0.05)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning(
+                    "rigctld state acquisition drain failed: %s",
+                    exc,
+                    exc_info=True,
+                )
+                self._record_state_diagnostic(
+                    "acquisition_drain_error",
+                    "rigctld.server",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                await asyncio.sleep(0.05)
+
+    def _record_acquisition_failure(
+        self,
+        scheduler: AcquisitionScheduler,
+        request: AcquisitionRequest,
+        *,
+        reason: str,
+        failed_paths: tuple[FieldPath, ...] | frozenset[FieldPath],
+        now: float,
+        kind: str = "acquisition_request_failed",
+        error: str | None = None,
+        error_type: str | None = None,
+    ) -> None:
+        details: dict[str, Any] = {
+            "request_id": request.id,
+            "paths": [str(path) for path in failed_paths],
+            "reason": reason,
+            "provider": request.provider,
+        }
+        if error is not None:
+            details["error"] = error
+        if error_type is not None:
+            details["error_type"] = error_type
+        self._record_state_diagnostic(kind, "rigctld.server", **details)
+        # MOR-874: keep rigctld failure handling unchanged — the send-relative
+        # deadline + healthy-link gate is scoped to the web radio poller. Pass
+        # link_healthy=False so every reported failure (incl. timeouts) stays
+        # terminal here exactly as before this change.
+        scheduler.record_acquisition_failure(
+            request,
+            reason=reason,
+            failed_paths=failed_paths,
+            now=now,
+            link_healthy=False,
+        )
+
+    def _dispatchable_this_pass(
+        self,
+        pending: Sequence[AcquisitionRequest],
+    ) -> Sequence[AcquisitionRequest]:
+        """Return the requests this seat may put on the wire this pass.
+
+        A Hamlib bridge owns the byte stream; the cadence reads this seat
+        gained must not pollute it (MOR-166 slice 2). The deleted PTT
+        re-read stood down on this exact flag. ``is True``, matching every
+        sibling poller, so a duck-typed radio never quiesces by accident.
+
+        Only a request whose ``reasons`` is exactly the profile cadence
+        stands down; a client read that coalesced into it carries a second
+        reason and still reaches the wire.
+        """
+
+        external_cat_owns_wire = (
+            getattr(self._radio, "external_cat_session_active", False) is True
+        )
+        if not external_cat_owns_wire:
+            return pending
+        return tuple(
+            request
+            for request in pending
+            if request.reasons != (_POLICY_CADENCE_REASON,)
+        )
+
+    def _report_acquisition_executor_missing(
+        self,
+        scheduler: AcquisitionScheduler,
+        request: AcquisitionRequest,
+        *,
+        now: float,
+    ) -> None:
+        if self._provider_uses_civ_executor(request.provider) and not isinstance(
+            self._radio, CivCommandCapable
+        ):
+            reason = "acquisition_executor_unavailable"
+        else:
+            reason = "acquisition_executor_missing"
+        self._record_acquisition_failure(
+            scheduler,
+            request,
+            reason=reason,
+            failed_paths=request.paths,
+            now=now,
+            kind=reason,
+        )
+
+    def _report_acquisition_executor_error(
+        self,
+        scheduler: AcquisitionScheduler,
+        request: AcquisitionRequest,
+        *,
+        error: BaseException,
+        sent_paths: frozenset[FieldPath],
+        now: float,
+    ) -> None:
+        failed_paths = tuple(path for path in request.paths if path not in sent_paths)
+        unavailable = isinstance(error, _AcquisitionExecutorUnavailable)
+        reason = (
+            "acquisition_executor_unavailable"
+            if unavailable
+            else "acquisition_executor_error"
+        )
+        self._record_acquisition_failure(
+            scheduler,
+            request,
+            reason=reason,
+            failed_paths=failed_paths or request.paths,
+            now=now,
+            kind=reason if unavailable else "acquisition_request_failed",
+            error=str(error),
+            error_type=type(error).__name__,
+        )
+
+    def _report_acquisition_sent(
+        self,
+        request: AcquisitionRequest,
+        *,
+        paths: tuple[FieldPath, ...],
+        pending_request_count: int,
+    ) -> None:
+        self._record_state_diagnostic(
+            "acquisition_request_sent",
+            "rigctld.server",
+            request_id=request.id,
+            paths=[str(path) for path in paths],
+            pending_request_count=pending_request_count,
+        )
+
+    def _state_acquisition_drain(self) -> AcquisitionDrain:
+        """Return this seat's drain, built on first use.
+
+        Scheduler, executor and store are read through callables:
+        ``_bootstrap_state_acquisition`` attaches them after construction.
+        """
+
+        drain = self._acquisition_drain
+        if drain is None:
+            drain = AcquisitionDrain(
+                scheduler=lambda: self._acquisition_scheduler,
+                executor=lambda: self._acquisition_executor,
+                store=lambda: self._state_store,
+                in_flight=self._acquisition_in_flight,
+                expired=self._acquisition_request_expired,
+                dispatchable=self._dispatchable_this_pass,
+                report_failure=self._record_acquisition_failure,
+                report_executor_missing=self._report_acquisition_executor_missing,
+                report_executor_error=self._report_acquisition_executor_error,
+                report_sent=self._report_acquisition_sent,
+                claimant=self,
+            )
+            self._acquisition_drain = drain
+        return drain
+
+    async def _drain_state_acquisition_once(self) -> None:
+        await self._state_acquisition_drain().run_once()
+
+    async def start(self) -> None:
+        """Start the TCP listener and initialise the command handler.
+
+        With ``allow_not_ready`` a radio still in its connect-time
+        identity hold does not abort start-up: a failed start-up
+        readiness check is logged as a warning instead of aborting, so
+        the listener binds while the radio is not ready.
+        """
+        try:
+            assert_radio_startup_ready(self._radio, component="rigctld startup")
+        except RuntimeError:
+            if not self._allow_not_ready:
+                raise
+            connected, ready, control_connected = _radio_details(self._radio)
+            logger.warning(
+                "rigctld starting while the radio is not ready "
+                "(connected=%s, radio_ready=%s, control_connected=%s)",
+                connected,
+                ready,
+                control_connected,
+            )
+
+        if self._protocol is None:
+            from . import protocol as _proto_mod  # noqa: PLC0415, TID251
+
+            self._protocol = _proto_mod
+
+        if self._state_store is None:
+            self._bootstrap_state_acquisition()
+
+        if self._rig_handler is None:
+            from . import handler as _handler_mod  # noqa: PLC0415, TID251
+
+            self._rig_handler = _handler_mod.RigctldHandler(
+                self._radio,
+                self._config,
+                state_store=self._state_store,
+                state_model_service=self._state_model_service,
+                managed_tx_authority=self._managed_tx_authority,
+                command_queue=self._command_queue,
+                command_service=self._command_service,
+            )
+
+        store = self._state_store
+        if store is not None:
+            bind_provider_generation = getattr(
+                self._rig_handler, "bind_provider_generation", None
+            )
+            if callable(bind_provider_generation):
+                bind_provider_generation(lambda: store.provider_generation)
+            if (
+                self._uses_fallback_state_store
+                and not self._fallback_state_store_attached
+            ):
+                store.begin_provider_generation()
+                self._fallback_state_store_attached = True
+
+        self._server = await asyncio.start_server(
+            self._accept_client,
+            host=self._config.host,
+            port=self._config.port,
+        )
+        self._server_was_running = True
+        addr = self._server.sockets[0].getsockname()
+        logger.info("rigctld listening on %s:%d", addr[0], addr[1])
+        self._start_state_freshness_task()
+        self._start_state_acquisition_drain_task()
+
+        # Poller starts lazily on first client connection to avoid idle
+        # CI-V traffic/noise when no CAT clients are connected.
+
+    async def stop(self) -> None:
+        """Close the listener and cancel all active client tasks."""
+        # MOR-1904: retire the handler's key-down bound first, so no
+        # outstanding ticker outlives the loop it was created on. Duck-typed
+        # like the ``release_session_tx`` / ``bind_provider_generation``
+        # probes: ``_rig_handler`` is an injected ``Any``.
+        stop_backstop = getattr(self._rig_handler, "stop_key_down_backstop", None)
+        if callable(stop_backstop):
+            stop_backstop()
+
+        if (
+            self._uses_fallback_state_store
+            and self._fallback_state_store_attached
+            and self._state_store is not None
+        ):
+            self._state_store.begin_provider_generation()
+            self._fallback_state_store_attached = False
+
+        if self._state_acquisition_drain_task is not None:
+            self._state_acquisition_drain_task.cancel()
+            try:
+                await self._state_acquisition_drain_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.debug(
+                    "rigctld state acquisition drain task failed before stop",
+                    exc_info=True,
+                )
+            self._state_acquisition_drain_task = None
+
+        if self._state_store_freshness_task is not None:
+            self._state_store_freshness_task.cancel()
+            try:
+                await self._state_store_freshness_task
+            except asyncio.CancelledError:
+                pass
+            self._state_store_freshness_task = None
+
+        # Listener down, then the live sessions, then the wait. The order is
+        # the release guarantee, not tidiness (MOR-1014): since 3.12
+        # ``wait_closed()`` returns only once every accepted connection has
+        # gone (gh-79033), so awaiting it before cancelling would park here for
+        # the whole ``client_timeout`` — 300s by default — behind one idle
+        # WSJT-X socket, and the managed TX lease that session holds is handed
+        # back by the cancellation queued below. Shutdown must not leave a
+        # transmitter keyed while it waits on a client that has nothing to say.
+        listener, self._server = self._server, None
+        if listener is not None:
+            listener.close()
+        self._server_was_running = False
+
+        tasks = list(self._client_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        if listener is not None:
+            # Bounded (MOR-2875): since 3.12 a connection still open holds
+            # wait_closed() until it goes.
+            try:
+                await asyncio.wait_for(
+                    listener.wait_closed(), timeout=LISTENER_CLOSE_TIMEOUT_S
+                )
+            except TimeoutError:
+                logger.warning(
+                    "rigctld listener did not close within %.1fs; continuing",
+                    LISTENER_CLOSE_TIMEOUT_S,
+                )
+
+        logger.info("rigctld stopped")
+
+    async def serve_forever(self) -> None:
+        """Start the server and block until cancelled or stop() is called."""
+        await self.start()
+        assert self._server is not None
+        try:
+            await self._server.serve_forever()
+        finally:
+            await self.stop()
+
+    async def __aenter__(self) -> RigctldServer:
+        await self.start()
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        await self.stop()
+
+    # ------------------------------------------------------------------
+    # Rate limiting
+    # ------------------------------------------------------------------
+
+    def _check_rate_limit(self, client_id: int) -> bool:
+        """Return True if the command is allowed, False if the rate limit is exceeded.
+
+        Uses a 1-second sliding window per client.  Only allowed commands
+        consume a slot; rejected commands are not counted.
+        """
+        limit = self._config.command_rate_limit
+        if limit is None:
+            return True
+        now = self._clock()
+        window = self._rate_windows.setdefault(client_id, [])
+        cutoff = now - 1.0
+        while window and window[0] <= cutoff:
+            window.pop(0)
+        if len(window) >= limit:
+            return False
+        window.append(now)
+        return True
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
+
+    def _warn_http_refusal(self, peer_host: str, peername: str) -> None:
+        """Log one throttled WARNING for a refused HTTP-looking connection.
+
+        Each refused connection logs at most once by construction (the
+        guard closes the connection on its first matching line); the
+        per-peer window is what keeps a browser re-dialing the port from
+        flooding the log.
+        """
+        now = self._clock()
+        last = self._http_refusal_logged_at.get(peer_host)
+        if last is not None and now - last < _HTTP_REFUSAL_LOG_WINDOW_S:
+            return
+        if len(self._http_refusal_logged_at) >= _HTTP_REFUSAL_LOG_MAX_PEERS:
+            self._http_refusal_logged_at = {
+                host: at
+                for host, at in self._http_refusal_logged_at.items()
+                if now - at < _HTTP_REFUSAL_LOG_WINDOW_S
+            }
+        self._http_refusal_logged_at[peer_host] = now
+        logger.warning(
+            "refused HTTP-looking request on rigctld port from %s "
+            "(cross-protocol guard, MOR-2890); closing connection, "
+            "no command executed",
+            peername,
+        )
+
+    def _accept_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Callback from asyncio.start_server — spawns a per-client task.
+
+        Called synchronously within the event loop; must not block.
+        """
+        if self._admit(writer, lambda: self._handle_client(reader, writer)) is None:
+            writer.close()
+
+    def open_channel(
+        self, reader: Any, writer: Any, owner: str
+    ) -> asyncio.Task[None] | None:
+        """Serve one connection over another transport, keyed as ``owner``.
+
+        The web rigctl channel (MOR-3536) hands in a reader (``readline()``)
+        and a writer (``write``, ``drain``, ``close``, ``wait_closed``,
+        ``get_extra_info``). Its lines run through the same loop as a TCP
+        client, with ``owner`` (the controller session the channel joined) as
+        the managed-TX owner instead of a minted ``rigctld-client-N``; teardown
+        releases the TX that owner holds only when the channel's last ``T`` was
+        a key (MOR-3562). Counts against ``max_clients``. One connection per
+        owner: the owner is also its command-queue session, which a second
+        one's teardown would end.
+        Call it in the session's controller context, which the task copies.
+        Returns ``None`` when refused.
+        """
+        if self._server is None or owner in self._channel_owners:
+            return None
+        task = self._admit(
+            writer, lambda: self._handle_client(reader, writer, owner=owner)
+        )
+        if task is not None:
+            self._channel_owners.add(owner)
+            task.add_done_callback(lambda _: self._channel_owners.discard(owner))
+        return task
+
+    def _admit(
+        self, writer: Any, start: Callable[[], Coroutine[Any, Any, None]]
+    ) -> asyncio.Task[None] | None:
+        """Start one client connection, or ``None`` at ``max_clients``."""
+        if self._client_count >= self._config.max_clients:
+            peer = writer.get_extra_info("peername", ("?", 0))
+            logger.warning(
+                "max_clients (%d) reached, rejecting %s:%s",
+                self._config.max_clients,
+                peer[0],
+                peer[1],
+            )
+            return None
+
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(start())
+        self._client_tasks.add(task)
+        self._client_count += 1
+
+        # Optional WSJT-X compatibility pre-warm for first client:
+        # if radio is in USB/LSB/RTTY with DATA off, enable DATA mode upfront
+        # to avoid long CAT/PTT latency on first TX sequence.
+        if self._client_count == 1 and self._config.wsjtx_compat:
+            self._spawn(self._wsjtx_compat_prewarm())
+
+        task.add_done_callback(self._on_client_done)
+        return task
+
+    def _on_client_done(self, task: asyncio.Task[None]) -> None:
+        self._client_tasks.discard(task)
+        self._client_count -= 1
+
+    async def _wsjtx_compat_prewarm(self) -> None:
+        """Best-effort DATA-mode prewarm for WSJT-X compatibility mode."""
+        get_mode = get_mode_reader(self._radio, _mode_to_name)
+        if get_mode is None:
+            return
+        try:
+            mode_name, _ = await get_mode()
+            data_on = await self._radio.get_data_mode()
+            # A plain DATA flag does not tell us whether the rig is in DATA1,
+            # DATA2, or DATA3.  When the embedded LAN bridge requests an
+            # explicit WSJT-X DATA sub-mode, apply it even if DATA is already
+            # on; otherwise keep the legacy prewarm behavior and only enable
+            # DATA1 when the rig is still in plain USB/LSB/RTTY.
+            explicit_data_mode = self._config.wsjtx_data_mode is not None
+            if mode_name in {"USB", "LSB", "RTTY"} and (
+                explicit_data_mode or not data_on
+            ):
+                data_mode = _wsjtx_data_mode_value(self._radio, self._config)
+                if type(data_mode) is int and data_mode > profile_data_mode_count(
+                    self._radio
+                ):
+                    data_mode = True
+                await apply_wsjtx_data_mod_input(
+                    self._radio,
+                    data_mode=data_mode,
+                    source=self._config.wsjtx_data_mod_input,
+                )
+                await self._radio.set_data_mode(data_mode)
+                logger.info(
+                    "WSJT-X compat prewarm: DATA%s enabled (base mode=%s)",
+                    data_mode,
+                    mode_name,
+                )
+        except Exception as exc:
+            logger.debug("WSJT-X compat prewarm skipped/failed: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Per-client coroutine
+    # ------------------------------------------------------------------
+
+    async def _handle_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        *,
+        owner: str | None = None,
+    ) -> None:
+        """Manage one client while receipt and ordered retirement stay separate."""
+        proto = self._protocol
+
+        peer = writer.get_extra_info("peername", ("?", 0))
+        self._next_client_id += 1
+        client_id = self._next_client_id
+        session = ClientSession(
+            client_id=client_id,
+            peername=f"{peer[0]}:{peer[1]}",
+        )
+        # Minted once per accepted socket and released in this coroutine's
+        # ``finally``: that pairing is what makes it a lease-bearing managed TX
+        # owner identity rather than a throwaway request id (MOR-1014). A
+        # channel opened for a controller session keys as that session.
+        session_id = owner or f"rigctld-client-{client_id}"
+        if self._command_queue is not None:
+            self._command_queue.register_session(session_id)
+        logger.info("client #%d connected from %s", client_id, session.peername)
+
+        loop = asyncio.get_running_loop()
+        previous_execution: asyncio.Future[None] = loop.create_future()
+        previous_execution.set_result(None)
+        previous_retirement: asyncio.Future[None] = loop.create_future()
+        previous_retirement.set_result(None)
+        response_tasks: set[asyncio.Task[None]] = set()
+        ptt_submissions: set[asyncio.Task[Any]] = set()
+        ptt_tracker = ManagedPttTracker()
+        graceful_quit = False
+        # MOR-3562: a channel keys as its controller session, which outlives
+        # it; its close releases the session's TX only when its last ``T`` was
+        # a key. The session's end releases the rest. A TCP client is the
+        # owner and always releases.
+        release_on_close = owner is None
+        # MOR-2890: the HTTP guard inspects only the first non-blank line.
+        first_command_line = True
+
+        def response_task_done(task: asyncio.Task[None]) -> None:
+            response_tasks.discard(task)
+            error = None if task.cancelled() else task.exception()
+            if error is not None:
+                logger.debug("client #%d response task failed: %s", client_id, error)
+                writer.close()
+
+        def submission_done(task: asyncio.Task[Any]) -> None:
+            ptt_submissions.discard(task)
+            if not task.cancelled():
+                task.exception()
+
+        def schedule_response(
+            cmd: Any | None,
+            *,
+            immediate_error: HamlibError | None = None,
+            ptt_submission: asyncio.Task[Any] | None = None,
+            ptt_ready: asyncio.Future[None] | None = None,
+        ) -> None:
+            nonlocal previous_execution, previous_retirement
+            execution = loop.create_future()
+            retirement = loop.create_future()
+            predecessor_retirement = previous_retirement
+            if ptt_submission is not None:
+                ptt_submissions.add(ptt_submission)
+                ptt_submission.add_done_callback(submission_done)
+
+            def settle_unstarted(task: asyncio.Task[None]) -> None:
+                if task.cancelled() and not execution.done():
+                    if ptt_submission is not None and not ptt_submission.done():
+                        ptt_submission.cancel()
+                    execution.set_result(None)
+                    _settle_retirement(predecessor_retirement, retirement)
+
+            task = loop.create_task(
+                self._execute_and_retire_client_command(
+                    writer=writer,
+                    session=session,
+                    session_id=session_id,
+                    client_id=client_id,
+                    cmd=cmd,
+                    immediate_error=immediate_error,
+                    predecessor_execution=previous_execution,
+                    predecessor_retirement=predecessor_retirement,
+                    execution=execution,
+                    retirement=retirement,
+                    ptt_submission=ptt_submission,
+                    ptt_ready=ptt_ready,
+                )
+            )
+            task.add_done_callback(settle_unstarted)
+            response_tasks.add(task)
+            task.add_done_callback(response_task_done)
+            previous_execution = execution
+            previous_retirement = retirement
+
+        try:
+            while True:
+                while len(response_tasks) > _MAX_PENDING_CLIENT_RESPONSES:
+                    await asyncio.wait(
+                        response_tasks,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                at_capacity = len(response_tasks) >= _MAX_PENDING_CLIENT_RESPONSES
+                # ── read with idle timeout ───────────────────────────
+                try:
+                    raw = await asyncio.wait_for(
+                        self._readline(reader),
+                        timeout=self._config.client_timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.info(
+                        "client #%d idle timeout (%.1fs)",
+                        client_id,
+                        self._config.client_timeout,
+                    )
+                    break
+                except ValueError as exc:
+                    # Line too long or malformed framing — close connection.
+                    logger.warning("client #%d framing error: %s", client_id, exc)
+                    break
+
+                if raw is None:
+                    logger.info("client #%d EOF", client_id)
+                    break
+
+                if not raw:
+                    continue  # skip blank lines
+
+                if first_command_line:
+                    first_command_line = False
+                    if _HTTP_REQUEST_LINE_RE.match(raw):
+                        self._warn_http_refusal(str(peer[0]), session.peername)
+                        break
+
+                logger.debug("client #%d → %r", client_id, raw)
+
+                # ── parse ────────────────────────────────────────────
+                try:
+                    cmd = proto.parse_line(raw, session)
+                except ValueError as exc:
+                    logger.debug("client #%d unknown/bad command: %s", client_id, exc)
+                    if at_capacity:
+                        logger.warning(
+                            "client #%d response capacity reached", client_id
+                        )
+                        break
+                    error = (
+                        HamlibError.EINVAL
+                        if isinstance(exc, ArgumentCountError)
+                        else HamlibError.ENIMPL
+                    )
+                    schedule_response(None, immediate_error=error)
+                    continue
+                except Exception as exc:
+                    logger.warning("client #%d parse error: %s", client_id, exc)
+                    if at_capacity:
+                        logger.warning(
+                            "client #%d response capacity reached", client_id
+                        )
+                        break
+                    schedule_response(None, immediate_error=HamlibError.EPROTO)
+                    continue
+
+                # ── quit ─────────────────────────────────────────────
+                if cmd.short_cmd == "q":
+                    logger.info("client #%d quit", client_id)
+                    graceful_quit = True
+                    break
+
+                managed_off = self._is_managed_off(cmd)
+                if at_capacity and not managed_off:
+                    logger.warning("client #%d response capacity reached", client_id)
+                    break
+
+                # ── rate limit ───────────────────────────────────────
+                if not self._check_rate_limit(client_id) and not managed_off:
+                    logger.warning(
+                        "client #%d rate limited (limit=%.1f cmds/sec)",
+                        client_id,
+                        self._config.command_rate_limit,
+                    )
+                    schedule_response(None, immediate_error=HamlibError.EIO)
+                    continue
+
+                if owner is not None and cmd.long_cmd == "set_ptt" and cmd.args:
+                    try:
+                        release_on_close = bool(int(cmd.args[0]))
+                    except ValueError:
+                        pass
+
+                ptt_submission = None
+                ptt_ready = None
+                if self._is_managed_ptt(cmd) and cmd.args:
+                    try:
+                        ptt_on = bool(int(cmd.args[0]))
+                    except ValueError:
+                        pass
+                    else:
+                        assert self._command_queue is not None
+                        assert self._managed_tx_authority is not None
+                        # Only a key-down captures the connection generation:
+                        # an unkey never touches the queue, so it must keep
+                        # working after the consumer unbinds (MOR-3821).
+                        ptt_submission, ptt_ready = ptt_tracker.begin_key(
+                            self._managed_tx_authority,
+                            owner=session_id,
+                            on=ptt_on,
+                            expires_at_monotonic=(
+                                loop.time() + self._config.command_timeout
+                            ),
+                            connection_generation=(
+                                self._command_queue.capture_connection_generation()
+                                if ptt_on
+                                else None
+                            ),
+                        )
+
+                schedule_response(
+                    cmd,
+                    ptt_submission=ptt_submission,
+                    ptt_ready=ptt_ready,
+                )
+
+        except asyncio.CancelledError:
+            logger.info("client #%d cancelled (server shutdown)", client_id)
+        except ConnectionResetError:
+            logger.info("client #%d connection reset by peer", client_id)
+        except Exception as exc:
+            logger.error(
+                "client #%d unexpected error: %s", client_id, exc, exc_info=True
+            )
+        finally:
+            self._rate_windows.pop(client_id, None)
+            if self._command_queue is not None:
+                self._command_queue.unregister_session(session_id)
+            tasks = tuple(response_tasks | ptt_submissions)
+            if not graceful_quit:
+                for task in tuple(response_tasks):
+                    if not task.done():
+                        task.cancel()
+            # The retirement below must survive the cancellation ``stop()``
+            # sends: awaited bare, a cancel landing on the gather inside it
+            # would skip the unconditional socket close and park the
+            # listener's ``wait_closed()`` forever (MOR-1887). Run it as its
+            # own task, shield the wait, and wait it out even when cancelled
+            # — the same handback pattern ``_release_session_tx`` uses.
+            retirement = loop.create_task(
+                self._retire_client_connection(
+                    session_id=session_id,
+                    release_tx=release_on_close,
+                    client_id=client_id,
+                    tasks=tasks,
+                    writer=writer,
+                )
+            )
+            try:
+                await asyncio.shield(retirement)
+            except asyncio.CancelledError:
+                await retirement
+                raise
+
+    async def _retire_client_connection(
+        self,
+        *,
+        session_id: str,
+        release_tx: bool,
+        client_id: int,
+        tasks: tuple[asyncio.Task[Any], ...],
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Retire one departing client: wait out its replies, then its socket.
+
+        Bounded by the response tasks' own cancellation and the session TX
+        handback, both of which complete on their own; nothing here waits on
+        the peer.
+        """
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            if release_tx:
+                await self._release_session_tx(session_id)
+        finally:
+            # Unconditional, and nested so no failure above can skip it:
+            # since 3.12 the listener's ``wait_closed()`` returns only once
+            # every accepted connection has gone, so a socket abandoned
+            # here would leave ``stop()`` waiting on it forever (MOR-1014).
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except (OSError, asyncio.CancelledError):
+                pass
+            logger.info("client #%d disconnected", client_id)
+
+    async def _execute_and_retire_client_command(
+        self,
+        *,
+        writer: asyncio.StreamWriter,
+        session: ClientSession,
+        session_id: str,
+        client_id: int,
+        cmd: Any | None,
+        immediate_error: HamlibError | None,
+        predecessor_execution: asyncio.Future[None],
+        predecessor_retirement: asyncio.Future[None],
+        execution: asyncio.Future[None],
+        retirement: asyncio.Future[None],
+        ptt_submission: asyncio.Task[Any] | None,
+        ptt_ready: asyncio.Future[None] | None,
+    ) -> None:
+        """Execute one received line, then retire its reply in wire order."""
+        proto = self._protocol
+        started = time.monotonic()
+        resp = None
+        out = None
+        try:
+            try:
+                if immediate_error is not None:
+                    out = proto.format_error(immediate_error)
+                else:
+                    assert cmd is not None
+                    managed_off = self._is_managed_off(cmd)
+                    handler_task: asyncio.Task[Any] | None = None
+                    try:
+                        if not managed_off:
+                            await asyncio.shield(predecessor_execution)
+                        handler_task = asyncio.create_task(
+                            self._handler_execute_call(
+                                cmd,
+                                session_id=session_id,
+                                predecessor=predecessor_execution,
+                                ptt_submission=ptt_submission,
+                                ptt_ready=ptt_ready,
+                            )
+                        )
+                        resp = await asyncio.wait_for(
+                            asyncio.shield(handler_task),
+                            timeout=self._config.command_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "client #%d command %r timed out",
+                            client_id,
+                            cmd.short_cmd,
+                        )
+                        out = proto.format_error(HamlibError.ETIMEOUT)
+                    except Exception as exc:
+                        logger.error("client #%d handler error: %s", client_id, exc)
+                        out = proto.format_error(HamlibError.EIO)
+                    finally:
+                        owned_tasks = tuple(
+                            task
+                            for task in (handler_task, ptt_submission)
+                            if task is not None
+                        )
+                        for task in owned_tasks:
+                            if not task.done():
+                                task.cancel()
+                        if owned_tasks:
+                            cleanup = asyncio.gather(
+                                *owned_tasks, return_exceptions=True
+                            )
+                            cancelled = False
+                            while not cleanup.done():
+                                try:
+                                    await asyncio.shield(cleanup)
+                                except asyncio.CancelledError:
+                                    cancelled = True
+                            if cancelled:
+                                raise asyncio.CancelledError
+
+                await asyncio.shield(predecessor_execution)
+            finally:
+                if not execution.done():
+                    execution.set_result(None)
+
+            await asyncio.shield(predecessor_retirement)
+            if resp is not None:
+                if cmd.long_cmd == "chk_vfo" and resp.values == ["1"]:
+                    session.vfo_mode = True
+                out = proto.format_response(cmd, resp, session)
+            assert out is not None
+            duration_ms = round((time.monotonic() - started) * 1000, 3)
+            logger.debug("client #%d ← %r", client_id, out)
+            writer.write(out)
+            await writer.drain()
+
+            if resp is not None:
+                _audit.log_command(
+                    _audit.AuditRecord(
+                        timestamp=datetime.datetime.now(
+                            datetime.timezone.utc
+                        ).isoformat(),
+                        client_id=client_id,
+                        peername=session.peername,
+                        cmd=cmd.short_cmd,
+                        long_cmd=cmd.long_cmd,
+                        args=cmd.args,
+                        vfo=cmd.vfo_arg,
+                        duration_ms=duration_ms,
+                        rprt=resp.error,
+                        is_set=cmd.is_set,
+                    )
+                )
+        finally:
+            _settle_retirement(predecessor_retirement, retirement)
+
+    # ------------------------------------------------------------------
+    # Line reader
+    # ------------------------------------------------------------------
+
+    async def _readline(self, reader: asyncio.StreamReader) -> bytes | None:
+        """Read one newline-terminated line, stripping the terminator.
+
+        Returns:
+            Stripped bytes, or None on EOF.
+
+        Raises:
+            ValueError: If the line exceeds max_line_length.
+        """
+        try:
+            line = await reader.readline()
+        except asyncio.IncompleteReadError:
+            # EOF arrived before a newline (abrupt disconnect).
+            return None
+        except asyncio.LimitOverrunError:
+            raise ValueError("command line exceeds StreamReader buffer limit")
+
+        if not line:
+            return None  # clean EOF
+
+        stripped = line.rstrip(b"\r\n")
+        if len(stripped) > self._config.max_line_length:
+            raise ValueError(
+                f"command line too long: {len(stripped)} bytes "
+                f"(max {self._config.max_line_length})"
+            )
+        return stripped
+
+
+# ---------------------------------------------------------------------------
+# Convenience entry point
+# ---------------------------------------------------------------------------
+
+
+async def run_rigctld_server(radio: "Radio", **kwargs: Any) -> None:
+    """Create a :class:`RigctldServer` from *kwargs* and run it forever.
+
+    Keyword arguments are forwarded to :class:`RigctldConfig`.
+
+    Example::
+
+        await run_rigctld_server(radio, host="0.0.0.0", port=4532)
+    """
+    config = RigctldConfig(**kwargs)
+    server = RigctldServer(radio, config)
+    await server.serve_forever()

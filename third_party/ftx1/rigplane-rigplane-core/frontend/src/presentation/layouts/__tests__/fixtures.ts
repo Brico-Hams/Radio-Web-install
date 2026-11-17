@@ -1,0 +1,16 @@
+/** Shared valid-manifest fixture for MOR-1066 contract tests (not itself a test file). */
+import type { LayoutManifest } from '../contract';
+
+export function validLayoutManifest(overrides: Partial<LayoutManifest> = {}): LayoutManifest {
+  return {
+    schemaVersion: 1,
+    id: 'testlayout',
+    displayName: 'Test Layout',
+    zones: [{ id: 'main', surfaces: ['vfo', 'rxTx'] }],
+    compatibleTopologies: ['1/single'],
+    requiredSemanticSurfaces: ['vfo', 'rxTx'],
+    stageSizing: { mode: 'fluid', responsiveBreakpoints: [] },
+    fallbackLayoutId: null,
+    ...overrides,
+  };
+}

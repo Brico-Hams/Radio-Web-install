@@ -1,0 +1,451 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  DEFAULT_KEYBOARD_CONFIG,
+  focusedElementOwnsArrowKey,
+  formatShortcut,
+  hasCommandModifier,
+  isDigitKey,
+  isFrequencyDisplayFocused,
+  resolveAction,
+  shouldIgnoreEvent,
+} from '../keyboard-map';
+import {
+  resetLocalExtensionKeyboardScope,
+  setLocalExtensionKeyboardScope,
+} from '$lib/local-extensions/keyboard-scope';
+
+describe('resolveAction', () => {
+  it('ArrowLeft tunes down by the current frontend step', () => {
+    const action = resolveAction({ key: 'ArrowLeft' }, DEFAULT_KEYBOARD_CONFIG);
+
+    expect(action).toEqual(
+      expect.objectContaining({
+        action: 'tune',
+        params: { direction: 'down', fine: false },
+      }),
+    );
+  });
+
+  it('ArrowRight tunes up by the current frontend step', () => {
+    const action = resolveAction({ key: 'ArrowRight' }, DEFAULT_KEYBOARD_CONFIG);
+
+    expect(action).toEqual(
+      expect.objectContaining({
+        action: 'tune',
+        params: { direction: 'up', fine: false },
+      }),
+    );
+  });
+
+  it('ArrowUp selects the next tuning step', () => {
+    const action = resolveAction({ key: 'ArrowUp' }, DEFAULT_KEYBOARD_CONFIG);
+
+    expect(action).toEqual(
+      expect.objectContaining({
+        action: 'adjust_tuning_step',
+        params: { direction: 'up' },
+      }),
+    );
+  });
+
+  it('ArrowDown selects the previous tuning step', () => {
+    const action = resolveAction({ key: 'ArrowDown' }, DEFAULT_KEYBOARD_CONFIG);
+
+    expect(action).toEqual(
+      expect.objectContaining({
+        action: 'adjust_tuning_step',
+        params: { direction: 'down' },
+      }),
+    );
+  });
+
+  it('returns null for an unbound key', () => {
+    expect(resolveAction({ key: 'q' }, DEFAULT_KEYBOARD_CONFIG)).toBeNull();
+  });
+
+  it.each([
+    ['[', false, 'scope_span_step', { direction: 'down' }],
+    [']', false, 'scope_span_step', { direction: 'up' }],
+    ['-', false, 'scope_ref_step', { direction: 'down' }],
+    ['+', true, 'scope_ref_step', { direction: 'up' }],
+    ['H', true, 'scope_toggle_hold', undefined],
+    ['D', true, 'scope_toggle_dual', undefined],
+    ['F', true, 'scope_toggle_fst', undefined],
+  ] as const)('binds %s to %s', (key, shiftKey, action, params) => {
+    const resolved = resolveAction({ key, shiftKey }, DEFAULT_KEYBOARD_CONFIG);
+    expect(resolved?.action).toBe(action);
+    expect(resolved?.params).toEqual(params);
+  });
+
+  it('m toggles the active receiver', () => {
+    const action = resolveAction({ key: 'm' }, DEFAULT_KEYBOARD_CONFIG);
+    expect(action?.action).toBe('switch_active_vfo');
+  });
+
+  it('Shift+M activates MAIN', () => {
+    const action = resolveAction({ key: 'M', shiftKey: true }, DEFAULT_KEYBOARD_CONFIG);
+    expect(action?.action).toBe('set_active_vfo');
+    expect(action?.params).toEqual({ vfo: 'MAIN' });
+  });
+
+  it('Shift+S activates SUB', () => {
+    const action = resolveAction({ key: 'S', shiftKey: true }, DEFAULT_KEYBOARD_CONFIG);
+    expect(action?.action).toBe('set_active_vfo');
+    expect(action?.params).toEqual({ vfo: 'SUB' });
+  });
+
+  it('m without shift does not resolve to set_active_vfo', () => {
+    const action = resolveAction({ key: 'm', shiftKey: false }, DEFAULT_KEYBOARD_CONFIG);
+    expect(action?.action).not.toBe('set_active_vfo');
+    expect(action?.action).toBe('switch_active_vfo');
+  });
+});
+
+describe('shouldIgnoreEvent', () => {
+  function makeEl(tag: string): Element {
+    return { tagName: tag } as Element;
+  }
+
+  it('suppresses shortcuts on editable elements', () => {
+    expect(shouldIgnoreEvent(makeEl('INPUT'))).toBe(true);
+    expect(shouldIgnoreEvent(makeEl('TEXTAREA'))).toBe(true);
+    expect(shouldIgnoreEvent(makeEl('SELECT'))).toBe(true);
+  });
+
+  it('keeps shortcuts active on non-editable elements', () => {
+    resetLocalExtensionKeyboardScope();
+    expect(shouldIgnoreEvent(makeEl('DIV'))).toBe(false);
+    expect(shouldIgnoreEvent(makeEl('BUTTON'))).toBe(false);
+    expect(shouldIgnoreEvent(null)).toBe(false);
+  });
+
+  it('suppresses shortcuts while a local extension owns keyboard scope', () => {
+    setLocalExtensionKeyboardScope('extension-input');
+
+    expect(shouldIgnoreEvent(makeEl('DIV'))).toBe(true);
+    expect(shouldIgnoreEvent(null)).toBe(true);
+
+    resetLocalExtensionKeyboardScope();
+  });
+});
+
+// MOR-2507 — a widget that consumes arrow keys declares data-owns-arrows
+// on its focusable element; the global shortcut layer yields exactly the
+// declared keys.
+describe('focusedElementOwnsArrowKey', () => {
+  function buildOwner(declared: string): HTMLElement {
+    const el = document.createElement('div');
+    el.setAttribute('data-owns-arrows', declared);
+    document.body.appendChild(el);
+    return el;
+  }
+
+  const evt = (key: string, flags: {
+    ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; shiftKey?: boolean;
+  } = {}) => ({ key, ...flags });
+
+  it('owns all four arrows for data-owns-arrows="both"', () => {
+    const owner = buildOwner('both');
+
+    for (const key of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']) {
+      expect(focusedElementOwnsArrowKey(owner, evt(key))).toBe(true);
+    }
+
+    owner.remove();
+  });
+
+  it('horizontal owns Left/Right only', () => {
+    const owner = buildOwner('horizontal');
+
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowLeft'))).toBe(true);
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowRight'))).toBe(true);
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowUp'))).toBe(false);
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowDown'))).toBe(false);
+
+    owner.remove();
+  });
+
+  it('vertical owns Up/Down only', () => {
+    const owner = buildOwner('vertical');
+
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowUp'))).toBe(true);
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowDown'))).toBe(true);
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowLeft'))).toBe(false);
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowRight'))).toBe(false);
+
+    owner.remove();
+  });
+
+  it('owns Shift+arrow only when shift is declared (value controls\' fine step)', () => {
+    const withShift = buildOwner('both shift');
+    const withoutShift = buildOwner('both');
+
+    expect(focusedElementOwnsArrowKey(withShift, evt('ArrowUp', { shiftKey: true }))).toBe(true);
+    expect(focusedElementOwnsArrowKey(withoutShift, evt('ArrowUp', { shiftKey: true }))).toBe(false);
+
+    withShift.remove();
+    withoutShift.remove();
+  });
+
+  it('never owns ctrl/alt/meta-modified arrows, even when shift is declared', () => {
+    const owner = buildOwner('both shift');
+
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowUp', { ctrlKey: true }))).toBe(false);
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowUp', { altKey: true }))).toBe(false);
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowUp', { metaKey: true }))).toBe(false);
+    expect(focusedElementOwnsArrowKey(owner, evt('ArrowUp', { ctrlKey: true, shiftKey: true }))).toBe(false);
+
+    owner.remove();
+  });
+
+  it('bare roles are not owners without the declaration', () => {
+    for (const role of ['slider', 'radiogroup', 'radio', 'separator']) {
+      const el = document.createElement('div');
+      el.setAttribute('role', role);
+      document.body.appendChild(el);
+
+      expect(focusedElementOwnsArrowKey(el, evt('ArrowUp'))).toBe(false);
+
+      el.remove();
+    }
+  });
+
+  it('owns arrows for a focused child inside an owner', () => {
+    const owner = buildOwner('both');
+    const child = document.createElement('div');
+    owner.appendChild(child);
+
+    expect(focusedElementOwnsArrowKey(child, evt('ArrowRight'))).toBe(true);
+
+    owner.remove();
+  });
+
+  it('does not own non-arrow keys, plain elements, or null', () => {
+    const owner = buildOwner('both');
+    const div = document.createElement('div');
+    const button = document.createElement('button');
+
+    expect(focusedElementOwnsArrowKey(owner, evt('7'))).toBe(false);
+    expect(focusedElementOwnsArrowKey(owner, evt('m'))).toBe(false);
+    expect(focusedElementOwnsArrowKey(div, evt('ArrowUp'))).toBe(false);
+    expect(focusedElementOwnsArrowKey(button, evt('ArrowRight'))).toBe(false);
+    expect(focusedElementOwnsArrowKey(null, evt('ArrowUp'))).toBe(false);
+
+    owner.remove();
+  });
+});
+
+// MOR-2512 — the shared predicate for the modified-arrow class the global
+// keyboard map owns (Alt+Arrow adjust_af_level / adjust_rf_gain since
+// MOR-2515 moved the defaults off macOS-reserved Ctrl+Arrow); the
+// focusedElementOwnsArrowKey ctrl/alt/meta pin above and the three widget
+// guard tests consume the same rule through it.
+describe('hasCommandModifier', () => {
+  it('is true for ctrl, alt, or meta', () => {
+    expect(hasCommandModifier({ ctrlKey: true })).toBe(true);
+    expect(hasCommandModifier({ altKey: true })).toBe(true);
+    expect(hasCommandModifier({ metaKey: true })).toBe(true);
+  });
+
+  it('is false for shift alone and for no modifiers', () => {
+    const shiftOnly: { shiftKey: boolean; ctrlKey?: boolean } = { shiftKey: true };
+    expect(hasCommandModifier(shiftOnly)).toBe(false);
+    expect(hasCommandModifier({})).toBe(false);
+  });
+});
+
+// MOR-2515 — the AF/RF defaults moved to Alt/Option+Arrow, and the hint must
+// name the key as the viewer's platform does: "Option" on Apple platforms,
+// "Alt" elsewhere. formatShortcut is the single place hint text is built
+// (panel shortcutHint props and the help overlay both render its output).
+describe('formatShortcut platform naming (MOR-2515)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubNavigatorPlatform(platform: string): void {
+    vi.stubGlobal('navigator', { platform });
+  }
+
+  it('names ALT "Option" on an Apple platform', () => {
+    stubNavigatorPlatform('MacIntel');
+    expect(formatShortcut({ id: 'af-level-up', section: 'Levels', sequence: ['ArrowUp'], modifiers: ['ALT'], action: 'adjust_af_level' }))
+      .toBe('Option+ArrowUp');
+    expect(formatShortcut({ id: 'rf-level-up', section: 'Levels', sequence: ['ArrowUp'], modifiers: ['ALT', 'SHIFT'], action: 'adjust_rf_gain' }))
+      .toBe('Option+Shift+ArrowUp');
+  });
+
+  it('names ALT "Alt" on other platforms', () => {
+    stubNavigatorPlatform('Win32');
+    expect(formatShortcut({ id: 'af-level-up', section: 'Levels', sequence: ['ArrowUp'], modifiers: ['ALT'], action: 'adjust_af_level' }))
+      .toBe('Alt+ArrowUp');
+    expect(formatShortcut({ id: 'rf-level-up', section: 'Levels', sequence: ['ArrowDown'], modifiers: ['SHIFT', 'ALT'], action: 'adjust_rf_gain' }))
+      .toBe('Alt+Shift+ArrowDown');
+  });
+
+  it('reads userAgentData.platform first when present', () => {
+    vi.stubGlobal('navigator', { platform: 'Win32', userAgentData: { platform: 'macOS' } });
+    expect(formatShortcut({ id: 'af-level-up', section: 'Levels', sequence: ['ArrowUp'], modifiers: ['ALT'], action: 'adjust_af_level' }))
+      .toBe('Option+ArrowUp');
+  });
+});
+
+// MOR-1444 — digit keys must reach BandSurface's frequency-entry input
+// instead of a band hotkey when the VFO/frequency display has focus.
+describe('isDigitKey', () => {
+  it.each(['0', '1', '5', '9'])('treats %s as a digit', (key) => {
+    expect(isDigitKey(key)).toBe(true);
+  });
+
+  it.each(['a', 'Enter', 'Tab', '10', '', '-'])('does not treat %s as a digit', (key) => {
+    expect(isDigitKey(key)).toBe(false);
+  });
+});
+
+describe('isFrequencyDisplayFocused', () => {
+  /**
+   * Mirrors VfoSurface.svelte's real DOM shape: a `[data-vfo-tile]` wrapping
+   * `data-vfo-active` (the RECEIVER-wide active flag) around a `[data-vfo-freq]`
+   * span. `active` defaults to true so the pre-existing tests below (written
+   * before the MOR-1444 B1 fix) keep exercising "the active tile's display".
+   */
+  function buildVfoTile(active = true): { tile: HTMLElement; freq: HTMLElement } {
+    const tile = document.createElement('div');
+    tile.setAttribute('data-vfo-tile', '');
+    tile.setAttribute('data-vfo-active', String(active));
+    const freq = document.createElement('span');
+    freq.setAttribute('data-vfo-freq', '');
+    tile.appendChild(freq);
+    document.body.appendChild(tile);
+    return { tile, freq };
+  }
+
+  it('is true when the active element sits inside the active tile\'s [data-vfo-freq]', () => {
+    const { tile, freq } = buildVfoTile(true);
+    const freqRoot = document.createElement('div');
+    freq.appendChild(freqRoot);
+
+    expect(isFrequencyDisplayFocused(freqRoot)).toBe(true);
+
+    tile.remove();
+  });
+
+  it('is true for the [data-vfo-freq] element itself on the active tile', () => {
+    const { tile, freq } = buildVfoTile(true);
+
+    expect(isFrequencyDisplayFocused(freq)).toBe(true);
+
+    tile.remove();
+  });
+
+  // MOR-1444 B1 — reproduced: on 2/main_sub both receivers mount a focusable
+  // [data-vfo-freq] (hasTunableFrequency gates on isActiveSlot, not isActive
+  // — VfoSurface.svelte:258-259), but only the ACTIVE RECEIVER's tile is the
+  // honest dispatch target for enterFrequency()'s view.activeReceiver write.
+  // Focusing the INACTIVE receiver's display must not qualify as "the VFO
+  // display is focused" for routing purposes — reopening the MOR-1322 B1 /
+  // MOR-1335 G4 cross-dispatch class this predicate exists to keep shut.
+  it('is false when the active element sits inside an INACTIVE tile\'s [data-vfo-freq]', () => {
+    const { tile, freq } = buildVfoTile(false);
+    const freqRoot = document.createElement('div');
+    freq.appendChild(freqRoot);
+
+    expect(isFrequencyDisplayFocused(freqRoot)).toBe(false);
+
+    tile.remove();
+  });
+
+  it('is false for the [data-vfo-freq] element itself on an inactive tile', () => {
+    const { tile, freq } = buildVfoTile(false);
+
+    expect(isFrequencyDisplayFocused(freq)).toBe(false);
+
+    tile.remove();
+  });
+
+  it('is false for an element outside any [data-vfo-freq] ancestor', () => {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+
+    expect(isFrequencyDisplayFocused(el)).toBe(false);
+
+    el.remove();
+  });
+
+  it('is false for null', () => {
+    expect(isFrequencyDisplayFocused(null)).toBe(false);
+  });
+
+  // MOR-1480 — reproduced: VfoPanel.svelte (mounted directly by the
+  // desktop-v2 header via VfoHeader.svelte/DualVfoDisplay.svelte, with NO
+  // [data-vfo-tile] ancestor) renders FrequencyDisplayInteractive, which now
+  // (per MOR-1480) emits `data-vfo-freq` + its own `data-vfo-active` directly
+  // on its focusable root. This block mirrors that self-attributed shape —
+  // no `[data-vfo-tile]` wrapper anywhere in the tree — the shape the
+  // pre-fix guard (ancestor-tile-only) silently failed to recognize.
+  describe('self-attributed [data-vfo-freq] with no [data-vfo-tile] ancestor (MOR-1480)', () => {
+    function buildBareFreqDisplay(active = true): HTMLElement {
+      const freq = document.createElement('div');
+      freq.setAttribute('data-vfo-freq', '');
+      freq.setAttribute('data-vfo-active', String(active));
+      document.body.appendChild(freq);
+      return freq;
+    }
+
+    it('is false when the self-attributed [data-vfo-freq] is marked inactive', () => {
+      const freq = buildBareFreqDisplay(false);
+
+      expect(isFrequencyDisplayFocused(freq)).toBe(false);
+
+      freq.remove();
+    });
+
+    /**
+     * F2 (verifier, confirmed): the two tests this replaced —
+     * "is true for the self-attributed [data-vfo-freq] element itself" and
+     * "...when the active element sits inside a self-attributed active
+     * [data-vfo-freq]" — were VACUOUS pre-fix: with no `[data-vfo-tile]`
+     * ancestor at all, `freq.closest('[data-vfo-tile]')` is `null` on BOTH
+     * the pre-fix and post-fix implementations, so `null?.getAttribute(...)
+     * !== 'false'` evaluates `undefined !== 'false'` — true — regardless of
+     * whether the code reads the element's OWN `data-vfo-active` first. They
+     * passed identically before and after the fix and proved nothing about
+     * the "own attribute wins" behavior the fix actually added.
+     *
+     * These two tests below discriminate: they wrap a self-attributed
+     * `[data-vfo-freq]` in an ANCESTOR `[data-vfo-tile]` whose own
+     * `data-vfo-active` DISAGREES with the element's own attribute. The
+     * pre-fix implementation only ever reads the ancestor tile's flag, so it
+     * gets these backwards; only reading the element's own attribute FIRST
+     * (falling back to the ancestor only when absent) gets them right.
+     */
+    function buildConflictingAncestorTile(ownActive: boolean, tileActive: boolean): HTMLElement {
+      const tile = document.createElement('div');
+      tile.setAttribute('data-vfo-tile', '');
+      tile.setAttribute('data-vfo-active', String(tileActive));
+      const freq = document.createElement('div');
+      freq.setAttribute('data-vfo-freq', '');
+      freq.setAttribute('data-vfo-active', String(ownActive));
+      tile.appendChild(freq);
+      document.body.appendChild(tile);
+      return freq;
+    }
+
+    it('prefers its own data-vfo-active=true over an ancestor [data-vfo-tile] marked inactive', () => {
+      const freq = buildConflictingAncestorTile(true, false);
+
+      expect(isFrequencyDisplayFocused(freq)).toBe(true);
+
+      freq.closest('[data-vfo-tile]')?.remove();
+    });
+
+    it('prefers its own data-vfo-active=false over an ancestor [data-vfo-tile] marked active', () => {
+      const freq = buildConflictingAncestorTile(false, true);
+
+      expect(isFrequencyDisplayFocused(freq)).toBe(false);
+
+      freq.closest('[data-vfo-tile]')?.remove();
+    });
+  });
+});

@@ -1,0 +1,1316 @@
+/**
+ * MOR-1311 — the semantic scope-controls surface (vocabulary slice 11B, the
+ * scope toolbar — the LAST B-slice of the vocabulary program), retargeted by
+ * MOR-2545 PR1 to the owner-approved ONE-ROW + More split.
+ *
+ * Every test names the carry-forward/mutation it pins:
+ *   (1) renders exclusively from `view.scopeControls` — no raw-state reach.
+ *   (2) `receiver` is the ONE MAIN/SUB control; no second "source" control.
+ *   (3) EDGE/SPAN visibility is a RENDERING decision (`isEdgeApplicable`/
+ *       `isSpanApplicable`, reused from `spectrum-toolbar-logic.ts`) layered
+ *       on facts that are always structurally available; a read FIX/S-F
+ *       mode hides SPAN, a read CTR/S-C mode hides EDGE, and an unread
+ *       mode hides only EDGE — SPAN keeps its slot unlit (MOR-2565, owner
+ *       ruling 2026-09-21) instead of vanishing with the layout.
+ *   handler guards — pinned independently of `disabled` (MOR-1304 F3
+ *       recipe): a direct dispatched click/input on a disabled control must
+ *       not reach the callback.
+ *   field identity — every choice/toggle control names ITS OWN field in the
+ *       callback, not a neighbour's (the copy-paste-loop mutation class).
+ *   MOR-2545 owner rules — one row; no `NAME: true/false` text; no `—`/`?`
+ *       placeholders; unread = drawn unlit in place with its label; MAIN/SUB
+ *       absent without the structural receiver fact; More opens on the
+ *       [MORE ▾] key, closes on Esc and outside click, and returns focus.
+ *   MOR-2545 PR3 — the hosted look (HOSTED mounts only, gated on the
+ *   host toolbar's rowTail): CTR|FIX and MAIN|SUB are ONE keyed group
+ *   each; a lit segment carries `data-lit='true'`; the More key's
+ *   label comes from the i18n system (pinned in ru-RU too); the rowTail
+ *   renders between the receiver group and More; the overflow hooks
+ *   cover quick → receiver → hold → ref → span → step → mode (CTR|FIX
+ *   hides last, into More's permanent MODE row); an unhosted mount
+ *   (no rowTail) keeps PR1's flat grammar. PR3 round 4 — the hosted LOOK
+ *   is the Standard-face raised-key family, and the CSS-mechanism pins at
+ *   the end of this file fail if the row falls back to the retired
+ *   capsule chrome.
+ *
+ * The More panel is opened through the [MORE ▾] key exactly as the operator
+ * opens it — `openMore()` below is the ONLY helper that reaches into
+ * More-hosted controls. Literal text assertions everywhere, never `t(key)`.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { flushSync, mount, unmount, createRawSnippet } from 'svelte';
+import { getLocale, setLocale } from '$lib/i18n';
+import ScopeControlsSurface, {
+  CHOICES, TOGGLES, type ScopeChoiceField, type ScopeToggleField,
+} from '../ScopeControlsSurface.svelte';
+import FiniteControlRendererFixture, {
+  resetRetainedInvocations, retainedInvocations,
+} from '../../primitives/control-instruments/__tests__/support/FiniteControlRendererFixture.svelte';
+import {
+  createFiniteRendererContext, type FiniteControlAppearance,
+} from '../../primitives/control-instruments/control-instrument-renderer.svelte';
+import { topologyFixtures, withScopeControls } from '../fixtures/topologies';
+import type { Availability, RadioViewModel, ScopeControlsField, ScopeControlsViewModel } from '../radio-view-model';
+
+const ON: Availability = { structural: true, operational: true };
+const SOURCE = readFileSync('src/semantic/ScopeControlsSurface.svelte', 'utf8');
+const OFF: Availability = { structural: false, operational: false };
+const unread = <T>(availability: Availability = ON): ScopeControlsField<T> =>
+  ({ reading: { status: 'unknown' }, availability });
+const known = <T>(value: T, availability: Availability = ON): ScopeControlsField<T> =>
+  ({ reading: { status: 'known', value }, availability });
+
+const base = (): RadioViewModel => withScopeControls(topologyFixtures['1/single']);
+const withSc = (over: Partial<ScopeControlsViewModel>): RadioViewModel => {
+  const view = base();
+  return { ...view, scopeControls: { ...view.scopeControls!, ...over } };
+};
+
+let target: HTMLDivElement;
+beforeEach(() => { target = document.createElement('div'); document.body.appendChild(target); });
+afterEach(() => { resetRetainedInvocations(); vi.restoreAllMocks(); target.remove(); });
+
+type Handlers = {
+  onToggleChange?: (field: ScopeToggleField, next: boolean) => void;
+  onChoiceChange?: (field: ScopeChoiceField, value: number) => void;
+  onSpanChange?: (span: number) => void;
+  onSpeedChange?: (speed: number) => void;
+  onRefChange?: (ref: number) => void;
+};
+
+function render(view: RadioViewModel, handlers: Handlers = {}, props: { rowTail?: boolean } = {}) {
+  // MOR-2545 PR3: a tail probe standing in for the toolbar's rowTail.
+  // createRawSnippet must return ONE element, hence the wrapper div.
+  const rowTail = props.rowTail
+    ? createRawSnippet(() => ({
+        render: () =>
+          '<div data-testid="row-tail"><span data-overflow="step" data-testid="row-tail-step"></span>'
+          + '<button data-overflow="quick" data-testid="row-tail-quick">AVG</button></div>',
+      }))
+    : undefined;
+  const component = mount(ScopeControlsSurface, { target, props: { view, spanHz: view.scopeControls?.span.reading.status === 'known' ? 100000 : null, ...handlers, rowTail } });
+  flushSync();
+  const q = <T extends HTMLElement>(sel: string) => target.querySelector(sel) as T | null;
+  const el = (id: string) => q<HTMLElement>(`[data-testid="${id}"]`);
+  return {
+    dispose: () => unmount(component),
+    root: () => q('[data-testid="scope-controls-surface"]'),
+    el,
+    /** Opens the More panel through the [MORE ▾] key, like the operator does. */
+    openMore: () => { el('scope-more')!.click(); flushSync(); },
+  };
+}
+/** MOR-1304 F3 recipe: bypasses jsdom's disabled-button `.click()` no-op. */
+const bypassClick = (el: HTMLElement) => el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+const pressEscape = () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); flushSync(); };
+
+describe('structural presence: absent group / absent leaves render nothing extra', () => {
+  it('renders nothing when scopeControls is absent', () => {
+    const r = render(topologyFixtures['1/single']);
+    expect(r.root()).toBeNull();
+    r.dispose();
+  });
+
+  it('hides a choice leaf whose structural availability is false — in the row AND in More', () => {
+    const r = render(withSc({ mode: unread(OFF) }));
+    expect(r.el('scope-mode-row')).toBeNull();
+    r.openMore();
+    expect(r.el('scope-mode')).toBeNull();
+    r.dispose();
+  });
+
+  it('hides a toggle leaf whose structural availability is false', () => {
+    const r = render(withSc({ hold: unread(OFF) }));
+    expect(r.el('scope-hold')).toBeNull();
+    r.dispose();
+  });
+});
+
+describe('carry-forward (3): EDGE/SPAN visibility is a rendering decision on top of facts', () => {
+  it('shows EDGE and granted subscription SPAN when mode is known FIX (1)', () => {
+    const r = render(withSc({ mode: known(1) }));
+    expect(r.el('scope-span-value')!.textContent).toBe('±50k');
+    r.openMore();
+    expect(r.el('scope-edge')).not.toBeNull();
+    r.dispose();
+  });
+
+  it('shows SPAN in the row and hides EDGE when mode is known CTR (0)', () => {
+    const r = render(withSc({ mode: known(0) }));
+    expect(r.el('scope-span')).not.toBeNull();
+    r.openMore();
+    expect(r.el('scope-edge')).toBeNull();
+    r.dispose();
+  });
+
+  // MOR-2565 (owner ruling 2026-09-21): an unread mode keeps SPAN in its
+  // slot, unlit and inert — only EDGE stays hidden until the mode is read.
+  // The fixture's span is known(3): the unread MODE alone must unlight it.
+  it('keeps SPAN in the row unlit and inert while the mode is unread (MOR-2565)', () => {
+    const r = render(withSc({ mode: unread() }));
+    const span = r.el('scope-span');
+    expect(span).not.toBeNull();
+    expect(r.el('scope-span-value')!.textContent).toBe('');
+    for (const key of span!.querySelectorAll('button')) {
+      expect(key.hasAttribute('disabled'), 'span key is inert').toBe(true);
+    }
+    r.openMore();
+    expect(r.el('scope-edge')).toBeNull(); // EDGE keeps the old contract
+    // The More overflow copy keeps its slot too, equally unlit.
+    expect(r.el('scope-overflow-span')).not.toBeNull();
+    expect(r.el('scope-overflow-span-value')!.textContent).toBe('');
+    r.dispose();
+  });
+
+  // Same slot, now lit: the mode read alone lights the value — no layout
+  // change, no placeholder in between.
+  it('lights the SPAN value once the mode is read (CTR)', () => {
+    const r = render(withSc({ mode: known(0) }));
+    expect(r.el('scope-span')!.querySelector('button')!.hasAttribute('disabled')).toBe(false);
+    expect(r.el('scope-span-value')!.textContent).toBe('±50k'); // granted full width = 100000
+    r.dispose();
+  });
+
+  // A radio with no span control at all draws nothing — the unread case is
+  // "kept unlit", the structurally-absent case is "not drawn" (MOR-2565).
+  it('omits SPAN entirely when the radio has no span control (structural false)', () => {
+    const r = render(withSc({ mode: known(0), span: unread(OFF) }));
+    expect(r.el('scope-span')).toBeNull();
+    r.openMore();
+    expect(r.el('scope-overflow-span')).toBeNull();
+    r.dispose();
+  });
+
+  // S-F retains EDGE and the subscription SPAN grant.
+  it('shows EDGE and granted subscription SPAN when mode is known S-F (3)', () => {
+    const r = render(withSc({ mode: known(3) }));
+    expect(r.el('scope-span-value')!.textContent).toBe('±50k');
+    r.openMore();
+    expect(r.el('scope-edge')).not.toBeNull();
+    r.dispose();
+  });
+
+  // F2 — mode S-C (2) shows SPAN and hides EDGE
+  it('shows SPAN in the row and hides EDGE when mode is known S-C (2)', () => {
+    const r = render(withSc({ mode: known(2) }));
+    expect(r.el('scope-span')).not.toBeNull();
+    r.openMore();
+    expect(r.el('scope-edge')).toBeNull();
+    r.dispose();
+  });
+
+  // MOR-2545: in S-C/S-F NEITHER row mode key lights, and the More panel's
+  // full mode choice is what shows the current mode.
+  it('lights neither row key in S-C; the More mode choice shows the current mode', () => {
+    const r = render(withSc({ mode: known(2) }));
+    expect(r.el('scope-mode-row-0')!.getAttribute('aria-checked')).toBe('false');
+    expect(r.el('scope-mode-row-1')!.getAttribute('aria-checked')).toBe('false');
+    expect(r.el('scope-mode-row-0')!.getAttribute('data-lit')).toBe('false');
+    expect(r.el('scope-mode-row-1')!.getAttribute('data-lit')).toBe('false');
+    r.openMore();
+    expect(r.el('scope-mode-2')!.getAttribute('aria-checked')).toBe('true');
+    expect(r.el('scope-mode-2')!.getAttribute('data-lit')).toBe('true');
+    r.dispose();
+  });
+});
+
+describe('unread leaves render honestly, never fabricated (MOR-2545 owner rules)', () => {
+  // `centerType` has no mode-applicability gate (unlike `mode` itself), so
+  // it isolates the choice-leaf honesty story from carry-forward 3 above.
+  it('an unread choice leaf shows no aria-checked="true" option and stays disabled', () => {
+    const r = render(withSc({ centerType: unread() }));
+    r.openMore();
+    expect(r.el('scope-centerType-0')!.getAttribute('aria-checked')).toBe('false');
+    expect(r.el('scope-centerType-0')!.hasAttribute('disabled')).toBe(true);
+    r.dispose();
+  });
+
+  it('an unread toggle OMITS aria-pressed entirely and is drawn UNLIT with its label, no value', () => {
+    const r = render(withSc({ hold: unread() }));
+    const hold = r.el('scope-hold')!;
+    expect(hold.hasAttribute('aria-pressed')).toBe(false);
+    expect(hold.getAttribute('data-lit')).toBe('false');
+    expect(hold.textContent).toBe('HOLD');
+    r.dispose();
+  });
+
+  it('an unread stepper value is EMPTY with its reserved-width box, never a placeholder', () => {
+    const r = render(withSc({ refDb: unread() }));
+    const value = r.el('scope-ref-value')!;
+    expect(value.textContent).toBe('');
+    expect(value.classList.contains('scope-step-value')).toBe(true);
+    r.dispose();
+  });
+
+  it('never prints a placeholder or a NAME: true/false text anywhere in the surface', () => {
+    const r = render(base());
+    r.openMore();
+    const text = r.root()!.textContent ?? '';
+    expect(text).not.toMatch(/:\s*(true|false)/i);
+    expect(text).not.toContain('—');
+    expect(text).not.toContain('?');
+    r.dispose();
+  });
+
+  // Same honesty bar in CTR with EVERY value unread: steppers EMPTY, toggles label-only.
+  it('in CTR with every value unread prints no placeholder and no true/false text', () => {
+    const r = render(withSc({
+      mode: known(0), span: unread(), refDb: unread(), speed: unread(),
+      hold: unread(), dual: unread(), duringTx: unread(), vbwNarrow: unread(),
+      edge: unread(), centerType: unread(), rbw: unread(), receiver: unread(),
+    }));
+    r.openMore();
+    const text = r.root()!.textContent ?? '';
+    expect(text).not.toMatch(/[—?–]|UNKNOWN|:\s*(true|false)/i);
+    r.dispose();
+  });
+
+  it('does not coerce an observed out-of-list choice into a selected option', () => {
+    const r = render(withSc({ centerType: known(99) }));
+    r.openMore();
+    for (const value of [0, 1, 2]) expect(r.el(`scope-centerType-${value}`)!.getAttribute('aria-checked')).toBe('false');
+    r.dispose();
+  });
+});
+
+describe('the ONE always-visible row (MOR-2545)', () => {
+  it('every always-visible key sits in one row element', () => {
+    const r = render(withSc({ mode: known(0) }));
+    const row = r.el('scope-controls-row')!;
+    expect(row).not.toBeNull();
+    for (const id of ['scope-mode-row', 'scope-span', 'scope-ref', 'scope-hold', 'scope-receiver', 'scope-more']) {
+      const node = r.el(id);
+      expect(node, id).not.toBeNull();
+      expect(node!.closest('[data-testid="scope-controls-row"]'), id).toBe(row);
+    }
+    r.dispose();
+  });
+
+  it('omits MAIN/SUB without the structural receiver fact (single-receiver radios)', () => {
+    const r = render(withSc({ receiver: unread(OFF) }));
+    expect(r.el('scope-receiver')).toBeNull();
+    r.openMore();
+    expect(r.el('scope-receiver')).toBeNull();
+    expect(r.el('scope-more-panel')).not.toBeNull();
+    r.dispose();
+  });
+
+  it('the row mode keys dispatch the mode choice from the row itself', () => {
+    const onChoiceChange = vi.fn();
+    const r = render(base(), { onChoiceChange });
+    r.el('scope-mode-row-0')!.click();
+    flushSync();
+    expect(onChoiceChange).toHaveBeenCalledExactlyOnceWith('mode', 0);
+    r.dispose();
+  });
+});
+
+describe('the hosted row look (MOR-2545 PR3 round 4, owner style B — HOSTED mounts only)', () => {
+  // PR3 round 2 (finding 3): keyed-group markup is gated on the host's
+  // rowTail. Every assertion below mounts with a rowTail; the flat-grammar
+  // test after this describe pins the unhosted mounts.
+  it('CTR|FIX is ONE keyed group: both keys are its only children', () => {
+    const r = render(withSc({ mode: known(0) }), {}, { rowTail: true });
+    const modeRow = r.el('scope-mode-row')!;
+    expect(modeRow.classList.contains('scope-capsule')).toBe(true);
+    expect(modeRow.getAttribute('role')).toBe('radiogroup');
+    const keys = modeRow.querySelectorAll('button');
+    expect(keys).toHaveLength(2);
+    expect(keys[0]!.textContent).toBe('CTR');
+    expect(keys[1]!.textContent).toBe('FIX');
+    // Round 4: the group is a bare flex box of SEPARATE family keys — no
+    // shared frame, no inner divider (the segment rules are gone from the
+    // sheet; pinned by the CSS pins at the end of this describe). The
+    // structure the family keys on (adjacent segment children of one
+    // group) is pinned here.
+    expect(keys[1]!.previousElementSibling).toBe(keys[0]);
+    r.dispose();
+  });
+
+  it('MAIN|SUB is ONE keyed group with exactly the two receiver keys', () => {
+    const r = render(base(), {}, { rowTail: true });
+    const receiver = r.el('scope-receiver')!;
+    expect(receiver.classList.contains('scope-capsule')).toBe(true);
+    const keys = receiver.querySelectorAll('button');
+    expect(keys).toHaveLength(2);
+    expect(keys[0]!.textContent).toBe('MAIN');
+    expect(keys[1]!.textContent).toBe('SUB');
+    r.dispose();
+  });
+
+  it('a lit segment carries data-lit=true; an unlit one does not', () => {
+    const r = render(withSc({ mode: known(0), receiver: known(1) }));
+    expect(r.el('scope-mode-row-0')!.getAttribute('data-lit')).toBe('true');
+    expect(r.el('scope-mode-row-1')!.getAttribute('data-lit')).toBe('false');
+    expect(r.el('scope-receiver-1')!.getAttribute('data-lit')).toBe('true');
+    expect(r.el('scope-receiver-0')!.getAttribute('data-lit')).toBe('false');
+    r.dispose();
+  });
+
+  it('[MORE ▾] exists with the i18n label, a title, and opens the More panel', () => {
+    const r = render(base(), {}, { rowTail: true });
+    const more = r.el('scope-more')!;
+    expect(more.textContent).toBe('More ▾'); // en catalog: core.spectrum.more
+    expect(more.getAttribute('title')).toBe('More ▾');
+    expect(more.getAttribute('aria-label')).toBe('More scope controls');
+    expect(r.el('scope-more-panel')).toBeNull();
+    r.openMore();
+    expect(r.el('scope-more-panel')).not.toBeNull();
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+    r.dispose();
+  });
+
+  // PR3 round 2 (finding 8): the label must go through t() — a hard-coded
+  // 'More ▾' stays green elsewhere (English-only renders). ru catalog:
+  // core.spectrum.more = "Ещё" (CSS uppercases it visually).
+  it('the hosted MORE label follows the locale: ru-RU renders Ещё, not More', () => {
+    const previous = getLocale();
+    setLocale('ru-RU');
+    try {
+      const r = render(base(), {}, { rowTail: true });
+      expect(r.el('scope-more')!.textContent).toBe('Ещё ▾');
+      r.dispose();
+    } finally {
+      setLocale(previous);
+    }
+  });
+
+  // PR3 round 2 (finding 3): without a host rowTail (LCD skins, mobile,
+  // bare mounts) the surface renders PR1's flat grammar exactly as before.
+  it('an unhosted mount keeps the PR1 flat grammar: key groups, reserved widths, ⋯ key', () => {
+    const r = render(withSc({ mode: known(0) }));
+    expect(r.el('scope-mode-row')!.classList.contains('scope-capsule')).toBe(false);
+    expect(r.el('scope-mode-row')!.classList.contains('scope-key-group')).toBe(true);
+    expect(r.el('scope-mode-row-0')!.getAttribute('style')).toBe('--scope-key-width: 42px;');
+    expect(r.el('scope-receiver')!.classList.contains('scope-key-group')).toBe(true);
+    expect(r.el('scope-receiver-0')!.getAttribute('style')).toBe('--scope-key-width: 48px;');
+    expect(r.el('scope-hold')!.getAttribute('style')).toBe('--scope-key-width: 52px;');
+    const more = r.el('scope-more')!;
+    expect(more.textContent).toBe('⋯');
+    expect(more.getAttribute('style')).toBe('--scope-key-width: 30px;');
+    expect(more.getAttribute('title')).toBeNull();
+    r.dispose();
+  });
+
+  it('the host rowTail renders between the receiver capsule and More', () => {
+    const r = render(withSc({ mode: known(0) }), {}, { rowTail: true });
+    const order = [r.el('scope-receiver')!, r.el('row-tail-step')!, r.el('row-tail-quick')!, r.el('scope-more')!];
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i]!.compareDocumentPosition(order[i - 1]!) & Node.DOCUMENT_POSITION_PRECEDING,
+        `item ${i} follows item ${i - 1}`).toBeTruthy();
+    }
+    r.dispose();
+  });
+
+  it('renders the host rowTail bare when the scope fact group is absent', () => {
+    // topologyFixtures['1/single'] carries no scopeControls — exactly the
+    // absent-group case the bare-tail fallback exists for.
+    const r = render(topologyFixtures['1/single'], {}, { rowTail: true });
+    expect(r.el('scope-hold')).toBeNull();
+    expect(r.el('row-tail-step')).not.toBeNull();
+    expect(r.el('row-tail-quick')).not.toBeNull();
+    r.dispose();
+  });
+
+  // MOR-2545 round 4 (owner style B) + round 5 (verifier defect): the
+  // surface's own CSS-mechanism pins. jsdom cannot compute the cascade, so
+  // these read the sheets directly and FAIL IF THE ROW FALLS BACK TO THE
+  // RETIRED CAPSULE LOOK (the teal lit wash or the segment frame/divider
+  // rules returning, or a colour literal re-entering the row sheet) OR IF
+  // THE FAMILY LEAKS PAST THE HOSTED ROW: the flat-key exclusion is
+  // hosted-conditional, so the unhosted mounts — LCD, mobile, and the
+  // desktop standalone audio_fft surfaces this component renders without a
+  // host toolbar — keep the flat grammar, pixel-identical to origin/main.
+  it('the family reaches only hosted keys; unhosted mounts keep the flat look', () => {
+    const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '');
+    const HOSTED_ONLY = '.scope-flat-key:not(.spectrum-toolbar.hosted *)';
+    const bezel = strip(readFileSync('src/components-v2/controls/control-button.css', 'utf8'));
+    const skin = strip(readFileSync('src/skins/desktop-v2/semantic-controls.css', 'utf8'));
+    expect(bezel.split(HOSTED_ONLY).length - 1).toBe(13);
+    expect(skin.split(HOSTED_ONLY).length - 1).toBe(3);
+    // Fails if the exclusion is dropped globally again (round-4 defect:
+    // the audio_fft standalone surfaces got the raised keys).
+    expect(bezel.split(HOSTED_ONLY).join('')).not.toContain('.scope-flat-key');
+    expect(skin.split(HOSTED_ONLY).join('')).not.toContain('.scope-flat-key');
+    const cssRaw = readFileSync('src/components/spectrum/scope-capsule.css', 'utf8');
+    const css = cssRaw.replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(css).not.toContain('--v2-accent-cyan-teal');
+    expect(css).not.toContain('.scope-capsule > .scope-flat-key');
+    expect(css.match(/#[0-9a-fA-F]{3,8}\b/)).toBeNull();
+    // Geometry only: the sheet must not re-style a key's font weight or
+    // transform (the family owns type as of round 4).
+    const keyRule = css.match(/\.spectrum-toolbar\.hosted \.scope-flat-key \{([\s\S]*?)\n\}/);
+    expect(keyRule, 'the key geometry rule exists').not.toBeNull();
+    expect(keyRule![1]).not.toContain('font-');
+    expect(keyRule![1]).not.toContain('color:');
+  });
+});
+
+describe('narrow widths: lower-priority keys overflow into More (MOR-2545)', () => {
+  // jsdom cannot lay out — this pins the STRUCTURE/hooks the container queries key on.
+  it('row hooks mark the overflow groups and More renders their copies', () => {
+    const r = render(withSc({ mode: known(0) }));
+    const row = r.el('scope-controls-row')!;
+    // Display order; hide-first is the reverse. CTR|FIX (mode) is hooked too
+    // (the hosted sheet's last band retires it into More's permanent MODE
+    // row); only the More anchor stays unhooked (filtered out).
+    const hooked = [...row.children].map((c) => c.getAttribute('data-overflow')).filter(Boolean);
+    expect(hooked).toEqual(['mode', 'span', 'ref', 'hold', 'receiver']);
+    r.openMore();
+    const overflow = r.el('scope-more-overflow')!;
+    for (const hook of ['receiver', 'hold', 'ref', 'span']) expect(overflow.querySelector(`[data-overflow="${hook}"]`), hook).not.toBeNull();
+    r.dispose();
+  });
+
+  // MOR-2545 PR3: with the host's rowTail present, the hooked order is the
+  // FULL hide order — the quick keys (AVG/PEAK) hide FIRST, CTR|FIX (mode)
+  // hides LAST (round 3). DOM order over the whole row (the More panel is
+  // closed, so no overflow copies exist yet); the real hide rules key on
+  // direct children, but the probe wraps its two hooks in one div.
+  it('the full hide order with the rowTail present: quick → receiver → hold → ref → span → step → mode', () => {
+    const r = render(withSc({ mode: known(0) }), {}, { rowTail: true });
+    const row = r.el('scope-controls-row')!;
+    const hooked = [...row.querySelectorAll('[data-overflow]')].map((c) => c.getAttribute('data-overflow'));
+    expect(hooked).toEqual(['mode', 'span', 'ref', 'hold', 'receiver', 'step', 'quick']);
+    r.dispose();
+  });
+});
+
+describe('the More panel ([MORE ▾])', () => {
+  it('opens on MORE, lights the key, and moves focus into the panel', () => {
+    const r = render(base());
+    expect(r.el('scope-more-panel')).toBeNull();
+    r.openMore();
+    expect(r.el('scope-more-panel')).not.toBeNull();
+    expect(r.el('scope-more')!.getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(r.el('scope-more-panel'));
+    expect(r.el('scope-more-panel')!.hasAttribute('popover')).toBe(false); // no top-layer route (round 4)
+    expect(r.el('scope-more-backdrop')!.hasAttribute('popover')).toBe(false);
+    r.dispose();
+  });
+
+  it('closes on a window-level Escape and returns focus to the More key', () => {
+    const r = render(base());
+    r.openMore();
+    pressEscape();
+    expect(r.el('scope-more-panel')).toBeNull();
+    expect(document.activeElement).toBe(r.el('scope-more'));
+    r.dispose();
+  });
+
+  it('closes on an outside click (backdrop) and returns focus to the More key', () => {
+    const r = render(base());
+    r.openMore();
+    r.el('scope-more-backdrop')!.click();
+    flushSync();
+    expect(r.el('scope-more-panel')).toBeNull();
+    expect(document.activeElement).toBe(r.el('scope-more'));
+    r.dispose();
+  });
+
+  it("clamps the fixed panel's left 8 px inside the viewport; top is the key's bottom edge", () => {
+    const realWidth = window.innerWidth;
+    Object.defineProperty(window, 'innerWidth', { value: 480, configurable: true, writable: true });
+    const r = render(base());
+    try {
+      // jsdom lays the panel out at 0×0: leftward-from-the-key is rect.right itself.
+      r.el('scope-more')!.getBoundingClientRect = () => ({ right: 700, bottom: 40 }) as DOMRect;
+      r.openMore();
+      expect(r.el('scope-more-panel')!.style.left).toBe('472px'); // 700 clamped to 480 − 8
+      expect(r.el('scope-more-panel')!.style.top).toBe('40px'); // the key's bottom edge
+    } finally {
+      r.dispose(); // a failing assertion must not leave the panel mounted for the next test
+      Object.defineProperty(window, 'innerWidth', { value: realWidth, configurable: true, writable: true });
+    }
+  });
+
+  // MOR-2895 correction round 3 (review item 3): with NO declared bottom
+  // bar (desktop) the pre-MOR-2895 clamp is back — the panel stays BELOW
+  // the key, shifted up only far enough to fit. The up-flip belongs to
+  // the phone's bottom bar (next test), not to the desktop.
+  it('keeps the downward clamp when no bottom bar is declared (MOR-2895)', () => {
+    const realHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { value: 812, configurable: true, writable: true });
+    // jsdom reports every box as 0 px tall; lend the panel a real height so
+    // the fit arithmetic has something to fit.
+    const realSize = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 300 });
+    const r = render(base());
+    try {
+      r.el('scope-more')!.getBoundingClientRect = () => ({ top: 700, bottom: 744, right: 700 }) as DOMRect;
+      r.openMore();
+      const panelEl = r.el('scope-more-panel')!;
+      expect(panelEl.style.top).toBe('504px'); // 812 − 8 − 300, clamped down — never flipped up
+      expect(panelEl.style.maxHeight).toBe(''); // no inline cap: the stylesheet's viewport cap applies
+    } finally {
+      r.dispose();
+      if (realSize) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', realSize);
+      Object.defineProperty(window, 'innerHeight', { value: realHeight, configurable: true, writable: true });
+    }
+  });
+
+  // MOR-2895 (owner, 2026-09-28 15:10 EDT): on the portrait phone the ⋯ key
+  // sits just above the fixed bottom tuning bar — opening down buried the
+  // panel's tail (During TX, VBW narrow) under that bar. No room below ⇒ the
+  // panel opens UP, flush 8 px above the key. Correction round 2: the flip
+  // decision must measure the fixed bottom bar's ACTUAL top edge (any
+  // [data-bottom-bar] element — the phone tuning strip declares itself),
+  // never a hard-coded height: that strip grew 52 → 76 px under merged PR
+  // #3879 (MOR-2874) and the panel must still clear it. The fixture below
+  // fits BELOW the key against the raw viewport bottom (424 + 300 ≤ 812 − 8)
+  // — only the measured bar flips it.
+  it('clears a declared bottom bar measured from the element, not the viewport bottom (MOR-2895)', () => {
+    const realHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { value: 812, configurable: true, writable: true });
+    const realSize = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 300 });
+    const bar = document.createElement('div');
+    bar.setAttribute('data-bottom-bar', '');
+    bar.getBoundingClientRect = () =>
+      ({ top: 660, bottom: 812, left: 0, right: 390, width: 390, height: 152, x: 0, y: 660, toJSON: () => ({}) }) as DOMRect;
+    document.body.appendChild(bar);
+    const r = render(base());
+    try {
+      r.el('scope-more')!.getBoundingClientRect = () => ({ top: 380, bottom: 424, right: 700 }) as DOMRect;
+      r.openMore();
+      // Without the bar this opens DOWN at 424; with the bar's top at 660
+      // (minus the 8 px margin ⇒ room below = 352 < 424) it must open UP:
+      // 380 − 8 − 300 = 72, ending at 372 — clear of the bar.
+      expect(r.el('scope-more-panel')!.style.top).toBe('72px');
+    } finally {
+      r.dispose();
+      bar.remove();
+      if (realSize) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', realSize);
+      Object.defineProperty(window, 'innerHeight', { value: realHeight, configurable: true, writable: true });
+    }
+  });
+
+  // MOR-2895 correction round 3 (review item 2): a panel that fits NEITHER
+  // below nor above the key (landscape, the phone's 44px rows) pins to the
+  // top margin with its max-height capped at the MEASURED gap — the whole
+  // box ends above the strip's top and scrolls inside, never under the bar.
+  it('caps a tall panel at the measured bar gap and pins it to the top margin (MOR-2895)', () => {
+    const realHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { value: 812, configurable: true, writable: true });
+    const realSize = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 700 });
+    const bar = document.createElement('div');
+    bar.setAttribute('data-bottom-bar', '');
+    bar.getBoundingClientRect = () =>
+      ({ top: 660, bottom: 812, left: 0, right: 390, width: 390, height: 152, x: 0, y: 660, toJSON: () => ({}) }) as DOMRect;
+    document.body.appendChild(bar);
+    const r = render(base());
+    try {
+      r.el('scope-more')!.getBoundingClientRect = () => ({ top: 380, bottom: 424, right: 700 }) as DOMRect;
+      r.openMore();
+      const panelEl = r.el('scope-more-panel')!;
+      expect(panelEl.style.top).toBe('8px'); // pinned to the top margin ...
+      // ... capped at the measured gap (660 − 8 margin − 8 top), so the box
+      // ends at 652 — above the strip — and scrolls inside.
+      expect(panelEl.style.maxHeight).toBe('644px');
+    } finally {
+      r.dispose();
+      bar.remove();
+      if (realSize) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', realSize);
+      Object.defineProperty(window, 'innerHeight', { value: realHeight, configurable: true, writable: true });
+    }
+  });
+
+  it('registers its window keydown/resize/scroll listeners only while open (MOR-2514 keeps its Esc)', () => {
+    const add = vi.spyOn(window, 'addEventListener');
+    const remove = vi.spyOn(window, 'removeEventListener');
+    const count = (spy: typeof add, type: string) => spy.mock.calls.filter(([t]) => t === type).length;
+    const r = render(base());
+    for (const type of ['keydown', 'resize', 'scroll']) expect(count(add, type), type).toBe(0); // closed: no listeners at all — Esc stays with MOR-2514
+    r.openMore();
+    for (const type of ['keydown', 'resize']) expect(count(add, type), type).toBe(1);
+    expect(add.mock.calls.filter(([t]) => t === 'scroll')[0]![2]).toBe(true); // capture: any scroll closes
+    pressEscape();
+    expect(r.el('scope-more-panel')).toBeNull();
+    for (const type of ['keydown', 'resize', 'scroll']) expect(count(remove, type), type).toBe(1);
+    r.dispose();
+  });
+});
+
+describe('handler guards are pinned independently of `disabled` (MOR-1304 F3)', () => {
+  it('refuses a choice click dispatched directly at a disabled option', () => {
+    const onChoiceChange = vi.fn();
+    const r = render(withSc({ centerType: unread() }), { onChoiceChange });
+    r.openMore();
+    bypassClick(r.el('scope-centerType-0')!);
+    flushSync();
+    expect(onChoiceChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('refuses a toggle click dispatched directly at a disabled control', () => {
+    const onToggleChange = vi.fn();
+    const r = render(withSc({ hold: unread() }), { onToggleChange });
+    bypassClick(r.el('scope-hold')!);
+    flushSync();
+    expect(onToggleChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('refuses a stepper click dispatched directly at a disabled control', () => {
+    const onSpanChange = vi.fn();
+    const r = render(withSc({ mode: known(0), span: unread() }), { onSpanChange });
+    bypassClick(r.el('scope-span')!.querySelector('button')!);
+    flushSync();
+    expect(onSpanChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // MOR-2565: an unread mode must make the span keys inert even when the
+  // span value itself is read — the guard is the mode, not the value.
+  it('refuses a span step while the mode is unread even with a read span', () => {
+    const onSpanChange = vi.fn();
+    const r = render(withSc({ mode: unread() }), { onSpanChange });
+    bypassClick(r.el('scope-span')!.querySelector('button')!);
+    flushSync();
+    expect(onSpanChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // MOR-4392 (coordinator ruling 2026-11-10): on Icom span is a CENTER-mode
+  // setting — in a fixed-edges mode (FIX/S-F) the window is wire-owned and a
+  // SPAN step writes nothing, so the keys render DISABLED (never silently
+  // inert) while the granted width stays on display.
+  it.each([1, 3])('disables the span keys in scope mode %i (fixed edges), width still displayed', (mode) => {
+    const onSpanChange = vi.fn();
+    const r = render(withSc({ mode: known(mode) }), { onSpanChange });
+    const keys = r.el('scope-span')!.querySelectorAll('button');
+    expect(keys).toHaveLength(2);
+    for (const key of keys) {
+      expect((key as HTMLButtonElement).disabled).toBe(true);
+      bypassClick(key as HTMLElement);
+    }
+    flushSync();
+    expect(r.el('scope-span-value')!.textContent).toBe('±50k');
+    expect(onSpanChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // MOR-4387 (owner build-4): a disabled control that says nothing reads as
+  // "SPAN stopped working". The blocked stepper names the reason and offers
+  // the one-tap CTR return through the ordinary mode choice.
+  it.each([1, 3])('names why span is disabled in scope mode %i and offers one-tap CTR, in the row and in More', (mode) => {
+    const onChoiceChange = vi.fn();
+    const r = render(withSc({ mode: known(mode) }), { onChoiceChange });
+    expect(r.el('scope-span')!.title).toBe('SPAN works in CTR');
+    const rowKey = r.el('scope-span-ctr')!;
+    expect(rowKey.textContent).toBe('CTR');
+    expect(rowKey.title).toBe('SPAN works in CTR');
+    expect(rowKey.getAttribute('aria-label')).toBe('Switch to CTR');
+    rowKey.click();
+    flushSync();
+    expect(onChoiceChange).toHaveBeenCalledExactlyOnceWith('mode', 0);
+    r.openMore();
+    const overflow = r.el('scope-overflow-span')!;
+    expect(overflow.title).toBe('SPAN works in CTR');
+    r.el('scope-overflow-span-ctr')!.click();
+    flushSync();
+    expect(onChoiceChange).toHaveBeenCalledTimes(2);
+    expect(onChoiceChange).toHaveBeenLastCalledWith('mode', 0);
+    r.dispose();
+  });
+
+  it.each([0, 2])('no reason and no CTR key while span is usable in scope mode %i', (mode) => {
+    const r = render(withSc({ mode: known(mode) }));
+    expect(r.el('scope-span')!.title).toBe('');
+    expect(r.el('scope-span-ctr')).toBeNull();
+    r.dispose();
+  });
+
+  const STALE: Availability = { structural: true, operational: false };
+
+  it('refuses a choice click on a KNOWN but operationally-stale field', () => {
+    const onChoiceChange = vi.fn();
+    const r = render(withSc({ centerType: known(1, STALE) }), { onChoiceChange });
+    r.openMore();
+    bypassClick(r.el('scope-centerType-1')!);
+    flushSync();
+    expect(onChoiceChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('refuses a toggle click on a KNOWN but operationally-stale field', () => {
+    const onToggleChange = vi.fn();
+    const r = render(withSc({ hold: known(true, STALE) }), { onToggleChange });
+    bypassClick(r.el('scope-hold')!);
+    flushSync();
+    expect(onToggleChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('refuses a stepper click on a KNOWN but operationally-stale field', () => {
+    const onSpanChange = vi.fn();
+    const r = render(withSc({ mode: known(0), span: known(3, STALE) }), { onSpanChange });
+    bypassClick(r.el('scope-span')!.querySelector('button')!);
+    flushSync();
+    expect(onSpanChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+});
+
+/** First option value per `CHOICES` field, precomputed once. */
+const CHOICE_FIRST_VALUE = Object.fromEntries(
+  CHOICES.map(([field, , , options]) => [field, options[0][0]]),
+) as Record<(typeof CHOICES)[number][0], number>;
+
+describe('field identity: every control names ITS OWN field, never a neighbour\'s', () => {
+  // MUTATION KILLED: a copy-paste-loop bug that closes over the wrong `field`
+  // — every CHOICES entry is driven and must report its own name.
+  it.each(CHOICES.map(([field]) => field))('choice group "%s" reports its own field', (field) => {
+    const onChoiceChange = vi.fn();
+    const r = render(base(), { onChoiceChange });
+    // receiver lives in the row; the other choice groups live in More.
+    if (field !== 'receiver') r.openMore();
+    r.el(`scope-${field}-${CHOICE_FIRST_VALUE[field]}`)!.click();
+    flushSync();
+    expect(onChoiceChange).toHaveBeenCalledExactlyOnceWith(field, CHOICE_FIRST_VALUE[field]);
+    r.dispose();
+  });
+
+  it.each(TOGGLES.map(([field]) => field))('toggle "%s" reports its own field', (field) => {
+    const onToggleChange = vi.fn();
+    const r = render(base(), { onToggleChange });
+    // hold lives in the row; the other toggles live in More.
+    if (field !== 'hold') r.openMore();
+    r.el(`scope-${field}`)!.click();
+    flushSync();
+    expect(onToggleChange).toHaveBeenCalledExactlyOnceWith(field, expect.any(Boolean));
+    r.dispose();
+  });
+
+  // `mode` uses the imported MODE_BUTTONS table rather than CHOICES, so it is
+  // exercised separately — the FULL choice (incl. S-C/S-F) lives in More.
+  it('mode reports "mode" with the clicked key\'s own value', () => {
+    const onChoiceChange = vi.fn();
+    const r = render(base(), { onChoiceChange });
+    r.openMore();
+    r.el('scope-mode-2')!.click();
+    flushSync();
+    expect(onChoiceChange).toHaveBeenCalledExactlyOnceWith('mode', 2);
+    r.dispose();
+  });
+});
+
+describe('steppers delegate span and clamp the remaining radio controls', () => {
+  it('SPAN emits a subscription step direction', () => {
+    const onSpanChange = vi.fn();
+    const r = render(withSc({ mode: known(0), span: known(3) }), { onSpanChange });
+    r.el('scope-span')!.querySelectorAll('button')[1]!.click();
+    flushSync();
+    expect(onSpanChange).toHaveBeenCalledExactlyOnceWith(1);
+    r.dispose();
+  });
+
+  it('SPEED decrements through clampSpeed (inverted delta, per the shipped function)', () => {
+    const onSpeedChange = vi.fn();
+    const r = render(withSc({ speed: known(1) }), { onSpeedChange });
+    r.openMore();
+    r.el('scope-speed')!.querySelectorAll('button')[0]!.click();
+    flushSync();
+    expect(onSpeedChange).toHaveBeenCalledExactlyOnceWith(2);
+    r.dispose();
+  });
+
+  it('REF steps by 5 through stepRef', () => {
+    const onRefChange = vi.fn();
+    const r = render(withSc({ refDb: known(0) }), { onRefChange });
+    r.el('scope-ref')!.querySelectorAll('button')[1]!.click();
+    flushSync();
+    expect(onRefChange).toHaveBeenCalledExactlyOnceWith(5);
+    r.dispose();
+  });
+
+  it('REF snaps onto the 5 dB grid from an off-grid readback (MOR-3694)', () => {
+    const onRefChange = vi.fn();
+    const r = render(withSc({ refDb: known(-4) }), { onRefChange });
+    const keys = r.el('scope-ref')!.querySelectorAll('button');
+    keys[0]!.click();
+    flushSync();
+    expect(onRefChange).toHaveBeenCalledExactlyOnceWith(-5);
+    onRefChange.mockClear();
+    keys[1]!.click();
+    flushSync();
+    expect(onRefChange).toHaveBeenCalledExactlyOnceWith(0);
+    r.dispose();
+  });
+
+  it('REF steps from a half-dB readback instead of refusing it (MOR-3694)', () => {
+    const onRefChange = vi.fn();
+    const r = render(withSc({ refDb: known(-4.5) }), { onRefChange });
+    const keys = r.el('scope-ref')!.querySelectorAll('button');
+    keys[0]!.click();
+    flushSync();
+    expect(onRefChange).toHaveBeenCalledExactlyOnceWith(-5);
+    r.dispose();
+  });
+
+  it('REF clamps to a different declared range (IC-705 ±20, not the fixture default)', () => {
+    const onRefChange = vi.fn();
+    const r = render(withSc({
+      refDb: known(15),
+      refRange: Object.freeze({ min: -20, max: 20 }),
+    }), { onRefChange });
+    r.el('scope-ref')!.querySelectorAll('button')[1]!.click();
+    flushSync();
+    expect(onRefChange).toHaveBeenCalledExactlyOnceWith(20);
+    r.dispose();
+  });
+
+  it('fails closed: no declared refRange disables the REF keys with no dispatch (MOR-3694)', () => {
+    const onRefChange = vi.fn();
+    const r = render(withSc({ refDb: known(0), refRange: null }), { onRefChange });
+    const keys = r.el('scope-ref')!.querySelectorAll('button');
+    expect(keys[0]!.disabled).toBe(true);
+    expect(keys[1]!.disabled).toBe(true);
+    // A bypassed click on the disabled key must still dispatch nothing.
+    bypassClick(keys[0]!);
+    bypassClick(keys[1]!);
+    flushSync();
+    expect(onRefChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  // SPAN bounds are owned by the subscription control.
+  it('SPAN delegates bounds to the subscription owner', () => {
+    const onSpanChange = vi.fn();
+    const r = render(withSc({ mode: known(0), span: known(7) }), { onSpanChange });
+    r.el('scope-span')!.querySelectorAll('button')[1]!.click();
+    flushSync();
+    expect(onSpanChange).toHaveBeenCalledExactlyOnceWith(1);
+    r.dispose();
+  });
+
+  // F1 — REF at the ceiling stays at the declared max (fixture range -30..10)
+  it('REF at the ceiling clamped to 10, never exceeds domain', () => {
+    const onRefChange = vi.fn();
+    const r = render(withSc({ refDb: known(10) }), { onRefChange });
+    r.el('scope-ref')!.querySelectorAll('button')[1]!.click();
+    flushSync();
+    expect(onRefChange).toHaveBeenCalledExactlyOnceWith(10);
+    r.dispose();
+  });
+
+  // F1 — SPEED at the floor stays 0 (domain 0-2, note clampSpeed's inverted delta)
+  it('SPEED at the floor clamped to 0, never goes below domain', () => {
+    const onSpeedChange = vi.fn();
+    const r = render(withSc({ speed: known(0) }), { onSpeedChange });
+    r.openMore();
+    r.el('scope-speed')!.querySelectorAll('button')[1]!.click();
+    flushSync();
+    expect(onSpeedChange).toHaveBeenCalledExactlyOnceWith(0);
+    r.dispose();
+  });
+});
+
+describe('carry-forward (2): receiver is the ONE MAIN/SUB control', () => {
+  it('renders exactly one scope-receiver control and no separate "source" control', () => {
+    const r = render(base());
+    expect(r.el('scope-receiver')).not.toBeNull();
+    expect(target.querySelectorAll('[data-testid^="scope-source"]').length).toBe(0);
+    r.dispose();
+  });
+
+  it('reports the receiver choice through the same onChoiceChange path as any other choice', () => {
+    const onChoiceChange = vi.fn();
+    const r = render(withSc({ receiver: known(0) }), { onChoiceChange });
+    r.el('scope-receiver-1')!.click();
+    flushSync();
+    expect(onChoiceChange).toHaveBeenCalledExactlyOnceWith('receiver', 1);
+    r.dispose();
+  });
+});
+
+describe('external finite appearance', () => {
+  const fixture = FiniteControlRendererFixture as FiniteControlAppearance['action'];
+  const appearance = {
+    action: fixture,
+    toggle: FiniteControlRendererFixture as FiniteControlAppearance['toggle'],
+    choice: FiniteControlRendererFixture as FiniteControlAppearance['choice'],
+  } satisfies FiniteControlAppearance;
+
+  it('uses host labels and the existing Scope action/toggle/choice intents', () => {
+    const onSpanChange = vi.fn(), onToggleChange = vi.fn(), onChoiceChange = vi.fn();
+    const component = mount(ScopeControlsSurface, { target, props: {
+      view: withSc({ mode: known(0), span: known(3), hold: known(false), centerType: known(1) }),
+      finiteAppearance: appearance, rendererContext: createFiniteRendererContext(), spanHz: 100000,
+      onSpanChange, onToggleChange, onChoiceChange,
+    } });
+    flushSync();
+    (target.querySelector('[aria-label="Increase scope span"]') as HTMLButtonElement).click();
+    (target.querySelector('[data-testid="external-HOLD"]') as HTMLButtonElement).click();
+    (target.querySelector('[data-testid="external-Scope center type-2"]') as HTMLButtonElement).click();
+    expect(onSpanChange).toHaveBeenCalledExactlyOnceWith(1);
+    expect(onToggleChange).toHaveBeenCalledExactlyOnceWith('hold', true);
+    expect(onChoiceChange).toHaveBeenCalledExactlyOnceWith('centerType', 2);
+    unmount(component);
+  });
+
+  it('refuses a retained callback after the external renderer unmounts', () => {
+    const onToggleChange = vi.fn();
+    const rendererContext = createFiniteRendererContext();
+    const component = mount(ScopeControlsSurface, { target, props: {
+      view: withSc({ hold: known(false) }), finiteAppearance: appearance, rendererContext, onToggleChange,
+    } });
+    flushSync();
+    const retained = retainedInvocations.get('HOLD')!;
+    unmount(component);
+    retained();
+    expect(onToggleChange).not.toHaveBeenCalled();
+  });
+
+  it('keeps the selected external appearance inert instead of falling back to native controls', () => {
+    const component = mount(ScopeControlsSurface, { target, props: {
+      view: withSc({ hold: known(false) }), finiteAppearance: appearance, rendererContext: null,
+    } });
+    flushSync();
+    expect(target.querySelector('[data-testid="scope-controls-surface"]')).not.toBeNull();
+    expect(target.querySelector('[data-testid="scope-hold"]')).toBeNull();
+    expect(target.querySelector('[data-testid="external-HOLD"]')).toBeNull();
+    expect(retainedInvocations.size).toBe(0);
+    unmount(component);
+  });
+
+  it('preserves an out-of-list canonical reading without selecting an option', () => {
+    const component = mount(ScopeControlsSurface, { target, props: {
+      view: withSc({ centerType: known(99) }), finiteAppearance: appearance,
+      rendererContext: createFiniteRendererContext(),
+    } });
+    flushSync();
+    const group = target.querySelector('[data-testid="external-Scope center type"]')!;
+    expect(group.getAttribute('data-reading')).toBe('99');
+    expect(group.querySelector('[aria-checked="true"]')).toBeNull();
+    unmount(component);
+  });
+
+  // MOR-2653: the finite-appearance REF output is EMPTY in a reserved box
+  // when unread — never a placeholder dash — and renders the verbatim value
+  // when known, exactly as the native row's REF already does.
+  it('renders an unread finite REF value as an empty reserved box, never a placeholder', () => {
+    const component = mount(ScopeControlsSurface, { target, props: {
+      view: withSc({ refDb: unread() }), finiteAppearance: appearance,
+      rendererContext: createFiniteRendererContext(),
+    } });
+    flushSync();
+    const value = target.querySelector('[data-testid="scope-ref-value"]')!;
+    expect(value.textContent).toBe('');
+    expect(value.textContent).not.toContain('—');
+    expect(value.classList.contains('scope-finite-value')).toBe(true);
+    unmount(component);
+  });
+
+  it('renders a known finite REF value verbatim in the same reserved box', () => {
+    const component = mount(ScopeControlsSurface, { target, props: {
+      view: withSc({ refDb: known(-30) }), finiteAppearance: appearance,
+      rendererContext: createFiniteRendererContext(),
+    } });
+    flushSync();
+    const value = target.querySelector('[data-testid="scope-ref-value"]')!;
+    expect(value.textContent).toBe('-30');
+    expect(value.classList.contains('scope-finite-value')).toBe(true);
+    unmount(component);
+  });
+
+  // MOR-2653: the span/speed label tables are NOT validated ranges — a radio
+  // can report a known value outside them. That value renders EMPTY in its
+  // reserved slot, never a dash; an unread value renders empty too.
+  it('renders finite SPAN/SPEED as EMPTY when known but unlabelled or unread, never a dash (MOR-2653)', () => {
+    const component = mount(ScopeControlsSurface, { target, props: {
+      view: withSc({ mode: known(0), span: known(9), speed: known(9) }),
+      finiteAppearance: appearance, rendererContext: createFiniteRendererContext(), spanHz: null,
+    } });
+    flushSync();
+    for (const id of ['scope-span-value', 'scope-speed-value']) {
+      const slot = target.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
+      expect(slot.textContent).toBe('');
+      expect(slot.textContent).not.toContain('—');
+      expect(slot.classList.contains('scope-finite-slot')).toBe(true);
+    }
+    unmount(component);
+    const unreadComponent = mount(ScopeControlsSurface, { target, props: {
+      view: withSc({ mode: known(0), speed: unread() }),
+      finiteAppearance: appearance, rendererContext: createFiniteRendererContext(), spanHz: 100000,
+    } });
+    flushSync();
+    expect(target.querySelector<HTMLElement>('[data-testid="scope-speed-value"]')!.textContent)
+      .toBe('');
+    unmount(unreadComponent);
+    // Structural geometry pin (jsdom has no layout): 5ch covers the widest
+    // label ('±500k'), so the slot's box never changes on a first read.
+    expect(SOURCE).toMatch(/\.scope-finite-slot\s*\{[^}]*min-width:\s*5ch/);
+  });
+});
+
+/* ── MOR-2704 T1 (option A): a read span/speed value is shown even when its
+   field is not operational; the step keys stay on the `usable` gate. ── */
+describe('MOR-2704 T1: a read value stays visible while its control is unavailable', () => {
+  const READ_NOT_OPERATIONAL: Availability = { structural: true, operational: false };
+  const appearance = {
+    action: FiniteControlRendererFixture as FiniteControlAppearance['action'],
+    toggle: FiniteControlRendererFixture as FiniteControlAppearance['toggle'],
+    choice: FiniteControlRendererFixture as FiniteControlAppearance['choice'],
+  } satisfies FiniteControlAppearance;
+
+  it('shows a read span in the row and in More while every span key is disabled and inert', () => {
+    const onSpanChange = vi.fn();
+    const r = render(withSc({ mode: known(0), span: known(3, READ_NOT_OPERATIONAL) }), { onSpanChange });
+    expect(r.el('scope-span-value')!.textContent).toBe('±50k');
+    for (const key of r.el('scope-span')!.querySelectorAll('button')) {
+      expect(key.hasAttribute('disabled')).toBe(true);
+      bypassClick(key);
+    }
+    r.openMore();
+    expect(r.el('scope-overflow-span-value')!.textContent).toBe('±50k');
+    for (const key of r.el('scope-overflow-span')!.querySelectorAll('button')) {
+      expect(key.hasAttribute('disabled')).toBe(true);
+      bypassClick(key);
+    }
+    flushSync();
+    expect(onSpanChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('shows a read speed in More while both speed keys are disabled and inert', () => {
+    const onSpeedChange = vi.fn();
+    const r = render(withSc({ speed: known(1, READ_NOT_OPERATIONAL) }), { onSpeedChange });
+    r.openMore();
+    expect(r.el('scope-speed-value')!.textContent).toBe('MID');
+    for (const key of r.el('scope-speed')!.querySelectorAll('button')) {
+      expect(key.hasAttribute('disabled')).toBe(true);
+      bypassClick(key);
+    }
+    flushSync();
+    expect(onSpeedChange).not.toHaveBeenCalled();
+    r.dispose();
+  });
+
+  it('shows a read span and speed in the finite appearance while their step actions are unavailable', () => {
+    const onSpanChange = vi.fn();
+    const onSpeedChange = vi.fn();
+    const component = mount(ScopeControlsSurface, { target, props: {
+      view: withSc({
+        mode: known(0), span: known(3, READ_NOT_OPERATIONAL), speed: known(1, READ_NOT_OPERATIONAL),
+      }),
+      finiteAppearance: appearance, rendererContext: createFiniteRendererContext(), spanHz: 100000,
+      onSpanChange, onSpeedChange,
+    } });
+    flushSync();
+    expect(target.querySelector('[data-testid="scope-span-value"]')!.textContent).toBe('±50k');
+    expect(target.querySelector('[data-testid="scope-speed-value"]')!.textContent).toBe('MID');
+    for (const label of [
+      'Decrease scope span', 'Increase scope span', 'Decrease scope speed', 'Increase scope speed',
+    ]) {
+      const key = target.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+      expect(key.disabled).toBe(true);
+      bypassClick(key);
+    }
+    flushSync();
+    expect(onSpanChange).not.toHaveBeenCalled();
+    expect(onSpeedChange).not.toHaveBeenCalled();
+    unmount(component);
+  });
+});
+
+/* ── MOR-2987: the phone ⋯ menu is a full-width BottomSheet — one setting
+   per row (label left, all options right on ONE line), pressable
+   HardwareButton keys (visible outline, selected lit cyan), labelled toggle
+   rows. The layout opts in with `moreAsSheet`; without it the desktop
+   popover is unchanged (last test). jsdom has no layout, so "one line" is
+   pinned as structure (a single options container per row) plus the nowrap
+   rules in the source; the real 360 px line boxes are proven by the e2e. ── */
+describe('phone More sheet (MOR-2987)', () => {
+  function renderSheet(view: RadioViewModel, handlers: Handlers = {}) {
+    const component = mount(ScopeControlsSurface, {
+      target,
+      props: { view, ...handlers, moreAsSheet: true },
+    });
+    flushSync();
+    const q = (sel: string) => target.querySelector(sel) as HTMLElement | null;
+    const el = (id: string) => q(`[data-testid="${id}"]`);
+    return {
+      dispose: () => unmount(component),
+      el,
+      openMore: () => { el('scope-more')!.click(); flushSync(); },
+    };
+  }
+
+  it('opens a BottomSheet from the ⋯ key, not the popover', () => {
+    const r = renderSheet(withSc({ mode: known(0) }));
+    r.openMore();
+    expect(r.el('scope-more-panel')).toBeNull();
+    expect(r.el('scope-more-sheet')).not.toBeNull();
+    expect(target.querySelector('.m-sheet-backdrop')).not.toBeNull();
+    expect(target.querySelector('.m-sheet-title')!.textContent).toBe('SCOPE');
+    r.dispose();
+  });
+
+  it('one row per setting: label left, every option of the row in ONE nowrap container', () => {
+    const r = renderSheet(withSc({ mode: known(0) }));
+    r.openMore();
+    const sheet = r.el('scope-more-sheet')!;
+    const rows = [...sheet.children].filter((c) => c.classList.contains('scope-sheet-row'));
+    // MODE + CENTRE + RBW + SPEED + DUAL + During TX + VBW narrow (EDGE hides in CTR).
+    expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual([
+      'scope-mode', 'scope-centerType', 'scope-rbw', 'scope-speed',
+      'scope-dual-row', 'scope-duringTx-row', 'scope-vbwNarrow-row',
+    ]);
+    for (const row of rows) {
+      expect(row.querySelectorAll(':scope > .scope-sheet-label')).toHaveLength(1);
+      const options = row.querySelectorAll(':scope > .scope-sheet-options');
+      expect(options).toHaveLength(1);
+      const outside = [...row.querySelectorAll('button, output')]
+        .filter((node) => !options[0]!.contains(node));
+      expect(outside, 'every key of the row lives in the one options container').toEqual([]);
+    }
+    // The containers never wrap: the row and its options box are nowrap.
+    expect(SOURCE).toMatch(/\.scope-sheet-row\s*\{[^}]*flex-wrap:\s*nowrap/);
+    expect(SOURCE).toMatch(/\.scope-sheet-options\s*\{[^}]*flex-wrap:\s*nowrap/);
+    r.dispose();
+  });
+
+  it('choice keys are outlined HardwareButtons; the selected one is lit cyan', () => {
+    const r = renderSheet(withSc({ mode: known(0), centerType: known(1) }));
+    r.openMore();
+    for (const [id, selected] of [['scope-mode-0', true], ['scope-mode-1', false], ['scope-centerType-1', true]] as const) {
+      const key = r.el(id)!;
+      expect(key.classList.contains('v2-control-button')).toBe(true);
+      expect(key.getAttribute('data-surface')).toBe('hardware');
+      expect(key.getAttribute('data-indicator-style')).toBe('edge-left');
+      expect(key.getAttribute('data-indicator-color')).toBe('cyan');
+      expect(key.getAttribute('data-active')).toBe(String(selected));
+      expect(key.getAttribute('role')).toBe('radio');
+      expect(key.getAttribute('aria-checked')).toBe(String(selected));
+    }
+    // Legibility floors live in the sheet's own rules (the phone button
+    // floors also reach them, but the sheet does not depend on the host).
+    expect(SOURCE).toMatch(/\.scope-sheet-options[^{]*\.v2-control-button[^}]*min-height:\s*44px/);
+    expect(SOURCE).toMatch(/\.scope-sheet-options[^{]*\.v2-control-button[^}]*font-size:\s*16px/);
+    expect(SOURCE).toMatch(/\.scope-sheet-value\s*\{[^}]*min-height:\s*44px/);
+    expect(SOURCE).toMatch(/\.scope-sheet-value\s*\{[^}]*font-size:\s*16px/);
+    r.dispose();
+  });
+
+  it('labels are visually distinct from options (smaller uppercase secondary, never button text)', () => {
+    const r = renderSheet(withSc({ mode: known(0) }));
+    r.openMore();
+    expect(r.el('scope-mode')!.querySelector('.scope-sheet-label')!.textContent).toBe('MODE');
+    expect(SOURCE).toMatch(/\.scope-sheet-label\s*\{[^}]*font-size:\s*12px/);
+    expect(SOURCE).toMatch(/\.scope-sheet-label\s*\{[^}]*text-transform:\s*uppercase/);
+    expect(SOURCE).toMatch(/\.scope-sheet-label\s*\{[^}]*color:\s*var\(--v2-text-secondary/);
+    r.dispose();
+  });
+
+  it('an unread value lights nothing, disables its keys, and omits aria-checked', () => {
+    const r = renderSheet(withSc({ centerType: unread(), duringTx: unread() }));
+    r.openMore();
+    for (const value of [0, 1, 2]) {
+      const key = r.el(`scope-centerType-${value}`)!;
+      expect(key.hasAttribute('disabled')).toBe(true);
+      expect(key.getAttribute('data-active')).toBe('false');
+      expect(key.getAttribute('aria-checked')).toBeNull();
+      expect(key.getAttribute('role')).toBe('radio');
+    }
+    for (const side of ['off', 'on']) {
+      const key = r.el(`scope-duringTx-${side}`)!;
+      expect(key.hasAttribute('disabled')).toBe(true);
+      expect(key.getAttribute('data-active')).toBe('false');
+      expect(key.getAttribute('aria-checked')).toBeNull();
+      expect(key.getAttribute('role')).toBe('radio');
+    }
+    r.dispose();
+  });
+
+  it('toggles get labelled rows with an Off/On pair; the confirmed option is lit', () => {
+    const r = renderSheet(withSc({ dual: known(true), duringTx: known(true), vbwNarrow: known(false) }));
+    r.openMore();
+    for (const [rowId, label, on] of [
+      ['scope-dual-row', 'DUAL', true], ['scope-duringTx-row', 'During TX', true],
+      ['scope-vbwNarrow-row', 'VBW narrow', false],
+    ] as const) {
+      const row = r.el(rowId)!;
+      expect(row.querySelector('.scope-sheet-label')!.textContent).toBe(label);
+      const options = row.querySelector('.scope-sheet-options')!;
+      expect(options.getAttribute('role')).toBe('radiogroup');
+      const off = options.querySelector('button[data-testid$="-off"]')!;
+      const onKey = options.querySelector('button[data-testid$="-on"]')!;
+      expect(off.textContent).toBe('Off');
+      expect(onKey.textContent).toBe('On');
+      expect(off.getAttribute('data-active')).toBe(String(!on));
+      expect(onKey.getAttribute('data-active')).toBe(String(on));
+      expect(off.getAttribute('role')).toBe('radio');
+      expect(onKey.getAttribute('role')).toBe('radio');
+      expect(off.getAttribute('aria-checked')).toBe(String(!on));
+      expect(onKey.getAttribute('aria-checked')).toBe(String(on));
+    }
+    r.dispose();
+  });
+
+  it('tapping the already-selected option dispatches nothing (two-position selector)', () => {
+    const onToggleChange = vi.fn();
+    const r = renderSheet(withSc({ duringTx: known(true) }), { onToggleChange });
+    r.openMore();
+    r.el('scope-duringTx-on')!.click(); flushSync();
+    expect(onToggleChange).not.toHaveBeenCalled();
+    r.el('scope-duringTx-off')!.click(); flushSync();
+    expect(onToggleChange).toHaveBeenCalledExactlyOnceWith('duringTx', false);
+    r.dispose();
+  });
+
+  it('an unsupported setting has no row', () => {
+    const r = renderSheet(withSc({ mode: known(0), rbw: unread(OFF), dual: unread(OFF) }));
+    r.openMore();
+    const sheet = r.el('scope-more-sheet')!;
+    expect(sheet.querySelector('[data-testid="scope-rbw"]')).toBeNull();
+    expect(sheet.querySelector('[data-testid="scope-dual-row"]')).toBeNull();
+    expect(sheet.querySelector('[data-testid="scope-mode"]')).not.toBeNull();
+    r.dispose();
+  });
+
+  it('the sheet dispatches the same intents as the popover (no new command)', () => {
+    const onChoiceChange = vi.fn();
+    const onToggleChange = vi.fn();
+    const onSpeedChange = vi.fn();
+    const r = renderSheet(withSc({ mode: known(0) }), { onChoiceChange, onToggleChange, onSpeedChange });
+    r.openMore();
+    r.el('scope-mode-2')!.click(); flushSync();
+    expect(onChoiceChange).toHaveBeenCalledExactlyOnceWith('mode', 2);
+    r.el('scope-centerType-1')!.click(); flushSync();
+    expect(onChoiceChange).toHaveBeenCalledWith('centerType', 1);
+    r.el('scope-speed')!.querySelectorAll('button')[1]!.click(); flushSync();
+    expect(onSpeedChange).toHaveBeenCalledOnce();
+    r.el('scope-duringTx-on')!.click(); flushSync();
+    expect(onToggleChange).toHaveBeenCalledWith('duringTx', true);
+    r.dispose();
+  });
+
+  it('without the flag the desktop popover is unchanged (flat keys, panel, aria-checked=false unread)', () => {
+    const r = render(withSc({ centerType: unread() }));
+    r.openMore();
+    expect(r.el('scope-more-panel')).not.toBeNull();
+    expect(r.el('scope-more-sheet')).toBeNull();
+    expect(target.querySelector('.m-sheet-backdrop')).toBeNull();
+    const key = r.el('scope-centerType-0')!;
+    expect(key.classList.contains('scope-flat-key')).toBe(true);
+    expect(key.classList.contains('v2-control-button')).toBe(false);
+    expect(key.getAttribute('aria-checked')).toBe('false');
+    r.dispose();
+  });
+});
+
+
+it('uses the granted subscription span and emits subscription step directions', () => {
+  const onSpanChange = vi.fn();
+  const component = mount(ScopeControlsSurface, { target, props: {
+    view: withSc({ mode: known(0), span: known(3) }), spanHz: 100000, onSpanChange,
+  } });
+  flushSync();
+  expect(target.querySelector('[data-testid="scope-span-value"]')!.textContent).toBe('±50k');
+  (target.querySelector('[aria-label="Increase scope span"]') as HTMLButtonElement).click();
+  expect(onSpanChange).toHaveBeenCalledExactlyOnceWith(1);
+  unmount(component);
+});

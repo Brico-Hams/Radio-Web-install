@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ftx1cat"
+version = "0.3.0"
+description = "Yaesu FTX-1 CAT Menu — desktop app to read and control the FTX-1 over its serial CAT interface"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "PolyForm-Noncommercial-1.0.0" }
+authors = [{ name = "Everton Machado — PR2EM" }]
+dependencies = ["pyserial==3.5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.4"]
+
+[project.scripts]
+ftx1cat = "ftx1cat.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["ftx1cat*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py38"
+src = ["."]
+
+[tool.ruff.lint]
+# E/W: estilo (pycodestyle), F: erros (pyflakes), I: ordem de imports, B: bugs comuns
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

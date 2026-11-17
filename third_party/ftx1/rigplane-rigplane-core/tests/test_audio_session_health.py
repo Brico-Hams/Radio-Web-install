@@ -1,0 +1,453 @@
+"""AudioSession health watchdog + liveness events (MOR-581, epic MOR-562 step 14).
+
+ADR §3.4, tenet T3 — "no silent audio death". Falsification-first:
+
+- (a) a session whose RX goes silent after start (no bus heartbeat
+  advance — the -50-shaped silent capture death) must transition to
+  RECOVERING and emit an event within ~threshold;
+- (b) a healthy session (heartbeat advancing) must NEVER false-positive;
+- (c) the web runtime payload exposes session state + last event
+  (additive JSON next to ``audioBus``);
+- (d) the watchdog task shuts down cleanly with the session — no leaked
+  asyncio task (the MOR-567 conformance hygiene).
+
+The watchdog only READS the AudioBus heartbeat (MOR-564) — it is fully
+decoupled from the ~500 ms control / ~100 ms audio keep-alive loops.
+Step 14 SURFACES the death; the recovery/retry loop is step 20.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from types import SimpleNamespace
+from typing import Any
+
+from _order_sensitive_radios import LanLikeRadio
+
+from rigplane.audio import AudioPacket
+from rigplane.audio.session import (
+    RX_LIVENESS_TIMEOUT_S,
+    WATCHDOG_INTERVAL_S,
+    AudioSession,
+    AudioSessionEvent,
+    AudioSessionState,
+)
+from rigplane.core._bounded_queue import BoundedQueue
+from rigplane.web.server import WebConfig, WebServer
+from rigplane.testing.timing import await_until
+
+_PACKET = AudioPacket(ident=0x0080, send_seq=1, data=b"\x01\x00" * 160)
+
+# Tight timings for deterministic tests: small threshold + generous polling
+# deadlines instead of fixed real sleeps (per-check awaits stay ~5 ms).
+_INTERVAL = 0.02
+_TIMEOUT = 0.06
+
+
+def _fast_session(radio: Any) -> AudioSession:
+    return AudioSession(
+        radio, watchdog_interval=_INTERVAL, rx_liveness_timeout=_TIMEOUT
+    )
+
+
+class _ManualClock:
+    """Deterministic ``time.monotonic`` stand-in (MOR-607).
+
+    The watchdog still wakes on the real event loop, but every liveness
+    comparison reads THIS clock — time only moves when the test says so,
+    so the assertions are immune to scheduling jitter under xdist load.
+    ``calls`` counts reads, letting tests wait until the watchdog has
+    observed a given clock state without real-time assumptions.
+    """
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+        self.calls = 0
+
+    def __call__(self) -> float:
+        self.calls += 1
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _clocked_session(radio: Any, clock: _ManualClock) -> AudioSession:
+    return AudioSession(
+        radio,
+        watchdog_interval=_INTERVAL,
+        rx_liveness_timeout=_TIMEOUT,
+        monotonic=clock,
+    )
+
+
+def _stamp_heartbeat(radio: Any, session: AudioSession, clock: _ManualClock) -> None:
+    """Deliver a frame, then re-stamp the bus heartbeat from the test clock.
+
+    The bus stamps real ``time.monotonic()`` internally; the session's
+    liveness math runs on the injected clock, so the heartbeat must be fed
+    from the SAME clock (see the ``AudioSession`` ``monotonic`` docs).
+    """
+    radio.rx_callback(_PACKET)  # type: ignore[operator]
+    session.bus._last_rx_frame_monotonic = clock.now  # noqa: SLF001
+
+
+class _FakeWriter:
+    """Minimal writer capturing the HTTP response bytes."""
+
+    def __init__(self) -> None:
+        self.buffer = bytearray()
+
+    def write(self, data: bytes) -> None:
+        self.buffer.extend(data)
+
+    async def drain(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    async def wait_closed(self) -> None:
+        return None
+
+
+def _response_json(writer: _FakeWriter) -> tuple[int, dict]:
+    text = writer.buffer.decode("ascii", errors="replace")
+    status = int(text.split(" ", 2)[1])
+    body_start = text.index("\r\n\r\n") + 4
+    return status, json.loads(text[body_start:] or "{}")
+
+
+# ---------------------------------------------------------------------------
+# Shipping cadence/threshold: a watchdog, NOT another keep-alive loop
+# ---------------------------------------------------------------------------
+
+
+def test_shipping_constants_are_watchdog_grade() -> None:
+    assert WATCHDOG_INTERVAL_S >= 1.0  # cadence ≥ 1 s — never a keep-alive
+    assert RX_LIVENESS_TIMEOUT_S >= 3.0
+    assert RX_LIVENESS_TIMEOUT_S > WATCHDOG_INTERVAL_S
+
+
+# ---------------------------------------------------------------------------
+# (a) silent RX after start → RECOVERING + event (T3)
+# ---------------------------------------------------------------------------
+
+
+async def test_silent_rx_after_start_surfaces_recovering_and_event() -> None:
+    radio = LanLikeRadio()
+    session = _fast_session(radio)
+    events: list[AudioSessionEvent] = []
+    session.add_listener(events.append)
+    sub = await session.subscribe_rx("a")
+    # RX armed but no frame EVER arrives — the silent -50 death shape.
+    assert await await_until(lambda: session.state is AudioSessionState.RECOVERING)
+    assert events, "RECOVERING transition must publish an event"
+    event = events[-1]
+    assert event.state is AudioSessionState.RECOVERING
+    assert event.reason == "rx_silent"
+    assert event.leg == "rx"
+    assert isinstance(event.timestamp, float)
+    assert session.last_event is event
+    await sub.release()
+    assert session.state is AudioSessionState.IDLE
+
+
+async def test_frames_resuming_returns_to_demand_state() -> None:
+    """Deterministic via the injected clock (MOR-607): the old real-time
+    version could grow a third spurious ``rx_silent`` if the feeder starved
+    past the timeout between the last frame and the events assert."""
+    clock = _ManualClock()
+    radio = LanLikeRadio()
+    session = _clocked_session(radio, clock)
+    events: list[AudioSessionEvent] = []
+    session.add_listener(events.append)
+    sub = await session.subscribe_rx("a")
+    # No frame ever lands; jump the clock past the timeout → rx_silent.
+    clock.advance(2 * _TIMEOUT)
+    assert await await_until(lambda: session.state is AudioSessionState.RECOVERING)
+    # Frames resume — one fresh same-clock heartbeat is enough.
+    _stamp_heartbeat(radio, session, clock)
+    assert await await_until(lambda: session.state is AudioSessionState.RX_ONLY)
+    # The clock no longer moves, so no further event can possibly fire.
+    assert [e.reason for e in events] == ["rx_silent", "rx_resumed"]
+    await sub.release()
+
+
+# ---------------------------------------------------------------------------
+# (b) healthy heartbeat must never false-positive
+# ---------------------------------------------------------------------------
+
+
+async def test_healthy_heartbeat_never_false_positives() -> None:
+    """A healthy, recently-heartbeat RX leg must NEVER go RECOVERING.
+
+    Deterministic (MOR-607): the old version fed real-time heartbeats from
+    a coroutine loop and flaked under parallel load whenever that loop
+    starved past ``rx_liveness_timeout`` — by wall clock the heartbeat WAS
+    stale, so the watchdog fired per its contract. Here time is the
+    injected clock: each step advances to just under the threshold, lands
+    a fresh same-clock heartbeat, then waits until the watchdog has read
+    the clock again. No assertion depends on real sleep durations.
+    """
+    clock = _ManualClock()
+    radio = LanLikeRadio()
+    session = _clocked_session(radio, clock)
+    events: list[AudioSessionEvent] = []
+    session.add_listener(events.append)
+    sub = await session.subscribe_rx("a")
+    for _ in range(6):
+        clock.advance(_TIMEOUT * 0.9)  # close to, but under, the threshold
+        _stamp_heartbeat(radio, session, clock)
+        reads = clock.calls
+        # ≥1 watchdog liveness check at exactly this clock state.
+        assert await await_until(lambda: clock.calls > reads)
+        assert session.state is AudioSessionState.RX_ONLY
+    assert events == []
+    await sub.release()
+
+
+async def test_watchdog_overrun_with_fresh_heartbeat_does_not_misfire() -> None:
+    """The MOR-607 jitter shape, pinned: the clock jumps FAR past the
+    timeout in one step (a starved watchdog waking late), but the heartbeat
+    is fresh on the same clock — the ``max(last, _rx_armed_at)`` reference
+    in ``_check_liveness_locked`` must not declare RECOVERING."""
+    clock = _ManualClock()
+    radio = LanLikeRadio()
+    session = _clocked_session(radio, clock)
+    events: list[AudioSessionEvent] = []
+    session.add_listener(events.append)
+    sub = await session.subscribe_rx("a")
+    clock.advance(10 * _TIMEOUT)  # one giant scheduling-jitter jump
+    _stamp_heartbeat(radio, session, clock)
+    reads = clock.calls
+    assert await await_until(lambda: clock.calls > reads)
+    assert session.state is AudioSessionState.RX_ONLY
+    assert events == []
+    await sub.release()
+
+
+# ---------------------------------------------------------------------------
+# (c) runtime payload + WS event forwarding (additive, local-only)
+# ---------------------------------------------------------------------------
+
+
+async def test_runtime_payload_exposes_session_state_and_last_event() -> None:
+    radio = LanLikeRadio()
+    session = _fast_session(radio)
+    sub = await session.subscribe_rx("a")
+    assert await await_until(lambda: session.state is AudioSessionState.RECOVERING)
+
+    web_radio = SimpleNamespace(
+        model="IC-7610",
+        backend_id="rigplane",
+        connected=True,
+        control_connected=True,
+        radio_ready=True,
+        capabilities=set(),
+        _audio_session=session,
+    )
+    srv = WebServer(web_radio, WebConfig(host="127.0.0.1", port=0))
+    writer = _FakeWriter()
+    await srv._handle_http(writer, "GET", "/api/v1/runtime")  # noqa: SLF001
+    status, data = _response_json(writer)
+    assert status == 200
+    payload = data["audioSession"]
+    assert payload["enabled"] is True
+    assert payload["state"] == "recovering"
+    last_event = payload["lastEvent"]
+    assert last_event["state"] == "recovering"
+    assert last_event["reason"] == "rx_silent"
+    assert last_event["leg"] == "rx"
+    assert isinstance(last_event["timestamp"], float)
+    await sub.release()
+
+
+async def test_runtime_payload_session_disabled_without_session() -> None:
+    srv = WebServer(None, WebConfig(host="127.0.0.1", port=0))
+    writer = _FakeWriter()
+    await srv._handle_http(writer, "GET", "/api/v1/runtime")  # noqa: SLF001
+    status, data = _response_json(writer)
+    assert status == 200
+    assert data["audioSession"] == {"enabled": False}
+
+
+async def test_session_events_forwarded_on_control_ws_queues() -> None:
+    """Server forwards AudioSessionEvents on the EXISTING WS event surface."""
+    radio = LanLikeRadio()
+    session = _fast_session(radio)
+    web_radio = SimpleNamespace(
+        model="IC-7610",
+        backend_id="rigplane",
+        connected=True,
+        control_connected=True,
+        radio_ready=True,
+        capabilities=set(),
+        audio_session=session,
+        _audio_session=session,
+    )
+    srv = WebServer(web_radio, WebConfig(host="127.0.0.1", port=0))
+    srv._attach_audio_session_listener()  # noqa: SLF001 — start() wiring
+    q: BoundedQueue[dict[str, Any]] = BoundedQueue(maxsize=16)
+    srv.register_control_event_queue(q)
+    sub = await session.subscribe_rx("a")
+    assert await await_until(lambda: not q.empty())
+    msg = q.get_nowait()
+    assert msg["type"] == "event"
+    assert msg["name"] == "audio_session"
+    assert msg["data"]["state"] == "recovering"
+    assert msg["data"]["reason"] == "rx_silent"
+    assert msg["data"]["leg"] == "rx"
+    await sub.release()
+    srv.unregister_control_event_queue(q)
+    # stop() detaches — no listener piles up across start/stop cycles.
+    srv._detach_audio_session_listener()  # noqa: SLF001
+    assert session._listeners == []  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# (d) watchdog task lifecycle — no leaked asyncio task
+# ---------------------------------------------------------------------------
+
+
+async def test_watchdog_stops_cleanly_on_session_teardown() -> None:
+    radio = LanLikeRadio()
+    session = _fast_session(radio)
+    assert session._watchdog_task is None  # noqa: SLF001 — IDLE: no task
+    sub = await session.subscribe_rx("a")
+    task = session._watchdog_task  # noqa: SLF001
+    assert task is not None and not task.done()
+    await sub.release()
+    assert session.state is AudioSessionState.IDLE
+    assert session._watchdog_task is None  # noqa: SLF001
+    assert task.done()  # cancelled AND awaited — nothing leaked
+
+
+async def test_runtime_playback_exports_only_bounded_anonymous_client_reports() -> None:
+    srv = WebServer(None, WebConfig(host="127.0.0.1", port=0))
+    playback = {
+        "schemaVersion": 1,
+        "contextState": "suspended",
+        "sampleRate": 48000,
+        "receivedFrames": 3,
+        "validFrames": 2,
+        "decodedFrames": 1,
+        "pcmPeak": 0,
+        "scheduledFrames": 0,
+        "suspendedDrops": 1,
+        "resumeOutcome": "rejected",
+        "lastResumeError": "NotAllowedError",
+    }
+    broadcaster = srv._audio_broadcaster
+    queues = [asyncio.Queue() for _ in range(11)]
+    for queue in queues:
+        broadcaster._clients[id(queue)] = queue
+        broadcaster.record_client_stats(queue, {"playback": playback})
+        broadcaster._client_identity[id(queue)] = "private-device-session"
+        broadcaster._client_link_quality[id(queue)]["message"] = "private-error"
+    # A legacy client is active but must not acquire invented zero counters.
+    broadcaster.record_client_stats(queues[-1], {"underruns": 3})
+    writer = _FakeWriter()
+    await srv._handle_http(writer, "GET", "/api/v1/runtime")  # noqa: SLF001
+    status, data = _response_json(writer)
+    assert status == 200
+    assert data["authRequired"] is False
+    assert data["audioSession"] == {"enabled": False}
+    assert "audioBus" in data
+    assert data["audioPlayback"] == {
+        "schemaVersion": 1,
+        "state": "available",
+        "activeClients": 11,
+        "reportedClients": 10,
+        "omittedClients": 2,
+        "clients": [playback] * 8,
+    }
+    assert "private" not in json.dumps(data["audioPlayback"])
+    # Saved JSON is detached; a later report/disconnect cannot change it.
+    broadcaster._drop_client(id(queues[0]))
+    assert data["audioPlayback"]["activeClients"] == 11
+    writer = _FakeWriter()
+    await srv._handle_http(writer, "GET", "/api/v1/runtime")  # noqa: SLF001
+    assert _response_json(writer)[1]["audioPlayback"]["reportedClients"] == 9
+    # Poison a complete retained DTO after ingestion: public projection must
+    # reject the raw error rather than relying solely on ingress validation.
+    broadcaster._client_link_quality[id(queues[1])]["playback"]["lastResumeError"] = (
+        "private-error-message"
+    )
+    writer = _FakeWriter()
+    await srv._handle_http(writer, "GET", "/api/v1/runtime")  # noqa: SLF001
+    exported = _response_json(writer)[1]["audioPlayback"]
+    assert exported["reportedClients"] == 8
+    assert exported["omittedClients"] == 0
+    assert "private" not in json.dumps(exported)
+
+
+async def test_runtime_playback_distinguishes_missing_invalid_and_unavailable() -> None:
+    srv = WebServer(None, WebConfig(host="127.0.0.1", port=0))
+    writer = _FakeWriter()
+    await srv._handle_http(writer, "GET", "/api/v1/runtime")  # noqa: SLF001
+    assert _response_json(writer)[1]["audioPlayback"] == {
+        "schemaVersion": 1,
+        "state": "no_clients",
+        "activeClients": 0,
+        "reportedClients": 0,
+        "omittedClients": 0,
+        "clients": [],
+    }
+    queue = asyncio.Queue()
+    broadcaster = srv._audio_broadcaster
+    broadcaster._clients[id(queue)] = queue
+    for stats in ({"underruns": 3}, {"playback": {"rawError": "private-device"}}):
+        broadcaster._client_link_quality[id(queue)] = stats
+        writer = _FakeWriter()
+        await srv._handle_http(writer, "GET", "/api/v1/runtime")  # noqa: SLF001
+        assert _response_json(writer)[1]["audioPlayback"] == {
+            "schemaVersion": 1,
+            "state": "no_playback_reports",
+            "activeClients": 1,
+            "reportedClients": 0,
+            "omittedClients": 0,
+            "clients": [],
+        }
+    # Simulate absence of the source without starting any radio/audio work.
+    del srv._audio_broadcaster
+    writer = _FakeWriter()
+    await srv._handle_http(writer, "GET", "/api/v1/runtime")  # noqa: SLF001
+    assert _response_json(writer)[1]["audioCapture"] == {
+        "schemaVersion": 1,
+        "lastFailureCategory": None,
+    }
+    assert _response_json(writer)[1]["audioPlayback"] == {
+        "schemaVersion": 1,
+        "state": "unavailable",
+        "activeClients": None,
+        "reportedClients": None,
+        "omittedClients": None,
+        "clients": [],
+    }
+
+
+async def test_runtime_retains_only_safe_microphone_failure_after_disconnect() -> None:
+    srv = WebServer(None, WebConfig(host="127.0.0.1", port=0))
+    broadcaster = srv._audio_broadcaster
+    queue = asyncio.Queue()
+    broadcaster._clients[id(queue)] = queue
+    broadcaster.record_client_stats(
+        queue,
+        {
+            "microphoneCaptureError": "NotFoundError",
+            "deviceId": "private-device",
+            "message": "private-exception",
+        },
+    )
+    broadcaster._drop_client(id(queue))
+    writer = _FakeWriter()
+    await srv._handle_http(writer, "GET", "/api/v1/runtime")  # noqa: SLF001
+    status, data = _response_json(writer)
+    assert status == 200
+    assert data["audioCapture"] == {
+        "schemaVersion": 1,
+        "lastFailureCategory": "NotFoundError",
+    }
+    assert "private" not in json.dumps(data["audioCapture"])

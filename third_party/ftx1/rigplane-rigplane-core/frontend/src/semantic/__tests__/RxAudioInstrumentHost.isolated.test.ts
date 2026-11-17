@@ -1,0 +1,758 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+// @ts-expect-error -- Svelte does not publish types for its reactive test harness.
+import { proxy } from 'svelte/internal/client';
+import type { Capabilities, VfoScheme } from '$lib/types/capabilities';
+import type { ServerState } from '$lib/types/state';
+
+const activation = vi.hoisted(() => ({ selected: undefined as unknown }));
+const scalarCapture = vi.hoisted(() => ({ bindings: [] as unknown[] }));
+vi.mock('../../component-kits/activation', () => ({
+  getSelectedScalarAppearance: () => activation.selected,
+}));
+vi.mock('../../primitives/scalar/continuous-scalar.svelte', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../primitives/scalar/continuous-scalar.svelte')>();
+  return {
+    ...actual,
+    createContinuousScalar: (...args: Parameters<typeof actual.createContinuousScalar>) => {
+      const binding = actual.createContinuousScalar(...args);
+      scalarCapture.bindings.push(binding);
+      return binding;
+    },
+  };
+});
+
+import { MOD_INPUT_SOURCES } from '$lib/radio/mod-input';
+import ExternalScalarRenderer from '../../components-v2/controls/value-control/__tests__/ExternalScalarRendererFixture.svelte';
+import type { Skin } from '../../components-v2/controls/value-control/skin';
+import {
+  createFiniteRendererContext, type FiniteControlAppearance,
+} from '../../primitives/control-instruments/control-instrument-renderer.svelte';
+import FiniteControlRendererFixture, {
+  resetRetainedInvocations, retainedInvocations,
+} from '../../primitives/control-instruments/__tests__/support/FiniteControlRendererFixture.svelte';
+import type {
+  ContinuousScalarBinding,
+  ContinuousScalarRendererLease,
+} from '../../primitives/scalar/continuous-scalar.svelte';
+import Fixture from './fixtures/RxAudioInstrumentHostFixture.svelte';
+import { topologyFixtures, withRxAudio } from '../fixtures/topologies';
+import type { AudioFocus, RadioViewModel, RxAudioViewModel } from '../radio-view-model';
+import {
+  FOCUS_CHOICES, MONITOR_MODES, SPLIT_CHOICES,
+} from '../rx-audio-instruments';
+import type {
+  RxAudioAuthorityPublication as Publication,
+  RxAudioFiniteChoiceValue,
+  SubscribeRxAudioAuthority,
+} from '../rx-audio-instruments';
+
+type RendererNode = HTMLButtonElement & { readonly rendererLease: ContinuousScalarRendererLease };
+type Props = {
+  publication: Publication;
+  rxAudio: RxAudioViewModel | undefined;
+  subscribeControlAuthority: SubscribeRxAudioAuthority;
+  layout: 'grouped' | 'independent';
+  onAfLevelChange?: (value: number) => void;
+  onReceiverAfLevelChange?: (receiver: 'main' | 'sub', value: number) => void;
+};
+
+function capabilities(receivers = 2, generation = 1, scheme?: VfoScheme): Capabilities {
+  return {
+    model: 'TEST', scope: false, audio: true, tx: false,
+    capabilities: receivers === 2 ? ['dual_rx', 'audio', 'af_level'] : ['audio', 'af_level'],
+    receivers, vfoScheme: scheme ?? (receivers === 2 ? 'main_sub' : 'single'),
+    freqRanges: [], modes: [], filters: [],
+    audioConfig: { sampleRate: 48_000, channels: 1, codecs: [] },
+    webrtc: { available: false, enabled: false }, txBands: null,
+    stateContractVersion: 1, providerGeneration: generation,
+  } as Capabilities;
+}
+
+const observed = () => ({
+  observed: true, freshness: 'fresh', availability: 'available', lastObservedMonotonic: 1,
+});
+function state(options: {
+  receivers?: number; generation?: number; active?: 'MAIN' | 'SUB'; activeKnown?: boolean;
+} = {}): ServerState {
+  const { receivers = 2, generation = 1, active = 'MAIN', activeKnown = true } = options;
+  const receiver = (afLevel: number) => ({
+    freqHz: 14_250_000, mode: 'USB', filter: 1, dataMode: 0, afLevel,
+    sMeter: 0, att: 0, preamp: 0, nb: false, nr: false, rfGain: 255, squelch: 0,
+  });
+  const paths = ['main', 'main.afLevel'];
+  if (activeKnown) paths.push('active');
+  if (receivers === 2) paths.push('sub', 'sub.afLevel');
+  return {
+    stateContractVersion: 1, providerGeneration: generation, revision: 1, stateRevision: 1,
+    freshnessRevision: 1, observationSeq: 1, updatedAt: '2026-09-06T00:00:00Z',
+    active, ptt: false, split: false, dualWatch: false, tunerStatus: 0,
+    txTarget: { status: 'unknown', reason: 'not-observed' },
+    main: receiver(0.2), ...(receivers === 2 ? { sub: receiver(0.6) } : {}),
+    connection: {} as ServerState['connection'],
+    fieldStatus: Object.fromEntries(paths.map((path) => [path, observed()])),
+  } as ServerState;
+}
+
+function publication(options: {
+  receivers?: number; generation?: number; capsGeneration?: number;
+  active?: 'MAIN' | 'SUB'; activeKnown?: boolean; scheme?: VfoScheme;
+  session?: Publication['session']['state']; epoch?: number; muted?: boolean; rxEnabled?: boolean;
+  nullState?: boolean;
+} = {}): Publication {
+  const receivers = options.receivers ?? 2;
+  const generation = options.generation ?? 1;
+  return {
+    state: options.nullState ? null : state({
+      receivers, generation, active: options.active, activeKnown: options.activeKnown,
+    }),
+    caps: capabilities(receivers, options.capsGeneration ?? generation, options.scheme),
+    session: { state: options.session ?? 'connected', epoch: options.epoch ?? 1 },
+    rxAudioTarget: { muted: options.muted ?? false, rxEnabled: options.rxEnabled ?? false },
+  };
+}
+
+/** MOR-1676: `publication()` whose caps publish `controls.af_level`, raw 0..255. */
+function rawAfPublication(options: Parameters<typeof publication>[0] = {}): Publication {
+  const base = publication(options);
+  return {
+    ...base,
+    caps: {
+      ...(base.caps as Capabilities), controls: { af_level: { raw_min: 0, raw_max: 255 } },
+    } as Capabilities,
+  };
+}
+
+const unknownField = {
+  reading: { status: 'unknown' as const },
+  availability: { structural: false, operational: false },
+};
+function audio(
+  value: number | null,
+  operational = true,
+  monitorMode: RxAudioViewModel['monitorMode'] = 'local',
+): RxAudioViewModel {
+  return {
+    monitorMode, liveAudio: { structural: true, operational: true },
+    afLevel: {
+      reading: value === null ? { status: 'unknown' } : { status: 'known', value },
+      availability: { structural: true, operational },
+    },
+    routingFocus: unknownField, routingSplit: unknownField,
+    modInputSource: unknownField, modInputReadiness: { status: 'not-applicable' },
+  } as RxAudioViewModel;
+}
+
+class Publisher {
+  handlers = new Set<(next: Publication) => void>();
+  constructor(public current: Publication) {}
+  subscribe: SubscribeRxAudioAuthority = (handler) => {
+    this.handlers.add(handler); handler(this.current);
+    return () => { this.handlers.delete(handler); };
+  };
+  emit(next: Publication): void {
+    this.current = next;
+    this.handlers.forEach((handler) => handler(next));
+  }
+}
+
+let target: HTMLDivElement;
+let components: ReturnType<typeof mount>[] = [];
+beforeEach(() => {
+  target = document.createElement('div'); document.body.appendChild(target);
+  activation.selected = { name: 'RX AF test', hbar: ExternalScalarRenderer } satisfies Skin;
+  scalarCapture.bindings = [];
+});
+afterEach(() => {
+  components.forEach((component) => unmount(component)); components = [];
+  activation.selected = undefined; target.remove();
+});
+
+function render(initial = publication(), initialAudio = audio(0.2)) {
+  const publisher = new Publisher(initial);
+  const onAfLevelChange = vi.fn<(value: number) => void>();
+  const props = proxy<Props>({
+    publication: initial, rxAudio: initialAudio,
+    subscribeControlAuthority: publisher.subscribe,
+    layout: 'grouped', onAfLevelChange,
+  });
+  const component = mount(Fixture, { target, props }); components.push(component); flushSync();
+  const slider = () => target.querySelector<RendererNode>('[data-external-scalar-renderer]')!;
+  const transition = (next: Publication, nextAudio: RxAudioViewModel) => {
+    props.publication = next; props.rxAudio = nextAudio; publisher.emit(next);
+  };
+  return { publisher, props, onAfLevelChange, slider, transition, component };
+}
+
+describe('RxAudioInstrumentHost', () => {
+  const changes = [
+    ['session', () => publication({ epoch: 2 })],
+    ['provider', () => publication({ generation: 2 })],
+    ['topology', () => publication({ scheme: 'ab_shared' })],
+    ['receiver', () => publication({ active: 'SUB' })],
+    ['receiver knowledge', () => publication({ activeKnown: false })],
+    ['mute', () => publication({ muted: true })],
+    ['live route', () => publication({ rxEnabled: true })],
+  ] as const;
+
+  it.each(changes)('cancels an old pointer across same-task %s A-B-A', (_name, middle) => {
+    const r = render(); const lease = r.slider().rendererLease;
+    const token = lease.beginPointer(); expect(token).not.toBeNull();
+    r.transition(middle(), audio(0.7));
+    r.transition(publication(), audio(0.35));
+    lease.pointer(token!, 0.9); lease.endPointer(token!);
+    expect(r.onAfLevelChange).not.toHaveBeenCalled();
+    expect(lease.view.canonical).toBe(0.35);
+    expect(lease.key({ key: 'ArrowRight', fine: false })).toBe(true);
+    expect(r.onAfLevelChange).toHaveBeenCalledExactlyOnceWith(0.36);
+  });
+
+  it.each([
+    ['pointer', 0.73, (lease: ContinuousScalarRendererLease) => {
+      const token = lease.beginPointer()!; lease.pointer(token, 0.73); lease.endPointer(token);
+    }],
+    ['native', 0.73, (lease: ContinuousScalarRendererLease) => lease.nativeInput(0.73)],
+    ['key', 0.71, (lease: ContinuousScalarRendererLease) => lease.key({ key: 'ArrowRight', fine: false })],
+    ['wheel', 0.76, (lease: ContinuousScalarRendererLease) => lease.wheel({ direction: 1, fine: false })],
+  ] as const)('uses the fresh same-task presentation for %s input', (_name, expected, act) => {
+    const r = render(); const lease = r.slider().rendererLease;
+    r.transition(publication({ rxEnabled: true }), audio(0.7, true, 'live'));
+    act(lease);
+    expect(r.onAfLevelChange).toHaveBeenCalledExactlyOnceWith(expected);
+  });
+
+  it('keeps a known reading but rejects it when its presentation source disagrees with the raw route', () => {
+    const r = render(); const lease = r.slider().rendererLease;
+    r.transition(publication({ rxEnabled: true }), audio(0.7));
+    expect(lease.view.canonical).toBe(0.7); expect(lease.view.editable).toBe(false);
+    r.props.rxAudio = audio(0.7, true, 'live');
+    lease.nativeInput(0.72);
+    expect(r.onAfLevelChange).toHaveBeenCalledExactlyOnceWith(0.72);
+  });
+
+  it('preserves readings while authority or availability makes the control inert, then recovers', () => {
+    const r = render(publication({ nullState: true }), audio(0.41));
+    const lease = r.slider().rendererLease;
+    expect(lease.view.canonical).toBe(0.41); expect(lease.view.editable).toBe(false);
+    r.transition(publication({ generation: 1, capsGeneration: 2 }), audio(0.42));
+    expect(lease.view.canonical).toBe(0.42); expect(lease.view.editable).toBe(false);
+    r.transition(publication({ session: 'disconnected', epoch: -1 }), audio(0.43));
+    expect(lease.view.canonical).toBe(0.43); expect(lease.view.editable).toBe(false);
+    r.transition(publication(), audio(0.44, false));
+    expect(lease.view.canonical).toBe(0.44); expect(lease.view.editable).toBe(false);
+    r.transition(publication(), audio(null));
+    expect(lease.view.canonical).toBeNull(); expect(lease.view.editable).toBe(false);
+    r.transition(publication({ generation: 2 }), audio(0.5));
+    expect(lease.key({ key: 'ArrowRight', fine: false })).toBe(true);
+    expect(r.onAfLevelChange).toHaveBeenCalledExactlyOnceWith(0.51);
+  });
+
+  it('updates value evidence without canceling an unchanged command target', () => {
+    const r = render(); const lease = r.slider().rendererLease;
+    const token = lease.beginPointer()!;
+    r.props.rxAudio = audio(0.3);
+    expect(lease.view.canonical).toBe(0.3);
+    r.transition(publication(), audio(0.31));
+    lease.pointer(token, 0.4); lease.endPointer(token);
+    expect(r.onAfLevelChange).toHaveBeenCalledExactlyOnceWith(0.4);
+  });
+
+  it('uses the adapter single-receiver MAIN fact and rejects unknown dual-RX routing', () => {
+    const single = publication({ receivers: 1, activeKnown: false });
+    const r = render(single);
+    expect(r.slider().rendererLease.key({ key: 'ArrowRight', fine: false })).toBe(true);
+    r.transition(publication({ activeKnown: false }), audio(0.3));
+    expect(r.slider().rendererLease.view.canonical).toBe(0.3);
+    expect(r.slider().rendererLease.view.editable).toBe(false);
+  });
+
+  it('retains one binding across layout replacement and retires the detached renderer lease', () => {
+    const r = render(); const binding = scalarCapture.bindings[0] as ContinuousScalarBinding;
+    // The AF binding, the two per-receiver AF bindings (MOR-2579) and the two
+    // channel-gain bindings (MOR-2524) — none may be recreated by a layout switch.
+    const before = [...scalarCapture.bindings];
+    expect(before).toHaveLength(5);
+    const oldLease = r.slider().rendererLease;
+    r.props.layout = 'independent'; flushSync();
+    expect(scalarCapture.bindings).toEqual(before);
+    expect(scalarCapture.bindings[0]).toBe(binding);
+    expect(oldLease.key({ key: 'ArrowRight', fine: false })).toBe(false);
+    expect(r.slider().rendererLease.key({ key: 'ArrowRight', fine: false })).toBe(true);
+    expect(r.onAfLevelChange).toHaveBeenCalledExactlyOnceWith(0.21);
+  });
+
+  it('has no reset default and tears down the subscriber, binding, and active gesture', () => {
+    const r = render(); const lease = r.slider().rendererLease;
+    lease.reset(); expect(r.onAfLevelChange).not.toHaveBeenCalled();
+    const token = lease.beginPointer()!;
+    unmount(r.component); components = components.filter((item) => item !== r.component);
+    expect(r.publisher.handlers.size).toBe(0);
+    lease.pointer(token, 0.8); lease.endPointer(token);
+    expect(r.onAfLevelChange).not.toHaveBeenCalled();
+  });
+
+  // MOR-2704 G2: the imported `usable` feeds both the AF row's `data-observed`
+  // (the script-level copy used to) and the AF `enabled` expression (the two
+  // inline copies used to). A field that is read but NOT operational must keep
+  // the action refused and `data-observed` at 'false' — red under a mutation
+  // dropping the gate's `operational` check (run in the throwaway mini).
+  it('refuses the AF action while its field is read but not operational, keeping data-observed at false', () => {
+    const publisher = new Publisher(publication({ rxEnabled: true }));
+    const onAfLevelChange = vi.fn<(value: number) => void>();
+    const base = withRxAudio(topologyFixtures['1/single']);
+    const view = {
+      ...base,
+      rxAudio: {
+        ...base.rxAudio!,
+        afLevel: {
+          reading: { status: 'known', value: 0.42 },
+          availability: { structural: true, operational: false },
+        },
+      },
+    } as RadioViewModel;
+    const component = mount(Fixture, { target, props: {
+      view, publication: publisher.current,
+      subscribeControlAuthority: publisher.subscribe,
+      layout: 'grouped', onAfLevelChange,
+    } });
+    components.push(component); flushSync();
+    expect(
+      target.querySelector('[data-testid="rx-audio-af"]')!.getAttribute('data-observed'),
+    ).toBe('false');
+    const lease = target.querySelector<RendererNode>(
+      '[data-external-scalar-renderer]',
+    )!.rendererLease;
+    expect(lease.view.editable).toBe(false);
+    lease.key({ key: 'ArrowRight', fine: false });
+    lease.nativeInput(0.5);
+    expect(onAfLevelChange).not.toHaveBeenCalled();
+  });
+});
+
+/* MOR-2579 — each per-receiver AF knob's authority names its own receiver:
+ * a session, provider, topology, mute or live-route change cancels its drag;
+ * a change of the selected receiver, or of whether it is known, does not. */
+describe('RxAudioInstrumentHost per-receiver AF knobs (MOR-2579)', () => {
+  const RECEIVERS = ['main', 'sub'] as const;
+  const level = (value: number) => ({
+    reading: { status: 'known' as const, value },
+    availability: { structural: true, operational: true },
+  });
+  const dual = (
+    main: number, sub: number, monitorMode: RxAudioViewModel['monitorMode'] = 'local',
+  ): RxAudioViewModel => ({
+    ...audio(0.2, true, monitorMode), receiverAfLevels: { main: level(main), sub: level(sub) },
+  });
+
+  function renderKnobs(initial = publication(), initialAudio = dual(0.3, 0.6)) {
+    const publisher = new Publisher(initial);
+    const onReceiverAfLevelChange = vi.fn<(receiver: 'main' | 'sub', value: number) => void>();
+    const props = proxy<Props>({
+      publication: initial, rxAudio: initialAudio,
+      subscribeControlAuthority: publisher.subscribe,
+      layout: 'grouped', onReceiverAfLevelChange,
+    });
+    const component = mount(Fixture, { target, props }); components.push(component); flushSync();
+    const knob = (receiver: 'main' | 'sub') => target.querySelector<RendererNode>(
+      `[data-receiver-af="${receiver}"] [data-external-scalar-renderer]`,
+    )!;
+    const transition = (next: Publication, nextAudio: RxAudioViewModel) => {
+      props.publication = next; props.rxAudio = nextAudio; publisher.emit(next);
+    };
+    return { onReceiverAfLevelChange, knob, transition };
+  }
+
+  const cancelling = [
+    ['session', () => publication({ epoch: 2 })],
+    ['provider', () => publication({ generation: 2 })],
+    ['topology', () => publication({ scheme: 'ab_shared' })],
+    ['mute', () => publication({ muted: true })],
+    ['live route', () => publication({ rxEnabled: true })],
+  ] as const;
+  const keeping = [
+    ['selected receiver', () => publication({ active: 'SUB' })],
+    ['selected-receiver knowledge', () => publication({ activeKnown: false })],
+  ] as const;
+  const eachKnob = <T extends readonly [string, () => Publication]>(changes: readonly T[]) =>
+    RECEIVERS.flatMap((receiver) => changes.map(([name, middle]) => [receiver, name, middle] as const));
+
+  it.each(eachKnob(cancelling))('cancels a %s-knob drag across same-task %s A-B-A', (receiver, _name, middle) => {
+    const r = renderKnobs(); const lease = r.knob(receiver).rendererLease;
+    const token = lease.beginPointer(); expect(token).not.toBeNull();
+    r.transition(middle(), dual(0.7, 0.7));
+    r.transition(publication(), dual(0.35, 0.35));
+    lease.pointer(token!, 0.9); lease.endPointer(token!);
+    expect(r.onReceiverAfLevelChange).not.toHaveBeenCalled();
+    expect(lease.view.canonical).toBe(0.35);
+    expect(lease.key({ key: 'ArrowRight', fine: false })).toBe(true);
+    expect(r.onReceiverAfLevelChange).toHaveBeenCalledExactlyOnceWith(receiver, 0.36);
+  });
+
+  it.each(eachKnob(keeping))('keeps a %s-knob drag across a %s change', (receiver, _name, middle) => {
+    const r = renderKnobs(); const lease = r.knob(receiver).rendererLease;
+    const token = lease.beginPointer(); expect(token).not.toBeNull();
+    r.transition(middle(), dual(0.3, 0.6));
+    lease.pointer(token!, 0.9); lease.endPointer(token!);
+    expect(r.onReceiverAfLevelChange).toHaveBeenLastCalledWith(receiver, 0.9);
+  });
+
+  it.each(RECEIVERS)('keeps the %s knob inert while muted', (receiver) => {
+    const r = renderKnobs(publication({ muted: true }), dual(0, 0.6, 'mute'));
+    const lease = r.knob(receiver).rendererLease;
+    expect(lease.view.editable).toBe(false);
+    lease.key({ key: 'ArrowRight', fine: false });
+    lease.nativeInput(0.5);
+    expect(r.onReceiverAfLevelChange).not.toHaveBeenCalled();
+  });
+
+  it('steps each knob one raw unit on the published raw range (MOR-1676)', () => {
+    const r = renderKnobs(rawAfPublication(), dual(128 / 255, 200 / 255));
+    expect(r.knob('main').rendererLease.view.canonical).toBe(128);
+    expect(r.knob('sub').rendererLease.view.canonical).toBe(200);
+    expect(r.knob('main').rendererLease.key({ key: 'ArrowRight', fine: false })).toBe(true);
+    expect(r.knob('sub').rendererLease.key({ key: 'ArrowLeft', fine: false })).toBe(true);
+    expect(r.onReceiverAfLevelChange.mock.calls).toEqual([['main', 129 / 255], ['sub', 199 / 255]]);
+  });
+});
+
+/* MOR-1676 — with `controls.af_level` published, the radio-AF slider moves on
+ * the raw 0..255 range, one raw unit per step, and sends raw r as r / 255, so
+ * a step and its reverse come back to the same raw value. */
+describe('RxAudioInstrumentHost radio-AF raw range (MOR-1676)', () => {
+  it('steps 128 to 129 and back by keyboard, sent as 129/255 then 128/255', () => {
+    const r = render(rawAfPublication(), audio(128 / 255));
+    const lease = r.slider().rendererLease;
+    expect(lease.view.domain).toEqual({
+      min: 0, max: 255, step: 1, defaultValue: null, fineStepDivisor: 1,
+    });
+    expect(lease.view.canonical).toBe(128);
+    expect(lease.key({ key: 'ArrowRight', fine: false })).toBe(true);
+    r.transition(rawAfPublication(), audio(129 / 255));
+    expect(lease.view.canonical).toBe(129);
+    expect(lease.key({ key: 'ArrowLeft', fine: false })).toBe(true);
+    expect(r.onAfLevelChange.mock.calls).toEqual([[129 / 255], [128 / 255]]);
+  });
+
+  it('steps 128 to 129 and back by pointer, sent as 129/255 then 128/255', () => {
+    const r = render(rawAfPublication(), audio(128 / 255));
+    const lease = r.slider().rendererLease;
+    const up = lease.beginPointer();
+    expect(up).not.toBeNull();
+    lease.pointer(up!, 129); lease.endPointer(up!);
+    r.transition(rawAfPublication(), audio(129 / 255));
+    expect(lease.view.canonical).toBe(129);
+    const down = lease.beginPointer();
+    expect(down).not.toBeNull();
+    lease.pointer(down!, 128); lease.endPointer(down!);
+    expect(r.onAfLevelChange.mock.calls).toEqual([[129 / 255], [128 / 255]]);
+  });
+
+  it('restores every raw value 0..254 after one step up and one back, 255 reached from 254', () => {
+    const r = render(rawAfPublication(), audio(0));
+    const lease = r.slider().rendererLease;
+    const expected: number[][] = [];
+    for (let raw = 0; raw < 255; raw += 1) {
+      r.transition(rawAfPublication(), audio(raw / 255));
+      expect(lease.view.canonical).toBe(raw);
+      expect(lease.key({ key: 'ArrowRight', fine: false })).toBe(true);
+      r.transition(rawAfPublication(), audio((raw + 1) / 255));
+      expect(lease.view.canonical).toBe(raw + 1);
+      expect(lease.key({ key: 'ArrowLeft', fine: false })).toBe(true);
+      r.transition(rawAfPublication(), audio(raw / 255));
+      expect(lease.view.canonical).toBe(raw);
+      expected.push([(raw + 1) / 255], [raw / 255]);
+    }
+    expect(r.onAfLevelChange.mock.calls).toEqual(expected);
+  });
+
+  it('reads a normalized 0.5 (raw 127.5, a rounding tie) as raw 128', () => {
+    const r = render(rawAfPublication(), audio(0.5));
+    expect(r.slider().rendererLease.view.canonical).toBe(128);
+  });
+
+  it('keeps the browser volume on the 0.01 lattice with the raw range published', () => {
+    const r = render(rawAfPublication({ rxEnabled: true }), audio(0.2, true, 'live'));
+    const lease = r.slider().rendererLease;
+    // MOR-4210: the browser volume runs to 2 (makeup gain), still on 0.01 steps.
+    expect(lease.view.domain.max).toBe(2);
+    expect(lease.key({ key: 'ArrowRight', fine: false })).toBe(true);
+    expect(r.onAfLevelChange).toHaveBeenCalledExactlyOnceWith(0.21);
+  });
+});
+
+/* MOR-2524 — the channel-gain handles carry AF LEVEL's own `hardware` flag:
+ * the same snippet ternary, so a non-hardware call renders the modern variant. */
+describe('RxAudioInstrumentHost channel-gain appearance (MOR-2524)', () => {
+  const gainAudio = (): RxAudioViewModel => ({
+    ...audio(0.2),
+    routingFocus: {
+      reading: { status: 'known', value: 'both' },
+      availability: { structural: true, operational: true },
+    },
+  } as RxAudioViewModel);
+
+  function renderGains(hardware: boolean): HTMLElement | null {
+    activation.selected = undefined;
+    const initial = publication();
+    const component = mount(Fixture, { target, props: {
+      publication: initial, rxAudio: gainAudio(),
+      subscribeControlAuthority: new Publisher(initial).subscribe,
+      layout: 'grouped', gainHardware: hardware,
+    } });
+    components.push(component);
+    flushSync();
+    return target.querySelector<HTMLElement>('[data-testid="rx-audio-main-gain"] .vc-hbar');
+  }
+
+  it('renders the hardware-illuminated fader on the hardware call', () => {
+    const frame = renderGains(true);
+    expect(frame?.classList.contains('hw-illum')).toBe(true);
+    expect(frame?.querySelector('.hil-thumb')).not.toBeNull();
+  });
+
+  it('renders the modern variant on a non-hardware call', () => {
+    const frame = renderGains(false);
+    expect(frame?.classList.contains('hw-illum')).toBe(false);
+    expect(frame?.querySelector('.vc-thumb')).not.toBeNull();
+  });
+});
+
+/**
+ * RX-B/RX-C — the five finite handles (`monitorMode`, `routingFocus`,
+ * `routingSplit`, `modInputSource`, `setModInputLan`). Per the RX-B/RX-C
+ * census, these are discrete choice/action instruments recomputed reactively
+ * every render, not scalars with drag-gesture state — so the correctness
+ * burden here is the finite seat/lease discipline (an inactive renderer's
+ * lease must not invoke after a context swap), exercised below through the
+ * shared `FiniteControlRendererFixture` test double, the same one
+ * `DspInstrumentHost.isolated.test.ts` uses for its own finite seats.
+ */
+describe('RxAudioInstrumentHost finite handles (RX-B/RX-C)', () => {
+  const appearance = {
+    action: FiniteControlRendererFixture as FiniteControlAppearance<RxAudioFiniteChoiceValue>['action'],
+    toggle: FiniteControlRendererFixture as FiniteControlAppearance<RxAudioFiniteChoiceValue>['toggle'],
+    choice: FiniteControlRendererFixture as FiniteControlAppearance<RxAudioFiniteChoiceValue>['choice'],
+  } satisfies FiniteControlAppearance<RxAudioFiniteChoiceValue>;
+
+  const rxBase = (): RadioViewModel => withRxAudio(topologyFixtures['1/single']);
+  const withRx = (over: Partial<RxAudioViewModel>): RadioViewModel => {
+    const view = rxBase();
+    return { ...view, rxAudio: { ...view.rxAudio!, ...over } };
+  };
+  const AVAILABLE = { structural: true, operational: true };
+  const UNAVAILABLE = { structural: false, operational: false };
+  type Handlers = {
+    onMonitorMode?: (mode: RxAudioViewModel['monitorMode']) => void;
+    onRoutingFocus?: (focus: AudioFocus) => void;
+    onRoutingSplit?: (split: boolean) => void;
+    onModInputChange?: (source: number) => void;
+    onSetModInputLan?: () => void;
+  };
+
+  function renderFinite(view: RadioViewModel, handlers: Handlers = {}) {
+    const publication: Publication = {
+      state: null, caps: null, session: { state: 'connected', epoch: 1 },
+      rxAudioTarget: { muted: false, rxEnabled: false },
+    };
+    const component = mount(Fixture, { target, props: {
+      view, publication, ...handlers,
+      subscribeControlAuthority: (handler) => { handler(publication); return () => undefined; },
+      finiteAppearance: appearance, rendererContext: createFiniteRendererContext(),
+    } });
+    components.push(component);
+    flushSync();
+    return { component };
+  }
+
+  beforeEach(() => resetRetainedInvocations());
+
+  it('routes each finite handle to its own callback with its own value, never crossed', () => {
+    const onMonitorMode = vi.fn();
+    const onRoutingFocus = vi.fn();
+    const onRoutingSplit = vi.fn();
+    const onModInputChange = vi.fn();
+    const onSetModInputLan = vi.fn();
+    const view = withRx({ modInputReadiness: { status: 'mismatch', source: 0 } });
+    renderFinite(view, {
+      onMonitorMode, onRoutingFocus, onRoutingSplit, onModInputChange, onSetModInputLan,
+    });
+
+    for (const mode of MONITOR_MODES) {
+      target.querySelector<HTMLButtonElement>(`[data-testid="external-Monitor mode-${mode}"]`)!.click();
+    }
+    expect(onMonitorMode.mock.calls).toEqual(MONITOR_MODES.map((mode) => [mode]));
+
+    for (const focus of FOCUS_CHOICES) {
+      target.querySelector<HTMLButtonElement>(`[data-testid="external-Audio focus-${focus}"]`)!.click();
+    }
+    expect(onRoutingFocus.mock.calls).toEqual(FOCUS_CHOICES.map((focus) => [focus]));
+
+    // The split seat's external choice VALUE is the STRING label ('on'/'off'),
+    // not the raw boolean — the Component-Kit SDK's `FiniteChoiceValue` bound
+    // is `string | number`, never `boolean` (`rx-audio-instruments.ts`'s own
+    // `RxAudioSplitLabel` doc comment). The callback still receives the
+    // mapped boolean.
+    for (const [, label] of SPLIT_CHOICES) {
+      target.querySelector<HTMLButtonElement>(`[data-testid="external-Stereo split-${label}"]`)!.click();
+    }
+    expect(onRoutingSplit.mock.calls).toEqual(SPLIT_CHOICES.map(([value]) => [value]));
+
+    for (const option of MOD_INPUT_SOURCES) {
+      target.querySelector<HTMLButtonElement>(`[data-testid="external-MOD input-${option.value}"]`)!.click();
+    }
+    expect(onModInputChange.mock.calls).toEqual(MOD_INPUT_SOURCES.map((option) => [option.value]));
+
+    target.querySelector<HTMLButtonElement>('[data-testid="external-Set LAN"]')!.click();
+    expect(onSetModInputLan).toHaveBeenCalledTimes(1);
+
+    // Cross-check: none of the five leaked into a sibling's callback.
+    expect(onMonitorMode).toHaveBeenCalledTimes(MONITOR_MODES.length);
+    expect(onRoutingFocus).toHaveBeenCalledTimes(FOCUS_CHOICES.length);
+    expect(onRoutingSplit).toHaveBeenCalledTimes(SPLIT_CHOICES.length);
+    expect(onModInputChange).toHaveBeenCalledTimes(MOD_INPUT_SOURCES.length);
+  });
+
+  it('uses the declared source domain and does not offer LAN when it is unsupported', () => {
+    const choices = MOD_INPUT_SOURCES.filter(option => option.value !== 5);
+    renderFinite(withRx({ modInputChoices: choices, modInputReadiness: { status: 'mismatch', source: 0 } }));
+    expect(target.querySelector('[data-testid="external-MOD input-4"]')).not.toBeNull();
+    expect(target.querySelector('[data-testid="external-MOD input-5"]')).toBeNull();
+    expect(target.querySelector('[data-testid="external-Set LAN"]')).toBeNull();
+  });
+
+  // The split seat's reading is the LABEL ('on'/'off') mapped from the raw
+  // `routingSplit` boolean fact by `splitLabelOf`; these two rows are literal
+  // (not derived via `SPLIT_CHOICES.find`) so a `splitLabelOf` that maps the
+  // fact to the wrong label is caught rather than agreed with.
+  it("reports the split seat's data-reading and aria-checked from a known-true routingSplit", () => {
+    renderFinite(withRx({
+      routingSplit: { reading: { status: 'known', value: true }, availability: AVAILABLE },
+    }));
+    expect(
+      target.querySelector('[data-testid="external-Stereo split"]')?.getAttribute('data-reading'),
+    ).toBe('on');
+    expect(
+      target.querySelector('[data-testid="external-Stereo split-on"]')?.getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      target.querySelector('[data-testid="external-Stereo split-off"]')?.getAttribute('aria-checked'),
+    ).toBe('false');
+  });
+
+  it("reports the split seat's data-reading and aria-checked from a known-false routingSplit", () => {
+    renderFinite(withRx({
+      routingSplit: { reading: { status: 'known', value: false }, availability: AVAILABLE },
+    }));
+    expect(
+      target.querySelector('[data-testid="external-Stereo split"]')?.getAttribute('data-reading'),
+    ).toBe('off');
+    expect(
+      target.querySelector('[data-testid="external-Stereo split-off"]')?.getAttribute('aria-checked'),
+    ).toBe('true');
+    expect(
+      target.querySelector('[data-testid="external-Stereo split-on"]')?.getAttribute('aria-checked'),
+    ).toBe('false');
+  });
+
+  it('offers `live` only while liveAudio is structural, never re-derived from anything else', () => {
+    const { component: absent } = renderFinite(withRx({ liveAudio: UNAVAILABLE }));
+    expect(target.querySelector('[data-testid="external-Monitor mode-live"]')).toBeNull();
+    expect(target.querySelector('[data-testid="external-Monitor mode-local"]')).not.toBeNull();
+    unmount(absent);
+    components = components.filter((item) => item !== absent);
+
+    renderFinite(withRx({ liveAudio: AVAILABLE }));
+    expect(target.querySelectorAll('[data-testid="external-Monitor mode-live"]')).toHaveLength(1);
+  });
+
+  it('renders no external composition for a structurally-absent focus, split or MOD-input group', () => {
+    renderFinite(withRx({
+      routingFocus: { reading: { status: 'unknown' }, availability: UNAVAILABLE },
+      routingSplit: { reading: { status: 'unknown' }, availability: UNAVAILABLE },
+      modInputSource: { reading: { status: 'unknown' }, availability: UNAVAILABLE },
+      modInputReadiness: { status: 'unknown' },
+    }));
+    expect(target.querySelector('[data-testid="external-Audio focus"]')).toBeNull();
+    expect(target.querySelector('[data-testid="external-Stereo split"]')).toBeNull();
+    expect(target.querySelector('[data-testid="external-MOD input"]')).toBeNull();
+  });
+
+  it('blocks an unrecognized MOD-input reading and offers no LAN remedy outside a mismatch', () => {
+    const onModInputChange = vi.fn();
+    const onSetModInputLan = vi.fn();
+    renderFinite(
+      withRx({
+        modInputSource: { reading: { status: 'known', value: 99 }, availability: AVAILABLE },
+        modInputReadiness: { status: 'unknown' },
+      }),
+      { onModInputChange, onSetModInputLan },
+    );
+    const modExternal = target.querySelector('[data-testid="external-MOD input"]')!;
+    expect(modExternal).not.toBeNull();
+    target.querySelector<HTMLButtonElement>('[data-testid="external-MOD input-0"]')!.click();
+    expect(onModInputChange).not.toHaveBeenCalled();
+    expect(target.querySelector('[data-testid="external-Set LAN"]')).toBeNull();
+    expect(onSetModInputLan).not.toHaveBeenCalled();
+  });
+
+  it(
+    'keeps the monitor-mode (absolute choice) and Set-LAN (action) seats owner-correct '
+    + 'across an A-B-A context swap: a detached lease stays inert, the active one still emits once',
+    () => {
+      const onMonitorMode = vi.fn();
+      const onSetModInputLan = vi.fn();
+      const a = createFiniteRendererContext();
+      const b = createFiniteRendererContext();
+      const view = withRx({ modInputReadiness: { status: 'mismatch', source: 0 } });
+      const publication: Publication = {
+        state: null, caps: null, session: { state: 'connected', epoch: 1 },
+        rxAudioTarget: { muted: false, rxEnabled: false },
+      };
+      const props = proxy({
+        view, publication,
+        subscribeControlAuthority: ((handler) => {
+          handler(publication); return () => undefined;
+        }) as SubscribeRxAudioAuthority,
+        finiteAppearance: appearance, rendererContext: a, onMonitorMode, onSetModInputLan,
+      });
+      const component = mount(Fixture, { target, props });
+      flushSync();
+      const staleMonitor = retainedInvocations.get('Monitor mode')!;
+      const staleLan = retainedInvocations.get('Set LAN')!;
+      expect(staleMonitor).toBeDefined();
+      expect(staleLan).toBeDefined();
+
+      props.rendererContext = b;
+      flushSync();
+      const activeMonitor = retainedInvocations.get('Monitor mode')!;
+      const activeLan = retainedInvocations.get('Set LAN')!;
+
+      staleMonitor('mute');
+      staleLan();
+      expect(onMonitorMode).not.toHaveBeenCalled();
+      expect(onSetModInputLan).not.toHaveBeenCalled();
+
+      activeMonitor('mute');
+      activeLan();
+      expect(onMonitorMode).toHaveBeenCalledExactlyOnceWith('mute');
+      expect(onSetModInputLan).toHaveBeenCalledTimes(1);
+
+      // Swap A back: the (new) A lease is live, the old B lease is now stale.
+      props.rendererContext = a;
+      flushSync();
+      const finalMonitor = retainedInvocations.get('Monitor mode')!;
+      const finalLan = retainedInvocations.get('Set LAN')!;
+      activeLan();
+      expect(onSetModInputLan).toHaveBeenCalledTimes(1);
+
+      // Host teardown (`onDestroy`'s seat.destroy() loop) is the LAST fence:
+      // a lease retained past `unmount` must stay inert too, independent of
+      // any later context swap ever happening.
+      unmount(component);
+      finalMonitor('local');
+      finalLan();
+      expect(onMonitorMode).toHaveBeenCalledTimes(1);
+      expect(onSetModInputLan).toHaveBeenCalledTimes(1);
+    },
+  );
+});

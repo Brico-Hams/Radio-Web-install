@@ -1,0 +1,2279 @@
+"""Observation adapters for Yaesu CAT polling reads."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol, TypeVar, cast
+
+from rigplane.core.acquisition_scheduler import (
+    AcquisitionScheduler,
+    DeclaredCommandDefect,
+    resolve_available_when,
+)
+from rigplane.core.exceptions import CommandError
+from rigplane.core.observation_adapter import ProviderObservationAdapter
+from rigplane.core.state_acquisition_policy import RadioAcquisitionProfile
+from rigplane.core.state_pipeline_contracts import (
+    FieldPath,
+    Observation,
+    startup_critical_path,
+)
+from rigplane.core.state_store import StateStore
+from rigplane.core.tx_observation import (
+    OBSERVED_PTT_PATH,
+    TxStateReading,
+    normalize_observed_ptt,
+)
+from rigplane.core.tx_target import (
+    KnownTxTarget,
+    TxReceiver,
+    TxSlot,
+    TxTarget,
+    UnknownTxTarget,
+)
+from rigplane.core.types import ctcss_booleans_for_tone_squelch_type
+from rigplane.runtime.meter_cal import interpolate_meter
+
+from .parser import CatFormatError, CatParseError
+from .radio import FilterWidthReading, _ctcss_index_to_centihz
+from .transport import CatCommandRejected, CatTimeoutError, CatTransportError
+
+if TYPE_CHECKING:
+    from rigplane.core.types import BreakInMode
+    from rigplane.profiles import RadioProfile
+
+logger = logging.getLogger(__name__)
+
+Clock = Callable[[], float]
+_T = TypeVar("_T")
+
+#: MOR-2749 (owner decision, 2026-09-27 14:20 EDT) / MOR-2757: a
+#: safety-critical path (:func:`startup_critical_path`) the radio has not
+#: answered after this many consecutive reads ends startup through the
+#: declared-command defect record — the same number the web gate's
+#: ``_STARTUP_GATE_CRITICAL_ATTEMPTS`` (``web/web_startup.py``) carries for
+#: the Icom sweep branch; the backends cannot import the web layer, so the
+#: owner's number is spelled out here with this cross-reference.
+_CRITICAL_READ_TIMEOUT_ATTEMPTS = 3
+
+__all__ = ["YAESU_PTT_PATH", "YaesuObservationAdapter"]
+
+_MAIN_FREQ = FieldPath.active("main", "freq_mode", "freq_hz")
+_MAIN_MODE = FieldPath.active("main", "freq_mode", "mode")
+_SUB_FREQ = FieldPath.active("sub", "freq_mode", "freq_hz")
+_SUB_MODE = FieldPath.active("sub", "freq_mode", "mode")
+_PTT = FieldPath.global_("tx_state", "ptt")
+_TX_TARGET = FieldPath.global_("tx_state", "tx_target")
+_MAIN_AF = FieldPath.receiver("main", "operator_controls", "af_level")
+_MAIN_RF = FieldPath.receiver("main", "operator_controls", "rf_gain")
+_MAIN_SQL = FieldPath.receiver("main", "operator_controls", "squelch")
+_SUB_AF = FieldPath.receiver("sub", "operator_controls", "af_level")
+_SUB_RF = FieldPath.receiver("sub", "operator_controls", "rf_gain")
+_SUB_SQL = FieldPath.receiver("sub", "operator_controls", "squelch")
+# RF front-end controls (MOR-443). ATT/preamp stay MAIN-only: the FTX-1 has
+# no per-receiver CAT command for them (no RA1/PA1), so emitting them for
+# the sub receiver would mislabel the shared front-end read. This mirrors the
+# legacy poller, which only writes ``main.{att,preamp,agc}``. AGC has the
+# SUB form ``GT1`` (bench 2026-09-18, MOR-2511 comment, 01:22Z).
+_MAIN_ATT = FieldPath.receiver("main", "operator_controls", "att")
+_MAIN_PREAMP = FieldPath.receiver("main", "operator_controls", "preamp")
+_MAIN_AGC = FieldPath.receiver("main", "operator_controls", "agc")
+_SUB_AGC = FieldPath.receiver("sub", "operator_controls", "agc")
+_MAIN_S_METER = FieldPath.receiver("main", "meters", "s_meter")
+_SUB_S_METER = FieldPath.receiver("sub", "meters", "s_meter")
+_ALC_METER = FieldPath.global_("meters", "alc")
+_POWER_METER = FieldPath.global_("meters", "power")
+_SWR_METER = FieldPath.global_("meters", "swr")
+# PA compression meter (MOR-460). Cross-vendor neutral meter (also Icom CI-V
+# 0x15 0x14); the FTX-1 reads it via RM3. Emitted as a stream-like TX meter in
+# the same lane and under the same freshness/coalescing policy as alc/power/swr.
+_COMP_METER = FieldPath.global_("meters", "comp")
+# Drain voltage / current (MOR-2425/T147; CAT RM P1 8 = VDD, 7 = IDD). Read in
+# ``poll_slow_controls``, NOT ``poll_tx_meters``: a read-only bench probe on
+# 2026-09-08 got an answer to all ten ``RM7;`` and all ten ``RM8;`` reads with
+# the radio receiving, so these are supply telemetry rather than TX readings
+# and the profile declares them without ``tx_only``.
+_VD_METER = FieldPath.global_("meters", "vd")
+_ID_METER = FieldPath.global_("meters", "id")
+# Global TX / operator-control setpoints (MOR-447). ``power_level`` is the
+# watt SETPOINT (CAT ``PC``), distinct from the ``global.meters.power`` meter.
+_POWER_LEVEL = FieldPath.global_("operator_controls", "power_level")
+_MIC_GAIN = FieldPath.global_("operator_controls", "mic_gain")
+_COMPRESSOR_ON = FieldPath.global_("tx_state", "compressor_on")
+_COMPRESSOR_LEVEL = FieldPath.global_("operator_controls", "compressor_level")
+_VOX_ON = FieldPath.global_("tx_state", "vox_on")
+# Filter / IF-shift / narrow DSP controls (MOR-445). IF-shift and narrow have
+# SUB forms answering SUB's own value in single receive (bench 2026-09-18,
+# MOR-2511 comment, 01:22Z).
+# ``filter_width`` has the SUB form SH1 and is read for both receivers
+# (MOR-2511). ``filter_width`` is a ``freq_mode`` ACTIVE-slot field emitted in
+# the freq/mode lane; IF-shift and narrow are per-receiver operator controls
+# emitted in the slow lane.
+_MAIN_FILTER_WIDTH = FieldPath.active("main", "freq_mode", "filter_width")
+_SUB_FILTER_WIDTH = FieldPath.active("sub", "freq_mode", "filter_width")
+# The radio-default flag twins (MOR-3677): published by the same SH read as
+# the width above, under the same narrow gate — one CAT query, two leaves.
+_MAIN_FILTER_WIDTH_RADIO_DEFAULT = FieldPath.active(
+    "main", "freq_mode", "filter_width_radio_default"
+)
+_SUB_FILTER_WIDTH_RADIO_DEFAULT = FieldPath.active(
+    "sub", "freq_mode", "filter_width_radio_default"
+)
+_MAIN_IF_SHIFT = FieldPath.receiver("main", "operator_controls", "if_shift")
+_SUB_IF_SHIFT = FieldPath.receiver("sub", "operator_controls", "if_shift")
+_MAIN_NARROW = FieldPath.receiver("main", "operator_toggles", "narrow")
+_SUB_NARROW = FieldPath.receiver("sub", "operator_toggles", "narrow")
+# NB/NR levels + derived toggles, auto/manual notch DSP controls (MOR-444);
+# SUB forms exist (bench 2026-09-18, MOR-2511 comment, 01:22Z).
+# The ``nb``/``nr`` toggles are DERIVED from the level
+# (``level > 0``) read in the same cycle — a single CAT read each, never a
+# second query — exactly as the legacy poller derives them.
+_MAIN_NB_LEVEL = FieldPath.receiver("main", "operator_controls", "nb_level")
+_MAIN_NB = FieldPath.receiver("main", "operator_toggles", "nb")
+_MAIN_NR_LEVEL = FieldPath.receiver("main", "operator_controls", "nr_level")
+_MAIN_NR = FieldPath.receiver("main", "operator_toggles", "nr")
+_MAIN_AUTO_NOTCH = FieldPath.receiver("main", "operator_toggles", "auto_notch")
+_MAIN_MANUAL_NOTCH = FieldPath.receiver("main", "operator_toggles", "manual_notch")
+_MAIN_MANUAL_NOTCH_FREQ = FieldPath.receiver(
+    "main", "operator_controls", "manual_notch_freq"
+)
+_SUB_NB_LEVEL = FieldPath.receiver("sub", "operator_controls", "nb_level")
+_SUB_NB = FieldPath.receiver("sub", "operator_toggles", "nb")
+_SUB_NR_LEVEL = FieldPath.receiver("sub", "operator_controls", "nr_level")
+_SUB_NR = FieldPath.receiver("sub", "operator_toggles", "nr")
+_SUB_AUTO_NOTCH = FieldPath.receiver("sub", "operator_toggles", "auto_notch")
+_SUB_MANUAL_NOTCH = FieldPath.receiver("sub", "operator_toggles", "manual_notch")
+_SUB_MANUAL_NOTCH_FREQ = FieldPath.receiver(
+    "sub", "operator_controls", "manual_notch_freq"
+)
+# Split + active-slot controls (MOR-446). ``split`` is a GLOBAL tx_state bool
+# (CAT ``ST``), emitted in the global TX-control lane alongside compressor/VOX.
+# ``active`` is the GLOBAL "which receiver is active" field (CAT ``VS``): the
+# backend-neutral target is ``global.slow_state.active`` — a ``"MAIN"``/``"SUB"``
+# str consumed by the rigctld VFOA/VFOB mapping and the dual-RX runtime. The
+# ``VS`` index (0/1) is coerced to that str; the per-receiver
+# ``receiver.<rx>.vfo.active_slot`` ("A"/"B") field is a DIFFERENT concept
+# (which VFO slot within a receiver) and is NOT the target.
+_SPLIT = FieldPath.global_("tx_state", "split")
+_ACTIVE = FieldPath.global_("slow_state", "active")
+_ACTIVE_INDEX_TO_STR = {0: "MAIN", 1: "SUB"}
+# Dual receive (CAT ``FR``; FTX-1_CAT_OM_ENG_2508-C printed page 16: P1 ``00`` = dual
+# receive, ``01`` = single receive) is emitted as the canonical
+# ``global.tx_state.dual_watch`` bool — the same path and value type the Icom
+# backend publishes from CI-V 0x07 0xC2 (``runtime/_civ_rx.py``).
+_DUAL_WATCH = FieldPath.global_("tx_state", "dual_watch")
+# Clarifier (RIT/XIT) controls (MOR-454). GLOBAL slow-changing operator/TX
+# controls (CAT ``CF000``/``CF001``): ``rit_on``/``rit_tx`` are global tx_state
+# bools (RX/TX clarifier flags), ``rit_freq`` is the global operator-control
+# signed Hz offset. Emitted in the global TX-control lane alongside split/VOX,
+# gated independently on the ``rit`` and ``xit`` runtime capabilities. The
+# signed Hz offset is shared and emitted when either capability is declared.
+_RIT_ON = FieldPath.global_("tx_state", "rit_on")
+_RIT_TX = FieldPath.global_("tx_state", "rit_tx")
+_RIT_FREQ = FieldPath.global_("operator_controls", "rit_freq")
+# Tuner + dial-lock controls (MOR-455). GLOBAL slow-changing operator/TX
+# controls: ``tuner_status`` is the global operator-control antenna-tuner state
+# (CAT ``AC``: 0=OFF, 1=ON, 2=tuning, 3=tune-start) emitted as the raw device
+# int (cross-vendor calibration is MOR-453); ``dial_lock`` is a global tx_state
+# bool (CAT ``LK``). Both are emitted in the global TX-control lane alongside
+# split/VOX, gated on the ``tuner``/``dial_lock`` runtime capabilities, mirroring
+# the legacy poller's ``"tuner" in caps``/``"dial_lock" in caps`` gates and its
+# single ``get_tuner``/``get_lock`` reads.
+_TUNER = FieldPath.global_("operator_controls", "tuner_status")
+_DIAL_LOCK = FieldPath.global_("tx_state", "dial_lock")
+# CW keyer family (MOR-456). GLOBAL slow-changing operator/slow controls, all
+# gated on the legacy poller's single ``"cw" in caps`` gate: ``key_speed`` is
+# the keyer WPM (CAT ``KS``), ``cw_pitch`` is the sidetone pitch in Hz (decoded
+# from the profile's ``cw_pitch`` control domain), ``break_in`` is the break-in
+# mode emitted as
+# the device int (CAT ``BI``: 0=OFF, 1=SEMI — FTX-1 is binary only, matching the
+# legacy poller's ``1 if get_break_in() else 0`` int store), ``break_in_delay``
+# is the QSK delay in ms (CAT ``SD``). All four are operator_controls and ride
+# the global TX-control lane alongside RIT/tuner. ``cw_spot`` is a global
+# slow_state bool (CAT ``CS``) emitted in the slow-control lane beside
+# ``slow_state.active``. Raw device scale (cross-vendor calibration is MOR-453).
+_KEY_SPEED = FieldPath.global_("operator_controls", "key_speed")
+_CW_PITCH = FieldPath.global_("operator_controls", "cw_pitch")
+_BREAK_IN = FieldPath.global_("operator_controls", "break_in")
+_BREAK_IN_DELAY = FieldPath.global_("operator_controls", "break_in_delay")
+_CW_SPOT = FieldPath.global_("slow_state", "cw_spot")
+# Tone / CTCSS squelch-type (MOR-457, corrected MOR-2130). The FTX-1 CAT ``CT``
+# "SQL TYPE" command (FTX-1_CAT_OM_ENG_2508-C) is receiver-routed (P1=0 MAIN,
+# P1=1 SUB); its P2 code is mapped onto ``RepeaterControlCapable``'s two
+# independent axes: ``repeater_tone`` = CTCSS tone TX ENCODE, ``repeater_tsql``
+# = CTCSS tone RX SQUELCH (decode):
+#   P2 code 0 (OFF)                      -> repeater_tone=False, repeater_tsql=False
+#   P2 code 1 (ENC ON / DEC OFF, "TONE") -> repeater_tone=True,  repeater_tsql=False
+#   P2 code 2 (ENC ON / DEC ON,  "TSQL") -> repeater_tone=True,  repeater_tsql=True
+#   P2 codes 3/4/5 (DCS / PR FREQ / REV TONE) -> both None (observed, but the
+#       two-boolean vocabulary has no representation for them; publishing
+#       False would invent OFF while the radio is in DCS — MOR-2572).
+# Since MOR-2969 the code's meaning comes from the profile's
+# [tone_squelch_types] table: the read publishes that type on
+# ``operator_controls.tone_squelch_type`` and derives the two booleans from it
+# (core/types.py: ctcss_booleans_for_tone_squelch_type), which gives the
+# mapping above.
+# Both paths are emitted every cycle (including the False/None derivations)
+# so the store always reflects current state. Per-receiver ``operator_toggles`` like
+# nb/nr/auto_notch, emitted in the slow-control lane; CT0 and CT1 are read
+# independently, so a failing side's defect names only that side's paths and
+# skips only that side's emissions — the other side still publishes. Raw
+# device code (cross-vendor calibration is MOR-453).
+_MAIN_REPEATER_TONE = FieldPath.receiver("main", "operator_toggles", "repeater_tone")
+_MAIN_REPEATER_TSQL = FieldPath.receiver("main", "operator_toggles", "repeater_tsql")
+_SUB_REPEATER_TONE = FieldPath.receiver("sub", "operator_toggles", "repeater_tone")
+_SUB_REPEATER_TSQL = FieldPath.receiver("sub", "operator_toggles", "repeater_tsql")
+_MAIN_TONE_SQUELCH_TYPE = FieldPath.receiver(
+    "main", "operator_controls", "tone_squelch_type"
+)
+_SUB_TONE_SQUELCH_TYPE = FieldPath.receiver(
+    "sub", "operator_controls", "tone_squelch_type"
+)
+# CTCSS tone FREQUENCY (MOR-458). The FTX-1 CAT ``CN`` "CTCSS TONE FREQUENCY"
+# command (FTX-1_CAT_OM_ENG_2508-C) reports each receiver's tone (P1=0 MAIN,
+# P1=1 SUB, P2=0 CTCSS) as a 0-49 INDEX into the standard 50-tone EIA chart
+# (NOT an absolute frequency; cf. Icom 0x1B BCD-Hz). The radio maps that
+# index → Hz → centiHz (the index→Hz Tone Chart is resolved by the active
+# ``RadioProfile`` catalog). The neutral value is centiHz = round(Hz * 100),
+# matching the Icom MOR-451 convention (``round(_decode_tone_freq(...) *
+# 100)``) so consumers see one unit. SINGLE-YAESU-TONE: unlike Icom (which can
+# carry distinct TONE/TSQL freqs), the FTX-1 has ONE CTCSS tone frequency (CN
+# P2=0) used for BOTH encode (TONE) and decode (TSQL). So the SAME centiHz
+# value is emitted to BOTH tone_freq and tsql_freq from a SINGLE CN read per
+# receiver. Emitted ALWAYS (the configured setpoint, like Icom's tone_freq
+# readback) — independent of whether CTCSS is currently active. DCS (CN P2=1)
+# is a documented limitation — NO neutral DCS path is emitted.
+_MAIN_TONE_FREQ = FieldPath.receiver("main", "operator_controls", "tone_freq")
+_MAIN_TSQL_FREQ = FieldPath.receiver("main", "operator_controls", "tsql_freq")
+_SUB_TONE_FREQ = FieldPath.receiver("sub", "operator_controls", "tone_freq")
+_SUB_TSQL_FREQ = FieldPath.receiver("sub", "operator_controls", "tsql_freq")
+# Repeater shift DIRECTION (MOR-2111/MOR-2160). The FTX-1 CAT ``OS`` "OFFSET
+# (REPEATER SHIFT)" command (FTX-1_CAT_OM_ENG_2508-C) reports the P2 code
+# directly for P1=0 MAIN and P1=1 SUB
+# (0=Simplex, 1=Plus Shift, 2=Minus Shift, 3=ARS; see
+# ``core.types.RepeaterShiftDirection``) — no cross-vendor unification is
+# needed since the FTX-1 is the only implementer of ``RepeaterShiftCapable``
+# today, so the raw device code IS the neutral value. A dedicated ``OS`` read
+# is used rather than riding the ``IF;`` bulk-status P10 field: the manual
+# documents ``IF``'s P10 (and three sibling bulk-status commands sharing the
+# same position) with only 3 values, no ARS, against ``OS``'s own 4-value P2.
+# A bench measurement recorded in MOR-2125 found the radio itself reports all
+# 4 values through both ``IF`` (MAIN) and ``OI`` (SUB) — the mismatch is in
+# the manual, not the hardware. The reason to prefer ``OS`` is instead that
+# ``IF`` is MAIN-side only (SUB needs the differently-laid-out ``OI``), so a
+# dedicated ``OS``/``OS1`` read generalizes to both receivers where riding
+# ``IF`` would not.
+_MAIN_REPEATER_SHIFT = FieldPath.receiver("main", "operator_controls", "repeater_shift")
+_SUB_REPEATER_SHIFT = FieldPath.receiver("sub", "operator_controls", "repeater_shift")
+YAESU_PTT_PATH = _PTT
+
+
+class YaesuObservationRadio(Protocol):
+    @property
+    def profile(self) -> RadioProfile: ...
+
+    @property
+    def capabilities(self) -> set[str]: ...
+
+    async def read_freq(self, receiver: int = 0) -> int: ...
+
+    async def read_mode(self, receiver: int = 0) -> tuple[str, int | None]: ...
+
+    async def read_transmit_state(self) -> TxStateReading: ...
+
+    async def get_tx_func(self) -> int: ...
+
+    async def get_rx_func(self) -> int: ...
+
+    async def read_af_level(self, receiver: int = 0) -> int: ...
+
+    async def read_rf_gain(self, receiver: int = 0) -> int: ...
+
+    async def read_squelch(self, receiver: int = 0) -> int: ...
+
+    async def read_attenuator(self, receiver: int = 0) -> bool: ...
+
+    async def read_preamp(self, band: int = 0) -> int: ...
+
+    async def read_agc(self, receiver: int = 0) -> int: ...
+
+    async def read_filter_width(
+        self, receiver: int = 0, mode: str | None = None
+    ) -> int | None: ...
+
+    async def read_filter_width_reading(
+        self, receiver: int = 0, mode: str | None = None
+    ) -> FilterWidthReading: ...
+
+    async def read_if_shift(self, receiver: int = 0) -> int: ...
+
+    async def read_narrow(self, receiver: int = 0) -> bool: ...
+
+    async def read_nb_level(self, receiver: int = 0) -> int: ...
+
+    async def read_nr_level(self, receiver: int = 0) -> int: ...
+
+    async def read_auto_notch(self, receiver: int = 0) -> bool: ...
+
+    async def read_manual_notch(self, receiver: int = 0) -> bool: ...
+
+    async def read_manual_notch_freq(self, receiver: int = 0) -> int: ...
+
+    async def read_s_meter(self, receiver: int = 0) -> int: ...
+
+    async def read_alc_meter(self) -> int: ...
+
+    async def read_comp_meter(self) -> int: ...
+
+    async def read_power_meter(self) -> int: ...
+
+    async def read_swr_meter(self) -> int: ...
+
+    async def get_vd_meter(self) -> int: ...
+
+    async def get_id_meter(self) -> int: ...
+
+    async def read_power(self) -> tuple[int, int]: ...
+
+    async def read_mic_gain(self) -> int: ...
+
+    async def read_processor(self) -> bool: ...
+
+    async def read_processor_level(self) -> int: ...
+
+    async def read_vox(self) -> bool: ...
+
+    async def read_split(self) -> bool: ...
+
+    async def read_vfo_select(self) -> int: ...
+
+    async def read_clarifier(self, receiver: int = 0) -> tuple[bool, bool]: ...
+
+    async def read_clarifier_freq(self, receiver: int = 0) -> int: ...
+
+    async def get_tuner_status(self) -> int: ...
+
+    async def read_lock(self) -> bool: ...
+
+    async def read_keyer_speed(self) -> int: ...
+
+    async def read_cw_pitch(self) -> int: ...
+
+    async def read_break_in(self) -> BreakInMode: ...
+
+    async def read_break_in_delay(self) -> int: ...
+
+    async def read_cw_spot(self) -> bool: ...
+
+    async def read_sql_type(self, receiver: int = 0) -> int: ...
+
+    async def read_ctcss_tone_index(self, receiver: int = 0) -> int: ...
+
+    async def read_repeater_shift(self, receiver: int = 0) -> int: ...
+
+
+@dataclass(slots=True)
+class YaesuObservationAdapter:
+    """Collect backend-neutral observations from Yaesu polling reads."""
+
+    radio: YaesuObservationRadio
+    profile: RadioAcquisitionProfile
+    clock: Clock = time.monotonic
+
+    @classmethod
+    def from_radio(
+        cls,
+        radio: YaesuObservationRadio,
+        *,
+        clock: Clock = time.monotonic,
+    ) -> YaesuObservationAdapter:
+        profile = getattr(radio, "profile").state_acquisition
+        if profile is None:
+            raise ValueError(
+                "radio profile does not declare state_acquisition metadata"
+            )
+        return cls(radio, profile=profile, clock=clock)
+
+    async def poll_medium(
+        self, *, ptt_callback: Callable[[Observation], None] | None = None
+    ) -> tuple[Observation, ...]:
+        adapter = self._adapter()
+        observations: list[Observation] = []
+        if self._can_poll(_MAIN_FREQ):
+            ok, value = await self._safe_read(
+                "main.freq",
+                self.radio.read_freq(0),
+                lambda: self.radio.read_freq(0),
+                paths=(_MAIN_FREQ,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_MAIN_FREQ, value, native_id="read_freq")
+                )
+        # Capture the MAIN mode so filter_width (below) can resolve its
+        # mode-specific width table from the freshly-read mode rather than
+        # issuing a redundant CAT mode query on the hot poll path (MOR-507).
+        main_mode: str | None = None
+        if self._can_poll(_MAIN_MODE):
+            ok, result = await self._safe_read(
+                "main.mode",
+                self.radio.read_mode(0),
+                lambda: self.radio.read_mode(0),
+                paths=(_MAIN_MODE,),
+            )
+            if ok and result is not None:
+                main_mode = result[0]
+                observations.append(
+                    adapter.observation(_MAIN_MODE, result[0], native_id="read_mode")
+                )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._can_poll(_SUB_FREQ)
+            and self._available(_SUB_FREQ)
+        ):
+            ok, value = await self._safe_read(
+                "sub.freq",
+                self.radio.read_freq(1),
+                lambda: self.radio.read_freq(1),
+                paths=(_SUB_FREQ,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_SUB_FREQ, value, native_id="read_freq")
+                )
+        sub_mode: str | None = None
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._can_poll(_SUB_MODE)
+            and self._available(_SUB_MODE)
+        ):
+            ok, result = await self._safe_read(
+                "sub.mode",
+                self.radio.read_mode(1),
+                lambda: self.radio.read_mode(1),
+                paths=(_SUB_MODE,),
+            )
+            if ok and result is not None:
+                sub_mode = result[0]
+                observations.append(
+                    adapter.observation(_SUB_MODE, result[0], native_id="read_mode")
+                )
+        if self._can_poll(_TX_TARGET):
+            observations.append(
+                adapter.observation(
+                    _TX_TARGET,
+                    await self._read_tx_target(),
+                    native_id="get_tx_func",
+                )
+            )
+        else:
+            # No pollable tx_target source declared (sourceless-Yaesu
+            # class: the profile carries no TX-function read verb, so a
+            # pollable target would make _read_tx_target raise out of
+            # _query and discard the whole medium batch). Publish the
+            # sticky ``unsupported`` fact through this same path, with no
+            # CAT I/O here, so downstream gates read "no source exists"
+            # instead of "not yet read" (MOR-4433).
+            observations.append(
+                adapter.observation(
+                    _TX_TARGET,
+                    UnknownTxTarget(reason="unsupported"),
+                    native_id="get_tx_func",
+                )
+            )
+        if self._can_poll(_PTT):
+
+            def publish_ptt_error() -> None:
+                observation = self.observed_ptt_observation(None)
+                if ptt_callback is None:
+                    observations.append(observation)
+                else:
+                    try:
+                        ptt_callback(observation)
+                    except (Exception, asyncio.CancelledError):
+                        logger.warning("Yaesu PTT error callback failed", exc_info=True)
+
+            try:
+                reading = await self.radio.read_transmit_state()
+            except asyncio.CancelledError:
+                raise
+            except (
+                CatParseError,
+                CatFormatError,
+                ValueError,
+                KeyError,
+                CatCommandRejected,
+            ) as exc:
+                # Same rule as ``_safe_read`` minus the record: PTT left
+                # the startup-critical set (MOR-4456), so a refused or
+                # malformed read is skipped with no defect — the gate
+                # serves it unknown after the deadline. The cycle is kept.
+                self._log_field_skip(
+                    "ptt",
+                    "Skipping field %s — declared read refused or malformed: %s",
+                    exc,
+                )
+                publish_ptt_error()
+            except Exception:
+                publish_ptt_error()
+                raise
+            else:
+                if reading.failure is not None:
+                    publish_ptt_error()
+                    if reading.failure == "timeout":
+                        # MOR-4456: a PTT-only timeout is contained in the
+                        # lane — unknown is already published above and the
+                        # cycle continues. The counting call stays (the
+                        # accounting lives here because the raised
+                        # ``CatTimeoutError`` used to be built here; the
+                        # tag carries no wire command, so the defect names
+                        # the field only), but PTT left the critical set,
+                        # so the count filters to nothing and the gate
+                        # serves PTT unknown after the deadline instead of
+                        # ending startup. Only transport failures still
+                        # raise below.
+                        exc = CatTimeoutError("PTT read failed: timeout")
+                        self._count_critical_read_timeouts("ptt", exc, (_PTT,))
+                    if reading.failure == "transport":
+                        raise CatTransportError("PTT read failed: transport")
+                else:
+                    self._note_critical_read_answers((_PTT,))
+                    timestamp = self.clock()
+                    if type(reading.value) is bool:
+                        observations.append(
+                            adapter.observation(
+                                _PTT,
+                                reading.value,
+                                native_id="read_ptt",
+                                timestamp_monotonic=timestamp,
+                            )
+                        )
+                    qualified = (
+                        reading.verified_readback is True
+                        and reading.source == "yaesu_poll_response"
+                        and reading.attributed in ("rx", "tx_cat", "tx_other")
+                    )
+                    observation = self.observed_ptt_observation(
+                        reading.value if qualified else None,
+                        timestamp_monotonic=timestamp,
+                    )
+                    if ptt_callback is None:
+                        observations.append(observation)
+                    else:
+                        ptt_callback(observation)
+        # filter_width (MOR-445) is a ``freq_mode`` ACTIVE-slot field, so it
+        # belongs in the freq/mode lane — mirroring the legacy poller, which
+        # reads it in ``_poll_medium`` for responsive knob tracking. MAIN-only
+        # and gated on the ``filter_width`` runtime capability. MOR-2803: also
+        # ``_available``-gated like the SUB reads below — ``rigs/ftx1.toml``
+        # declares the width absent while that receiver's NARROW is on (the
+        # manual's NAR WIDTH menu owns the passband then), so without this
+        # gate the poll re-added the width each second while
+        # StateFreshnessService._discard_declared_absent removed it each tick.
+        # The gate withholds the read while the clause is unobserved, and
+        # NARROW lives in the slow lane, so the first pass primes it
+        # (``_prime_narrow_clause``) before deciding.
+        if self._has_runtime_capability("filter_width") and self._can_poll(
+            _MAIN_FILTER_WIDTH
+        ):
+            await self._prime_narrow_clause(
+                adapter,
+                observations,
+                label="main.narrow",
+                receiver=0,
+                narrow=_MAIN_NARROW,
+                width=_MAIN_FILTER_WIDTH,
+            )
+            if self._available(_MAIN_FILTER_WIDTH):
+                # MOR-3677: profiles declaring the flag (FTX-1 only) take
+                # the twin-leaf read; every other profile keeps the legacy
+                # single-value read. Both leaves share the width's narrow
+                # gate and timestamp — the flag always emits, including
+                # False, so a stale True cannot persist.
+                if self._can_poll(_MAIN_FILTER_WIDTH_RADIO_DEFAULT):
+                    ok, reading = await self._safe_read(
+                        "main.filter_width",
+                        self.radio.read_filter_width_reading(0, mode=main_mode),
+                        lambda: self.radio.read_filter_width_reading(0, mode=main_mode),
+                        paths=(
+                            _MAIN_FILTER_WIDTH,
+                            _MAIN_FILTER_WIDTH_RADIO_DEFAULT,
+                        ),
+                    )
+                    if ok and reading is not None:
+                        timestamp = self.clock()
+                        observations.append(
+                            adapter.observation(
+                                _MAIN_FILTER_WIDTH,
+                                reading.hz,
+                                native_id="read_filter_width",
+                                timestamp_monotonic=timestamp,
+                            )
+                        )
+                        observations.append(
+                            adapter.observation(
+                                _MAIN_FILTER_WIDTH_RADIO_DEFAULT,
+                                reading.radio_default,
+                                native_id="read_filter_width_reading",
+                                timestamp_monotonic=timestamp,
+                            )
+                        )
+                else:
+                    ok, value = await self._safe_read(
+                        "main.filter_width",
+                        self.radio.read_filter_width(0, mode=main_mode),
+                        lambda: self.radio.read_filter_width(0, mode=main_mode),
+                        paths=(_MAIN_FILTER_WIDTH,),
+                    )
+                    if ok:
+                        observations.append(
+                            adapter.observation(
+                                _MAIN_FILTER_WIDTH,
+                                value,
+                                native_id="read_filter_width",
+                            )
+                        )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._has_runtime_capability("filter_width")
+            and self._can_poll(_SUB_FILTER_WIDTH)
+        ):
+            await self._prime_narrow_clause(
+                adapter,
+                observations,
+                label="sub.narrow",
+                receiver=1,
+                narrow=_SUB_NARROW,
+                width=_SUB_FILTER_WIDTH,
+            )
+            if self._available(_SUB_FILTER_WIDTH):
+                # MOR-3677: the SUB twin of the MAIN branch above — the
+                # twin-leaf read when the profile declares the flag, the
+                # legacy single-value read otherwise.
+                if self._can_poll(_SUB_FILTER_WIDTH_RADIO_DEFAULT):
+                    ok, reading = await self._safe_read(
+                        "sub.filter_width",
+                        self.radio.read_filter_width_reading(1, mode=sub_mode),
+                        lambda: self.radio.read_filter_width_reading(1, mode=sub_mode),
+                        paths=(
+                            _SUB_FILTER_WIDTH,
+                            _SUB_FILTER_WIDTH_RADIO_DEFAULT,
+                        ),
+                    )
+                    if ok and reading is not None:
+                        timestamp = self.clock()
+                        observations.append(
+                            adapter.observation(
+                                _SUB_FILTER_WIDTH,
+                                reading.hz,
+                                native_id="read_filter_width",
+                                timestamp_monotonic=timestamp,
+                            )
+                        )
+                        observations.append(
+                            adapter.observation(
+                                _SUB_FILTER_WIDTH_RADIO_DEFAULT,
+                                reading.radio_default,
+                                native_id="read_filter_width_reading",
+                                timestamp_monotonic=timestamp,
+                            )
+                        )
+                else:
+                    ok, value = await self._safe_read(
+                        "sub.filter_width",
+                        self.radio.read_filter_width(1, mode=sub_mode),
+                        lambda: self.radio.read_filter_width(1, mode=sub_mode),
+                        paths=(_SUB_FILTER_WIDTH,),
+                    )
+                    if ok:
+                        observations.append(
+                            adapter.observation(
+                                _SUB_FILTER_WIDTH,
+                                value,
+                                native_id="read_filter_width",
+                            )
+                        )
+        return tuple(observations)
+
+    def observed_ptt_observation(
+        self, value: object, *, timestamp_monotonic: float | None = None
+    ) -> Observation:
+        return self._adapter().observation(
+            OBSERVED_PTT_PATH,
+            normalize_observed_ptt(value),
+            native_id="read_transmit_state",
+            timestamp_monotonic=timestamp_monotonic,
+            max_age=self.profile.policy_for(_PTT).freshness_ttl_seconds,
+        )
+
+    async def _read_tx_func(self) -> int | UnknownTxTarget:
+        method = getattr(self.radio, "get_tx_func", None)
+        if not callable(method):
+            return UnknownTxTarget(reason="unsupported")
+        # MOR-4433: the ``FT;`` read is the TX target's own read, and the TX
+        # target is not safety-critical — an unanswered read counts toward
+        # nothing. The timeout stays uncaught here; ``_read_tx_target``
+        # contains it as ``not-observed`` so the medium cycle survives.
+        try:
+            tx_func = await method()
+        except CatCommandRejected:
+            # Gate P2 (MOR-4433): the profile declares the source and the
+            # radio refused the read (?;), so the source exists and only
+            # the answer is missing. It reports not-observed — never
+            # unsupported, which is reserved for a source that does not
+            # exist at all — instead of aborting the whole medium poll
+            # batch.
+            return UnknownTxTarget(reason="not-observed")
+        except (
+            AttributeError,
+            NotImplementedError,
+            CommandError,
+        ):
+            # CommandError is the absent/unsupported-command refusal: _query
+            # raises it before any wire traffic when the profile declares
+            # no get_tx_func. It reports unsupported instead of aborting
+            # the whole medium poll batch.
+            return UnknownTxTarget(reason="unsupported")
+        except (CatParseError, CatFormatError, ValueError, KeyError):
+            return UnknownTxTarget(reason="contradiction")
+        if tx_func is None:
+            return UnknownTxTarget(reason="not-observed")
+        if type(tx_func) is not int or tx_func not in (0, 1):
+            return UnknownTxTarget(reason="contradiction")
+        return tx_func
+
+    async def _read_tx_target(self) -> TxTarget:
+        """Bracket the selected frequency with stable native FT authority.
+
+        MOR-4433: the TX target is not startup-critical — a timeout of any
+        of its own reads (either ``FT;`` bracket, the bracketed frequency)
+        is contained here as ``not-observed``. The medium cycle then keeps
+        the observations it already accumulated and still reads PTT. A
+        genuinely dead link needs no new counting here: the cycle's earlier
+        critical reads re-raise (and count) their own timeouts through
+        ``_safe_read``, and the transport's own error streak — the one the
+        poller's reconnect reads — is never grown by a lone silent ``FT;``
+        (a timeout only bumps ``timeouts``; every answered read resets the
+        streak), so a silent TX target can neither abort nor wedge startup.
+        """
+        if not self._has_runtime_capability("tx"):
+            return UnknownTxTarget(reason="unsupported")
+        stats = getattr(getattr(self.radio, "_transport", None), "stats", None)
+        reconnects = getattr(stats, "reconnects", 0)
+        generation = (
+            self.profile.provider,
+            reconnects if type(reconnects) is int else 0,
+        )
+        try:
+            before = await self._read_tx_func()
+            if isinstance(before, UnknownTxTarget):
+                return before
+            ok, raw_frequency = await self._safe_read(
+                "tx_target.freq",
+                self.radio.read_freq(before),
+                lambda: self.radio.read_freq(before),
+            )
+            after = await self._read_tx_func()
+        except CatTimeoutError:
+            return UnknownTxTarget(reason="not-observed")
+        current_reconnects = getattr(stats, "reconnects", 0)
+        current_generation = (
+            self.profile.provider,
+            current_reconnects if type(current_reconnects) is int else 0,
+        )
+        if generation != current_generation:
+            return UnknownTxTarget(reason="not-observed")
+        if isinstance(after, UnknownTxTarget):
+            return after
+        if after != before:
+            return UnknownTxTarget(reason="contradiction")
+        frequency = (
+            raw_frequency
+            if ok and type(raw_frequency) is int and raw_frequency > 0
+            else None
+        )
+        # The FT answer's meaning is profile-declared ([vfo.tx_func]):
+        # MAIN/SUB on dual-receiver profiles, MAIN with the A/B slot on
+        # single-receiver ab profiles. No hard-coded mapping lives here.
+        spec = self.radio.profile.tx_func
+        if spec is None:
+            return UnknownTxTarget(reason="unsupported")
+        mapping = spec.read_map.get(str(before))
+        if mapping is None:
+            return UnknownTxTarget(reason="contradiction")
+        return KnownTxTarget(
+            receiver=cast(TxReceiver, mapping.receiver),
+            slot=cast(TxSlot | None, mapping.slot),
+            frequency_hz=frequency,
+        )
+
+    async def poll_rx_meters(
+        self,
+        *,
+        smooth_s_meter: Callable[[int, int], int] | None = None,
+    ) -> tuple[Observation, ...]:
+        adapter = self._adapter()
+        observations: list[Observation] = []
+        if self._has_runtime_capability("meters") and self._can_poll(_MAIN_S_METER):
+            ok, raw = await self._safe_read(
+                "main.s_meter",
+                self.radio.read_s_meter(0),
+                lambda: self.radio.read_s_meter(0),
+                paths=(_MAIN_S_METER,),
+            )
+            if ok and raw is not None:
+                raw = smooth_s_meter(0, raw) if smooth_s_meter is not None else raw
+                value, quality = self._calibrate_s_meter(raw)
+                observations.append(
+                    adapter.observation(
+                        _MAIN_S_METER,
+                        value,
+                        native_id="read_s_meter",
+                        quality=quality,
+                    )
+                )
+        if (
+            self._has_runtime_capability("meters")
+            and self._has_runtime_capability("dual_rx")
+            and self._can_poll(_SUB_S_METER)
+            and self._available(_SUB_S_METER)
+        ):
+            ok, raw = await self._safe_read(
+                "sub.s_meter",
+                self.radio.read_s_meter(1),
+                lambda: self.radio.read_s_meter(1),
+                paths=(_SUB_S_METER,),
+            )
+            if ok and raw is not None:
+                raw = smooth_s_meter(1, raw) if smooth_s_meter is not None else raw
+                value, quality = self._calibrate_s_meter(raw)
+                observations.append(
+                    adapter.observation(
+                        _SUB_S_METER,
+                        value,
+                        native_id="read_s_meter",
+                        quality=quality,
+                    )
+                )
+        return tuple(observations)
+
+    def _calibrate_s_meter(self, raw: int) -> tuple[int, tuple[str, ...]]:
+        profile = getattr(self.radio, "profile", None)
+        meter_calibrations = getattr(profile, "meter_calibrations", None)
+        if not isinstance(meter_calibrations, dict):
+            return int(raw), ("confirmed", "uncalibrated")
+        value, calibrated = interpolate_meter(raw, meter_calibrations, "s_meter")
+        return (
+            int(round(value)),
+            ("confirmed", "calibrated" if calibrated else "uncalibrated"),
+        )
+
+    def _calibrate_meter(
+        self, raw: int, meter_key: str
+    ) -> tuple[int | float, tuple[str, ...]]:
+        profile = getattr(self.radio, "profile", None)
+        meter_calibrations = getattr(profile, "meter_calibrations", None)
+        if not isinstance(meter_calibrations, dict):
+            return int(raw), ("confirmed", "uncalibrated")
+        value, calibrated = interpolate_meter(raw, meter_calibrations, meter_key)
+        if not calibrated:
+            return int(raw), ("confirmed", "uncalibrated")
+        if meter_key == "alc":
+            value = value / 100.0
+        return value, ("confirmed", "calibrated")
+
+    def _normalize_level_255(self, value: object) -> object:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return float(value) / 255.0
+        return value
+
+    def _normalize_power_level(self, watts: object) -> float | None:
+        profile = getattr(self.radio, "profile", None)
+        max_watts = getattr(profile, "max_watts", None)
+        if isinstance(max_watts, bool) or not isinstance(max_watts, (int, float)):
+            self._log_field_skip(
+                "power_level",
+                "Skipping field %s — invalid power metadata: %s",
+                ValueError(f"max_watts must be a positive number, got {max_watts!r}"),
+            )
+            return None
+        if max_watts <= 0:
+            self._log_field_skip(
+                "power_level",
+                "Skipping field %s — invalid power metadata: %s",
+                ValueError(f"max_watts must be > 0, got {max_watts!r}"),
+            )
+            return None
+        if isinstance(watts, bool) or not isinstance(watts, (int, float)):
+            self._log_field_skip(
+                "power_level",
+                "Skipping field %s — invalid CAT value: %s",
+                ValueError(f"watts must be numeric, got {watts!r}"),
+            )
+            return None
+        return float(watts) / float(max_watts)
+
+    async def poll_tx_meters(self) -> tuple[Observation, ...]:
+        adapter = self._adapter()
+        observations: list[Observation] = []
+        # ALC is a stream-like TX meter (MOR-448), emitted in the same lane and
+        # under the same meter freshness/coalescing policy as power/swr.
+        if self._has_runtime_capability("meters") and self._can_poll(_ALC_METER):
+            ok, raw = await self._safe_read(
+                "alc",
+                self.radio.read_alc_meter(),
+                lambda: self.radio.read_alc_meter(),
+                paths=(_ALC_METER,),
+            )
+            if ok and raw is not None:
+                value, quality = self._calibrate_meter(raw, "alc")
+                observations.append(
+                    adapter.observation(
+                        _ALC_METER,
+                        value,
+                        native_id="read_alc_meter",
+                        quality=quality,
+                    )
+                )
+        if self._has_runtime_capability("meters") and self._can_poll(_POWER_METER):
+            ok, raw = await self._safe_read(
+                "power",
+                self.radio.read_power_meter(),
+                lambda: self.radio.read_power_meter(),
+                paths=(_POWER_METER,),
+            )
+            if ok and raw is not None:
+                value, quality = self._calibrate_meter(raw, "power")
+                observations.append(
+                    adapter.observation(
+                        _POWER_METER,
+                        value,
+                        native_id="read_power_meter",
+                        quality=quality,
+                    )
+                )
+        if self._has_runtime_capability("meters") and self._can_poll(_SWR_METER):
+            ok, raw = await self._safe_read(
+                "swr",
+                self.radio.read_swr_meter(),
+                lambda: self.radio.read_swr_meter(),
+                paths=(_SWR_METER,),
+            )
+            if ok and raw is not None:
+                value, quality = self._calibrate_meter(raw, "swr")
+                observations.append(
+                    adapter.observation(
+                        _SWR_METER,
+                        value,
+                        native_id="read_swr_meter",
+                        quality=quality,
+                    )
+                )
+        # COMP is the cross-vendor PA meter (MOR-460), emitted in the same lane
+        # and under the same meter freshness/coalescing policy as alc/power/swr.
+        if self._has_runtime_capability("meters") and self._can_poll(_COMP_METER):
+            ok, raw = await self._safe_read(
+                "comp",
+                self.radio.read_comp_meter(),
+                lambda: self.radio.read_comp_meter(),
+                paths=(_COMP_METER,),
+            )
+            if ok and raw is not None:
+                value, quality = self._calibrate_meter(raw, "comp")
+                observations.append(
+                    adapter.observation(
+                        _COMP_METER,
+                        value,
+                        native_id="read_comp_meter",
+                        quality=quality,
+                    )
+                )
+        return tuple(observations)
+
+    async def poll_slow_controls(self) -> tuple[Observation, ...]:
+        adapter = self._adapter()
+        observations: list[Observation] = []
+        if self._can_poll(_DUAL_WATCH):
+            ok, mode = await self._safe_read(
+                "main.rx_func",
+                self.radio.get_rx_func(),
+                lambda: self.radio.get_rx_func(),
+                paths=(_DUAL_WATCH,),
+            )
+            if ok and mode is not None:
+                observations.append(
+                    adapter.observation(_DUAL_WATCH, mode == 0, native_id="get_rx_func")
+                )
+        if self._has_runtime_capability("af_level") and self._can_poll(_MAIN_AF):
+            ok, value = await self._safe_read(
+                "main.af_level",
+                self.radio.read_af_level(0),
+                lambda: self.radio.read_af_level(0),
+                paths=(_MAIN_AF,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _MAIN_AF,
+                        self._normalize_level_255(value),
+                        native_id="read_af_level",
+                    )
+                )
+        if self._has_runtime_capability("rf_gain") and self._can_poll(_MAIN_RF):
+            ok, value = await self._safe_read(
+                "main.rf_gain",
+                self.radio.read_rf_gain(0),
+                lambda: self.radio.read_rf_gain(0),
+                paths=(_MAIN_RF,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _MAIN_RF,
+                        self._normalize_level_255(value),
+                        native_id="read_rf_gain",
+                    )
+                )
+        if self._has_runtime_capability("squelch") and self._can_poll(_MAIN_SQL):
+            ok, value = await self._safe_read(
+                "main.squelch",
+                self.radio.read_squelch(0),
+                lambda: self.radio.read_squelch(0),
+                paths=(_MAIN_SQL,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _MAIN_SQL,
+                        self._normalize_level_255(value),
+                        native_id="read_squelch",
+                    )
+                )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._has_runtime_capability("af_level")
+            and self._can_poll(_SUB_AF)
+            and self._available(_SUB_AF)
+        ):
+            ok, value = await self._safe_read(
+                "sub.af_level",
+                self.radio.read_af_level(1),
+                lambda: self.radio.read_af_level(1),
+                paths=(_SUB_AF,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _SUB_AF,
+                        self._normalize_level_255(value),
+                        native_id="read_af_level",
+                    )
+                )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._has_runtime_capability("rf_gain")
+            and self._can_poll(_SUB_RF)
+            and self._available(_SUB_RF)
+        ):
+            ok, value = await self._safe_read(
+                "sub.rf_gain",
+                self.radio.read_rf_gain(1),
+                lambda: self.radio.read_rf_gain(1),
+                paths=(_SUB_RF,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _SUB_RF,
+                        self._normalize_level_255(value),
+                        native_id="read_rf_gain",
+                    )
+                )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._has_runtime_capability("squelch")
+            and self._can_poll(_SUB_SQL)
+            and self._available(_SUB_SQL)
+        ):
+            ok, value = await self._safe_read(
+                "sub.squelch",
+                self.radio.read_squelch(1),
+                lambda: self.radio.read_squelch(1),
+                paths=(_SUB_SQL,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _SUB_SQL,
+                        self._normalize_level_255(value),
+                        native_id="read_squelch",
+                    )
+                )
+        # RF front-end + AGC (MOR-443). ATT/preamp gate on their runtime
+        # capabilities (matching the legacy poller's ``attenuator`` /
+        # ``preamp`` gates) and stay MAIN-only (no RA1/PA1 form); AGC has
+        # no FTX-1 capability tag and is polled unconditionally (gated by
+        # policy only), mirroring the legacy poller. The SUB AGC read
+        # (MOR-2511) answers SUB's own value in single receive (bench
+        # 2026-09-18, comment 01:22Z) and carries the ``dual_rx`` +
+        # ``_can_poll``/``_available`` guards of the other SUB reads.
+        # The ``RA0`` attenuator read returns a bool; the int registry path
+        # receives the coerced ``int(on_off)`` (0/1) — no scaling beyond the
+        # bool→int match (cross-vendor calibration is MOR-453).
+        if (
+            self._has_runtime_capability("attenuator")
+            and self._can_poll(_MAIN_ATT)
+            and self._available(_MAIN_ATT)
+        ):
+            ok, value = await self._safe_read(
+                "main.att",
+                self.radio.read_attenuator(0),
+                lambda: self.radio.read_attenuator(0),
+                paths=(_MAIN_ATT,),
+            )
+            if ok and value is not None:
+                observations.append(
+                    adapter.observation(
+                        _MAIN_ATT, int(value), native_id="read_attenuator"
+                    )
+                )
+        if self._has_runtime_capability("preamp") and self._can_poll(_MAIN_PREAMP):
+            ok, value = await self._safe_read(
+                "main.preamp",
+                self.radio.read_preamp(0),
+                lambda: self.radio.read_preamp(0),
+                paths=(_MAIN_PREAMP,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_MAIN_PREAMP, value, native_id="read_preamp")
+                )
+        if self._can_poll(_MAIN_AGC):
+            ok, value = await self._safe_read(
+                "main.agc",
+                self.radio.read_agc(0),
+                lambda: self.radio.read_agc(0),
+                paths=(_MAIN_AGC,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_MAIN_AGC, value, native_id="read_agc")
+                )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._can_poll(_SUB_AGC)
+            and self._available(_SUB_AGC)
+        ):
+            ok, value = await self._safe_read(
+                "sub.agc",
+                self.radio.read_agc(1),
+                lambda: self.radio.read_agc(1),
+                paths=(_SUB_AGC,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_SUB_AGC, value, native_id="read_agc")
+                )
+        # IF-shift / narrow (MOR-445). IF-shift gates on the ``if_shift``
+        # capability (matching the legacy poller's ``if_shift`` gate); narrow
+        # has no FTX-1 capability tag and is polled unconditionally (gated by
+        # policy only), mirroring the legacy poller's "always — lightweight
+        # query" treatment, like AGC. The SUB reads (MOR-2511) answer their
+        # own value in single receive (bench 2026-09-18). Every SUB read
+        # carries ``dual_rx`` + the control's capability where its MAIN twin
+        # has one (narrow has none) + ``_can_poll``/``_available`` per field,
+        # matching the AF/RF/SQL SUB guards.
+        if self._has_runtime_capability("if_shift") and self._can_poll(_MAIN_IF_SHIFT):
+            ok, value = await self._safe_read(
+                "main.if_shift",
+                self.radio.read_if_shift(0),
+                lambda: self.radio.read_if_shift(0),
+                paths=(_MAIN_IF_SHIFT,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _MAIN_IF_SHIFT, value, native_id="read_if_shift"
+                    )
+                )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._has_runtime_capability("if_shift")
+            and self._can_poll(_SUB_IF_SHIFT)
+            and self._available(_SUB_IF_SHIFT)
+        ):
+            ok, value = await self._safe_read(
+                "sub.if_shift",
+                self.radio.read_if_shift(1),
+                lambda: self.radio.read_if_shift(1),
+                paths=(_SUB_IF_SHIFT,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_SUB_IF_SHIFT, value, native_id="read_if_shift")
+                )
+        if self._can_poll(_MAIN_NARROW):
+            ok, value = await self._safe_read(
+                "main.narrow",
+                self.radio.read_narrow(0),
+                lambda: self.radio.read_narrow(0),
+                paths=(_MAIN_NARROW,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_MAIN_NARROW, value, native_id="read_narrow")
+                )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._can_poll(_SUB_NARROW)
+            and self._available(_SUB_NARROW)
+        ):
+            ok, value = await self._safe_read(
+                "sub.narrow",
+                self.radio.read_narrow(1),
+                lambda: self.radio.read_narrow(1),
+                paths=(_SUB_NARROW,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_SUB_NARROW, value, native_id="read_narrow")
+                )
+        # NB/NR levels + derived toggles, auto/manual notch (MOR-444). NB/NR
+        # gate on their runtime capabilities (matching the legacy poller's
+        # ``nb``/``nr`` gates); both notch controls gate on the ``notch``
+        # capability (matching the poller's ``notch`` gate). The ``nb``/``nr``
+        # toggles are DERIVED from the level read in the same cycle
+        # (``level > 0``), a single CAT read each — exactly as the legacy
+        # poller derives them; no second query. The SUB reads (MOR-2511)
+        # answer their own value in single receive (bench 2026-09-18).
+        if self._has_runtime_capability("nb"):
+            ok, nb_level = await self._safe_read(
+                "main.nb_level",
+                self.radio.read_nb_level(0),
+                lambda: self.radio.read_nb_level(0),
+                paths=(_MAIN_NB_LEVEL, _MAIN_NB),
+            )
+            if ok and nb_level is not None:
+                if self._can_poll(_MAIN_NB_LEVEL):
+                    observations.append(
+                        adapter.observation(
+                            _MAIN_NB_LEVEL,
+                            nb_level,
+                            native_id="read_nb_level",
+                        )
+                    )
+                if self._can_poll(_MAIN_NB):
+                    observations.append(
+                        adapter.observation(
+                            _MAIN_NB,
+                            nb_level > 0,
+                            native_id="read_nb_level",
+                        )
+                    )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._has_runtime_capability("nb")
+            and self._can_poll(_SUB_NB_LEVEL)
+            and self._available(_SUB_NB_LEVEL)
+        ):
+            ok, nb_level = await self._safe_read(
+                "sub.nb_level",
+                self.radio.read_nb_level(1),
+                lambda: self.radio.read_nb_level(1),
+                paths=(_SUB_NB_LEVEL, _SUB_NB),
+            )
+            if ok and nb_level is not None:
+                if self._can_poll(_SUB_NB_LEVEL):
+                    observations.append(
+                        adapter.observation(
+                            _SUB_NB_LEVEL,
+                            nb_level,
+                            native_id="read_nb_level",
+                        )
+                    )
+                if self._can_poll(_SUB_NB):
+                    observations.append(
+                        adapter.observation(
+                            _SUB_NB,
+                            nb_level > 0,
+                            native_id="read_nb_level",
+                        )
+                    )
+        if self._has_runtime_capability("nr"):
+            ok, nr_level = await self._safe_read(
+                "main.nr_level",
+                self.radio.read_nr_level(0),
+                lambda: self.radio.read_nr_level(0),
+                paths=(_MAIN_NR_LEVEL, _MAIN_NR),
+            )
+            if ok and nr_level is not None:
+                if self._can_poll(_MAIN_NR_LEVEL):
+                    observations.append(
+                        adapter.observation(
+                            _MAIN_NR_LEVEL,
+                            nr_level,
+                            native_id="read_nr_level",
+                        )
+                    )
+                if self._can_poll(_MAIN_NR):
+                    observations.append(
+                        adapter.observation(
+                            _MAIN_NR,
+                            nr_level > 0,
+                            native_id="read_nr_level",
+                        )
+                    )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._has_runtime_capability("nr")
+            and self._can_poll(_SUB_NR_LEVEL)
+            and self._available(_SUB_NR_LEVEL)
+        ):
+            ok, nr_level = await self._safe_read(
+                "sub.nr_level",
+                self.radio.read_nr_level(1),
+                lambda: self.radio.read_nr_level(1),
+                paths=(_SUB_NR_LEVEL, _SUB_NR),
+            )
+            if ok and nr_level is not None:
+                if self._can_poll(_SUB_NR_LEVEL):
+                    observations.append(
+                        adapter.observation(
+                            _SUB_NR_LEVEL,
+                            nr_level,
+                            native_id="read_nr_level",
+                        )
+                    )
+                if self._can_poll(_SUB_NR):
+                    observations.append(
+                        adapter.observation(
+                            _SUB_NR,
+                            nr_level > 0,
+                            native_id="read_nr_level",
+                        )
+                    )
+        if self._has_runtime_capability("notch") and self._can_poll(_MAIN_AUTO_NOTCH):
+            ok, value = await self._safe_read(
+                "main.auto_notch",
+                self.radio.read_auto_notch(0),
+                lambda: self.radio.read_auto_notch(0),
+                paths=(_MAIN_AUTO_NOTCH,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _MAIN_AUTO_NOTCH, value, native_id="read_auto_notch"
+                    )
+                )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._has_runtime_capability("notch")
+            and self._can_poll(_SUB_AUTO_NOTCH)
+            and self._available(_SUB_AUTO_NOTCH)
+        ):
+            ok, value = await self._safe_read(
+                "sub.auto_notch",
+                self.radio.read_auto_notch(1),
+                lambda: self.radio.read_auto_notch(1),
+                paths=(_SUB_AUTO_NOTCH,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _SUB_AUTO_NOTCH, value, native_id="read_auto_notch"
+                    )
+                )
+        if self._has_runtime_capability("notch") and self._can_poll(_MAIN_MANUAL_NOTCH):
+            ok, value = await self._safe_read(
+                "main.manual_notch",
+                self.radio.read_manual_notch(0),
+                lambda: self.radio.read_manual_notch(0),
+                paths=(_MAIN_MANUAL_NOTCH,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _MAIN_MANUAL_NOTCH, value, native_id="read_manual_notch"
+                    )
+                )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._has_runtime_capability("notch")
+            and self._can_poll(_SUB_MANUAL_NOTCH)
+            and self._available(_SUB_MANUAL_NOTCH)
+        ):
+            ok, value = await self._safe_read(
+                "sub.manual_notch",
+                self.radio.read_manual_notch(1),
+                lambda: self.radio.read_manual_notch(1),
+                paths=(_SUB_MANUAL_NOTCH,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _SUB_MANUAL_NOTCH, value, native_id="read_manual_notch"
+                    )
+                )
+        if (
+            self._has_runtime_capability("notch")
+            and self._can_poll(_MAIN_MANUAL_NOTCH_FREQ)
+            and self._available(_MAIN_MANUAL_NOTCH_FREQ)
+        ):
+            ok, value = await self._safe_read(
+                "main.manual_notch_freq",
+                self.radio.read_manual_notch_freq(0),
+                lambda: self.radio.read_manual_notch_freq(0),
+                paths=(_MAIN_MANUAL_NOTCH_FREQ,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _MAIN_MANUAL_NOTCH_FREQ,
+                        value,
+                        native_id="read_manual_notch_freq",
+                    )
+                )
+        if (
+            self._has_runtime_capability("dual_rx")
+            and self._has_runtime_capability("notch")
+            and self._can_poll(_SUB_MANUAL_NOTCH_FREQ)
+            and self._available(_SUB_MANUAL_NOTCH_FREQ)
+        ):
+            ok, value = await self._safe_read(
+                "sub.manual_notch_freq",
+                self.radio.read_manual_notch_freq(1),
+                lambda: self.radio.read_manual_notch_freq(1),
+                paths=(_SUB_MANUAL_NOTCH_FREQ,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _SUB_MANUAL_NOTCH_FREQ,
+                        value,
+                        native_id="read_manual_notch_freq",
+                    )
+                )
+        # Tone / CTCSS squelch-type (MOR-457, corrected MOR-2130) —
+        # per-receiver ``operator_toggles``, grouped with the other receiver
+        # toggles (nb/nr/auto_notch/manual_notch) above. Each receiver's
+        # ``read_sql_type(receiver)`` CAT ``CT`` read (FTX-1_CAT_OM_ENG_2508-C,
+        # P1=0 MAIN / P1=1 SUB) yields that side's P2 "SQL TYPE" code, from
+        # which the two independent neutral CTCSS booleans are DERIVED per
+        # ``RepeaterControlCapable``'s own docstrings (see the module-level
+        # mapping comment): code 1 -> encode only, code 2 -> encode AND decode
+        # (both True), codes 0 -> both False, codes 3/4/5 (DCS / PR FREQ /
+        # REV TONE) -> both None ("observed, not known"; MOR-2572 — the
+        # two-boolean vocabulary cannot represent them, and a False pair
+        # would invent OFF). Both paths are emitted every cycle (incl. the
+        # False/None derivations) so the store always reflects current
+        # state. Gated on the ``sql_type`` runtime capability
+        # (``CAP_SQL_TYPE``), a dedicated readback capability: ``"ctcss"`` is
+        # not a known capability tag (rejected by the rig loader). CT0 and CT1
+        # are read independently, so a failing side's defect names only that
+        # side's paths and skips only that side's emissions — the other side
+        # still publishes (same read shape as the ``OS`` routes below); the
+        # SUB read rides the ``dual_rx`` capability. Each emission is gated
+        # independently by per-field policy.
+        if self._has_runtime_capability("sql_type"):
+            ct_routes = (
+                (
+                    0,
+                    "main",
+                    _MAIN_REPEATER_TONE,
+                    _MAIN_REPEATER_TSQL,
+                    _MAIN_TONE_SQUELCH_TYPE,
+                ),
+            )
+            if self._has_runtime_capability("dual_rx"):
+                ct_routes += (
+                    (
+                        1,
+                        "sub",
+                        _SUB_REPEATER_TONE,
+                        _SUB_REPEATER_TSQL,
+                        _SUB_TONE_SQUELCH_TYPE,
+                    ),
+                )
+            types = self.radio.profile.tone_squelch_types or {}
+            for receiver, label, tone_path, tsql_path, type_path in ct_routes:
+
+                async def _remake_sql_type() -> int:
+                    return await self.radio.read_sql_type(receiver)
+
+                ok, sql_type = await self._safe_read(
+                    f"{label}.sql_type",
+                    self.radio.read_sql_type(receiver),
+                    _remake_sql_type,
+                    paths=(tone_path, tsql_path, type_path),
+                )
+                if ok and sql_type is not None:
+                    tone_squelch_type = types.get(sql_type)
+                    tone_value, tsql_value = ctcss_booleans_for_tone_squelch_type(
+                        tone_squelch_type
+                    )
+                    if self._can_poll(tone_path):
+                        observations.append(
+                            adapter.observation(
+                                tone_path,
+                                tone_value,
+                                native_id="read_sql_type",
+                            )
+                        )
+                    if self._can_poll(tsql_path):
+                        observations.append(
+                            adapter.observation(
+                                tsql_path,
+                                tsql_value,
+                                native_id="read_sql_type",
+                            )
+                        )
+                    if self._can_poll(type_path):
+                        observations.append(
+                            adapter.observation(
+                                type_path,
+                                None
+                                if tone_squelch_type is None
+                                else tone_squelch_type.value,
+                                native_id="read_sql_type",
+                            )
+                        )
+        # CTCSS tone FREQUENCY (MOR-458) — per-receiver ``operator_controls``,
+        # grouped with the CTCSS squelch-type toggles above. Each receiver's
+        # ``read_ctcss_tone_index(receiver)`` CAT ``CN`` read
+        # (FTX-1_CAT_OM_ENG_2508-C, P1=0 MAIN / P1=1 SUB) yields that side's
+        # 0-49 standard-EIA tone-chart index, which ``_ctcss_index_to_centihz``
+        # maps through the active profile's resolved catalog domain. The
+        # neutral unit is centiHz = round(Hz * 100), matching the Icom MOR-451
+        # convention so consumers see one unit. SINGLE-YAESU-TONE: the FTX-1
+        # has ONE CTCSS tone frequency (CN P2=0) used for BOTH encode (TONE)
+        # and decode (TSQL) — Icom can carry distinct freqs, Yaesu cannot — so
+        # the SAME centiHz value is emitted to BOTH tone_freq and tsql_freq
+        # from one read per receiver. Emitted ALWAYS (the configured setpoint,
+        # like Icom's tone_freq readback), independent of whether CTCSS is
+        # currently active. Gated on the same ``sql_type`` readback capability
+        # as the CTCSS toggles (the FTX-1 CTCSS readback surface); CN00 and
+        # CN10 are read independently, mirroring the ``OS`` routes below, and
+        # the SUB read rides the ``dual_rx`` capability. DCS (CN P2=1) is a
+        # documented limitation: NO neutral DCS path is emitted.
+        if self._has_runtime_capability("sql_type"):
+            cn_routes = ((_MAIN_TONE_FREQ, _MAIN_TSQL_FREQ, 0, "main"),)
+            if self._has_runtime_capability("dual_rx"):
+                cn_routes += ((_SUB_TONE_FREQ, _SUB_TSQL_FREQ, 1, "sub"),)
+            for tone_path, tsql_path, receiver, label in cn_routes:
+
+                async def _remake_tone_index() -> int:
+                    return await self.radio.read_ctcss_tone_index(receiver)
+
+                ok, tone_index = await self._safe_read(
+                    f"{label}.ctcss_tone_index",
+                    self.radio.read_ctcss_tone_index(receiver),
+                    _remake_tone_index,
+                    paths=(tone_path, tsql_path),
+                )
+                if ok and tone_index is not None:
+                    try:
+                        tone_centihz = _ctcss_index_to_centihz(
+                            tone_index,
+                            domain=self.radio.profile.ctcss_tones_centihz,
+                        )
+                    except ValueError as exc:
+                        logger.warning(
+                            "Skipping CTCSS observations for invalid profile domain: %s",
+                            exc,
+                        )
+                        tone_centihz = None
+                    if tone_centihz is not None:
+                        if self._can_poll(tone_path):
+                            observations.append(
+                                adapter.observation(
+                                    tone_path,
+                                    tone_centihz,
+                                    native_id="read_ctcss_tone_index",
+                                )
+                            )
+                        if self._can_poll(tsql_path):
+                            observations.append(
+                                adapter.observation(
+                                    tsql_path,
+                                    tone_centihz,
+                                    native_id="read_ctcss_tone_index",
+                                )
+                            )
+        # Repeater shift direction (MOR-2111/MOR-2160). OS0 and OS1 are read
+        # independently so one side's malformed/rejected answer never hides
+        # or relabels the other side. P2 is already the neutral 0-3 value.
+        if self._has_runtime_capability("repeater_shift"):
+            receiver_paths = ((0, "main", _MAIN_REPEATER_SHIFT),)
+            if self._has_runtime_capability("dual_rx"):
+                receiver_paths += ((1, "sub", _SUB_REPEATER_SHIFT),)
+            for receiver, label, path in receiver_paths:
+                if self._can_poll(path) and self._available(path):
+
+                    async def _remake_shift() -> int:
+                        return await self.radio.read_repeater_shift(receiver)
+
+                    ok, shift_code = await self._safe_read(
+                        f"{label}.repeater_shift",
+                        self.radio.read_repeater_shift(receiver),
+                        _remake_shift,
+                        paths=(path,),
+                    )
+                    if ok and shift_code is not None:
+                        observations.append(
+                            adapter.observation(
+                                path,
+                                shift_code,
+                                native_id="read_repeater_shift",
+                            )
+                        )
+        # active-slot (MOR-446) — the GLOBAL "which receiver is active" field.
+        # Polled unconditionally (gated by policy only), mirroring the legacy
+        # poller's always-on ``get_vfo_select`` read, like AGC/narrow. The
+        # ``VS`` index (0=MAIN, 1=SUB) is coerced to the neutral
+        # ``global.slow_state.active`` ``"MAIN"``/``"SUB"`` str.
+        if self._can_poll(_ACTIVE):
+            ok, index = await self._safe_read(
+                "active",
+                self.radio.read_vfo_select(),
+                lambda: self.radio.read_vfo_select(),
+                paths=(_ACTIVE,),
+            )
+            if ok and index is not None:
+                observations.append(
+                    adapter.observation(
+                        _ACTIVE,
+                        _ACTIVE_INDEX_TO_STR.get(index, "MAIN"),
+                        native_id="read_vfo_select",
+                    )
+                )
+        # CW spot (MOR-456) — GLOBAL slow_state bool (CAT ``CS``), gated on the
+        # legacy poller's single ``"cw" in caps`` gate (the same block that feeds
+        # key_speed/cw_pitch/break_in). Emitted in the slow-control lane beside
+        # ``slow_state.active``, the only other global slow_state observation.
+        if self._has_runtime_capability("cw") and self._can_poll(_CW_SPOT):
+            ok, value = await self._safe_read(
+                "cw_spot",
+                self.radio.read_cw_spot(),
+                lambda: self.radio.read_cw_spot(),
+                paths=(_CW_SPOT,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _CW_SPOT,
+                        bool(value),
+                        native_id="read_cw_spot",
+                    )
+                )
+        # Drain voltage / current (MOR-2425/T147; CAT ``RM8``/``RM7``). Read in
+        # this always-running lane rather than the PTT-gated ``poll_tx_meters``
+        # — the 2026-09-08 bench probe got an answer to both while receiving.
+        # ``get_vd_meter``/``get_id_meter`` route through ``_read_meter`` and do
+        # not mutate legacy state, so no ``read_*`` twin is needed. Scaled by
+        # the profile's ``[[meters.vd|id.calibration]]`` tables under the same
+        # ``_calibrate_meter`` the other meters use.
+        if self._has_runtime_capability("meters") and self._can_poll(_VD_METER):
+            ok, raw = await self._safe_read(
+                "vd",
+                self.radio.get_vd_meter(),
+                lambda: self.radio.get_vd_meter(),
+                paths=(_VD_METER,),
+            )
+            if ok and raw is not None:
+                value, quality = self._calibrate_meter(raw, "vd")
+                observations.append(
+                    adapter.observation(
+                        _VD_METER,
+                        value,
+                        native_id="get_vd_meter",
+                        quality=quality,
+                    )
+                )
+        if self._has_runtime_capability("meters") and self._can_poll(_ID_METER):
+            ok, raw = await self._safe_read(
+                "id",
+                self.radio.get_id_meter(),
+                lambda: self.radio.get_id_meter(),
+                paths=(_ID_METER,),
+            )
+            if ok and raw is not None:
+                value, quality = self._calibrate_meter(raw, "id")
+                observations.append(
+                    adapter.observation(
+                        _ID_METER,
+                        value,
+                        native_id="get_id_meter",
+                        quality=quality,
+                    )
+                )
+        return tuple(observations)
+
+    async def poll_tx_controls(self) -> tuple[Observation, ...]:
+        """Emit global TX / operator-control setpoints (MOR-447).
+
+        Mirrors the per-receiver ``poll_slow_controls`` lane but covers
+        the GLOBAL-scoped TX setpoints (power, mic gain, compressor,
+        VOX). Each emission is gated by BOTH a runtime capability and the
+        profile's per-field ``can_poll`` policy, matching the legacy
+        poller's capability gates (``tx`` for power, unconditional mic
+        gain, ``vox``, ``compressor`` for both compressor fields).
+
+        ``power_level`` is the watt SETPOINT (CAT ``PC``), distinct from
+        the ``global.meters.power`` meter handled by ``poll_tx_meters``.
+        """
+        adapter = self._adapter()
+        observations: list[Observation] = []
+        if self._has_runtime_capability("tx") and self._can_poll(_POWER_LEVEL):
+            ok, result = await self._safe_read(
+                "power_level",
+                self.radio.read_power(),
+                lambda: self.radio.read_power(),
+                paths=(_POWER_LEVEL,),
+            )
+            if ok and result is not None:
+                normalized = self._normalize_power_level(result[1])
+                if normalized is not None:
+                    observations.append(
+                        adapter.observation(
+                            _POWER_LEVEL,
+                            normalized,
+                            native_id="read_power",
+                        )
+                    )
+        if self._can_poll(_MIC_GAIN):
+            ok, value = await self._safe_read(
+                "mic_gain",
+                self.radio.read_mic_gain(),
+                lambda: self.radio.read_mic_gain(),
+                paths=(_MIC_GAIN,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_MIC_GAIN, value, native_id="read_mic_gain")
+                )
+        if self._has_runtime_capability("compressor") and self._can_poll(
+            _COMPRESSOR_ON
+        ):
+            ok, value = await self._safe_read(
+                "compressor_on",
+                self.radio.read_processor(),
+                lambda: self.radio.read_processor(),
+                paths=(_COMPRESSOR_ON,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _COMPRESSOR_ON, value, native_id="read_processor"
+                    )
+                )
+        if self._has_runtime_capability("compressor") and self._can_poll(
+            _COMPRESSOR_LEVEL
+        ):
+            ok, value = await self._safe_read(
+                "compressor_level",
+                self.radio.read_processor_level(),
+                lambda: self.radio.read_processor_level(),
+                paths=(_COMPRESSOR_LEVEL,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _COMPRESSOR_LEVEL, value, native_id="read_processor_level"
+                    )
+                )
+        if self._has_runtime_capability("vox") and self._can_poll(_VOX_ON):
+            ok, value = await self._safe_read(
+                "vox",
+                self.radio.read_vox(),
+                lambda: self.radio.read_vox(),
+                paths=(_VOX_ON,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_VOX_ON, value, native_id="read_vox")
+                )
+        # split (MOR-446) — GLOBAL tx_state bool (CAT ``ST``), gated on the
+        # ``split`` runtime capability, mirroring the legacy poller's
+        # ``"split" in caps`` gate. MOR-4456: an unanswered split read is
+        # contained as an absent observation within its field (the
+        # MOR-4433 ``_read_tx_target`` containment shape) — the completed
+        # fields and the reads after split still reach the store. Split
+        # left the critical set, so the contained timeout counts nothing
+        # and a refused/malformed read records no defect: the gate serves
+        # split unknown after the deadline instead of ending startup.
+        if self._has_runtime_capability("split") and self._can_poll(_SPLIT):
+            ok, value = await self._safe_read(
+                "split",
+                self.radio.read_split(),
+                lambda: self.radio.read_split(),
+                paths=(_SPLIT,),
+                contain_timeout=True,
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(_SPLIT, value, native_id="read_split")
+                )
+        # Clarifier RIT/XIT (MOR-454) — GLOBAL slow-changing operator/TX
+        # controls (CAT ``CF000``/``CF001``). The status read is shared when
+        # either capability is declared; each flag is emitted only for its
+        # declared capability. The frequency is shared too.
+        has_rit = self._has_runtime_capability("rit")
+        has_xit = self._has_runtime_capability("xit")
+        if has_rit or has_xit:
+            ok, clar = await self._safe_read(
+                "clarifier",
+                self.radio.read_clarifier(0),
+                lambda: self.radio.read_clarifier(0),
+                paths=(_RIT_ON, _RIT_TX),
+            )
+            if ok and clar is not None:
+                rx_clar, tx_clar = clar
+                if has_rit and self._can_poll(_RIT_ON):
+                    observations.append(
+                        adapter.observation(
+                            _RIT_ON,
+                            rx_clar,
+                            native_id="read_clarifier",
+                        )
+                    )
+                if has_xit and self._can_poll(_RIT_TX):
+                    observations.append(
+                        adapter.observation(
+                            _RIT_TX,
+                            tx_clar,
+                            native_id="read_clarifier",
+                        )
+                    )
+            if self._can_poll(_RIT_FREQ):
+                ok, freq = await self._safe_read(
+                    "clarifier_freq",
+                    self.radio.read_clarifier_freq(0),
+                    lambda: self.radio.read_clarifier_freq(0),
+                    paths=(_RIT_FREQ,),
+                )
+                if ok:
+                    observations.append(
+                        adapter.observation(
+                            _RIT_FREQ,
+                            freq,
+                            native_id="read_clarifier_freq",
+                        )
+                    )
+        # Antenna tuner (MOR-455) — GLOBAL operator-control state (CAT ``AC``),
+        # gated on the ``tuner`` runtime capability, mirroring the legacy
+        # poller's ``"tuner" in caps`` gate; the generic getter normalizes AC.
+        if self._has_runtime_capability("tuner") and self._can_poll(_TUNER):
+            ok, value = await self._safe_read(
+                "tuner",
+                self.radio.get_tuner_status(),
+                lambda: self.radio.get_tuner_status(),
+                paths=(_TUNER,),
+            )
+            if ok and value is not None:
+                observations.append(
+                    adapter.observation(
+                        _TUNER,
+                        int(value),
+                        native_id="get_tuner_status",
+                    )
+                )
+        # Dial lock (MOR-455) — GLOBAL tx_state bool (CAT ``LK``), gated on the
+        # ``dial_lock`` runtime capability, mirroring the legacy poller's
+        # ``"dial_lock" in caps`` gate.
+        if self._has_runtime_capability("dial_lock") and self._can_poll(_DIAL_LOCK):
+            ok, value = await self._safe_read(
+                "dial_lock",
+                self.radio.read_lock(),
+                lambda: self.radio.read_lock(),
+                paths=(_DIAL_LOCK,),
+            )
+            if ok:
+                observations.append(
+                    adapter.observation(
+                        _DIAL_LOCK,
+                        bool(value),
+                        native_id="read_lock",
+                    )
+                )
+        # CW keyer family (MOR-456) — GLOBAL operator-control setpoints, all
+        # gated on the legacy poller's single ``"cw" in caps`` gate, mirroring
+        # its ``key_speed``/``cw_pitch``/``break_in``/``break_in_delay`` reads in
+        # the same pass. ``key_speed`` is the keyer WPM (CAT ``KS``);
+        # ``cw_pitch`` is the sidetone in Hz, decoded from the profile's
+        # ``cw_pitch`` control domain (CAT ``KP``);
+        # ``break_in`` is emitted as the device int (CAT ``BI``: 0=OFF, 1=SEMI),
+        # exactly the poller's ``1 if get_break_in() else 0`` int store;
+        # ``break_in_delay`` is the QSK delay in ms (CAT ``SD``). Raw device scale
+        # (cross-vendor calibration is MOR-453); each emission is gated
+        # independently by per-field policy.
+        if self._has_runtime_capability("cw"):
+            if self._can_poll(_KEY_SPEED):
+                ok, value = await self._safe_read(
+                    "key_speed",
+                    self.radio.read_keyer_speed(),
+                    lambda: self.radio.read_keyer_speed(),
+                    paths=(_KEY_SPEED,),
+                )
+                if ok and value is not None:
+                    observations.append(
+                        adapter.observation(
+                            _KEY_SPEED,
+                            int(value),
+                            native_id="read_keyer_speed",
+                        )
+                    )
+            if self._can_poll(_CW_PITCH):
+                ok, value = await self._safe_read(
+                    "cw_pitch",
+                    self.radio.read_cw_pitch(),
+                    lambda: self.radio.read_cw_pitch(),
+                    paths=(_CW_PITCH,),
+                )
+                if ok and value is not None:
+                    observations.append(
+                        adapter.observation(
+                            _CW_PITCH,
+                            int(value),
+                            native_id="read_cw_pitch",
+                        )
+                    )
+            if self._can_poll(_BREAK_IN):
+                ok, value = await self._safe_read(
+                    "break_in",
+                    self.radio.read_break_in(),
+                    lambda: self.radio.read_break_in(),
+                    paths=(_BREAK_IN,),
+                )
+                if ok and value is not None:
+                    observations.append(
+                        adapter.observation(
+                            _BREAK_IN,
+                            int(value),
+                            native_id="read_break_in",
+                        )
+                    )
+            if self._can_poll(_BREAK_IN_DELAY):
+                ok, value = await self._safe_read(
+                    "break_in_delay",
+                    self.radio.read_break_in_delay(),
+                    lambda: self.radio.read_break_in_delay(),
+                    paths=(_BREAK_IN_DELAY,),
+                )
+                if ok and value is not None:
+                    observations.append(
+                        adapter.observation(
+                            _BREAK_IN_DELAY,
+                            int(value),
+                            native_id="read_break_in_delay",
+                        )
+                    )
+        return tuple(observations)
+
+    async def _safe_read(
+        self,
+        label: str,
+        read: Awaitable[_T],
+        remake: Callable[[], Awaitable[_T]],
+        *,
+        paths: tuple[FieldPath, ...] = (),
+        contain_timeout: bool = False,
+    ) -> tuple[bool, _T | None]:
+        """Await one field read, classifying a FIELD-level CAT failure.
+
+        Returns ``(ok, value)``. A read naming declared ``paths`` that the
+        radio answers in another shape RECORDS the defect on the acquisition
+        scheduler — the recording is what the startup gate reads — and then
+        skips that one field exactly like an undeclared read. A read the
+        radio refuses (``?;``) is re-issued ONCE through ``remake`` before
+        it is recorded: a refusal the radio repeats still records the
+        defect, while a refusal followed by a normal answer publishes the
+        answer and records nothing, so a one-off radio state (MOR-2584)
+        does not refuse the bind. A twice-refused field is still skipped on
+        that cycle, so a refused read cannot abort the whole poll cycle and
+        starve every later field (MOR-2578).
+
+        ``read`` is the first attempt (already created — coroutine arguments
+        evaluate before the call — because a site whose read needs the
+        freshest locals must build it inline); ``remake`` rebuilds the same
+        read for the single retry, so the retry costs one extra command
+        only after a refusal. Every declared-read site passes its own call —
+        there is no label table, so a new declared read retries without a
+        mapping change (MOR-2584's ``NA1;`` display-mode case included). A
+        malformed answer on the re-read records the field defect exactly
+        like a malformed first read; it never escapes to the cycle-level
+        handler.
+
+        TRANSPORT errors are NOT caught — they RE-RAISE so the poller's
+        ``_run_poll_cycle`` reconnect/backoff still fires. ``CatTimeoutError``
+        and ``CatGarbledFrameError`` reach that path unchanged;
+        ``CatCommandRejected`` is caught out of the same base class because a
+        refusal is an answer, not link quality.
+
+        MOR-2757: the one timeout exception that IS intercepted on its way
+        out: a read of a safety-critical path that went unanswered counts
+        toward that path's consecutive-unread tally (any answer resets it),
+        so the 3rd unanswered read records the declared-command defect that
+        ends startup. The re-raise keeps the reconnect path unchanged.
+
+        MOR-4456: ``contain_timeout`` serves a contained lane's unanswered
+        read as absent for the cycle — completed fields still reach the
+        store and the reads after this one still run. The critical-path
+        accounting above still runs but filters through
+        ``startup_critical_path``: PTT and split left that set, so their
+        contained timeouts count nothing and the gate serves them unknown
+        after the deadline. Only timeouts are contained — a timeout on
+        the refusal re-read contains exactly like a first-read timeout; a
+        refused or malformed read still skips the field below (PTT/split
+        record no defect), and transport failures still raise untouched.
+        """
+        try:
+            value = await read
+        except CatTimeoutError as exc:
+            self._count_critical_read_timeouts(label, exc, paths)
+            if contain_timeout:
+                return False, None
+            raise
+        except (CatParseError, CatFormatError, ValueError, KeyError) as exc:
+            # ValueError covers _read_meter / int() malformed-frame failures;
+            # CatParse/FormatError subclass ValueError but are listed for clarity.
+            if paths:
+                self._record_declared_defect(label, exc, paths)
+            self._log_field_skip(
+                label,
+                "Skipping field %s — malformed CAT response: %s",
+                exc,
+            )
+            return False, None
+        except CatCommandRejected:
+            try:
+                value = await remake()
+            except CatTimeoutError as retry_exc:
+                self._count_critical_read_timeouts(label, retry_exc, paths)
+                if contain_timeout:
+                    return False, None
+                raise
+            except CatCommandRejected as retry_exc:
+                if paths:
+                    self._record_declared_defect(label, retry_exc, paths)
+                self._log_field_skip(
+                    label,
+                    "Skipping field %s — command refused twice (?;): %s",
+                    retry_exc,
+                )
+                return False, None
+            except (CatParseError, CatFormatError, ValueError, KeyError) as retry_exc:
+                if paths:
+                    self._record_declared_defect(label, retry_exc, paths)
+                self._log_field_skip(
+                    label,
+                    "Skipping field %s — malformed CAT response on re-read: %s",
+                    retry_exc,
+                )
+                return False, None
+        self._note_critical_read_answers(paths)
+        return True, value
+
+    def _critical_read_timeout_counts(self) -> dict[FieldPath, int] | None:
+        """Return the radio's unanswered-critical-read tally, if it has one.
+
+        The tally lives on the radio (``_critical_read_timeouts``) because
+        this adapter is rebuilt every poll cycle while the count must span
+        cycles — the ``_poll_warned_fields`` idiom. A radio object that
+        carries no tally (test doubles) simply does not count: the
+        pre-MOR-2757 behaviour.
+        """
+
+        counts = getattr(self.radio, "_critical_read_timeouts", None)
+        if isinstance(counts, dict):
+            return counts
+        return None
+
+    def _note_critical_read_answers(self, paths: tuple[FieldPath, ...]) -> None:
+        """Reset the unanswered tally of every *path* that just answered."""
+
+        counts = self._critical_read_timeout_counts()
+        if counts is None:
+            return
+        for path in paths:
+            counts.pop(path, None)
+
+    def _count_critical_read_timeouts(
+        self,
+        label: str,
+        exc: CatTimeoutError,
+        paths: tuple[FieldPath, ...],
+    ) -> None:
+        """Count one unanswered read per safety-critical path (MOR-2757).
+
+        The medium poll cycle re-issues every read each interval, so one
+        timeout per cycle is one unanswered attempt. Non-critical paths are
+        not counted — the web gate's own 10 s deadline already stops them
+        from blocking. On the attempt that reaches
+        ``_CRITICAL_READ_TIMEOUT_ATTEMPTS`` the same
+        :class:`DeclaredCommandDefect` a refused read records
+        (:meth:`_record_declared_defect`) is recorded for that one path,
+        naming the field and the command the radio never answered; the
+        startup gate aborts on it. Later records keep only the first
+        (``AcquisitionScheduler.record_startup_defect``).
+        """
+
+        counts = self._critical_read_timeout_counts()
+        if counts is None:
+            return
+        for path in paths:
+            if not startup_critical_path(path):
+                continue
+            count = counts.get(path, 0) + 1
+            counts[path] = count
+            if count >= _CRITICAL_READ_TIMEOUT_ATTEMPTS:
+                self._record_declared_defect(label, exc, (path,))
+
+    def _record_declared_defect(
+        self,
+        label: str,
+        exc: Exception,
+        paths: tuple[FieldPath, ...],
+    ) -> None:
+        """Record the defect for a declared read that cannot answer.
+
+        The recording is what the startup gate reads: it checks the
+        scheduler's record before and during its wait, so a declared read
+        that fails twice before the gate completes refuses the bind — a
+        refusal the re-read answers (MOR-2584) records nothing. A refusal
+        that begins only after the gate has completed is recorded but
+        cannot undo a bind that already happened. The
+        read itself is skipped — only that field is dropped and the poll
+        cycle continues, so the field's own refusal cannot stall every
+        later field (MOR-2578).
+
+        MOR-4456: PTT and split record nothing — they left the
+        startup-critical set and are served unknown after the non-critical
+        deadline, so they must never occupy the startup-defect slot (the
+        first record wins). Name-scoped, not a criticality filter: every
+        other path keeps its existing record, and the timeout tally in
+        :meth:`_count_critical_read_timeouts` already filters through
+        :func:`startup_critical_path` and switched off by itself.
+        """
+        paths = tuple(path for path in paths if path.name not in ("ptt", "split"))
+        if not paths:
+            return
+        command = ""
+        frame = ""
+        if isinstance(exc, CatParseError):
+            command, frame = exc.template, exc.response
+        elif isinstance(exc, CatFormatError):
+            command = exc.template
+        elif isinstance(exc, CatCommandRejected):
+            command, frame = exc.command, "?;"
+        elif isinstance(exc, CatTimeoutError):
+            command = exc.command
+        defect = DeclaredCommandDefect(
+            label=label,
+            paths=paths,
+            command=command,
+            frame=frame,
+            detail=str(exc),
+        )
+        scheduler = getattr(self.radio, "_acquisition_scheduler", None)
+        if isinstance(scheduler, AcquisitionScheduler):
+            scheduler.record_startup_defect(defect)
+
+    def _log_field_skip(
+        self,
+        label: str,
+        message: str,
+        exc: Exception,
+    ) -> None:
+        """Warn once per field, then demote repeats to DEBUG (MOR-561).
+
+        The warned-field set lives on the radio (persistent across poll cycles)
+        rather than the adapter (rebuilt every cycle). A non-``set`` attribute —
+        e.g. a ``MagicMock`` test double — falls back to always-warn.
+        """
+        warned = getattr(self.radio, "_poll_warned_fields", None)
+        if isinstance(warned, set):
+            if label in warned:
+                logger.debug(message, label, exc)
+                return
+            warned.add(label)
+        logger.warning(message, label, exc)
+
+    def _adapter(self) -> ProviderObservationAdapter:
+        return ProviderObservationAdapter(
+            profile=self.profile,
+            source="yaesu_poll_response",
+            transport="serial",
+            clock=self.clock,
+        )
+
+    def _can_poll(self, path: FieldPath) -> bool:
+        capability = self.profile.capability_for(path)
+        return bool(capability.can_poll)
+
+    def _available(self, path: FieldPath) -> bool:
+        """Return False while a declared clause is contradicted or unobserved.
+
+        The ``available_when`` clauses are resolved against a
+        :class:`StateStore` attached to the radio as ``_state_store``; with
+        none attached the read proceeds unchanged.
+        """
+
+        store = getattr(self.radio, "_state_store", None)
+        if not isinstance(store, StateStore):
+            return True
+        availability = resolve_available_when(self.profile, store.snapshot())
+        return availability.get(path, True) is True
+
+    async def _prime_narrow_clause(
+        self,
+        adapter: ProviderObservationAdapter,
+        observations: list[Observation],
+        *,
+        label: str,
+        receiver: int,
+        narrow: FieldPath,
+        width: FieldPath,
+    ) -> None:
+        """Read an unobserved NARROW once, before this receiver's width read.
+
+        The width's ``available_when`` clause (MOR-2803) resolves against
+        the store, and an unresolved clause — ``None``, nobody has observed
+        the toggle yet — withholds the width read through ``_available``.
+        NARROW is a slow-lane field, so the first medium pass after startup
+        can run before the slow lane observes it. Make the condition known
+        first: read the toggle here, apply it to the store so the width gate
+        below resolves in this same pass, and publish the observation like
+        any other. Once observed — here or by the slow lane — this is a
+        no-op; a failed read leaves the clause unresolved, which withholds
+        the width read exactly as before.
+        """
+
+        if not self._can_poll(narrow):
+            return
+        store = getattr(self.radio, "_state_store", None)
+        if not isinstance(store, StateStore):
+            return
+        availability = resolve_available_when(self.profile, store.snapshot())
+        if availability.get(width, True) is not None:
+            return
+        ok, value = await self._safe_read(
+            label,
+            self.radio.read_narrow(receiver),
+            lambda: self.radio.read_narrow(receiver),
+            paths=(narrow,),
+        )
+        if not ok:
+            return
+        observation = adapter.observation(narrow, value, native_id="read_narrow")
+        store.apply_current(observation)
+        observations.append(observation)
+
+    def _has_runtime_capability(self, capability: str) -> bool:
+        raw: object = getattr(self.radio, "capabilities", set())
+        return capability in raw if isinstance(raw, set) else False

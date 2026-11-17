@@ -1,0 +1,791 @@
+# Rig Configuration — Xiegu X6200
+#
+# Xiegu X6200 ultra-portable HF/50MHz transceiver.
+# Protocol: CI-V (subset of standard Icom CI-V, similar to X6100 family).
+#
+# Sources of truth (cross-referenced):
+#   1. Radioddity "Xiegu X6200 CI-V implementation V1.0.6" (firmware V1.0.6).
+#      All commands below come from the documented Table 1 (parts 1-5),
+#      pages 5-9 of that PDF.
+#   2. Hamlib master ``rigs/icom/xiegu.c`` — ``x6200_caps`` reuses the same
+#      ``x6100_priv_caps`` struct (line ~690), confirming X6100 and X6200
+#      share the same CI-V personality at the protocol level even though
+#      they're separate Hamlib ``RIG_MODEL_*`` entries.
+#
+# History: MOR-170. Filed after the IC-705 profile (which X6200 was
+# misidentified as by default — both default to CI-V address 0xA4) drove
+# the radio's display into a flicker → wedge state on real hardware.
+# The X6200 documented CI-V envelope is narrower than IC-705's, and
+# crucially the CI-V power command 0x18 is not listed in any official
+# command table (no 0x18 row anywhere in the V1.0.6 Table 1 opcode list
+# — an absent row, not a vendor statement that power on/off is
+# unsupported); this profile therefore omits ``power_on`` /
+# ``power_off`` entirely so the runtime cannot send 0x18 on behalf of
+# an X6200. ``power_control`` below is declared for the documented
+# 0x14 0x0A RF-power level pair, not for 0x18 (MOR-2488/MOR-2489).
+
+[radio]
+id = "xiegu_x6200"
+model = "X6200"
+civ_addr = 0xA4
+# Hamlib RIG_MODEL_X6200 (rigs_list.h) — used by validate --provider hamlib.
+hamlib_model_id = 3091
+receiver_count = 1
+has_lan = false
+has_wifi = true
+# PDF page 4: "For CAT control, a speed of 19.200 bps on the SERIAL-B port
+# is used." SERIAL-A at up to 115200 is the terminal port, not CAT.
+default_baud = 19200
+# The value bytes this radio answers to the Xiegu-only 0x1D 0x19 model-ID
+# query (V1.0.6 p.9; reply `62 00` in the live capture behind
+# tests/test_discovery.py's _XIEGU_MODEL_ID_REPLY). Discovery maps the
+# reply back to this profile through this field (MOR-4352).
+xiegu_model_id = 0x6200
+
+[protocol]
+type = "civ"
+address = 0xA4
+
+[audio]
+# The Xiegu X6200 exposes a standard mono USB Audio Class CODEC (C-Media
+# based), exactly like the IC-705 / IC-7300 SERIAL-audio path. Its capture
+# device advertises a single input channel, so RX audio must be opened as
+# 1-channel PCM. Without this section the profile fell back to the global
+# default codec (``PCM_2CH_16BIT``, stereo), and ``UsbAudioDriver.start_rx``
+# asked PortAudio for a 2-channel InputStream — which the mono device
+# rejects with ``Invalid number of channels`` (PaErrorCode -9998). The
+# AudioBus then logged ``failed to start RX`` and the browser received zero
+# RX frames (MOR-236). Mirror the IC-705 / IC-7300 mono preference.
+codec_preference = ["PCM_1CH_16BIT", "ULAW_1CH"]
+
+[capabilities]
+# Aligned to Hamlib's ``X108G_LEVELS`` / ``X108G_FUNCS`` envelope
+# (xiegu.c lines 52, 54) intersected with what the Radioddity X6200 PDF
+# explicitly documents as supported by firmware V1.0.6. Intentionally
+# narrower than the IC-705 envelope:
+#   - ``power_control`` IS declared (MOR-2488/MOR-2489), covering the
+#     documented 0x14 0x0A "Get/Set TX Power" pair (V1.0.6 pp.6-7): the
+#     [commands] entries below already carried both opcodes while the
+#     capability was withheld, so ``IcomRadio.set_rf_power`` refused on
+#     a command this radio's own table documents. The declaration does
+#     NOT extend to 0x18: power on/off is not listed in any official
+#     command table (no 0x18 row in V1.0.6 Table 1), so
+#     ``power_on``/``power_off`` stay undeclared and ``set_powerstat``
+#     still refuses at the bound command map — 0x18 never reaches the
+#     wire (see the NOTE above [commands] for the wedge history).
+#   - no ``scope`` (no documented 0x27 family)
+#   - no tone family (``repeater_tone`` / ``tsql``): the backend would send
+#     ``0x16 0x42/0x43`` + ``0x1B 0x00``, none of which the X6200 firmware
+#     answers. A live X6200 capture (CI-V 0xA4) confirmed all four tone
+#     RMVR checks (repeater_tone/tone_freq/tsql/tsql_freq) time out, so the
+#     caps are dropped — the checks now resolve UNSUPPORTED, not FAIL
+#     (MOR-683, supersedes the audit's gap-list D tone row).
+#   - no ``pbt`` (twin passband tuning): the front panel HAS PBT, but a live
+#     X6200 probe (CI-V 0xA4) showed ``get_pbt_inner`` (0x14 0x07) and
+#     ``get_pbt_outer`` (0x14 0x08) both TIME OUT in BOTH AM and USB modes —
+#     the firmware does not expose PBT over CI-V. Hamlib xiegu.c over-declares
+#     it without a round-trip, so the cap is dropped → the pbt.presence check
+#     now resolves UNSUPPORTED, not a spurious presence-pass (MOR-699).
+#   - no ``filter_width`` SET: a live X6200 capture (CI-V 0xA4) showed
+#     ``0x1A 0x03`` cannot be round-tripped by the harness — ``get`` reads
+#     back a passband index (live: 27) while the USB setter guards
+#     50-9999 Hz, so the nudge produces an out-of-range write (units
+#     mismatch), and Hamlib marks ``x1ax03_supported = 0``. The cap stays
+#     UNDECLARED pending a setter units fix + a clean live round-trip
+#     (MOR-683 defers; tracked as a filter_width follow-up).
+#   - ``break_in`` KEEPS the capability tag but intentionally declares NO
+#     ``[break_in]`` domain (MOR-1534). docs/validation/cat-audits/x6200.md
+#     (§ "D. MISMATCH / WRONG", break-in row; § "Documentation quality note")
+#     found the backend's ``get/set_break_in`` opcode
+#     (``0x16 0x47``, IC-7610's CW BK-IN mode register) is NOT in the X6200's
+#     documented CI-V table at all — the X6200 PDF only documents QSK hang
+#     time (``0x14 0x0F``), not a BK-IN-mode register. This profile declares
+#     no ``break_in_delay`` key, control or feature either (unlike its four
+#     IC-7300/7610/9700/705 siblings, which all do). MOR-1983 removed the
+#     former unconditional ``0x14 0x0F`` state poll: the sweep now follows
+#     ``[state_acquisition]`` plus ``[commands]``, neither of which declares
+#     a break-in-delay read for this profile, so the frame is suppressed.
+#     ``CoreRadio.get_break_in_delay`` / ``CoreRadio.set_break_in_delay``
+#     (``commands/levels.py: get_break_in_delay`` / ``set_break_in_delay``)
+#     do NOT reach it: both route through the bound command map
+#     (``commands/bound.py: BoundCommands``, MOR-2006) and this profile
+#     declares neither key present nor declared-absent, so both refuse
+#     with ``CommandError`` (the undeclared-command policy, D1, MOR-2005)
+#     instead of sending anything — confirmed by calling both against this
+#     profile's own ``CommandMap`` directly (correction, #2834/#2836
+#     review: an earlier draft of this comment first claimed the opposite
+#     of undeclared-hardcode, then a follow-up undercounted by naming only
+#     ``get_break_in_delay``'s hardcode — a hardcode the bound-command-map
+#     migration had already replaced with this refusal by the time that
+#     follow-up was written). There is no trustworthy in-repo source for
+#     an OFF/SEMI/FULL value domain on this radio, so
+#     ``CoreRadio.set_break_in`` refuses (fails loud) rather than validate
+#     against a guessed table.
+#   - ``notch`` likewise KEEPS the capability tag but intentionally declares
+#     NO ``[notch] width_values`` domain (MOR-1551). docs/validation/
+#     cat-audits/x6200.md (§ "C. MISSING BACKEND"; § "D. MISMATCH / WRONG",
+#     manual notch row) found the ``notch`` cap
+#     currently routes to ``set_manual_notch`` (``0x16 0x48``, Icom
+#     manual-notch on/off) which is ALSO not in the X6200's documented CI-V
+#     table — the X6200's real notch mechanism is the digital notch filter
+#     (DNF) toggle at ``0x16 0x41`` plus its center frequency at
+#     ``0x14 0x0D`` (confirmed-correct opcode, 100-3000 Hz). Neither the PDF
+#     Table 1 nor Hamlib's ``x6100_priv_caps`` document a WIDE/MID/NAR-style
+#     width register for this radio at all, so there is no trustworthy
+#     in-repo source for a width domain — ``CoreRadio.set_manual_notch_width``
+#     stays unvalidated (permissive, mirrors ``set_agc``/``set_preamp``)
+#     rather than fabricate one. Closing evidence: a live X6200 CI-V capture
+#     of ``0x16 0x57`` GET/SET (NAK vs. ACK), or discovery of an actual DNF
+#     width register via a wfview/hamlib update or firmware doc revision.
+features = [
+    "audio",
+    "af_level",
+    "rf_gain",
+    "squelch",
+    "attenuator",
+    "preamp",
+    "nb",
+    "nr",
+    "notch",
+    "tx",
+    "split",
+    "vox",
+    "compressor",
+    "cw",
+    "break_in",
+    "rit",
+    "xit",
+    "tuner",
+    "meters",
+    "data_mode",
+    "scan",
+    "dial_lock",
+    "agc",
+    "power_control",
+]
+
+[state_acquisition]
+provider = "xiegu_civ"
+default_cadence_seconds = 2.0
+default_freshness_ttl_seconds = 8.0
+default_reconciliation_priority = "poll"
+adaptive_decay = true
+adaptive_decay_idle_multiplier = 4.0
+adaptive_decay_max_cadence_seconds = 30.0
+external_cat_pause = "pause_polling"
+meter_coalescing_window_seconds = 0.25
+
+[state_acquisition.capabilities]
+polling_only = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    # MOR-3002: reads the 2.x state sweep made before MOR-1983, restricted
+    # to GET rows of V1.0.6 Table 1 (11 p.5; 14 01/02/03/0A/0B/15 p.6;
+    # 16 02/12/22 p.7; 1C 00/01 p.9). v3 reads only a declared field.
+    "receiver.main.operator_controls.att",
+    "receiver.main.operator_controls.af_level",
+    "receiver.main.operator_controls.rf_gain",
+    "receiver.main.operator_controls.squelch",
+    "receiver.main.operator_controls.preamp",
+    "receiver.main.operator_controls.agc",
+    "receiver.main.operator_toggles.nb",
+    "global.operator_controls.power_level",
+    "global.operator_controls.mic_gain",
+    "global.operator_controls.monitor_gain",
+    "global.tx_state.ptt",
+    "global.operator_controls.tuner_status",
+]
+stream_like_meters = [
+    "receiver.main.meters.s_meter",
+    "global.meters.power",
+]
+command_response_observable = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+    "receiver.main.active.freq_mode.filter_width",
+    # MOR-3002: read on demand (field policies below), V1.0.6 p.6.
+    "global.operator_controls.cw_pitch",
+    "global.operator_controls.key_speed",
+]
+supported_controls = [
+    "receiver.main.active.freq_mode.freq_hz",
+    "receiver.main.active.freq_mode.mode",
+]
+unsupported = ["global.tx_state.power_on"]
+unknown = ["global.meters.swr", "global.meters.alc"]
+
+[state_acquisition.field_policies."receiver.main.active.freq_mode.mode"]
+cadence_seconds = 1.0
+freshness_ttl_seconds = 4.0
+reconciliation_priority = "command_response"
+external_cat_pause = "pause_polling"
+
+# MOR-2425/R36b: same event-driven-only shape as ic7300.toml's filter_width
+# entry -- without this, prime_unobserved() never reaches this path (it only
+# iterates field_policies), so it could never be observed at startup.
+[state_acquisition.field_policies."receiver.main.active.freq_mode.filter_width"]
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."global.operator_controls.cw_pitch"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."global.operator_controls.key_speed"]
+reason = "on-demand, not polled: prime_unobserved (MOR-1490) reads only field_policies paths, and the never TTL keeps the value from expiring"
+cadence_seconds = 25.0
+freshness_ttl_seconds = "never"
+reconciliation_priority = "command_response"
+adaptive_decay = false
+
+[state_acquisition.field_policies."receiver.main.meters.s_meter"]
+cadence_seconds = 0.25
+freshness_ttl_seconds = 1.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.25
+
+[state_acquisition.field_policies."global.meters.power"]
+cadence_seconds = 0.25
+freshness_ttl_seconds = 1.0
+adaptive_decay = false
+meter_coalescing_window_seconds = 0.25
+
+# PDF page 10 (Table 3 — Mode, Data & filter bandwidth) documents:
+# LSB, LSB-D, USB, USB-D, AM, CW, NFM, CWR. The ``-D`` variants are the
+# data-mode flavours selected via byte 2 of mode commands 0x26 0x00/0x01.
+[modes]
+list = ["USB", "LSB", "CW", "CW-R", "AM", "FM", "RTTY", "DIGI"]
+# MOR-3679: the CW modes, named once here for every client.
+families = { cw = ["CW", "CW-R"] }
+
+# count/labels match the loader's feature-only default (count = 1,
+# OFF/DATA) — the table exists so the DATA-capable modes can be declared.
+# Source: PDF page 10 (Table 3 — Mode, Data & filter bandwidth) documents
+# the -D variants for LSB and USB only (MOR-4036).
+[data_mode]
+count = 1
+labels = { "0" = "OFF", "1" = "DATA" }
+modes = ["USB", "LSB"]
+
+[filters]
+list = ["FIL1", "FIL2", "FIL3"]
+# MOR-706 live USB CI-V 0xA4 evidence: 0x1A/0x03 returns one raw byte for the
+# active selected FIL slot width, not packed BCD. Examples: 0x1c -> 1800 Hz,
+# 0x22 -> 2400 Hz, 0x27 -> 2900 Hz. The observed formula is:
+#   byte <= 21: Hz = byte * 50 + 50
+#   byte >= 22: Hz = (byte - 10) * 100
+# Keep max_hz at 3600 to match the established Icom SSB/CW/RTTY profile bound;
+# higher X6200 values are not proven by current live evidence.
+encoding = "raw_byte_index"
+width_min_hz = 50
+width_max_hz = 3600
+
+[filters.width.SSB]
+min_hz = 50
+max_hz = 3600
+defaults = [2900, 2400, 1800]
+segments = [
+    { hz_min = 50, hz_max = 1100, step_hz = 50, index_min = 0 },
+    { hz_min = 1200, hz_max = 3600, step_hz = 100, index_min = 22 },
+]
+
+[filters.width.CW]
+min_hz = 50
+max_hz = 3600
+defaults = [2900, 2400, 1800]
+segments = [
+    { hz_min = 50, hz_max = 1100, step_hz = 50, index_min = 0 },
+    { hz_min = 1200, hz_max = 3600, step_hz = 100, index_min = 22 },
+]
+
+[filters.width.RTTY]
+min_hz = 50
+max_hz = 3600
+defaults = [2900, 2400, 1800]
+segments = [
+    { hz_min = 50, hz_max = 1100, step_hz = 50, index_min = 0 },
+    { hz_min = 1200, hz_max = 3600, step_hz = 100, index_min = 22 },
+]
+
+[filters.width.DIGI]
+min_hz = 50
+max_hz = 3600
+defaults = [2900, 2400, 1800]
+segments = [
+    { hz_min = 50, hz_max = 1100, step_hz = 50, index_min = 0 },
+    { hz_min = 1200, hz_max = 3600, step_hz = 100, index_min = 22 },
+]
+
+[filters.width.AM]
+fixed = true
+
+[filters.width.FM]
+fixed = true
+
+[vfo]
+scheme = "ab"
+
+# PDF page 5: ``0x11 0x00`` (off) / ``0x11 0x01`` (on) — binary toggle.
+[attenuator]
+values = [0, 1]
+labels = { "0" = "OFF", "1" = "ON" }
+
+# PDF page 8: ``0x16 0x02 0x00`` / ``0x16 0x02 0x01`` — binary toggle.
+[preamp]
+values = [0, 1]
+
+# PDF page 8: ``0x16 0x12 0x00..0x03`` — off / fast / slow / auto.
+[agc]
+modes = [0, 1, 2, 3]
+labels = { "0" = "OFF", "1" = "FAST", "2" = "SLOW", "3" = "AUTO" }
+
+# Per-radio validation classification (MOR-208). Controls whose capability
+# names appear here route through the validate set-and-observe engine path
+# (no read-first), so SET-but-no-GET controls report honest PASS instead of a
+# read-first-timeout FAIL. Each entry must be a declared [capabilities] feature.
+[validation]
+write_only_controls = ["rit", "xit", "notch"]  # SET accepted but GET times out / no echo (MOR-179 rit/xit, MOR-207 notch; raw-CIV confirmed)
+
+[controls.attenuator]
+style = "toggle"
+
+# Level control ranges — CI-V compatible (Xiegu X6200).
+# Every "raw_min/raw_max" pair below is documented in the PDF as
+# "BCD format 0-255" (pages 6-7).
+[controls.af_level]
+raw_min = 0
+raw_max = 255
+
+[controls.rf_gain]
+raw_min = 0
+raw_max = 255
+
+[controls.squelch]
+raw_min = 0
+raw_max = 255
+
+[controls.nr_level]
+raw_min = 0
+raw_max = 255
+
+[controls.nb_level]
+raw_min = 0
+raw_max = 255
+
+[controls.compressor_level]
+raw_min = 0
+raw_max = 255
+
+# PDF page 6: "0=400Hz, 255=1200Hz" for CW sidetone.
+[controls.cw_pitch]
+raw_min = 0
+raw_max = 255
+display_min = 400
+display_max = 1200
+display_unit = "Hz"
+decode_quantum = 1  # no Hz step documented: Radioddity X6200 CI-V V1.0.6 p.6 gives only 0=400Hz/255=1200Hz
+encode_rounding = "ceil"  # band endpoints 400->0 and 1200->255 are pinned by tests/test_control_domain_math.py::test_x6200_cw_pitch_encode_uses_the_declared_400_1200_domain
+
+[controls.key_speed]
+raw_min = 0
+raw_max = 255
+display_min = 6
+display_max = 48
+display_unit = "WPM"
+decode_quantum = 1  # band not documented for this radio: it reproduces the pre-existing shared CI-V key-speed decode; Radioddity X6200 CI-V V1.0.6 p.6 gives no WPM scale
+encode_rounding = "nearest_half_down"  # same 6-48 band and rule as the Icom CI-V encode (pinned by tests/test_control_domain_math.py::test_x6200_key_speed_encode_matches_the_icom_vectors)
+
+[controls.rit]
+# MOR-1883: exact-form translation of the previously declared range;
+# step 1 from the shared CI-V builder (+/-9999 Hz, 1 Hz BCD).
+mapping = "identity"
+raw_min = -9999
+raw_max = 9999
+raw_step = 1
+raw_origin = 0
+display_min = -9999
+display_max = 9999
+display_step = 1
+display_origin = 0
+display_unit = "Hz"
+quantization = "reject"
+restoration = "exact"
+
+# Same HF coverage envelope as X6100 (Xiegu HF/50MHz portables).
+[[freq_ranges.ranges]]
+label = "HF"
+start_hz = 100000
+end_hz = 54000000
+
+[[freq_ranges.ranges.bands]]
+name = "160m"
+start_hz = 1800000
+end_hz = 2000000
+default_hz = 1825000
+
+[[freq_ranges.ranges.bands]]
+name = "80m"
+start_hz = 3500000
+end_hz = 3800000
+default_hz = 3600000
+
+[[freq_ranges.ranges.bands]]
+name = "40m"
+start_hz = 7000000
+end_hz = 7200000
+default_hz = 7100000
+
+[[freq_ranges.ranges.bands]]
+name = "30m"
+start_hz = 10100000
+end_hz = 10150000
+default_hz = 10125000
+
+[[freq_ranges.ranges.bands]]
+name = "20m"
+start_hz = 14000000
+end_hz = 14350000
+default_hz = 14200000
+
+[[freq_ranges.ranges.bands]]
+name = "17m"
+start_hz = 18068000
+end_hz = 18168000
+default_hz = 18100000
+
+[[freq_ranges.ranges.bands]]
+name = "15m"
+start_hz = 21000000
+end_hz = 21450000
+default_hz = 21200000
+
+[[freq_ranges.ranges.bands]]
+name = "12m"
+start_hz = 24890000
+end_hz = 24990000
+default_hz = 24940000
+
+[[freq_ranges.ranges.bands]]
+name = "10m"
+start_hz = 28000000
+end_hz = 29700000
+default_hz = 28500000
+
+[[freq_ranges.ranges.bands]]
+name = "6m"
+start_hz = 50000000
+end_hz = 54000000
+default_hz = 51000000
+
+[[freq_ranges.ranges]]
+label = "WFM"
+start_hz = 88000000
+end_hz = 108000000
+
+[[freq_ranges.ranges]]
+label = "Air"
+start_hz = 108000000
+end_hz = 136000000
+
+# ── CI-V Commands ────────────────────────────────────────────────
+# Only opcodes documented in Radioddity X6200 CI-V V1.0.6.
+# NOTE: ``power_on`` / ``power_off`` are INTENTIONALLY OMITTED — CI-V
+# 0x18 is not listed in any official command table (no 0x18 row in the
+# V1.0.6 Table 1 opcode list — an absent row, not a vendor declaration
+# that power on/off is unsupported), and sending it from the IC-705
+# profile is the suspected wedge trigger that motivated this file. The
+# ``power_control`` capability declared above unlocks only the
+# documented 0x14 0x0A level pair; an undeclared ``power_on`` key makes
+# ``set_powerstat`` refuse at the bound command map. Do NOT add a 0x18
+# mapping here without re-validating on hardware.
+[commands]
+
+# PROVENANCE OPEN (D2, MOR-2019): the following have no live X6200 capture
+# to close them, and none is possible now -- the unit was destroyed
+# 2026-08-11. Where an entry below already has a [commands] key, its byte
+# value is unchanged by this note; the note only records why it stays
+# open. House pattern: rigs/ic9700.toml "PROVENANCE OPEN (D2, MOR-2015)".
+#
+# - get_freq [0x03]: Radioddity X6200 CI-V V1.0.6 p.4 documents it only
+#   inside a worked CAT-control narrative example (GET active VFO
+#   frequency), not in the opcode table itself (narrative-only per
+#   docs/validation/cat-audits/x6200.md's per-opcode matrix).
+# - set_freq [0x05]: absent from the V1.0.6 document entirely, not just
+#   from the table -- the p.4 narrative example shows the GET direction
+#   only, and grepping the extract for "0x05" as a command turns up
+#   nothing else: its three hits are the unrelated 0x1A 0x05 LOCK GET row
+#   and LOCK SET row (both p.8) plus a Table 3 mode-data row for NFM
+#   (correction: an earlier draft of this entry grouped set_freq with
+#   get_freq under the same narrative citation, which overstated
+#   set_freq's sourcing).
+# - get_mode / set_mode [0x04] / [0x06]: this entry's own comment used to
+#   group get_mode/set_mode with get_freq/set_freq under one "PDF page 4
+#   example" citation. docs/validation/cat-audits/x6200.md's per-opcode
+#   matrix is more granular and disagrees for mode: 0x04 is absent from
+#   the V1.0.6 table entirely (no narrative mention either) -- the prior
+#   comment overstated the sourcing; corrected here (D2, MOR-2019).
+# - vox -> formally { absent = ... } below (MOR-2008 batch 3, promoted
+#   from this comment-only note): CoreRadio's dsp.py: get_vox/set_vox
+#   built [0x16, 0x46] via a hardcoded fallback with no [commands] key at
+#   all -- the V1.0.6 table has no CI-V VOX row of any kind, so the
+#   fallback was sending an unconfirmed opcode on every call. The bound-
+#   command-map migration (MOR-2006) deletes that fallback; without a
+#   formal absent row this would land in D1 state 3 (unknown, refuse AND
+#   warn) rather than state 2 (confirmed absent, refuse silently) for a
+#   fact this comment already recorded.
+# - notch -> get_manual_notch/set_manual_notch formally { absent = ... }
+#   below (MOR-2008 batch 3, same promotion): the "notch" capability's
+#   registry check (validation/registry/_dsp.py: notch.set) routes
+#   through get_manual_notch/set_manual_notch, which built the Icom
+#   manual-notch opcode [0x16, 0x48] via a hardcoded fallback -- not a
+#   V1.0.6-documented register at all. The table's real notch mechanism
+#   is the digital notch filter (DNF) toggle at [0x16, 0x41] (MOR-1551,
+#   docs/validation/cat-audits/x6200.md § "C. MISSING BACKEND" /
+#   § "D. MISMATCH / WRONG", manual notch row) -- that DNF register is
+#   what `dsp.py: get_auto_notch`/`set_auto_notch` (a separate, uncapped
+#   builder pair, not routed through the "notch" capability at all) build,
+#   and is declared present below as `get_auto_notch`/`set_auto_notch`,
+#   correcting the cat-audit's own "no method binds it" line (§ "C.
+#   MISSING BACKEND", DNF row), which predates those two builders.
+# - break_in -> get_break_in/set_break_in formally { absent = ... } below
+#   (MOR-2008 batch 3, same promotion): built the Icom CW BK-IN opcode
+#   [0x16, 0x47] via a hardcoded fallback with no [commands] key -- the
+#   V1.0.6 table documents only QSK hang time at [0x14, 0x0F], not a
+#   BK-IN-mode register (MOR-1534, docs/validation/cat-audits/x6200.md
+#   § "D. MISMATCH / WRONG", break-in row). This profile declares no
+#   break_in_delay key either (unlike its four IC-7300/7610/9700/705
+#   siblings). MOR-1983 removed the former unconditional [0x14, 0x0F]
+#   state poll; profile-derived acquisition now suppresses it because this
+#   profile declares neither a pollable path nor a getter. CoreRadio.
+#   get_break_in_delay / CoreRadio.set_break_in_delay (commands/levels.py)
+#   do NOT reach it either: both route through the bound command map
+#   (commands/bound.py: BoundCommands, MOR-2006), and since this profile
+#   declares neither key present nor declared-absent, both refuse with
+#   CommandError instead (the undeclared-command policy, D1, MOR-2005) --
+#   confirmed by calling both against this profile's own CommandMap
+#   (correction, #2834/#2836 review: an earlier fix here undercounted by
+#   naming only get_break_in_delay's hardcode, which the bound-command-map
+#   migration had already replaced with this refusal).
+# - nr / compressor / auto_notch -> declared present below (MOR-2008
+#   batch 3, a correctness fix, not a promotion): dsp.py: get_nr/set_nr
+#   ([0x16, 0x40]), get_compressor/set_compressor ([0x16, 0x44]), and
+#   get_auto_notch/set_auto_notch ([0x16, 0x41], see the notch bullet
+#   above) already built the V1.0.6-documented, cat-audit-confirmed-
+#   correct opcode for each (docs/validation/cat-audits/x6200.md §
+#   "Correctly handled" for NR; § "A. UNDER-DECLARED" for NR/compressor;
+#   § "C. MISSING BACKEND" for the DNF/auto_notch opcode) via their
+#   hardcoded fallback, with no [commands] key at all. Left undeclared,
+#   the bound-command-map migration (MOR-2006) would have turned three
+#   already-working controls into a refusal -- a regression, not a
+#   correction, caught before it shipped by cross-checking every gap this
+#   migration would newly enforce against this profile's own cat-audit
+#   rather than assuming every gap is a genuine absence.
+# - rit / xit -> hardcoded [0x21] in the RIT/XIT command builders
+#   (commands/_frame.py: _CMD_RIT, consumed by commands/system.py), no
+#   [commands] key: [0x21] itself is absent from the V1.0.6 table, but
+#   the write-only *behavior* (SET accepted, GET times out) is
+#   live-confirmed on this X6200 unit itself, not inferred from another
+#   Icom model -- MOR-208/179 (commit 5a493d70) and MOR-207 (commit
+#   b1df1e71). See [validation] write_only_controls above.
+#
+# One more V1.0.6-documented register (p.8) has no capability and no
+# [commands] key at all, named here so nobody assumes an existing entry
+# already covers it:
+# - front-panel LOCK, [0x1A, 0x05, 0x00, 0x62] -- distinct from
+#   get_dial_lock/set_dial_lock [0x16, 0x50] below.
+#
+# D2, MOR-2008 batch 4: this note used to also claim the band-stacking
+# WRITE side of [0x1A, 0x01] was undeclared. That was false against the
+# source it cited: p.8 of the same V1.0.6 PDF documents a SET row too
+# ("Set Band stacking register D1-Band Number(01-0C), D2 irrelevant"),
+# three lines under the GET row get_band_spectrum_display already cites
+# below -- established by the MOR-2008 batch 4 D2 audit report (§6.2),
+# which re-derived the page against the local PDF with pdftotext rather
+# than trusting the prior claim. The SET row is real but is not the same
+# command as Icom's own set_bsr (2-byte payload vs. set_bsr's 9-byte
+# band+register+frequency+mode+filter record) -- see get_bsr/set_bsr's
+# own { absent = ... } rows below for the narrower, correct claim.
+
+# Frequency / mode (compatible Icom CI-V subset — see PROVENANCE OPEN above)
+get_freq         = [0x03]  # source: Radioddity X6200 CI-V V1.0.6 p.4, narrative example only (via docs/validation/cat-audits/x6200.md) -- PROVENANCE OPEN above
+set_freq         = [0x05]  # source: none in V1.0.6 -- absent from both the opcode table and the p.4 narrative (which shows GET only) -- PROVENANCE OPEN above
+get_mode         = [0x04]  # source: PROVENANCE OPEN above -- 0x04 absent from the V1.0.6 table entirely (corrects the prior overstated comment)
+set_mode         = [0x06]  # source: PROVENANCE OPEN above -- grouped with get_mode; 0x06 absent from the table under the same row
+
+# Get receiver frequency range
+get_band_edge_freq = [0x02]  # source: Radioddity X6200 CI-V V1.0.6 p.5 (via docs/validation/cat-audits/x6200.md)
+
+# VFO selection / swap (0x07 family)
+get_vfo          = [0x07]  # source: Radioddity X6200 CI-V V1.0.6 p.5 (via docs/validation/cat-audits/x6200.md)
+set_vfo          = [0x07]  # source: same as get_vfo
+
+# Split (NOTE: Hamlib xiegu.c contains a comment that the *X6100* rejected
+# ``0x0f 0x01``; the X6200 PDF explicitly documents both ``0x0f 0x00``
+# (split off) and ``0x0f 0x01`` (split on). If a runtime wedge reappears
+# tied to set_split, audit this entry against firmware.)
+set_split        = [0x0F]  # source: Radioddity X6200 CI-V V1.0.6 p.5 (via docs/validation/cat-audits/x6200.md)
+
+# Attenuator / preamp
+get_attenuator   = [0x11]  # source: Radioddity X6200 CI-V V1.0.6 p.5 (via docs/validation/cat-audits/x6200.md)
+set_attenuator   = [0x11]  # source: same as get_attenuator
+get_preamp       = [0x16, 0x02]  # source: Radioddity X6200 CI-V V1.0.6 p.7 (GET; SET is p.8) -- re-checked against the local manuals/x6200.txt extract, D2 MOR-2019
+set_preamp       = [0x16, 0x02]  # source: Radioddity X6200 CI-V V1.0.6 p.8 (SET; GET is p.7) -- re-checked against the local extract
+
+# Levels (gets and sets — same opcode pair for both directions,
+# distinguished by frame data presence). Radioddity X6200 CI-V V1.0.6:
+# all GETs on p.6, all SETs on p.7 -- re-checked against the local
+# manuals/x6200.txt extract, D2 MOR-2019 (the prior "pp.6-7" per-line
+# citation did not distinguish which page covers which direction).
+get_af_level     = [0x14, 0x01]  # source: Radioddity X6200 CI-V V1.0.6 p.6 (via docs/validation/cat-audits/x6200.md)
+set_af_level     = [0x14, 0x01]  # source: Radioddity X6200 CI-V V1.0.6 p.7
+get_rf_gain      = [0x14, 0x02]  # source: Radioddity X6200 CI-V V1.0.6 p.6 (via docs/validation/cat-audits/x6200.md)
+set_rf_gain      = [0x14, 0x02]  # source: Radioddity X6200 CI-V V1.0.6 p.7
+get_squelch      = [0x14, 0x03]  # source: Radioddity X6200 CI-V V1.0.6 p.6 (via docs/validation/cat-audits/x6200.md)
+set_squelch      = [0x14, 0x03]  # source: Radioddity X6200 CI-V V1.0.6 p.7
+get_nr_level     = [0x14, 0x06]  # source: Radioddity X6200 CI-V V1.0.6 p.6 (via docs/validation/cat-audits/x6200.md)
+set_nr_level     = [0x14, 0x06]  # source: Radioddity X6200 CI-V V1.0.6 p.7
+get_cw_pitch     = [0x14, 0x09]  # source: Radioddity X6200 CI-V V1.0.6 p.6 (via docs/validation/cat-audits/x6200.md; see also [controls.cw_pitch] above)
+set_cw_pitch     = [0x14, 0x09]  # source: Radioddity X6200 CI-V V1.0.6 p.7
+# No CI-V CW keying: the documented command table (V1.0.6 Table 1,
+# pp.5-9, the complete opcode list) has no CW send/stop row of any kind,
+# so both directions are formally absent (MOR-4352) and the name is
+# never a "neither declared nor declared absent" state-3 gap.
+send_cw          = { absent = "Radioddity X6200 CI-V V1.0.6 Table 1 (pp.5-9, the complete documented opcode list) has no CI-V CW keying row of any kind -- documented-absent, not live-confirmed (MOR-4352)" }
+stop_cw          = { absent = "Radioddity X6200 CI-V V1.0.6 Table 1 (pp.5-9, the complete documented opcode list) has no CI-V CW keying row of any kind -- documented-absent, not live-confirmed (MOR-4352)" }
+get_rf_power     = [0x14, 0x0A]  # source: Radioddity X6200 CI-V V1.0.6 p.6 (via docs/validation/cat-audits/x6200.md)
+set_rf_power     = [0x14, 0x0A]  # source: Radioddity X6200 CI-V V1.0.6 p.7
+get_mic_gain     = [0x14, 0x0B]  # source: Radioddity X6200 CI-V V1.0.6 p.6 (via docs/validation/cat-audits/x6200.md)
+set_mic_gain     = [0x14, 0x0B]  # source: Radioddity X6200 CI-V V1.0.6 p.7
+get_key_speed    = [0x14, 0x0C]  # source: Radioddity X6200 CI-V V1.0.6 p.6 (via docs/validation/cat-audits/x6200.md)
+set_key_speed    = [0x14, 0x0C]  # source: Radioddity X6200 CI-V V1.0.6 p.7
+get_nb_level     = [0x14, 0x12]  # source: Radioddity X6200 CI-V V1.0.6 p.6 (via docs/validation/cat-audits/x6200.md)
+set_nb_level     = [0x14, 0x12]  # source: Radioddity X6200 CI-V V1.0.6 p.7
+get_monitor_gain = [0x14, 0x15]  # source: Radioddity X6200 CI-V V1.0.6 p.6 (via docs/validation/cat-audits/x6200.md)
+set_monitor_gain = [0x14, 0x15]  # source: Radioddity X6200 CI-V V1.0.6 p.7
+
+# Meters (all returns BCD 0-255 → 0-100%)
+get_s_meter      = [0x15, 0x02]  # source: Radioddity X6200 CI-V V1.0.6 p.7 (via docs/validation/cat-audits/x6200.md)
+get_power_meter  = [0x15, 0x11]  # source: same as get_s_meter
+get_swr          = [0x15, 0x12]  # source: same as get_s_meter
+get_vd_meter     = [0x15, 0x15]  # source: same as get_s_meter
+
+# Functions (0x16 family). Radioddity X6200 CI-V V1.0.6: GETs on p.7,
+# SETs on p.8 -- re-checked against the local manuals/x6200.txt extract,
+# D2 MOR-2019 (the prior per-line citation said p.8 for both directions).
+get_agc          = [0x16, 0x12]  # source: Radioddity X6200 CI-V V1.0.6 p.7 (via docs/validation/cat-audits/x6200.md); AGC OFF (0) presence + label pinned by tests/test_rig_loader.py::test_x6200_keeps_its_declared_off -- the full 00-03 domain is not test-pinned
+set_agc          = [0x16, 0x12]  # source: Radioddity X6200 CI-V V1.0.6 p.8
+get_nb           = [0x16, 0x22]  # source: Radioddity X6200 CI-V V1.0.6 p.7 (via docs/validation/cat-audits/x6200.md)
+set_nb           = [0x16, 0x22]  # source: Radioddity X6200 CI-V V1.0.6 p.8
+get_nr           = [0x16, 0x40]  # source: Radioddity X6200 CI-V V1.0.6 p.7 (docs/validation/cat-audits/x6200.md § "Correctly handled" lists NR alongside NB/AGC in this same table); MOR-2008 batch 3 -- dsp.py: get_nr/set_nr already built this opcode via their hardcoded fallback, only the [commands] declaration was missing (see the "nr / compressor / auto_notch" bullet above)
+set_nr           = [0x16, 0x40]  # source: Radioddity X6200 CI-V V1.0.6 p.8; same fix as get_nr
+get_compressor   = [0x16, 0x44]  # source: docs/validation/cat-audits/x6200.md § "A. UNDER-DECLARED" (opcode confirmed correct for X6200, presence-only in the registry); MOR-2008 batch 3, same fix as get_nr
+set_compressor   = [0x16, 0x44]  # source: same as get_compressor
+get_auto_notch   = [0x16, 0x41]  # source: docs/validation/cat-audits/x6200.md § "C. MISSING BACKEND", DNF row (the X6200's real notch mechanism, distinct from get_manual_notch below); MOR-2008 batch 3, same fix as get_nr
+set_auto_notch   = [0x16, 0x41]  # source: same as get_auto_notch
+get_dial_lock    = [0x16, 0x50]  # source: Radioddity X6200 CI-V V1.0.6 p.7 (via docs/validation/cat-audits/x6200.md); distinct from the undeclared front-panel LOCK register, see PROVENANCE OPEN above
+set_dial_lock    = [0x16, 0x50]  # source: Radioddity X6200 CI-V V1.0.6 p.8
+
+# Confirmed-absent DSP controls (MOR-2008 batch 3, promoted from the
+# "vox"/"notch"/"break_in" bullets above -- documented-absent per the
+# V1.0.6 table, not live-confirmed on hardware, since the X6200 unit was
+# destroyed 2026-08-11 before a live NAK capture could close that gap).
+get_vox          = { absent = "Radioddity X6200 CI-V V1.0.6 has no CI-V VOX row of any kind (docs/validation/cat-audits/x6200.md § 'D. MISMATCH / WRONG', VOX row) -- documented-absent, not live-confirmed" }
+set_vox          = { absent = "Radioddity X6200 CI-V V1.0.6 has no CI-V VOX row of any kind (docs/validation/cat-audits/x6200.md § 'D. MISMATCH / WRONG', VOX row) -- documented-absent, not live-confirmed" }
+get_manual_notch = { absent = "the Icom manual-notch opcode [0x16, 0x48] is not in the V1.0.6 table; this radio's real notch mechanism is the DNF toggle at [0x16, 0x41] (see get_auto_notch above) (docs/validation/cat-audits/x6200.md § 'D. MISMATCH / WRONG', manual notch row) -- documented-absent, not live-confirmed" }
+set_manual_notch = { absent = "the Icom manual-notch opcode [0x16, 0x48] is not in the V1.0.6 table; this radio's real notch mechanism is the DNF toggle at [0x16, 0x41] (see set_auto_notch above) (docs/validation/cat-audits/x6200.md § 'D. MISMATCH / WRONG', manual notch row) -- documented-absent, not live-confirmed" }
+get_break_in     = { absent = "the Icom CW BK-IN opcode [0x16, 0x47] is not in the V1.0.6 table, which documents only QSK hang time at [0x14, 0x0F] (docs/validation/cat-audits/x6200.md § 'D. MISMATCH / WRONG', break-in row) -- documented-absent, not live-confirmed" }
+set_break_in     = { absent = "the Icom CW BK-IN opcode [0x16, 0x47] is not in the V1.0.6 table, which documents only QSK hang time at [0x14, 0x0F] (docs/validation/cat-audits/x6200.md § 'D. MISMATCH / WRONG', break-in row) -- documented-absent, not live-confirmed" }
+
+# Identification
+get_transceiver_id = [0x19, 0x00]  # source: Radioddity X6200 CI-V V1.0.6 p.8 (via docs/validation/cat-audits/x6200.md)
+
+# 0x1A family (band/spectrum documented by the PDF; filter_width sourced
+# from LIVE evidence instead, per the doctrine live > hamlib > doc)
+get_band_spectrum_display = [0x1A, 0x01]  # source: Radioddity X6200 CI-V V1.0.6 p.8 (via docs/validation/cat-audits/x6200.md; re-checked against the local extract, D2 MOR-2019 -- the whole 0x1A family is on p.8, not p.8-9); GET half only -- the SET row on the same page is documented too (D2, MOR-2008 batch 4) but is a different, 2-byte command, not canonical set_bsr -- see PROVENANCE OPEN above
+get_filter_width          = [0x1A, 0x03]  # source: LIVE -- commit 74986b77 (MOR-706, 2026-06-12), raw USB CI-V 0xA4 captures; formula recorded in [filters] above; pinned by tests/test_dsp_filter_family.py::test_x6200_get_filter_width_decodes_raw_byte_index
+
+# PTT / tuner (0x1C family)
+ptt_on           = [0x1C, 0x00, 0x01]  # source: Radioddity X6200 CI-V V1.0.6 p.9 (via docs/validation/cat-audits/x6200.md); 3-byte wire tuple per MOR-2002 (commits 9957ee49, 713172a6) -- shape fix only, not a re-sourcing
+ptt_off          = [0x1C, 0x00, 0x00]  # source: same as ptt_on
+get_transceiver_status = [0x1C, 0x00]  # source: Radioddity X6200 CI-V V1.0.6 p.9 (via docs/validation/cat-audits/x6200.md); this opcode resolves to four different command-map names on IC-705 and X6200 (plan §8.1 Q3 / evidence §C9)
+set_transceiver_status = [0x1C, 0x00]  # source: same as get_transceiver_status
+get_tuner_status = [0x1C, 0x01]  # source: Radioddity X6200 CI-V V1.0.6 p.9 (via docs/validation/cat-audits/x6200.md)
+set_tuner_status = [0x1C, 0x01]  # source: same as get_tuner_status
+
+# Xiegu model ID. Returns 0x6200 on this rig; intended as a positive
+# disambiguator vs Icom CI-V at the same address (IC-705 has no 0x1D 0x19
+# opcode). Future improvement: probe this in discovery rather than relying
+# on hwid fingerprint.
+get_xiegu_model_id = [0x1D, 0x19]  # source: Radioddity X6200 CI-V V1.0.6 p.9 (via docs/validation/cat-audits/x6200.md); design rationale MOR-170
+
+# Selected / unselected VFO (0x25 / 0x26)
+get_selected_freq    = [0x25, 0x00]  # source: Radioddity X6200 CI-V V1.0.6 p.9 (via docs/validation/cat-audits/x6200.md)
+# set_selected_freq/set_unselected_freq/set_unselected_mode: no Python
+# builder resolves any of these three keys yet (git grep, zero hits in
+# src/rigplane/ -- MOR-2008 batch 4 D2 audit). Kept, not deleted: each
+# documents a real, sourced capability the same 0x25/0x26 opcodes
+# above confirm, data completeness rather than a code orphan.
+set_selected_freq    = [0x25, 0x00]  # source: same as get_selected_freq
+get_unselected_freq  = [0x25, 0x01]  # source: same as get_selected_freq
+set_unselected_freq  = [0x25, 0x01]  # source: same as get_selected_freq
+get_selected_mode    = [0x26, 0x00]  # source: same as get_selected_freq
+set_selected_mode    = [0x26, 0x00]  # source: same as get_selected_freq
+get_unselected_mode  = [0x26, 0x01]  # source: same as get_selected_freq
+set_unselected_mode  = [0x26, 0x01]  # source: same as get_selected_freq
+
+# Protocol ack/nak echoes (used by transport-level matchers)
+get_command_error_fa = [0xFA]  # source: Icom CI-V protocol convention; copied from the IC-705 profile at MOR-170, no X6200-specific row
+get_command_ok_fb    = [0xFB]  # source: same as get_command_error_fa
+
+# Memory / TX band edge (D2, MOR-2008 batch 4): none of these 11 opcodes
+# appear anywhere in V1.0.6 Table 1 parts 1-5 (pp.5-9, the complete
+# documented opcode list) -- absent, not merely undeclared.
+get_memory_mode      = { absent = "Radioddity X6200 CI-V implementation V1.0.6, Table 1 parts 1-5, pp.5-9 (complete opcode list) -- no 0x08/0x09/0x0A/0x0B row anywhere" }
+set_memory_mode      = { absent = "Radioddity X6200 CI-V implementation V1.0.6, Table 1 parts 1-5, pp.5-9 -- no 0x08 row anywhere" }
+memory_write         = { absent = "Radioddity X6200 CI-V implementation V1.0.6, Table 1 parts 1-5, pp.5-9 -- no 0x09 row anywhere" }
+memory_to_vfo        = { absent = "Radioddity X6200 CI-V implementation V1.0.6, Table 1 parts 1-5, pp.5-9 -- no 0x0A row anywhere" }
+memory_clear         = { absent = "Radioddity X6200 CI-V implementation V1.0.6, Table 1 parts 1-5, pp.5-9 -- no 0x0B row anywhere" }
+get_memory_contents  = { absent = "Radioddity X6200 CI-V implementation V1.0.6, Table 1 parts 1-5, pp.5-9 -- no 0x1A 0x00 row anywhere" }
+set_memory_contents  = { absent = "Radioddity X6200 CI-V implementation V1.0.6, Table 1 parts 1-5, pp.5-9 -- no 0x1A 0x00 row anywhere" }
+# get_bsr/set_bsr: the opcode [0x1A, 0x01] IS documented (see
+# get_band_spectrum_display above and the PROVENANCE OPEN note), but as a
+# different, structurally incompatible command -- 2-byte payload, not
+# Icom's 9-byte band+register+frequency+mode+filter record. Absent for
+# these canonical keys specifically; the opcode is not free for reuse
+# under this name.
+get_bsr              = { absent = "Radioddity X6200 CI-V implementation V1.0.6 p.8 -- [0x1A, 0x01] documented, but as get_band_spectrum_display's 2-byte command, not Icom's 9-byte get_bsr record" }
+set_bsr              = { absent = "Radioddity X6200 CI-V implementation V1.0.6 p.8 -- [0x1A, 0x01] SET row documented, but as a 2-byte band-select command, not Icom's 9-byte set_bsr record" }
+# get_tx_band_count/get_tx_band_edge: no 0x1E row in Table 1 either --
+# slightly softer confidence than the seven above, since the curator's own
+# "KNOWN-ABSENT" preface list (0x18/0x1B/0x21/0x27) does not name 0x1E
+# explicitly; this rests on table exhaustiveness, not an explicit vendor
+# statement.
+get_tx_band_count    = { absent = "Radioddity X6200 CI-V implementation V1.0.6, Table 1 parts 1-5, pp.5-9 -- no 0x1E row anywhere (table-exhaustiveness inference, not an explicit vendor statement)" }
+get_tx_band_edge     = { absent = "Radioddity X6200 CI-V implementation V1.0.6, Table 1 parts 1-5, pp.5-9 -- no 0x1E row anywhere (table-exhaustiveness inference, not an explicit vendor statement)" }
+
+[commands.overrides]
+
+[tx_policy]
+# Not bench-measured — inherited (MOR-1947). The backend factory routes X6200 onto Ic705SerialRadio: the Xiegu shares the IC-705 CI-V personality (MOR-170), and this profile declares the same 0x1C/0x00 PTT command.
+# That is the same transmit-state read the measured IC-7300 uses: the
+# solicited CI-V 0x1C/0x00 request in runtime/radio.py, decoded through the
+# 0x00/0x01 allowlist in runtime/_civ_rx.py. The decode is shared, so the
+# ruling is the same ruling, and it is written here rather than left absent
+# because an absent section and an empty one load identically — only a
+# written section records that this was decided.
+# Nothing on this radio's path reads this map today: the CI-V reply is
+# decoded natively in runtime/radio.py into the canonical
+# core/tx_observation.py TxStateReading contract. The section records the
+# profile ruling even though the current Icom read path does not consult it.
+# No write-during-transmit battery was run on this radio, so no radio-side
+# refusal is claimed. Empty means "nothing measured", not "nothing refuses".
+refused_during_tx = []
+# Positive-RX rule (§3.7): the receiving byte only. This wire carries no
+# keying attribution, so nothing else is mapped and the transmitting byte
+# is not-receiving without an invented source.
+tx_state_map = { "0" = "rx" }

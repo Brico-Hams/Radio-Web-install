@@ -1,0 +1,2029 @@
+import { writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fixtureById } from '../../../../../fixtures/catalog';
+/**
+ * MOR-1065 — the live adapter behind the semantic VFO / RX-TX surfaces.
+ *
+ * The failure mode this file exists to kill is FABRICATION: an adapter that
+ * fills an unobserved receiver with 'MAIN', an unobserved A/B slot with 'A',
+ * or an unobserved split with `false` looks perfectly healthy on screen and
+ * lies about the radio. Every "unknown" assertion below names the mutation
+ * it kills.
+ *
+ * The contract itself (`semantic/radio-view-model`) cannot be imported by
+ * `lib/runtime/**` production code (eslint invariant 1) — test files are
+ * exempt, so this is also where the emitted shape is proven to be a real,
+ * validator-clean `RadioViewModel`.
+ */
+import { describe, expect, it } from 'vitest';
+import type { Capabilities } from '$lib/types/capabilities';
+import type { FieldStatus, ServerState } from '$lib/types/state';
+import {
+  validateRadioViewModel, type RadioViewModel,
+} from '../../../../semantic/radio-view-model';
+import {
+  keyBlockedReasons, type TxAuthoritySnapshot,
+} from '../../../../semantic/rx-tx-surface';
+import { getFrequencyPermit } from '$lib/utils/tx-permit';
+import { antennaSwitchBlocks } from '../../../../semantic/AntennaSurface.svelte';
+import {
+  topologyFixtures, withAntenna, withCwKeyer,
+} from '../../../../semantic/fixtures/topologies';
+import { resolveFilterModeConfig, toMemoryPanelProps } from '../../props/panel-props';
+import {
+  toRadioViewModel, type MetersTxAuthority,
+} from '../radio-view-model-adapter';
+import { editState } from '../../../transport/__tests__/support/state-edit';
+import { PROFILES } from './conformance/profiles';
+import { FTX1_STATE_FULLY_UNOBSERVED } from './fixtures/ftx1-profile';
+import strictProjectionGolden from './fixtures/strict-projection.golden.json';
+
+const DUAL = ['scope', 'audio', 'tx', 'dual_rx'];
+const SINGLE = ['scope', 'audio', 'tx'];
+
+function caps(overrides: Partial<Capabilities> = {}): Capabilities {
+  return {
+    model: 'fixture', scope: true, audio: true, tx: true, capabilities: DUAL,
+    receivers: 2, vfoScheme: 'main_sub', freqRanges: [], modes: [], filters: [],
+    audioConfig: { sampleRate: 48000, channels: 1, codecs: ['pcm16'] },
+    webrtc: { available: false, enabled: false },
+    txBands: [{ start: 14000000, end: 14350000, name: '20m' }],
+    scopeSource: 'hardware', audioFftAvailable: true, ...overrides,
+  } as Capabilities;
+}
+
+/** One representative capability set per canonical topology fixture. */
+const TOPOLOGY_CAPS: Record<string, Capabilities> = {
+  '1/single': caps({ vfoScheme: 'single', receivers: 1, capabilities: SINGLE }),
+  '1/ab': caps({ vfoScheme: 'ab', receivers: 1, capabilities: SINGLE }),
+  '2/ab_shared': caps({ vfoScheme: 'ab_shared', receivers: 2 }),
+  '2/main_sub': caps({ vfoScheme: 'main_sub', receivers: 2 }),
+};
+
+const fresh: FieldStatus = {
+  storePath: 'x', observed: true, freshness: 'fresh', availability: 'available',
+};
+const stale: FieldStatus = {
+  storePath: 'x', observed: true, freshness: 'stale', availability: 'stale',
+};
+
+const slot = (freqHz: number, mode = 'USB') => ({
+  freqHz, mode, filterNum: 1, dataMode: 0,
+});
+const receiver = (freqHz: number) => ({
+  ...slot(freqHz), vfoA: slot(freqHz), vfoB: slot(freqHz + 50000), activeSlot: 'A',
+  filter: 1, att: 0, preamp: 0, nb: false, nr: false, afLevel: 1, rfGain: 1,
+  squelch: 0, sMeter: 0,
+});
+
+/** A fully observed state: every field this adapter reads is fresh+available. */
+function observedState(overrides: Partial<ServerState> = {}): ServerState {
+  const paths = [
+    'active', 'split', 'dualWatch', 'txTarget', 'main.freqHz', 'main.mode', 'main.filter',
+    'sub.freqHz', 'sub.mode', 'sub.filter', 'main.activeSlot', 'sub.activeSlot',
+  ];
+  for (const key of ['main', 'sub'] as const) {
+    for (const vfo of ['vfoA', 'vfoB']) {
+      paths.push(`${key}.${vfo}.freqHz`, `${key}.${vfo}.mode`, `${key}.${vfo}.filterNum`);
+    }
+  }
+  return {
+    active: 'MAIN', split: false, dualWatch: false, ptt: false,
+    txTarget: { status: 'known', receiver: 'MAIN', slot: 'A', frequencyHz: 14250000 },
+    main: receiver(14250000), sub: receiver(14300000),
+    scopeControls: { receiver: 0, dual: false } as ServerState['scopeControls'],
+    fieldStatus: Object.fromEntries(paths.map((p) => [p, fresh])),
+    ...overrides,
+  } as ServerState;
+}
+
+/** Nothing has ever been observed: the payload exists, field status does not. */
+const unobservedState = (): ServerState => ({
+  ...observedState(), fieldStatus: {},
+} as ServerState);
+
+describe('qualified VFO display observations', () => {
+  it.each(['topology-2-main-sub', 'topology-1-single', 'topology-2-ab-shared',
+    'tx-phase-rx', 'tx-phase-tx', 'tx-phase-fault'])('keeps %s fixture current with explicit synthetic observation evidence', (id) => {
+    const fixture = fixtureById(id)!;
+    const state = structuredClone(fixture.state()!);
+    const capabilities = fixture.caps()!;
+    for (const vfo of toRadioViewModel(state, capabilities)!.vfos) {
+      expect(vfo.slot.kind).not.toBe('unknown');
+      expect(vfo.frequencyHz).not.toBeNull();
+      expect(vfo.display?.frequencyHz).toEqual({ state: 'current', value: vfo.frequencyHz });
+      expect(vfo.display?.mode).toEqual({ state: 'current', value: vfo.mode });
+      expect(vfo.display?.filter).toEqual({ state: 'current', value: vfo.filter });
+    }
+  });
+  const dc = { ...TOPOLOGY_CAPS['1/single'], stateContractVersion: 1, providerGeneration: 1 };
+  function ds(isStale = false): ServerState {
+    const state = observedState({ stateContractVersion: 1, providerGeneration: 1 });
+    state.fieldStatus = Object.fromEntries(Object.keys(state.fieldStatus!).map((path) =>
+      [path, { ...(isStale && /\.(freqHz|mode|filter|filterNum)$/.test(path) ? stale : fresh), lastObservedMonotonic: 0 }]));
+    return state;
+  }
+  const display = (state: ServerState | null, c: Capabilities = dc) => toRadioViewModel(state, c)!.vfos[0].display;
+  // MOR-2425/R40: the `:true` (stale) rows are IDENTICAL to their `:false`
+  // twins — a held reading is a reading, so the strict model a stale
+  // snapshot projects is byte-for-byte the fresh one.
+  const strictBaselines: Record<string, unknown> = {
+    '1/single:false': [
+      {"receiver":"MAIN","slot":{"kind":"unslotted"},"label":"MAIN","frequencyHz":14250000,"mode":"USB","filter":"FIL1","isActive":true,"isActiveSlot":true,"isTxTarget":false},
+    ],
+    '1/single:true': [
+      {"receiver":"MAIN","slot":{"kind":"unslotted"},"label":"MAIN","frequencyHz":14250000,"mode":"USB","filter":"FIL1","isActive":true,"isActiveSlot":true,"isTxTarget":false},
+    ],
+    '1/ab:false': [
+      {"receiver":"MAIN","slot":{"kind":"slotted","id":"A"},"label":"MAIN A","frequencyHz":14250000,"mode":"USB","filter":"FIL1","isActive":true,"isActiveSlot":true,"isTxTarget":true},
+      {"receiver":"MAIN","slot":{"kind":"slotted","id":"B"},"label":"MAIN B","frequencyHz":14300000,"mode":"USB","filter":"FIL1","isActive":false,"isActiveSlot":false,"isTxTarget":false},
+    ],
+    '1/ab:true': [
+      {"receiver":"MAIN","slot":{"kind":"slotted","id":"A"},"label":"MAIN A","frequencyHz":14250000,"mode":"USB","filter":"FIL1","isActive":true,"isActiveSlot":true,"isTxTarget":true},
+      {"receiver":"MAIN","slot":{"kind":"slotted","id":"B"},"label":"MAIN B","frequencyHz":14300000,"mode":"USB","filter":"FIL1","isActive":false,"isActiveSlot":false,"isTxTarget":false},
+    ],
+    '2/ab_shared:false': [
+      {"receiver":"MAIN","slot":{"kind":"unslotted"},"label":"MAIN","frequencyHz":14250000,"mode":"USB","filter":"FIL1","isActive":true,"isActiveSlot":true,"isTxTarget":false},
+      {"receiver":"SUB","slot":{"kind":"unslotted"},"label":"SUB","frequencyHz":14300000,"mode":"USB","filter":"FIL1","isActive":false,"isActiveSlot":true,"isTxTarget":false},
+    ],
+    '2/ab_shared:true': [
+      {"receiver":"MAIN","slot":{"kind":"unslotted"},"label":"MAIN","frequencyHz":14250000,"mode":"USB","filter":"FIL1","isActive":true,"isActiveSlot":true,"isTxTarget":false},
+      {"receiver":"SUB","slot":{"kind":"unslotted"},"label":"SUB","frequencyHz":14300000,"mode":"USB","filter":"FIL1","isActive":false,"isActiveSlot":true,"isTxTarget":false},
+    ],
+    // MOR-2467 mixed versions: `main_sub` is two unslotted receiver-level
+    // records; `ds()`'s legacy `slot: 'A'` target normalizes to slot null, so
+    // MAIN — not "no record" — carries `isTxTarget` here.
+    '2/main_sub:false': [
+      {"receiver":"MAIN","slot":{"kind":"unslotted"},"label":"MAIN","frequencyHz":14250000,"mode":"USB","filter":"FIL1","isActive":true,"isActiveSlot":true,"isTxTarget":true},
+      {"receiver":"SUB","slot":{"kind":"unslotted"},"label":"SUB","frequencyHz":14300000,"mode":"USB","filter":"FIL1","isActive":false,"isActiveSlot":true,"isTxTarget":false},
+    ],
+    '2/main_sub:true': [
+      {"receiver":"MAIN","slot":{"kind":"unslotted"},"label":"MAIN","frequencyHz":14250000,"mode":"USB","filter":"FIL1","isActive":true,"isActiveSlot":true,"isTxTarget":true},
+      {"receiver":"SUB","slot":{"kind":"unslotted"},"label":"SUB","frequencyHz":14300000,"mode":"USB","filter":"FIL1","isActive":false,"isActiveSlot":true,"isTxTarget":false},
+    ],
+  };
+
+  it.each([false, true, false])('qualifies first accepted snapshots with stale=%s', (isStale) => {
+    expect(display(ds(isStale))).toEqual({
+      frequencyHz: { state: isStale ? 'stale' : 'current', value: 14250000 },
+      mode: { state: isStale ? 'stale' : 'current', value: 'USB' },
+      filter: { state: isStale ? 'stale' : 'current', value: 'FIL1' },
+    });
+  });
+  it('accepts zero frequency/filter and rejects non-scalar or empty values', () => {
+    // MOR-4213: every change is a new snapshot, built as the client builds a delta.
+    let state = ds(true);
+    state = editState(state, (s) => { s.main = { ...s.main, freqHz: 0, filter: 0 }; });
+    expect(display(state)?.frequencyHz).toEqual({ state: 'stale', value: 0 });
+    expect(display(state)?.filter).toEqual({ state: 'stale', value: 'FIL0' });
+    state = editState(state, (s) => { s.main = { ...s.main, freqHz: NaN, mode: '', filter: Infinity }; });
+    expect(Object.values(display(state)!)).toEqual(Array(3).fill({ state: 'unknown', reason: 'invalid-value' }));
+    state = editState(state, (s) => { s.main.freqHz = false as unknown as number; });
+    expect(display(state)?.frequencyHz).toEqual({ state: 'unknown', reason: 'invalid-value' });
+  });
+  it.each([
+    undefined, { ...fresh, observed: false }, { ...fresh },
+    { ...fresh, lastObservedMonotonic: -1 },
+    { ...fresh, lastObservedMonotonic: 1, availability: 'unavailable' },
+  ])('rejects missing or invalid leaf evidence %#', (status) => {
+    const state = editState(ds(), (s) => { s.fieldStatus!['main.freqHz'] = status as FieldStatus; });
+    expect(display(state)?.frequencyHz.state).toBe('unknown');
+  });
+  it.each(['main', 'main.vfoA'])('honors ancestor veto and ancestor staleness at %s', (path) => {
+    const c = { ...dc, vfoScheme: 'ab' as const, vfoReadback: 'absolute' as const };
+    let state = editState(ds(), (s) => {
+      s.fieldStatus![path] = { ...fresh, observed: false, lastObservedMonotonic: 0 };
+    });
+    expect(display(state, c)?.frequencyHz).toEqual({ state: 'unknown', reason: 'not-observed' });
+    state = editState(state, (s) => { s.fieldStatus![path] = { ...stale, lastObservedMonotonic: 0 }; });
+    expect(display(state, c)?.frequencyHz).toEqual({ state: 'stale', value: 14250000 });
+  });
+  it('fences capability generation, contract, reset and unresolved slot identity without caching', () => {
+    expect(display(ds())?.frequencyHz.state).toBe('current');
+    for (const c of [{ ...dc, providerGeneration: 2 }, { ...dc, stateContractVersion: undefined }]) {
+      expect(display(ds(), c)?.frequencyHz).toEqual({ state: 'unknown', reason: 'identity-unresolved' });
+    }
+    expect(display(null)?.frequencyHz.state).toBe('unknown');
+    const state = editState(ds(), (s) => { s.main = { ...s.main, vfoA: undefined, vfoB: undefined }; });
+    expect(display(state, { ...dc, vfoScheme: 'ab', vfoReadback: 'absolute' })?.frequencyHz)
+      .toEqual({ state: 'unknown', reason: 'identity-unresolved' });
+    expect(display(ds(true))?.frequencyHz).toEqual({ state: 'stale', value: 14250000 });
+  });
+  it.each([
+    { providerGeneration: undefined }, { providerGeneration: -1 },
+    { stateContractVersion: undefined }, { active: 'SUB' as const },
+  ])('rejects unresolved state identity %#', (overrides) => {
+    expect(display({ ...ds(), ...overrides })?.frequencyHz)
+      .toEqual({ state: 'unknown', reason: 'identity-unresolved' });
+  });
+  it('does not carry a receiver display into a new generation or fabricate a missing value', () => {
+    const first = ds(true);
+    let next = editState(ds(true), (s) => { s.providerGeneration = 2; s.main.freqHz = 7100000; });
+    const nextCaps = { ...dc, providerGeneration: 2 };
+    expect(display(first)?.frequencyHz).toEqual({ state: 'stale', value: 14250000 });
+    expect(display(next, nextCaps)?.frequencyHz).toEqual({ state: 'stale', value: 7100000 });
+    next = editState(next, (s) => { s.fieldStatus = {}; });
+    expect(display(next, nextCaps)?.frequencyHz).toEqual({ state: 'unknown', reason: 'not-observed' });
+    const missing = editState(ds(), (s) => { s.main.freqHz = undefined as unknown as number; });
+    expect(display(missing)?.frequencyHz).toEqual({ state: 'unknown', reason: 'invalid-value' });
+  });
+  it.each(Object.keys(TOPOLOGY_CAPS))('uses each %s position path and preserves strict baseline', (id) => {
+    const c = { ...TOPOLOGY_CAPS[id], stateContractVersion: 1, providerGeneration: 1 };
+    for (const isStale of [false, true]) {
+      const state = ds(isStale);
+      const view = toRadioViewModel(state, c)!;
+      const strict = view.vfos.map(({ display: _display, ...vfo }) => vfo);
+      const baseline = topologyFixtures[id as keyof typeof topologyFixtures].vfos;
+      // Capture the complete pre-change projection separately from display assertions.
+      expect(strict).toEqual(strictBaselines[`${id}:${isStale}`]);
+      expect(view.vfos).toHaveLength(baseline.length);
+      for (const vfo of view.vfos) {
+        const rx = vfo.receiver === 'MAIN' ? state.main : state.sub;
+        const raw = vfo.slot.kind === 'slotted' ? rx[vfo.slot.id === 'A' ? 'vfoA' : 'vfoB']! : rx;
+        expect(vfo.display?.frequencyHz).toEqual({ state: isStale ? 'stale' : 'current', value: raw.freqHz });
+      }
+    }
+  });
+  it('keeps relative selected/unselected provenance separate from absolute A/B', () => {
+    let state = editState(ds(true), (s) => {
+      delete s.fieldStatus!['main.activeSlot'];
+      s.main.unselectedVfo = slot(7100000, 'LSB');
+      for (const leaf of ['freqHz', 'mode', 'filterNum']) {
+        s.fieldStatus![`main.unselectedVfo.${leaf}`] = { ...stale, lastObservedMonotonic: 0 };
+      }
+    });
+    const c = { ...dc, vfoScheme: 'ab' as const, vfoReadback: 'selected_unselected' as const };
+    const view = toRadioViewModel(state, c)!;
+    expect(view.vfos.map((vfo) => [vfo.slot, vfo.display?.frequencyHz, vfo.isActiveSlot])).toEqual([
+      [{ kind: 'relative', role: 'selected' }, { state: 'stale', value: 14250000 }, true],
+      [{ kind: 'relative', role: 'unselected' }, { state: 'stale', value: 7100000 }, false],
+    ]);
+    state = editState(state, (s) => { s.main.unselectedVfo = undefined; });
+    expect(toRadioViewModel(state, c)!.vfos[1].display?.frequencyHz.state).toBe('unknown');
+  });
+});
+
+function model(
+  state: ServerState | null, capabilities: Capabilities | null,
+  tx?: MetersTxAuthority | null,
+): RadioViewModel {
+  const view = toRadioViewModel(state, capabilities, tx);
+  expect(view).not.toBeNull();
+  // The single most important assertion in this file: the adapter's output is
+  // a real view model by the contract's OWN validator, cross-field invariants
+  // included (no 'allowed' permit under an unknown target, no orphan
+  // isTxTarget). `lib/runtime` cannot import this type — the test can.
+  return validateRadioViewModel(view);
+}
+
+const INDICATOR_CAPS = caps({
+  stateContractVersion: 1,
+  providerGeneration: 1,
+  filters: ['FIL1'],
+  agcModes: [0, 2],
+  agcLabels: { '2': 'SLOW' },
+  capabilities: [
+    ...DUAL, 'filter_width', 'agc', 'nb', 'nr', 'notch', 'attenuator', 'preamp',
+    'attenuator_main', 'preamp_main', 'attenuator_sub', 'preamp_sub',
+    'rf_gain', 'digisel', 'ip_plus',
+  ],
+});
+const INDICATOR_LEAVES = [
+  'sMeter', 'filterWidth', 'agc', 'nb', 'nr', 'autoNotch', 'manualNotch',
+  'att', 'preamp', 'rfGain', 'digisel', 'ipplus',
+] as const;
+const RECEIVING: MetersTxAuthority = { radioTx: 'off', txRisk: 'none' };
+
+function indicatorState(overrides: Partial<ServerState> = {}): ServerState {
+  const base = observedState();
+  const fieldStatus = { ...base.fieldStatus } as Record<string, FieldStatus>;
+  for (const receiverKey of ['main', 'sub'] as const) {
+    for (const leaf of INDICATOR_LEAVES) {
+      fieldStatus[`${receiverKey}.${leaf}`] = leaf === 'sMeter'
+        ? { ...fresh, lastObservedMonotonic: 0 }
+        : fresh;
+    }
+  }
+  return {
+    ...base,
+    stateContractVersion: 1,
+    providerGeneration: 1,
+    main: {
+      ...base.main, sMeter: 0, filterWidth: 2400, agc: 0, nb: false, nr: true,
+      autoNotch: false, manualNotch: false, att: 0, preamp: 0, rfGain: 0,
+      digisel: false, ipplus: true,
+    },
+    sub: {
+      ...base.sub, sMeter: -37, filterWidth: 500, agc: 2, nb: true, nr: false,
+      autoNotch: true, manualNotch: false, att: 12, preamp: 2, rfGain: 0.75,
+      digisel: true, ipplus: false,
+    },
+    fieldStatus,
+    ...overrides,
+  } as ServerState;
+}
+
+describe('receiver indicators are structural-receiver addressed (MOR-2299 slice 1)', () => {
+  it.each([
+    ['1/single', ['MAIN']],
+    ['1/ab', ['MAIN']],
+    ['2/ab_shared', ['MAIN', 'SUB']],
+    ['2/main_sub', ['MAIN', 'SUB']],
+  ] as const)('%s emits one row per structural receiver, never per A/B slot', (id, receivers) => {
+    const view = model(indicatorState(), TOPOLOGY_CAPS[id]);
+    expect(view.receiverIndicators?.map((indicator) => indicator.receiver)).toEqual(receivers);
+  });
+
+  it('keeps an unavailable structural SUB present but unknown and disabled', () => {
+    const view = model(
+      indicatorState(),
+      { ...INDICATOR_CAPS, capabilities: INDICATOR_CAPS.capabilities.filter((tag) => tag !== 'dual_rx') },
+      RECEIVING,
+    );
+    const sub = view.receiverIndicators?.find((indicator) => indicator.receiver === 'SUB');
+    expect(sub?.availability).toEqual({ structural: true, operational: false });
+    expect(sub?.sMeter.reading).toEqual({ status: 'unknown' });
+    expect(sub?.sMeter.source).toBeNull();
+    expect(sub?.nbActive.reading).toEqual({ status: 'unknown' });
+  });
+
+  it('keeps deliberately different MAIN/SUB facts distinct across active-receiver switches', () => {
+    const before = model(indicatorState({ active: 'MAIN' }), INDICATOR_CAPS, RECEIVING);
+    const after = model(indicatorState({ active: 'SUB' }), INDICATOR_CAPS, RECEIVING);
+    const signature = (view: RadioViewModel) => view.receiverIndicators?.map((indicator) => ({
+      receiver: indicator.receiver,
+      s: indicator.sMeter.reading,
+      domain: indicator.sMeter.domain,
+      source: indicator.sMeter.source,
+      bw: indicator.bandwidthHz.reading,
+      agc: indicator.agcMode.reading,
+      nb: indicator.nbActive.reading,
+      att: indicator.attenuator.reading,
+      pre: indicator.preamp.reading,
+      rfg: indicator.rfGain.reading,
+      digi: indicator.digiSel.reading,
+      ip: indicator.ipPlus.reading,
+    }));
+    expect(signature(after)).toEqual(signature(before));
+    expect(signature(before)).toEqual([
+      {
+        receiver: 'MAIN', s: { status: 'known', value: 0 },
+        domain: { kind: 'unknown' },
+        source: { providerGeneration: 1, scope: 'receiver', receiver: 'MAIN', path: 'main.sMeter' },
+        bw: { status: 'known', value: 2400 }, agc: { status: 'known', value: 0 },
+        nb: { status: 'known', value: false }, att: { status: 'known', value: 0 },
+        pre: { status: 'known', value: 0 }, rfg: { status: 'known', value: 0 },
+        digi: { status: 'known', value: false }, ip: { status: 'known', value: true },
+      },
+      {
+        receiver: 'SUB', s: { status: 'known', value: -37 },
+        domain: { kind: 'unknown' },
+        source: { providerGeneration: 1, scope: 'receiver', receiver: 'SUB', path: 'sub.sMeter' },
+        bw: { status: 'known', value: 500 }, agc: { status: 'known', value: 'SLOW' },
+        nb: { status: 'known', value: true }, att: { status: 'known', value: 12 },
+        pre: { status: 'known', value: 2 }, rfg: { status: 'known', value: 0.75 },
+        digi: { status: 'known', value: true }, ip: { status: 'known', value: false },
+      },
+    ]);
+  });
+
+  it('keeps MAIN and SUB S-meter domains receiver-addressed', () => {
+    const state = indicatorState();
+    state.fieldStatus!['main.sMeter'] = {
+      ...state.fieldStatus!['main.sMeter'], quality: ['calibrated'],
+    };
+    state.fieldStatus!['sub.sMeter'] = {
+      ...state.fieldStatus!['sub.sMeter'], quality: ['uncalibrated'],
+    };
+
+    const indicators = model(state, INDICATOR_CAPS, RECEIVING).receiverIndicators!;
+    expect(indicators.map(({ receiver, sMeter }) => ({ receiver, domain: sMeter.domain }))).toEqual([
+      { receiver: 'MAIN', domain: { kind: 'engineering', unit: 'db' } },
+      { receiver: 'SUB', domain: { kind: 'raw' } },
+    ]);
+  });
+
+  it.each([
+    ['missing leaf', (statuses: Record<string, FieldStatus>) => { delete statuses['main.sMeter']; }],
+    ['unobserved leaf', (statuses: Record<string, FieldStatus>) => {
+      statuses['main.sMeter'] = { ...fresh, observed: false };
+    }],
+    ['stale leaf', (statuses: Record<string, FieldStatus>) => { statuses['main.sMeter'] = stale; }],
+    ['stale parent', (statuses: Record<string, FieldStatus>) => { statuses.main = stale; }],
+    ['parent-only', (statuses: Record<string, FieldStatus>) => {
+      delete statuses['main.sMeter'];
+      statuses.main = fresh;
+    }],
+  ] as const)('%s leaves the S-meter unknown', (_label, mutate) => {
+    const state = indicatorState();
+    const fieldStatus = { ...state.fieldStatus } as Record<string, FieldStatus>;
+    mutate(fieldStatus);
+    const main = model({ ...state, fieldStatus }, INDICATOR_CAPS, RECEIVING)
+      .receiverIndicators?.find((indicator) => indicator.receiver === 'MAIN');
+    expect(main?.sMeter.reading).toEqual({ status: 'unknown' });
+    expect(main?.sMeter.availability.operational).toBe(false);
+    expect(main?.sMeter.domain).toEqual({ kind: 'unknown' });
+    expect(main?.sMeter.source).toBeNull();
+  });
+
+  it.each([
+    ['provider mismatch', { providerGeneration: 2 }],
+    ['invalid marker', { lastObservedMonotonic: NaN }],
+  ] as const)('%s fences only the receiver S-meter qualification path', (kind, override) => {
+    const state = indicatorState();
+    const fieldStatus = { ...state.fieldStatus } as Record<string, FieldStatus>;
+    if (kind === 'invalid marker') fieldStatus['main.sMeter'] = { ...fresh, ...override };
+    const capabilities = kind === 'provider mismatch' ? { ...INDICATOR_CAPS, ...override } : INDICATOR_CAPS;
+    const main = model({ ...state, fieldStatus }, capabilities as Capabilities, RECEIVING)
+      .receiverIndicators?.find((indicator) => indicator.receiver === 'MAIN')!;
+    expect(main.sMeter.reading).toEqual({ status: 'unknown' });
+    expect(main.sMeter.availability.operational).toBe(false);
+    expect(main.sMeter.domain).toEqual({ kind: 'unknown' });
+    expect(main.sMeter.source).toBeNull();
+    expect(main.nbActive.reading).toEqual({ status: 'known', value: false });
+  });
+
+  it('uses one App-authority RF fact only: ptt and assignment cannot override it', () => {
+    const pttFalse = indicatorState({ ptt: false });
+    const pttTrue = indicatorState({ ptt: true });
+    const transmitting = model(
+      pttFalse, INDICATOR_CAPS, { radioTx: 'on', txRisk: 'none' },
+    ).radioWideIndicators!;
+    expect(transmitting.rfState).toBe('transmitting');
+
+    const receiving = model(pttTrue, INDICATOR_CAPS, RECEIVING).radioWideIndicators!;
+    expect(receiving.rfState).toBe('receiving');
+
+    const assignmentOnly = model(indicatorState({
+      ptt: true,
+      txTarget: { status: 'known', receiver: 'SUB', slot: 'A', frequencyHz: 14_300_000 },
+    }), INDICATOR_CAPS).radioWideIndicators!;
+    expect(assignmentOnly.rfState).toBe('unknown');
+  });
+
+  // MOR-2588: per-receiver att/preamp decide from what the radio declares —
+  // the server-served `attenuator_main`/`preamp_main` (MAIN) and
+  // `attenuator_sub`/`preamp_sub` (SUB) tags
+  // (`web/runtime_helpers.py: projected_receiver_control_tags`) — never from
+  // the radio-wide `attenuator`/`preamp` capability alone (tx500/x6100/x6200
+  // declare the command with no polled MAIN field) and never from whether a
+  // reading was observed. An IC-9700 with SUB selected credits MAIN's poll
+  // answer to SUB: the field status flips to `available` although the
+  // profile never declared SUB att/preamp, and only the missing tag says so
+  // (replaces the MOR-2511 B2 `fieldUndeclared` gates).
+  describe('MOR-2588: per-receiver att/preamp gates read the declared tags', () => {
+    // The tx500/x6100/x6200 shape: radio-wide attenuator/preamp capability
+    // (the command exists), no per-receiver declared-field tags.
+    const UNDECLARED_SUB_CAPS = caps({
+      stateContractVersion: 1,
+      providerGeneration: 1,
+      filters: ['FIL1'],
+      agcModes: [0, 2],
+      agcLabels: { '2': 'SLOW' },
+      capabilities: [
+        ...DUAL, 'filter_width', 'agc', 'nb', 'nr', 'notch', 'attenuator', 'preamp',
+      ],
+    });
+
+    it('keeps observed-but-undeclared SUB att/preamp structurally absent with the receiver-lacks-control reasons', () => {
+      // indicatorState credits BOTH receivers with fresh att/preamp readings;
+      // with no sub tags only MAIN was ever declared.
+      const view = model(indicatorState({ active: 'SUB' }), UNDECLARED_SUB_CAPS, RECEIVING);
+      const sub = view.receiverIndicators?.find((indicator) => indicator.receiver === 'SUB');
+      expect(sub?.attenuator.availability).toEqual({ structural: false, operational: false });
+      expect(sub?.attenuator.reading).toEqual({ status: 'unknown' });
+      expect(sub?.preamp.availability).toEqual({ structural: false, operational: false });
+      expect(sub?.preamp.reading).toEqual({ status: 'unknown' });
+      // The active-receiver group still reports the (wrongly credited) fresh
+      // reading; the disabled reason is what keeps the control hidden.
+      expect(view.rfFrontEnd?.attenuator.availability).toEqual({ structural: true, operational: true });
+      expect(view.disabledReasons).toContainEqual({ field: 'rfFrontEnd.attenuator', code: 'receiver-lacks-control' });
+      expect(view.disabledReasons).toContainEqual({ field: 'rfFrontEnd.preamp', code: 'receiver-lacks-control' });
+    });
+
+    it('draws SUB att/preamp when the radio declares them (tags served)', () => {
+      const view = model(indicatorState({ active: 'SUB' }), INDICATOR_CAPS, RECEIVING);
+      const sub = view.receiverIndicators?.find((indicator) => indicator.receiver === 'SUB');
+      expect(sub?.attenuator.availability).toEqual({ structural: true, operational: true });
+      expect(sub?.attenuator.reading).toEqual({ status: 'known', value: 12 });
+      expect(sub?.preamp.availability).toEqual({ structural: true, operational: true });
+      expect(sub?.preamp.reading).toEqual({ status: 'known', value: 2 });
+      expect(view.disabledReasons.some((r) => r.code === 'receiver-lacks-control')).toBe(false);
+    });
+
+    it('keeps observed-but-undeclared MAIN att/preamp structurally absent with the receiver-lacks-control reasons', () => {
+      // The Finding-A case: tx500/x6100/x6200 carry the radio-wide
+      // attenuator/preamp capability but declare no MAIN att/preamp field.
+      // The capability alone must not light MAIN, and the disabled reason
+      // must explain the control on MAIN exactly as on SUB.
+      const view = model(indicatorState({ active: 'MAIN' }), UNDECLARED_SUB_CAPS, RECEIVING);
+      const main = view.receiverIndicators?.find((indicator) => indicator.receiver === 'MAIN');
+      expect(main?.attenuator.availability).toEqual({ structural: false, operational: false });
+      expect(main?.attenuator.reading).toEqual({ status: 'unknown' });
+      expect(main?.preamp.availability).toEqual({ structural: false, operational: false });
+      expect(main?.preamp.reading).toEqual({ status: 'unknown' });
+      // The active-receiver group still reports the (wrongly credited) fresh
+      // reading on MAIN exactly as on SUB; the disabled reason is what keeps
+      // the control hidden and explained.
+      expect(view.rfFrontEnd?.attenuator.availability).toEqual({ structural: true, operational: true });
+      expect(view.disabledReasons).toContainEqual({ field: 'rfFrontEnd.attenuator', code: 'receiver-lacks-control' });
+      expect(view.disabledReasons).toContainEqual({ field: 'rfFrontEnd.preamp', code: 'receiver-lacks-control' });
+    });
+
+    it('draws MAIN att/preamp when the radio declares them for MAIN (tags served)', () => {
+      const view = model(indicatorState({ active: 'MAIN' }), INDICATOR_CAPS, RECEIVING);
+      const main = view.receiverIndicators?.find((indicator) => indicator.receiver === 'MAIN');
+      expect(main?.attenuator.availability).toEqual({ structural: true, operational: true });
+      expect(main?.attenuator.reading).toEqual({ status: 'known', value: 0 });
+      expect(main?.preamp.availability).toEqual({ structural: true, operational: true });
+      expect(main?.preamp.reading).toEqual({ status: 'known', value: 0 });
+      expect(view.disabledReasons.some((r) => r.code === 'receiver-lacks-control')).toBe(false);
+    });
+  });
+});
+
+const RADIO_WIDE_CAPS = caps({
+  antennas: 1,
+  capabilities: [
+    ...DUAL, 'tuner', 'rit', 'xit', 'split', 'dual_watch', 'dial_lock',
+    'vfo_equalize', 'vfo_swap',
+  ],
+});
+
+function radioWideState(overrides: Partial<ServerState> = {}): ServerState {
+  const base = observedState();
+  const fieldStatus = { ...base.fieldStatus } as Record<string, FieldStatus>;
+  for (const path of ['tunerStatus', 'ritOn', 'ritTx', 'ritFreq', 'txAntenna', 'dialLock']) {
+    fieldStatus[path] = fresh;
+  }
+  return {
+    ...base,
+    tunerStatus: 0, ritOn: false, ritTx: true, ritFreq: 0, txAntenna: 1, dialLock: false,
+    fieldStatus,
+    ...overrides,
+  } as ServerState;
+}
+
+describe('radio-wide indicators and DUAL actions are singleton contract facts (MOR-2309)', () => {
+  it('preserves one-port ANT, ATU off, false RIT and zero shared offset as known values', () => {
+    const shared = model(radioWideState(), RADIO_WIDE_CAPS).radioWideIndicators!;
+    expect(shared.rfState).toBe('unknown');
+    expect(shared.antenna).toEqual({
+      reading: { status: 'known', value: 1 },
+      availability: { structural: true, operational: true },
+    });
+    expect(shared.atu.reading).toEqual({ status: 'known', value: 'off' });
+    expect(shared.dialLock).toEqual({
+      reading: { status: 'known', value: false },
+      availability: { structural: true, operational: true },
+    });
+    expect(shared.ritActive.reading).toEqual({ status: 'known', value: false });
+    expect(shared.ritOffset.reading).toEqual({ status: 'known', value: 0 });
+    expect(shared.xitActive.reading).toEqual({ status: 'known', value: true });
+    expect(shared.xitOffset.reading).toEqual({ status: 'known', value: 0 });
+  });
+
+  const sharedLeafCases = [
+    ['txAntenna', (shared: NonNullable<RadioViewModel['radioWideIndicators']>) => shared.antenna],
+    ['tunerStatus', (shared: NonNullable<RadioViewModel['radioWideIndicators']>) => shared.atu],
+    ['dialLock', (shared: NonNullable<RadioViewModel['radioWideIndicators']>) => shared.dialLock],
+    ['ritOn', (shared: NonNullable<RadioViewModel['radioWideIndicators']>) => shared.ritActive],
+    ['ritFreq', (shared: NonNullable<RadioViewModel['radioWideIndicators']>) => shared.ritOffset],
+    ['ritTx', (shared: NonNullable<RadioViewModel['radioWideIndicators']>) => shared.xitActive],
+  ] as const;
+  const rejectedStatuses = [
+    ['missing', undefined],
+    ['observed false', { ...fresh, observed: false }],
+    ['explicit unavailable', { ...fresh, availability: 'missing' as const }],
+  ] as const;
+
+  it.each(sharedLeafCases)('%s requires its own observed and available leaf', (path, select) => {
+    for (const [label, rejected] of rejectedStatuses) {
+      const state = radioWideState();
+      const fieldStatus = { ...state.fieldStatus } as Record<string, FieldStatus>;
+      if (rejected === undefined) delete fieldStatus[path];
+      else fieldStatus[path] = rejected;
+      const field = select(model({ ...state, fieldStatus }, RADIO_WIDE_CAPS).radioWideIndicators!);
+      expect(field.reading, label).toEqual({ status: 'unknown' });
+      expect(field.availability.operational, label).toBe(false);
+    }
+  });
+
+  // MOR-2425/R40+R41: indicators hold too — a stale leaf is no longer rejected.
+  it.each(sharedLeafCases)('%s holds its last observed value when its leaf goes stale', (path, select) => {
+    const state = radioWideState();
+    const fieldStatus = { ...state.fieldStatus, [path]: stale } as Record<string, FieldStatus>;
+    const held = select(model({ ...state, fieldStatus }, RADIO_WIDE_CAPS).radioWideIndicators!);
+    const live = select(model(state, RADIO_WIDE_CAPS).radioWideIndicators!);
+    expect(held.reading).toEqual(live.reading);
+    expect(held.availability).toEqual(live.availability);
+  });
+
+  it('the shared RIT offset gate applies independently to both displayed aggregates', () => {
+    const state = radioWideState();
+    const fieldStatus = { ...state.fieldStatus } as Record<string, FieldStatus>;
+    fieldStatus.ritFreq = { ...fresh, observed: false };
+    const shared = model({ ...state, fieldStatus }, RADIO_WIDE_CAPS).radioWideIndicators!;
+    expect(shared.ritOffset.reading).toEqual({ status: 'unknown' });
+    expect(shared.xitOffset.reading).toEqual({ status: 'unknown' });
+    expect(shared.ritOffset.availability.operational).toBe(false);
+  });
+
+  it('publishes exact primitive action availability', () => {
+    const actions = model(radioWideState(), RADIO_WIDE_CAPS).radioWideIndicators!.actions;
+    expect(actions).toEqual({
+      main: { structural: true, operational: true },
+      sub: { structural: true, operational: true },
+      equalize: { structural: true, operational: true },
+      swap: { structural: true, operational: true },
+    });
+
+    const unavailableSub = model(
+      radioWideState(),
+      { ...RADIO_WIDE_CAPS, capabilities: RADIO_WIDE_CAPS.capabilities.filter((tag) => tag !== 'dual_rx') },
+    ).radioWideIndicators!.actions;
+    expect(unavailableSub.main).toEqual({ structural: true, operational: true });
+    expect(unavailableSub.sub).toEqual({ structural: true, operational: false });
+  });
+
+  it.each([
+    ['vfo_equalize', 'equalize'],
+    ['vfo_swap', 'swap'],
+  ] as const)('removing %s removes only the %s action', (capability, action) => {
+    const actions = model(radioWideState(), {
+      ...RADIO_WIDE_CAPS,
+      capabilities: RADIO_WIDE_CAPS.capabilities.filter((tag) => tag !== capability),
+    }).radioWideIndicators!.actions;
+    expect(actions[action]).toEqual({ structural: false, operational: false });
+    const expectedPresent = {
+      equalize: action !== 'equalize', swap: action !== 'swap',
+    } as const;
+    expect(actions.equalize).toEqual({ structural: expectedPresent.equalize, operational: expectedPresent.equalize });
+    expect(actions.swap).toEqual({ structural: expectedPresent.swap, operational: expectedPresent.swap });
+    expect(actions.main).toEqual({ structural: true, operational: true });
+    expect(actions.sub).toEqual({ structural: true, operational: true });
+  });
+
+  it('publishes an exact per-action absence matrix for unsupported controls', () => {
+    const noActions = model(
+      radioWideState(),
+      caps({ vfoScheme: 'single', receivers: 1, antennas: 1, capabilities: ['tx'] }),
+    ).radioWideIndicators!.actions;
+    expect(noActions).toEqual({
+      main: { structural: false, operational: false },
+      sub: { structural: false, operational: false },
+      equalize: { structural: false, operational: false },
+      swap: { structural: false, operational: false },
+    });
+  });
+
+  it('never emits deprecated receiver RF state in live output', () => {
+    const view = model(radioWideState(), RADIO_WIDE_CAPS, RECEIVING);
+    expect(view.receiverIndicators).toBeDefined();
+    for (const indicator of view.receiverIndicators ?? []) {
+      expect(Object.hasOwn(indicator, 'rfState')).toBe(false);
+    }
+  });
+
+  it('preserves a known-true dial lock without collapsing it to false', () => {
+    const shared = model(radioWideState({ dialLock: true }), RADIO_WIDE_CAPS).radioWideIndicators!;
+    expect(shared.dialLock).toEqual({
+      reading: { status: 'known', value: true },
+      availability: { structural: true, operational: true },
+    });
+  });
+
+  it('dialLock is structural-absent without the dial_lock capability', () => {
+    const shared = model(radioWideState(), {
+      ...RADIO_WIDE_CAPS,
+      capabilities: RADIO_WIDE_CAPS.capabilities.filter((tag) => tag !== 'dial_lock'),
+    }).radioWideIndicators!;
+    expect(shared.dialLock).toEqual({
+      reading: { status: 'unknown' },
+      availability: { structural: false, operational: false },
+    });
+  });
+});
+
+describe('dialLock over the live-captured profiles (MOR-2509)', () => {
+  it('ic7300: capability declared, leaf never observed → unknown, never false', () => {
+    const ic7300 = PROFILES.ic7300;
+    expect(ic7300.state.dialLock).toBe(false); // pre-MOR-2513 capture: default value, never confirmed
+    expect(ic7300.state.fieldStatus?.dialLock?.observed).toBe(false);
+    expect(ic7300.caps.capabilities.includes('dial_lock')).toBe(true);
+
+    const view = validateRadioViewModel(toRadioViewModel(ic7300.state, ic7300.caps)!);
+    expect(view.radioWideIndicators!.dialLock).toEqual({
+      reading: { status: 'unknown' },
+      availability: { structural: true, operational: false },
+    });
+  });
+
+  it('ftx1: an observed false dial lock survives as known false', () => {
+    const ftx1 = PROFILES.ftx1;
+    expect(ftx1.state.dialLock).toBe(false);
+    expect(ftx1.state.fieldStatus?.dialLock?.observed).toBe(true);
+    expect(ftx1.caps.capabilities.includes('dial_lock')).toBe(true);
+
+    const view = validateRadioViewModel(toRadioViewModel(ftx1.state, ftx1.caps)!);
+    expect(view.radioWideIndicators!.dialLock).toEqual({
+      reading: { status: 'known', value: false },
+      availability: { structural: true, operational: true },
+    });
+  });
+
+  it('ftx1 fully unobserved (MOR-2513): null leaf reads unknown, never false', () => {
+    const state = FTX1_STATE_FULLY_UNOBSERVED;
+    expect(state.dialLock).toBeNull();
+
+    const view = validateRadioViewModel(toRadioViewModel(state, PROFILES.ftx1.caps)!);
+    expect(view.radioWideIndicators!.dialLock).toEqual({
+      reading: { status: 'unknown' },
+      availability: { structural: true, operational: false },
+    });
+  });
+});
+
+describe('filter selector and width capability split (MOR-2530)', () => {
+  it('FTX-1 omits the selector while retaining width facts and bounds', () => {
+    const { state, caps } = PROFILES.ftx1;
+    const view = validateRadioViewModel(toRadioViewModel(state, caps)!);
+
+    expect(caps.filters).toEqual([]);
+    expect(caps.capabilities).toContain('filter_width');
+    expect(view.modeFilter!.filterChoices).toEqual([]);
+    expect(view.modeFilter!.currentFilter.availability.structural).toBe(false);
+    expect(view.modeFilter!.filterWidth.availability.structural).toBe(true);
+    expect(view.modeFilter!.filterWidthMin.reading).toEqual({ status: 'known', value: 300 });
+    expect(view.modeFilter!.filterWidthMax.reading).toEqual({ status: 'known', value: 4000 });
+    expect(view.filterPassband!.filterShape.availability.structural).toBe(true);
+    expect(view.receiverIndicators!.every((item) => item.bandwidthHz.availability.structural)).toBe(true);
+  });
+
+  it('IC-7300 retains both selector and width facts', () => {
+    const { state, caps } = PROFILES.ic7300;
+    const view = validateRadioViewModel(toRadioViewModel(state, caps)!);
+
+    expect(caps.filters).toEqual(['FIL1', 'FIL2', 'FIL3']);
+    expect(caps.capabilities).toContain('filter_width');
+    expect(view.modeFilter!.filterChoices).toEqual(['FIL1', 'FIL2', 'FIL3']);
+    expect(view.modeFilter!.currentFilter.availability.structural).toBe(true);
+    expect(view.modeFilter!.filterWidth.availability.structural).toBe(true);
+    expect(view.filterPassband!.filterShape.availability.structural).toBe(true);
+  });
+});
+
+describe('topology is derived from real capabilities', () => {
+  it.each(Object.keys(TOPOLOGY_CAPS))('%s is reachable and validator-clean', (id) => {
+    const view = model(observedState(), TOPOLOGY_CAPS[id]);
+    expect(view.topologyId).toBe(id);
+    expect(view.vfoScheme).toBe(topologyFixtures[id as keyof typeof topologyFixtures].vfoScheme);
+  });
+
+  it('emits the structural VFO positions each scheme implies', () => {
+    const shape = (id: string) => model(observedState(), TOPOLOGY_CAPS[id]).vfos
+      .map((v) => `${v.receiver}:${v.slot.kind === 'slotted' ? v.slot.id : v.slot.kind}`);
+    expect(shape('1/single')).toEqual(['MAIN:unslotted']);
+    expect(shape('1/ab')).toEqual(['MAIN:A', 'MAIN:B']);
+    expect(shape('2/ab_shared')).toEqual(['MAIN:unslotted', 'SUB:unslotted']);
+    // MOR-2467: `main_sub` is two receiver-level records, never A/B slots.
+    expect(shape('2/main_sub')).toEqual(['MAIN:unslotted', 'SUB:unslotted']);
+  });
+
+  it('renders nothing rather than guessing when capabilities are absent or contradictory', () => {
+    expect(toRadioViewModel(observedState(), null)).toBeNull();
+    // receivers=2 under a single-receiver scheme is `invalid-topology`; a
+    // guessed topology here would silently mis-address every TX decision.
+    expect(toRadioViewModel(observedState(), caps({ vfoScheme: 'ab', receivers: 2 }))).toBeNull();
+  });
+});
+
+describe('unobserved facts survive as the explicit unknown branch', () => {
+  it('projects fresh relative values without fabricating A/B identity', () => {
+    const base = observedState();
+    const fieldStatus = {
+      ...base.fieldStatus,
+      'main.freqHz': fresh,
+      'main.mode': fresh,
+      'main.filter': fresh,
+      'main.unselectedVfo.freqHz': fresh,
+      'main.unselectedVfo.mode': fresh,
+      'main.unselectedVfo.filterNum': fresh,
+    } as Record<string, FieldStatus>;
+    delete fieldStatus['main.activeSlot'];
+    const view = model({
+      ...base,
+      main: {
+        ...base.main,
+        unselectedVfo: slot(7_100_000, 'LSB'),
+      },
+      fieldStatus,
+    } as ServerState, caps({
+      vfoScheme: 'ab', receivers: 1, capabilities: SINGLE,
+      vfoReadback: 'selected_unselected',
+    }));
+
+    expect(view.vfos.map((vfo) => [vfo.slot, vfo.frequencyHz, vfo.label])).toEqual([
+      [{ kind: 'relative', role: 'selected' }, 14_250_000, 'Selected VFO'],
+      [{ kind: 'relative', role: 'unselected' }, 7_100_000, 'Unselected VFO'],
+    ]);
+    expect(view.vfos.filter((vfo) => vfo.isActive)).toHaveLength(1);
+    expect(view.vfos.some((vfo) => vfo.slot.kind === 'slotted')).toBe(false);
+  });
+
+  it('keeps selected-only relative readback neutral while the unselected tuple is unavailable', () => {
+    const base = observedState();
+    const fieldStatus = { ...base.fieldStatus } as Record<string, FieldStatus>;
+    delete fieldStatus['main.activeSlot'];
+    const capabilities = caps({
+      vfoScheme: 'ab', receivers: 1, capabilities: SINGLE,
+      vfoReadback: 'selected_unselected',
+    });
+    const state = {
+      ...base,
+      main: { ...base.main, unselectedVfo: undefined },
+      fieldStatus,
+    } as ServerState;
+
+    const view = model(state, capabilities);
+    expect(view.vfos.map((vfo) => [vfo.slot, vfo.frequencyHz])).toEqual([
+      [{ kind: 'relative', role: 'selected' }, 14_250_000],
+      [{ kind: 'relative', role: 'unselected' }, null],
+    ]);
+    expect(view.vfos.some((vfo) => vfo.slot.kind === 'slotted')).toBe(false);
+    expect(toMemoryPanelProps(state, capabilities).vfoIdentityKnown).toBe(false);
+  });
+
+  it('keeps an older selected-only payload neutral without local persistence guesses', () => {
+    const base = observedState();
+    const fieldStatus = { ...base.fieldStatus } as Record<string, FieldStatus>;
+    delete fieldStatus['main.activeSlot'];
+    for (const slotKey of ['vfoA', 'vfoB']) {
+      for (const leaf of ['freqHz', 'mode', 'filterNum', 'dataMode']) {
+        delete fieldStatus[`main.${slotKey}.${leaf}`];
+      }
+    }
+    const capabilities = caps({
+      vfoScheme: 'ab', receivers: 1, capabilities: SINGLE,
+    });
+    const state = {
+      ...base,
+      main: {
+        ...base.main, vfoA: undefined, vfoB: undefined, unselectedVfo: undefined,
+      },
+      fieldStatus,
+    } as ServerState;
+
+    const view = model(state, capabilities);
+    expect(view.vfos.map((vfo) => [vfo.slot, vfo.frequencyHz])).toEqual([
+      [{ kind: 'relative', role: 'selected' }, 14_250_000],
+      [{ kind: 'relative', role: 'unselected' }, null],
+    ]);
+    expect(toMemoryPanelProps(state, capabilities).vfoIdentityKnown).toBe(false);
+  });
+
+  it('leaves an explicitly absolute single-RX A/B contract literal', () => {
+    const base = observedState();
+    const fieldStatus = { ...base.fieldStatus } as Record<string, FieldStatus>;
+    delete fieldStatus['main.activeSlot'];
+    const view = model({ ...base, fieldStatus } as ServerState, caps({
+      vfoScheme: 'ab', receivers: 1, capabilities: SINGLE, vfoReadback: 'absolute',
+    }));
+    expect(view.vfos.map((vfo) => vfo.slot)).toEqual([
+      { kind: 'slotted', id: 'A' }, { kind: 'slotted', id: 'B' },
+    ]);
+  });
+
+  // MUTATION KILLED: `activeReceiver: { status: 'known', receiver: state.active ?? 'MAIN' }`
+  // — the classic "default to MAIN" that MOR-988 §3.2 forbids.
+  it('never fabricates an active receiver, and marks no VFO active', () => {
+    const view = model(unobservedState(), TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.activeReceiver).toEqual({ status: 'unknown' });
+    expect(view.vfos.some((v) => v.isActive)).toBe(false);
+    expect(view.disabledReasons).toContainEqual({
+      field: 'activeReceiver', code: 'field-not-observed',
+    });
+  });
+
+  // MUTATION KILLED: `split: { status: 'known', value: state.split ?? false }`.
+  it.each(['split', 'dualWatch'] as const)('never fabricates %s as off', (field) => {
+    expect(model(unobservedState(), TOPOLOGY_CAPS['2/main_sub'])[field])
+      .toEqual({ status: 'unknown' });
+  });
+
+  // MUTATION KILLED: enumerating `['A', 'B']` for a slotted scheme whose slot
+  // view was never sent — one fabricated 'A' position and the operator reads a
+  // slot identity the radio never reported.
+  it('degrades an unobserved A/B slot view to slot.kind "unknown", not to "A"', () => {
+    const view = model(observedState({
+      main: { ...receiver(14250000), vfoA: undefined, vfoB: undefined },
+    } as Partial<ServerState>), TOPOLOGY_CAPS['1/ab']);
+    expect(view.vfos).toHaveLength(1);
+    expect(view.vfos[0].slot).toEqual({ kind: 'unknown' });
+    expect(view.vfos.some((v) => v.slot.kind === 'slotted')).toBe(false);
+  });
+
+  // MUTATION KILLED: reading `<rx>.activeSlot` ungated. The backend DEFAULTS
+  // that field (`state_schema.py`: `activeSlot: str = "A"`), so an ungated
+  // read highlights MAIN A as active on evidence the radio never provided —
+  // a fabricated fact on an operator display, in a file whose header promises
+  // every radio fact is field-status gated. MOR-2467 moved this kill to
+  // `1/ab`: `main_sub` no longer reads `activeSlot` at all (its records are
+  // unslotted), so `ab` is the scheme where the gated read still decides.
+  it('marks no slot active when <rx>.activeSlot was never observed', () => {
+    const base = observedState();
+    const fieldStatus = { ...base.fieldStatus } as Record<string, unknown>;
+    delete fieldStatus['main.activeSlot'];
+    delete fieldStatus['sub.activeSlot'];
+    const view = model(
+      { ...base, fieldStatus } as unknown as ServerState, TOPOLOGY_CAPS['1/ab'],
+    );
+
+    expect(view.vfos.filter((v) => v.isActive)).toEqual([]);
+    // The slot IDENTITIES stay structurally known (the slot view WAS observed);
+    // only "which one is active" is unknown. The two must not collapse.
+    expect(view.vfos.map((v) => v.slot.kind)).toEqual(['slotted', 'slotted']);
+  });
+
+  it('marks the active receiver\'s record active once active is reported', () => {
+    const view = model(observedState({
+      txTarget: { status: 'known', receiver: 'MAIN', slot: null, frequencyHz: 14250000 },
+    }), TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.vfos.filter((v) => v.isActive).map((v) => v.label)).toEqual(['MAIN']);
+  });
+
+  it('projects each newer coherent bound alias revision without client arbitration', () => {
+    const capabilities = caps({
+      vfoScheme: 'ab', receivers: 1, capabilities: SINGLE,
+      vfoReadback: 'selected_unselected',
+    });
+    for (const frequencyHz of [14_164_000, 14_130_000, 14_123_000]) {
+      const base = observedState();
+      const view = model({
+        ...base,
+        main: {
+          ...base.main,
+          freqHz: frequencyHz,
+          vfoA: slot(frequencyHz),
+          vfoB: slot(14_076_000),
+          activeSlot: 'A',
+        },
+      } as ServerState, capabilities);
+      expect(view.vfos.map((vfo) => [vfo.label, vfo.frequencyHz])).toEqual([
+        ['MAIN A', frequencyHz],
+        ['MAIN B', 14_076_000],
+      ]);
+    }
+  });
+
+  // ── MOR-1335 (G4): the per-receiver active slot ─────────────────────────
+  //
+  // `isActive` answers "is this the ACTIVE RECEIVER's active VFO" and is
+  // therefore globally unique — which is why the VFO surface, gating tuning on
+  // it, left SUB untunable on `2/main_sub`. `isActiveSlot` answers the
+  // per-receiver question, so each receiver names the VFO its own
+  // receiver-scoped `set_freq` would write.
+
+  // MUTATION KILLED: deriving `isActiveSlot` from the ACTIVE RECEIVER (i.e.
+  // aliasing `isActive`) — SUB would report no active slot at all and the
+  // parity gap this fact exists to close would silently persist. MOR-2467:
+  // on slot-less `main_sub` each receiver's one unslotted record IS its
+  // active slot, exactly the `2/ab_shared` shape.
+  it('names each receiver\'s own active record, including the receiver that is NOT active', () => {
+    const view = model(observedState({
+      txTarget: { status: 'known', receiver: 'MAIN', slot: null, frequencyHz: 14250000 },
+    }), TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.activeReceiver).toEqual({ status: 'known', receiver: 'MAIN' });
+    expect(view.vfos.filter((v) => v.isActiveSlot).map((v) => v.label))
+      .toEqual(['MAIN', 'SUB']);
+    // ...and the radio-wide fact is unchanged by it: still exactly one.
+    expect(view.vfos.filter((v) => v.isActive).map((v) => v.label)).toEqual(['MAIN']);
+  });
+
+  // MOR-2467 retired the per-receiver `activeSlot` discrimination test that
+  // used to live here: `main_sub` no longer reads `<rx>.activeSlot` at all
+  // (unslotted records have no slot to name), so the ungated-read kill moved
+  // to `1/ab` above — the one scheme where the gated read still decides.
+
+  // An unslotted position IS its receiver's active slot — there is no other
+  // VFO on that receiver for `set_freq` to write. Kills a derivation keyed to
+  // a slotted id, which would leave every `single`/`ab_shared`/`main_sub`
+  // position untunable.
+  it.each(['1/single', '2/ab_shared', '2/main_sub'] as const)('%s: every unslotted position is its receiver\'s active slot', (id) => {
+    const view = model(observedState(), TOPOLOGY_CAPS[id]);
+    expect(view.vfos.every((v) => v.isActiveSlot)).toBe(true);
+  });
+
+  // The decomposition, stated once over the whole matrix: `isActive` is
+  // exactly "this receiver is the active one AND this is its active slot".
+  it.each(Object.keys(TOPOLOGY_CAPS))('%s: isActive === active receiver AND isActiveSlot', (id) => {
+    const view = model(observedState(), TOPOLOGY_CAPS[id]);
+    for (const vfo of view.vfos) {
+      const receiverActive = view.activeReceiver.status === 'known'
+        && view.activeReceiver.receiver === vfo.receiver;
+      expect(vfo.isActive, vfo.label).toBe(receiverActive && vfo.isActiveSlot);
+    }
+  });
+
+  // MOR-2425/R40: a HELD TX target is a target. Staleness alone no longer
+  // demotes it; the never-observed fixture below still does.
+  it('holds a stale TX target, permit and flags exactly as the fresh one', () => {
+    const view = model(observedState({
+      fieldStatus: { ...observedState().fieldStatus, txTarget: stale },
+    }), TOPOLOGY_CAPS['2/main_sub']);
+    const live = model(observedState(), TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.txTarget).toEqual(live.txTarget);
+    expect(view.txPermit).toEqual(live.txPermit);
+    expect(view.vfos.map((v) => v.isTxTarget)).toEqual(live.vfos.map((v) => v.isTxTarget));
+  });
+
+  // MUTATION KILLED: `frequencyHz: rx.freqHz ?? 14074000` (the legacy
+  // `toVfoProps` default) — a plausible-looking frequency for an unread radio.
+  it('nulls unobserved frequency / mode / filter instead of defaulting them', () => {
+    const view = model(unobservedState(), TOPOLOGY_CAPS['1/single']);
+    expect(view.vfos[0]).toMatchObject({ frequencyHz: null, mode: null, filter: null });
+  });
+
+  it('keeps observed readings when the field status backs them', () => {
+    const view = model(observedState({
+      txTarget: { status: 'known', receiver: 'MAIN', slot: null, frequencyHz: 14250000 },
+    }), TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.vfos[0]).toMatchObject({
+      receiver: 'MAIN', frequencyHz: 14250000, mode: 'USB', filter: 'FIL1',
+      isActive: true, isTxTarget: true,
+    });
+  });
+});
+
+// ── MOR-2467: `main_sub` is exactly two unslotted receiver-level records ────
+//
+// The owner-confirmed IC-7610 reality: MAIN and SUB are receiver-level VFOs
+// with NO per-receiver A/B slots. The backend describes the radio as
+// MAIN/SUB-only, so a `main_sub` capabilities payload must present exactly
+// two records reading `main.freqHz`/`main.mode`/`main.filter` and the `sub`
+// equivalents — even when `vfoA`/`vfoB`/`activeSlot` are absent entirely
+// (the pre-fix adapter collapsed such a receiver to one `kind: 'unknown'`
+// position with `identity-unresolved` display, blanking Standard).
+describe('main_sub presents two unslotted receiver-level VFO records (MOR-2467)', () => {
+  /** The IC-7610 shape: receiver-level readings only — no vfoA/vfoB and no
+   * activeSlot anywhere, neither raw state nor field status. Every surviving
+   * field-status entry is marked with a valid monotonic timestamp so display
+   * qualification is decided by freshness/identity, not by evidence shape. */
+  function receiverLevelState(overrides: Partial<ServerState> = {}): ServerState {
+    const base = observedState();
+    const fieldStatus: Record<string, FieldStatus> = {};
+    for (const [path, status] of Object.entries(base.fieldStatus ?? {})) {
+      fieldStatus[path] = { ...(status as FieldStatus), lastObservedMonotonic: 0 };
+    }
+    for (const key of ['main', 'sub'] as const) {
+      delete fieldStatus[`${key}.activeSlot`];
+      for (const slotKey of ['vfoA', 'vfoB']) {
+        for (const leaf of ['freqHz', 'mode', 'filterNum', 'dataMode']) {
+          delete fieldStatus[`${key}.${slotKey}.${leaf}`];
+        }
+      }
+    }
+    return {
+      ...base,
+      main: { freqHz: 14250000, mode: 'USB', filter: 1 },
+      sub: { freqHz: 21295000, mode: 'LSB', filter: 2 },
+      fieldStatus,
+      ...overrides,
+    } as ServerState;
+  }
+
+  const SLOTLESS_TARGET = {
+    status: 'known' as const, receiver: 'MAIN' as const, slot: null, frequencyHz: 14250000,
+  };
+  /** Caps/state pair carrying the identity fields display qualification
+   * fences on (`stateContractVersion`/`providerGeneration` agreement). */
+  const IDENTITY_CAPS = {
+    ...TOPOLOGY_CAPS['2/main_sub'], stateContractVersion: 1, providerGeneration: 1,
+  } as Capabilities;
+
+  // MUTATION KILLED: re-introducing the `{ MAIN: ['A','B'], SUB: ['A','B'] }`
+  // slot table for `main_sub` in `presentation-capabilities.ts` — the exact
+  // regression this ticket fixes. Non-vacuous: the state DOES carry observed
+  // vfoA/vfoB/activeSlot leaves, so a slot-table regression would happily
+  // consume them and render four slotted records.
+  it('never synthesizes per-receiver A/B slots, even for a legacy payload that still carries them', () => {
+    const view = model(observedState({ txTarget: SLOTLESS_TARGET }), TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.vfos).toHaveLength(2);
+    expect(view.vfos.map((vfo) => [vfo.receiver, vfo.slot])).toEqual([
+      ['MAIN', { kind: 'unslotted' }], ['SUB', { kind: 'unslotted' }],
+    ]);
+    expect(view.vfos.some((vfo) => vfo.slot.kind === 'slotted')).toBe(false);
+    expect(view.vfos.some((vfo) => vfo.slot.kind === 'unknown')).toBe(false);
+  });
+
+  // THE acceptance: qualified receiver-level readings reach the model (and its
+  // display observations) with vfoA/vfoB and activeSlot absent entirely.
+  it('reads receiver-level main./sub. freq/mode/filter when vfoA/vfoB and activeSlot are absent', () => {
+    const view = model(receiverLevelState({
+      stateContractVersion: 1, providerGeneration: 1, txTarget: SLOTLESS_TARGET,
+    }), IDENTITY_CAPS);
+    expect(view.vfos.map((vfo) => [vfo.receiver, vfo.frequencyHz, vfo.mode, vfo.filter]))
+      .toEqual([
+        ['MAIN', 14250000, 'USB', 'FIL1'],
+        ['SUB', 21295000, 'LSB', 'FIL2'],
+      ]);
+    for (const vfo of view.vfos) {
+      expect(vfo.display?.frequencyHz).toEqual({ state: 'current', value: vfo.frequencyHz });
+      expect(vfo.display?.mode).toEqual({ state: 'current', value: vfo.mode });
+      expect(vfo.display?.filter).toEqual({ state: 'current', value: vfo.filter });
+    }
+  });
+
+  // Freshness/provider-generation gating is preserved on the receiver-level
+  // paths — same fence discipline the slotted paths follow (MOR-2425/R40: a
+  // held stale reading is a reading; a generation mismatch is not).
+  it('preserves freshness and provider-generation gating on the receiver-level paths', () => {
+    const caps = IDENTITY_CAPS;
+    const state = receiverLevelState({
+      stateContractVersion: 1, providerGeneration: 1, txTarget: SLOTLESS_TARGET,
+    });
+    state.fieldStatus!['main.freqHz'] = { ...stale, lastObservedMonotonic: 0 };
+    state.fieldStatus!['sub.mode'] = { ...stale, lastObservedMonotonic: 0 };
+
+    const held = toRadioViewModel(state, caps)!;
+    expect(held.vfos[0].frequencyHz).toBe(14250000);
+    expect(held.vfos[0].display?.frequencyHz).toEqual({ state: 'stale', value: 14250000 });
+    expect(held.vfos[1].display?.mode).toEqual({ state: 'stale', value: 'LSB' });
+
+    const nextGeneration = { ...state, providerGeneration: 2 };
+    const fenced = toRadioViewModel(nextGeneration, caps)!;
+    expect(fenced.vfos[0].display?.frequencyHz).toEqual({ state: 'unknown', reason: 'identity-unresolved' });
+    expect(fenced.vfos[1].display?.mode).toEqual({ state: 'unknown', reason: 'identity-unresolved' });
+
+    const neverObserved = receiverLevelState({
+      stateContractVersion: 1, providerGeneration: 1, txTarget: SLOTLESS_TARGET,
+    });
+    delete neverObserved.fieldStatus!['sub.freqHz'];
+    const unobserved = toRadioViewModel(neverObserved, IDENTITY_CAPS)!;
+    expect(unobserved.vfos[1].frequencyHz).toBeNull();
+    expect(unobserved.vfos[1].display?.frequencyHz).toEqual({ state: 'unknown', reason: 'not-observed' });
+  });
+});
+
+/**
+ * MOR-1421 — `active` is structurally impossible to positively observe on
+ * some single-receiver radios: the live IC-7300 stand's `fieldStatus.active`
+ * reads observed:false/availability:'missing' FOREVER (confirmed against a
+ * live `/api/v1/state` probe, 2026-08-10 — `main.activeSlot` is equally
+ * unobserved). The old `seen(state, 'active')` gate therefore left
+ * `activeReceiver: unknown` permanently on that class of radio, which cascaded
+ * into `scope-adapter`'s spectrum authority (requires `activeReceiver.status
+ * === 'known'`), band select / frequency entry (`SemanticRadioSurfaces`'s
+ * `selectBand`/`enterFrequency`, both hard-gated on a known active receiver),
+ * and the selected VFO tile's `.is-active` highlight — none of it ever worked
+ * on a single-receiver radio.
+ *
+ * The fix is capability-aware, not state-aware: a capabilities payload that
+ * DECLARES exactly one receiver (`receivers: 1`, MAIN-only topology) leaves
+ * `active` no question to answer — MAIN is the only receiver that could ever
+ * be active — so `activeReceiver` resolves to `{status: 'known', receiver:
+ * 'MAIN'}` regardless of the `active` field's observedness or raw value. This
+ * is the tautology MOR-988 §3.2 permits (there is no live alternative to
+ * guess among), not the forbidden fabricated default.
+ */
+describe('single-receiver active-receiver resolves structurally, not from the active field (MOR-1421)', () => {
+  const SINGLE_RX_CAPS = caps({
+    vfoScheme: 'ab', receivers: 1, capabilities: SINGLE, vfoReadback: 'selected_unselected',
+  });
+
+  /** The live-stand shape: `active` and `main.activeSlot` never observed;
+   *  `main.freqHz`/`main.mode`/`main.filter` fresh — exactly the IC-7300 probe. */
+  function liveStandState(): ServerState {
+    const base = observedState();
+    const fieldStatus = { ...base.fieldStatus } as Record<string, FieldStatus>;
+    delete fieldStatus.active;
+    delete fieldStatus['main.activeSlot'];
+    return { ...base, fieldStatus } as ServerState;
+  }
+
+  it('resolves activeReceiver to MAIN though `active` was never observed', () => {
+    const view = model(liveStandState(), SINGLE_RX_CAPS);
+    expect(view.activeReceiver).toEqual({ status: 'known', receiver: 'MAIN' });
+    expect(view.disabledReasons).not.toContainEqual({
+      field: 'activeReceiver', code: 'field-not-observed',
+    });
+  });
+
+  it('marks the selected VFO tile isActive — the tile the operator sees highlighted', () => {
+    const view = model(liveStandState(), SINGLE_RX_CAPS);
+    const selected = view.vfos.find(
+      (vfo) => vfo.slot.kind === 'relative' && vfo.slot.role === 'selected',
+    );
+    expect(selected).toBeDefined();
+    expect(selected!.isActive).toBe(true);
+    expect(selected!.isActiveSlot).toBe(true);
+  });
+
+  // MUTATION KILLED: reading `state.active` for the single-receiver branch
+  // instead of ignoring it — the whole point is that the CAPABILITIES answer
+  // the question, not a raw field this class of radio never confirms.
+  it('is a tautology, not a fabrication — holds regardless of the raw active VALUE', () => {
+    const view = model(
+      { ...liveStandState(), active: 'SUB' as unknown as ServerState['active'] },
+      SINGLE_RX_CAPS,
+    );
+    expect(view.activeReceiver).toEqual({ status: 'known', receiver: 'MAIN' });
+  });
+
+  // Dual-RX guard (byte-identical to pre-MOR-1421 behaviour): the tautology
+  // is single-receiver-only — a radio whose capabilities declare a second
+  // receiver still needs a genuinely OBSERVED `active` reading.
+  it('leaves a dual-receiver radio unaffected — activeReceiver stays unknown when active is unobserved', () => {
+    const base = observedState();
+    const fieldStatus = { ...base.fieldStatus } as Record<string, FieldStatus>;
+    delete fieldStatus.active;
+    const view = model({ ...base, fieldStatus } as ServerState, TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.activeReceiver).toEqual({ status: 'unknown' });
+    expect(view.vfos.some((v) => v.isActive)).toBe(false);
+    expect(view.disabledReasons).toContainEqual({
+      field: 'activeReceiver', code: 'field-not-observed',
+    });
+  });
+});
+
+describe('TX identity and permit fail closed', () => {
+  it('marks exactly the VFO a known target names', () => {
+    const view = model(observedState({
+      txTarget: { status: 'known', receiver: 'MAIN', slot: null, frequencyHz: 14250000 },
+    }), TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.vfos.filter((v) => v.isTxTarget).map((v) => v.label)).toEqual(['MAIN']);
+    expect(view.txPermit).toEqual({ status: 'allowed', band: '20m' });
+  });
+
+  // MUTATION KILLED: keeping a target whose slot contradicts the scheme —
+  // MOR-2467 mixed versions flipped the `main_sub` half: a legacy A/B target
+  // under the slot-less scheme NORMALIZES to slot null and never surfaces
+  // A/B; a slot-less target under `ab` still collapses.
+  it('normalizes a legacy main_sub A/B target to slot null; ab still collapses slot-less', () => {
+    const normalized = model(observedState({
+      txTarget: { status: 'known', receiver: 'MAIN', slot: 'B', frequencyHz: 14250000 },
+    }), TOPOLOGY_CAPS['2/main_sub']);
+    expect(normalized.txTarget).toEqual({
+      status: 'known', receiver: 'MAIN', frequencyHz: 14250000,
+      slot: { kind: 'unslotted' },
+    });
+    expect(normalized.vfos.filter((v) => v.isTxTarget).map((v) => v.label)).toEqual(['MAIN']);
+    expect(normalized.vfos.some((v) => v.slot.kind === 'slotted')).toBe(false);
+    const collapsed = model(observedState({
+      txTarget: { status: 'known', receiver: 'MAIN', slot: null, frequencyHz: 14250000 },
+    }), TOPOLOGY_CAPS['1/ab']);
+    expect(collapsed.txTarget).toEqual({ status: 'unknown', reason: 'contradiction' });
+    expect(collapsed.txPermit.status).toBe('unknown');
+  });
+
+  it('denies an out-of-band target rather than leaving the permit open', () => {
+    const view = model(observedState({
+      txTarget: { status: 'known', receiver: 'MAIN', slot: null, frequencyHz: 1000 },
+    }), TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.txPermit).toEqual({ status: 'denied', reason: 'outside-configured-ranges' });
+    expect(view.disabledReasons).toContainEqual({ field: 'txPermit', code: 'out-of-band' });
+  });
+
+  it('reports unconfigured TX ranges as unknown, never as allowed', () => {
+    // MOR-2467: a slot-less MAIN target — the shape `main_sub` accepts. A
+    // slotted one would collapse to unknown for the CONTRADICTION, and the
+    // permit would read `tx-target-unknown` instead of `ranges-unconfigured`.
+    const view = model(observedState({
+      txTarget: { status: 'known', receiver: 'MAIN', slot: null, frequencyHz: 14250000 },
+    }), caps({ txBands: null }));
+    expect(view.txPermit).toEqual({ status: 'unknown', reason: 'ranges-unconfigured' });
+  });
+});
+
+describe('scope availability separates structural from operational', () => {
+  it('holds the hardware scope structurally present but not operational without controls', () => {
+    const view = model(observedState({ scopeControls: undefined }), TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.scope.hardwareScope).toEqual({ structural: true, operational: false });
+    expect(view.disabledReasons).toContainEqual({
+      field: 'scope.hardwareScope', code: 'field-not-observed',
+    });
+  });
+
+  it('reports an absent audio FFT as capability-unavailable', () => {
+    const view = model(observedState(), caps({ audioFftAvailable: false }));
+    expect(view.scope.audioFftScope).toEqual({ structural: false, operational: false });
+    expect(view.disabledReasons).toContainEqual({
+      field: 'scope.audioFftScope', code: 'capability-unavailable',
+    });
+  });
+});
+
+// MOR-1256: `operationalReceivers` (presentation-capabilities.ts) had zero
+// consumers — a `dual-rx-unavailable` radio (structurally dual, no `dual_rx`
+// tag) kept SUB fully enabled. `vfos` correctly stays derived from
+// `structuralReceivers` (MOR-977: the strip must still be PRESENT); the gap
+// was that nothing fed `operationalReceivers` anywhere, so no CONSUMER ever
+// disabled it. This closes the gap the same way `scope.hardwareScope` /
+// `scope.audioFftScope` already report degraded-but-structural facts: one
+// `disabledReasons` entry per structurally-present, operationally-absent
+// receiver, read back by `dual-receiver-strips.ts`'s `isOperationalStrip`.
+describe('operational receiver availability separates structural from operational (MOR-1256)', () => {
+  const dualRxUnavailableCaps = caps({ capabilities: SINGLE });
+
+  // MUTATION KILLED: dropping the `topology.operationalReceivers` loop
+  // entirely — SUB stays structurally present (correct) but nothing ever
+  // marks it disabled, reproducing the exact bug this ticket exists to fix.
+  it('marks the structurally-present, operationally-unavailable SUB receiver disabled', () => {
+    const view = model(observedState(), dualRxUnavailableCaps);
+    expect(view.topologyId).toBe('2/main_sub');
+    expect(view.vfos.some((v) => v.receiver === 'SUB')).toBe(true);
+    expect(view.disabledReasons).toContainEqual({
+      field: 'receiver.SUB', code: 'capability-unavailable',
+    });
+  });
+
+  // MUTATION KILLED: pushing the reason for every structural receiver
+  // instead of only the ones missing from `operationalReceivers` — MAIN
+  // would falsely disable too.
+  it('never marks MAIN unavailable — only the receiver that failed the capability check', () => {
+    const view = model(observedState(), dualRxUnavailableCaps);
+    expect(view.disabledReasons.some((r) => r.field === 'receiver.MAIN')).toBe(false);
+  });
+
+  it('emits no receiver disabledReason when the radio is fully dual-capable', () => {
+    const view = model(observedState(), TOPOLOGY_CAPS['2/main_sub']);
+    expect(view.disabledReasons.some((r) => r.field.startsWith('receiver.'))).toBe(false);
+  });
+});
+
+describe('the emitted model carries only contract data', () => {
+  it('survives a JSON round-trip unchanged — no functions, classes or live objects', () => {
+    for (const id of Object.keys(TOPOLOGY_CAPS)) {
+      const view = model(observedState(), TOPOLOGY_CAPS[id]);
+      expect(JSON.parse(JSON.stringify(view))).toEqual(view);
+    }
+  });
+
+  // MUTATION KILLED: passing the capability object (or a component/module
+  // path) through onto the view model so a surface can "just read caps" —
+  // exactly the manufacturer/runtime leak the contract exists to prevent.
+  it('leaks no capability object and no module path', () => {
+    const view = model(observedState(), TOPOLOGY_CAPS['2/main_sub']);
+    const strings: string[] = [];
+    const walk = (value: unknown, path: string): void => {
+      expect(typeof value).not.toBe('function');
+      if (typeof value === 'string') strings.push(value);
+      if (value && typeof value === 'object') {
+        for (const [key, child] of Object.entries(value)) walk(child, `${path}.${key}`);
+      }
+    };
+    walk(view, '$');
+    for (const value of strings) {
+      // `topologyId` is legitimately `<count>/<scheme>`, so bare '/' is not the
+      // tell — module-ish segments and file extensions are.
+      expect(value).not.toMatch(
+        /\.svelte|\.ts$|\$lib|node_modules|(^|\/)(src|lib|skins|semantic|components-v2)(\/|$)/,
+      );
+    }
+    expect(Object.keys(view)).not.toContain('capabilities');
+    // The validator rejects extra keys, so this is belt-and-braces on shape.
+    expect(Object.keys(view).sort()).toEqual([
+      'activeReceiver', 'disabledReasons', 'dualWatch', 'radioWideIndicators',
+      'receiverIndicators', 'scope', 'scopeControls', 'split',
+      'topologyId', 'txPermit', 'txTarget', 'vfoScheme', 'vfos',
+    ]);
+  });
+});
+
+
+describe('RF gain additive display observation', () => {
+  const displayCaps = { ...INDICATOR_CAPS, stateContractVersion: 1, providerGeneration: 1 };
+  function displayState(stale = false) {
+    const state = indicatorState({ stateContractVersion: 1, providerGeneration: 1 });
+    state.fieldStatus!['main.rfGain'] = {
+      ...fresh, lastObservedMonotonic: 310658.42975425,
+      ...(stale ? { freshness: 'stale' as const, availability: 'stale' as const } : {}),
+    };
+    return state;
+  }
+  it.each([false, true])('preserves legacy strict model members for stale=%s', (stale) => {
+    const view = toRadioViewModel(displayState(stale), displayCaps, RECEIVING)!;
+    expect(Object.fromEntries(Object.entries(view.meters!).filter(([key]) => key !== 'rfState')
+      .map(([key, field]) => [key, typeof field === 'object' ? field.presence : undefined])))
+      .toEqual({ signal: 'present', power: 'absent', swr: 'absent', alc: 'absent',
+        compression: 'absent', drainVoltage: 'absent', drainCurrent: 'absent' });
+    const legacyView = structuredClone(view);
+    for (const field of [
+      'signal', 'power', 'swr', 'alc', 'compression', 'drainVoltage', 'drainCurrent',
+    ] as const) {
+      delete legacyView.meters?.[field].source;
+      delete legacyView.meters?.[field].domain;
+      delete legacyView.meters?.[field].presence;
+    }
+    for (const indicator of legacyView.receiverIndicators ?? []) {
+      delete indicator.sMeter.source;
+      delete indicator.sMeter.domain;
+    }
+    // `bandwidthMaxHz` joins the structural extras dropped below — it is
+    // a capability echo fixed when caps load, not a strict model member
+    // (same class as `display`).
+    const strictJson = JSON.stringify(legacyView, (key, value) => [
+      'display', 'activeFilterConfiguration', 'dataModeChoices', 'modInputSource', 'modInputChoices',
+      'bandwidthMaxHz',
+    ].includes(key) ? undefined : value);
+    // Regenerate the golden by running this test file with UPDATE_GOLDENS=1
+    // (see "Projection goldens" in docs/development/source-text-pins.md).
+    if (process.env.UPDATE_GOLDENS) {
+      // `process.cwd()` (vitest's project root, `frontend/`), not
+      // `import.meta.url` — under this suite's jsdom transform it is not
+      // a `file://` origin (same as fixture-provenance.guard.test.ts).
+      writeFileSync(
+        resolve(process.cwd(),
+          'src/lib/runtime/adapters/__tests__/fixtures/strict-projection.golden.json'),
+        JSON.stringify(JSON.parse(strictJson), null, 2) + '\n');
+    }
+    // One golden serves both freshness values: the stale/fresh difference
+    // sits in `display`, which the replacer drops.
+    expect(view.dsp?.agcMode.reading).toEqual({ status: 'known', value: 0 });
+    expect(view.receiverIndicators?.[0].agcMode.reading).toEqual({ status: 'known', value: 0 });
+    expect(view.dsp?.manualNotchWidth.availability).toEqual({ structural: false, operational: false });
+    expect(JSON.parse(strictJson)).toEqual(strictProjectionGolden);
+  });
+  it.each([false, true])('projects the explicit display and HOLDS RF gain, stale=%s', (stale) => {
+    const view = model(displayState(stale), displayCaps, RECEIVING);
+    expect(view.receiverIndicators![0].rfGain).toEqual({
+      reading: { status: 'known', value: 0 },
+      availability: { structural: true, operational: true },
+      display: { state: stale ? 'stale' : 'current', value: 0 },
+    });
+  });
+  it('does not classify a fresh but nonoperational SUB as stale', () => {
+    const state = displayState();
+    state.dualWatch = false;
+    state.fieldStatus!['sub.rfGain'] = { ...fresh, lastObservedMonotonic: 310658.42975425 };
+    const view = model(state, { ...displayCaps, capabilities: displayCaps.capabilities.filter((cap) => cap !== 'dual_rx') }, RECEIVING);
+    expect(view.receiverIndicators![1].rfGain.availability.operational).toBe(false);
+    expect(view.receiverIndicators![1].rfGain.display).toEqual({ state: 'current', value: 0.75 });
+  });
+});
+
+
+describe('SQL tag squelch-level fact (replaces the BUSY lamp)', () => {
+  const sqlCaps = { ...INDICATOR_CAPS, capabilities: [...INDICATOR_CAPS.capabilities, 'squelch'] };
+  function sqlState(main?: number, sub?: number, mainHz = 14_250_000): ServerState {
+    const state = indicatorState();
+    state.main!.freqHz = mainHz;
+    if (main !== undefined) {
+      state.main!.squelch = main;
+      state.fieldStatus!['main.squelch'] = fresh;
+    }
+    if (sub !== undefined) {
+      state.sub!.squelch = sub;
+      state.fieldStatus!['sub.squelch'] = fresh;
+    }
+    return state;
+  }
+  const squelchFacts = (state: ServerState, c: Capabilities = sqlCaps) =>
+    toRadioViewModel(state, c, RECEIVING)!.receiverIndicators!;
+
+  it('carries the receiver squelch level as a known reading, preserving 0', () => {
+    expect(squelchFacts(sqlState(40))[0].squelch).toEqual({
+      reading: { status: 'known', value: 40 },
+      availability: { structural: true, operational: true },
+    });
+    expect(squelchFacts(sqlState(0))[0].squelch?.reading).toEqual({ status: 'known', value: 0 });
+  });
+
+  it('reads unknown until the receiver leaf is observed', () => {
+    const state = indicatorState();
+    expect(squelchFacts(state)[0].squelch).toEqual({
+      reading: { status: 'unknown' },
+      availability: { structural: true, operational: false },
+    });
+  });
+
+  it('addresses each receiver from its own leaf only', () => {
+    const view = squelchFacts(sqlState(0, 90));
+    expect(view[0].squelch?.reading).toEqual({ status: 'known', value: 0 });
+    expect(view[1].squelch?.reading).toEqual({ status: 'known', value: 90 });
+  });
+
+  it('reads the same level on HF and on VHF/UHF: no band gate', () => {
+    for (const hz of [3_700_000, 14_250_000, 50_100_000, 145_500_000, 435_000_000]) {
+      expect(squelchFacts(sqlState(25, undefined, hz))[0].squelch?.reading, `${hz} Hz`)
+        .toEqual({ status: 'known', value: 25 });
+    }
+  });
+
+  it('omits the fact when the radio declares no squelch capability', () => {
+    expect(squelchFacts(sqlState(40), INDICATOR_CAPS)[0].squelch).toBeUndefined();
+  });
+
+  it('has no squelch-open (BUSY) fact any more', () => {
+    const state = sqlState(40);
+    state.main!.dcd = true;
+    expect(squelchFacts(state)[0]).not.toHaveProperty('squelchOpen');
+  });
+});
+
+describe('MOR-3630 FM-refused controls are not offered (pinning)', () => {
+  // Pinning, not red-first: the FM gate lives in profile data
+  // (rigs/ic705.toml available_when) and the backend resolves it into
+  // fieldStatus; the adapter below only renders that status. These cases
+  // lock the contract each profile's status feed must satisfy: the
+  // unavailable feed hides or disables, the available feed offers.
+  // Topology stays dual (shared harness); only the tags, filterConfig
+  // and field statuses vary per profile. Tag sets mirror
+  // projected_receiver_control_tags for each profile: the IC-705 serves
+  // manual_notch_width but no agc_time_constant (undeclared, MOR-2915),
+  // the IC-9700 serves neither, the IC-7300 serves both.
+  const FM_FIXED = { defaults: [15000, 10000, 7000], fixed: true };
+  const USB_TWIN = {
+    defaults: [3000, 2400, 1800], fixed: false, minHz: 50, maxHz: 3600,
+    stepHz: 50, pbtStepHz: 50,
+    segments: [{ hzMin: 50, hzMax: 500, stepHz: 50, indexMin: 0 }],
+  };
+  const unavailable: FieldStatus = {
+    storePath: 'x', observed: false, freshness: 'unknown', availability: 'unavailable',
+  };
+  const undeclared: FieldStatus = {
+    storePath: 'x', observed: false, freshness: 'unknown', availability: 'undeclared',
+  };
+  const fmCaps = (tags: string[]) => caps({
+    capabilities: [...SINGLE, ...tags],
+    modes: ['USB', 'LSB', 'CW', 'CW-R', 'AM', 'FM'],
+    filters: ['FIL1', 'FIL2', 'FIL3'],
+    filterConfig: { FM: FM_FIXED, USB: USB_TWIN },
+    controls: {
+      pbt_inner: { raw_min: 0, raw_max: 255, raw_center: 128, display_min: -1200, display_max: 1200 },
+    },
+  });
+  const DSP_TAGS = ['notch', 'agc', 'filter_width', 'pbt', 'filter_shape'];
+  function fmState(mode: 'FM' | 'USB', leaves: Record<string, FieldStatus>): ServerState {
+    const state = observedState();
+    state.main!.mode = mode;
+    state.fieldStatus!['main.mode'] = fresh;
+    for (const [leaf, status] of Object.entries(leaves)) state.fieldStatus![`main.${leaf}`] = status;
+    return state;
+  }
+  const GATED = ['pbtInner', 'pbtOuter', 'manualNotchWidth', 'filterShape'] as const;
+  const gated = (status: FieldStatus): Record<string, FieldStatus> =>
+    Object.fromEntries(GATED.map((leaf) => [leaf, status]));
+
+  it('IC-705 in FM: PBT hidden, notch width and shape disabled, FM slots from the profile', () => {
+    const view = toRadioViewModel(
+      fmState('FM', gated(unavailable)),
+      fmCaps([...DSP_TAGS, 'manual_notch_width']), RECEIVING)!;
+    expect(view.filterPassband?.pbtInner.availability.structural).toBe(false);
+    expect(view.filterPassband?.pbtOuter.availability.structural).toBe(false);
+    expect(view.dsp?.manualNotchWidth.availability).toEqual({ structural: true, operational: false });
+    expect(view.filterPassband?.filterShape.availability.operational).toBe(false);
+    expect(view.dsp?.agcTimeConstant.availability.structural).toBe(false);
+    expect(view.modeFilter?.activeFilterConfiguration?.fixed).toBe(true);
+    expect(view.modeFilter?.activeFilterConfiguration?.slots.map((slot) => slot.factoryWidthHz))
+      .toEqual([15000, 10000, 7000]);
+  });
+
+  it('IC-705 in USB: the same controls are offered once observed', () => {
+    const view = toRadioViewModel(
+      fmState('USB', gated(fresh)),
+      fmCaps([...DSP_TAGS, 'manual_notch_width']), RECEIVING)!;
+    expect(view.filterPassband?.pbtInner.availability.structural).toBe(true);
+    expect(view.filterPassband?.pbtOuter.availability.structural).toBe(true);
+    expect(view.dsp?.manualNotchWidth.availability).toEqual({ structural: true, operational: true });
+    expect(view.filterPassband?.filterShape.availability.operational).toBe(true);
+  });
+
+  it('IC-9700 in FM: nothing FM-refused is offered', () => {
+    const view = toRadioViewModel(
+      fmState('FM', { ...gated(unavailable), filterShape: undeclared }),
+      fmCaps(DSP_TAGS), RECEIVING)!;
+    expect(view.filterPassband?.pbtInner.availability.structural).toBe(false);
+    expect(view.filterPassband?.pbtOuter.availability.structural).toBe(false);
+    expect(view.dsp?.manualNotchWidth.availability.structural).toBe(false);
+    expect(view.dsp?.agcTimeConstant.availability.structural).toBe(false);
+    expect(view.filterPassband?.filterShape.availability.operational).toBe(false);
+    expect(view.modeFilter?.activeFilterConfiguration?.fixed).toBe(true);
+  });
+
+  it('IC-7300 in FM: the ungated radio offers notch width, shape and AGC time', () => {
+    // PBT stays hidden: fixed FM carries no twin-PBT step on any Icom
+    // (filterConfig data, not the FM gate) — the USB case above is the
+    // PBT contrast instead.
+    const view = toRadioViewModel(
+      fmState('FM', { ...gated(fresh), agcTimeConstant: fresh }),
+      fmCaps([...DSP_TAGS, 'manual_notch_width', 'agc_time_constant']), RECEIVING)!;
+    expect(view.filterPassband?.pbtInner.availability.structural).toBe(false);
+    expect(view.dsp?.manualNotchWidth.availability).toEqual({ structural: true, operational: true });
+    expect(view.filterPassband?.filterShape.availability.operational).toBe(true);
+    expect(view.dsp?.agcTimeConstant.availability).toEqual({ structural: true, operational: true });
+  });
+});
+
+describe('MOR-2374 shared DATA and filter configuration', () => {
+  const config = {
+    defaults: [2400], fixed: false, minHz: 50, maxHz: 3600, stepHz: 50,
+    segments: [{ hzMin: 50, hzMax: 500, stepHz: 50, indexMin: 0 }], table: [50, 100, 500],
+  };
+  const dataCaps = (extra: Partial<Capabilities> = {}) => caps({
+    capabilities: [...DUAL, 'data_mode', 'filter_width'],
+    modes: ['USB'], filters: ['FIL1', 'FIL2'],
+    dataModeCount: 3, filterConfig: { USB: config }, ...extra,
+  });
+  function state() {
+    const s = observedState();
+    s.fieldStatus = { ...s.fieldStatus, 'main.dataMode': fresh, 'sub.dataMode': fresh };
+    return s;
+  }
+  const ic7300Inputs = [
+    { value: 0, label: 'MIC' }, { value: 1, label: 'ACC' },
+    { value: 2, label: 'MIC+ACC' }, { value: 3, label: 'USB' },
+    { value: 4, label: 'MIC+USB' },
+  ];
+  const ic7610Inputs = [
+    { value: 0, label: 'MIC' }, { value: 1, label: 'ACC' },
+    { value: 3, label: 'USB' }, { value: 5, label: 'LAN' },
+    { value: 2, label: 'MIC+ACC' }, { value: 4, label: 'MIC+USB' },
+  ];
+  it.each([
+    [0, 'dataOffModInput', 3], [1, 'data1ModInput', 4],
+  ] as const)('projects IC-7300 DATA group %i from %s with its exact source domain', (dataMode, key, source) => {
+    const s = state(); s.main.dataMode = dataMode; s[key] = source; s.fieldStatus![key] = fresh;
+    const fp = toRadioViewModel(s, dataCaps({ dataModeCount: 1, dataModeInputs: ic7300Inputs }))!.filterPassband!;
+    expect(fp.modInputChoices).toEqual(ic7300Inputs);
+    expect(fp.modInputChoices!.map(choice => choice.label)).not.toContain('LAN');
+    expect(fp.modInputSource!.reading).toEqual({ status: 'known', value: source });
+  });
+  it('projects IC-7610 D3 and preserves the profile source order including LAN', () => {
+    const s = state(); s.main.dataMode = 3; s.data3ModInput = 5; s.fieldStatus!.data3ModInput = fresh;
+    const fp = toRadioViewModel(s, dataCaps({ dataModeInputs: ic7610Inputs }))!.filterPassband!;
+    expect(fp.modInputChoices).toEqual(ic7610Inputs);
+    expect(fp.modInputSource!.reading).toEqual({ status: 'known', value: 5 });
+  });
+  it('fails closed for absent domains, undeclared fields, and unobserved values', () => {
+    const s = state(); s.dataOffModInput = 0;
+    expect(toRadioViewModel(s, dataCaps())!.filterPassband!.modInputSource).toBeUndefined();
+    s.fieldStatus!.dataOffModInput = { ...fresh, availability: 'undeclared', observed: false };
+    expect(toRadioViewModel(s, dataCaps({ dataModeInputs: ic7300Inputs }))!.filterPassband!
+      .modInputSource!.availability.structural).toBe(false);
+    s.fieldStatus!.dataOffModInput = { ...fresh, availability: 'missing', observed: false };
+    const unknown = toRadioViewModel(s, dataCaps({ dataModeInputs: ic7300Inputs }))!.filterPassband!.modInputSource!;
+    expect(unknown.availability).toEqual({ structural: true, operational: false });
+    expect(unknown.reading).toEqual({ status: 'unknown' });
+  });
+  it.each([0, 1, 3])('offers exactly 0..%i with canonical labels', (count) => {
+    const model = toRadioViewModel(state(), dataCaps({ dataModeCount: count,
+      dataModeLabels: { '0': 'OFF label', '1': 'Digital', '2': '  ', '9': 'stray' } }))!;
+    expect(model.filterPassband!.dataModeChoices).toEqual(Array.from({ length: count + 1 }, (_, value) =>
+      ({ value, label: value === 0 ? 'OFF label' : value === 1 ? 'Digital' : null })));
+    expect(validateRadioViewModel(model)).toEqual(model);
+  });
+  it.each([undefined, -1, 1.5, 4, 1e12, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity, '3'])
+    ('rejects malformed or oversized DATA count %s', (dataModeCount) => {
+      expect(toRadioViewModel(state(), dataCaps({ dataModeCount } as Partial<Capabilities>))!
+        .filterPassband!.dataModeChoices).toEqual([]);
+    });
+  it('leaves fallback presentation to the component and does not infer DATA support', () => {
+    expect(toRadioViewModel(state(), dataCaps({ dataModeLabels: undefined }))!.filterPassband!.dataModeChoices)
+      .toEqual([0, 1, 2, 3].map(value => ({ value, label: null })));
+    const fp = toRadioViewModel(state(), dataCaps({
+      capabilities: [...DUAL, 'filter_width'],
+    }))!.filterPassband!;
+    expect(fp.dataModeChoices).toEqual([]);
+    expect(fp.dataMode.availability.structural).toBe(false);
+  });
+  it('uses SUB observations for DATA and configuration', () => {
+    const s = state(); s.active = 'SUB'; s.sub!.dataMode = 2;
+    const model = toRadioViewModel(s, dataCaps({ filterConfig: { USB: config,
+      'USB-D': { defaults: [500], fixed: true } } }))!;
+    expect(model.filterPassband!.dataMode.reading).toEqual({ status: 'known', value: 2 });
+    expect(model.modeFilter!.activeFilterConfiguration!.slots[0].factoryWidthHz).toBe(500);
+  });
+  it.each(['active', 'main.dataMode', 'main.mode'])('requires observed evidence for %s', (path) => {
+    for (const status of [undefined, { ...fresh, observed: false }]) {
+      const s = state(); s.fieldStatus = { ...s.fieldStatus, [path]: status } as ServerState['fieldStatus'];
+      const model = toRadioViewModel(s, dataCaps())!;
+      expect(model.modeFilter!.activeFilterConfiguration).toBeNull();
+      if (path !== 'main.mode') {
+        expect(model.filterPassband!.dataMode.reading.status).toBe('unknown');
+        expect(model.filterPassband!.dataMode.availability.operational).toBe(false);
+        expect(model.filterPassband!.dataModeChoices).toHaveLength(4);
+      }
+    }
+  });
+  // MOR-2425/R40: staleness alone is no longer one of the statuses above.
+  it.each(['active', 'main.dataMode', 'main.mode'])('holds %s through staleness', (path) => {
+    const s = state(); s.fieldStatus = { ...s.fieldStatus, [path]: stale } as ServerState['fieldStatus'];
+    const held = toRadioViewModel(s, dataCaps())!;
+    const live = toRadioViewModel(state(), dataCaps())!;
+    expect(held.modeFilter!.activeFilterConfiguration)
+      .toEqual(live.modeFilter!.activeFilterConfiguration);
+    expect(held.filterPassband!.dataMode.reading).toEqual(live.filterPassband!.dataMode.reading);
+  });
+  it.each([
+    ['USB', 0, 'USB'], ['USB', 1, 'USB-D'], ['LSB', 0, 'SSB'], ['LSB', 1, 'SSB-D'],
+    ['CW-R', 0, 'CW'], ['RTTY-R', 0, 'RTTY'], ['FM', 0, null],
+  ] as const)('resolves %s DATA %i via the shipped resolver', (mode, dataMode, key) => {
+    const entries = ['USB', 'USB-D', 'SSB', 'SSB-D', 'CW', 'RTTY'];
+    const c = dataCaps({ filterConfig: Object.fromEntries(entries.map((name, i) =>
+      [name, { ...config, defaults: [100 * (i + 1)] }])) });
+    const s = state(); s.main.mode = mode; s.main.dataMode = dataMode;
+    const resolved = resolveFilterModeConfig(c, mode, dataMode);
+    const result = toRadioViewModel(s, c)!.modeFilter!.activeFilterConfiguration;
+    expect(resolved).toBe(key ? c.filterConfig![key] : null);
+    expect(result).toEqual(resolved ? { slots: [
+      { filter: 1, label: 'FIL1', factoryWidthHz: resolved.defaults[0] },
+      { filter: 2, label: 'FIL2', factoryWidthHz: null },
+    ], fixed: resolved.fixed, minHz: resolved.minHz, maxHz: resolved.maxHz, stepHz: resolved.stepHz,
+    segments: resolved.segments, table: resolved.table } : null);
+  });
+  it('projects fixed = true for a defaults-only fixed configuration', () => {
+    const c = dataCaps({ filterConfig: { FM: { defaults: [15000, 10000, 7000], fixed: true } } });
+    const s = state(); s.main.mode = 'FM'; s.main.dataMode = 0;
+    const projected = toRadioViewModel(s, c)!.modeFilter!.activeFilterConfiguration!;
+    expect(projected.fixed).toBe(true);
+    expect(projected.table).toEqual([]);
+    expect(projected.minHz).toBeNull();
+  });
+  it('copies nested configuration and never fills missing defaults from current width', () => {
+    const c = dataCaps({ filterConfig: { USB: structuredClone(config) } });
+    const s = state(); s.main.filterWidth = 999;
+    const projected = toRadioViewModel(s, c)!.modeFilter!.activeFilterConfiguration!;
+    const saved = structuredClone(projected);
+    expect(projected.slots[1].factoryWidthHz).toBeNull();
+    c.filterConfig!.USB.defaults[0] = 999; c.filterConfig!.USB.segments![0].stepHz = 25;
+    c.filterConfig!.USB.table![0] = 25; c.filters[0] = 'changed';
+    expect(projected).toEqual(saved);
+  });
+  it.each([undefined, NaN, Infinity, -1, 0.5, 4])('withholds missing or invalid observed DATA value %s', (value) => {
+    const s = state(); Object.assign(s.main, { dataMode: value });
+    const model = toRadioViewModel(s, dataCaps())!;
+    expect(model.modeFilter!.activeFilterConfiguration).toBeNull();
+    expect(model.filterPassband!.dataMode.reading.status).toBe('unknown');
+  });
+  it.each([[1, 2], [0, 1]])('preserves observed DATA independently of advertised count %i', (count, value) => {
+    const s = state(); s.main.dataMode = value;
+    const model = toRadioViewModel(s, dataCaps({ dataModeCount: count, filterConfig: { USB: config,
+      'USB-D': { defaults: [500], fixed: true } } }))!;
+    expect(model.filterPassband!.dataMode.reading).toEqual({ status: 'known', value });
+    expect(model.filterPassband!.dataMode.availability.operational).toBe(true);
+    expect(model.modeFilter!.activeFilterConfiguration!.slots[0].factoryWidthHz).toBe(500);
+  });
+  it('permits observed non-DATA mode configuration without DATA evidence', () => {
+    const s = state(); delete s.fieldStatus!['main.dataMode'];
+    expect(toRadioViewModel(s, dataCaps({ capabilities: DUAL }))!.modeFilter!.activeFilterConfiguration).not.toBeNull();
+  });
+  it.each([
+    null, {}, { ...config, fixed: 'yes' }, { ...config, defaults: [-1] },
+    { ...config, minHz: NaN }, { ...config, maxHz: 1 }, { ...config, stepHz: 0 },
+    { ...config, table: [100, 50] }, { ...config, table: [Infinity] },
+    { ...config, segments: [{ hzMin: 50, hzMax: 10, stepHz: 0, indexMin: -1 }] },
+  ])('withholds malformed filter configuration %#', (bad) => {
+    const c = dataCaps({ filterConfig: { USB: bad } } as unknown as Partial<Capabilities>);
+    expect(toRadioViewModel(state(), c)!.modeFilter!.activeFilterConfiguration).toBeNull();
+  });
+});
+
+/* ── MOR-4433 — sourceless TX target through the real adapter ──────────────
+ * Folded from `semantic/__tests__/unsupported-tx-target.test.ts` (gate round
+ * 1 file ceiling). A single-receiver `ab` radio with no TX-target source
+ * (the sourceless class: G7250 and the sourceless-Yaesu shape) projects
+ * `txTarget: { status: 'unknown', reason: 'unsupported' }` — "no source
+ * exists", not "a source exists but is unobserved". The break-in gate, the
+ * `txPermit` entry and the validator read that reason.
+ *
+ * The fixture below is a COMPLETE, compiler-checked `ServerState` — every
+ * required top-level field, both receivers, a `ConnectionPublic` with its
+ * three required booleans, and `fieldStatus` entries that each carry the
+ * required `storePath`. No `as` cast of any kind: if a required field is
+ * dropped, `svelte-check`/`tsc` fails. The `ConnectionPublic` / field-status
+ * shapes come straight from the producer contracts (`$lib/types/state`),
+ * never re-typed here.
+ */
+describe('MOR-4433 — sourceless TX target through the real adapter', () => {
+  /** Single-receiver `ab` capabilities with TX bands configured — the
+   *  FT-991A topology with no TX-target source. The `audioConfig`/`webrtc`
+   *  entries are the producer's required fields (`Capabilities` in
+   *  `$lib/types/capabilities`), not adornments. */
+  const sourcelessCaps: Capabilities = {
+    model: 'FT-991A',
+    scope: false,
+    audio: true,
+    tx: true,
+    capabilities: ['tx', 'audio', 'cw', 'break_in'],
+    receivers: 1,
+    vfoScheme: 'ab',
+    freqRanges: [],
+    txBands: [{ name: '20m', start: 14_000_000, end: 14_350_000 }],
+    modes: ['USB'],
+    filters: ['NARROW'],
+    audioConfig: { sampleRate: 48_000, channels: 1, codecs: ['pcm16'] },
+    webrtc: { available: false, enabled: false },
+  };
+
+  const observedLeaf = (storePath: string): FieldStatus => ({
+    storePath, observed: true, freshness: 'fresh', availability: 'available',
+  });
+  /** A receiver carrying only what this scenario reads (frequency/mode on
+   *  MAIN); every other required leaf is an explicit honest `null`. */
+  const receiver = (freqHz: number | null, mode: string | null): ServerState['main'] => ({
+    freqHz, mode, filter: null, dataMode: null,
+    att: null, preamp: null, nb: null, nr: null,
+    afLevel: null, rfGain: null, squelch: null, sMeter: null,
+  });
+  /** Server state carrying the backend's `unsupported` projection, observed. */
+  const sourcelessState = (
+    reason: 'unsupported' | 'not-observed',
+  ): ServerState => ({
+    revision: 1, stateRevision: 1, freshnessRevision: 1, observationSeq: 1,
+    updatedAt: '2026-08-08T00:00:00Z',
+    active: 'MAIN', ptt: false, split: false, dualWatch: false, tunerStatus: null,
+    txTarget: { status: 'unknown', reason },
+    main: receiver(14_074_000, 'USB'),
+    sub: receiver(null, null),
+    connection: { rigConnected: true, radioReady: true, controlConnected: true },
+    fieldStatus: {
+      active: observedLeaf('active'),
+      split: observedLeaf('split'),
+      dualWatch: observedLeaf('dualWatch'),
+      txTarget: observedLeaf('txTarget'),
+    },
+  });
+
+  it('toRadioViewModel keeps the reason and records no break-in disable', () => {
+    // End to end through the real adapter: the view model carries the
+    // backend's `unsupported` reason, the permit stays honestly unknown,
+    // and no `cwKeyer.breakIn` disabled reason blocks the keyer — and the
+    // whole model validates.
+    const view = toRadioViewModel(sourcelessState('unsupported'), sourcelessCaps);
+    if (view === null) throw new Error('fixture precondition: model is null');
+    expect(view.txTarget).toEqual({ status: 'unknown', reason: 'unsupported' });
+    expect(view.txPermit).toEqual({ status: 'unknown', reason: 'tx-target-unknown' });
+    expect(
+      view.disabledReasons.some((r) => r.field === 'cwKeyer.breakIn'),
+    ).toBe(false);
+    expect(() => validateRadioViewModel(view)).not.toThrow();
+  });
+
+  it('toRadioViewModel still records the break-in disable for not-observed target', () => {
+    const view = toRadioViewModel(sourcelessState('not-observed'), sourcelessCaps);
+    if (view === null) throw new Error('fixture precondition: model is null');
+    expect(
+      view.disabledReasons.some((r) => r.field === 'cwKeyer.breakIn'),
+    ).toBe(true);
+  });
+
+  /* MOR-4433 RED (gate round 1, P1-3): an unconfigured band table must win
+   * over the missing target frequency in the REAL producer. With an
+   * unsupported target and `caps.txBands === null`, `deriveTxCapabilities`
+   * calls `getFrequencyPermit(null, null)` — which today checks the missing
+   * frequency first and returns `unknown/tx-target-unknown`, so the
+   * sourceless exception suppresses it and an otherwise unavailable TUNE
+   * becomes enabled. The producer must classify unconfigured bands (`null`
+   * → unknown/ranges-unconfigured) and explicit deny-all (`[]` → denied)
+   * BEFORE the missing-frequency check. Fails before the fix, passes after;
+   * the permit is never overwritten by hand — every assertion below reads
+   * the producer's own output through `toRadioViewModel`/`keyBlockedReasons`.
+   */
+  it('RED: getFrequencyPermit classifies the band table before the missing frequency', () => {
+    expect(getFrequencyPermit(null, null)).toEqual(
+      { status: 'unknown', reason: 'ranges-unconfigured' },
+    );
+    expect(getFrequencyPermit(null, [])).toEqual(
+      { status: 'denied', reason: 'outside-configured-ranges' },
+    );
+    // Known targets keep their behaviour: unconfigured is unknown, empty is deny-all.
+    expect(getFrequencyPermit(14_074_000, null)).toEqual(
+      { status: 'unknown', reason: 'ranges-unconfigured' },
+    );
+    expect(getFrequencyPermit(14_074_000, [])).toEqual(
+      { status: 'denied', reason: 'outside-configured-ranges' },
+    );
+  });
+
+  it('RED: toRadioViewModel preserves ranges-unconfigured with txBands null', () => {
+    const view = toRadioViewModel(
+      sourcelessState('unsupported'), { ...sourcelessCaps, txBands: null },
+    );
+    if (view === null) throw new Error('fixture precondition: model is null');
+    expect(view.txPermit).toEqual({ status: 'unknown', reason: 'ranges-unconfigured' });
+    expect(keyBlockedReasons(view, IDLE_RX)).toContain('tx-permit-unknown');
+  });
+
+  it('RED: toRadioViewModel preserves deny-all with txBands []', () => {
+    const view = toRadioViewModel(
+      sourcelessState('unsupported'), { ...sourcelessCaps, txBands: [] },
+    );
+    if (view === null) throw new Error('fixture precondition: model is null');
+    expect(view.txPermit).toEqual(
+      { status: 'denied', reason: 'outside-configured-ranges' },
+    );
+    expect(keyBlockedReasons(view, IDLE_RX)).toContain('tx-permit-denied');
+  });
+});
+
+/* Folded from `semantic/__tests__/unsupported-tx-target.test.ts` (gate round 1
+ * file ceiling): the fixture-dependent halves of the sourceless-class pins
+ * live here, next to the adapter describe above, instead of in their topical
+ * homes (`rx-tx-surface.component.test.ts`, `cw-keyer.test.ts`,
+ * `AntennaSurface.test.ts`). One file, same assertions. */
+
+const IDLE_RX: TxAuthoritySnapshot = {
+  phase: 'idle', intent: null, radioTx: 'off', txRisk: 'none', fault: null,
+};
+
+/** The `1/ab` view as a sourceless radio projects it: target `unsupported`,
+ *  permit unknown for that reason, bands configured. */
+const unsupportedTargetView = (): RadioViewModel => ({
+  ...topologyFixtures['1/ab'],
+  txTarget: { status: 'unknown', reason: 'unsupported' },
+});
+
+describe('MOR-4433 — keyBlockedReasons under an unsupported target', () => {
+  it('is empty for unsupported target on an idle RX radio', () => {
+    // Kill-mutation: `view.txTarget.status !== 'known'` without the
+    // `unsupported` exception — the prohibition this change removes.
+    expect(keyBlockedReasons(unsupportedTargetView(), IDLE_RX)).toEqual([]);
+  });
+
+  it('still blocks not-observed / stale / contradiction', () => {
+    const base = topologyFixtures['1/ab'];
+    expect(keyBlockedReasons(base, IDLE_RX)).toContain('tx-target-unknown');
+    for (const reason of ['not-observed', 'stale', 'contradiction'] as const) {
+      const view: RadioViewModel = {
+        ...base, txTarget: { status: 'unknown', reason },
+      };
+      expect(keyBlockedReasons(view, IDLE_RX)).toContain('tx-target-unknown');
+    }
+  });
+
+  it('still blocks an unconfigured band table under unsupported target', () => {
+    // The exception is scoped to "permit unknown because the target is
+    // sourceless" — `ranges-unconfigured` (no TX bands at all) still blocks.
+    const view: RadioViewModel = {
+      ...unsupportedTargetView(),
+      txPermit: { status: 'unknown', reason: 'ranges-unconfigured' },
+    };
+    const reasons = keyBlockedReasons(view, IDLE_RX);
+    expect(reasons).not.toContain('tx-target-unknown');
+    expect(reasons).toContain('tx-permit-unknown');
+  });
+});
+
+describe('MOR-4433 — validator under an unsupported target', () => {
+  // The adapter stops recording the `cwKeyer.breakIn` disable for a
+  // sourceless target (break-in stays usable); the validator — the
+  // fail-closed half of "no second permit" — accepts the model without
+  // that entry. Kill-mutation: drop the `unsupported` exception in either
+  // `deriveCwKeyerReasons` or `validateRadioViewModel`.
+  it('accepts an armed break-in under an unsupported target with no disabled reason', () => {
+    const keyed = withCwKeyer(unsupportedTargetView());
+    const enabled: RadioViewModel = {
+      ...keyed,
+      disabledReasons: keyed.disabledReasons.filter((r) => r.field !== 'cwKeyer.breakIn'),
+    };
+    expect(() => validateRadioViewModel(enabled)).not.toThrow();
+    expect(
+      enabled.disabledReasons.some((r) => r.field === 'cwKeyer.breakIn'),
+    ).toBe(false);
+  });
+
+  it('still rejects an enabled break-in for a not-observed target', () => {
+    // The exception above is scoped to `unsupported`: a source that exists
+    // but has not been read still fails closed.
+    const keyed = withCwKeyer(topologyFixtures['1/ab']);
+    const enabled: RadioViewModel = {
+      ...keyed,
+      disabledReasons: keyed.disabledReasons.filter((r) => r.field !== 'cwKeyer.breakIn'),
+    };
+    expect(() => validateRadioViewModel(enabled)).toThrow();
+  });
+
+  /* MOR-4433 RED (gate round 1, P2-2): the validator exempts EVERY permit
+   * whenever the target is unsupported (`!targetUnsupported`), while the
+   * adapter exempts only the narrow case (permit unknown FOR the
+   * unsupported target). A model pairing an unsupported target with an
+   * unconfigured or denied permit must still reject an enabled break-in.
+   * Fails before the validator adopts the shared predicate, passes after.
+   */
+  it.each([
+    ['unconfigured', { status: 'unknown', reason: 'ranges-unconfigured' }],
+    ['denied', { status: 'denied', reason: 'outside-configured-ranges' }],
+  ] as const)('RED: rejects an enabled break-in for an unsupported target with a %s permit', (
+    _label, txPermit,
+  ) => {
+    const keyed = withCwKeyer(unsupportedTargetView());
+    const model: RadioViewModel = {
+      ...keyed,
+      txPermit,
+      vfos: keyed.vfos.map((vfo) => ({ ...vfo, isTxTarget: false })),
+      disabledReasons: keyed.disabledReasons.filter((r) => r.field !== 'cwKeyer.breakIn'),
+    };
+    expect(() => validateRadioViewModel(model)).toThrow(/cwKeyer\.breakIn/);
+  });
+});
+
+describe('MOR-4433 — antenna switching is not gated on the target', () => {
+  it('with or without a source', () => {
+    // `antennaSwitchBlocks` only keeps the RF-idle subset; the target
+    // reasons never reached the relay. Pinned both ways so a future
+    // widening of the filter cannot silently re-block sourceless radios.
+    expect(antennaSwitchBlocks(withAntenna(unsupportedTargetView()), IDLE_RX)).toEqual([]);
+    expect(antennaSwitchBlocks(withAntenna(topologyFixtures['1/ab']), IDLE_RX)).toEqual([]);
+  });
+});

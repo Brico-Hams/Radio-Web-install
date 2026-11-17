@@ -1,0 +1,809 @@
+<script lang="ts">
+  import { onDestroy, untrack } from 'svelte';
+  import { ValueControl } from '../controls/value-control';
+  import { rawToPercentDisplay } from '../../primitives/scalar/value-control-core';
+  import { HardwareButton } from '$lib/Button';
+  import { buildNrOptions, buildNotchOptions } from './dsp-utils';
+  import {
+    AGC_TIME_LABELS,
+    LONG_PRESS_MS,
+    formatAgcTime,
+    toggleNrMode,
+    toggleNotchMode,
+    isNrActive,
+  } from './dsp-panel-logic';
+
+  import { runtime } from '$lib/runtime/frontend-runtime';
+  import {
+    deriveDspProps, getDspHandlers, getAutoNotchArmed, getManualNotchArmed,
+    getDspControlFeedback, projectDspControlFeedbackToDisplay,
+  } from '$lib/runtime/adapters/panel-adapters';
+  import {
+    createContinuousScalar,
+    createDiscreteContinuousScalarPolicy,
+    createHBarContinuousScalarPolicy,
+    type ContinuousScalarBinding,
+  } from '../../primitives/scalar/continuous-scalar.svelte';
+  import type {
+    HBarIssuedStatusPresentation,
+    HBarIssuedStatusSnapshot,
+  } from '../controls/value-control/skin';
+  import { t } from '$lib/i18n';
+
+  const handlers = getDspHandlers();
+  let p = $derived(deriveDspProps());
+  // MOR-1536: freshest in-flight `set_auto_notch`/`set_manual_notch`
+  // targets, DISPLAY ONLY (see `panel-adapters.ts`'s ARMED-SIGNAL
+  // CONTRACT). `notchMode` below stays the sole selection source — armed
+  // only marks the button the pending command is racing toward, never a
+  // substitute for the confirmed reading. Two independent accessors
+  // because notch mode is written as two independent commands (see
+  // `getAutoNotchArmed`'s doc comment) — NOTCH tracks manual, A-NOTCH
+  // tracks auto.
+  let manualNotchArmed = $derived(getManualNotchArmed());
+  let autoNotchArmed = $derived(getAutoNotchArmed());
+  const notchArmedIdBase = $props.id();
+  // MOR-1672: the dialog uses the same two truthful command strands as the
+  // top-level buttons.  A mode is still selected only from `notchMode`; these
+  // facts merely identify the requested choice while radio confirmation is
+  // delayed.  OFF is a grouped target only when both real false writes are in
+  // flight, never after one partial strand.
+  let autoNotchChoicePending = $derived(autoNotchArmed.armed && autoNotchArmed.value === true);
+  let manualNotchChoicePending = $derived(manualNotchArmed.armed && manualNotchArmed.value === true);
+  let offNotchChoicePending = $derived(
+    autoNotchArmed.armed
+      && autoNotchArmed.value === false
+      && manualNotchArmed.armed
+      && manualNotchArmed.value === false,
+  );
+  let hasNotchChoicePending = $derived(
+    autoNotchChoicePending || manualNotchChoicePending || offNotchChoicePending,
+  );
+
+  // MOR-2979: the NB/NR/NOTCH/A-NOTCH keys expose the confirmed on/off
+  // and stay disabled until observed (`toDspProps`), same seam as #3927's
+  // choice keys. The MOR-2932 scalar feedback below is untouched.
+  let nbKnown = $derived(p.nbKnown ?? true);
+  let nrKnown = $derived(p.nrKnown ?? true);
+  let manualNotchKnown = $derived(p.manualNotchKnown ?? true);
+  let autoNotchKnown = $derived(p.autoNotchKnown ?? true);
+
+  let nrMode = $derived(p.nrMode);
+  // MOR-1735: this fallback panel must render the same projection contract as
+  // the semantic DSP surface.  The legacy shape is only retained for older
+  // test/embedding callers that do not supply a projection at all.
+  const LEGACY_NR_LEVEL_DOMAIN = { min: 0, max: 15, step: 1, origin: 0 };
+  let nrLevelProjection = $derived(p.nrLevelProjection);
+  let nrLevelDomain = $derived(
+    nrLevelProjection?.domain
+      ?? (nrLevelProjection === undefined ? LEGACY_NR_LEVEL_DOMAIN : null),
+  );
+  let nrLevel = $derived(
+    nrLevelProjection?.value
+      ?? (nrLevelProjection === undefined ? p.nrLevel : nrLevelDomain?.origin ?? null),
+  );
+  let nrLevelAdjustable = $derived(
+    nrLevel !== null
+      && nrLevelDomain !== null
+      && (nrLevelProjection === undefined || nrLevelProjection.adjustable),
+  );
+  let nbActive = $derived(p.nbActive);
+  let nbLevel = $derived(p.nbLevel);
+  let nbWidth = $derived(p.nbWidth ?? 0);
+  // MOR-502: NB level scale — IC-7610 reports a 0-255 control range (percent
+  // display); FTX-1 has none → native 0-10 raw integer (matches LCD skin).
+  let nbLevelMax = $derived(p.nbLevelMax ?? 255);
+  let nbLevelPercent = $derived(p.nbLevelPercent ?? true);
+  let hasNbDepth = $derived(p.hasNbDepth ?? false);
+  let hasNbWidth = $derived(p.hasNbWidth ?? false);
+  let nbLevelDisplayFn = $derived(
+    nbLevelPercent ? (v: number) => rawToPercentDisplay(v, 0, nbLevelMax) : (v: number) => `${v}`,
+  );
+  let notchMode = $derived(p.notchMode);
+  let notchFreq = $derived(p.notchFreq);
+  // MOR-2475: the published `manual_notch_freq` display domain when the
+  // radio declares one (props state the domain, never a fallback); `null`
+  // keeps this panel's raw 0-255 constants.
+  let notchFreqDomain = $derived(p.notchFreqDomain ?? null);
+  // MOR-2735: the width is what was read (`finiteValue` in `toDspProps`) or
+  // nothing — an unread width lights NO choice, never a made-up WIDE.
+  let manualNotchWidth = $derived(p.manualNotchWidth ?? null);
+  // MOR-2735: the #3811 per-receiver tag decision — a radio whose profile
+  // declares no width field draws no group at all.
+  let hasManualNotchWidth = $derived(p.hasManualNotchWidth ?? false);
+  let agcTimeConstant = $derived(p.agcTimeConstant ?? 0);
+  const onNrModeChange = handlers.onNrModeChange;
+  const onNrLevelChange = handlers.onNrLevelChange;
+  const onNbToggle = handlers.onNbToggle;
+  const onNbLevelChange = handlers.onNbLevelChange;
+  const onNbDepthChange = handlers.onNbDepthChange ?? (() => {});
+  const onNbWidthChange = handlers.onNbWidthChange ?? (() => {});
+  const onNotchModeChange = handlers.onNotchModeChange;
+  const onNotchFreqChange = handlers.onNotchFreqChange;
+  const onManualNotchWidthChange = handlers.onManualNotchWidthChange ?? (() => {});
+  const onAgcTimeChange = handlers.onAgcTimeChange ?? (() => {});
+
+  /* NOTCH_WIDTH_LABELS, AGC_TIME_LABELS imported from dsp-panel-logic */
+
+  let showNr = $derived(p.hasNr);
+  let showNb = $derived(p.hasNb);
+  let showNotch = $derived(p.hasNotch ?? true);
+  let showAutoNotch = $derived(p.hasAutoNotch ?? true);
+  let showAgcTime = $derived(p.hasAgcTime ?? true);
+
+  let nbLevelFeedback = $derived(getDspControlFeedback('nbLevel'));
+  let nbWidthFeedback = $derived(getDspControlFeedback('nbWidth'));
+  let notchPositionFeedback = $derived(getDspControlFeedback('notchFilter'));
+  let agcTimeFeedback = $derived(getDspControlFeedback('agcTimeConstant'));
+  // MOR-2932: NR level and NB depth ride the shared command-feedback scalar
+  // like their Standard twins — raw feedback projected to display units
+  // through the same adapter pair the semantic host is fed with.
+  let nrLevelFeedback = $derived(projectDspControlFeedbackToDisplay(
+    'nrLevel', getDspControlFeedback('nrLevel'), runtime.caps,
+  ));
+  let nbDepthFeedback = $derived(projectDspControlFeedbackToDisplay(
+    'nbDepth', getDspControlFeedback('nbDepth'), runtime.caps,
+  ));
+  const hbarPolicy = (describeTarget: (value: number) => string) =>
+    createHBarContinuousScalarPolicy({ preview: 'optimistic', debounceMs: 50, describeTarget });
+  const nbLevelBinding = createContinuousScalar(
+    () => ({
+      evidence: 'command-feedback', feedback: nbLevelFeedback, command: 'set_nb_level',
+      domain: { min: 0, max: nbLevelMax, step: 1, defaultValue: null, fineStepDivisor: 10 },
+      enabled: showNb && nbLevelFeedback.availability === 'available', request: onNbLevelChange,
+    }),
+    hbarPolicy((value) => nbLevelDisplayFn(value)),
+  );
+  const nbWidthBinding = createContinuousScalar(
+    () => ({
+      evidence: 'command-feedback', feedback: nbWidthFeedback, command: 'set_nb_width',
+      domain: { min: 0, max: 255, step: 1, defaultValue: null, fineStepDivisor: 10 },
+      enabled: showNb && hasNbWidth && nbWidthFeedback.availability === 'available',
+      request: onNbWidthChange,
+    }),
+    hbarPolicy(rawToPercentDisplay),
+  );
+  const notchPositionBinding = createContinuousScalar(
+    () => ({
+      evidence: 'command-feedback', feedback: notchPositionFeedback, command: 'set_notch_filter',
+      domain: notchFreqDomain === null
+        ? { min: 0, max: 255, step: 1, defaultValue: null, fineStepDivisor: 10 }
+        : {
+          min: notchFreqDomain.min, max: notchFreqDomain.max, step: notchFreqDomain.step,
+          defaultValue: null, fineStepDivisor: 10,
+        },
+      enabled: showNotch && notchMode === 'manual'
+        && notchPositionFeedback.availability === 'available',
+      request: onNotchFreqChange,
+    }),
+    hbarPolicy(String),
+  );
+  const agcTimeBinding = createContinuousScalar(
+    () => ({
+      evidence: 'command-feedback', feedback: agcTimeFeedback, command: 'set_agc_time_constant',
+      domain: { min: 0, max: 9, step: 1, defaultValue: null, fineStepDivisor: 10 },
+      enabled: showAgcTime && agcTimeFeedback.availability === 'available', request: onAgcTimeChange,
+    }),
+    createDiscreteContinuousScalarPolicy({ debounceMs: 50, describeTarget: formatAgcTime }),
+  );
+  // MOR-2932: the NR domain is the projection's own (legacy 0..15 only when
+  // the radio publishes nothing); a null domain keeps the eager binding on
+  // the legacy range while the gate below renders no slider for it.
+  const nrLevelBinding = createContinuousScalar(
+    () => ({
+      evidence: 'command-feedback', feedback: nrLevelFeedback, command: 'set_nr_level',
+      domain: nrLevelDomain === null
+        ? { min: 0, max: 15, step: 1, defaultValue: null, fineStepDivisor: 10 }
+        : {
+          min: nrLevelDomain.min, max: nrLevelDomain.max, step: nrLevelDomain.step,
+          defaultValue: null, fineStepDivisor: 10,
+        },
+      enabled: showNr && nrLevelAdjustable && nrLevelFeedback.availability === 'available',
+      request: onNrLevelChange,
+    }),
+    createDiscreteContinuousScalarPolicy({ debounceMs: 50, describeTarget: String }),
+  );
+  const nbDepthBinding = createContinuousScalar(
+    () => ({
+      evidence: 'command-feedback', feedback: nbDepthFeedback, command: 'set_nb_depth',
+      domain: { min: 1, max: 10, step: 1, defaultValue: null, fineStepDivisor: 10 },
+      enabled: showNb && hasNbDepth && nbDepthFeedback.availability === 'available',
+      request: onNbDepthChange,
+    }),
+    createDiscreteContinuousScalarPolicy({ debounceMs: 50, describeTarget: String }),
+  );
+
+  type HBarDspLane = 'nbLevel' | 'nbWidth' | 'notchPosition';
+  let issuedStatusText = $state<Record<HBarDspLane, string | null>>({
+    nbLevel: null, nbWidth: null, notchPosition: null,
+  });
+  function formatIssuedStatus({ view, announcement }: Readonly<HBarIssuedStatusSnapshot>): string {
+    return view.error === null
+      ? announcement.message
+      : `${announcement.message.replace(/[.!?]$/, '')}: ${view.error}`;
+  }
+  function issuedStatusPresentation(lane: HBarDspLane): Readonly<HBarIssuedStatusPresentation> {
+    return {
+      get text() { return issuedStatusText[lane]; },
+      format: formatIssuedStatus,
+      accept(text) { issuedStatusText[lane] = text; },
+    };
+  }
+  const nbLevelStatus = issuedStatusPresentation('nbLevel');
+  const nbWidthStatus = issuedStatusPresentation('nbWidth');
+  const notchPositionStatus = issuedStatusPresentation('notchPosition');
+  function consumeHiddenStatus(
+    binding: ContinuousScalarBinding,
+    presentation?: Readonly<HBarIssuedStatusPresentation>,
+  ): void {
+    const view = binding.view;
+    if (presentation === undefined || view.evidence !== 'command-feedback') return;
+    const announcement = view.presentation.politeAnnouncement;
+    if (announcement !== null) {
+      presentation.accept(untrack(() => presentation.format({ view, announcement })));
+    } else if (view.feedback.transitionId === null) {
+      presentation.accept(null);
+    }
+  }
+  const feedbackIntegratedControl = { 'feedback-policy': 'feedback-integrated' } as const;
+
+  let nrOptions = $derived(buildNrOptions());
+  let notchOptions = $derived(buildNotchOptions());
+
+  let nrActive = $derived(isNrActive(nrMode));
+
+  type ModalId = 'nr' | 'nb' | 'notch' | 'agc';
+  let openModal = $state<ModalId | null>(null);
+  let nrModalStyle = $state('');
+  let nbModalStyle = $state('');
+  let notchModalStyle = $state('');
+  let agcModalStyle = $state('');
+
+  let nrAnchorEl: HTMLDivElement | undefined = $state();
+  let nbAnchorEl: HTMLDivElement | undefined = $state();
+  let notchAnchorEl: HTMLDivElement | undefined = $state();
+  let agcAnchorEl: HTMLDivElement | undefined = $state();
+
+  /** Local NR mode for modal (supports 2 when server only reports on/off). */
+  let nrModalMode = $state(0);
+  function computeModalStyle(anchor: HTMLElement | undefined): string {
+    const menuWidth = 220;
+    const app = document.getElementById('app');
+    const topLimit = 8 + (app ? Number.parseFloat(getComputedStyle(app).paddingTop) || 0 : 0);
+    let left = anchor?.getBoundingClientRect().left ?? 8;
+    if (left + menuWidth > window.innerWidth - 8) {
+      left = window.innerWidth - 8 - menuWidth;
+    }
+    if (left < 8) {
+      left = 8;
+    }
+
+    // MobileRadioLayout owns the tuning strip's size (including the device
+    // safe-area inset). Read its actual viewport boundary instead of copying
+    // that layout constant here, so this dialog remains above the live strip.
+    const mobileTuningStrip = window.innerWidth < 640
+      ? document.querySelector<HTMLElement>('.m-tuning-strip')
+      : null;
+    if (mobileTuningStrip) {
+      const stripTop = mobileTuningStrip.getBoundingClientRect().top;
+      return `top: ${topLimit}px; left: ${left}px; width: ${menuWidth}px; bottom: calc(100dvh - ${stripTop}px + 8px); overflow-y: auto;`;
+    }
+
+    if (!anchor) {
+      return `top: ${topLimit}px; left: 8px; width: 220px; max-height: calc(100dvh - ${topLimit + 8}px); overflow-y: auto;`;
+    }
+    const rect = anchor.getBoundingClientRect();
+    const top = Math.max(topLimit, rect.bottom + 6);
+    return `top: ${top}px; left: ${left}px; width: ${menuWidth}px; max-height: calc(100dvh - ${top + 8}px); overflow-y: auto;`;
+  }
+
+  function openModalFor(kind: ModalId): void {
+    if (kind === 'nr') {
+      nrModalMode = nrMode;
+      nrModalStyle = computeModalStyle(nrAnchorEl);
+    } else if (kind === 'nb') {
+      nbModalStyle = computeModalStyle(nbAnchorEl);
+    } else if (kind === 'agc') {
+      agcModalStyle = computeModalStyle(agcAnchorEl);
+    } else {
+      notchModalStyle = computeModalStyle(notchAnchorEl);
+    }
+    openModal = kind;
+  }
+
+  function closeModal(): void {
+    openModal = null;
+  }
+
+  function toggleNrShort(): void {
+    onNrModeChange(toggleNrMode(nrMode));
+  }
+
+  function toggleNotchShort(): void {
+    onNotchModeChange(toggleNotchMode(notchMode));
+  }
+
+  function handleNrModalMode(v: string | number): void {
+    const n = v as number;
+    nrModalMode = n;
+    onNrModeChange(n);
+  }
+
+  function handleNotchModalMode(v: string | number): void {
+    const m = v as 'off' | 'auto' | 'manual';
+    onNotchModeChange(m);
+  }
+
+  $effect(() => {
+    if (openModal === 'nr') {
+      nrModalStyle = computeModalStyle(nrAnchorEl);
+    } else if (openModal === 'nb') {
+      nbModalStyle = computeModalStyle(nbAnchorEl);
+    } else if (openModal === 'notch') {
+      notchModalStyle = computeModalStyle(notchAnchorEl);
+    } else if (openModal === 'agc') {
+      agcModalStyle = computeModalStyle(agcAnchorEl);
+    }
+  });
+
+  $effect(() => {
+    if (openModal !== 'nb') {
+      consumeHiddenStatus(nbLevelBinding, nbLevelStatus);
+      consumeHiddenStatus(nbWidthBinding, nbWidthStatus);
+    } else if (!hasNbWidth) {
+      consumeHiddenStatus(nbWidthBinding, nbWidthStatus);
+    }
+    if (!(openModal === 'notch' && notchMode === 'manual')) {
+      consumeHiddenStatus(notchPositionBinding, notchPositionStatus);
+    }
+    if (openModal !== 'agc') consumeHiddenStatus(agcTimeBinding);
+    if (openModal !== 'nr') consumeHiddenStatus(nrLevelBinding);
+    if (openModal !== 'nb' || !hasNbDepth) consumeHiddenStatus(nbDepthBinding);
+  });
+
+  onDestroy(() => {
+    nbLevelBinding.destroy();
+    nbWidthBinding.destroy();
+    notchPositionBinding.destroy();
+    agcTimeBinding.destroy();
+    nrLevelBinding.destroy();
+    nbDepthBinding.destroy();
+  });
+
+  /* LONG_PRESS_MS imported from dsp-panel-logic */
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let suppressNextToggle: ModalId | null = null;
+
+  function startLongPress(kind: ModalId): void {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+    }
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      suppressNextToggle = kind;
+      openModalFor(kind);
+    }, LONG_PRESS_MS);
+  }
+
+  function endLongPressPointer(): void {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function onNrClick(): void {
+    if (suppressNextToggle === 'nr') {
+      suppressNextToggle = null;
+      return;
+    }
+    toggleNrShort();
+  }
+
+  function onNbClick(): void {
+    if (suppressNextToggle === 'nb') {
+      suppressNextToggle = null;
+      return;
+    }
+    onNbToggle(!nbActive);
+  }
+
+  function onNotchClick(): void {
+    if (suppressNextToggle === 'notch') {
+      suppressNextToggle = null;
+      return;
+    }
+    toggleNotchShort();
+  }
+</script>
+
+<div class="dsp-panel">
+  <div class="dsp-button-grid">
+    {#if showNb}
+      <div class="dsp-btn-wrap" bind:this={nbAnchorEl}>
+        <HardwareButton
+          active={nbActive}
+          pressed={nbKnown ? nbActive : undefined}
+          disabled={!nbKnown}
+          indicator="edge-left"
+          color="orange"
+          title="NB — click to toggle; long-press for settings"
+          onclick={onNbClick}
+          onpointerdown={() => startLongPress('nb')}
+          onpointerup={endLongPressPointer}
+          onpointercancel={endLongPressPointer}
+          onpointerleave={endLongPressPointer}
+        >NB{nbActive ? ` ${nbLevelDisplayFn(nbLevel)}` : ''}</HardwareButton>
+      </div>
+    {/if}
+
+    {#if showNr}
+      <div class="dsp-btn-wrap" bind:this={nrAnchorEl}>
+        <HardwareButton
+          active={nrActive}
+          pressed={nrKnown ? nrActive : undefined}
+          disabled={!nrKnown}
+          indicator="edge-left"
+          color="cyan"
+          title="NR — click to toggle; long-press for settings"
+          onclick={onNrClick}
+          onpointerdown={() => startLongPress('nr')}
+          onpointerup={endLongPressPointer}
+          onpointercancel={endLongPressPointer}
+          onpointerleave={endLongPressPointer}
+        >NR{nrActive ? ` ${nrLevel ?? 'unavailable'}` : ''}</HardwareButton>
+      </div>
+    {/if}
+
+    {#if showNotch}
+      {@const manualNotchArmedId = `${notchArmedIdBase}-manual`}
+      <div class="dsp-btn-wrap" bind:this={notchAnchorEl}>
+        <HardwareButton
+          active={notchMode === 'manual'}
+          pressed={manualNotchKnown ? notchMode === 'manual' : undefined}
+          disabled={!manualNotchKnown}
+          indicator="edge-left"
+          color="cyan"
+          title="Manual Notch — click to toggle; long-press for settings"
+          armed={manualNotchArmed.armed}
+          describedBy={manualNotchArmed.armed ? manualNotchArmedId : undefined}
+          onclick={onNotchClick}
+          onpointerdown={() => startLongPress('notch')}
+          onpointerup={endLongPressPointer}
+          onpointercancel={endLongPressPointer}
+          onpointerleave={endLongPressPointer}
+        >NOTCH</HardwareButton>
+      </div>
+      {#if manualNotchArmed.armed}
+        <span id={manualNotchArmedId} class="sr-only">{t('core.dsp.notch.pendingAnnouncement')}</span>
+      {/if}
+    {/if}
+
+    {#if showAutoNotch}
+      {@const autoNotchArmedId = `${notchArmedIdBase}-auto`}
+      <div class="dsp-btn-wrap">
+        <HardwareButton
+          active={notchMode === 'auto'}
+          pressed={autoNotchKnown ? notchMode === 'auto' : undefined}
+          disabled={!autoNotchKnown}
+          indicator="edge-left"
+          color="green"
+          title="Auto Notch"
+          armed={autoNotchArmed.armed}
+          describedBy={autoNotchArmed.armed ? autoNotchArmedId : undefined}
+          onclick={() => onNotchModeChange(notchMode === 'auto' ? 'off' : 'auto')}
+        >A-NOTCH</HardwareButton>
+      </div>
+      {#if autoNotchArmed.armed}
+        <span id={autoNotchArmedId} class="sr-only">{t('core.dsp.notch.pendingAnnouncement')}</span>
+      {/if}
+    {/if}
+
+    {#if showAgcTime}
+      <div class="dsp-btn-wrap" bind:this={agcAnchorEl}>
+        <HardwareButton
+          indicator="edge-left"
+          color="gray"
+          title="AGC Time — click for settings"
+          onclick={() => openModalFor('agc')}
+        >AGC-T {formatAgcTime(agcTimeConstant)}s</HardwareButton>
+      </div>
+    {/if}
+  </div>
+</div>
+
+{#if openModal}
+  <button
+    type="button"
+    class="menu-backdrop"
+    aria-label="Close DSP settings"
+    onclick={closeModal}
+  ></button>
+{/if}
+
+{#if openModal === 'nr'}
+  <div
+    class="dsp-modal"
+    role="dialog"
+    aria-label="Noise reduction settings"
+    style={nrModalStyle}
+  >
+    <div class="menu-title">Noise reduction</div>
+    <div class="dsp-modal-block dsp-mode-grid">
+      {#each nrOptions as option}
+        <HardwareButton
+          active={nrModalMode === option.value}
+          indicator="edge-left"
+          color="cyan"
+          onclick={() => handleNrModalMode(option.value)}
+        >
+          {option.label}
+        </HardwareButton>
+      {/each}
+    </div>
+    {#if nrLevel !== null && nrLevelDomain !== null}
+      {#if nrLevelAdjustable}
+        <ValueControl
+          {...feedbackIntegratedControl}
+          label="NR Level"
+          binding={nrLevelBinding}
+          renderer="discrete"
+          tickStyle="notch"
+          accentColor="var(--v2-accent-cyan)"
+          variant="hardware-illuminated"
+        />
+      {:else}
+        <div class="nr-level-unavailable">NR Level {nrLevel} unavailable</div>
+      {/if}
+    {:else}
+      <div class="nr-level-unavailable">NR Level unavailable</div>
+    {/if}
+  </div>
+{/if}
+
+{#if openModal === 'nb'}
+  <div class="dsp-modal" role="dialog" aria-label="Noise blanker settings" style={nbModalStyle}>
+    <div class="menu-title">Noise blanker</div>
+    <div class="dsp-modal-block dsp-modal-row">
+      <span class="dsp-modal-inline-label">NB</span>
+      <HardwareButton
+        indicator="edge-left"
+        active={nbActive}
+        pressed={nbKnown ? nbActive : undefined}
+        disabled={!nbKnown}
+        color="orange"
+        onclick={() => onNbToggle(!nbActive)}
+      >
+        {nbActive ? 'ON' : 'OFF'}
+      </HardwareButton>
+    </div>
+    <ValueControl
+      {...feedbackIntegratedControl}
+      label="NB Level"
+      binding={nbLevelBinding}
+      renderer="hbar"
+      displayFn={nbLevelDisplayFn}
+      accentColor="var(--v2-accent-yellow)"
+      issuedStatusPresentation={nbLevelStatus}
+      variant="hardware-illuminated"
+    />
+    {#if hasNbDepth}
+      <ValueControl
+        {...feedbackIntegratedControl}
+        label="NB Depth"
+        binding={nbDepthBinding}
+        renderer="discrete"
+        tickStyle="notch"
+        accentColor="var(--v2-accent-orange)"
+        variant="hardware-illuminated"
+      />
+    {/if}
+    {#if hasNbWidth}
+      <ValueControl
+        {...feedbackIntegratedControl}
+        label="NB Width"
+        binding={nbWidthBinding}
+        renderer="hbar"
+        displayFn={rawToPercentDisplay}
+        accentColor="var(--v2-accent-orange)"
+        issuedStatusPresentation={nbWidthStatus}
+        variant="hardware-illuminated"
+      />
+    {/if}
+  </div>
+{/if}
+
+{#if openModal === 'notch'}
+  <div class="dsp-modal" role="dialog" aria-label="Notch filter settings" style={notchModalStyle}>
+    <div class="menu-title">Notch</div>
+    <div class="dsp-modal-block dsp-mode-grid">
+      {#each notchOptions as option}
+        {@const mode = option.value as 'off' | 'auto' | 'manual'}
+        {@const isPending = mode === 'off'
+          ? offNotchChoicePending
+          : mode === 'auto'
+            ? autoNotchChoicePending
+            : manualNotchChoicePending}
+        {@const pendingId = `${notchArmedIdBase}-dialog-${mode}`}
+        <div
+          class="notch-mode-choice"
+          data-notch-mode-choice={mode}
+          data-notch-pending-target={isPending ? mode : undefined}
+          role="group"
+          aria-label={`Notch mode ${option.label}`}
+          aria-busy={isPending}
+        >
+          <HardwareButton
+            active={notchMode === option.value}
+            indicator="edge-left"
+            color="cyan"
+            armed={isPending}
+            describedBy={isPending ? pendingId : undefined}
+            onclick={() => handleNotchModalMode(option.value)}
+          >
+            {option.label}
+          </HardwareButton>
+          {#if isPending}
+            <span id={pendingId} class="sr-only">{t('core.dsp.notch.pendingAnnouncement')}</span>
+          {/if}
+        </div>
+      {/each}
+    </div>
+    {#if hasNotchChoicePending}
+      <span class="sr-only" aria-live="polite" aria-atomic="true" data-notch-mode-live>
+        {t('core.dsp.notch.pendingAnnouncement')}
+      </span>
+    {/if}
+    {#if notchMode === 'manual'}
+      <ValueControl
+        {...feedbackIntegratedControl}
+        label="Notch Position"
+        binding={notchPositionBinding}
+        renderer="hbar"
+        accentColor="var(--v2-accent-cyan)"
+        issuedStatusPresentation={notchPositionStatus}
+        variant="hardware-illuminated"
+      />
+      {#if hasManualNotchWidth}
+        <div class="dsp-modal-block dsp-mode-grid">
+          <HardwareButton active={manualNotchWidth === 0} indicator="edge-left" color="cyan" onclick={() => onManualNotchWidthChange(0)}>WIDE</HardwareButton>
+          <HardwareButton active={manualNotchWidth === 1} indicator="edge-left" color="cyan" onclick={() => onManualNotchWidthChange(1)}>MID</HardwareButton>
+          <HardwareButton active={manualNotchWidth === 2} indicator="edge-left" color="cyan" onclick={() => onManualNotchWidthChange(2)}>NAR</HardwareButton>
+        </div>
+      {/if}
+    {/if}
+  </div>
+{/if}
+
+{#if openModal === 'agc'}
+  <div class="dsp-modal" role="dialog" aria-label="AGC time settings" style={agcModalStyle}>
+    <div class="menu-title">AGC Time Constant</div>
+    <ValueControl
+      {...feedbackIntegratedControl}
+      label="AGC Time"
+      binding={agcTimeBinding}
+      renderer="discrete"
+      tickStyle="notch"
+      displayFn={formatAgcTime}
+      unit="s"
+      accentColor="var(--v2-accent-cyan)"
+      variant="hardware-illuminated"
+    />
+  </div>
+{/if}
+
+<style>
+  .dsp-panel {
+    padding: 8px 8px;
+  }
+
+  .dsp-button-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .dsp-btn-wrap {
+    display: flex;
+    min-width: 0;
+  }
+
+  .dsp-btn-wrap > :global(button) {
+    flex: 1;
+    min-height: 34px;
+    font-size: 12px;
+  }
+
+  .menu-backdrop {
+    position: fixed;
+    inset: 0;
+    top: var(--rp-chrome-top, 0px); /* MOR-3845 */
+    z-index: 10000;
+    background: var(--v2-attenuator-bg);
+    border: 0;
+    padding: 0;
+    margin: 0;
+  }
+
+  .dsp-modal {
+    position: fixed;
+    z-index: 10001;
+    box-sizing: border-box;
+    min-width: min(200px, calc(100vw - 32px));
+    max-width: min(240px, calc(100vw - 32px));
+    padding: 8px;
+    background: var(--v2-bg-darkest);
+    border: 1px solid var(--v2-border-darker);
+    border-radius: 4px;
+    box-shadow: 0 10px 24px var(--v2-attenuator-shadow);
+  }
+
+  .menu-title {
+    margin-bottom: 8px;
+    color: var(--v2-text-subdued);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .dsp-modal-block {
+    margin-bottom: 8px;
+  }
+
+  .dsp-modal-block:last-child {
+    margin-bottom: 0;
+  }
+
+  .dsp-modal-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .dsp-modal-inline-label {
+    flex: 0 0 auto;
+    color: var(--v2-text-header);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+
+  .dsp-mode-grid {
+    display: flex;
+    gap: 4px;
+  }
+
+  .nr-level-unavailable {
+    color: var(--v2-text-subdued);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 11px;
+  }
+
+  .dsp-mode-grid > :global(button) {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .notch-mode-choice {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .notch-mode-choice > :global(button) {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  /* MOR-1536 — same convention as `ModePanel.svelte`'s `.sr-only`: visually
+     hidden, `position: absolute` removes it from `.dsp-button-grid`'s flow
+     so it never consumes a grid cell. */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+</style>

@@ -1,0 +1,1292 @@
+"""Radio profile and capability matrix for runtime routing and guards.
+
+All profiles are loaded from TOML rig files in the ``rigs/`` directory.
+There are **no** hardcoded profiles — adding a new radio means adding one
+TOML file with zero Python changes.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+from collections.abc import Awaitable, Callable
+from typing import (
+    TYPE_CHECKING,
+    Literal,
+    Never,
+    NotRequired,
+    Required,
+    TypeAlias,
+    TypedDict,
+    cast,
+)
+
+if TYPE_CHECKING:
+    from rigplane.profiles.rig_loader import TxFuncSpec
+
+from rigplane.commands._codec import (
+    bcd_encode_value,
+    filter_hz_to_index,
+    hz_to_table_index,
+)
+from rigplane.commands.command_map import CommandMap, ReverseCommandIndex
+from rigplane.core.exceptions import CommandError
+from rigplane.core.state_acquisition_policy import RadioAcquisitionProfile
+from rigplane.core.state_pipeline_contracts import PowerWriteQuantum
+from rigplane.core.types import (
+    ScopeFixedEdgeRange,
+    MemoryProfile,
+    MemoryWriteLayout,
+    ToneSquelchType,
+)
+from rigplane.core.usb_identity import UsbAudioIdentity
+
+__all__ = [
+    "selector_one_is_sub",
+    "CwTextSendCancelledError",
+    "CwTextSpec",
+    "CwTextUnsupportedError",
+    "MemoryWriteUnverifiedError",
+    "await_fenced_cw_text",
+    "admit_cw_text",
+    "admit_memory_write",
+    "ControlLookupPoint",
+    "EncodedControlChoice",
+    "ControlDomainSpec",
+    "ControlSpec",
+    "FilterWidthSegment",
+    "FilterWidthRule",
+    "IqLanSpec",
+    "MeterCalibrationPoint",
+    "PowerWriteQuantum",
+    "RadioProfile",
+    "RuleSpec",
+    "TxPolicy",
+    "get_radio_profile",
+    "preferred_serial_bauds",
+    "resolve_radio_profile",
+    "KeyboardBinding",
+    "KeyboardConfig",
+    "MemoryProfile",
+]
+
+logger = logging.getLogger(__name__)
+
+
+class ControlLookupPoint(TypedDict):
+    """One normalized lookup point for a profile control domain."""
+
+    raw: int
+    display: str
+
+
+class EncodedControlLabelChoice(TypedDict):
+    """One encoded choice represented by a truthful non-numeric label."""
+
+    raw: int
+    label: str
+
+
+class EncodedControlNumericChoice(TypedDict):
+    """One encoded choice represented by an exact numeric display value."""
+
+    raw: int
+    display: str
+
+
+EncodedControlChoice = EncodedControlLabelChoice | EncodedControlNumericChoice
+
+
+class ControlSpec(TypedDict, total=False):
+    """Legacy control specification (from TOML ``[controls.*]``).
+
+    This remains callable for consumers that construct legacy controls at
+    runtime. Explicit scalar domains use ``ControlDomainSpec`` instead.
+    """
+
+    style: str
+    raw_min: int
+    raw_max: int
+    raw_center: int
+    display_min: int
+    display_max: int
+    display_unit: str
+    decode_quantum: int
+    encode_rounding: str
+    write_quantum_w: float
+
+
+class _ControlDomainBase(TypedDict):
+    """Fields shared by all normalized public control domains."""
+
+    raw_min: int
+    raw_max: int
+    raw_step: int
+    raw_origin: int
+    display_min: str
+    display_max: str
+    display_step: str
+    display_origin: str
+    display_unit: str
+    quantization: str
+    restoration: str
+    style: NotRequired[str]
+
+
+class IdentityControlDomainSpec(_ControlDomainBase):
+    mapping: Required[Literal["identity"]]
+    raw_center: NotRequired[Never]
+    display_center: NotRequired[Never]
+    lookup: NotRequired[Never]
+
+
+class LinearControlDomainSpec(_ControlDomainBase):
+    mapping: Required[Literal["linear"]]
+    raw_center: NotRequired[Never]
+    display_center: NotRequired[Never]
+    lookup: NotRequired[Never]
+
+
+class CenteredControlDomainSpec(_ControlDomainBase):
+    mapping: Required[Literal["centered"]]
+    raw_center: int
+    display_center: str
+    lookup: NotRequired[Never]
+
+
+class LookupControlDomainSpec(_ControlDomainBase):
+    mapping: Required[Literal["lookup"]]
+    lookup: list[ControlLookupPoint]
+    raw_center: NotRequired[Never]
+    display_center: NotRequired[Never]
+
+
+class EncodedControlDomainSpec(TypedDict):
+    """Discrete raw codes whose choices may be labeled or numeric."""
+
+    mapping: Required[Literal["encoded"]]
+    choices: list[EncodedControlChoice]
+    style: NotRequired[str]
+
+
+ControlDomainSpec = (
+    IdentityControlDomainSpec
+    | LinearControlDomainSpec
+    | CenteredControlDomainSpec
+    | LookupControlDomainSpec
+    | EncodedControlDomainSpec
+)
+
+
+class MeterCalibrationPoint(TypedDict):
+    """One calibration point for a meter (from TOML ``[[meters.*.calibration]]``)."""
+
+    raw: int
+    actual: float
+    label: str
+
+
+class RuleSpec(TypedDict, total=False):
+    """Inter-control rule (from TOML ``[[rules]]``)."""
+
+    kind: Required[str]
+    fields: list[str]
+    when_active: str
+    disables: list[str]
+    reason: str
+
+
+def _normalize(value: str) -> str:
+    return "".join(ch for ch in value.upper() if ch.isalnum())
+
+
+@dataclass(frozen=True, slots=True)
+class BandInfo:
+    """Amateur band definition for UI band selector."""
+
+    name: str
+    start: int  # Hz
+    end: int  # Hz
+    default: int  # Hz — default tuning frequency
+    bsr_code: int | None = None  # Band Stack Register code for CI-V 0x1A 0x01
+    #: True when this band row is receive-only (MOR-3632): the radio tunes
+    #: it (band selector, ``freqRanges``) but it must never grant transmit
+    #: permission, so the capabilities ``txBands`` payload omits it. Data
+    #: only — no band name or frequency lives in code.
+    rx_only: bool = False
+    default_mode: str | None = None  # e.g. "FM" — used on BSR-miss fallback
+    #: Rated maximum TX power of this band in watts (MOR-3634), from the
+    #: manuals; ``None`` means the band has no row of its own and the flat
+    #: ``RadioProfile.max_watts`` applies. Data only: the capabilities
+    #: ``txBands`` payload publishes it and the power slider's range or watts
+    #: label follows it; it never changes a power value that is written.
+    max_power_w: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FreqRangeInfo:
+    """Frequency range with optional band plan."""
+
+    start: int  # Hz
+    end: int  # Hz
+    label: str
+    bands: tuple[BandInfo, ...] = ()
+    #: True when this range is a VHF/UHF repeater band (e.g. 2 m / 70 cm).
+    #: Data-only (MOR-2111): the frontend gates the per-receiver repeater
+    #: strip on a receiver's own frequency falling inside a flagged range;
+    #: no band name or frequency lives in code.
+    repeater: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class FilterWidthSegment:
+    """One linear segment of a filter-width index mapping."""
+
+    hz_min: int
+    hz_max: int
+    step_hz: int
+    index_min: int
+
+
+@dataclass(frozen=True, slots=True)
+class FilterWidthRule:
+    """Per-mode filter-width behavior loaded from rig TOML."""
+
+    defaults: tuple[int, ...] = ()
+    fixed: bool = False
+    step_hz: int | None = None
+    min_hz: int | None = None
+    max_hz: int | None = None
+    segments: tuple[FilterWidthSegment, ...] = ()
+    table: tuple[int, ...] = ()
+    #: Passband-tuning step for this mode, in Hz. ``None`` means the mode has
+    #: no twin PBT at all, which is why it is absent rather than zero: the
+    #: IC-7300 Advanced Manual heads its Twin PBT section "SSB, CW, RTTY and
+    #: AM modes", so FM (and WFM/DV) have no passband tuning to describe.
+    #: That reading is only safe while no PBT-capable profile is unmigrated,
+    #: wholly or in part: a profile declaring a step for some modes and not
+    #: others reads as "no PBT in CW" when it means "nobody filled CW in".
+    #: ``test_pbt_step_declared_by_every_shipped_pbt_capable_profile`` enforces
+    #: both over every shipped rig rather than over a chosen few: among the
+    #: modes a profile's filter table lists, every one other than FM, WFM and
+    #: DV declares a step, and none of those three does. A mode absent from
+    #: that table is outside the guarantee, but not necessarily without a step:
+    #: the browser's ``resolveFilterModeConfig`` falls back to a related entry
+    #: -- ``CW-R`` to ``CW``, ``RTTY-R`` to ``RTTY``, the SSB variants to
+    #: ``SSB`` -- and then carries that mode's value. Only a mode with neither
+    #: an entry nor a fallback, as the IC-7610's ``PSK`` is, resolves to
+    #: nothing, and nothing here speaks for whether that radio has twin PBT
+    #: there.
+    #: Distinct from ``step_hz`` above, which quantises the filter WIDTH; the
+    #: two collide at 200 in AM and differ in USB.
+    pbt_step_hz: int | None = None
+    #: Optional narrow-state variant of the SH index table (MOR-4428):
+    #: when NARROW is on, the same SH code maps to ``narrow_table``
+    #: instead of ``table``. Empty (the default) means the mapping does
+    #: not depend on the narrow state and no narrow read is issued.
+    #: Only valid with ``table_index`` encoding; rejected on fixed rules.
+    #: Declared last so existing positional constructor calls keep their
+    #: field bindings.
+    narrow_table: tuple[int, ...] = ()
+    #: Optional per-table wire-code bases (MOR-4433): the SH code the
+    #: rule's wide ``table`` (``first_code``) and narrow ``narrow_table``
+    #: (``narrow_first_code``) count from. ``None`` (the default) keeps
+    #: today's behavior — the profile-level ``[filters] first_code``.
+    #: Only valid with ``table_index`` encoding; rejected on fixed rules,
+    #: and ``narrow_first_code`` additionally needs a ``narrow_table``.
+    #: Declared after ``narrow_table`` so existing positional constructor
+    #: calls keep their field bindings.
+    first_code: int | None = None
+    narrow_first_code: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KeyboardBinding:
+    """One keyboard shortcut binding loaded from rig TOML."""
+
+    id: str
+    action: str
+    sequence: tuple[str, ...]
+    section: str = "General"
+    label: str | None = None
+    description: str | None = None
+    modifiers: tuple[str, ...] = ()
+    repeatable: bool = False
+    params: dict[str, object] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KeyboardConfig:
+    """Keyboard shortcut configuration exposed to the web UI."""
+
+    leader_key: str = "g"
+    leader_timeout_ms: int = 1000
+    alt_hints: bool = True
+    help_title: str = "Keyboard Shortcuts"
+    bindings: tuple[KeyboardBinding, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TxPolicy:
+    """Measured per-radio transmit policy (MOR-1912, ADR row 3a).
+
+    Both fields carry only bench-measured facts — no speculative hooks.
+
+    ``refused_during_tx`` names the command families this radio refuses on
+    its own while transmitting. Entries are opaque, validated strings: the
+    profile type owns their measured representation and checks shape, not
+    membership in a runtime command-family vocabulary.
+
+    ``tx_state_map`` is the positive transmit-state map for the radio's PTT
+    read-back: it lists the raw values that mean the radio is receiving.
+    Everything else — including a raw value with no entry at all — must be
+    treated as *not receiving*. Backend reads carry that result in the
+    canonical :class:`~rigplane.core.tx_observation.TxStateReading` contract.
+    Use :meth:`is_receiving` rather than testing the map directly so that
+    rule cannot be quietly inverted by a later reader.
+    """
+
+    refused_during_tx: frozenset[str] = frozenset()
+    tx_state_map: dict[str, str] = field(default_factory=dict)
+
+    def is_receiving(self, raw_value: str) -> bool:
+        """True only if ``raw_value`` is explicitly mapped to receiving.
+
+        An unmapped value — including one that simply isn't in the map —
+        is never receiving. This is the fail-closed direction the positive
+        transmit-state map exists to guarantee.
+        """
+        return self.tx_state_map.get(raw_value) == "rx"
+
+    def attribution(self, raw_value: str) -> str | None:
+        """The vendor label mapped to ``raw_value``, or ``None`` if unmapped.
+
+        Display-grade only (MOR-1941): unlike :meth:`is_receiving`, this
+        carries no fail-closed safety rule — an unmapped value is simply
+        ``None``, not a hazard answer. Yaesu's three-valued ``TX;`` answer
+        surfaces here as ``"rx"`` / ``"tx_cat"`` / ``"tx_other"``; a vendor
+        with no attribution (e.g. Icom) never populates ``tx_state_map`` with
+        more than ``"rx"``, so this is honestly ``None`` for every other raw
+        value.
+        """
+        return self.tx_state_map.get(raw_value)
+
+
+@dataclass(frozen=True, slots=True)
+class CwTextSpec:
+    """Whether and how a radio sends typed CW text (MOR-3678).
+
+    Separate from the ``cw`` capability tag, which drives the CW decoder,
+    console and keyer controls: a radio can have ``cw`` and still not
+    accept ``send_cw_text``. Published as ``cwText`` on ``/api/v1/info``
+    and ``/api/v1/capabilities``.
+
+    ``max_length`` is the longest text one ``send_cw_text`` accepts; a
+    longer request is rejected, never truncated or split.
+    ``memory_channel`` and ``memory_type`` are set only for radios that
+    send text by writing a keyer memory and playing it back (Yaesu KM +
+    KY); ``memory_type`` is ``"text"`` or ``"message"``.
+    """
+
+    supported: bool = True
+    max_length: int = 512
+    memory_channel: int | None = None
+    memory_type: str | None = None
+
+
+# MOR-4385: the meaning of one ``scope_span_presets_hz`` entry on the
+# radio's own wire — a +/- half-width (Icom CI-V) or a full display width.
+SpanPresetSemantics: TypeAlias = Literal["half_width", "full_width"]
+
+
+@dataclass(frozen=True, slots=True)
+class IqLanSpec:
+    """Radio-LAN IQ wire facts; the LAN host remains server configuration."""
+
+    protocol: str
+    radio_port: int
+    receive_port: int
+    sample_rate_hz: int
+    samples_per_datagram: int
+    center_offset_hz: int
+    usable_bandwidth_hz: int
+    tune_min_hz: int
+    tune_max_hz: int
+
+
+@dataclass(frozen=True, slots=True)
+class RadioProfile:
+    """Runtime radio profile used by command routing and capability checks."""
+
+    id: str
+    model: str
+    civ_addr: int
+    receiver_count: int
+    capabilities: frozenset[str]
+    cmd29_routes: frozenset[tuple[int, int | None]]
+    vfo_main_code: int | None = None
+    vfo_sub_code: int | None = None
+    # Explicit split (issue #710):
+    #   *_ab_code       → VFO A↔B within the currently-selected receiver
+    #   *_main_sub_code → MAIN↔SUB across receivers (dual-receiver rigs only)
+    swap_ab_code: int | None = None
+    equal_ab_code: int | None = None
+    swap_main_sub_code: int | None = None
+    equal_main_sub_code: int | None = None
+    vfo_scheme: str = "main_sub"
+    # How provider readbacks identify VFO state. ``selected_unselected``
+    # exposes relative radio facts without claiming absolute A/B identity.
+    vfo_readback: str = "none"
+    # How the transmitting receiver is named from a reply that is
+    # transceiver-wide (carries no receiver of its own, e.g. the 1C 03
+    # transmit-frequency read). ``main_unless_split``: the TX band is MAIN,
+    # or SUB while a FRESH ``global.tx_state.split`` readback is ON;
+    # an unknown or stale split fact publishes no receiver-labelled
+    # target (fail closed). ``none`` (default) keeps the selected-band
+    # label, which is exact for single-receiver radios.
+    tx_receiver_rule: str = "none"
+    # Meaning of selector 01 for split TX on dual-RX radios. This is
+    # separate from receiver attribution of transceiver-wide replies.
+    split_tx_target: str = "none"
+    has_lan: bool = False
+    freq_ranges: tuple[FreqRangeInfo, ...] = ()
+    modes: tuple[str, ...] = ()
+    filters: tuple[str, ...] = ()
+    command_names: frozenset[str] = frozenset()
+    # Command names this radio is confirmed NOT to have, per a named source
+    # recorded in the TOML entry itself (MOR-2005 step 4a: the
+    # `{ absent = "<source>" }` spelling in `[commands]`, parsed into
+    # `commands/command_spec.py: AbsentCommandSpec`). Disjoint from
+    # ``command_names`` by construction (`profiles/rig_loader.py:
+    # RigConfig.to_profile` partitions ``self.commands`` between the two).
+    # A name in neither set is the third, still-unrepresented-by-a-refusal-
+    # policy state: "nobody has looked" — see ``supports_command``'s
+    # docstring for what does and does not yet distinguish it from this set.
+    absent_command_names: frozenset[str] = frozenset()
+    # Source text for each ``absent_command_names`` entry (MOR-2005 step 4b,
+    # plan §4 Step 4 / §8.1 D1 state 2): step 4a's ``to_profile`` partition
+    # kept the name but dropped D2's required provenance
+    # (`commands/command_spec.py: AbsentCommandSpec.source`). Keyed the
+    # same as ``absent_command_names``, so the state-2 runtime refusal
+    # (`commands/bound.py: BoundCommands`) can quote "per <source>" as
+    # plain data, without `commands/` importing anything from `profiles`.
+    absent_command_sources: dict[str, str] = field(default_factory=dict)
+    # The radio's CI-V wire bytes by command name (MOR-2003 Step 3). ``None``
+    # means this is a hand-built ``RadioProfile`` constructed outside
+    # ``profiles/rig_loader.py`` -- e.g. directly in a test -- with no map
+    # supplied at all. An empty, non-``None`` ``CommandMap`` means the
+    # opposite: a profile that *was* loaded and declares no CI-V commands
+    # (a CAT-only rig, whose TOML entries are all
+    # ``CatCommandSpec`` and get dropped by
+    # ``RigConfig.to_command_map`` -- a known, recorded asymmetry, plan
+    # §8.1 Q8, not resolved here). `runtime/radio.py: CoreRadio.__init__`
+    # treats both the same way: it binds an empty `CommandMap` rather than
+    # raising.
+    command_map: CommandMap | None = None
+    # Reverse of ``command_map`` above (MOR-1993 Z2, `docs/plans/
+    # 2026-09-01-reverse-command-index.md`): resolves an incoming
+    # ``(command, sub, data)`` frame back to a declared command name.
+    # ``None`` under the same rule as ``command_map`` -- a hand-built
+    # ``RadioProfile`` constructed outside ``profiles/rig_loader.py`` with
+    # no map supplied at all. Built from this profile's own
+    # ``command_map`` and only ever consulted for it -- never a union
+    # across profiles (`commands/command_map.py: ReverseCommandIndex`'s
+    # own module docstring has the per-radio-menu evidence for why).
+    reverse_index: ReverseCommandIndex | None = None
+    filter_width_min: int = 50
+    filter_width_max: int = 9999
+    filter_width_encoding: str = "segmented_bcd_index"
+    # Device code ``table[0]`` answers to under ``table_index`` encoding;
+    # codes below it carry no Hz value (FTX-1 2508-C Table 5 counts from
+    # 01). Pinned for ftx1 by
+    # tests/test_dsp_filter_family.py::TestFtx1Table5LoaderPins.
+    filter_width_first_code: int = 0
+    # The writeable code that returns the width to the radio's OWN
+    # mode-dependent default (FTX-1 Table 5 code 00, "(Default)"), declared
+    # as ``[filters].radio_default_code`` and validated below
+    # ``filter_width_first_code`` by the loader. ``None`` = the radio has no
+    # such code and ``reset_filter_width`` refuses. The loader derives the
+    # ``filter_width_radio_default`` capability tag from this field.
+    filter_width_radio_default_code: int | None = None
+    filter_config: dict[str, FilterWidthRule] | None = None
+    max_watts: int | None = None
+    # Lower bound of the ``PC`` power range in watts (MOR-2998). ``None``
+    # keeps today's behaviour: a request below the range is sent as-is.
+    min_watts: int | None = None
+    # The whole-watt write lattice of a raw_255 (CI-V) radio declared in
+    # ``[controls.rf_power].write_quantum_w`` (MOR-4352). ``None`` — every
+    # radio without the field — keeps today's encoder exactly: the
+    # normalized level is written as its own rounded raw byte. Keyword-only
+    # like every field appended after the positional-contract freeze
+    # (tests/test_discovery_probe_baud_order.py).
+    power_write_quantum: PowerWriteQuantum | None = field(default=None, kw_only=True)
+    att_values: tuple[int, ...] | None = None
+    att_labels: dict[str, str] | None = None
+    pre_values: tuple[int, ...] | None = None
+    pre_labels: dict[str, str] | None = None
+    agc_modes: tuple[int, ...] | None = None
+    agc_labels: dict[str, str] | None = None
+    agc_readback_modes: tuple[int, ...] | None = None
+    agc_auto_mode: int | None = None
+    agc_auto_speed_labels: dict[str, str] | None = None
+    # MOR-1534: enumerated-domain controls that were declared in TOML but
+    # never parsed/validated (break_in, notch width) or hardcoded via an
+    # IC-7610-specific enum with no profile domain to check against
+    # (ssb_tx_bw, filter_shape). ``None`` means the profile declared no
+    # domain — see each ``CoreRadio`` setter's docstring for what that means
+    # for that specific control (some fail loud, some are permissive).
+    break_in_modes: tuple[int, ...] | None = None
+    break_in_labels: dict[str, str] | None = None
+    notch_width_values: tuple[int, ...] | None = None
+    notch_width_labels: dict[str, str] | None = None
+    ssb_tx_bw_values: tuple[int, ...] | None = None
+    ssb_tx_bw_labels: dict[str, str] | None = None
+    filter_shape_values: tuple[int, ...] | None = None
+    filter_shape_labels: dict[str, str] | None = None
+    # MOR-2007 ruling 4: scan-type and scan-resume domains are per-radio,
+    # not the uniform code-level frozensets commands/vfo.py used to check
+    # against on every profile (VALID_SCAN_TYPES omitted IC-7300/IC-7610/
+    # IC-9700's documented 0x13 and IC-705's 0x24; VALID_SCAN_RESUME
+    # accepted 0xD0-0xD3 where every documented CI-V guide lists only
+    # 0xD0/0xD3). ``None`` means the profile declares no domain --
+    # permissive, like ``agc_modes`` (see
+    # ``runtime/radio.py: CoreRadio.scan_start``/``scan_set_resume``).
+    scan_type_values: tuple[int, ...] | None = None
+    scan_type_labels: dict[str, str] | None = None
+    scan_resume_values: tuple[int, ...] | None = None
+    scan_resume_labels: dict[str, str] | None = None
+    # MOR-1447 leg 2: "separate" (default, two independent controls) or
+    # "combined" (Icom-style single RF/SQL knob). Data-driven from
+    # ``[capabilities].rf_sql_control_model`` in the rig TOML — never a
+    # vendor/model-name branch in code.
+    rf_sql_control_model: str = "separate"
+    data_mode_count: int = 0
+    data_mode_labels: dict[str, str] | None = None
+    data_mode_inputs: tuple[tuple[int, str], ...] | None = None
+    # MOR-4036: ``[data_mode].modes`` — names as written in the rig TOML
+    # ``[modes].list`` of the modes that can carry the DATA flag. The 0x26
+    # selected-mode set drops the preserved DATA flag when the target mode
+    # is not among them. ``None`` = undeclared: the runtime keeps the
+    # current DATA flag (the unchanged pre-MOR-4036 behaviour).
+    data_mode_modes: tuple[str, ...] | None = None
+    # When True, MAIN set_mode routes through CI-V 0x26 0x00 (set selected
+    # receiver mode) instead of the bare 0x06. Data-driven: derived from the
+    # profile declaring a ``set_selected_mode`` command (e.g. Xiegu X6200,
+    # whose 0x06 mode-set is a hardware-confirmed no-op). Default False keeps
+    # the unchanged 0x06 path for every rig that does not declare it.
+    set_mode_via_selected: bool = False
+    protocol_type: str = "civ"
+    # Hamlib rig_model integer (from rigs_list.h). Used by the validate
+    # ``--provider hamlib`` path to launch stock rigctld with ``-m <id>``.
+    hamlib_model_id: int = 2028
+    controls: dict[str, ControlSpec | ControlDomainSpec] | None = None
+    meter_calibrations: dict[str, list[MeterCalibrationPoint]] | None = None
+    meter_redlines: dict[str, int] | None = None
+    rules: tuple[RuleSpec, ...] = ()
+    keyboard: KeyboardConfig | None = None
+    antenna_tx_count: int = 1
+    antenna_has_rx_ant: bool = False
+    transceiver_count: int = 1
+    scope_ref_min_db: float | None = None
+    scope_ref_max_db: float | None = None
+    scope_ref_step_db: float | None = None
+    # MOR-2258: scope span presets (Hz), index-ordered to match the CI-V
+    # 0x27/0x15 span code. Sole source of the Hz<->index mapping: read by
+    # the waveform-stream span derivation (runtime/_civ_rx.py:
+    # CivRuntime._publish_scope_span_observation) and passed into
+    # commands/scope.py: parse_scope_span_response / scope_set_span,
+    # which take it as a parameter because commands/ may not import
+    # profiles/ (.importlinter).
+    scope_span_presets_hz: tuple[int, ...] = ()
+    scope_fixed_edge_ranges: tuple[ScopeFixedEdgeRange, ...] = field(
+        default=(), kw_only=True
+    )
+    scope_fixed_edge_step_hz: int | None = field(default=None, kw_only=True)
+    # Per-profile RX codec preference override (#797). When non-None, the first
+    # entry is used as the initial ``audio_codec`` for radios created under this
+    # profile (unless the caller passes an explicit non-default value). Values
+    # are ``AudioCodec`` enum names (e.g. ``"PCM_1CH_16BIT"``).
+    codec_preference: tuple[str, ...] | None = None
+    tx_codec: str | None = None
+    default_sample_rate_hz: int | None = None
+    supported_sample_rates_hz: tuple[int, ...] | None = None
+    sample_rate_by_codec: dict[str, int] | None = None
+    browser_rx_transport: str | None = None
+    browser_rx_transcode_to_opus: bool | None = None
+    # Capability names whose validate checks route through the set-and-observe
+    # engine path (no read-first) instead of read-modify-verify-restore. Data-
+    # driven from ``[validation].write_only_controls`` in the rig TOML (MOR-208).
+    # Empty by default: every control uses the standard RMVR path.
+    write_only_controls: frozenset[str] = frozenset()
+    # Validation check_id -> source establishing that this radio has only one
+    # legal value for that control (MOR-2105 part 2): a check_id-grained
+    # sibling to ``write_only_controls`` above, needed because a capability
+    # like "scope" mixes fixed-value checks with genuinely multi-valued ones
+    # on the same radio (scope_span.set). A check_id named here makes the
+    # RMVR read-modify-verify-restore harness (`validation/hardware.py:
+    # _run_one_check`) report SKIP, quoting the source, instead of flipping
+    # to a value the radio can never report back and reporting a false FAIL.
+    # Data-driven from ``[validation.fixed_value]`` in the rig TOML -- but
+    # only for a fact with no other home. IC-7300's scope_dual.set (single
+    # scope) lives here because nothing else in this dataclass says so;
+    # scope_receiver.set (single receiver) does NOT, even though it is
+    # fixed-value for the same reason, because ``receiver_count``/
+    # ``supports_receiver`` above already say so and the harness derives it
+    # from that instead of restating it as a second, independently-editable
+    # source of truth (F1, MOR-2105 part 2 owner ruling). Empty by default:
+    # every control uses the standard RMVR path.
+    fixed_value_checks: dict[str, str] = field(default_factory=dict)
+    # Provider-specific state acquisition metadata (MOR-344). This is profile
+    # data only; future schedulers/adapters consume it instead of Web or
+    # rigctld delivery code branching on radio model.
+    state_acquisition: RadioAcquisitionProfile | None = None
+    # Measured per-radio transmit policy (MOR-1912).
+    tx_policy: TxPolicy = field(default_factory=TxPolicy)
+    # Ordered legal CTCSS domain resolved from the profile's named table.
+    # Values are exact integer centiHz (8850 = 88.5 Hz); the tuple order is
+    # also the provider index mapping. Declaring a table does not add a
+    # capability or command, so this is domain metadata rather than write
+    # authority. Appended to preserve the positional constructor contract.
+    ctcss_tones_centihz: tuple[int, ...] | None = None
+    # The radio's tone squelch selector codes and the neutral type each one
+    # means, from the profile's ``[tone_squelch_types]`` table (MOR-2131).
+    # None when the profile declares no table. Appended for the same reason.
+    tone_squelch_types: dict[int, ToneSquelchType] | None = None
+    # Protocol-native identity tokens this radio is expected to answer with
+    # (MOR-3064): opaque strings in the caller's backend-canonical spelling —
+    # e.g. CI-V uppercase payload hex after the 19 00 echo, or a Yaesu
+    # four-digit ID payload. NOT ``civ_addr``, ``hamlib_model_id``, or a
+    # firmware version. Empty (the default, and the explicit ``[]``) means
+    # unverified identity configuration; the loader validates shape only.
+    # Appended to preserve the positional constructor contract.
+    expected_identity_ids: tuple[str, ...] = ()
+    # Memory channel addressing from the optional ``[memory]`` section
+    # (MOR-3627); None when the profile declares none. Appended for the same
+    # reason as the fields above.
+    memory: MemoryProfile | None = field(default=None, kw_only=True)
+    # ``[modes] families`` (MOR-3679): family name -> member modes, e.g.
+    # ``{"cw": ("CW-U", "CW-L")}``. Empty when the profile declares none.
+    # Keyword-only and appended so no positional argument shifts.
+    mode_families: dict[str, tuple[str, ...]] = field(
+        default_factory=dict, kw_only=True
+    )
+    # Typed CW text sending (MOR-3678), from the profile's ``[cw_text]``.
+    # Keyword-only so the positional constructor contract cannot shift.
+    cw_text: CwTextSpec = field(default_factory=CwTextSpec, kw_only=True)
+    usb_identity: UsbAudioIdentity | None = field(default=None, kw_only=True)
+    # MOR-4207: ``[radio].default_baud`` — the serial baud the radio is run at
+    # (for the Icom CI-V profiles 115200, the serial scope minimum). Serial
+    # discovery probes these bauds first (:func:`preferred_serial_bauds`).
+    # Keyword-only and appended so no positional argument shifts.
+    default_baud: int = field(default=19200, kw_only=True)
+    # MOR-4352: ``[radio].xiegu_model_id`` — the integer whose big-endian
+    # bytes the radio answers to the Xiegu-only CI-V 0x1D 0x19 model-ID
+    # query (0x6200 = X6200's ``62 00``, 0x7250 = G7250's ``72 50``).
+    # ``None`` on every non-Xiegu profile. Read by
+    # :func:`profile_by_xiegu_model_id` so discovery maps a reply to a
+    # profile through profile data alone — no per-model branches.
+    # Keyword-only and appended so no positional argument shifts.
+    xiegu_model_id: int | None = field(default=None, kw_only=True)
+    # MOR-4385: what one entry of ``scope_span_presets_hz`` means on the
+    # radio's own wire. ``"half_width"``: the preset is a +/- half-width —
+    # the CI-V 0x27 0x15 span and the center-mode waveform field both
+    # carry the value the display spans either side of center (IC-7610
+    # CI-V Reference Guide p.14; runtime/_civ_rx.py:
+    # CivRuntime._publish_scope_span_observation derives frame edges as
+    # center - span / center + span). ``"full_width"``: the preset is the
+    # full display width. Every shipped profile with presets (all Icom
+    # CI-V) declares ``"half_width"``; the loader requires the field
+    # whenever presets are declared. The default covers direct Python
+    # construction of CI-V-style profiles. Keyword-only and appended so
+    # no positional argument shifts.
+    scope_span_preset_semantics: SpanPresetSemantics = field(
+        default="half_width", kw_only=True
+    )
+    # Optional radio-LAN IQ wire facts from ``[iq_lan]`` (MOR-4398). The
+    # dataclass stays in profiles to preserve the profiles/sdr independence.
+    iq_lan: IqLanSpec | None = field(default=None, kw_only=True)
+    # Profile-declared FT (TX function) answer/write map
+    # (``rig_loader.TxFuncSpec``): which receiver (and A/B slot) each
+    # ``get_tx_func`` answer digit names, and which wire digit each
+    # ``set_tx_func`` selector writes. ``None`` when the profile declares
+    # no TX-function commands (single-receiver radios without an FT verb).
+    # Keyword-only and appended so no positional argument shifts
+    # (tests/test_discovery_probe_baud_order.py).
+    tx_func: TxFuncSpec | None = field(default=None, kw_only=True)
+
+    @property
+    def vfo_swap_code(self) -> int | None:
+        """Deprecated alias; use ``swap_ab_code`` or ``swap_main_sub_code``.
+
+        Retained for 3.x compatibility with the v2.11.1 truthy fallback.
+        """
+        return self.swap_main_sub_code or self.swap_ab_code
+
+    @property
+    def vfo_equal_code(self) -> int | None:
+        """Deprecated alias; use ``equal_ab_code`` or ``equal_main_sub_code``.
+
+        Retained for 3.x compatibility with the v2.11.1 truthy fallback.
+        """
+        return self.equal_main_sub_code or self.equal_ab_code
+
+    @property
+    def scope_span_view_widths_hz(self) -> tuple[int, ...]:
+        """View widths (``end - start``) each span preset grants, in Hz.
+
+        MOR-4385: the single preset-to-view-width conversion, consumed by
+        the scope source capabilities and the web capabilities endpoint.
+        A ``half_width`` preset (Icom CI-V) covers twice its number, a
+        ``full_width`` preset covers exactly its number. Empty when no
+        presets are declared.
+        """
+        if not self.scope_span_presets_hz:
+            return ()
+        factor = 2 if self.scope_span_preset_semantics == "half_width" else 1
+        return tuple(preset * factor for preset in self.scope_span_presets_hz)
+
+    def supports_capability(self, capability: str) -> bool:
+        return capability in self.capabilities
+
+    def supports_receiver(self, receiver: int) -> bool:
+        return 0 <= receiver < self.receiver_count
+
+    def supports_cmd29(self, command: int, sub: int | None = None) -> bool:
+        return (command, sub) in self.cmd29_routes or (
+            command,
+            None,
+        ) in self.cmd29_routes
+
+    def attenuator_on_db(self) -> int | None:
+        """The dB a boolean attenuator "on" resolves to, if unambiguous.
+
+        Returns the single non-zero value in ``att_values`` when exactly
+        one is declared, otherwise ``None`` (no values declared, or
+        several non-zero steps, so a boolean "on" is ambiguous).
+        """
+        if not self.att_values:
+            return None
+        non_zero = sorted({v for v in self.att_values if v != 0})
+        if len(non_zero) != 1:
+            return None
+        return non_zero[0]
+
+    def supports_command(self, command_name: str) -> bool:
+        """Whether ``command_name`` is declared (with bytes or a CAT
+        template) by this profile.
+
+        Plan `docs/plans/2026-08-29-profile-driven-command-bytes.md` §8.1
+        D1 names three states for a command name: (1) declared — this
+        returns True; (2) declared absent, via ``absent_command_names``;
+        (3) neither declared nor declared absent. States (2) and (3) are
+        each other's negative space here — this method returns False for
+        both and does not distinguish them; a caller that needs to tell
+        them apart checks ``absent_command_names`` directly. The refusal
+        policy that acts on that distinction (D1's "report unsupported"
+        for (2), "must not exist at release" for (3)) is plan §4 Step 4,
+        a later change — not implemented by this method.
+        """
+        return command_name in self.command_names
+
+    def supports_vfo_command(self, command_name: str) -> bool:
+        """Whether the VFO-primitive command ``command_name`` is executable.
+
+        Single shared rule for the VFO-swap/equalize admission consumed by
+        capability projection
+        (``web/runtime_helpers.py: projected_vfo_capability_tags``) and
+        command admission
+        (``web/handlers/control.py: _enqueue_rc_frequency``), so the two
+        cannot disagree.
+
+        The Yaesu CAT family declares these primitives as CAT commands,
+        not CI-V opcode bytes: ``ab`` (single-receiver, e.g. the FT-991A
+        class) implements ``vfo_swap`` (``SV;``), and implements
+        ``vfo_equalize`` exactly when the profile declares the ``vfo_a_to_b``
+        copy primitive on a single transceiver — equalize is that A→B copy,
+        admitted and executed through it (``YaesuCatRadio.equalize_vfo_ab``
+        delegates to ``vfo_a_to_b``; a profile without it keeps today's
+        refusal, as does a multi-transceiver ``ab`` command set whose
+        ``AB;`` spans receivers instead of copying within one) — while
+        ``ab_shared`` (dual-RX, e.g. FTX-1) implements both ``vfo_swap``
+        (``SV;``) and ``vfo_equalize`` (``AB;``, OM 2508-C) as declared
+        commands. Every other family keeps its opcode-byte rule.
+        """
+        if command_name not in ("vfo_swap", "vfo_equalize"):
+            return False
+        if self.protocol_type == "yaesu_cat" and self.vfo_scheme in {
+            "ab",
+            "ab_shared",
+        }:
+            if self.vfo_scheme == "ab" and command_name == "vfo_equalize":
+                return (
+                    self.supports_command("vfo_a_to_b") and self.transceiver_count == 1
+                )
+            return self.supports_command(command_name)
+        if self.vfo_scheme == "ab":
+            code = (
+                self.swap_ab_code if command_name == "vfo_swap" else self.equal_ab_code
+            )
+            return code is not None
+        if self.vfo_scheme == "main_sub":
+            code = (
+                self.swap_main_sub_code
+                if command_name == "vfo_swap"
+                else self.equal_main_sub_code
+            )
+            return code is not None
+        if self.vfo_scheme == "ab_shared":
+            return self.supports_command(command_name)
+        return False
+
+    @property
+    def infers_power_on_from_liveness(self) -> bool:
+        """Whether power state is inferred from link liveness evidence.
+
+        True exactly when all three hold: the profile declares the
+        ``power_control`` capability, binds a ``power_off`` command, and
+        declares no ``get_powerstat`` query. Decided purely from profile
+        data — never from a model name.
+
+        MOR-2544 (owner rule: no fabricated values, evidence only): on a
+        profile that binds the CI-V 0x18 power command pair but has no
+        power-status query (``get_powerstat`` undeclared — e.g.
+        IC-7610/IC-7300, whose CI-V guides document cmd 0x18 as SET-only)
+        an honest power state still exists: the radio answering reads is
+        powered on; a power command the radio acknowledged (0xFB, parsed
+        by ``set_powerstat`` — a 0x18 frame is never the acknowledgement)
+        is the commanded state until the radio answers again; and before
+        the first answer the state is unknown. The ``power_off`` binding
+        is the gate that keeps level-only profiles out: Xiegu
+        X6100/X6200 and Lab599 TX-500 declare ``power_control`` for the
+        RF-power level alone (X6100/X6200: 0x14 0x0A, binding no
+        ``power_on``/``power_off`` and declaring
+        ``global.tx_state.power_on`` unsupported; TX-500: the CAT
+        PC/TP pair), so liveness there must not publish ``powerOn: true``
+        behind a power button whose command refuses. A profile with a
+        declared query keeps using it instead, and a radio without
+        ``power_control`` (FTX-1) gets nothing fabricated.
+        """
+        return (
+            self.supports_capability("power_control")
+            and self.supports_command("power_off")
+            and not self.supports_command("get_powerstat")
+        )
+
+    def resolve_filter_rule(
+        self, mode: str | None, *, data_mode: int = 0
+    ) -> FilterWidthRule | None:
+        if not self.filter_config or not mode:
+            return None
+        # Runtime callers pass Mode.name ("CW_R"); profile keys are hyphenated
+        # ("CW-R") — without this lookup and fallback both miss (MOR-2505).
+        base_mode = str(mode).upper().replace("_", "-")
+        candidates: list[str] = []
+        if data_mode > 0:
+            candidates.append(f"{base_mode}-D")
+        candidates.append(base_mode)
+        if base_mode in {"USB", "LSB"}:
+            if data_mode > 0:
+                candidates.append("SSB-D")
+            candidates.append("SSB")
+        if base_mode == "CW-R":
+            candidates.append("CW")
+        if base_mode == "RTTY-R":
+            candidates.append("RTTY")
+        for key in candidates:
+            rule = self.filter_config.get(key)
+            if rule is not None:
+                return rule
+        return None
+
+    def resolve_filter_first_code(
+        self, rule: FilterWidthRule | None, *, narrow: bool = False
+    ) -> int:
+        """Effective wire-code base for one filter-width table (MOR-4433).
+
+        The narrow state selects not only the table (``narrow_table`` vs
+        ``table``) but also its code base: a per-rule ``narrow_first_code``
+        while NARROW is on, a per-rule ``first_code`` while it is off.
+        Either may be absent (``None``) — including every rule written
+        before per-table bases existed — and falls back to the
+        profile-level ``[filters] first_code``, which is today's behavior.
+        """
+        if rule is not None:
+            override = rule.narrow_first_code if narrow else rule.first_code
+            if override is not None:
+                return override
+        return self.filter_width_first_code
+
+    def encode_filter_width(
+        self, width_hz: int, mode: str | None, *, data_mode: int = 0
+    ) -> bytes:
+        """Encode a width using the resolved segmented CI-V filter rule."""
+        rule = self.resolve_filter_rule(mode, data_mode=data_mode)
+
+        min_hz = self.filter_width_min
+        max_hz = self.filter_width_max
+        if rule is not None:
+            if rule.fixed:
+                raise CommandError(
+                    f"set_filter_width is unsupported for fixed-width mode {mode}"
+                )
+            if rule.min_hz is not None:
+                min_hz = rule.min_hz
+            if rule.max_hz is not None:
+                max_hz = rule.max_hz
+        if not min_hz <= width_hz <= max_hz:
+            raise CommandError(
+                f"set_filter_width value must be {min_hz}-{max_hz} Hz "
+                f"for {mode}, got {width_hz}"
+            )
+
+        if rule is None or not rule.segments:
+            raise CommandError(
+                f"set_filter_width has no filter-width mapping for mode {mode}"
+            )
+        try:
+            payload_value = filter_hz_to_index(width_hz, segments=rule.segments)
+        except ValueError as exc:
+            raise CommandError(str(exc)) from exc
+
+        return bcd_encode_value(payload_value, byte_count=1)
+
+    def declared_filter_width(
+        self, mode: str | None, filter_num: int | None, *, data_mode: int = 0
+    ) -> int | None:
+        """Profile-declared width of one filter slot in a fixed-width mode.
+
+        MOR-2503: a ``fixed = true`` mode (FM on the IC-7300/7610/9700, WFM
+        and DV on the IC-705) has no width readback — the CI-V ``1A 03``
+        table has no FM row — but the profile declares each slot's width in
+        ``defaults``. The width of the selected slot is then profile data,
+        not an observation: ``defaults[filter_num - 1]``.
+
+        Returns ``None`` — and the caller must publish nothing rather than
+        invent a width — when the mode resolves to no rule, the rule is not
+        fixed, ``defaults`` is empty (X6200 AM/FM), or the slot is outside
+        the declared table.
+        """
+        if filter_num is None or filter_num < 1:
+            return None
+        rule = self.resolve_filter_rule(mode, data_mode=data_mode)
+        if rule is None or not rule.fixed:
+            return None
+        if filter_num > len(rule.defaults):
+            return None
+        return rule.defaults[filter_num - 1]
+
+    def admitted_filter_width(
+        self, mode: str | None, width_hz: int, *, narrow: bool = False
+    ) -> int | None:
+        """The on-table width a ``set_filter_width`` write will land on.
+
+        Only ``table_index`` profiles quantize a requested width through
+        the live mode's Hz table — the same ``hz_to_table_index`` nearest-
+        entry mapping the Yaesu CAT backend applies in
+        ``YaesuCatRadio.set_filter_width`` — so every other encoding has
+        no admission to report. ``None`` when the mode resolves to no
+        rule, a fixed-width rule (the backend refuses the write there), or
+        an empty table. Pinned by tests/test_filter_width_admitted_width.py.
+
+        When ``narrow`` is true and the mode's rule declares a narrow
+        variant (MOR-4428/MOR-4433), the narrow table selects the entry —
+        the same table the backend write maps through — so the hint stays
+        exact while NARROW is on. ``False`` (unknown or off) keeps today's
+        wide-table mapping.
+        """
+        if self.filter_width_encoding != "table_index":
+            return None
+        rule = self.resolve_filter_rule(mode)
+        if rule is None or rule.fixed or not rule.table:
+            return None
+        table = rule.narrow_table if narrow and rule.narrow_table else rule.table
+        return table[hz_to_table_index(width_hz, table=table)]
+
+
+# ── TOML-driven profile registry ──────────────────────────────────
+
+# Lazy-loaded on first access.  Populated from rigs/*.toml.
+_profiles: dict[str, RadioProfile] | None = None
+_by_normalized: dict[str, RadioProfile] = {}
+_by_id: dict[str, RadioProfile] = {}
+_by_civ_addr: dict[int, RadioProfile] = {}
+
+# Search paths for rig TOML files (first existing directory wins).
+_RIG_DIRS: list[Path] = [
+    Path(__file__).resolve().parent.parent.parent.parent
+    / "rigs",  # dev: repo root/rigs/
+    Path(__file__).resolve().parent.parent / "rigs",  # installed: package/rigs/
+]
+
+
+def _ensure_loaded() -> dict[str, RadioProfile]:
+    """Load TOML rig profiles on first access (lazy init)."""
+    global _profiles, _by_normalized, _by_id, _by_civ_addr
+
+    if _profiles is not None:
+        return _profiles
+
+    # Import here to avoid circular imports
+    from .rig_loader import discover_rigs
+
+    _profiles = {}
+    _by_normalized = {}
+    _by_id = {}
+    _by_civ_addr = {}
+
+    for rig_dir in _RIG_DIRS:
+        if rig_dir.is_dir():
+            rigs = discover_rigs(rig_dir)
+            for model, rig_config in rigs.items():
+                profile = rig_config.to_profile()
+                _profiles[model] = profile
+                _by_normalized[_normalize(model)] = profile
+                _by_id[_normalize(profile.id)] = profile
+                _by_civ_addr.setdefault(profile.civ_addr, profile)
+            if rigs:
+                logger.debug(
+                    "Loaded %d rig profiles from %s: %s",
+                    len(rigs),
+                    rig_dir,
+                    ", ".join(sorted(rigs.keys())),
+                )
+                break  # use first directory that has rigs
+
+    if not _profiles:
+        logger.warning(
+            "No rig TOML profiles found in search paths: %s",
+            [str(p) for p in _RIG_DIRS],
+        )
+
+    return _profiles
+
+
+def selector_one_is_sub(receiver_count: int, split_tx_target: str) -> bool:
+    """Whether CI-V 0x25/0x26 selector 01 is the physical SUB receiver.
+
+    Profile data, not a model check: ``split_tx_target = "sub_receiver"``
+    declares that selector 01 is the SUB band (IC-7610 CI-V Reference Guide
+    Rev.4 p.9/p.13). ``main_unselected`` -- selector 01 is the unselected
+    VFO inside MAIN, never SUB -- and any other value fail closed (MOR-3591).
+    """
+    return receiver_count >= 2 and split_tx_target == "sub_receiver"
+
+
+def get_radio_profile(name_or_id: str) -> RadioProfile:
+    """Return a profile by model name or profile id."""
+    _ensure_loaded()
+    key = _normalize(name_or_id)
+    profile = _by_id.get(key) or _by_normalized.get(key)
+    if profile is None:
+        known = ", ".join(sorted(_ensure_loaded().keys()))
+        raise KeyError(f"Unknown radio profile {name_or_id!r}. Known models: {known}")
+    return profile
+
+
+def preferred_serial_bauds(protocol_type: str) -> tuple[int, ...]:
+    """The loaded profiles' ``default_baud`` values for *protocol_type*, highest first.
+
+    MOR-4207: the bauds serial discovery opens a port at before the
+    protocol's other documented rates. Profile data, so a new radio changes
+    the order through its TOML only.
+    """
+    bauds = {
+        profile.default_baud
+        for profile in _ensure_loaded().values()
+        if profile.protocol_type == protocol_type
+    }
+    return tuple(sorted(bauds, reverse=True))
+
+
+def profile_by_xiegu_model_id(model_id: bytes) -> RadioProfile | None:
+    """The loaded profile whose ``xiegu_model_id`` matches *model_id*.
+
+    ``model_id`` is the payload of a CI-V ``0x1D 0x19`` reply (e.g.
+    ``b"\x72\x50"``). Returns ``None`` when no loaded profile declares a
+    matching value — an unlisted Xiegu stays unnamed rather than falling
+    back to a known profile. Data-driven (MOR-4352): adding a Xiegu radio
+    means adding ``xiegu_model_id`` to its TOML, nothing here.
+    """
+    if not model_id:
+        return None
+    value = int.from_bytes(model_id, "big")
+    for profile in _ensure_loaded().values():
+        if profile.xiegu_model_id == value:
+            return profile
+    return None
+
+
+def resolve_radio_profile(
+    *,
+    profile: RadioProfile | str | None = None,
+    model: str | None = None,
+    radio_addr: int | None = None,
+) -> RadioProfile:
+    """Resolve a runtime profile from an explicit override or a CI-V address.
+
+    A ``RadioProfile`` or a non-blank profile/model name is a deliberate
+    caller override and always wins over ``radio_addr``. When none of the
+    three identifies the radio — no profile, a ``None`` or
+    blank/whitespace-only model, and either no ``radio_addr`` or one that
+    matches no loaded profile — this raises :class:`ValueError` instead of
+    guessing a default profile (plan §8.1 Q5): an unidentified radio must
+    refuse rather than be silently driven as some other rig.
+    """
+    _ensure_loaded()
+    if isinstance(profile, RadioProfile):
+        return profile
+    if isinstance(profile, str) and profile.strip():
+        return get_radio_profile(profile)
+    if isinstance(model, str) and model.strip():
+        return get_radio_profile(model)
+    if radio_addr is not None and radio_addr in _by_civ_addr:
+        return _by_civ_addr[radio_addr]
+    raise ValueError(
+        "Cannot resolve a radio profile: no profile, model, or matching "
+        "radio_addr identifies the radio. Pass an explicit profile= or "
+        "model= — rigplane no longer guesses a default rig."
+    )
+
+
+def reload_profiles() -> None:
+    """Force reload of TOML profiles (useful for tests)."""
+    global _profiles
+    _profiles = None
+    _ensure_loaded()
+
+
+class CwTextUnsupportedError(RuntimeError):
+    """The radio's profile does not enable ``send_cw_text`` (MOR-3678).
+
+    A ``RuntimeError`` whose text says "does not support", so the web layer
+    answers it with the existing ``unsupported_command`` path (HTTP 409,
+    WebSocket ``unsupported_command``).
+    """
+
+
+class CwTextSendCancelledError(RuntimeError):
+    """A CW stop or a transmit abort ended a send_cw_text (MOR-3700).
+
+    A send that was still pending (queued behind another send, or waiting
+    to write) when a CW stop or a transmit abort arrived. A transmit abort
+    is the managed TX abort fence going stale: a force-off, the radio
+    transport going away, or shutdown. It is a defined refusal, not a
+    failure: HTTP answers 409 ``command_cancelled``,
+    the WebSocket command ``ok: false`` with ``command_cancelled``, the CLI
+    ``Error: <message>`` with exit 1. Raise it with :func:`cw_text_cancelled`
+    so every backend uses the same text.
+    """
+
+
+def cw_text_cancelled(
+    model: str, by: Literal["stop", "abort"]
+) -> CwTextSendCancelledError:
+    """The refusal for a send a CW stop or a transmit abort ended (MOR-3700)."""
+    cause = "a CW stop" if by == "stop" else "a transmit abort"
+    return CwTextSendCancelledError(f"CW text send to {model} was cancelled by {cause}")
+
+
+async def await_fenced_cw_text(work: Awaitable[None], model: str) -> None:
+    """Await a send's abort-fenced TX work; an abort is a refusal (MOR-3700).
+
+    A transmit abort (force-off, transport gone) cancels the fenced work task, and the runner hands
+    that on as ``CancelledError``; left alone it would cancel the caller's
+    request too (HTTP closed the connection unanswered). That cancellation
+    becomes :class:`CwTextSendCancelledError`. A cancellation of the caller
+    itself (server shutdown, a client gone) is not a refusal and stays a
+    cancellation.
+    """
+    try:
+        await work
+    except asyncio.CancelledError:
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            raise
+        raise cw_text_cancelled(model, "abort") from None
+
+
+def cw_text_sender(radio: object) -> Callable[[str], Awaitable[None]] | None:
+    """The backend's ``send_cw_text``, or ``None`` when it has none (MOR-3678).
+
+    The one check for "can this backend run send_cw_text at all": the HTTP
+    and WebSocket handler and the CLI refuse when it is ``None``, and the
+    published ``cwText.supported`` is false then, so what is advertised and
+    what runs cannot drift apart (external rigctld has no CW text sending).
+    """
+    send = getattr(radio, "send_cw_text", None)
+    return cast("Callable[[str], Awaitable[None]]", send) if callable(send) else None
+
+
+def admit_cw_text(profile: RadioProfile, text: str) -> None:
+    """The one admission check every ``send_cw_text`` passes (MOR-3678).
+
+    Called first thing by each backend's ``send_cw_text``, so the HTTP
+    endpoint, the WebSocket command and the CLI refuse the same requests
+    with the same text. The profile's ``cw_text`` is the only source of the
+    limit. Text over the limit is rejected, never truncated or split.
+
+    Raises:
+        CwTextUnsupportedError: ``cw_text.supported`` is false.
+        ValueError: The text is longer than ``cw_text.max_length``.
+    """
+    spec = profile.cw_text
+    if not spec.supported:
+        raise CwTextUnsupportedError(
+            f"{profile.model} does not support sending CW text yet"
+        )
+    if len(text) > spec.max_length:
+        raise ValueError(
+            f"CW text too long for {profile.model}: got {len(text)} characters, "
+            f"limit is {spec.max_length}"
+        )
+
+
+class MemoryWriteUnverifiedError(CommandError):
+    """A memory contents write or clear was refused (MOR-3644).
+
+    The profile's ``[memory]`` section declares no verified write layout,
+    so the record this package would build is not proven for this radio;
+    writing it could corrupt a stored channel. ``reason_code`` is the
+    stable machine-readable refusal reason, carried by the WebSocket
+    ``error`` field and the HTTP error envelope so a client never has to
+    parse English prose.
+    """
+
+    reason_code = "memory_write_unverified"
+
+
+def admit_memory_write(profile: RadioProfile | None) -> None:
+    """The one admission check every memory contents write/clear passes.
+
+    Called first thing by the shared dispatch arm in the web control
+    handler (every WebSocket and HTTP ingress) and by the Icom backend's
+    ``memory_clear``/``set_memory_contents``, so a direct SDK call refuses
+    the same way. The profile's ``[memory].write_layout`` is the only
+    authority: a structurally valid field table (the same
+    :meth:`MemoryWriteLayout.validation_errors` rules the TOML loader
+    applies) admits the radio, anything else — a missing section, a
+    junk value an SDK caller spliced in with ``dataclasses.replace`` —
+    refuses exactly like a profile that declares none. Nothing is sent to
+    the radio.
+
+    Raises:
+        MemoryWriteUnverifiedError: no verified write layout is declared.
+    """
+    memory = profile.memory if isinstance(profile, RadioProfile) else None
+    layout = memory.write_layout if isinstance(memory, MemoryProfile) else None
+    if (
+        isinstance(layout, MemoryWriteLayout)
+        and not layout.validation_errors()
+        and not layout.domain_errors(
+            profile.ctcss_tones_centihz if isinstance(profile, RadioProfile) else None
+        )
+    ):
+        return
+    model = profile.model if isinstance(profile, RadioProfile) else "this radio"
+    raise MemoryWriteUnverifiedError(
+        f"{model} has no verified memory write layout: memory contents "
+        "writes and clears are refused (declare [memory].write_layout in "
+        "the profile)"
+    )

@@ -1,0 +1,4332 @@
+"""TOML rig config loader — parse, validate, and build runtime objects."""
+
+from __future__ import annotations
+
+import logging
+import tempfile
+import tomllib
+import warnings
+from dataclasses import dataclass, field
+from decimal import Decimal
+from fractions import Fraction
+from importlib import resources
+from importlib.resources.abc import Traversable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from rigplane.profiles.probe_checks import ProbeCheck
+
+from rigplane.core.capabilities import (
+    CAP_FILTER_WIDTH_RADIO_DEFAULT,
+    KNOWN_CAPABILITIES,
+)
+from rigplane.core.state_acquisition_policy import (
+    AcquisitionPolicy,
+    AdaptiveDecayPolicy,
+    AvailabilityClause,
+    ExternalCatPauseBehavior,
+    FieldAvailability,
+    FieldCapability,
+    MeterCoalescingPolicy,
+    RadioAcquisitionProfile,
+    ReconciliationPriority,
+)
+from rigplane.core.state_pipeline_contracts import FieldPath
+from rigplane.core.types import (
+    ScopeFixedEdgeRange,
+    MEMORY_WRITE_CLEAR_FORMS,
+    MemoryWriteField,
+    MemoryWriteLayout,
+    ToneSquelchType,
+)
+from rigplane.core.usb_identity import UsbAudioIdentity, UsbFunctionId
+from rigplane.commands.command_map import CommandMap, ReverseCommandIndex
+from rigplane.profiles.control_domain import (
+    _on_control_lattice,
+    _public_decimal,
+    validate_control_raw_value,
+)
+from rigplane.profiles.probe_checks import RadioFacts, parse_probe_checks
+
+__all__ = [
+    "RigConfig",
+    "SplitSpec",
+    "RigLoadError",
+    "load_rig",
+    "discover_rigs",
+    "discover_available_rigs",
+    # Re-exported from control_domain (MOR-2472) so pre-existing import
+    # paths keep working; the mechanism itself lives in one module only.
+    "validate_control_raw_value",
+]
+from rigplane.commands.command_spec import (
+    AbsentCommandSpec,
+    CatCommandSpec,
+    CivCommandSpec,
+    CommandSpec,
+)
+from rigplane.profiles import (
+    selector_one_is_sub,
+    BandInfo,
+    CwTextSpec,
+    ControlDomainSpec,
+    ControlLookupPoint,
+    EncodedControlChoice,
+    ControlSpec,
+    FilterWidthRule,
+    FilterWidthSegment,
+    FreqRangeInfo,
+    IqLanSpec,
+    KeyboardBinding,
+    KeyboardConfig,
+    MemoryProfile,
+    MeterCalibrationPoint,
+    PowerWriteQuantum,
+    RadioProfile,
+    RuleSpec,
+    SpanPresetSemantics,
+    TxPolicy,
+)
+
+logger = logging.getLogger(__name__)
+
+VALID_VFO_SCHEMES = {"ab", "main_sub", "ab_shared", "single"}
+VALID_PROTOCOL_TYPES = {"civ", "kenwood_cat", "yaesu_cat"}
+VALID_CONTROL_STYLES = {
+    "toggle",
+    "stepped",
+    "selector",
+    "toggle_and_level",
+    "level_is_toggle",
+}
+VALID_CONTROL_MAPPINGS = {"identity", "linear", "centered", "lookup", "encoded"}
+VALID_CONTROL_QUANTIZATION = {
+    "nearest_ties_down",
+    "nearest_ties_up",
+    "floor",
+    "ceil",
+    "reject",
+}
+VALID_CONTROL_RESTORATION = {"exact", "unavailable"}
+VALID_CONTROL_ENCODE_ROUNDINGS = {"ceil", "nearest_half_down"}
+_CONTROL_KEYS = {
+    "style",
+    "range_min",
+    "range_max",
+    "raw_min",
+    "raw_max",
+    "raw_step",
+    "raw_origin",
+    "raw_center",
+    "display_min",
+    "display_max",
+    "display_step",
+    "display_origin",
+    "display_center",
+    "display_unit",
+    "decode_quantum",
+    "encode_rounding",
+    "write_quantum_w",
+    "mapping",
+    "quantization",
+    "restoration",
+    "lookup",
+    "choices",
+}
+_EXPLICIT_CONTROL_DOMAIN_KEYS = {
+    "raw_step",
+    "raw_origin",
+    "display_step",
+    "display_origin",
+    "display_center",
+    "mapping",
+    "quantization",
+    "restoration",
+    "lookup",
+    "choices",
+}
+VALID_RULE_KINDS = {"mutex", "disables", "requires", "value_limit"}
+VALID_KEYBOARD_MODIFIERS = {"SHIFT", "CTRL", "ALT", "META"}
+VALID_AUDIO_SAMPLE_RATES_HZ = {8000, 12000, 16000, 24000, 48000}
+VALID_BROWSER_RX_TRANSPORTS = {"auto", "pcm", "opus"}
+VALID_RX_AUDIO_CHANNELS = {"mix", "left", "right"}
+VALID_VFO_READBACK = {"absolute", "selected_unselected", "none"}
+VALID_SPLIT_TX_TARGETS = {"none", "main_unselected", "sub_receiver"}
+# How a transceiver-wide reply (no receiver of its own) names the
+# transmitting receiver. ``main_unless_split``: MAIN, or SUB while a FRESH
+# split readback is ON (IC-7610 Basic Manual p.3-2 "transmit on only the
+# Main band (except in Split Frequency operation)", p.4-9: split = Main
+# receives, Sub transmits); an unknown or stale split fact fails closed.
+# ``none`` (default): the selected band labels the reply — exact for
+# single-receiver radios.
+VALID_TX_RECEIVER_RULES = {"main_unless_split", "none"}
+# MOR-1447 leg 2. Icom hardware wires RF gain and squelch as one physical
+# knob (hard left = RF min/SQL min, center = RF max/SQL min, hard right =
+# SQL max/RF max); "separate" is the default two-independent-controls model
+# every other rig uses.
+VALID_RF_SQL_CONTROL_MODELS = {"separate", "combined"}
+DEFAULT_KEYBOARD_PROFILE_NAME = "_keyboard-default.toml"
+DEFAULT_CTCSS_TABLES_PROFILE_NAME = "_ctcss_tables_v1.toml"
+CTCSS_TONE_MIN_CENTIHZ = 6700
+CTCSS_TONE_MAX_CENTIHZ = 25410
+_CTCSS_CAPABILITIES = frozenset({"repeater_tone", "tsql", "sql_type"})
+
+_REQUIRED_SECTIONS = ("radio", "capabilities", "modes", "filters", "vfo")
+# MOR-3679: only ``cw`` has a consumer; add a family when a consumer needs it.
+KNOWN_MODE_FAMILIES = frozenset({"cw"})
+
+
+def _parse_mode_families(
+    filename: str, raw: object, modes: list[str]
+) -> dict[str, tuple[str, ...]]:
+    """Validate ``[modes] families``: known family names, each a non-empty
+    list of distinct mode names from ``[modes].list``; a mode belongs to at
+    most one family (MOR-3679)."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise RigLoadError(f"{filename}: [modes].families must be a table")
+    families: dict[str, tuple[str, ...]] = {}
+    owner: dict[str, str] = {}
+    for name, members in raw.items():
+        if name not in KNOWN_MODE_FAMILIES:
+            raise RigLoadError(
+                f"{filename}: [modes].families unknown family {name!r}; "
+                f"known: {sorted(KNOWN_MODE_FAMILIES)!r}"
+            )
+        if (
+            not isinstance(members, list)
+            or not members
+            or not all(isinstance(mode, str) for mode in members)
+        ):
+            raise RigLoadError(
+                f"{filename}: [modes].families.{name} must be a non-empty list of strings"
+            )
+        for mode in members:
+            if mode not in modes:
+                raise RigLoadError(
+                    f"{filename}: [modes].families.{name} names mode {mode!r} "
+                    "that is not in [modes].list"
+                )
+            if mode in owner:
+                raise RigLoadError(
+                    f"{filename}: [modes].families.{name} repeats mode {mode!r} "
+                    f"(already in family {owner[mode]!r})"
+                )
+            owner[mode] = name
+        families[name] = tuple(members)
+    return families
+
+
+_REQUIRED_RADIO_FIELDS = ("id", "model", "receiver_count", "has_lan", "has_wifi")
+
+
+class RigLoadError(Exception):
+    """Raised when a rig TOML file is invalid or malformed."""
+
+
+_LookupPoint = tuple[int, Decimal]
+_EncodedChoice = tuple[int, Decimal | str]
+_ScalarControlDomain = dict[
+    str, str | int | Decimal | tuple[_LookupPoint, ...] | tuple[_EncodedChoice, ...]
+]
+
+
+def _control_number(value: object, path: str, *, integer: bool = False) -> int | float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        expected = "an integer" if integer else "a finite number"
+        raise RigLoadError(f"{path} must be {expected}")
+    if integer and not isinstance(value, int):
+        raise RigLoadError(f"{path} must be an integer")
+    if isinstance(value, float) and not Decimal(str(value)).is_finite():
+        raise RigLoadError(f"{path} must be a finite number")
+    return value
+
+
+def _control_decimal(value: object, path: str) -> Decimal:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RigLoadError(f"{path} must be a finite number")
+    decimal = Decimal(str(value))
+    if not decimal.is_finite():
+        raise RigLoadError(f"{path} must be a finite number")
+    return decimal
+
+
+def _parse_control_lookup(
+    raw_lookup: object,
+    prefix: str,
+    raw_range: tuple[int, int, int, int],
+    display_range: tuple[Decimal, Decimal, Decimal, Decimal],
+    restoration: str,
+) -> tuple[_LookupPoint, ...]:
+    if not isinstance(raw_lookup, list) or not raw_lookup:
+        raise RigLoadError(f"{prefix}.lookup must be a non-empty array")
+    raw_min, raw_max, raw_step, raw_origin = raw_range
+    display_min, display_max, display_step, display_origin = display_range
+    points: list[_LookupPoint] = []
+    for index, point in enumerate(raw_lookup):
+        point_prefix = f"{prefix}.lookup[{index}]"
+        if not isinstance(point, dict) or set(point) != {"raw", "display"}:
+            raise RigLoadError(
+                f"{point_prefix} must be a table containing exactly raw and display"
+            )
+        raw_value = int(
+            _control_number(point["raw"], f"{point_prefix}.raw", integer=True)
+        )
+        display_value = _control_decimal(point["display"], f"{point_prefix}.display")
+        if not raw_min <= raw_value <= raw_max:
+            raise RigLoadError(f"{point_prefix}.raw must be inside its declared range")
+        if not _on_control_lattice(raw_value, raw_origin, raw_step):
+            raise RigLoadError(f"{point_prefix}.raw must lie on its declared lattice")
+        if not display_min <= display_value <= display_max:
+            raise RigLoadError(
+                f"{point_prefix}.display must be inside its declared range"
+            )
+        if not _on_control_lattice(display_value, display_origin, display_step):
+            raise RigLoadError(
+                f"{point_prefix}.display must lie on its declared lattice"
+            )
+        points.append((raw_value, display_value))
+
+    axes: tuple[tuple[str, list[int | Decimal]], ...] = (
+        ("raw", [point[0] for point in points]),
+        ("display", [point[1] for point in points]),
+    )
+    for name, values in axes:
+        if len(set(values)) != len(values):
+            raise RigLoadError(f"{prefix}.lookup {name} values must be unique")
+        increasing = all(first < second for first, second in zip(values, values[1:]))
+        decreasing = all(first > second for first, second in zip(values, values[1:]))
+        if len(values) > 1 and not (increasing or decreasing):
+            raise RigLoadError(
+                f"{prefix}.lookup {name} values must be strictly monotonic"
+            )
+
+    expected_raw_points = (raw_max - raw_min) // raw_step + 1
+    if restoration == "exact" and len(points) != expected_raw_points:
+        raise RigLoadError(
+            f"{prefix}.lookup exact restoration requires complete raw lattice coverage"
+        )
+    return tuple(points)
+
+
+def _parse_encoded_control_choices(
+    raw_choices: object, prefix: str
+) -> tuple[_EncodedChoice, ...]:
+    if not isinstance(raw_choices, list) or not raw_choices:
+        raise RigLoadError(f"{prefix}.choices must be a non-empty array")
+
+    choices: list[_EncodedChoice] = []
+    numeric_values: list[Decimal] = []
+    labeled_choices: list[tuple[int, str, str]] = []
+    for index, choice in enumerate(raw_choices):
+        choice_prefix = f"{prefix}.choices[{index}]"
+        if not isinstance(choice, dict) or set(choice) not in (
+            {"raw", "label"},
+            {"raw", "display"},
+        ):
+            raise RigLoadError(
+                f"{choice_prefix} must contain exactly raw and one of label or display"
+            )
+        raw_value = int(
+            _control_number(choice["raw"], f"{choice_prefix}.raw", integer=True)
+        )
+        if "label" in choice:
+            label = choice["label"]
+            if not isinstance(label, str) or not label.strip():
+                raise RigLoadError(f"{choice_prefix}.label must be a non-empty string")
+            choices.append((raw_value, label))
+            labeled_choices.append((raw_value, label, choice_prefix))
+        else:
+            display = _control_decimal(choice["display"], f"{choice_prefix}.display")
+            choices.append((raw_value, display))
+            numeric_values.append(display)
+
+    raw_values = [choice[0] for choice in choices]
+    if len(set(raw_values)) != len(raw_values):
+        raise RigLoadError(f"{prefix}.choices raw values must be unique")
+    if len(set(numeric_values)) != len(numeric_values):
+        raise RigLoadError(f"{prefix}.choices display values must be unique")
+    if len(labeled_choices) != 1:
+        raise RigLoadError(
+            f"{prefix}.choices must contain exactly one default label choice"
+        )
+    default_raw, default_label, default_prefix = labeled_choices[0]
+    if default_raw != 0:
+        raise RigLoadError(f"{default_prefix}.label default must use raw code 0")
+    if default_label != "Default":
+        raise RigLoadError(f'{default_prefix}.label must be exactly "Default"')
+    return tuple(choices)
+
+
+def _parse_control_spec(
+    filename: str, control_name: str, raw: object
+) -> tuple[ControlSpec | None, _ScalarControlDomain | None]:
+    prefix = f"{filename}: [controls.{control_name}]"
+    if not isinstance(raw, dict):
+        raise RigLoadError(f"{prefix} must be a table")
+
+    unknown = sorted(set(raw) - _CONTROL_KEYS)
+    if unknown:
+        raise RigLoadError(f"{prefix} unknown key(s): {unknown!r}")
+
+    style = raw.get("style")
+    if style is not None and (
+        not isinstance(style, str) or style not in VALID_CONTROL_STYLES
+    ):
+        raise RigLoadError(
+            f"{prefix}.style must be one of {VALID_CONTROL_STYLES}, got {style!r}"
+        )
+
+    # MOR-4352: the whole-watt CI-V power write quantum. Validated before
+    # the band checks below so a quantum without its raw band reports the
+    # quantum, not the half-declared band pair.
+    if "write_quantum_w" in raw:
+        quantum = raw["write_quantum_w"]
+        if control_name != "rf_power":
+            raise RigLoadError(
+                f"{prefix}.write_quantum_w is only valid on [controls.rf_power]"
+            )
+        _control_number(quantum, f"{prefix}.write_quantum_w")
+        if not quantum > 0:
+            raise RigLoadError(f"{prefix}.write_quantum_w must be > 0")
+        if set(raw) & _EXPLICIT_CONTROL_DOMAIN_KEYS:
+            raise RigLoadError(
+                f"{prefix}.write_quantum_w is a legacy-band key and cannot be "
+                "combined with an explicit domain"
+            )
+        missing_band = [key for key in ("raw_min", "raw_max") if key not in raw]
+        if missing_band:
+            raise RigLoadError(
+                f"{prefix}.write_quantum_w requires the declared raw band "
+                f"(raw_min/raw_max); missing {missing_band!r}"
+            )
+
+    for first, last, integer in (
+        ("range_min", "range_max", True),
+        ("raw_min", "raw_max", True),
+        ("display_min", "display_max", False),
+    ):
+        present = [key in raw for key in (first, last)]
+        if any(present) and not all(present):
+            raise RigLoadError(f"{prefix}.{first} and {last} must be declared together")
+        if all(present):
+            low = _control_number(raw[first], f"{prefix}.{first}", integer=integer)
+            high = _control_number(raw[last], f"{prefix}.{last}", integer=integer)
+            if low >= high:
+                raise RigLoadError(f"{prefix}.{first} must be less than {last}")
+    if "raw_center" in raw:
+        _control_number(raw["raw_center"], f"{prefix}.raw_center", integer=True)
+    if "display_center" in raw:
+        _control_number(raw["display_center"], f"{prefix}.display_center")
+    if "display_unit" in raw and not isinstance(raw["display_unit"], str):
+        raise RigLoadError(f"{prefix}.display_unit must be a string")
+    if "decode_quantum" in raw:
+        decode_quantum = raw["decode_quantum"]
+        if (
+            isinstance(decode_quantum, bool)
+            or not isinstance(decode_quantum, int)
+            or decode_quantum <= 0
+        ):
+            raise RigLoadError(f"{prefix}.decode_quantum must be a positive integer")
+        if set(raw) & _EXPLICIT_CONTROL_DOMAIN_KEYS:
+            raise RigLoadError(
+                f"{prefix}.decode_quantum is a legacy-band key and cannot be "
+                "combined with an explicit domain"
+            )
+        missing_band = [
+            key
+            for key in ("raw_min", "raw_max", "display_min", "display_max")
+            if key not in raw
+        ]
+        if missing_band:
+            raise RigLoadError(
+                f"{prefix}.decode_quantum requires the legacy band "
+                f"(raw_min/raw_max and display_min/display_max); missing {missing_band!r}"
+            )
+        # Exhaustive half-step tie guard over every raw in range: decode
+        # rounds to the nearest quantum step, so an exact .5 remainder would
+        # make the value depend on the tie-break rule, not the domain.
+        band_lo_raw = int(raw["raw_min"])
+        band_hi_raw = int(raw["raw_max"])
+        band_lo_display = int(raw["display_min"])
+        band_hi_display = int(raw["display_max"])
+        for candidate in range(band_lo_raw, band_hi_raw + 1):
+            if (
+                Fraction(
+                    (candidate - band_lo_raw) * (band_hi_display - band_lo_display),
+                    (band_hi_raw - band_lo_raw) * decode_quantum,
+                ).denominator
+                == 2
+            ):
+                raise RigLoadError(
+                    f"{prefix} decode domain has an exact half-step tie at raw "
+                    f"{candidate}; declare a decode_quantum that avoids ties"
+                )
+    if "encode_rounding" in raw:
+        encode_rounding = raw["encode_rounding"]
+        if (
+            not isinstance(encode_rounding, str)
+            or encode_rounding not in VALID_CONTROL_ENCODE_ROUNDINGS
+        ):
+            raise RigLoadError(
+                f"{prefix}.encode_rounding must be one of "
+                f"{sorted(VALID_CONTROL_ENCODE_ROUNDINGS)!r}"
+            )
+        if set(raw) & _EXPLICIT_CONTROL_DOMAIN_KEYS:
+            raise RigLoadError(
+                f"{prefix}.encode_rounding is a legacy-band key and cannot be "
+                "combined with an explicit domain"
+            )
+        missing_band = [
+            key
+            for key in ("raw_min", "raw_max", "display_min", "display_max")
+            if key not in raw
+        ]
+        if missing_band:
+            raise RigLoadError(
+                f"{prefix}.encode_rounding requires the legacy band "
+                f"(raw_min/raw_max and display_min/display_max); missing {missing_band!r}"
+            )
+
+    explicit = bool(set(raw) & _EXPLICIT_CONTROL_DOMAIN_KEYS)
+    if not explicit:
+        return cast(ControlSpec, dict(raw)), None
+    if "mapping" not in raw:
+        raise RigLoadError(f"{prefix}.mapping is required for an explicit domain")
+
+    mapping = raw["mapping"]
+    if not isinstance(mapping, str) or mapping not in VALID_CONTROL_MAPPINGS:
+        raise RigLoadError(
+            f"{prefix}.mapping must be one of {sorted(VALID_CONTROL_MAPPINGS)!r}"
+        )
+    if mapping != "encoded" and "choices" in raw:
+        raise RigLoadError(f"{prefix}.choices requires encoded mapping")
+    if mapping == "encoded":
+        if "choices" not in raw:
+            raise RigLoadError(f"{prefix}.choices is required for encoded mapping")
+        encoded_only = {"mapping", "choices", "style"}
+        unsupported = sorted(set(raw) - encoded_only)
+        if unsupported:
+            raise RigLoadError(
+                f"{prefix}.encoded mapping does not accept key(s): {unsupported!r}"
+            )
+        choices = _parse_encoded_control_choices(raw["choices"], prefix)
+        encoded_domain: _ScalarControlDomain = {"mapping": mapping, "choices": choices}
+        encoded_public_spec: ControlSpec | None = (
+            {"style": style} if style is not None else None
+        )
+        return encoded_public_spec, encoded_domain
+    if mapping == "lookup" and "lookup" not in raw:
+        raise RigLoadError(f"{prefix}.lookup is required for lookup mapping")
+    if mapping != "lookup" and "lookup" in raw:
+        raise RigLoadError(f"{prefix}.lookup requires lookup mapping")
+    required = {
+        "raw_min",
+        "raw_max",
+        "raw_step",
+        "raw_origin",
+        "display_min",
+        "display_max",
+        "display_step",
+        "display_origin",
+        "display_unit",
+        "quantization",
+        "restoration",
+    }
+    missing = sorted(required - set(raw))
+    if missing:
+        if "display_unit" in missing:
+            raise RigLoadError(f"{prefix}.display_unit must be a non-empty string")
+        if "display_min" in missing and "display_max" in missing:
+            raise RigLoadError(f"{prefix}.display_min and display_max are required")
+        raise RigLoadError(f"{prefix} missing required key(s): {missing!r}")
+
+    raw_min = int(_control_number(raw["raw_min"], f"{prefix}.raw_min", integer=True))
+    raw_max = int(_control_number(raw["raw_max"], f"{prefix}.raw_max", integer=True))
+    raw_step = int(_control_number(raw["raw_step"], f"{prefix}.raw_step", integer=True))
+    raw_origin = int(
+        _control_number(raw["raw_origin"], f"{prefix}.raw_origin", integer=True)
+    )
+    display_min = _control_decimal(raw["display_min"], f"{prefix}.display_min")
+    display_max = _control_decimal(raw["display_max"], f"{prefix}.display_max")
+    display_step = _control_decimal(raw["display_step"], f"{prefix}.display_step")
+    display_origin = _control_decimal(raw["display_origin"], f"{prefix}.display_origin")
+    display_unit = raw["display_unit"]
+    if not isinstance(display_unit, str) or not display_unit.strip():
+        raise RigLoadError(f"{prefix}.display_unit must be a non-empty string")
+    for name, step in (("raw_step", raw_step), ("display_step", display_step)):
+        if step <= 0:
+            raise RigLoadError(f"{prefix}.{name} must be > 0")
+    for name, value, origin, step in (
+        ("raw_min", raw_min, raw_origin, raw_step),
+        ("raw_max", raw_max, raw_origin, raw_step),
+        ("display_min", display_min, display_origin, display_step),
+        ("display_max", display_max, display_origin, display_step),
+    ):
+        if not _on_control_lattice(value, origin, step):
+            raise RigLoadError(f"{prefix}.{name} must lie on its declared lattice")
+    if not raw_min <= raw_origin <= raw_max:
+        raise RigLoadError(f"{prefix}.raw_origin must be inside its declared range")
+    if not display_min <= display_origin <= display_max:
+        raise RigLoadError(f"{prefix}.display_origin must be inside its declared range")
+
+    if "range_min" in raw and (
+        raw["range_min"] != raw_min or raw["range_max"] != raw_max
+    ):
+        raise RigLoadError(f"{prefix} legacy range must equal explicit raw bounds")
+
+    quantization = raw["quantization"]
+    if (
+        not isinstance(quantization, str)
+        or quantization not in VALID_CONTROL_QUANTIZATION
+    ):
+        raise RigLoadError(
+            f"{prefix}.quantization must be one of "
+            f"{sorted(VALID_CONTROL_QUANTIZATION)!r}"
+        )
+    restoration = raw["restoration"]
+    if not isinstance(restoration, str) or restoration not in VALID_CONTROL_RESTORATION:
+        raise RigLoadError(
+            f"{prefix}.restoration must be one of {sorted(VALID_CONTROL_RESTORATION)!r}"
+        )
+
+    lookup = None
+    if mapping == "lookup":
+        lookup = _parse_control_lookup(
+            raw["lookup"],
+            prefix,
+            (raw_min, raw_max, raw_step, raw_origin),
+            (display_min, display_max, display_step, display_origin),
+            restoration,
+        )
+    if mapping == "identity":
+        raw_domain = tuple(
+            Decimal(value) for value in (raw_min, raw_max, raw_step, raw_origin)
+        )
+        display_domain = (display_min, display_max, display_step, display_origin)
+        if raw_domain != display_domain:
+            raise RigLoadError(f"{prefix} identity mapping requires identical domains")
+    if mapping == "centered":
+        if "raw_center" not in raw or "display_center" not in raw:
+            raise RigLoadError(f"{prefix} centered mapping requires both center fields")
+        raw_center = int(
+            _control_number(raw["raw_center"], f"{prefix}.raw_center", integer=True)
+        )
+        display_center = _control_decimal(
+            raw["display_center"], f"{prefix}.display_center"
+        )
+        if not raw_min <= raw_center <= raw_max:
+            raise RigLoadError(f"{prefix}.raw_center must be inside its declared range")
+        if not _on_control_lattice(raw_center, raw_origin, raw_step):
+            raise RigLoadError(f"{prefix}.raw_center must lie on its declared lattice")
+        if not display_min <= display_center <= display_max:
+            raise RigLoadError(
+                f"{prefix}.display_center must be inside its declared range"
+            )
+        if not _on_control_lattice(display_center, display_origin, display_step):
+            raise RigLoadError(
+                f"{prefix}.display_center must lie on its declared lattice"
+            )
+    elif "raw_center" in raw or "display_center" in raw:
+        raise RigLoadError(f"{prefix} center fields require centered mapping")
+
+    domain: _ScalarControlDomain = {
+        "mapping": mapping,
+        "raw_min": raw_min,
+        "raw_max": raw_max,
+        "raw_step": raw_step,
+        "raw_origin": raw_origin,
+        "display_min": display_min,
+        "display_max": display_max,
+        "display_step": display_step,
+        "display_origin": display_origin,
+        "display_unit": display_unit,
+        "quantization": quantization,
+        "restoration": restoration,
+    }
+    if mapping == "centered":
+        domain["raw_center"] = raw_center
+        domain["display_center"] = display_center
+    if mapping == "lookup":
+        assert lookup is not None
+        domain["lookup"] = lookup
+    public_spec: ControlSpec | None = {"style": style} if style is not None else None
+    return public_spec, domain
+
+
+@dataclass(frozen=True, slots=True)
+class TxFuncTarget:
+    """One FT (TX function) answer's meaning: receiver + optional A/B slot."""
+
+    receiver: str
+    slot: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class TxFuncSpec:
+    """Profile-declared FT answer and write encodings.
+
+    ``read_map`` translates the ``get_tx_func`` answer digit to the
+    transmitting receiver (and, on single-receiver ``ab`` profiles, the
+    A/B slot whose frequency was read). ``write_map`` translates the
+    ``set_tx_func`` 0/1 selector to the wire digit (identity on radios
+    like the FTX-1, ``2``/``3`` on the FT-991A).
+    """
+
+    read_map: dict[str, TxFuncTarget]
+    write_map: dict[int, str]
+
+
+@dataclass(frozen=True, slots=True)
+class SplitSpec:
+    """CAT split value encodings, separate from command templates."""
+
+    write_map: dict[bool, str] = field(default_factory=lambda: {False: "0", True: "1"})
+    read_map: dict[str, bool] = field(default_factory=lambda: {"0": False, "1": True})
+
+
+def _parse_split(filename: str, raw: object) -> SplitSpec:
+    if raw is None:
+        return SplitSpec()
+    if not isinstance(raw, dict):
+        raise RigLoadError(f"{filename}: [vfo.split] must be a table")
+    _reject_unknown_keys(
+        filename, "[vfo.split]", raw, frozenset({"write_map", "read_map"})
+    )
+    write = raw.get("write_map", {"off": "0", "on": "1"})
+    read = raw.get("read_map", {"0": "off", "1": "on"})
+    if (
+        not isinstance(write, dict)
+        or set(write) != {"off", "on"}
+        or not all(isinstance(value, str) and value for value in write.values())
+        or write["off"] == write["on"]
+    ):
+        raise RigLoadError(
+            f"{filename}: [vfo.split].write_map must map off/on to distinct non-empty strings"
+        )
+    if (
+        not isinstance(read, dict)
+        or not all(isinstance(key, str) and key for key in read)
+        or not all(
+            isinstance(value, str) and value in ("off", "on") for value in read.values()
+        )
+        or set(read.values()) != {"off", "on"}
+    ):
+        raise RigLoadError(
+            f"{filename}: [vfo.split].read_map must map non-empty strings to both off and on"
+        )
+    return SplitSpec(
+        write_map={False: cast(str, write["off"]), True: cast(str, write["on"])},
+        read_map={cast(str, key): value == "on" for key, value in read.items()},
+    )
+
+
+def _parse_tx_func(filename: str, raw: object, scheme: str) -> TxFuncSpec | None:
+    """Parse the optional ``[vfo.tx_func]`` FT answer/write map."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RigLoadError(f"{filename}: [vfo.tx_func] must be a table")
+    _reject_unknown_keys(
+        filename, "[vfo.tx_func]", raw, frozenset({"read_map", "write_map"})
+    )
+    read = raw.get("read_map")
+    if (
+        not isinstance(read, dict)
+        or set(read) != {"0", "1"}
+        or not all(isinstance(value, str) and value for value in read.values())
+    ):
+        raise RigLoadError(
+            f"{filename}: [vfo.tx_func].read_map must map "
+            '"0" and "1" to non-empty targets'
+        )
+    targets: dict[str, TxFuncTarget] = {}
+    for answer, target in read.items():
+        parts = cast(str, target).split(":")
+        receiver, slot = (parts[0], None) if len(parts) == 1 else (parts[0], parts[1])
+        if (
+            len(parts) not in (1, 2)
+            or receiver not in ("MAIN", "SUB")
+            or (slot is not None and slot not in ("A", "B"))
+        ):
+            raise RigLoadError(
+                f"{filename}: [vfo.tx_func].read_map[{answer!r}] must be "
+                '"MAIN", "SUB", "MAIN:A" or "MAIN:B", '
+                f"got {target!r}"
+            )
+        if scheme == "ab":
+            if receiver != "MAIN" or slot is None:
+                raise RigLoadError(
+                    f"{filename}: [vfo.tx_func] on the ab scheme names "
+                    f"MAIN with an A/B slot, got {target!r}"
+                )
+        elif scheme in ("ab_shared", "main_sub"):
+            if slot is not None:
+                raise RigLoadError(
+                    f"{filename}: [vfo.tx_func] on the {scheme} scheme names "
+                    f"MAIN/SUB with no slot, got {target!r}"
+                )
+        elif receiver != "MAIN" or slot is not None:
+            raise RigLoadError(
+                f"{filename}: [vfo.tx_func] on the {scheme} scheme names "
+                f"MAIN with no slot, got {target!r}"
+            )
+        targets[cast(str, answer)] = TxFuncTarget(receiver=receiver, slot=slot)
+    write = raw.get("write_map")
+    if (
+        not isinstance(write, dict)
+        or set(write) != {"0", "1"}
+        or not all(isinstance(value, str) and value for value in write.values())
+        or write["0"] == write["1"]
+    ):
+        raise RigLoadError(
+            f"{filename}: [vfo.tx_func].write_map must map "
+            '"0" and "1" to distinct non-empty wire digits'
+        )
+    return TxFuncSpec(
+        read_map=targets,
+        write_map={0: cast(str, write["0"]), 1: cast(str, write["1"])},
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RigConfig:
+    """Parsed rig configuration from a TOML file."""
+
+    id: str
+    model: str
+    civ_addr: int
+    receiver_count: int
+    has_lan: bool
+    has_wifi: bool
+    default_baud: int
+    capabilities: tuple[str, ...]
+    modes: tuple[str, ...]
+    filters: tuple[str, ...]
+    vfo_scheme: str
+    vfo_readback: str
+    vfo_main_select: tuple[int, ...] | None
+    vfo_sub_select: tuple[int, ...] | None
+    vfo_swap_ab: tuple[int, ...] | None
+    vfo_equal_ab: tuple[int, ...] | None
+    vfo_swap_main_sub: tuple[int, ...] | None
+    vfo_equal_main_sub: tuple[int, ...] | None
+    freq_ranges: tuple[dict[str, Any], ...]
+    commands: dict[str, CommandSpec]
+    cmd29_routes: tuple[tuple[int, int | None], ...]
+    spectrum: dict[str, int] | None
+    att_values: tuple[int, ...] | None
+    att_labels: dict[str, str] | None
+    pre_values: tuple[int, ...] | None
+    pre_labels: dict[str, str] | None
+    agc_modes: tuple[int, ...] | None
+    agc_labels: dict[str, str] | None
+    agc_readback_modes: tuple[int, ...] | None
+    agc_auto_mode: int | None
+    agc_auto_speed_labels: dict[str, str] | None
+    break_in_modes: tuple[int, ...] | None = None
+    break_in_labels: dict[str, str] | None = None
+    notch_width_values: tuple[int, ...] | None = None
+    notch_width_labels: dict[str, str] | None = None
+    ssb_tx_bw_values: tuple[int, ...] | None = None
+    ssb_tx_bw_labels: dict[str, str] | None = None
+    filter_shape_values: tuple[int, ...] | None = None
+    filter_shape_labels: dict[str, str] | None = None
+    scan_type_values: tuple[int, ...] | None = None
+    scan_type_labels: dict[str, str] | None = None
+    scan_resume_values: tuple[int, ...] | None = None
+    scan_resume_labels: dict[str, str] | None = None
+    # How a transceiver-wide reply names the transmitting receiver
+    # (``VALID_TX_RECEIVER_RULES``); ``"none"`` keeps the selected-band
+    # label.
+    tx_receiver_rule: str = "none"
+    split_tx_target: str = "none"
+    # MOR-1447 leg 2: "separate" (default) or "combined" (Icom-style single
+    # RF/SQL knob — see ``VALID_RF_SQL_CONTROL_MODELS``).
+    rf_sql_control_model: str = "separate"
+    filter_width_min: int = 50
+    filter_width_max: int = 9999
+    filter_width_encoding: str = "segmented_bcd_index"
+    filter_width_first_code: int = 0
+    # ``[filters].radio_default_code``: the writeable code for the radio's
+    # own mode-dependent width default (MOR-2535). ``None`` when the TOML
+    # declares none; ``load_rig`` then also withholds the derived
+    # ``filter_width_radio_default`` capability tag.
+    filter_width_radio_default_code: int | None = None
+    filter_config: dict[str, FilterWidthRule] | None = None
+    max_watts: int | None = None
+    min_watts: int | None = None
+    # MOR-4352: ``[controls.rf_power].write_quantum_w`` lifted beside the
+    # other power facts. ``None`` for every radio that declares none.
+    power_write_quantum: PowerWriteQuantum | None = None
+    data_mode_count: int = 0
+    data_mode_labels: dict[str, str] | None = None
+    data_mode_inputs: tuple[tuple[int, str], ...] | None = None
+    # MOR-4036: ``[data_mode].modes`` — names from ``[modes].list`` of the
+    # modes that can carry the DATA flag. ``None`` = undeclared (the runtime
+    # keeps the current DATA flag on a mode change, the unchanged default).
+    data_mode_modes: tuple[str, ...] | None = None
+    protocol_type: str = "civ"
+    protocol_address: int | None = None
+    protocol_baud: int | None = None
+    # Optional per-mode single-character CAT mode codes, parallel to
+    # ``modes`` (MOR-2518; consumed by the Yaesu MD codec).
+    mode_codes: tuple[str, ...] | None = None
+    controls: dict[str, ControlSpec] | None = None
+    _control_domains: dict[str, _ScalarControlDomain] | None = field(
+        default=None, repr=False
+    )
+    meter_calibrations: dict[str, list[MeterCalibrationPoint]] | None = None
+    meter_redlines: dict[str, int] | None = None
+    rules: tuple[RuleSpec, ...] = ()
+    keyboard: KeyboardConfig | None = None
+    antenna_tx_count: int = 1
+    antenna_has_rx_ant: bool = False
+    transceiver_count: int = 1
+    # Hamlib rig_model integer (from rigs_list.h). Used by rigctld Yaesu
+    # dump_state responses. Default 2028 = RIG_MODEL_FTX1. Icom radios
+    # are served by the built-in Icom routing path and don't use this.
+    hamlib_model_id: int = 2028
+    scope_ref_min_db: float | None = None
+    scope_ref_max_db: float | None = None
+    scope_ref_step_db: float | None = None
+    scope_span_presets_hz: tuple[int, ...] = ()
+    # MOR-4385: meaning of one preset entry on the radio's wire — see
+    # RadioProfile.scope_span_preset_semantics. Required (in the TOML)
+    # whenever span_presets_hz is declared; "half_width" for every
+    # shipped Icom profile.
+    scope_span_preset_semantics: SpanPresetSemantics = "half_width"
+    scope_fixed_edge_ranges: tuple[ScopeFixedEdgeRange, ...] = field(
+        default=(), kw_only=True
+    )
+    scope_fixed_edge_step_hz: int | None = field(default=None, kw_only=True)
+    codec_preference: tuple[str, ...] | None = None
+    tx_codec: str | None = None
+    default_sample_rate_hz: int | None = None
+    supported_sample_rates_hz: tuple[int, ...] | None = None
+    sample_rate_by_codec: dict[str, int] | None = None
+    browser_rx_transport: str | None = None
+    browser_rx_transcode_to_opus: bool | None = None
+    # Stereo→mono RX downmix channel selection (MOR-508). "mix" = (L+R)//2
+    # average (default, unchanged for every rig); "left"/"right" = that channel
+    # at full level. The FTX-1 sets "left" (USB RX audio is on L only, so the
+    # average with a silent R loses 6 dB).
+    rx_audio_channel: str = "mix"
+    write_only_controls: tuple[str, ...] = ()
+    # Per-check_id fixed-value declarations (MOR-2105 part 2): check_id ->
+    # source establishing that this radio has only one legal value for that
+    # control. See ``RadioProfile.fixed_value_checks`` (profiles/__init__.py)
+    # for the full rationale.
+    fixed_value_checks: dict[str, str] = field(default_factory=dict)
+    state_acquisition: RadioAcquisitionProfile | None = None
+    tx_policy: TxPolicy = field(default_factory=TxPolicy)
+    split: SplitSpec = field(default_factory=SplitSpec)
+    tx_func: TxFuncSpec | None = None
+    ctcss_tones_centihz: tuple[int, ...] | None = None
+    tone_squelch_types: dict[int, ToneSquelchType] | None = None
+    # Protocol-native expected identity tokens (MOR-3064), from the optional
+    # top-level ``[identity].expected_ids``. Empty means no/unverified
+    # identity configuration.
+    expected_identity_ids: tuple[str, ...] = ()
+    memory: MemoryProfile | None = field(default=None, kw_only=True)
+    # Optional ``[modes] families`` (MOR-3679): family name -> member mode
+    # names from ``modes``, in declared order. Empty when not declared.
+    # Keyword-only and appended so no positional argument shifts.
+    mode_families: dict[str, tuple[str, ...]] = field(
+        default_factory=dict, kw_only=True
+    )
+    # Typed CW text sending (MOR-3678), from the optional ``[cw_text]``.
+    # Keyword-only so the positional constructor contract cannot shift.
+    cw_text: CwTextSpec = field(default_factory=CwTextSpec, kw_only=True)
+    usb_identity: UsbAudioIdentity | None = field(default=None, kw_only=True)
+    # ``[radio].xiegu_model_id`` (MOR-4352): the value bytes the radio
+    # answers to the Xiegu-only CI-V 0x1D 0x19 model-ID query, as one
+    # integer (``0x7250`` = reply bytes ``72 50``). ``None`` on every
+    # non-Xiegu profile. Keyword-only so no positional argument shifts.
+    xiegu_model_id: int | None = field(default=None, kw_only=True)
+    iq_lan: IqLanSpec | None = field(default=None, kw_only=True)
+    # Typed ``[[probe.checks]]`` write checks (MOR-4464 B1), from the
+    # optional top-level ``[probe]`` section. Empty when not declared.
+    # Keyword-only so no positional argument shifts.
+    probe_checks: tuple[ProbeCheck, ...] = field(default=(), kw_only=True)
+
+    def to_profile(self) -> RadioProfile:
+        """Build a ``RadioProfile`` from this config."""
+        vfo_main = self.vfo_main_select[0] if self.vfo_main_select else None
+        vfo_sub = self.vfo_sub_select[0] if self.vfo_sub_select else None
+        swap_ab = self.vfo_swap_ab[0] if self.vfo_swap_ab else None
+        equal_ab = self.vfo_equal_ab[0] if self.vfo_equal_ab else None
+        swap_main_sub = self.vfo_swap_main_sub[0] if self.vfo_swap_main_sub else None
+        equal_main_sub = self.vfo_equal_main_sub[0] if self.vfo_equal_main_sub else None
+
+        ranges = tuple(
+            FreqRangeInfo(
+                start=r["start_hz"],
+                end=r["end_hz"],
+                label=r["label"],
+                repeater=r.get("repeater", False),
+                bands=tuple(
+                    BandInfo(
+                        name=b["name"],
+                        start=b["start_hz"],
+                        end=b["end_hz"],
+                        default=b["default_hz"],
+                        bsr_code=b.get("bsr_code"),
+                        rx_only=b.get("rx_only", False),
+                        default_mode=b.get("default_mode"),
+                        max_power_w=b.get("max_power_w"),
+                    )
+                    for b in r.get("bands", ())
+                ),
+            )
+            for r in self.freq_ranges
+        )
+        controls = cast(
+            dict[str, ControlSpec | ControlDomainSpec] | None, self.controls
+        )
+        if self._control_domains:
+            published_controls = cast(
+                dict[str, ControlSpec | ControlDomainSpec],
+                {name: spec.copy() for name, spec in (self.controls or {}).items()},
+            )
+            for name, domain in self._control_domains.items():
+                if domain["mapping"] == "encoded":
+                    published_encoded_domain: dict[str, object] = {
+                        "mapping": "encoded",
+                        "choices": [
+                            (
+                                cast(EncodedControlChoice, {"raw": raw, "label": value})
+                                if isinstance(value, str)
+                                else cast(
+                                    EncodedControlChoice,
+                                    {"raw": raw, "display": _public_decimal(value)},
+                                )
+                            )
+                            for raw, value in cast(
+                                tuple[_EncodedChoice, ...], domain["choices"]
+                            )
+                        ],
+                    }
+                    legacy = published_controls.get(name)
+                    if legacy is not None and "style" in legacy:
+                        published_encoded_domain["style"] = legacy["style"]
+                    published_controls[name] = cast(
+                        ControlDomainSpec, published_encoded_domain
+                    )
+                    continue
+                published_domain: dict[str, object] = {
+                    "mapping": cast(str, domain["mapping"]),
+                    "raw_min": cast(int, domain["raw_min"]),
+                    "raw_max": cast(int, domain["raw_max"]),
+                    "raw_step": cast(int, domain["raw_step"]),
+                    "raw_origin": cast(int, domain["raw_origin"]),
+                    "display_min": _public_decimal(
+                        cast(Decimal, domain["display_min"])
+                    ),
+                    "display_max": _public_decimal(
+                        cast(Decimal, domain["display_max"])
+                    ),
+                    "display_step": _public_decimal(
+                        cast(Decimal, domain["display_step"])
+                    ),
+                    "display_origin": _public_decimal(
+                        cast(Decimal, domain["display_origin"])
+                    ),
+                    "display_unit": cast(str, domain["display_unit"]),
+                    "quantization": cast(str, domain["quantization"]),
+                    "restoration": cast(str, domain["restoration"]),
+                }
+                if published_domain["mapping"] == "centered":
+                    published_domain["raw_center"] = cast(int, domain["raw_center"])
+                    published_domain["display_center"] = _public_decimal(
+                        cast(Decimal, domain["display_center"])
+                    )
+                if published_domain["mapping"] == "lookup":
+                    published_domain["lookup"] = [
+                        ControlLookupPoint(raw=raw, display=_public_decimal(display))
+                        for raw, display in cast(
+                            tuple[_LookupPoint, ...], domain["lookup"]
+                        )
+                    ]
+                legacy = published_controls.get(name)
+                if legacy is not None and "style" in legacy:
+                    published_domain["style"] = legacy["style"]
+                # The loader has already established the mapping-specific
+                # shape above; this cast keeps the public discriminated union
+                # explicit without weakening its legacy counterpart.
+                published_controls[name] = cast(ControlDomainSpec, published_domain)
+            controls = published_controls
+
+        command_map = self.to_command_map()
+
+        return RadioProfile(
+            id=self.id,
+            model=self.model,
+            civ_addr=self.civ_addr,
+            receiver_count=self.receiver_count,
+            capabilities=frozenset(self.capabilities),
+            cmd29_routes=frozenset(self.cmd29_routes),
+            vfo_main_code=vfo_main,
+            vfo_sub_code=vfo_sub,
+            swap_ab_code=swap_ab,
+            equal_ab_code=equal_ab,
+            swap_main_sub_code=swap_main_sub,
+            equal_main_sub_code=equal_main_sub,
+            vfo_scheme=self.vfo_scheme,
+            vfo_readback=self.vfo_readback,
+            tx_receiver_rule=self.tx_receiver_rule,
+            split_tx_target=self.split_tx_target,
+            tx_func=self.tx_func,
+            has_lan=self.has_lan,
+            freq_ranges=ranges,
+            modes=tuple(self.modes),
+            mode_families=dict(self.mode_families),
+            filters=tuple(self.filters),
+            command_names=frozenset(
+                name
+                for name, spec in self.commands.items()
+                if not isinstance(spec, AbsentCommandSpec)
+            ),
+            absent_command_names=frozenset(
+                name
+                for name, spec in self.commands.items()
+                if isinstance(spec, AbsentCommandSpec)
+            ),
+            absent_command_sources={
+                name: spec.source
+                for name, spec in self.commands.items()
+                if isinstance(spec, AbsentCommandSpec)
+            },
+            command_map=command_map,
+            reverse_index=ReverseCommandIndex(command_map),
+            filter_width_min=self.filter_width_min,
+            filter_width_max=self.filter_width_max,
+            filter_width_encoding=self.filter_width_encoding,
+            filter_width_first_code=self.filter_width_first_code,
+            filter_width_radio_default_code=self.filter_width_radio_default_code,
+            filter_config=self.filter_config,
+            max_watts=self.max_watts,
+            min_watts=self.min_watts,
+            power_write_quantum=self.power_write_quantum,
+            att_values=self.att_values,
+            att_labels=self.att_labels,
+            pre_values=self.pre_values,
+            pre_labels=self.pre_labels,
+            agc_modes=self.agc_modes,
+            agc_labels=self.agc_labels,
+            agc_readback_modes=self.agc_readback_modes,
+            agc_auto_mode=self.agc_auto_mode,
+            agc_auto_speed_labels=self.agc_auto_speed_labels,
+            ctcss_tones_centihz=self.ctcss_tones_centihz,
+            tone_squelch_types=(
+                None
+                if self.tone_squelch_types is None
+                else dict(self.tone_squelch_types)
+            ),
+            break_in_modes=self.break_in_modes,
+            break_in_labels=self.break_in_labels,
+            notch_width_values=self.notch_width_values,
+            notch_width_labels=self.notch_width_labels,
+            ssb_tx_bw_values=self.ssb_tx_bw_values,
+            ssb_tx_bw_labels=self.ssb_tx_bw_labels,
+            filter_shape_values=self.filter_shape_values,
+            filter_shape_labels=self.filter_shape_labels,
+            scan_type_values=self.scan_type_values,
+            scan_type_labels=self.scan_type_labels,
+            scan_resume_values=self.scan_resume_values,
+            scan_resume_labels=self.scan_resume_labels,
+            rf_sql_control_model=self.rf_sql_control_model,
+            data_mode_count=self.data_mode_count,
+            data_mode_labels=self.data_mode_labels,
+            data_mode_inputs=self.data_mode_inputs,
+            data_mode_modes=self.data_mode_modes,
+            # isinstance, not membership: a declared-absent entry
+            # (AbsentCommandSpec, MOR-2005 step 4a) is a dict key too, but
+            # it means the opposite of "the radio has this command" — see
+            # `tests/test_rig_loader.py:
+            # TestSetModeViaSelectedDiscriminatesAbsent`. CivCommandSpec
+            # specifically (not CatCommandSpec) because this flag gates a
+            # CI-V-only wire path (`runtime/_dual_rx_runtime.py:
+            # DualRxRuntimeMixin._set_mode_main`'s CI-V 0x26 0x00 branch).
+            set_mode_via_selected=isinstance(
+                self.commands.get("set_selected_mode"), CivCommandSpec
+            ),
+            protocol_type=self.protocol_type,
+            default_baud=self.default_baud,
+            hamlib_model_id=self.hamlib_model_id,
+            controls=controls,
+            meter_calibrations=self.meter_calibrations,
+            meter_redlines=self.meter_redlines,
+            rules=self.rules,
+            keyboard=self.keyboard,
+            antenna_tx_count=self.antenna_tx_count,
+            antenna_has_rx_ant=self.antenna_has_rx_ant,
+            transceiver_count=self.transceiver_count,
+            scope_ref_min_db=self.scope_ref_min_db,
+            scope_ref_max_db=self.scope_ref_max_db,
+            scope_ref_step_db=self.scope_ref_step_db,
+            scope_span_presets_hz=self.scope_span_presets_hz,
+            scope_span_preset_semantics=self.scope_span_preset_semantics,
+            scope_fixed_edge_ranges=self.scope_fixed_edge_ranges,
+            scope_fixed_edge_step_hz=self.scope_fixed_edge_step_hz,
+            codec_preference=self.codec_preference,
+            tx_codec=self.tx_codec,
+            default_sample_rate_hz=self.default_sample_rate_hz,
+            supported_sample_rates_hz=self.supported_sample_rates_hz,
+            sample_rate_by_codec=self.sample_rate_by_codec,
+            browser_rx_transport=self.browser_rx_transport,
+            browser_rx_transcode_to_opus=self.browser_rx_transcode_to_opus,
+            write_only_controls=frozenset(self.write_only_controls),
+            fixed_value_checks=dict(self.fixed_value_checks),
+            state_acquisition=self.state_acquisition,
+            tx_policy=self.tx_policy,
+            expected_identity_ids=self.expected_identity_ids,
+            memory=self.memory,
+            cw_text=self.cw_text,
+            usb_identity=self.usb_identity,
+            xiegu_model_id=self.xiegu_model_id,
+            iq_lan=self.iq_lan,
+        )
+
+    def to_command_map(self) -> CommandMap:
+        """Build a ``CommandMap`` from this config's CI-V commands.
+
+        Only CivCommandSpec entries are included; CatCommandSpec and
+        AbsentCommandSpec entries are excluded (pinned by
+        `tests/test_rig_loader.py: TestAbsentCommandSemantics
+        .test_absent_name_excluded_from_command_map`).
+        """
+        civ_commands: dict[str, tuple[int, ...]] = {}
+        value_variants: dict[str, dict[int, tuple[int, ...]]] = {}
+        for name, spec in self.commands.items():
+            if isinstance(spec, CivCommandSpec):
+                civ_commands[name] = spec.bytes
+                if spec.value_variants:
+                    value_variants[name] = dict(spec.value_variants)
+        return CommandMap(civ_commands, value_variants=value_variants)
+
+
+def _parse_keyboard_binding(
+    filename: str,
+    binding_raw: dict[str, Any],
+    *,
+    index: int,
+) -> KeyboardBinding:
+    binding_id = str(binding_raw.get("id", f"binding-{index}"))
+    action = str(binding_raw.get("action", "")).strip()
+    if not action:
+        raise RigLoadError(
+            f"{filename}: [[ui.keyboard.bindings]].action must not be empty"
+        )
+    if "sequence" in binding_raw:
+        sequence_raw = binding_raw["sequence"]
+        if not isinstance(sequence_raw, list) or not sequence_raw:
+            raise RigLoadError(
+                f"{filename}: [[ui.keyboard.bindings]].sequence must be a non-empty list"
+            )
+        sequence = tuple(str(step) for step in sequence_raw)
+    elif "key" in binding_raw:
+        sequence = (str(binding_raw["key"]),)
+    else:
+        raise RigLoadError(
+            f"{filename}: [[ui.keyboard.bindings]] must define key or sequence"
+        )
+    modifiers_raw = binding_raw.get("modifiers", [])
+    if not isinstance(modifiers_raw, list):
+        raise RigLoadError(
+            f"{filename}: [[ui.keyboard.bindings]].modifiers must be a list"
+        )
+    modifiers = tuple(str(modifier).upper() for modifier in modifiers_raw)
+    invalid_modifiers = [m for m in modifiers if m not in VALID_KEYBOARD_MODIFIERS]
+    if invalid_modifiers:
+        raise RigLoadError(
+            f"{filename}: invalid keyboard modifiers {invalid_modifiers!r}; "
+            f"expected subset of {sorted(VALID_KEYBOARD_MODIFIERS)}"
+        )
+    params_raw = binding_raw.get("params")
+    params = dict(params_raw) if isinstance(params_raw, dict) else None
+    return KeyboardBinding(
+        id=binding_id,
+        action=action,
+        sequence=sequence,
+        section=str(binding_raw.get("section", "General")),
+        label=(
+            str(binding_raw["label"])
+            if "label" in binding_raw and binding_raw["label"] is not None
+            else None
+        ),
+        description=(
+            str(binding_raw["description"])
+            if "description" in binding_raw and binding_raw["description"] is not None
+            else None
+        ),
+        modifiers=modifiers,
+        repeatable=bool(binding_raw.get("repeatable", False)),
+        params=params,
+    )
+
+
+def _parse_keyboard_config(
+    filename: str,
+    keyboard_section: dict[str, Any],
+) -> KeyboardConfig:
+    leader_key = str(keyboard_section.get("leader_key", "g"))
+    leader_timeout_ms = int(keyboard_section.get("leader_timeout_ms", 1000))
+    alt_hints = bool(keyboard_section.get("alt_hints", True))
+    help_title = str(keyboard_section.get("help_title", "Keyboard Shortcuts"))
+    bindings_raw = keyboard_section.get("bindings", [])
+    bindings: list[KeyboardBinding] = []
+    for index, binding_raw in enumerate(bindings_raw, start=1):
+        if not isinstance(binding_raw, dict):
+            raise RigLoadError(
+                f"{filename}: [[ui.keyboard.bindings]] entry #{index} must be a table"
+            )
+        bindings.append(_parse_keyboard_binding(filename, binding_raw, index=index))
+    return KeyboardConfig(
+        leader_key=leader_key,
+        leader_timeout_ms=leader_timeout_ms,
+        alt_hints=alt_hints,
+        help_title=help_title,
+        bindings=tuple(bindings),
+    )
+
+
+def _load_keyboard_file(
+    path: Path, keyboard_path: Path, *, optional: bool = False
+) -> KeyboardConfig | None:
+    include_name = keyboard_path.name
+    if not keyboard_path.exists():
+        if optional:
+            return None
+        raise RigLoadError(
+            f"{path.name}: keyboard profile file not found: {keyboard_path.name}"
+        )
+    try:
+        data = tomllib.loads(keyboard_path.read_text())
+    except Exception as exc:
+        raise RigLoadError(
+            f"{path.name}: failed to parse keyboard profile {include_name}: {exc}"
+        ) from exc
+    keyboard_section = data.get("keyboard", data)
+    if not isinstance(keyboard_section, dict):
+        raise RigLoadError(
+            f"{path.name}: keyboard profile {include_name} must contain a [keyboard] table or root mapping"
+        )
+    return _parse_keyboard_config(include_name, keyboard_section)
+
+
+def _load_default_keyboard_config(path: Path) -> KeyboardConfig | None:
+    return _load_keyboard_file(
+        path, path.parent / DEFAULT_KEYBOARD_PROFILE_NAME, optional=True
+    )
+
+
+def _load_ctcss_tables(path: Path) -> dict[str, tuple[int, ...]]:
+    catalog_path = path.parent / DEFAULT_CTCSS_TABLES_PROFILE_NAME
+    if not catalog_path.exists():
+        raise RigLoadError(
+            f"{path.name}: CTCSS table catalog file not found: {catalog_path.name}"
+        )
+    try:
+        data = tomllib.loads(catalog_path.read_text())
+    except Exception as exc:
+        raise RigLoadError(
+            f"{path.name}: failed to parse CTCSS table catalog "
+            f"{catalog_path.name}: {exc}"
+        ) from exc
+
+    if set(data) != {"schema_version", "tables"}:
+        raise RigLoadError(
+            f"{catalog_path.name}: root must contain exactly schema_version and tables"
+        )
+    if (
+        isinstance(data["schema_version"], bool)
+        or not isinstance(data["schema_version"], int)
+        or data["schema_version"] != 1
+    ):
+        raise RigLoadError(f"{catalog_path.name}: schema_version must be 1")
+    raw_tables = data["tables"]
+    if not isinstance(raw_tables, dict) or not raw_tables:
+        raise RigLoadError(f"{catalog_path.name}: [tables] must be a non-empty table")
+
+    tables: dict[str, tuple[int, ...]] = {}
+    for name, raw_table in raw_tables.items():
+        prefix = f"{catalog_path.name}: [tables.{name}]"
+        if not isinstance(name, str) or not name:
+            raise RigLoadError(f"{catalog_path.name}: table names must be non-empty")
+        if not isinstance(raw_table, dict) or set(raw_table) != {"values_centihz"}:
+            raise RigLoadError(f"{prefix} must contain exactly values_centihz")
+        values = raw_table["values_centihz"]
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(
+                isinstance(value, bool) or not isinstance(value, int)
+                for value in values
+            )
+        ):
+            raise RigLoadError(
+                f"{prefix}.values_centihz must be a non-empty integer array"
+            )
+        if len(values) != len(set(values)):
+            raise RigLoadError(f"{prefix}.values_centihz must not contain duplicates")
+        if any(first >= second for first, second in zip(values, values[1:])):
+            raise RigLoadError(f"{prefix}.values_centihz must be strictly ascending")
+        if any(
+            not CTCSS_TONE_MIN_CENTIHZ <= value <= CTCSS_TONE_MAX_CENTIHZ
+            for value in values
+        ):
+            raise RigLoadError(
+                f"{prefix}.values_centihz must be within "
+                f"{CTCSS_TONE_MIN_CENTIHZ}..{CTCSS_TONE_MAX_CENTIHZ} centiHz"
+            )
+        if any(value % 10 for value in values):
+            raise RigLoadError(f"{prefix}.values_centihz must use exact 0.1 Hz steps")
+        tables[name] = tuple(values)
+    return tables
+
+
+def _resolve_ctcss_table(
+    path: Path, data: dict[str, Any], features: tuple[str, ...] | list[str]
+) -> tuple[int, ...] | None:
+    filename = path.name
+    section = data.get("ctcss")
+    requires_table = bool(_CTCSS_CAPABILITIES.intersection(features))
+    if section is None:
+        if requires_table:
+            raise RigLoadError(f"{filename}: missing required [ctcss].table")
+        return None
+    if not isinstance(section, dict):
+        raise RigLoadError(f"{filename}: [ctcss] must be a table")
+    if set(section) != {"table"}:
+        raise RigLoadError(f"{filename}: [ctcss] must contain exactly table")
+    table_name = section["table"]
+    if not isinstance(table_name, str) or not table_name:
+        raise RigLoadError(f"{filename}: [ctcss].table must be a non-empty string")
+    tables = _load_ctcss_tables(path)
+    try:
+        return tables[table_name]
+    except KeyError as exc:
+        raise RigLoadError(
+            f"{filename}: unknown CTCSS table {table_name!r} in "
+            f"{DEFAULT_CTCSS_TABLES_PROFILE_NAME}"
+        ) from exc
+
+
+# The reads whose reply code [tone_squelch_types] names: the Icom 16 5D
+# selector and the Yaesu CAT CT read (MOR-2969).
+_TONE_SQUELCH_TYPE_READS = ("get_tone_squelch_type", "get_sql_type")
+
+
+def _resolve_tone_squelch_types(
+    path: Path, data: dict[str, Any], commands: dict[str, CommandSpec]
+) -> dict[int, ToneSquelchType] | None:
+    """Parse ``[tone_squelch_types]``: selector code -> neutral type (MOR-2131).
+
+    A profile that declares a selector read in ``_TONE_SQUELCH_TYPE_READS``,
+    in ``[commands]`` or its overrides and not as absent, must carry the
+    table, because the decoder reads the code's meaning from it and nowhere
+    else.
+    """
+    filename = path.name
+    section = data.get("tone_squelch_types")
+    if section is None:
+        for name in _TONE_SQUELCH_TYPE_READS:
+            selector = commands.get(name)
+            if selector is not None and not isinstance(selector, AbsentCommandSpec):
+                raise RigLoadError(
+                    f"{filename}: {name} needs a [tone_squelch_types] table"
+                )
+        return None
+    if not isinstance(section, dict) or not section:
+        raise RigLoadError(
+            f"{filename}: [tone_squelch_types] must be a non-empty table"
+        )
+    table: dict[int, ToneSquelchType] = {}
+    for raw_code, raw_type in section.items():
+        try:
+            code = int(raw_code)
+        except ValueError as exc:
+            raise RigLoadError(
+                f"{filename}: [tone_squelch_types] key {raw_code!r} is not a code"
+            ) from exc
+        if not 0 <= code <= 0xFF:
+            raise RigLoadError(
+                f"{filename}: [tone_squelch_types] code {code} is not one byte"
+            )
+        try:
+            table[code] = ToneSquelchType(raw_type)
+        except ValueError as exc:
+            raise RigLoadError(
+                f"{filename}: [tone_squelch_types].{raw_code} = {raw_type!r} is not "
+                f"one of {sorted(t.value for t in ToneSquelchType)}"
+            ) from exc
+    return table
+
+
+def _parse_command_value(
+    filename: str,
+    command_name: str,
+    value: Any,
+) -> CommandSpec:
+    """Parse a single command value from TOML.
+
+    Supports three formats:
+    1. CI-V wire bytes (list): the frame's full constant prefix, per the
+       tuple contract ruled in Q7
+       (`docs/plans/2026-08-29-profile-driven-command-bytes.md` §8.1) —
+       command, sub-command, and any further constant bytes (extended menu
+       addressing, a selector byte, or a constant payload byte). Examples:
+       [0x03] (command only), [0x14, 0x01] (command + sub), or
+       [0x1C, 0x00, 0x01] (command + sub + a constant payload byte, the
+       X6100 ptt_on shape).
+    2. CAT command spec (dict): { cat = { read = "FA;", parse = "FA{freq:09d};" } }
+    3. Declared-absent (dict, MOR-2005 step 4a): { absent = "<source>" } —
+       this radio confirmed does not have the command, per the named
+       authority. See `commands/command_spec.py: AbsentCommandSpec`.
+
+    Args:
+        filename: Source TOML filename (for error messages).
+        command_name: Command name (for error messages).
+        value: Raw TOML value to parse.
+
+    Returns:
+        Parsed CommandSpec (CivCommandSpec, CatCommandSpec, or
+        AbsentCommandSpec).
+
+    Raises:
+        RigLoadError: If the value format is invalid.
+    """
+    # Format 1: CI-V wire bytes (list of integers)
+    if isinstance(value, list):
+        if not value:
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name} = [] (empty list not allowed)"
+            )
+        if not all(isinstance(byte, int) for byte in value):
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name} must be all integers, "
+                f"got {value!r}"
+            )
+        if not all(0x00 <= byte <= 0xFF for byte in value):
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name} bytes must be 0x00–0xFF, "
+                f"got {value!r}"
+            )
+        return CivCommandSpec(bytes=tuple(value))
+
+    # Additive CI-V descriptor: one public command name with complete wire
+    # tuples selected by an integer semantic value.
+    if isinstance(value, dict) and ({"bytes", "value_variants"} & set(value)):
+        prefix = f"{filename}: [commands].{command_name}"
+        if set(value) != {"bytes", "value_variants"}:
+            raise RigLoadError(
+                f"{prefix} value-variant descriptor must contain exactly "
+                "bytes and value_variants"
+            )
+
+        base_raw = value["bytes"]
+        if not isinstance(base_raw, list) or not base_raw:
+            raise RigLoadError(f"{prefix}.bytes must be a non-empty byte array")
+        if any(
+            isinstance(byte, bool) or not isinstance(byte, int) for byte in base_raw
+        ):
+            raise RigLoadError(f"{prefix}.bytes must contain only integers")
+        if any(not 0 <= byte <= 0xFF for byte in base_raw):
+            raise RigLoadError(f"{prefix}.bytes must contain only values 0..255")
+        base = tuple(base_raw)
+
+        variants_raw = value["value_variants"]
+        if not isinstance(variants_raw, dict) or not variants_raw:
+            raise RigLoadError(f"{prefix}.value_variants must be a non-empty table")
+
+        variants: dict[int, tuple[int, ...]] = {}
+        seen_wires: set[tuple[int, ...]] = set()
+        for raw_key, wire_raw in variants_raw.items():
+            variant_path = f"{prefix}.value_variants.{raw_key}"
+            try:
+                semantic_value = int(raw_key)
+            except (TypeError, ValueError):
+                semantic_value = 0
+            if not isinstance(raw_key, str) or str(semantic_value) != raw_key:
+                raise RigLoadError(
+                    f"{variant_path} key must be a canonical decimal integer"
+                )
+            if not isinstance(wire_raw, list) or not wire_raw:
+                raise RigLoadError(f"{variant_path} must be a non-empty byte array")
+            if any(
+                isinstance(byte, bool) or not isinstance(byte, int) for byte in wire_raw
+            ):
+                raise RigLoadError(f"{variant_path} must contain only integers")
+            if any(not 0 <= byte <= 0xFF for byte in wire_raw):
+                raise RigLoadError(f"{variant_path} must contain only values 0..255")
+            wire = tuple(wire_raw)
+            if len(wire) <= len(base) or wire[: len(base)] != base:
+                raise RigLoadError(
+                    f"{variant_path} must strictly extend and prefix-match "
+                    f"{prefix}.bytes"
+                )
+            if wire in seen_wires:
+                raise RigLoadError(f"{variant_path} duplicates another variant value")
+            variants[semantic_value] = wire
+            seen_wires.add(wire)
+        return CivCommandSpec(bytes=base, value_variants=variants)
+
+    # Format 3: declared-absent (dict with 'absent' key, MOR-2005 step 4a)
+    if isinstance(value, dict) and "absent" in value:
+        extra_keys = sorted(set(value) - {"absent"})
+        if extra_keys:
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name} = {{ absent = ... }} "
+                f"must not have other keys, got extra: {extra_keys}"
+            )
+        source = value["absent"]
+        if not isinstance(source, str) or not source.strip():
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name}.absent must be a "
+                f"non-empty string naming the authority (a manual, a wfview "
+                f"rig definition, ...), got {source!r}"
+            )
+        return AbsentCommandSpec(source=source)
+
+    # Format 2: CAT command spec (dict with 'cat' key)
+    if isinstance(value, dict):
+        if "cat" not in value:
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name} dict must have 'cat' key, "
+                f"got keys: {sorted(value.keys())}"
+            )
+        cat_spec = value["cat"]
+        if not isinstance(cat_spec, dict):
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name}.cat must be a dict, "
+                f"got {type(cat_spec).__name__}"
+            )
+
+        read_cmd = cat_spec.get("read")
+        write_cmd = cat_spec.get("write")
+        parse_template = cat_spec.get("parse")
+
+        # Validate types
+        if read_cmd is not None and not isinstance(read_cmd, str):
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name}.cat.read must be a string"
+            )
+        if write_cmd is not None and not isinstance(write_cmd, str):
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name}.cat.write must be a string"
+            )
+        if parse_template is not None and not isinstance(parse_template, str):
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name}.cat.parse must be a string"
+            )
+
+        # At least one of read/write must be present
+        if read_cmd is None and write_cmd is None:
+            raise RigLoadError(
+                f"{filename}: [commands].{command_name}.cat must have "
+                f"at least one of 'read' or 'write'"
+            )
+
+        return CatCommandSpec(read=read_cmd, write=write_cmd, parse=parse_template)
+
+    # Unknown format
+    raise RigLoadError(
+        f"{filename}: [commands].{command_name} must be a list (CI-V bytes) "
+        f"or dict (CAT spec), got {type(value).__name__}"
+    )
+
+
+def _merge_keyboard_config(
+    base: KeyboardConfig | None,
+    override_section: dict[str, Any],
+    *,
+    filename: str,
+) -> KeyboardConfig | None:
+    if base is None and not override_section:
+        return None
+
+    leader_key = str(
+        override_section.get("leader_key", base.leader_key if base else "g")
+    )
+    leader_timeout_ms = int(
+        override_section.get(
+            "leader_timeout_ms",
+            base.leader_timeout_ms if base else 1000,
+        )
+    )
+    alt_hints = bool(
+        override_section.get("alt_hints", base.alt_hints if base else True)
+    )
+    help_title = str(
+        override_section.get(
+            "help_title", base.help_title if base else "Keyboard Shortcuts"
+        )
+    )
+
+    merged_bindings: dict[str, KeyboardBinding] = {
+        binding.id: binding for binding in (base.bindings if base else ())
+    }
+    bindings_raw = override_section.get("bindings", [])
+    for index, binding_raw in enumerate(bindings_raw, start=1):
+        if not isinstance(binding_raw, dict):
+            raise RigLoadError(
+                f"{filename}: [[ui.keyboard.bindings]] entry #{index} must be a table"
+            )
+        binding = _parse_keyboard_binding(filename, binding_raw, index=index)
+        merged_bindings[binding.id] = binding
+
+    return KeyboardConfig(
+        leader_key=leader_key,
+        leader_timeout_ms=leader_timeout_ms,
+        alt_hints=alt_hints,
+        help_title=help_title,
+        bindings=tuple(merged_bindings.values()),
+    )
+
+
+def _filter_undeclared_mode_bindings(
+    keyboard: KeyboardConfig | None,
+    modes: tuple[str, ...],
+) -> KeyboardConfig | None:
+    """Exclude mode shortcuts that do not target a declared profile mode."""
+    if keyboard is None:
+        return None
+
+    bindings = tuple(
+        binding
+        for binding in keyboard.bindings
+        if not (
+            binding.action == "mode_select"
+            and isinstance(binding.params, dict)
+            and isinstance(binding.params.get("mode"), str)
+            and binding.params["mode"] not in modes
+        )
+    )
+    if len(bindings) == len(keyboard.bindings):
+        return keyboard
+    return KeyboardConfig(
+        leader_key=keyboard.leader_key,
+        leader_timeout_ms=keyboard.leader_timeout_ms,
+        alt_hints=keyboard.alt_hints,
+        help_title=keyboard.help_title,
+        bindings=bindings,
+    )
+
+
+def _valid_audio_codec_names() -> set[str]:
+    from rigplane.types import AudioCodec
+
+    return {codec.name for codec in AudioCodec}
+
+
+def _validate_audio_codec_name(
+    filename: str,
+    field_name: str,
+    value: Any,
+    valid_names: set[str],
+) -> str:
+    if not isinstance(value, str):
+        raise RigLoadError(f"{filename}: [audio].{field_name} must be a string")
+    if value not in valid_names:
+        raise RigLoadError(
+            f"{filename}: [audio].{field_name} has unknown codec {value!r}. "
+            f"Valid names: {sorted(valid_names)}"
+        )
+    return value
+
+
+def _validate_audio_sample_rate(filename: str, field_name: str, value: Any) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise RigLoadError(f"{filename}: [audio].{field_name} must be an integer")
+    if value <= 0 or value not in VALID_AUDIO_SAMPLE_RATES_HZ:
+        raise RigLoadError(
+            f"{filename}: [audio].{field_name} must be one of "
+            f"{sorted(VALID_AUDIO_SAMPLE_RATES_HZ)}, got {value!r}"
+        )
+    return value
+
+
+def _state_path_list(filename: str, section: str, value: Any) -> tuple[FieldPath, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise RigLoadError(f"{filename}: {section} must be a list of field paths")
+    try:
+        return tuple(FieldPath.parse(item) for item in value)
+    except ValueError as exc:
+        raise RigLoadError(
+            f"{filename}: {section} has invalid field path: {exc}"
+        ) from exc
+
+
+def _reject_unknown_keys(
+    filename: str,
+    section: str,
+    raw: dict[str, Any],
+    allowed: frozenset[str],
+) -> None:
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise RigLoadError(
+            f"{filename}: {section} unknown key {unknown[0]!r}. "
+            f"Valid keys: {sorted(allowed)}"
+        )
+
+
+def _parse_enumerated_domain(
+    filename: str,
+    section: str,
+    raw_section: dict[str, Any],
+    *,
+    values_key: str = "values",
+    labels_key: str = "labels",
+) -> tuple[tuple[int, ...] | None, dict[str, str] | None]:
+    """Parse a ``[section] <values_key>/<labels_key>`` enumerated-domain
+    declaration, generalizing the ``[agc] modes/labels`` fail-loud pattern
+    (MOR-1522) to the other per-radio enumerated controls (MOR-1534:
+    break_in, notch width, ssb_tx_bw, filter_shape). Rejects unknown keys,
+    non-integer/empty value lists, orphan label keys, and — the MOR-1522 R1
+    (B2) hole class — labels declared without a matching values list, which
+    would otherwise load silently as a capability-present control with an
+    empty domain.
+    """
+    if raw_section:
+        _reject_unknown_keys(
+            filename, section, raw_section, frozenset({values_key, labels_key})
+        )
+    values = tuple(raw_section[values_key]) if values_key in raw_section else None
+    if values is not None and (
+        not values or any(isinstance(v, bool) or not isinstance(v, int) for v in values)
+    ):
+        raise RigLoadError(
+            f"{filename}: {section}.{values_key} must be a non-empty list of integers"
+        )
+    labels = dict(raw_section[labels_key]) if labels_key in raw_section else None
+    if labels is not None and values is None:
+        raise RigLoadError(
+            f"{filename}: {section}.{labels_key} declared without {section}.{values_key}"
+        )
+    if labels is not None and values is not None:
+        declared = {str(v) for v in values}
+        orphan_labels = sorted(set(labels) - declared)
+        if orphan_labels:
+            raise RigLoadError(
+                f"{filename}: {section}.{labels_key} key {orphan_labels[0]!r} has no "
+                f"matching entry in {section}.{values_key} {sorted(values)}"
+            )
+    return values, labels
+
+
+def _strict_policy_bool(
+    filename: str,
+    prefix: str,
+    key: str,
+    value: Any,
+) -> bool:
+    if not isinstance(value, bool):
+        raise RigLoadError(f"{filename}: {prefix}.{key} must be a bool")
+    return value
+
+
+def _strict_policy_float(
+    filename: str,
+    prefix: str,
+    key: str,
+    value: Any,
+) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise RigLoadError(f"{filename}: {prefix}.{key} must be a number")
+    return float(value)
+
+
+#: TOML has no null literal, and an omitted acquisition-policy key inherits
+#: the profile default rather than clearing it, so ``cadence_seconds`` and
+#: ``freshness_ttl_seconds`` (the two keys ``_policy_seconds`` parses) spell
+#: "no value here" with this token. It resolves to ``None``, which
+#: ``StateStore.mark_stale_due`` skips instead of ageing.
+_POLICY_SECONDS_NEVER = "never"
+
+
+def _policy_seconds(
+    filename: str,
+    prefix: str,
+    raw: dict[str, Any],
+    key: str,
+    *,
+    defaults: AcquisitionPolicy | None,
+    fallback: float,
+    label: str | None = None,
+) -> float | None:
+    if key in raw:
+        value = raw[key]
+    elif defaults is not None:
+        value = getattr(defaults, key)
+    else:
+        value = fallback
+    key_label = label if label is not None else key
+    if value == _POLICY_SECONDS_NEVER:
+        return None
+    return (
+        None
+        if value is None
+        else _strict_policy_float(filename, prefix, key_label, value)
+    )
+
+
+_ACQUISITION_POLICY_KEYS = frozenset(
+    {
+        "cadence_seconds",
+        "freshness_ttl_seconds",
+        "reconciliation_priority",
+        "adaptive_decay",
+        "adaptive_decay_idle_multiplier",
+        "adaptive_decay_max_cadence_seconds",
+        "external_cat_pause",
+        "meter_coalescing_window_seconds",
+        "tx_only",
+        "available_when",
+        "reason",
+    }
+)
+
+#: Operator keys an ``available_when`` clause may carry; a clause must use
+#: exactly one of them alongside its ``field``.
+_AVAILABILITY_OPERATOR_KEYS = ("in", "not_in", "min", "max", "equals")
+_AVAILABILITY_CLAUSE_KEYS = frozenset({"field", *_AVAILABILITY_OPERATOR_KEYS})
+
+
+def _parse_available_when(
+    filename: str,
+    prefix: str,
+    value: Any,
+) -> tuple[AvailabilityClause, ...]:
+    if not isinstance(value, list):
+        raise RigLoadError(
+            f"{filename}: {prefix}.available_when must be a list of clauses"
+        )
+    clauses: list[AvailabilityClause] = []
+    for index, raw_clause in enumerate(value):
+        label = f"{prefix}.available_when[{index}]"
+        if not isinstance(raw_clause, dict):
+            raise RigLoadError(f"{filename}: {label} must be a table")
+        _reject_unknown_keys(filename, label, raw_clause, _AVAILABILITY_CLAUSE_KEYS)
+        if not isinstance(raw_clause.get("field"), str):
+            raise RigLoadError(f"{filename}: {label}.field must be a field path string")
+        try:
+            path = FieldPath.parse(raw_clause["field"])
+        except ValueError as exc:
+            raise RigLoadError(
+                f"{filename}: {label}.field is not a field path: {exc}"
+            ) from exc
+        present = [key for key in _AVAILABILITY_OPERATOR_KEYS if key in raw_clause]
+        if len(present) != 1:
+            raise RigLoadError(
+                f"{filename}: {label} must use exactly one of "
+                f"{list(_AVAILABILITY_OPERATOR_KEYS)}, got {present}"
+            )
+        operator = present[0]
+        operand = raw_clause[operator]
+        if operator in ("in", "not_in") and not isinstance(operand, list):
+            raise RigLoadError(f"{filename}: {label}.{operator} must be a list")
+        if operator in ("min", "max"):
+            operand = _strict_policy_float(filename, label, operator, operand)
+        try:
+            clauses.append(
+                AvailabilityClause(field=path, operator=operator, value=operand)
+            )
+        except ValueError as exc:
+            raise RigLoadError(f"{filename}: {label} invalid: {exc}") from exc
+    return tuple(clauses)
+
+
+_STATE_ACQUISITION_KEYS = frozenset(
+    {
+        "provider",
+        "default_cadence_seconds",
+        "default_freshness_ttl_seconds",
+        "default_reconciliation_priority",
+        "adaptive_decay",
+        "adaptive_decay_idle_multiplier",
+        "adaptive_decay_max_cadence_seconds",
+        "external_cat_pause",
+        "meter_coalescing_window_seconds",
+        "capabilities",
+        "field_policies",
+    }
+)
+
+_STATE_ACQUISITION_CAPABILITY_KEYS = frozenset(
+    {
+        "unsolicited_push",
+        "polling_only",
+        "stream_like_meters",
+        "command_response_observable",
+        "startup_optional",
+        "supported_controls",
+        "unsupported",
+        "unknown",
+    }
+)
+
+
+def _parse_acquisition_policy(
+    filename: str,
+    raw: dict[str, Any],
+    *,
+    prefix: str,
+    defaults: AcquisitionPolicy | None = None,
+    key_labels: dict[str, str] | None = None,
+) -> AcquisitionPolicy:
+    _reject_unknown_keys(filename, prefix, raw, _ACQUISITION_POLICY_KEYS)
+    if not isinstance(raw.get("reason", ""), str):
+        raise RigLoadError(f"{filename}: {prefix}.reason must be a string")
+    labels = key_labels or {}
+    available_when = (
+        _parse_available_when(filename, prefix, raw["available_when"])
+        if "available_when" in raw
+        else ()
+    )
+    try:
+        return AcquisitionPolicy(
+            cadence_seconds=_policy_seconds(
+                filename,
+                prefix,
+                raw,
+                "cadence_seconds",
+                defaults=defaults,
+                fallback=5.0,
+                label=labels.get("cadence_seconds"),
+            ),
+            freshness_ttl_seconds=_policy_seconds(
+                filename,
+                prefix,
+                raw,
+                "freshness_ttl_seconds",
+                defaults=defaults,
+                fallback=15.0,
+                label=labels.get("freshness_ttl_seconds"),
+            ),
+            reconciliation_priority=ReconciliationPriority(
+                str(
+                    raw.get(
+                        "reconciliation_priority",
+                        defaults.reconciliation_priority
+                        if defaults is not None
+                        else ReconciliationPriority.POLL,
+                    )
+                )
+            ),
+            adaptive_decay=AdaptiveDecayPolicy(
+                enabled=_strict_policy_bool(
+                    filename,
+                    prefix,
+                    labels.get("adaptive_decay", "adaptive_decay"),
+                    raw.get(
+                        "adaptive_decay",
+                        defaults.adaptive_decay.enabled
+                        if defaults is not None
+                        else False,
+                    ),
+                ),
+                idle_multiplier=_strict_policy_float(
+                    filename,
+                    prefix,
+                    labels.get(
+                        "adaptive_decay_idle_multiplier",
+                        "adaptive_decay_idle_multiplier",
+                    ),
+                    raw.get(
+                        "adaptive_decay_idle_multiplier",
+                        defaults.adaptive_decay.idle_multiplier
+                        if defaults is not None
+                        else 1.0,
+                    ),
+                ),
+                max_cadence_seconds=(
+                    None
+                    if raw.get(
+                        "adaptive_decay_max_cadence_seconds",
+                        defaults.adaptive_decay.max_cadence_seconds
+                        if defaults is not None
+                        else None,
+                    )
+                    is None
+                    else _strict_policy_float(
+                        filename,
+                        prefix,
+                        labels.get(
+                            "adaptive_decay_max_cadence_seconds",
+                            "adaptive_decay_max_cadence_seconds",
+                        ),
+                        raw.get(
+                            "adaptive_decay_max_cadence_seconds",
+                            defaults.adaptive_decay.max_cadence_seconds
+                            if defaults is not None
+                            else None,
+                        ),
+                    )
+                ),
+            ),
+            external_cat_pause=ExternalCatPauseBehavior(
+                str(
+                    raw.get(
+                        "external_cat_pause",
+                        defaults.external_cat_pause
+                        if defaults is not None
+                        else ExternalCatPauseBehavior.PAUSE_POLLING,
+                    )
+                )
+            ),
+            meter_coalescing=(
+                MeterCoalescingPolicy(
+                    window_seconds=_strict_policy_float(
+                        filename,
+                        prefix,
+                        labels.get(
+                            "meter_coalescing_window_seconds",
+                            "meter_coalescing_window_seconds",
+                        ),
+                        raw["meter_coalescing_window_seconds"],
+                    )
+                )
+                if "meter_coalescing_window_seconds" in raw
+                else None
+            ),
+            tx_only=_strict_policy_bool(
+                filename,
+                prefix,
+                labels.get("tx_only", "tx_only"),
+                raw.get(
+                    "tx_only",
+                    defaults.tx_only if defaults is not None else False,
+                ),
+            ),
+            available_when=available_when,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RigLoadError(
+            f"{filename}: {prefix} invalid acquisition policy: {exc}"
+        ) from exc
+
+
+def _parse_state_acquisition(
+    filename: str,
+    raw: Any,
+) -> RadioAcquisitionProfile | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RigLoadError(f"{filename}: [state_acquisition] must be a table")
+    _reject_unknown_keys(
+        filename,
+        "[state_acquisition]",
+        raw,
+        _STATE_ACQUISITION_KEYS,
+    )
+
+    caps_raw = raw.get("capabilities", {})
+    if not isinstance(caps_raw, dict):
+        raise RigLoadError(
+            f"{filename}: [state_acquisition.capabilities] must be a table"
+        )
+    _reject_unknown_keys(
+        filename,
+        "[state_acquisition.capabilities]",
+        caps_raw,
+        _STATE_ACQUISITION_CAPABILITY_KEYS,
+    )
+
+    section = "[state_acquisition.capabilities]"
+    unsolicited = set(
+        _state_path_list(
+            filename, f"{section}.unsolicited_push", caps_raw.get("unsolicited_push")
+        )
+    )
+    polling = set(
+        _state_path_list(
+            filename, f"{section}.polling_only", caps_raw.get("polling_only")
+        )
+    )
+    stream = set(
+        _state_path_list(
+            filename,
+            f"{section}.stream_like_meters",
+            caps_raw.get("stream_like_meters"),
+        )
+    )
+    command_response = set(
+        _state_path_list(
+            filename,
+            f"{section}.command_response_observable",
+            caps_raw.get("command_response_observable"),
+        )
+    )
+    startup_optional = set(
+        _state_path_list(
+            filename,
+            f"{section}.startup_optional",
+            caps_raw.get("startup_optional"),
+        )
+    )
+    optional_without_acquisition = startup_optional - (
+        unsolicited | polling | stream | command_response
+    )
+    if optional_without_acquisition:
+        formatted = ", ".join(
+            str(path) for path in sorted(optional_without_acquisition, key=str)
+        )
+        raise RigLoadError(
+            f"{filename}: {section}.startup_optional paths must also be "
+            f"declared acquisitive: {formatted}"
+        )
+    supported_controls = set(
+        _state_path_list(
+            filename,
+            f"{section}.supported_controls",
+            caps_raw.get("supported_controls"),
+        )
+    )
+    unsupported = set(
+        _state_path_list(
+            filename, f"{section}.unsupported", caps_raw.get("unsupported")
+        )
+    )
+    unknown = set(
+        _state_path_list(filename, f"{section}.unknown", caps_raw.get("unknown"))
+    )
+
+    paths = (
+        unsolicited
+        | polling
+        | stream
+        | command_response
+        | startup_optional
+        | supported_controls
+        | unsupported
+        | unknown
+    )
+    capabilities: list[FieldCapability] = []
+    for path in sorted(paths, key=str):
+        availability = FieldAvailability.SUPPORTED
+        diagnostic = ""
+        if path in unsupported:
+            availability = FieldAvailability.UNSUPPORTED
+            diagnostic = "profile marks field unsupported"
+        if path in unknown:
+            availability = FieldAvailability.UNKNOWN
+            diagnostic = "profile marks field unknown"
+        try:
+            capabilities.append(
+                FieldCapability(
+                    path=path,
+                    availability=availability,
+                    unsolicited_push=path in unsolicited,
+                    polling=path in polling or path in stream,
+                    stream_like=path in stream,
+                    command_response_observable=path in command_response,
+                    startup_required=path not in startup_optional,
+                    supported_controls=(
+                        ("profile_control",) if path in supported_controls else ()
+                    ),
+                    diagnostic=diagnostic,
+                )
+            )
+        except ValueError as exc:
+            raise RigLoadError(f"{filename}: {path}: {exc}") from exc
+
+    default_policy = _parse_acquisition_policy(
+        filename,
+        {
+            "cadence_seconds": raw.get("default_cadence_seconds", 5.0),
+            "freshness_ttl_seconds": raw.get("default_freshness_ttl_seconds", 15.0),
+            "reconciliation_priority": raw.get(
+                "default_reconciliation_priority",
+                ReconciliationPriority.POLL,
+            ),
+            "adaptive_decay": raw.get("adaptive_decay", False),
+            "adaptive_decay_idle_multiplier": raw.get(
+                "adaptive_decay_idle_multiplier",
+                1.0,
+            ),
+            "adaptive_decay_max_cadence_seconds": raw.get(
+                "adaptive_decay_max_cadence_seconds"
+            ),
+            "external_cat_pause": raw.get(
+                "external_cat_pause",
+                ExternalCatPauseBehavior.PAUSE_POLLING,
+            ),
+            **(
+                {
+                    "meter_coalescing_window_seconds": raw[
+                        "meter_coalescing_window_seconds"
+                    ]
+                }
+                if "meter_coalescing_window_seconds" in raw
+                else {}
+            ),
+        },
+        prefix="[state_acquisition]",
+        key_labels={
+            "cadence_seconds": "default_cadence_seconds",
+            "freshness_ttl_seconds": "default_freshness_ttl_seconds",
+        },
+    )
+
+    policies_raw = raw.get("field_policies", {})
+    if not isinstance(policies_raw, dict):
+        raise RigLoadError(
+            f"{filename}: [state_acquisition.field_policies] must be a table"
+        )
+    field_policies: dict[FieldPath, AcquisitionPolicy] = {}
+    for path_text, policy_raw in policies_raw.items():
+        if not isinstance(policy_raw, dict):
+            raise RigLoadError(
+                f"{filename}: [state_acquisition.field_policies.{path_text}] must be a table"
+            )
+        try:
+            path = FieldPath.parse(str(path_text))
+        except ValueError as exc:
+            raise RigLoadError(
+                f"{filename}: [state_acquisition.field_policies] invalid path {path_text!r}: {exc}"
+            ) from exc
+        field_policies[path] = _parse_acquisition_policy(
+            filename,
+            policy_raw,
+            prefix=f"[state_acquisition.field_policies.{path_text}]",
+            defaults=default_policy,
+        )
+
+    provider = raw.get("provider", "profile")
+    if not isinstance(provider, str):
+        raise RigLoadError(f"{filename}: [state_acquisition].provider must be a string")
+
+    try:
+        return RadioAcquisitionProfile(
+            provider=provider,
+            capabilities=tuple(capabilities),
+            default_policy=default_policy,
+            field_policies=field_policies,
+        )
+    except ValueError as exc:
+        raise RigLoadError(f"{filename}: [state_acquisition] invalid: {exc}") from exc
+
+
+_TX_POLICY_KEYS = frozenset({"refused_during_tx", "tx_state_map"})
+
+
+def _parse_tx_policy(filename: str, raw: Any) -> TxPolicy:
+    """Parse the measured per-radio ``[tx_policy]`` section (MOR-1912).
+
+    ``refused_during_tx`` entries are validated for shape only — a list of
+    unique, non-empty strings — never against a fixed vocabulary. The parser
+    owns only shape and uniqueness; it does not couple profile loading to a
+    runtime command-family membership list.
+    """
+    if raw is None:
+        return TxPolicy()
+    if not isinstance(raw, dict):
+        raise RigLoadError(f"{filename}: [tx_policy] must be a table")
+    _reject_unknown_keys(filename, "[tx_policy]", raw, _TX_POLICY_KEYS)
+
+    refused_raw = raw.get("refused_during_tx", [])
+    if not isinstance(refused_raw, list):
+        raise RigLoadError(f"{filename}: [tx_policy].refused_during_tx must be a list")
+    refused: list[str] = []
+    for entry in refused_raw:
+        if not isinstance(entry, str) or not entry:
+            raise RigLoadError(
+                f"{filename}: [tx_policy].refused_during_tx entries must be "
+                "non-empty strings"
+            )
+        refused.append(entry)
+    if len(refused) != len(set(refused)):
+        raise RigLoadError(
+            f"{filename}: [tx_policy].refused_during_tx must not contain duplicates"
+        )
+
+    state_map_raw = raw.get("tx_state_map", {})
+    if not isinstance(state_map_raw, dict):
+        raise RigLoadError(f"{filename}: [tx_policy].tx_state_map must be a table")
+    tx_state_map: dict[str, str] = {}
+    for key, value in state_map_raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise RigLoadError(
+                f"{filename}: [tx_policy].tx_state_map must map strings to strings"
+            )
+        tx_state_map[key] = value
+
+    return TxPolicy(refused_during_tx=frozenset(refused), tx_state_map=tx_state_map)
+
+
+_IDENTITY_KEYS = frozenset({"expected_ids"})
+
+
+def _is_control_char(ch: str) -> bool:
+    """Unicode Cc: C0 controls U+0000–U+001F and C1 controls U+007F–U+009F."""
+    code = ord(ch)
+    return code <= 0x1F or 0x7F <= code <= 0x9F
+
+
+_MEMORY_KEYS = frozenset(
+    {
+        "addressing",
+        "first_group",
+        "last_group",
+        "first_channel",
+        "last_channel",
+        "recall",
+        "dd_groups",
+        "offset_10mhz_groups",
+        "frequency_ranges",
+        "write_layout",
+    }
+)
+_MEMORY_ADDRESSING = frozenset({"group_channel", "band_channel", "channel"})
+_WRITE_LAYOUT_KEYS = frozenset(
+    {"clear", "record_length", "tone_max", "copies", "fields", "default_tone_centihz"}
+)
+_WRITE_FIELD_KEYS = frozenset(
+    {"field", "offset", "length", "encoding", "max_hz", "value"}
+)
+
+
+def _parse_write_layout(
+    filename: str, raw: Any, ctcss_tones_centihz: tuple[int, ...] | None
+) -> MemoryWriteLayout | None:
+    """Parse the optional ``[memory.write_layout]`` table (MOR-3644).
+
+    The declaration is pure data: the clear form, the record length, the
+    block copy count, the tone a ``tone``/``tsql`` field carries when the
+    caller leaves it unset, and the field table. Structural correctness
+    (known encodings, exact tiling, one frequency/mode/name field, the
+    block span a ``copies`` repeat needs) is decided by
+    :meth:`MemoryWriteLayout.validation_errors`, the same rules the
+    runtime admission gate applies to SDK-supplied profiles; the tone
+    default's membership in the profile's CTCSS domain is checked here.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RigLoadError(
+            f"{filename}: [memory].write_layout must be a table with "
+            "'clear', 'record_length' and 'fields', got "
+            f"{type(raw).__name__}"
+        )
+    _reject_unknown_keys(filename, "[memory].write_layout", raw, _WRITE_LAYOUT_KEYS)
+    clear = raw.get("clear")
+    if not isinstance(clear, str) or clear not in MEMORY_WRITE_CLEAR_FORMS:
+        raise RigLoadError(
+            f"{filename}: [memory].write_layout.clear must be one of "
+            f"{sorted(MEMORY_WRITE_CLEAR_FORMS)}, got {clear!r}"
+        )
+    record_length = raw.get("record_length")
+    if (
+        isinstance(record_length, bool)
+        or not isinstance(record_length, int)
+        or not 1 <= record_length <= 128
+    ):
+        raise RigLoadError(
+            f"{filename}: [memory].write_layout.record_length must be an "
+            f"integer 1..128, got {record_length!r}"
+        )
+    tone_max = raw.get("tone_max", 3)
+    if (
+        isinstance(tone_max, bool)
+        or not isinstance(tone_max, int)
+        or (not 0 <= tone_max <= 3)
+    ):
+        raise RigLoadError(
+            f"{filename}: [memory].write_layout.tone_max must be an integer "
+            f"0..3 (the tone-mode nibble this record can store), got {tone_max!r}"
+        )
+    copies = raw.get("copies", 1)
+    if isinstance(copies, bool) or not isinstance(copies, int) or not 1 <= copies <= 2:
+        raise RigLoadError(
+            f"{filename}: [memory].write_layout.copies must be an integer "
+            "1..2 (how many times the channel-data block appears on the "
+            "wire; the sourced Icom manuals print the block's position "
+            f"labels twice for the TX/split copy), got {copies!r}"
+        )
+    default_tone = raw.get("default_tone_centihz")
+    if default_tone is not None and (
+        isinstance(default_tone, bool) or not isinstance(default_tone, int)
+    ):
+        raise RigLoadError(
+            f"{filename}: [memory].write_layout.default_tone_centihz must be "
+            f"an integer in centi-Hz, got {default_tone!r}"
+        )
+    rows = raw.get("fields")
+    if not isinstance(rows, list) or not rows:
+        raise RigLoadError(
+            f"{filename}: [memory].write_layout.fields must be a non-empty "
+            "array of field tables"
+        )
+    fields: list[MemoryWriteField] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise RigLoadError(
+                f"{filename}: [memory].write_layout.fields entries must be tables"
+            )
+        _reject_unknown_keys(
+            filename, "[memory].write_layout.fields", row, _WRITE_FIELD_KEYS
+        )
+        name = row.get("field")
+        offset = row.get("offset")
+        length = row.get("length")
+        encoding = row.get("encoding")
+        max_hz = row.get("max_hz")
+        value = row.get("value")
+        if value is not None and not isinstance(value, str):
+            raise RigLoadError(
+                f"{filename}: [memory].write_layout field 'value' must be a "
+                f"hex string, got {value!r}"
+            )
+        if value is not None and encoding != "fixed":
+            raise RigLoadError(
+                f"{filename}: [memory].write_layout field {name!r}: 'value' "
+                "is only valid on a fixed field"
+            )
+        if not isinstance(name, str) or not name:
+            raise RigLoadError(
+                f"{filename}: [memory].write_layout field 'field' must be a "
+                f"non-empty string, got {name!r}"
+            )
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or isinstance(length, bool)
+            or not isinstance(length, int)
+        ):
+            raise RigLoadError(
+                f"{filename}: [memory].write_layout field {name!r}: 'offset' "
+                f"and 'length' must be integers"
+            )
+        if not isinstance(encoding, str):
+            raise RigLoadError(
+                f"{filename}: [memory].write_layout field {name!r}: "
+                f"'encoding' must be a string, got {encoding!r}"
+            )
+        if max_hz is not None and encoding != "frequency":
+            raise RigLoadError(
+                f"{filename}: [memory].write_layout field {name!r}: 'max_hz' "
+                "is only valid on a frequency field"
+            )
+        if max_hz is not None and (
+            isinstance(max_hz, bool) or not isinstance(max_hz, int)
+        ):
+            raise RigLoadError(
+                f"{filename}: [memory].write_layout field {name!r}: 'max_hz' "
+                "must be an integer"
+            )
+        fields.append(
+            MemoryWriteField(
+                field=name,
+                offset=offset,
+                length=length,
+                encoding=encoding,
+                max_hz=max_hz,
+                value=value,
+            )
+        )
+    layout = MemoryWriteLayout(
+        clear=clear,
+        record_length=record_length,
+        tone_max=tone_max,
+        copies=copies,
+        default_tone_centihz=default_tone,
+        fields=tuple(fields),
+    )
+    errors = layout.validation_errors()
+    if errors:
+        raise RigLoadError(f"{filename}: [memory].write_layout: {'; '.join(errors)}")
+    errors = layout.domain_errors(ctcss_tones_centihz)
+    if errors:
+        raise RigLoadError(f"{filename}: [memory].write_layout: {'; '.join(errors)}")
+    return layout
+
+
+def _parse_memory(
+    filename: str, raw: Any, ctcss_tones_centihz: tuple[int, ...] | None
+) -> MemoryProfile | None:
+    """Parse the optional ``[memory]`` section (MOR-3627)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RigLoadError(f"{filename}: [memory] must be a table")
+    _reject_unknown_keys(filename, "[memory]", raw, _MEMORY_KEYS)
+    addressing = raw.get("addressing")
+    if not isinstance(addressing, str) or addressing not in _MEMORY_ADDRESSING:
+        raise RigLoadError(
+            f"{filename}: [memory].addressing must be one of "
+            f"{sorted(_MEMORY_ADDRESSING)}, got {addressing!r}"
+        )
+    bounds: dict[str, int] = {}
+    for key in ("first_group", "last_group", "first_channel", "last_channel"):
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise RigLoadError(f"{filename}: [memory].{key} must be an integer")
+        if not 0 <= value <= 9999:
+            raise RigLoadError(f"{filename}: [memory].{key} must be 0..9999")
+        bounds[key] = value
+    if bounds["first_group"] > bounds["last_group"]:
+        raise RigLoadError(f"{filename}: [memory].first_group must be <= last_group")
+    if bounds["first_channel"] > bounds["last_channel"]:
+        raise RigLoadError(
+            f"{filename}: [memory].first_channel must be <= last_channel"
+        )
+    if addressing == "channel" and bounds["last_group"] != 0:
+        raise RigLoadError(f"{filename}: [memory] a channel list has only group 0")
+    if addressing == "band_channel" and bounds["last_group"] > 99:
+        raise RigLoadError(f"{filename}: [memory] band codes are one BCD byte (0-99)")
+    recall = raw.get("recall", False)
+    if not isinstance(recall, bool):
+        raise RigLoadError(f"{filename}: [memory].recall must be a boolean")
+    if recall and addressing == "band_channel":
+        raise RigLoadError(
+            f"{filename}: [memory].recall is only implemented for group_channel "
+            "and channel addressing"
+        )
+    groups: dict[str, tuple[int, ...]] = {}
+    for key in ("dd_groups", "offset_10mhz_groups"):
+        values = raw.get(key, [])
+        if not isinstance(values, list) or any(
+            isinstance(value, bool) or not isinstance(value, int) for value in values
+        ):
+            raise RigLoadError(f"{filename}: [memory].{key} must be a list of integers")
+        if any(
+            not bounds["first_group"] <= value <= bounds["last_group"]
+            for value in values
+        ):
+            raise RigLoadError(
+                f"{filename}: [memory].{key} must be within first_group..last_group"
+            )
+        if len(set(values)) != len(values):
+            raise RigLoadError(
+                f"{filename}: [memory].{key} must not contain duplicates"
+            )
+        groups[key] = tuple(values)
+    ranges = raw.get("frequency_ranges", [])
+    if not isinstance(ranges, list):
+        raise RigLoadError(f"{filename}: [memory].frequency_ranges must be a list")
+    frequency_ranges: list[tuple[int, int, int]] = []
+    for row in ranges:
+        section = "[memory].frequency_ranges"
+        if not isinstance(row, dict):
+            raise RigLoadError(f"{filename}: {section} entries must be tables")
+        _reject_unknown_keys(
+            filename, section, row, frozenset({"group", "min_hz", "max_hz"})
+        )
+        range_values: list[int] = []
+        for key in ("group", "min_hz", "max_hz"):
+            value = row.get(key)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise RigLoadError(f"{filename}: {section} {key} must be an integer")
+            range_values.append(value)
+        group, low, high = range_values
+        if not bounds["first_group"] <= group <= bounds["last_group"]:
+            raise RigLoadError(f"{filename}: {section} group outside memory bounds")
+        if not 0 < low <= high <= 9_999_999_999:
+            raise RigLoadError(
+                f"{filename}: {section} needs 0 < min_hz <= max_hz <= 9999999999"
+            )
+        if any(
+            g == group and low <= end and start <= high
+            for g, start, end in frequency_ranges
+        ):
+            raise RigLoadError(
+                f"{filename}: {section} ranges for a group must not overlap"
+            )
+        frequency_ranges.append((group, low, high))
+    write_layout = _parse_write_layout(
+        filename, raw.get("write_layout"), ctcss_tones_centihz
+    )
+    return MemoryProfile(  # type: ignore[arg-type]
+        addressing=addressing,
+        recall=recall,
+        write_layout=write_layout,
+        frequency_ranges=tuple(frequency_ranges),
+        **bounds,
+        **groups,
+    )
+
+
+_CW_TEXT_KEYS = frozenset({"supported", "max_length", "memory_channel", "memory_type"})
+_CW_TEXT_MEMORY_TYPES = frozenset({"text", "message"})
+
+
+def _is_writable(spec: CommandSpec | None, protocol_type: str) -> bool:
+    """A command this protocol's backend can write (#4317 review).
+
+    CI-V needs CI-V bytes; Yaesu and Kenwood CAT need a CAT write template.
+    A declared-absent command, or one in the other protocol's form, is not
+    writable: the backend could not send it.
+    """
+    if protocol_type == "civ":
+        return isinstance(spec, CivCommandSpec)
+    return isinstance(spec, CatCommandSpec) and spec.write is not None
+
+
+# KM P1 is one digit, keyer memory channel 1-5 (FTX-1 CAT 2508-C printed p.17).
+_YAESU_KEYER_MEMORY_CHANNELS = range(1, 6)
+# KM P2 stores up to 50 characters (FTX-1 CAT 2508-C printed p.17).
+_YAESU_KEYER_MEMORY_MAX_CHARS = 50
+
+
+def _parse_cw_text(
+    filename: str,
+    raw: Any,
+    *,
+    protocol_type: str,
+    commands: dict[str, CommandSpec],
+) -> CwTextSpec:
+    """Parse the optional top-level ``[cw_text]`` section (MOR-3678).
+
+    Typed CW text sending is separate from the ``cw`` capability tag (the
+    decoder, console and keyer controls). Whether it is supported depends
+    on what the protocol's backend needs (#4317 gate review):
+
+    * ``civ``: the backend sends the text with ``send_cw`` (0x17), so
+      ``supported`` defaults to whether that command is declared as CI-V
+      bytes, and ``supported = true`` without it is an error.
+    * ``yaesu_cat``: the backend writes the text into a keyer memory
+      (``write_keyer_memory``, KM, CAT 2508-C printed p.17) and plays it
+      (``send_cw``, KY, printed p.18). ``supported`` defaults to false;
+      ``supported = true`` needs ``memory_channel`` 1-5, ``max_length``
+      (at most 50, one KM write) and both commands as CAT write templates. ``memory_channel`` outside 1-5 is an error either way.
+    * ``kenwood_cat``: core has no backend that sends CW text, so it is
+      never supported and ``supported = true`` is an error.
+
+    ``max_length`` (default 512) is the longest text one request may carry:
+    longer requests are rejected, never truncated or split.
+    ``memory_type`` (``"text"`` / ``"message"``) picks the Yaesu memory kind.
+    """
+    has_send_cw = _is_writable(commands.get("send_cw"), protocol_type)
+    default_supported = protocol_type == "civ" and has_send_cw
+    if raw is None:
+        return CwTextSpec(supported=default_supported)
+    if not isinstance(raw, dict):
+        raise RigLoadError(f"{filename}: [cw_text] must be a table")
+    _reject_unknown_keys(filename, "[cw_text]", raw, _CW_TEXT_KEYS)
+    supported = raw.get("supported", default_supported)
+    if not isinstance(supported, bool):
+        raise RigLoadError(f"{filename}: [cw_text].supported must be a boolean")
+    if supported and protocol_type == "kenwood_cat":
+        raise RigLoadError(
+            f"{filename}: [cw_text].supported = true is not available for "
+            "kenwood_cat profiles: no backend sends CW text over Kenwood CAT"
+        )
+    if supported and not has_send_cw:
+        raise RigLoadError(
+            f"{filename}: [cw_text].supported = true needs a send_cw command "
+            f"{protocol_type} can write"
+        )
+    max_length = raw.get("max_length", CwTextSpec().max_length)
+    if (
+        isinstance(max_length, bool)
+        or not isinstance(max_length, int)
+        or max_length < 1
+    ):
+        raise RigLoadError(
+            f"{filename}: [cw_text].max_length must be a positive integer"
+        )
+    channel = raw.get("memory_channel")
+    if channel is not None and (
+        isinstance(channel, bool) or not isinstance(channel, int) or channel < 1
+    ):
+        raise RigLoadError(
+            f"{filename}: [cw_text].memory_channel must be a positive integer"
+        )
+    memory_type = raw.get("memory_type")
+    if memory_type is not None and (
+        not isinstance(memory_type, str) or memory_type not in _CW_TEXT_MEMORY_TYPES
+    ):
+        raise RigLoadError(
+            f'{filename}: [cw_text].memory_type must be "text" or "message"'
+        )
+    if protocol_type == "yaesu_cat":
+        # The text is one KM write, so the limit is the KM limit: required
+        # when sending is enabled, never above it (#4317 gate review).
+        if supported and "max_length" not in raw:
+            raise RigLoadError(
+                f"{filename}: [cw_text].max_length is required when "
+                "[cw_text].supported = true (one KM write holds at most "
+                f"{_YAESU_KEYER_MEMORY_MAX_CHARS} characters)"
+            )
+        if "max_length" in raw and max_length > _YAESU_KEYER_MEMORY_MAX_CHARS:
+            raise RigLoadError(
+                f"{filename}: [cw_text].max_length must be at most "
+                f"{_YAESU_KEYER_MEMORY_MAX_CHARS} (one KM write), got {max_length}"
+            )
+        if channel is not None and channel not in _YAESU_KEYER_MEMORY_CHANNELS:
+            raise RigLoadError(
+                f"{filename}: [cw_text].memory_channel must be a keyer memory "
+                f"channel 1-5, got {channel}"
+            )
+        if supported and channel is None:
+            raise RigLoadError(
+                f"{filename}: [cw_text].supported = true needs "
+                "[cw_text].memory_channel (keyer memory 1-5)"
+            )
+        if supported and not _is_writable(
+            commands.get("write_keyer_memory"), protocol_type
+        ):
+            raise RigLoadError(
+                f"{filename}: [cw_text].supported = true needs a writable "
+                "write_keyer_memory command"
+            )
+    return CwTextSpec(
+        supported=supported,
+        max_length=max_length,
+        memory_channel=channel,
+        memory_type=memory_type,
+    )
+
+
+_IQ_LAN_PROTOCOL = "xiegu_udp"
+_IQ_LAN_INT_KEYS = (
+    "radio_port",
+    "receive_port",
+    "sample_rate_hz",
+    "samples_per_datagram",
+    "center_offset_hz",
+    "usable_bandwidth_hz",
+    "tune_min_hz",
+    "tune_max_hz",
+)
+_IQ_LAN_KEYS = frozenset({"protocol", *_IQ_LAN_INT_KEYS})
+
+
+def _parse_iq_lan(filename: str, raw: Any) -> IqLanSpec | None:
+    """Parse optional radio-LAN IQ wire facts without importing ``sdr``."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RigLoadError(f"{filename}: [iq_lan] must be a table")
+    _reject_unknown_keys(filename, "[iq_lan]", raw, _IQ_LAN_KEYS)
+    missing = sorted(_IQ_LAN_KEYS - set(raw))
+    if missing:
+        raise RigLoadError(f"{filename}: [iq_lan] missing required key(s): {missing!r}")
+    protocol = raw["protocol"]
+    if protocol != _IQ_LAN_PROTOCOL:
+        raise RigLoadError(
+            f"{filename}: [iq_lan].protocol must be {_IQ_LAN_PROTOCOL!r}, "
+            f"got {protocol!r}"
+        )
+    values: dict[str, int] = {}
+    for key in _IQ_LAN_INT_KEYS:
+        value = raw[key]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise RigLoadError(f"{filename}: [iq_lan].{key} must be an integer")
+        values[key] = value
+    for key in ("radio_port", "receive_port"):
+        if not 1 <= values[key] <= 65_535:
+            raise RigLoadError(f"{filename}: [iq_lan].{key} must be in 1..65535")
+    for key in ("sample_rate_hz", "samples_per_datagram", "usable_bandwidth_hz"):
+        if values[key] <= 0:
+            raise RigLoadError(f"{filename}: [iq_lan].{key} must be positive")
+    if values["samples_per_datagram"] * 4 > 65_507:
+        raise RigLoadError(
+            f"{filename}: [iq_lan].samples_per_datagram * 4 must be <= 65507"
+        )
+    if values["usable_bandwidth_hz"] > values["sample_rate_hz"]:
+        raise RigLoadError(
+            f"{filename}: [iq_lan].usable_bandwidth_hz must not exceed sample_rate_hz"
+        )
+    if values["tune_min_hz"] < 0:
+        raise RigLoadError(f"{filename}: [iq_lan].tune_min_hz must be non-negative")
+    if values["tune_max_hz"] > 2**64 - 1:
+        raise RigLoadError(
+            f"{filename}: [iq_lan].tune_max_hz must fit an unsigned 64-bit integer"
+        )
+    if values["tune_min_hz"] >= values["tune_max_hz"]:
+        raise RigLoadError(
+            f"{filename}: [iq_lan].tune_min_hz must be less than tune_max_hz"
+        )
+    return IqLanSpec(protocol=protocol, **values)
+
+
+def _parse_identity(filename: str, raw: Any) -> tuple[str, ...]:
+    """Parse the optional top-level ``[identity]`` section (MOR-3064).
+
+    ``expected_ids`` entries are opaque protocol-native response tokens
+    (CI-V uppercase payload hex, Yaesu four-digit ID payload) — validated
+    for shape only: non-empty strings without whitespace or control
+    characters, no duplicates, no coercion from ints/bools, spelling and
+    case preserved exactly. ``None`` section or an empty array both load
+    as ``()`` (explicitly unverified identity configuration).
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise RigLoadError(f"{filename}: [identity] must be a table")
+    _reject_unknown_keys(filename, "[identity]", raw, _IDENTITY_KEYS)
+    ids_raw = raw.get("expected_ids", [])
+    if not isinstance(ids_raw, list):
+        raise RigLoadError(
+            f"{filename}: [identity].expected_ids must be an array of strings"
+        )
+    ids: list[str] = []
+    for index, entry in enumerate(ids_raw):
+        label = f"[identity].expected_ids[{index}]"
+        if isinstance(entry, bool) or not isinstance(entry, str):
+            raise RigLoadError(f"{filename}: {label} must be a string")
+        if not entry:
+            raise RigLoadError(f"{filename}: {label} must not be empty")
+        if any(ch.isspace() or _is_control_char(ch) for ch in entry):
+            raise RigLoadError(
+                f"{filename}: {label} must not contain whitespace or control characters"
+            )
+        ids.append(entry)
+    if len(ids) != len(set(ids)):
+        raise RigLoadError(
+            f"{filename}: [identity].expected_ids must not contain duplicates"
+        )
+    return tuple(ids)
+
+
+def _validate_band_max_power(
+    filename: str, freq_ranges_data: list[Any], max_watts: int | None
+) -> None:
+    """Validate the optional per-band ``max_power_w`` rows (MOR-3634).
+
+    A row is a positive integer no larger than the flat ``[power].max_watts``
+    (the scale the normalized power level is a fraction of), so a band can
+    only narrow the slider, never widen it. A row without the flat maximum
+    has nothing to be a fraction of and is a load error. The row is data for
+    the power slider's scale only; no value that is written depends on it.
+    """
+    for index, rng in enumerate(freq_ranges_data):
+        if not isinstance(rng, dict):
+            continue
+        for band_index, band in enumerate(rng.get("bands", ())):
+            if not isinstance(band, dict) or "max_power_w" not in band:
+                continue
+            where = (
+                f"{filename}: freq_ranges.ranges[{index}].bands[{band_index}]"
+                f".max_power_w"
+            )
+            band_name = f" (band {band.get('name', band_index)!r})"
+            watts = band["max_power_w"]
+            if not isinstance(watts, int) or isinstance(watts, bool) or watts <= 0:
+                raise RigLoadError(f"{where} must be a positive integer{band_name}")
+            if max_watts is None:
+                raise RigLoadError(f"{where} requires [power].max_watts{band_name}")
+            if watts > max_watts:
+                raise RigLoadError(
+                    f"{where} must not exceed [power].max_watts ({max_watts})"
+                    f"{band_name}"
+                )
+
+
+def _parse_optional_first_code(
+    filename: str, mode_key: str, raw_rule: dict[str, Any], field: str
+) -> int | None:
+    """Parse one optional per-rule wire-code base (MOR-4433).
+
+    ``None`` (absent) keeps the profile-level ``[filters] first_code``;
+    a present value must be a non-negative integer (bools excluded —
+    ``isinstance(True, int)`` would otherwise admit them).
+    """
+    raw = raw_rule.get(field)
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
+        raise RigLoadError(
+            f"{filename}: [filters.width.{mode_key}].{field} must be "
+            f"a non-negative integer, got {raw!r}"
+        )
+    return raw
+
+
+def _validate_filter_table_first_codes(
+    filename: str,
+    filter_width_encoding: str,
+    filter_width_radio_default_code: int | None,
+    filter_config: dict[str, FilterWidthRule] | None,
+) -> None:
+    """Validate the optional per-table wire-code bases (MOR-4433).
+
+    A rule may carry its own base for the wide ``table`` (``first_code``)
+    and for the narrow ``narrow_table`` (``narrow_first_code``) — the
+    FT-991A SH space counts the wide table from 09/10 while the narrow
+    table counts from 01. Absent fields fall back to the profile-level
+    ``[filters] first_code`` (every pre-MOR-4433 profile), so only rules
+    that set at least one field are checked here.
+    """
+    for mode_key in sorted((filter_config or {}).keys()):
+        rule = (filter_config or {})[mode_key]
+        if rule.first_code is None and rule.narrow_first_code is None:
+            continue
+        where = f"{filename}: [filters.width.{mode_key}]"
+        if filter_width_encoding != "table_index":
+            raise RigLoadError(
+                f"{where} per-table first codes need [filters].encoding "
+                f'"table_index", got {filter_width_encoding!r}'
+            )
+        if rule.fixed:
+            raise RigLoadError(
+                f"{where} per-table first codes are rejected on a fixed-width mode"
+            )
+        if rule.first_code is not None and not rule.table:
+            raise RigLoadError(
+                f"{where}.first_code needs a [filters.width.{mode_key}].table"
+            )
+        if rule.narrow_first_code is not None and not rule.narrow_table:
+            raise RigLoadError(
+                f"{where}.narrow_first_code needs a "
+                f"[filters.width.{mode_key}].narrow_table"
+            )
+        if filter_width_radio_default_code is not None:
+            for field, base in (
+                ("first_code", rule.first_code),
+                ("narrow_first_code", rule.narrow_first_code),
+            ):
+                if base is not None and not filter_width_radio_default_code < base:
+                    raise RigLoadError(
+                        f"{where}.{field} ({base}) must sit above "
+                        "[filters].radio_default_code "
+                        f"({filter_width_radio_default_code}): a default "
+                        "among the table codes would be a table entry, "
+                        "not the radio's default"
+                    )
+
+
+def _validate_filter_narrow_variant(
+    filename: str,
+    filter_width_encoding: str,
+    filter_config: dict[str, FilterWidthRule] | None,
+    commands: dict[str, Any],
+    receiver_count: int,
+) -> None:
+    """Validate the optional narrow-state filter-width variant (MOR-4428).
+
+    A mode rule may carry ``narrow_table``: while NARROW is on, an SH code maps through the
+    narrow table instead of ``table``. Absent narrow data keeps exactly
+    today's behavior — the loader leaves the tuples empty and no narrow
+    read is ever issued for the mode.
+    """
+
+    def _has_readable(name: str) -> bool:
+        spec = commands.get(name)
+        if spec is None or isinstance(spec, AbsentCommandSpec):
+            return False
+        read = getattr(spec, "read", None)
+        return isinstance(read, str) and bool(read)
+
+    for mode_key in sorted((filter_config or {}).keys()):
+        rule = (filter_config or {})[mode_key]
+        where = f"{filename}: [filters.width.{mode_key}]"
+        if not rule.narrow_table:
+            continue
+        if filter_width_encoding != "table_index":
+            raise RigLoadError(
+                f"{where}.narrow_table needs [filters].encoding "
+                '"table_index", '
+                f"got {filter_width_encoding!r}"
+            )
+        if rule.fixed:
+            raise RigLoadError(
+                f"{where}.narrow_table is rejected on a fixed-width mode"
+            )
+        if not rule.table:
+            raise RigLoadError(
+                f"{where}.narrow_table needs a [filters.width.{mode_key}].table"
+            )
+        if any(
+            first >= second
+            for first, second in zip(rule.narrow_table, rule.narrow_table[1:])
+        ):
+            raise RigLoadError(f"{where}.narrow_table must be strictly increasing")
+        if not _has_readable("get_narrow"):
+            raise RigLoadError(
+                f"{where}.narrow_table needs a [commands].get_narrow read"
+            )
+        if receiver_count > 1 and not _has_readable("get_narrow_sub"):
+            raise RigLoadError(
+                f"{where}.narrow_table needs a [commands].get_narrow_sub "
+                "read on a multi-receiver profile"
+            )
+
+
+def load_rig(path: Path) -> RigConfig:
+    """Load and validate a rig TOML file.
+
+    Args:
+        path: Path to the ``.toml`` file.
+
+    Returns:
+        Parsed and validated ``RigConfig``.
+
+    Raises:
+        RigLoadError: If the file is missing, unparseable, or invalid.
+    """
+    filename = path.name
+
+    if not path.exists():
+        raise RigLoadError(f"{filename}: file not found: {path}")
+
+    try:
+        raw = path.read_bytes()
+        source = raw.decode()
+        data = tomllib.loads(source)
+    except Exception as exc:
+        raise RigLoadError(f"{filename}: failed to parse TOML: {exc}") from exc
+
+    # Validate required sections
+    for section in _REQUIRED_SECTIONS:
+        if section not in data:
+            raise RigLoadError(f"{filename}: missing required section [{section}]")
+
+    # Validate [radio]
+    radio = data["radio"]
+    if not isinstance(radio, dict):
+        raise RigLoadError(f"{filename}: [radio] must be a table")
+    for field_name in _REQUIRED_RADIO_FIELDS:
+        if field_name not in radio:
+            raise RigLoadError(
+                f"{filename}: missing required field [radio].{field_name}"
+            )
+    # ``id`` and ``model`` name the profile everywhere downstream (CLI
+    # ``models``/``discover``, ``--model`` matching): reject other types here,
+    # once, instead of crashing in each consumer (MOR-3859).
+    for field_name in ("id", "model"):
+        value = radio[field_name]
+        if not isinstance(value, str) or not value.strip():
+            raise RigLoadError(
+                f"{filename}: [radio].{field_name} must be a non-empty string"
+            )
+
+    # civ_addr is optional (default 0 for non-civ radios); validate range if present
+    if "civ_addr" in radio:
+        civ_addr = radio["civ_addr"]
+        if not (0x00 <= civ_addr <= 0xFF):
+            raise RigLoadError(
+                f"{filename}: [radio].civ_addr = {civ_addr} out of range 0x00–0xFF"
+            )
+    else:
+        civ_addr = 0
+
+    # [radio].xiegu_model_id (MOR-4352): optional integer whose big-endian
+    # bytes are the radio's 0x1D 0x19 reply (0x7250 -> b"\x72\x50").
+    xiegu_model_id_raw = radio.get("xiegu_model_id")
+    if xiegu_model_id_raw is None:
+        xiegu_model_id = None
+    elif (
+        isinstance(xiegu_model_id_raw, bool)
+        or not isinstance(xiegu_model_id_raw, int)
+        or not 0x0000 <= xiegu_model_id_raw <= 0xFFFF
+    ):
+        raise RigLoadError(
+            f"{filename}: [radio].xiegu_model_id = {xiegu_model_id_raw!r} "
+            "must be an integer 0x0000-0xFFFF"
+        )
+    else:
+        xiegu_model_id = xiegu_model_id_raw
+
+    # Validate [capabilities]
+    features = data["capabilities"].get("features", [])
+    if not features:
+        raise RigLoadError(f"{filename}: [capabilities].features must not be empty")
+    for cap in features:
+        if cap not in KNOWN_CAPABILITIES:
+            raise RigLoadError(
+                f"{filename}: unknown capability {cap!r}. "
+                f"Known: {sorted(KNOWN_CAPABILITIES)}"
+            )
+    if CAP_FILTER_WIDTH_RADIO_DEFAULT in features:
+        raise RigLoadError(
+            f"{filename}: capability {CAP_FILTER_WIDTH_RADIO_DEFAULT!r} is derived "
+            "from [filters].radio_default_code and must not be listed in "
+            "[capabilities].features"
+        )
+    rf_sql_control_model = data["capabilities"].get("rf_sql_control_model", "separate")
+    if rf_sql_control_model not in VALID_RF_SQL_CONTROL_MODELS:
+        raise RigLoadError(
+            f"{filename}: [capabilities].rf_sql_control_model must be one of "
+            f"{sorted(VALID_RF_SQL_CONTROL_MODELS)}, got {rf_sql_control_model!r}"
+        )
+    ctcss_tones_centihz = _resolve_ctcss_table(path, data, features)
+
+    # Validate [validation].write_only_controls — each entry must be a declared
+    # capability. These route through the validate set-and-observe engine path
+    # (MOR-208) instead of read-modify-verify-restore.
+    feature_set = set(features)
+    write_only_raw = data.get("validation", {}).get("write_only_controls", [])
+    for c in write_only_raw:
+        if c not in feature_set:
+            raise RigLoadError(
+                f"{filename}: [validation].write_only_controls entry {c!r} "
+                f"is not a declared capability"
+            )
+    write_only_controls = tuple(write_only_raw)
+
+    # Validate [validation.fixed_value] — a check_id-grained sibling to
+    # write_only_controls above (MOR-2105 part 2), for a fact with no other
+    # home in RadioProfile: some controls genuinely have only one legal
+    # value on this radio (e.g. IC-7300's single scope), so the RMVR harness
+    # must SKIP the flip instead of reporting a false FAIL for a value
+    # nothing on the radio can ever report back. Keyed by check_id, finer
+    # than write_only_controls' per-capability grain -- a capability like
+    # "scope" mixes fixed-value checks with genuinely multi-valued ones
+    # (e.g. scope_span.set). Each source is required non-empty, in the
+    # spirit of the `{ absent = "<source>" }` convention in [commands].
+    # check_id existence cannot be cross-checked here against the live
+    # registry (`validation/registry/_assembly.py: REGISTRY_BY_ID`) --
+    # `rigplane.profiles` may not import `rigplane.validation`, per
+    # `.importlinter`'s validation-leaf contract -- so that cross-check is
+    # a test (`tests/test_rig_loader.py:
+    # test_every_shipped_profiles_fixed_value_check_ids_are_real_registry_
+    # check_ids`), not a parameter here (F4, MOR-2105 part 2 owner ruling:
+    # an unused ``known_check_ids`` parameter with no production caller was
+    # an orphan).
+    fixed_value_raw = data.get("validation", {}).get("fixed_value", {})
+    for check_id, source in fixed_value_raw.items():
+        if not isinstance(source, str) or not source.strip():
+            raise RigLoadError(
+                f"{filename}: [validation.fixed_value].{check_id!r} must be "
+                f"a non-empty string naming the source, got {source!r}"
+            )
+    fixed_value_checks = dict(fixed_value_raw)
+
+    # Validate [vfo]
+    vfo = data["vfo"]
+    split = _parse_split(filename, vfo.get("split"))
+    scheme = vfo.get("scheme", "")
+    if scheme not in VALID_VFO_SCHEMES:
+        raise RigLoadError(
+            f"{filename}: [vfo].scheme must be one of {VALID_VFO_SCHEMES}, "
+            f"got {scheme!r}"
+        )
+    tx_func = _parse_tx_func(filename, vfo.get("tx_func"), scheme)
+    vfo_readback = vfo.get("readback", "none")
+    if vfo_readback not in VALID_VFO_READBACK:
+        raise RigLoadError(
+            f"{filename}: [vfo].readback must be one of "
+            f"{sorted(VALID_VFO_READBACK)}, got {vfo_readback!r}"
+        )
+    tx_receiver_rule = vfo.get("tx_receiver_rule", "none")
+    if tx_receiver_rule not in VALID_TX_RECEIVER_RULES:
+        raise RigLoadError(
+            f"{filename}: [vfo].tx_receiver_rule must be one of "
+            f"{sorted(VALID_TX_RECEIVER_RULES)}, got {tx_receiver_rule!r}"
+        )
+    split_tx_target = vfo.get("split_tx_target", "none")
+    if (
+        not isinstance(split_tx_target, str)
+        or split_tx_target not in VALID_SPLIT_TX_TARGETS
+    ):
+        raise RigLoadError(
+            f"{filename}: [vfo].split_tx_target must be one of "
+            f"{sorted(VALID_SPLIT_TX_TARGETS)}, got {split_tx_target!r}"
+        )
+    if split_tx_target != "none" and scheme != "main_sub":
+        raise RigLoadError(
+            f"{filename}: [vfo].split_tx_target requires main_sub scheme"
+        )
+    expected_receiver_count = 1 if scheme in {"single", "ab"} else 2
+    receiver_count = radio["receiver_count"]
+    if (
+        not isinstance(receiver_count, int)
+        or isinstance(receiver_count, bool)
+        or receiver_count != expected_receiver_count
+    ):
+        raise RigLoadError(
+            f"{filename}: [radio].receiver_count = {receiver_count!r} is incompatible "
+            f"with [vfo].scheme = {scheme!r}; expected {expected_receiver_count}"
+        )
+
+    # Validate [modes]
+    modes = data["modes"].get("list", [])
+    if not isinstance(modes, list) or not all(isinstance(mode, str) for mode in modes):
+        # A scalar would pass ``in`` checks by substring and publish its
+        # characters as modes (MOR-3679 pro-gate finding).
+        raise RigLoadError(f"{filename}: [modes].list must be a list of strings")
+    if not modes:
+        raise RigLoadError(f"{filename}: [modes].list must not be empty")
+    # MOR-2518: optional [modes].codes — one single-character code per mode,
+    # parallel to list (Yaesu CAT MD P2 codes).
+    raw_mode_codes = data["modes"].get("codes")
+    mode_codes: tuple[str, ...] | None = None
+    if raw_mode_codes is not None:
+        if not isinstance(raw_mode_codes, list) or not all(
+            isinstance(code, str) for code in raw_mode_codes
+        ):
+            raise RigLoadError(f"{filename}: [modes].codes must be a list of strings")
+        if len(raw_mode_codes) != len(modes):
+            raise RigLoadError(
+                f"{filename}: [modes].codes has {len(raw_mode_codes)} entries "
+                f"for {len(modes)} modes"
+            )
+        if any(len(code) != 1 for code in raw_mode_codes):
+            raise RigLoadError(
+                f"{filename}: [modes].codes entries must be single characters"
+            )
+        if len(set(raw_mode_codes)) != len(raw_mode_codes):
+            raise RigLoadError(f"{filename}: [modes].codes entries must be unique")
+        mode_codes = tuple(raw_mode_codes)
+    mode_families = _parse_mode_families(filename, data["modes"].get("families"), modes)
+
+    # Validate [filters]
+    filter_section = data["filters"]
+    if "list" not in filter_section:
+        raise RigLoadError(f"{filename}: missing required [filters].list")
+    filters = filter_section.get("list", [])
+    filter_width_min = int(filter_section.get("width_min_hz", 50))
+    filter_width_max = int(filter_section.get("width_max_hz", 9999))
+    filter_width_encoding = str(filter_section.get("encoding", "segmented_bcd_index"))
+    filter_width_first_code = int(filter_section.get("first_code", 0))
+    # MOR-2535: optional ``radio_default_code`` — the writeable code that
+    # returns the width to the radio's own mode-dependent default (FTX-1
+    # Table 5 code 00). It must sit BELOW ``first_code``: codes from
+    # ``first_code`` up carry real Hz values, so a "default" among them
+    # would be a table entry, not the radio's default.
+    radio_default_code_raw = filter_section.get("radio_default_code")
+    filter_width_radio_default_code: int | None = None
+    if radio_default_code_raw is not None:
+        if isinstance(radio_default_code_raw, bool) or not isinstance(
+            radio_default_code_raw, int
+        ):
+            raise RigLoadError(
+                f"{filename}: [filters].radio_default_code must be an integer"
+            )
+        if not 0 <= radio_default_code_raw < filter_width_first_code:
+            raise RigLoadError(
+                f"{filename}: [filters].radio_default_code "
+                f"{radio_default_code_raw} must be >= 0 and below first_code "
+                f"{filter_width_first_code}"
+            )
+        filter_width_radio_default_code = radio_default_code_raw
+    filter_config_raw = filter_section.get("width", {})
+    filter_config: dict[str, FilterWidthRule] | None = None
+    if isinstance(filter_config_raw, dict) and filter_config_raw:
+        filter_config = {}
+        for mode_key, raw_rule in filter_config_raw.items():
+            if not isinstance(raw_rule, dict):
+                raise RigLoadError(
+                    f"{filename}: [filters.width].{mode_key} must be a table"
+                )
+            raw_segments = raw_rule.get("segments", [])
+            segments = tuple(
+                FilterWidthSegment(
+                    hz_min=int(segment["hz_min"]),
+                    hz_max=int(segment["hz_max"]),
+                    step_hz=int(segment["step_hz"]),
+                    index_min=int(segment["index_min"]),
+                )
+                for segment in raw_segments
+            )
+            defaults_raw = raw_rule.get("defaults", [])
+            table_raw = raw_rule.get("table", [])
+            narrow_table_raw = raw_rule.get("narrow_table", [])
+            filter_config[str(mode_key).upper()] = FilterWidthRule(
+                defaults=tuple(int(value) for value in defaults_raw),
+                narrow_table=tuple(int(v) for v in narrow_table_raw),
+                first_code=_parse_optional_first_code(
+                    filename, mode_key, raw_rule, "first_code"
+                ),
+                narrow_first_code=_parse_optional_first_code(
+                    filename, mode_key, raw_rule, "narrow_first_code"
+                ),
+                fixed=bool(raw_rule.get("fixed", False)),
+                step_hz=(int(raw_rule["step_hz"]) if "step_hz" in raw_rule else None),
+                pbt_step_hz=(
+                    int(raw_rule["pbt_step_hz"]) if "pbt_step_hz" in raw_rule else None
+                ),
+                min_hz=(int(raw_rule["min_hz"]) if "min_hz" in raw_rule else None),
+                max_hz=(int(raw_rule["max_hz"]) if "max_hz" in raw_rule else None),
+                segments=segments,
+                table=tuple(int(v) for v in table_raw),
+            )
+
+    # Parse [protocol] (optional)
+    proto_section = data.get("protocol", {})
+    protocol_type = proto_section.get("type", "civ")
+    if protocol_type not in VALID_PROTOCOL_TYPES:
+        raise RigLoadError(
+            f"{filename}: [protocol].type must be one of {VALID_PROTOCOL_TYPES}, "
+            f"got {protocol_type!r}"
+        )
+    protocol_address = proto_section.get("address")
+    protocol_baud = proto_section.get("baud")
+
+    # Parse commands (optional for non-civ protocols)
+    commands: dict[str, CommandSpec] = {}
+    if "commands" in data:
+        commands_raw = dict(data["commands"])
+        overrides = commands_raw.pop("overrides", {})
+
+        # Parse main commands
+        for key, value in commands_raw.items():
+            commands[key] = _parse_command_value(filename, key, value)
+
+        # Apply overrides
+        for key, value in overrides.items():
+            commands[key] = _parse_command_value(filename, key, value)
+    # The FT answer/write map and its commands come as a pair, either way:
+    # a command without the map has no declared meaning, and a map with no
+    # command has no caller.
+    has_tx_func_commands = "get_tx_func" in commands or "set_tx_func" in commands
+    if has_tx_func_commands and tx_func is None:
+        raise RigLoadError(
+            f"{filename}: get/set_tx_func is declared without [vfo.tx_func]"
+        )
+    if tx_func is not None and not has_tx_func_commands:
+        raise RigLoadError(
+            f"{filename}: [vfo.tx_func] is declared without get/set_tx_func"
+        )
+    tone_squelch_types = _resolve_tone_squelch_types(path, data, commands)
+
+    # Parse freq_ranges
+    freq_ranges_data = data.get("freq_ranges", {}).get("ranges", [])
+
+    # MOR-2111: the optional per-range ``repeater`` flag marks a VHF/UHF
+    # repeater band. It is data only — no band name or frequency lives in
+    # code. Omitted defaults to false; any non-boolean value is a load error.
+    # MOR-3632: the optional per-band ``rx_only`` flag marks a receive-only
+    # band row (tunable, never TX-permitted). Same rule as ``repeater``:
+    # omitted defaults to false; any non-boolean value is a load error
+    # naming the band.
+    for index, rng in enumerate(freq_ranges_data):
+        if not isinstance(rng, dict):
+            continue
+        if "repeater" in rng and not isinstance(rng["repeater"], bool):
+            raise RigLoadError(
+                f"{filename}: freq_ranges.ranges[{index}].repeater must be a boolean"
+            )
+        for band_index, band in enumerate(rng.get("bands", ())):
+            if (
+                isinstance(band, dict)
+                and "rx_only" in band
+                and not isinstance(band["rx_only"], bool)
+            ):
+                raise RigLoadError(
+                    f"{filename}: freq_ranges.ranges[{index}].bands[{band_index}]"
+                    f".rx_only must be a boolean"
+                    f" (band {band.get('name', band_index)!r})"
+                )
+
+    # MOR-3631: the optional per-band ``default_mode`` is the mode the
+    # SetBand BSR-miss fallback tunes alongside default_hz. It must name
+    # a mode from [modes].list exactly as written there.
+    for range_index, rng in enumerate(freq_ranges_data):
+        if not isinstance(rng, dict):
+            continue
+        for band_index, band in enumerate(rng.get("bands", [])):
+            if not isinstance(band, dict) or "default_mode" not in band:
+                continue
+            mode_value = band["default_mode"]
+            if not isinstance(mode_value, str):
+                raise RigLoadError(
+                    f"{filename}: freq_ranges.ranges[{range_index}]."
+                    f"bands[{band_index}].default_mode must be a string"
+                )
+            if mode_value not in modes:
+                raise RigLoadError(
+                    f"{filename}: freq_ranges.ranges[{range_index}]."
+                    f"bands[{band_index}].default_mode {mode_value!r} "
+                    "must name a mode from [modes].list"
+                )
+
+    # Parse VFO bytes — explicit split (issue #710)
+    vfo_main = tuple(vfo["main_select"]) if "main_select" in vfo else None
+    vfo_sub = tuple(vfo["sub_select"]) if "sub_select" in vfo else None
+    vfo_swap_ab = tuple(vfo["swap_ab"]) if "swap_ab" in vfo else None
+    vfo_equal_ab = tuple(vfo["equal_ab"]) if "equal_ab" in vfo else None
+    vfo_swap_main_sub = tuple(vfo["swap_main_sub"]) if "swap_main_sub" in vfo else None
+    vfo_equal_main_sub = (
+        tuple(vfo["equal_main_sub"]) if "equal_main_sub" in vfo else None
+    )
+
+    # Legacy keys — map to new fields based on scheme; warn once per file.
+    has_legacy = "swap" in vfo or "equal" in vfo
+    if has_legacy:
+        legacy_swap = tuple(vfo["swap"]) if "swap" in vfo else None
+        legacy_equal = tuple(vfo["equal"]) if "equal" in vfo else None
+        if scheme == "main_sub":
+            if legacy_swap is not None and vfo_swap_main_sub is None:
+                vfo_swap_main_sub = legacy_swap
+            if legacy_equal is not None and vfo_equal_main_sub is None:
+                vfo_equal_main_sub = legacy_equal
+        else:
+            if legacy_swap is not None and vfo_swap_ab is None:
+                vfo_swap_ab = legacy_swap
+            if legacy_equal is not None and vfo_equal_ab is None:
+                vfo_equal_ab = legacy_equal
+        msg = (
+            f"{filename}: [vfo].swap/[vfo].equal are deprecated; "
+            "use swap_ab/equal_ab or swap_main_sub/equal_main_sub "
+            "(issue #710)."
+        )
+        warnings.warn(msg, DeprecationWarning, stacklevel=2)
+        logger.warning(msg)
+
+    # Parse cmd29 routes
+    cmd29_raw = data.get("cmd29", {}).get("routes", [])
+    cmd29_routes: list[tuple[int, int | None]] = []
+    for entry in cmd29_raw:
+        if len(entry) == 1:
+            cmd29_routes.append((entry[0], None))
+        elif len(entry) == 2:
+            cmd29_routes.append((entry[0], entry[1]))
+
+    # Parse spectrum
+    spectrum = data.get("spectrum")
+
+    # Parse [scope] (optional)
+    scope_section = data.get("scope", {})
+    scope_ref_min_db: float | None = None
+    scope_ref_max_db: float | None = None
+    scope_ref_step_db: float | None = None
+    scope_span_presets_hz: tuple[int, ...] = ()
+    scope_span_preset_semantics: SpanPresetSemantics = "half_width"
+    scope_fixed_edge_ranges: tuple[ScopeFixedEdgeRange, ...] = ()
+    scope_fixed_edge_step_hz: int | None = None
+    if scope_section:
+        entries = scope_section.get("fixed_edge_ranges", [])
+        step = scope_section.get("fixed_edge_step_hz")
+        if "fixed_edge_ranges" in scope_section or step is not None:
+            if (
+                not isinstance(entries, list)
+                or not entries
+                or type(step) is not int
+                or step <= 0
+            ):
+                raise RigLoadError(
+                    f"{filename}: fixed_edge_ranges require a positive fixed_edge_step_hz"
+                )
+            fixed_ranges: list[ScopeFixedEdgeRange] = []
+            for entry in entries:
+                if (
+                    not isinstance(entry, dict)
+                    or set(entry) != {"range_index", "start_hz", "end_hz"}
+                    or any(type(v) is not int for v in entry.values())
+                ):
+                    raise RigLoadError(f"{filename}: invalid fixed_edge_ranges")
+                item = ScopeFixedEdgeRange(**entry)
+                if not (
+                    1 <= item.range_index <= 99 and 0 <= item.start_hz < item.end_hz
+                ):
+                    raise RigLoadError(f"{filename}: invalid fixed_edge_ranges limits")
+                if any(
+                    other.range_index == item.range_index
+                    or max(other.start_hz, item.start_hz)
+                    < min(other.end_hz, item.end_hz)
+                    for other in fixed_ranges
+                ):
+                    raise RigLoadError(
+                        f"{filename}: overlapping or duplicate fixed_edge_ranges"
+                    )
+                fixed_ranges.append(item)
+            scope_fixed_edge_ranges = tuple(fixed_ranges)
+            scope_fixed_edge_step_hz = step
+        scope_ref_min_db = (
+            float(scope_section["ref_min_db"])
+            if "ref_min_db" in scope_section
+            else None
+        )
+        scope_ref_max_db = (
+            float(scope_section["ref_max_db"])
+            if "ref_max_db" in scope_section
+            else None
+        )
+        scope_ref_step_db = (
+            float(scope_section["ref_step_db"])
+            if "ref_step_db" in scope_section
+            else None
+        )
+        if "span_presets_hz" in scope_section:
+            raw_span_presets = scope_section["span_presets_hz"]
+            if not raw_span_presets:
+                raise RigLoadError(
+                    f"{filename}: [scope].span_presets_hz must be a non-empty array"
+                )
+            scope_span_presets_hz = tuple(int(v) for v in raw_span_presets)
+            if any(
+                scope_span_presets_hz[i] >= scope_span_presets_hz[i + 1]
+                for i in range(len(scope_span_presets_hz) - 1)
+            ):
+                raise RigLoadError(
+                    f"{filename}: [scope].span_presets_hz must be strictly ascending"
+                )
+            # MOR-4385: presets alone are ambiguous — a number may be a
+            # +/- half-width (Icom CI-V 0x27 0x15) or a full display
+            # width — so the profile must state which one it means.
+            semantics = scope_section.get("span_preset_semantics")
+            if semantics is None:
+                raise RigLoadError(
+                    f"{filename}: [scope].span_presets_hz requires"
+                    " span_preset_semantics (half_width or full_width)"
+                )
+            if semantics not in ("half_width", "full_width"):
+                raise RigLoadError(
+                    f"{filename}: [scope].span_preset_semantics must be"
+                    " half_width or full_width"
+                )
+            scope_span_preset_semantics = semantics
+
+    # Parse attenuator/preamp/agc (optional sections)
+    att_section = data.get("attenuator", {})
+    att_values = tuple(att_section["values"]) if "values" in att_section else None
+    att_labels = dict(att_section["labels"]) if "labels" in att_section else None
+
+    pre_section = data.get("preamp", {})
+    pre_values = tuple(pre_section["values"]) if "values" in pre_section else None
+    pre_labels = dict(pre_section["labels"]) if "labels" in pre_section else None
+
+    agc_section = data.get("agc", {})
+    if agc_section:
+        _reject_unknown_keys(
+            filename,
+            "[agc]",
+            agc_section,
+            frozenset(
+                {
+                    "modes",
+                    "labels",
+                    "readback_modes",
+                    "auto_mode",
+                    "auto_speed_labels",
+                }
+            ),
+        )
+    agc_modes, agc_labels = _parse_enumerated_domain(
+        filename,
+        "[agc]",
+        {key: agc_section[key] for key in ("modes", "labels") if key in agc_section},
+        values_key="modes",
+    )
+    raw_agc_readback_modes = agc_section.get("readback_modes")
+    agc_readback_modes = (
+        tuple(raw_agc_readback_modes) if raw_agc_readback_modes is not None else None
+    )
+    if agc_readback_modes is not None and (
+        not agc_readback_modes
+        or any(
+            isinstance(mode, bool) or not isinstance(mode, int)
+            for mode in agc_readback_modes
+        )
+    ):
+        raise RigLoadError(
+            f"{filename}: [agc].readback_modes must be a non-empty list of integers"
+        )
+    if agc_readback_modes is not None and agc_modes is None:
+        raise RigLoadError(
+            f"{filename}: [agc].readback_modes declared without [agc].modes"
+        )
+    if (
+        agc_readback_modes is not None
+        and agc_modes is not None
+        and not set(agc_modes).issubset(agc_readback_modes)
+    ):
+        raise RigLoadError(
+            f"{filename}: [agc].readback_modes must include every settable mode "
+            "from [agc].modes"
+        )
+    agc_auto_mode = agc_section.get("auto_mode")
+    if agc_auto_mode is not None and (
+        isinstance(agc_auto_mode, bool) or not isinstance(agc_auto_mode, int)
+    ):
+        raise RigLoadError(f"{filename}: [agc].auto_mode must be an integer")
+    if agc_auto_mode is not None and (
+        agc_modes is None or agc_auto_mode not in agc_modes
+    ):
+        raise RigLoadError(
+            f"{filename}: [agc].auto_mode must match an entry in [agc].modes"
+        )
+    raw_agc_auto_speed_labels = agc_section.get("auto_speed_labels")
+    if raw_agc_auto_speed_labels is not None and not isinstance(
+        raw_agc_auto_speed_labels, dict
+    ):
+        raise RigLoadError(f"{filename}: [agc].auto_speed_labels must be a table")
+    agc_auto_speed_labels = (
+        dict(raw_agc_auto_speed_labels)
+        if raw_agc_auto_speed_labels is not None
+        else None
+    )
+    if (
+        agc_readback_modes is not None
+        and agc_auto_mode is not None
+        and agc_auto_speed_labels is None
+    ):
+        raise RigLoadError(
+            f"{filename}: [agc].readback_modes with auto_mode requires "
+            "auto_speed_labels"
+        )
+    if agc_auto_speed_labels is not None:
+        if agc_readback_modes is None or agc_auto_mode is None:
+            raise RigLoadError(
+                f"{filename}: [agc].auto_speed_labels requires readback_modes and auto_mode"
+            )
+        declared_readbacks = {str(mode) for mode in agc_readback_modes}
+        orphan_speed_labels = sorted(set(agc_auto_speed_labels) - declared_readbacks)
+        if orphan_speed_labels:
+            raise RigLoadError(
+                f"{filename}: [agc].auto_speed_labels key {orphan_speed_labels[0]!r} "
+                "has no matching entry in [agc].readback_modes"
+            )
+        settable_non_auto_labels = sorted(
+            str(mode)
+            for mode in agc_modes or ()
+            if mode != agc_auto_mode and str(mode) in agc_auto_speed_labels
+        )
+        if settable_non_auto_labels:
+            raise RigLoadError(
+                f"{filename}: [agc].auto_speed_labels key "
+                f"{settable_non_auto_labels[0]!r} targets a settable non-auto mode"
+            )
+        readback_only_codes = {
+            str(mode) for mode in agc_readback_modes if mode not in (agc_modes or ())
+        }
+        missing_speed_labels = sorted(readback_only_codes - set(agc_auto_speed_labels))
+        if missing_speed_labels:
+            raise RigLoadError(
+                f"{filename}: [agc].auto_speed_labels missing readback-only code "
+                f"{missing_speed_labels[0]!r}"
+            )
+        if any(
+            not isinstance(label, str) or not label.strip()
+            for label in agc_auto_speed_labels.values()
+        ):
+            raise RigLoadError(
+                f"{filename}: [agc].auto_speed_labels values must be non-empty strings"
+            )
+    if agc_modes is not None:
+        missing_agc_labels = sorted(
+            str(mode) for mode in agc_modes if str(mode) not in (agc_labels or {})
+        )
+        if missing_agc_labels:
+            raise RigLoadError(
+                f"{filename}: [agc].labels missing settable mode "
+                f"{missing_agc_labels[0]!r}"
+            )
+        if any(
+            not isinstance(label, str) or not label.strip()
+            for label in (agc_labels or {}).values()
+        ):
+            raise RigLoadError(
+                f"{filename}: [agc].labels values must be non-empty strings"
+            )
+
+    # Parse break_in/notch-width/ssb_tx_bw/filter_shape enumerated domains
+    # (MOR-1534). Each was declared in TOML (or, for filter_shape, nowhere
+    # at all) but never parsed/validated at load time — see rig_loader
+    # tests + CoreRadio's setters for the per-control validation seat.
+    break_in_modes, break_in_labels = _parse_enumerated_domain(
+        filename, "[break_in]", data.get("break_in", {})
+    )
+    notch_width_values, notch_width_labels = _parse_enumerated_domain(
+        filename,
+        "[notch]",
+        data.get("notch", {}),
+        values_key="width_values",
+        labels_key="width_labels",
+    )
+    # MOR-1685 (notch width), MOR-2729 (break-in): a declared value with no
+    # label would raise KeyError inside the capabilities serializer at
+    # request time — fail loud here instead.
+    for section, values_key, labels_key, values, labels in (
+        (
+            "[notch]",
+            "width_values",
+            "width_labels",
+            notch_width_values,
+            notch_width_labels,
+        ),
+        ("[break_in]", "values", "labels", break_in_modes, break_in_labels),
+    ):
+        missing_labels = sorted(
+            str(value) for value in values or () if str(value) not in (labels or {})
+        )
+        if missing_labels:
+            raise RigLoadError(
+                f"{filename}: {section}.{labels_key} missing entry for "
+                f"{values_key} {missing_labels}"
+            )
+    ssb_tx_bw_values, ssb_tx_bw_labels = _parse_enumerated_domain(
+        filename, "[ssb_tx_bw]", data.get("ssb_tx_bw", {})
+    )
+    filter_shape_values, filter_shape_labels = _parse_enumerated_domain(
+        filename, "[filter_shape]", data.get("filter_shape", {})
+    )
+    # MOR-2007 ruling 4: scan-type and scan-resume validation domains,
+    # generalizing the [agc]-style fail-loud pattern the way break_in/
+    # notch/ssb_tx_bw/filter_shape above already did (MOR-1534).
+    scan_type_values, scan_type_labels = _parse_enumerated_domain(
+        filename, "[scan_types]", data.get("scan_types", {})
+    )
+    scan_resume_values, scan_resume_labels = _parse_enumerated_domain(
+        filename, "[scan_resume]", data.get("scan_resume", {})
+    )
+
+    # Parse [data_mode] (optional)
+    # If data_mode is in features but no [data_mode] section, default to 1 mode (OFF/DATA)
+    data_mode_section = data.get("data_mode", {})
+    has_data_mode_feature = "data_mode" in features
+    if data_mode_section:
+        data_mode_count = int(data_mode_section.get("count", 0))
+        data_mode_labels = (
+            dict(data_mode_section["labels"]) if "labels" in data_mode_section else None
+        )
+        raw_modes = data_mode_section.get("modes")
+        if raw_modes is None:
+            data_mode_modes = None
+        else:
+            # MOR-4036: the modes that can carry the DATA flag — names as
+            # written in [modes].list, validated the same fail-loud way as
+            # [modes].families above.
+            if not isinstance(raw_modes, list) or not raw_modes:
+                raise RigLoadError(
+                    f"{filename}: [data_mode].modes must be a non-empty array"
+                )
+            for index, entry in enumerate(raw_modes):
+                if not isinstance(entry, str):
+                    raise RigLoadError(
+                        f"{filename}: [data_mode].modes[{index}] must be a string"
+                    )
+                if entry not in modes:
+                    raise RigLoadError(
+                        f"{filename}: [data_mode].modes[{index}] names mode "
+                        f"{entry!r} that is not in [modes].list"
+                    )
+            seen: set[str] = set()
+            for index, entry in enumerate(raw_modes):
+                if entry in seen:
+                    raise RigLoadError(
+                        f"{filename}: [data_mode].modes[{index}] repeats mode {entry!r}"
+                    )
+                seen.add(entry)
+            data_mode_modes = tuple(raw_modes)
+        raw_inputs = data_mode_section.get("inputs")
+        if raw_inputs is not None:
+            if not isinstance(raw_inputs, list) or not raw_inputs:
+                raise RigLoadError(
+                    f"{filename}: [data_mode].inputs must be a non-empty array"
+                )
+            parsed_inputs: list[tuple[int, str]] = []
+            for index, item in enumerate(raw_inputs):
+                if not isinstance(item, dict) or set(item) != {"value", "name"}:
+                    raise RigLoadError(
+                        f"{filename}: [data_mode].inputs[{index}] must contain value and name"
+                    )
+                value, name = item["value"], item["name"]
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, int)
+                    or not 0 <= value <= 5
+                ):
+                    raise RigLoadError(
+                        f"{filename}: [data_mode].inputs[{index}].value must be an integer from 0 to 5"
+                    )
+                if not isinstance(name, str) or not name.strip():
+                    raise RigLoadError(
+                        f"{filename}: [data_mode].inputs[{index}].name must be non-empty"
+                    )
+                parsed_inputs.append((value, name))
+            if len({value for value, _ in parsed_inputs}) != len(parsed_inputs):
+                raise RigLoadError(
+                    f"{filename}: [data_mode].inputs values must be unique"
+                )
+            data_mode_inputs = tuple(parsed_inputs)
+        else:
+            data_mode_inputs = None
+    elif has_data_mode_feature:
+        data_mode_count = 1
+        data_mode_labels = {"0": "OFF", "1": "DATA"}
+        data_mode_inputs = None
+        data_mode_modes = None
+    else:
+        data_mode_count = 0
+        data_mode_labels = None
+        data_mode_inputs = None
+        data_mode_modes = None
+
+    # Parse [controls] (optional)
+    controls_raw = data.get("controls")
+    controls: dict[str, ControlSpec] | None = None
+    control_domains: dict[str, _ScalarControlDomain] | None = None
+    if controls_raw is not None:
+        if not isinstance(controls_raw, dict):
+            raise RigLoadError(f"{filename}: [controls] must be a table")
+        controls = {}
+        control_domains = {}
+        for ctrl_name, ctrl_data in controls_raw.items():
+            public_spec, domain = _parse_control_spec(filename, ctrl_name, ctrl_data)
+            if public_spec is not None:
+                controls[ctrl_name] = public_spec
+            if domain is not None:
+                control_domains[ctrl_name] = domain
+        if not controls and control_domains:
+            controls = None
+        if not control_domains:
+            control_domains = None
+
+    # MOR-4352: lift the declared whole-watt write quantum of the RF power
+    # control onto the config beside the [power] facts, so the single
+    # power-write encoder (resolve_power_level_target) receives it as one
+    # typed fact instead of every caller re-reading the control table.
+    power_write_quantum: PowerWriteQuantum | None = None
+    rf_power_control = (controls or {}).get("rf_power")
+    if isinstance(rf_power_control, dict) and "write_quantum_w" in rf_power_control:
+        power_write_quantum = PowerWriteQuantum(
+            quantum_w=float(rf_power_control["write_quantum_w"]),
+            raw_min=int(rf_power_control["raw_min"]),
+            raw_max=int(rf_power_control["raw_max"]),
+        )
+
+    # Parse [meters] (optional)
+    meters_raw = data.get("meters")
+    meter_calibrations: dict[str, list[MeterCalibrationPoint]] | None = None
+    meter_redlines: dict[str, int] | None = None
+    if meters_raw is not None:
+        meter_calibrations = {}
+        meter_redlines = {}
+        for meter_name, meter_data in meters_raw.items():
+            if isinstance(meter_data, dict):
+                if "calibration" in meter_data:
+                    meter_calibrations[meter_name] = list(meter_data["calibration"])
+                if "redline_raw" in meter_data:
+                    meter_redlines[meter_name] = meter_data["redline_raw"]
+        if not meter_calibrations:
+            meter_calibrations = None
+        if not meter_redlines:
+            meter_redlines = None
+
+    # Parse [[rules]] (optional)
+    rules_raw = data.get("rules", [])
+    rules: list[RuleSpec] = []
+    for rule in rules_raw:
+        kind = rule.get("kind")
+        if kind not in VALID_RULE_KINDS:
+            raise RigLoadError(
+                f"{filename}: rule kind must be one of {VALID_RULE_KINDS}, got {kind!r}"
+            )
+        rules.append(cast(RuleSpec, dict(rule)))
+
+    # Parse [antenna] (optional)
+    antenna_section = data.get("antenna", {})
+    antenna_tx_count = int(antenna_section.get("tx_count", 1))
+    antenna_has_rx_ant = bool(antenna_section.get("has_rx_ant", False))
+
+    # Parse keyboard config: shared default profile + optional rig-local overrides.
+    ui_section = data.get("ui", {})
+    keyboard_section = (
+        ui_section.get("keyboard", {}) if isinstance(ui_section, dict) else {}
+    )
+    base_keyboard = _load_default_keyboard_config(path)
+    override_section = keyboard_section if isinstance(keyboard_section, dict) else {}
+    keyboard = _merge_keyboard_config(
+        base_keyboard,
+        override_section,
+        filename=filename,
+    )
+    keyboard = _filter_undeclared_mode_bindings(keyboard, tuple(modes))
+
+    # Parse optional [audio] codec and sample-rate policy (#797, #1470).
+    codec_preference: tuple[str, ...] | None = None
+    tx_codec: str | None = None
+    default_sample_rate_hz: int | None = None
+    supported_sample_rates_hz: tuple[int, ...] | None = None
+    sample_rate_by_codec: dict[str, int] | None = None
+    browser_rx_transport: str | None = None
+    browser_rx_transcode_to_opus: bool | None = None
+    rx_audio_channel: str = "mix"
+    audio_section = data.get("audio")
+    if audio_section is not None:
+        if not isinstance(audio_section, dict):
+            raise RigLoadError(f"{filename}: [audio] must be a table")
+        valid_codec_names = _valid_audio_codec_names()
+        codec_raw = audio_section.get("codec_preference")
+        if codec_raw is not None:
+            if not isinstance(codec_raw, list) or not all(
+                isinstance(c, str) for c in codec_raw
+            ):
+                raise RigLoadError(
+                    f"{filename}: [audio].codec_preference must be a list of strings"
+                )
+            if not codec_raw:
+                raise RigLoadError(
+                    f"{filename}: [audio].codec_preference must not be empty"
+                )
+            unknown = [c for c in codec_raw if c not in valid_codec_names]
+            if unknown:
+                raise RigLoadError(
+                    f"{filename}: [audio].codec_preference has unknown codec(s): "
+                    f"{unknown}. Valid names: {sorted(valid_codec_names)}"
+                )
+            codec_preference = tuple(codec_raw)
+        if "tx_codec" in audio_section:
+            tx_codec = _validate_audio_codec_name(
+                filename, "tx_codec", audio_section["tx_codec"], valid_codec_names
+            )
+        if "default_sample_rate_hz" in audio_section:
+            default_sample_rate_hz = _validate_audio_sample_rate(
+                filename,
+                "default_sample_rate_hz",
+                audio_section["default_sample_rate_hz"],
+            )
+        if "supported_sample_rates_hz" in audio_section:
+            supported_raw = audio_section["supported_sample_rates_hz"]
+            if not isinstance(supported_raw, list) or not supported_raw:
+                raise RigLoadError(
+                    f"{filename}: [audio].supported_sample_rates_hz must be a non-empty list"
+                )
+            supported_sample_rates_hz = tuple(
+                _validate_audio_sample_rate(filename, "supported_sample_rates_hz", rate)
+                for rate in supported_raw
+            )
+        if "sample_rate_by_codec" in audio_section:
+            by_codec_raw = audio_section["sample_rate_by_codec"]
+            if not isinstance(by_codec_raw, dict) or not by_codec_raw:
+                raise RigLoadError(
+                    f"{filename}: [audio].sample_rate_by_codec must be a non-empty table"
+                )
+            sample_rate_by_codec = {}
+            for codec_name, sample_rate in by_codec_raw.items():
+                codec_key = _validate_audio_codec_name(
+                    filename,
+                    "sample_rate_by_codec",
+                    codec_name,
+                    valid_codec_names,
+                )
+                sample_rate_by_codec[codec_key] = _validate_audio_sample_rate(
+                    filename,
+                    f"sample_rate_by_codec.{codec_key}",
+                    sample_rate,
+                )
+        if "browser_rx_transport" in audio_section:
+            browser_rx_transport_raw = audio_section["browser_rx_transport"]
+            if not isinstance(browser_rx_transport_raw, str):
+                raise RigLoadError(
+                    f"{filename}: [audio].browser_rx_transport must be a string"
+                )
+            if browser_rx_transport_raw not in VALID_BROWSER_RX_TRANSPORTS:
+                raise RigLoadError(
+                    f"{filename}: [audio].browser_rx_transport must be one of "
+                    f"{sorted(VALID_BROWSER_RX_TRANSPORTS)}, got {browser_rx_transport_raw!r}"
+                )
+            browser_rx_transport = browser_rx_transport_raw
+        if "browser_rx_transcode_to_opus" in audio_section:
+            transcode_raw = audio_section["browser_rx_transcode_to_opus"]
+            if not isinstance(transcode_raw, bool):
+                raise RigLoadError(
+                    f"{filename}: [audio].browser_rx_transcode_to_opus must be a boolean"
+                )
+            browser_rx_transcode_to_opus = transcode_raw
+        if "rx_audio_channel" in audio_section:
+            rx_channel_raw = audio_section["rx_audio_channel"]
+            if (
+                not isinstance(rx_channel_raw, str)
+                or rx_channel_raw not in VALID_RX_AUDIO_CHANNELS
+            ):
+                raise RigLoadError(
+                    f"{filename}: [audio].rx_audio_channel must be one of "
+                    f"{sorted(VALID_RX_AUDIO_CHANNELS)}, got {rx_channel_raw!r}"
+                )
+            rx_audio_channel = rx_channel_raw
+
+    usb_identity: UsbAudioIdentity | None = None
+    usb_section = data.get("usb")
+    if "usb" in data:
+        if not isinstance(usb_section, dict):
+            raise RigLoadError(f"{filename}: [usb] must be a table")
+        _reject_unknown_keys(
+            filename,
+            "[usb]",
+            usb_section,
+            frozenset({"audio_codec", "serial_functions"}),
+        )
+        usb_functions: dict[
+            str, frozenset[UsbFunctionId] | tuple[UsbFunctionId, ...]
+        ] = {}
+        for key in ("audio_codec", "serial_functions"):
+            entries = usb_section.get(key, [])
+            if not isinstance(entries, list):
+                raise RigLoadError(f"{filename}: [usb].{key} must be a list of tables")
+            ordered: list[UsbFunctionId] = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    raise RigLoadError(
+                        f"{filename}: [usb].{key} entries must be tables"
+                    )
+                _reject_unknown_keys(
+                    filename, f"[usb].{key}", entry, frozenset({"vid", "pid"})
+                )
+                vid, pid = entry.get("vid"), entry.get("pid")
+                if not isinstance(vid, str) or not isinstance(pid, str):
+                    raise RigLoadError(
+                        f"{filename}: [usb].{key} requires string vid and pid"
+                    )
+                try:
+                    ordered.append(UsbFunctionId(vid, pid))
+                except ValueError as exc:
+                    raise RigLoadError(f"{filename}: [usb].{key}: {exc}") from exc
+            # Each serial_functions entry is one serial function: the same
+            # VID:PID may appear more than once. audio_codec stays a set.
+            usb_functions[key] = (
+                frozenset(ordered) if key == "audio_codec" else tuple(ordered)
+            )
+        usb_identity = UsbAudioIdentity(
+            audio_codec=usb_functions["audio_codec"],
+            serial_functions=usb_functions["serial_functions"],
+        )
+
+    max_watts: int | None = None
+    min_watts: int | None = None
+    power_section = data.get("power")
+    if power_section is not None:
+        if not isinstance(power_section, dict):
+            raise RigLoadError(f"{filename}: [power] must be a table")
+        if "max_watts" in power_section:
+            max_watts_raw = power_section["max_watts"]
+            if not isinstance(max_watts_raw, int) or isinstance(max_watts_raw, bool):
+                raise RigLoadError(f"{filename}: [power].max_watts must be an integer")
+            if max_watts_raw <= 0:
+                raise RigLoadError(f"{filename}: [power].max_watts must be > 0")
+            max_watts = max_watts_raw
+        if "min_watts" in power_section:
+            min_watts_raw = power_section["min_watts"]
+            if not isinstance(min_watts_raw, int) or isinstance(min_watts_raw, bool):
+                raise RigLoadError(f"{filename}: [power].min_watts must be an integer")
+            if min_watts_raw <= 0:
+                raise RigLoadError(f"{filename}: [power].min_watts must be > 0")
+            min_watts = min_watts_raw
+        if min_watts is not None and max_watts is not None and min_watts > max_watts:
+            raise RigLoadError(f"{filename}: [power].min_watts must be <= max_watts")
+    if power_write_quantum is not None and max_watts is None:
+        raise RigLoadError(
+            f"{filename}: [controls.rf_power].write_quantum_w requires "
+            "[power].max_watts"
+        )
+    _validate_band_max_power(filename, freq_ranges_data, max_watts)
+
+    state_acquisition = _parse_state_acquisition(
+        filename,
+        data.get("state_acquisition"),
+    )
+    tx_policy = _parse_tx_policy(filename, data.get("tx_policy"))
+    iq_lan = _parse_iq_lan(filename, data.get("iq_lan"))
+    expected_identity_ids = _parse_identity(filename, data.get("identity"))
+    memory = _parse_memory(filename, data.get("memory"), ctcss_tones_centihz)
+    cw_text = _parse_cw_text(
+        filename,
+        data.get("cw_text"),
+        protocol_type=protocol_type,
+        commands=commands,
+    )
+
+    # The reset-to-radio-default capability is DERIVED from the parsed
+    # ``[filters].radio_default_code`` field (MOR-2535), never hand-listed in
+    # a TOML ``features`` array: the tag and the writeable code cannot drift
+    # apart. Everything downstream (``RigConfig.capabilities``,
+    # ``RadioProfile.capabilities``, ``/api/v1/capabilities``) reads this
+    # one tuple.
+    capability_features = tuple(features)
+    if (
+        filter_width_radio_default_code is not None
+        and CAP_FILTER_WIDTH_RADIO_DEFAULT not in capability_features
+    ):
+        capability_features = (
+            *capability_features,
+            CAP_FILTER_WIDTH_RADIO_DEFAULT,
+        )
+
+    _validate_filter_narrow_variant(
+        filename,
+        filter_width_encoding,
+        filter_config,
+        commands,
+        receiver_count,
+    )
+    _validate_filter_table_first_codes(
+        filename,
+        filter_width_encoding,
+        filter_width_radio_default_code,
+        filter_config,
+    )
+
+    return RigConfig(
+        id=radio["id"],
+        model=radio["model"],
+        civ_addr=civ_addr,
+        xiegu_model_id=xiegu_model_id,
+        receiver_count=receiver_count,
+        transceiver_count=int(radio.get("transceiver_count", 1)),
+        hamlib_model_id=int(radio.get("hamlib_model_id", 2028)),
+        has_lan=radio["has_lan"],
+        has_wifi=radio["has_wifi"],
+        default_baud=radio.get("default_baud", 19200),
+        capabilities=capability_features,
+        modes=tuple(modes),
+        mode_codes=mode_codes,
+        mode_families=mode_families,
+        filters=tuple(filters),
+        filter_width_min=filter_width_min,
+        filter_width_max=filter_width_max,
+        filter_width_encoding=filter_width_encoding,
+        filter_width_first_code=filter_width_first_code,
+        filter_width_radio_default_code=filter_width_radio_default_code,
+        filter_config=filter_config,
+        max_watts=max_watts,
+        min_watts=min_watts,
+        power_write_quantum=power_write_quantum,
+        vfo_scheme=scheme,
+        vfo_readback=vfo_readback,
+        tx_receiver_rule=tx_receiver_rule,
+        split_tx_target=split_tx_target,
+        vfo_main_select=vfo_main,
+        vfo_sub_select=vfo_sub,
+        vfo_swap_ab=vfo_swap_ab,
+        vfo_equal_ab=vfo_equal_ab,
+        vfo_swap_main_sub=vfo_swap_main_sub,
+        vfo_equal_main_sub=vfo_equal_main_sub,
+        freq_ranges=tuple(freq_ranges_data),
+        commands=commands,
+        cmd29_routes=tuple(cmd29_routes),
+        spectrum=spectrum,
+        att_values=att_values,
+        att_labels=att_labels,
+        pre_values=pre_values,
+        pre_labels=pre_labels,
+        agc_modes=agc_modes,
+        agc_labels=agc_labels,
+        agc_readback_modes=agc_readback_modes,
+        agc_auto_mode=agc_auto_mode,
+        agc_auto_speed_labels=agc_auto_speed_labels,
+        ctcss_tones_centihz=ctcss_tones_centihz,
+        tone_squelch_types=tone_squelch_types,
+        break_in_modes=break_in_modes,
+        break_in_labels=break_in_labels,
+        notch_width_values=notch_width_values,
+        notch_width_labels=notch_width_labels,
+        ssb_tx_bw_values=ssb_tx_bw_values,
+        ssb_tx_bw_labels=ssb_tx_bw_labels,
+        filter_shape_values=filter_shape_values,
+        filter_shape_labels=filter_shape_labels,
+        scan_type_values=scan_type_values,
+        scan_type_labels=scan_type_labels,
+        scan_resume_values=scan_resume_values,
+        scan_resume_labels=scan_resume_labels,
+        rf_sql_control_model=rf_sql_control_model,
+        data_mode_count=data_mode_count,
+        data_mode_labels=data_mode_labels,
+        data_mode_inputs=data_mode_inputs,
+        data_mode_modes=data_mode_modes,
+        protocol_type=protocol_type,
+        protocol_address=protocol_address,
+        protocol_baud=protocol_baud,
+        controls=controls,
+        _control_domains=control_domains,
+        meter_calibrations=meter_calibrations,
+        meter_redlines=meter_redlines,
+        rules=tuple(rules),
+        keyboard=keyboard,
+        antenna_tx_count=antenna_tx_count,
+        antenna_has_rx_ant=antenna_has_rx_ant,
+        scope_ref_min_db=scope_ref_min_db,
+        scope_ref_max_db=scope_ref_max_db,
+        scope_ref_step_db=scope_ref_step_db,
+        scope_span_presets_hz=scope_span_presets_hz,
+        scope_span_preset_semantics=scope_span_preset_semantics,
+        scope_fixed_edge_ranges=scope_fixed_edge_ranges,
+        scope_fixed_edge_step_hz=scope_fixed_edge_step_hz,
+        codec_preference=codec_preference,
+        tx_codec=tx_codec,
+        default_sample_rate_hz=default_sample_rate_hz,
+        supported_sample_rates_hz=supported_sample_rates_hz,
+        sample_rate_by_codec=sample_rate_by_codec,
+        browser_rx_transport=browser_rx_transport,
+        browser_rx_transcode_to_opus=browser_rx_transcode_to_opus,
+        rx_audio_channel=rx_audio_channel,
+        write_only_controls=write_only_controls,
+        fixed_value_checks=fixed_value_checks,
+        state_acquisition=state_acquisition,
+        tx_policy=tx_policy,
+        split=split,
+        tx_func=tx_func,
+        expected_identity_ids=expected_identity_ids,
+        memory=memory,
+        cw_text=cw_text,
+        usb_identity=usb_identity,
+        iq_lan=iq_lan,
+        probe_checks=parse_probe_checks(
+            filename,
+            data.get("probe"),
+            facts=RadioFacts(
+                protocol=protocol_type,
+                commands=commands,
+                modes=tuple(modes),
+                mode_codes=None if mode_codes is None else tuple(mode_codes),
+                cmd29_routes=frozenset(cmd29_routes),
+                swap_ab=vfo_swap_ab,
+                swap_main_sub=vfo_swap_main_sub,
+                unselected_is_sub=selector_one_is_sub(receiver_count, split_tx_target),
+                data_modes=data_mode_count,
+                freq_ranges=tuple(
+                    (r["start_hz"], r["end_hz"]) for r in freq_ranges_data
+                ),
+            ),
+        ),
+    )
+
+
+def discover_rigs(directory: Path) -> dict[str, RigConfig]:
+    """Discover and load all rig TOML files in a directory.
+
+    Files starting with underscore are ignored (e.g. ``_schema.md``,
+    ``_template.toml``). ``*.draft.toml`` files (emitted by ``rigplane
+    convert``) are also ignored so an unreviewed bootstrap draft is never
+    auto-loaded as a real profile.
+
+    Returns:
+        Dict mapping model name to ``RigConfig``.
+    """
+    rigs: dict[str, RigConfig] = {}
+    if not directory.is_dir():
+        return rigs
+
+    for path in sorted(directory.glob("*.toml")):
+        if path.name.startswith("_") or path.name.endswith(".draft.toml"):
+            continue
+        rig = load_rig(path)
+        rigs[rig.model] = rig
+
+    return rigs
+
+
+def _discover_resource_rigs(directory: Traversable) -> dict[str, RigConfig]:
+    """Load profiles from a package-resource directory.
+
+    Filesystem resources can use the normal loader directly. Non-filesystem
+    resources (for example, a zip import) are materialized together so profile
+    includes such as ``_keyboard-default.toml`` remain available as siblings.
+    """
+    if not directory.is_dir():
+        return {}
+    if isinstance(directory, Path):
+        return discover_rigs(directory)
+
+    with tempfile.TemporaryDirectory(prefix="rigplane-rigs-") as temp_dir:
+        materialized = Path(temp_dir)
+        for resource in directory.iterdir():
+            if resource.is_file() and resource.name.endswith(".toml"):
+                (materialized / resource.name).write_bytes(resource.read_bytes())
+        return discover_rigs(materialized)
+
+
+def discover_available_rigs(
+    fallback_directory: Path | None = None,
+) -> dict[str, RigConfig]:
+    """Discover bundled profiles, with an optional filesystem fallback.
+
+    Package resources are authoritative for installed distributions. The
+    fallback preserves source/editable checkouts whose profiles live at the
+    repository root.
+    """
+    package_rigs = resources.files("rigplane").joinpath("rigs")
+    rigs = _discover_resource_rigs(package_rigs)
+    if rigs or fallback_directory is None:
+        return rigs
+    return discover_rigs(fallback_directory)

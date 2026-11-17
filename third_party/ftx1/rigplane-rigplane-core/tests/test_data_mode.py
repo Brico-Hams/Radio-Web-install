@@ -1,0 +1,365 @@
+"""Tests for IC-7610 DATA mode (CI-V 0x1A 0x06) support.
+
+Covers:
+- commands.py: get_data_mode, set_data_mode, parse_data_mode_response
+- state_cache.py: data_mode field, update/invalidate, is_fresh, snapshot
+- handler.py: PKTUSB/PKTLSB/PKTRTTY set_mode, get_mode with DATA active
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+from unittest.mock import AsyncMock
+
+import pytest
+
+from rigplane.commands import (
+    get_data_mode,
+    parse_civ_frame,
+    parse_data_mode_response,
+    set_data_mode,
+)
+from rigplane.rig_loader import load_rig
+from rigplane.rigctld.contract import RigctldCommand, RigctldConfig
+from rigplane.rigctld.handler import RigctldHandler
+from rigplane.rigctld.state_cache import StateCache
+from rigplane.types import CivFrame, Mode
+
+RIG_DIR = Path(__file__).resolve().parents[1] / "rigs"
+
+
+@pytest.fixture()
+def cmd_map():
+    rig = load_rig(RIG_DIR / "ic7610.toml")
+    return rig.to_command_map()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def set_cmd(long_cmd: str, *args: str) -> RigctldCommand:
+    return RigctldCommand(
+        short_cmd="", long_cmd=long_cmd, args=tuple(args), is_set=True
+    )
+
+
+def get_cmd(long_cmd: str, *args: str) -> RigctldCommand:
+    return RigctldCommand(
+        short_cmd="", long_cmd=long_cmd, args=tuple(args), is_set=False
+    )
+
+
+# ---------------------------------------------------------------------------
+# commands.py — get_data_mode / set_data_mode
+# ---------------------------------------------------------------------------
+
+
+class TestGetDataModeCommand:
+    """commands/mode.py migrated onto the bound command map in MOR-2008
+    (batch 2): get_data_mode/set_data_mode now require cmd_map -- zero
+    divergence, so IC-7610's own map declares the identical bytes the
+    fallback used to build, and the expected frames below are unchanged.
+    """
+
+    def test_frame_bytes(self, cmd_map) -> None:
+        frame = get_data_mode(to_addr=0x98, cmd_map=cmd_map)
+        assert frame == b"\xfe\xfe\x98\xe0\x1a\x06\xfd"
+
+    def test_custom_addresses(self, cmd_map) -> None:
+        frame = get_data_mode(to_addr=0x94, from_addr=0xE1, cmd_map=cmd_map)
+        assert frame == b"\xfe\xfe\x94\xe1\x1a\x06\xfd"
+
+    def test_requires_cmd_map(self) -> None:
+        """cmd_map is required keyword-only -- MOR-2006 Q6's API break."""
+        with pytest.raises(TypeError, match="MOR-2006"):
+            get_data_mode(to_addr=0x98)  # type: ignore[call-arg]
+
+
+class TestSetDataModeCommand:
+    def test_on(self, cmd_map) -> None:
+        frame = set_data_mode(True, to_addr=0x98, cmd_map=cmd_map)
+        assert frame == b"\xfe\xfe\x98\xe0\x1a\x06\x01\xfd"
+
+    def test_off(self, cmd_map) -> None:
+        frame = set_data_mode(False, to_addr=0x98, cmd_map=cmd_map)
+        assert frame == b"\xfe\xfe\x98\xe0\x1a\x06\x00\xfd"
+
+    def test_data2(self, cmd_map) -> None:
+        frame = set_data_mode(2, to_addr=0x98, cmd_map=cmd_map)
+        assert frame == b"\xfe\xfe\x98\xe0\x1a\x06\x02\xfd"
+
+    def test_data3(self, cmd_map) -> None:
+        frame = set_data_mode(3, to_addr=0x98, cmd_map=cmd_map)
+        assert frame == b"\xfe\xfe\x98\xe0\x1a\x06\x03\xfd"
+
+    def test_data3_sub_receiver_uses_cmd29(self, cmd_map) -> None:
+        frame = set_data_mode(3, to_addr=0x98, receiver=1, cmd_map=cmd_map)
+        assert frame == b"\xfe\xfe\x98\xe0\x29\x01\x1a\x06\x03\xfd"
+
+    def test_rejects_explicit_none_the_same_way(self, cmd_map) -> None:
+        """An explicit ``cmd_map=None`` must hit the same Q6 explanation as
+        omitting it entirely."""
+        with pytest.raises(TypeError, match="MOR-2006"):
+            set_data_mode(True, to_addr=0x98, cmd_map=None)
+
+
+class TestParseDataModeResponse:
+    def _frame(self, data_byte: int) -> CivFrame:
+        raw = bytes([0xFE, 0xFE, 0xE0, 0x98, 0x1A, 0x06, data_byte, 0xFD])
+        return parse_civ_frame(raw)
+
+    def test_data_off(self) -> None:
+        frame = self._frame(0x00)
+        assert parse_data_mode_response(frame) is False
+
+    def test_data1(self) -> None:
+        frame = self._frame(0x01)
+        assert parse_data_mode_response(frame) is True
+
+    def test_data2(self) -> None:
+        frame = self._frame(0x02)
+        assert parse_data_mode_response(frame) is True
+
+    def test_data3(self) -> None:
+        frame = self._frame(0x03)
+        assert parse_data_mode_response(frame) is True
+
+    def test_wrong_command_raises(self) -> None:
+        frame = CivFrame(
+            to_addr=0xE0, from_addr=0x98, command=0x04, sub=None, data=b"\x01"
+        )
+        with pytest.raises(ValueError, match="Not a DATA mode response"):
+            parse_data_mode_response(frame)
+
+    def test_wrong_sub_raises(self) -> None:
+        frame = CivFrame(
+            to_addr=0xE0, from_addr=0x98, command=0x1A, sub=0x05, data=b"\x01"
+        )
+        with pytest.raises(ValueError, match="Not a DATA mode response"):
+            parse_data_mode_response(frame)
+
+    def test_no_data_raises(self) -> None:
+        frame = CivFrame(to_addr=0xE0, from_addr=0x98, command=0x1A, sub=0x06, data=b"")
+        with pytest.raises(ValueError, match="no data byte"):
+            parse_data_mode_response(frame)
+
+
+# ---------------------------------------------------------------------------
+# state_cache.py — data_mode field
+# ---------------------------------------------------------------------------
+
+
+class TestStateCacheDataMode:
+    def test_default_false(self) -> None:
+        cache = StateCache()
+        assert cache.data_mode is False
+        assert cache.data_mode_ts == 0.0
+
+    def test_update_sets_value_and_timestamp(self) -> None:
+        cache = StateCache()
+        before = time.monotonic()
+        cache.update_data_mode(True)
+        after = time.monotonic()
+        assert cache.data_mode is True
+        assert before <= cache.data_mode_ts <= after
+
+    def test_invalidate_resets_timestamp(self) -> None:
+        cache = StateCache()
+        cache.update_data_mode(True)
+        cache.invalidate_data_mode()
+        assert cache.data_mode_ts == 0.0
+        assert cache.data_mode is True  # value preserved, just stale
+
+    def test_is_fresh_after_update(self) -> None:
+        cache = StateCache()
+        cache.update_data_mode(False)
+        assert cache.is_fresh("data_mode", 60.0) is True
+
+    def test_not_fresh_before_update(self) -> None:
+        cache = StateCache()
+        assert cache.is_fresh("data_mode", 60.0) is False
+
+    def test_not_fresh_after_invalidate(self) -> None:
+        cache = StateCache()
+        cache.update_data_mode(True)
+        cache.invalidate_data_mode()
+        assert cache.is_fresh("data_mode", 60.0) is False
+
+    def test_snapshot_includes_data_mode(self) -> None:
+        cache = StateCache()
+        cache.update_data_mode(True)
+        snap = cache.snapshot()
+        assert snap["data_mode"] is True
+        assert snap["data_mode_age"] is not None
+        assert snap["data_mode_age"] >= 0.0
+
+    def test_snapshot_data_mode_age_none_before_update(self) -> None:
+        cache = StateCache()
+        snap = cache.snapshot()
+        assert snap["data_mode_age"] is None
+
+
+# ---------------------------------------------------------------------------
+# handler.py — PKTUSB / PKTLSB set_mode
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def config() -> RigctldConfig:
+    return RigctldConfig()
+
+
+@pytest.fixture
+def mock_radio() -> AsyncMock:
+    radio = AsyncMock()
+    radio.get_data_mode.return_value = False
+    return radio
+
+
+@pytest.fixture
+def handler(mock_radio: AsyncMock, config: RigctldConfig) -> RigctldHandler:
+    return RigctldHandler(mock_radio, config)
+
+
+class TestHandlerPktUsb:
+    @pytest.mark.asyncio
+    async def test_set_pktusb_sets_mode_usb(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        resp = await handler.execute(set_cmd("set_mode", "PKTUSB"))
+        assert resp.ok
+        mock_radio.set_mode.assert_awaited_once_with("USB", filter_width=None)
+
+    @pytest.mark.asyncio
+    async def test_set_pktusb_enables_data_mode(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        await handler.execute(set_cmd("set_mode", "PKTUSB"))
+        mock_radio.set_data_mode.assert_awaited_once_with(True)
+
+    @pytest.mark.asyncio
+    async def test_set_pktlsb_sets_mode_lsb(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        resp = await handler.execute(set_cmd("set_mode", "PKTLSB"))
+        assert resp.ok
+        mock_radio.set_mode.assert_awaited_once_with("LSB", filter_width=None)
+
+    @pytest.mark.asyncio
+    async def test_set_pktlsb_enables_data_mode(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        await handler.execute(set_cmd("set_mode", "PKTLSB"))
+        mock_radio.set_data_mode.assert_awaited_once_with(True)
+
+    @pytest.mark.asyncio
+    async def test_set_non_packet_mode_does_not_force_data_change(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        mock_radio.supports_command.return_value = True
+        await handler.execute(set_cmd("set_mode", "USB"))
+        mock_radio.set_data_mode.assert_awaited_once_with(False)
+
+    @pytest.mark.asyncio
+    async def test_set_pktrtty_sets_mode_rtty_and_enables_data(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        resp = await handler.execute(set_cmd("set_mode", "PKTRTTY"))
+        assert resp.ok
+        mock_radio.set_mode.assert_awaited_once_with("RTTY", filter_width=None)
+        mock_radio.set_data_mode.assert_awaited_once_with(True)
+
+
+class TestHandlerGetModeWithDataMode:
+    @pytest.mark.asyncio
+    async def test_get_mode_usb_with_data_returns_pktusb(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        mock_radio.get_mode_info.return_value = (Mode.USB, 1)
+        mock_radio.get_data_mode.return_value = True
+        resp = await handler.execute(get_cmd("get_mode"))
+        assert resp.ok
+        assert resp.values[0] == "PKTUSB"
+
+    @pytest.mark.asyncio
+    async def test_get_mode_lsb_with_data_returns_pktlsb(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        mock_radio.get_mode_info.return_value = (Mode.LSB, 1)
+        mock_radio.get_data_mode.return_value = True
+        resp = await handler.execute(get_cmd("get_mode"))
+        assert resp.ok
+        assert resp.values[0] == "PKTLSB"
+
+    @pytest.mark.asyncio
+    async def test_get_mode_usb_data_off_returns_usb(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        mock_radio.get_mode_info.return_value = (Mode.USB, 1)
+        mock_radio.get_data_mode.return_value = False
+        resp = await handler.execute(get_cmd("get_mode"))
+        assert resp.values[0] == "USB"
+
+    @pytest.mark.asyncio
+    async def test_get_mode_rtty_with_data_returns_pktrtty(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        mock_radio.get_mode_info.return_value = (Mode.RTTY, 1)
+        mock_radio.get_data_mode.return_value = True
+        resp = await handler.execute(get_cmd("get_mode"))
+        assert resp.ok
+        assert resp.values[0] == "PKTRTTY"
+
+    @pytest.mark.asyncio
+    async def test_get_mode_am_with_data_stays_am(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        """DATA mode does not affect non-USB/LSB modes."""
+        mock_radio.get_mode_info.return_value = (Mode.AM, None)
+        mock_radio.get_data_mode.return_value = True
+        resp = await handler.execute(get_cmd("get_mode"))
+        assert resp.values[0] == "AM"
+
+    @pytest.mark.asyncio
+    async def test_set_pktusb_then_get_returns_pktusb(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        """Round-trip: set PKTUSB, then get_mode returns PKTUSB from cache."""
+        mock_radio.get_mode_info.return_value = (Mode.USB, 1)
+        mock_radio.get_data_mode.return_value = True
+
+        await handler.execute(set_cmd("set_mode", "PKTUSB"))
+        # Cache invalidated by set; next get_mode will re-query radio.
+        resp = await handler.execute(get_cmd("get_mode"))
+        assert resp.values[0] == "PKTUSB"
+
+
+# ---------------------------------------------------------------------------
+# handler.py — get_mode: data_mode from cache when mode is fresh
+# ---------------------------------------------------------------------------
+
+
+class TestHandlerGetModeCacheDataMode:
+    @pytest.mark.asyncio
+    async def test_get_mode_reads_radio_each_call_without_self_caching(
+        self, handler: RigctldHandler, mock_radio: AsyncMock
+    ) -> None:
+        """get_mode is read-only: it re-reads the radio rather than self-caching.
+
+        The legacy behavior wrote the mode/filter/data_mode readback into the
+        canonical StateStore so a second poll was served from the projection.
+        That write-back clobbered the CI-V-owned ``filter_width`` (Hz) and
+        ``data_mode`` (int) keys (MOR-895) and was removed, so each get_mode now
+        queries the radio and consistently reports the same value.
+        """
+        mock_radio.get_mode_info.return_value = (Mode.USB, 1)
+        mock_radio.get_data_mode.return_value = False
+        resp1 = await handler.execute(get_cmd("get_mode"))
+        assert resp1.values[0] == "USB"
+        resp2 = await handler.execute(get_cmd("get_mode"))
+        assert resp2.values[0] == "USB"
+        # No self-cache: the radio is polled on every read.
+        assert mock_radio.get_mode_info.await_count == 2

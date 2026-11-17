@@ -1,0 +1,56 @@
+@import './styles/tokens.css';
+@import './styles/animations.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:focus,
+:focus-visible {
+  outline: none;
+}
+
+/* MOR-2522: a native range slider LIGHTS on keyboard focus, never draws a
+ * frame (owner ruling: no rectangle around a slider). ONE shared rule covers
+ * the six native `<input type="range">` call sites — semantic/
+ * FilterSurface.svelte, DspSurface.svelte, CwKeyerSurface.svelte,
+ * RitXitScanSurface.svelte, components-v2/panels/AudioRoutingControl.svelte
+ * and CwPanel.svelte — because this is the only stylesheet every context
+ * loads unconditionally. It uses the protected value-control token where
+ * available, then the theme token; desktop-v2/sdr-test compose the same
+ * illumination with their range-track chrome in semantic-controls.css. */
+input[type='range'][type='range']:focus-visible {
+  outline: none;
+  box-shadow: var(--vc-focus-ring-shadow, var(--v2-focus-ring-shadow));
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100dvh;
+}
+
+/* MOR-3845: top chrome inset contract (same pattern as MOR-1240's
+ * `--rp-status-bar-bottom`). An embedding shell (the unified title bar)
+ * reserves the strip above the page by setting `--rp-chrome-top` on
+ * <html>; Core's root layout offsets below it and every fixed surface
+ * anchored to the viewport top starts at the same edge. The default is
+ * 0px, so with the property unset nothing changes visually. */
+:root {
+  --rp-chrome-top: 0px;
+}
+
+#app {
+  min-height: 100dvh;
+  padding-top: var(--rp-chrome-top, 0px);
+}

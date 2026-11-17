@@ -1,0 +1,636 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Capabilities, FilterModeConfig } from '$lib/types/capabilities';
+import type { FieldStatus, ServerState } from '$lib/types/state';
+
+const h = vi.hoisted(() => ({
+  modelOverride: null as unknown,
+  calls: 0,
+}));
+
+vi.mock('../radio-view-model-adapter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../radio-view-model-adapter')>();
+  return {
+    ...actual,
+    toRadioViewModel: (...args: Parameters<typeof actual.toRadioViewModel>) => {
+      h.calls += 1;
+      return h.modelOverride ?? actual.toRadioViewModel(...args);
+    },
+  };
+});
+
+import {
+  ingressScopeFrame, parseCurrentScopeFrame, SCOPE_FRAME_SILENCE_MS, snapSpectrumFilterWidth, toSpectrumAuthority,
+} from '../scope-adapter';
+import { ScopeController } from '../../scope-controller.svelte';
+import { scopeWire, scopeFixtures as fixtures } from '../../__tests__/scope-wire-fixture';
+import { toRadioViewModel } from '../radio-view-model-adapter';
+import {
+  deriveIfShift, measuredPbtRawToHz, PBT_MEASURED_STEP_HZ,
+} from '$lib/radio/filter-controls';
+import { IC7300_CAPABILITIES, IC7300_STATE } from './fixtures/ic7300-profile';
+import { resolveLcdSpectrumFrame } from '../../../../skins/segmentline/lcd-display-contract';
+
+// MOR-3677: `lastObservedMonotonic` is part of every observed FieldStatus
+// the server publishes (the FTX-1/IC-7300 captures carry it), and the
+// FilterWidthDisplay qualification reads it as evidence — the fixtures here
+// must be shape-realistic, not minimal.
+const fresh: FieldStatus = {
+  storePath: 'fixture', observed: true, freshness: 'fresh', availability: 'available',
+  lastObservedMonotonic: 100,
+};
+const stale: FieldStatus = {
+  storePath: 'fixture', observed: true, freshness: 'stale', availability: 'stale',
+  lastObservedMonotonic: 100,
+};
+const SEGMENT_RULE: FilterModeConfig = {
+  defaults: [3000, 2400, 1800], fixed: false, minHz: 50, maxHz: 3600,
+  // MOR-2497 (post-#3519): the per-mode PBT lattice step. Ignored by the
+  // pre-change conversion; after it, the pinned pbtInnerHz/pbtOuterHz values
+  // below exist only because the resolved mode declares this step.
+  pbtStepHz: 50,
+  segments: [
+    { hzMin: 50, hzMax: 500, stepHz: 50, indexMin: 0 },
+    { hzMin: 600, hzMax: 3600, stepHz: 100, indexMin: 10 },
+  ],
+};
+const TABLE_RULE: FilterModeConfig = {
+  defaults: [2400, 1800, 300], fixed: false, table: [300, 600, 1200, 1800, 2400, 3000],
+};
+const STEP_RULE: FilterModeConfig = {
+  defaults: [3050, 1750, 550], fixed: false, minHz: 250, maxHz: 3550, stepHz: 100,
+};
+
+function receiver(frequencyHz: number, mode = 'USB') {
+  return {
+    freqHz: frequencyHz, mode, filter: 2, dataMode: 1, filterWidth: 2400,
+    filterShape: 1, pbtInner: 140, pbtOuter: 116, ifShift: 0,
+    att: 0, preamp: 0, nb: false, nr: false, afLevel: 1, rfGain: 1, squelch: 0, sMeter: 0,
+  };
+}
+
+function fieldStatus(): Record<string, FieldStatus> {
+  const paths = [
+    'active', 'split', 'dualWatch', 'txTarget',
+    'main.freqHz', 'main.mode', 'main.filter', 'main.filterWidth', 'main.filterShape',
+    'main.dataMode', 'main.pbtInner', 'main.pbtOuter', 'main.ifShift',
+    'sub.freqHz', 'sub.mode', 'sub.filter', 'sub.filterWidth', 'sub.filterShape',
+    'sub.dataMode', 'sub.pbtInner', 'sub.pbtOuter', 'sub.ifShift',
+    ...[
+      'mode', 'edge', 'span', 'speed', 'hold', 'refDb', 'dual', 'receiver',
+      'duringTx', 'centerType', 'vbwNarrow', 'rbw',
+    ].map((leaf) => `scopeControls.${leaf}`),
+  ];
+  return Object.fromEntries(paths.map((path) => [path, { ...fresh, storePath: path }]));
+}
+
+function state(overrides: Partial<ServerState> = {}): ServerState {
+  return {
+    stateContractVersion: 1, providerGeneration: 7,
+    active: 'MAIN', split: false, dualWatch: false, ptt: false, tunerStatus: 0,
+    txTarget: { status: 'known', receiver: 'MAIN', slot: null, frequencyHz: 14_074_000 },
+    main: receiver(14_074_000), sub: receiver(7_074_000, 'LSB'),
+    scopeControls: {
+      mode: 0, edge: 1, span: 3, speed: 1, hold: false, refDb: -5,
+      dual: false, receiver: 0, duringTx: false, centerType: 1, vbwNarrow: false, rbw: 1,
+      fixedEdge: { rangeIndex: 0, edge: 1, startHz: 14_000_000, endHz: 14_350_000 },
+    },
+    fieldStatus: fieldStatus(),
+    ...overrides,
+  } as ServerState;
+}
+
+function caps(overrides: Partial<Capabilities> = {}): Capabilities {
+  return {
+    model: 'fixture', scope: true, audio: true, tx: true,
+    stateContractVersion: 1, providerGeneration: 7,
+    capabilities: ['scope', 'dual_rx', 'filter_width', 'data_mode', 'pbt', 'if_shift'],
+    receivers: 2, vfoScheme: 'main_sub', freqRanges: [], modes: ['USB', 'LSB'], filters: ['FIL1'],
+    filterConfig: { USB: SEGMENT_RULE, LSB: SEGMENT_RULE },
+    // MOR-1291: a REAL `pbt`-capable radio's capabilities payload declares
+    // its own `controls.pbt_inner` range (IC-7610-shaped here) — the
+    // frontend fact layer no longer fabricates this scale from a store
+    // fallback when it is omitted, so this fixture must carry it explicitly
+    // for `pbtInnerHz`/`pbtOuterHz`/`ifShiftHz` below to stay populated.
+    controls: { pbt_inner: { raw_min: 0, raw_max: 255, raw_center: 128, display_min: -1200, display_max: 1200 } },
+    audioConfig: { sampleRate: 48_000, channels: 1, codecs: ['pcm16'] },
+    webrtc: { available: false, enabled: false }, txBands: [],
+    ...overrides,
+  } as Capabilities;
+}
+
+function withStatus(base: ServerState, path: string, status: FieldStatus | undefined): ServerState {
+  const statuses = { ...base.fieldStatus } as Record<string, FieldStatus>;
+  if (status) statuses[path] = { ...status, storePath: path };
+  else delete statuses[path];
+  return { ...base, fieldStatus: statuses } as ServerState;
+}
+
+function freshStatus(path: string): FieldStatus {
+  return { ...fresh, storePath: path };
+}
+
+function freshPbtOnlyIc7300State(): ServerState {
+  const captured = structuredClone(IC7300_STATE);
+  const { ifShift: _rawIfShift, ...mainWithoutRawIfShift } = captured.main!;
+  const fieldStatus = { ...captured.fieldStatus };
+  delete fieldStatus['main.ifShift'];
+  return {
+    ...captured,
+    main: {
+      ...mainWithoutRawIfShift,
+      mode: 'AM',
+      filterWidth: 10_000,
+      pbtInner: 128,
+      pbtOuter: 128,
+    },
+    fieldStatus: {
+      ...fieldStatus,
+      'main.mode': freshStatus('main.mode'),
+      'main.filterWidth': freshStatus('main.filterWidth'),
+      'main.pbtInner': freshStatus('main.pbtInner'),
+      'main.pbtOuter': freshStatus('main.pbtOuter'),
+    },
+  } as ServerState;
+}
+
+/**
+ * MOR-2497 (post-#3519): the captured `IC7300_CAPABILITIES` JSON predates
+ * `pbtStepHz`, so AS CAPTURED it is the legacy case — pinned below to yield
+ * NO PBT Hz reading. The MOR-1649/MOR-2425 tests that follow pin observation-
+ * state behavior of the derived shift, so they run against the same radio as
+ * a post-#3519 server describes it: the capture plus the per-mode steps
+ * `rigs/ic7300.toml` declares (50 Hz for SSB/CW/RTTY, 200 for AM, FM none).
+ * The JSON itself stays a byte-faithful capture and is not edited.
+ */
+const IC7300_STEPPED_CAPABILITIES = {
+  ...IC7300_CAPABILITIES,
+  filterConfig: Object.fromEntries(
+    Object.entries(IC7300_CAPABILITIES.filterConfig ?? {}).map(([mode, config]) => [
+      mode,
+      mode === 'FM' ? config : { ...config, pbtStepHz: mode === 'AM' ? 200 : 50 },
+    ]),
+  ),
+} as Capabilities;
+
+afterEach(() => {
+  h.modelOverride = null;
+  h.calls = 0;
+});
+
+describe('MOR-1409 A06a1 canonical spectrum authority selector', () => {
+  it('delegates once, returns deterministic deeply immutable facts, and leaves inputs untouched', () => {
+    const inputState = state();
+    const inputCaps = caps();
+    const beforeState = structuredClone(inputState);
+    const beforeCaps = structuredClone(inputCaps);
+
+    const first = toSpectrumAuthority(inputState, inputCaps);
+    const second = toSpectrumAuthority(inputState, inputCaps);
+
+    expect(h.calls).toBe(2);
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      providerGeneration: 7, receiver: 0, frequencyHz: 14_074_000,
+      mode: 'USB', filter: 'FIL2', filterWidthHz: 2400,
+      // MOR-2497 step 2: +/-100 Hz are lattice positions at this fixture's
+      // 2400 Hz filter (raws 140 and 116, two steps either side of centre).
+      // The retired conversion read them as 113 and -112 Hz, offsets that lie
+      // between reachable positions.
+      filterShape: 1, ifShiftHz: 0, pbtInnerHz: 100, pbtOuterHz: -100, dataMode: 1,
+      rule: { kind: 'segments', minHz: 50, maxHz: 3600 },
+    });
+    expect(first?.digest).toBe(second?.digest);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first?.rule)).toBe(true);
+    expect(Object.isFrozen(first?.rule?.kind === 'segments' ? first.rule.segments : null)).toBe(true);
+    expect(Object.isFrozen(first?.scopeControls)).toBe(true);
+    expect(Object.isFrozen(first?.scopeControls?.mode)).toBe(true);
+    expect(Object.isFrozen(first?.scopeControls?.mode.reading)).toBe(true);
+    expect(inputState).toEqual(beforeState);
+    expect(inputCaps).toEqual(beforeCaps);
+    expect(Object.isFrozen(inputState)).toBe(false);
+    expect(Object.isFrozen(inputCaps)).toBe(false);
+    expect(Object.isFrozen(inputCaps.capabilities)).toBe(false);
+
+    inputState.scopeControls!.mode = 3;
+    inputCaps.capabilities.push('later');
+    expect(first?.scopeControls?.mode.reading).toEqual({ status: 'known', value: 0 });
+  });
+
+  it.each([
+    [state({ stateContractVersion: undefined }), caps()],
+    [state(), caps({ stateContractVersion: undefined })],
+    [state({ providerGeneration: -1 }), caps()],
+    [state({ providerGeneration: 8 }), caps()],
+    [state(), caps({ providerGeneration: 8 })],
+    [state(), caps({ receivers: 1 })],
+    [state(), caps({ vfoScheme: 'single' })],
+  ] as Array<[ServerState, Capabilities]>)('rejects invalid epoch/topology row %#', (s, c) => {
+    expect(toSpectrumAuthority(s, c)).toBeNull();
+  });
+
+  it('rejects physical SUB without valid dual topology, but reads a HELD active identity', () => {
+    // MOR-2425/R40: staleness alone no longer unmakes the active receiver.
+    expect(toSpectrumAuthority(withStatus(state(), 'active', stale), caps()))
+      .toMatchObject({ receiver: 0 });
+    const sub = state({ active: 'SUB' });
+    expect(toSpectrumAuthority(sub, caps({ capabilities: ['scope', 'filter_width', 'data_mode'] }))).toBeNull();
+  });
+
+  it('maps valid dual MAIN/SUB to physical 0/1 with their canonical VFO facts', () => {
+    const main = toSpectrumAuthority(state(), caps());
+    const sub = toSpectrumAuthority(state({ active: 'SUB' }), caps());
+    expect(main).toMatchObject({ receiver: 0, frequencyHz: 14_074_000, mode: 'USB' });
+    expect(sub).toMatchObject({ receiver: 1, frequencyHz: 7_074_000, mode: 'LSB' });
+  });
+
+  it.each([
+    ['single', undefined],
+    ['ab', 'selected_unselected'],
+  ] as const)('maps one-receiver %s/relative identity to physical MAIN/0', (vfoScheme, vfoReadback) => {
+    const s = state({ active: 'MAIN', sub: receiver(7_074_000) as ServerState['sub'] });
+    const c = caps({
+      receivers: 1, vfoScheme, vfoReadback,
+      capabilities: ['scope', 'filter_width', 'data_mode', 'pbt', 'if_shift'],
+    });
+    expect(toSpectrumAuthority(s, c)).toMatchObject({ receiver: 0, frequencyHz: 14_074_000 });
+  });
+
+  /**
+   * MOR-1421 — the live IC-7300 stand's `active` field reads
+   * observed:false/availability:'missing' FOREVER; `main.activeSlot` is
+   * equally never observed. Before the fix, `activeReceiver` stayed
+   * `unknown` forever on that class of radio and this whole authority was
+   * permanently null — no spectrum, no filter-width snapping, nothing. The
+   * capability-aware fix resolves `activeReceiver` to `'MAIN'` on a
+   * single-receiver topology regardless of `active`'s observedness, which is
+   * what revives this authority.
+   */
+  it('revives the spectrum authority on a single-receiver radio even though active was never observed', () => {
+    const s = withStatus(withStatus(state({ active: 'MAIN' }), 'active', undefined), 'main.activeSlot', undefined);
+    const c = caps({
+      receivers: 1, vfoScheme: 'ab', vfoReadback: 'selected_unselected',
+      capabilities: ['scope', 'filter_width', 'data_mode', 'pbt', 'if_shift'],
+    });
+    expect(toSpectrumAuthority(s, c)).toMatchObject({ receiver: 0, frequencyHz: 14_074_000, mode: 'USB' });
+  });
+
+  // Dual-RX guard (byte-identical to pre-MOR-1421 behaviour): a radio whose
+  // capabilities declare a SECOND receiver still needs a genuinely observed
+  // `active` reading — the tautology is single-receiver-only.
+  it('leaves a dual-receiver radio unaffected — null when active is unobserved, not stale (MOR-1421)', () => {
+    const s = withStatus(state(), 'active', undefined);
+    expect(toSpectrumAuthority(s, caps())).toBeNull();
+  });
+
+  it('rejects zero active canonical VFOs in an unobserved absolute A/B slot view', () => {
+    const s = state({
+      main: {
+        ...receiver(14_074_000), activeSlot: 'A',
+        vfoA: { freqHz: 14_074_000, mode: 'USB', filterNum: 2, dataMode: 1 },
+        vfoB: { freqHz: 7_074_000, mode: 'LSB', filterNum: 1, dataMode: 0 },
+      },
+    } as Partial<ServerState>);
+    expect(toSpectrumAuthority(s, caps({
+      receivers: 1, vfoScheme: 'ab', vfoReadback: 'absolute',
+      capabilities: ['scope', 'filter_width', 'data_mode', 'pbt', 'if_shift'],
+    }))).toBeNull();
+  });
+
+  it('rejects a delegated model with multiple active canonical VFOs', () => {
+    const model = toRadioViewModel(state(), caps());
+    expect(model).not.toBeNull();
+    h.modelOverride = {
+      ...model!,
+      vfos: model!.vfos.map((vfo, index) => ({ ...vfo, isActive: index < 2 })),
+    };
+    expect(toSpectrumAuthority(state(), caps())).toBeNull();
+  });
+
+  it('holds an independently stale frequency without losing receiver identity', () => {
+    const result = toSpectrumAuthority(withStatus(state(), 'main.freqHz', stale), caps());
+    expect(result).toMatchObject({ receiver: 0, frequencyHz: 14_074_000, mode: 'USB' });
+  });
+
+  // MOR-2425/R40: each used to degrade its fact, and three of them the rule.
+  it.each([
+    ['main.mode', 'mode'], ['main.filterWidth', 'filterWidthHz'],
+    ['main.dataMode', 'dataMode'], ['main.filterShape', 'filterShape'],
+    ['main.ifShift', 'ifShiftHz'], ['main.pbtInner', 'pbtInnerHz'], ['main.pbtOuter', 'pbtOuterHz'],
+  ] as const)('holds stale %s at the fresh authority value, rule included', (path, key) => {
+    const live = toSpectrumAuthority(state(), caps());
+    const result = toSpectrumAuthority(withStatus(state(), path, stale), caps());
+    expect(result).not.toBeNull();
+    expect(live?.[key]).not.toBeNull();
+    expect(result?.[key]).toEqual(live?.[key]);
+    expect(result?.rule).toEqual(live?.rule);
+  });
+
+  it('requires active-VFO and modeFilter parity before constructing a rule', () => {
+    const model = toRadioViewModel(state(), caps());
+    expect(model?.modeFilter).toBeDefined();
+    h.modelOverride = {
+      ...model!, modeFilter: {
+        ...model!.modeFilter!, currentMode: {
+          ...model!.modeFilter!.currentMode, reading: { status: 'known', value: 'CW' },
+        },
+      },
+    };
+    expect(toSpectrumAuthority(state(), caps())).toMatchObject({ mode: 'USB', rule: null });
+  });
+
+  it.each([
+    { defaults: [2400], fixed: true, table: [2400] },
+    { defaults: [2400], fixed: false },
+    { defaults: [], fixed: false, table: [] },
+    { defaults: [], fixed: false, table: [600, 300] },
+    { defaults: [], fixed: false, table: [300], segments: SEGMENT_RULE.segments },
+    { ...SEGMENT_RULE, segments: [{ hzMin: 50, hzMax: 525, stepHz: 50, indexMin: 0 }] },
+    { ...STEP_RULE, stepHz: 0 },
+  ] as FilterModeConfig[])('normalizes fixed/unresolved/malformed rule %# to null', (rule) => {
+    expect(toSpectrumAuthority(state(), caps({ filterConfig: { USB: rule } }))?.rule).toBeNull();
+  });
+
+  it.each([
+    [TABLE_RULE, 'table'], [SEGMENT_RULE, 'segments'], [STEP_RULE, 'step'],
+  ] as const)('normalizes valid %s metadata without sharing input arrays', (rule, kind) => {
+    const inputCaps = caps({ filterConfig: { USB: rule } });
+    const normalized = toSpectrumAuthority(state(), inputCaps)?.rule;
+    expect(normalized?.kind).toBe(kind);
+    expect(Object.isFrozen(normalized)).toBe(true);
+    expect(normalized).not.toBe(rule);
+  });
+
+  it('uses structural DATA-OFF only when data_mode is unsupported', () => {
+    const s = withStatus(state(), 'main.dataMode', stale);
+    const withoutData = caps({
+      capabilities: ['scope', 'dual_rx', 'filter_width', 'pbt', 'if_shift'],
+      filterConfig: { USB: STEP_RULE },
+    });
+    expect(toSpectrumAuthority(s, withoutData)).toMatchObject({ dataMode: null, rule: { kind: 'step' } });
+    expect(toSpectrumAuthority(s, caps({ filterConfig: { USB: STEP_RULE } })))
+      .toMatchObject({ dataMode: 1, rule: { kind: 'step' } });
+  });
+
+  it('changes the digest with canonical facts but not with mutable input identity', () => {
+    const first = toSpectrumAuthority(state(), caps());
+    const equal = toSpectrumAuthority(structuredClone(state()), structuredClone(caps()));
+    const changed = toSpectrumAuthority(state({ main: { ...receiver(14_074_000), filterWidth: 1800 } }), caps());
+    expect(first?.digest).toBe(equal?.digest);
+    expect(first?.digest).not.toBe(changed?.digest);
+  });
+
+  /**
+   * MOR-1494 review round — the trap. `FilterSurface.svelte`'s IF-shift ROW
+   * now hides for an IC-7300-shaped radio (pbt, no if_shift capability), via
+   * a NEW `ifShiftControlStructural` presentation flag. This authority's
+   * `ifShiftHz` must be UNAFFECTED: it reads `filterPassband.ifShift`
+   * directly (`toSpectrumAuthority`'s own `knownReading` call, keyed on the
+   * field's `reading.status`, never on `ifShiftControlStructural`), which
+   * still derives from PBT for exactly this radio shape. A fix that gated
+   * the DERIVED fact instead of adding a separate presentation flag would
+   * have silently broken this passband-center overlay.
+   */
+  it('IC-7300-shaped caps (pbt, no if_shift): ifShiftHz still derives from PBT (MOR-1494 trap)', () => {
+    const icomCaps = caps({
+      capabilities: ['scope', 'dual_rx', 'filter_width', 'data_mode', 'pbt'],
+    });
+    const result = toSpectrumAuthority(state(), icomCaps);
+    // MOR-2497 step 2: off the measured lattice at this fixture's 2400 Hz
+    // filter, not off the profile's declared +/-1200 Hz span.
+    const edge = (raw: number): number => {
+      const value = measuredPbtRawToHz(raw, 2400, PBT_MEASURED_STEP_HZ);
+      if (value === null) throw new Error('no lattice at 2400 Hz');
+      return value;
+    };
+    const expectedIfShiftHz = deriveIfShift(edge(140), edge(116));
+    expect(result?.ifShiftHz).toBe(expectedIfShiftHz);
+    expect(result?.ifShiftHz).not.toBeNull();
+  });
+
+  it('keeps a fresh centered PBT-only IC-7300 passband without raw IF-shift authority (MOR-1649)', () => {
+    const pbtOnlyState = freshPbtOnlyIc7300State();
+
+    expect(IC7300_CAPABILITIES).toMatchObject({
+      model: 'IC-7300', receivers: 1, vfoScheme: 'ab', vfoReadback: 'selected_unselected',
+    });
+    expect(IC7300_CAPABILITIES.capabilities).toContain('pbt');
+    expect(IC7300_CAPABILITIES.capabilities).not.toContain('dual_rx');
+    expect(IC7300_CAPABILITIES.capabilities).not.toContain('if_shift');
+    expect(pbtOnlyState.fieldStatus?.['main.ifShift']).toBeUndefined();
+    expect(toSpectrumAuthority(pbtOnlyState, IC7300_STEPPED_CAPABILITIES)).toMatchObject({
+      ifShiftHz: 0,
+      pbtInnerHz: 0,
+      pbtOuterHz: 0,
+    });
+  });
+
+  // MOR-2497: the byte-faithful capture predates `pbtStepHz`. No mode declares
+  // a step, so the derived path has nothing to convert with — the authority
+  // reports no PBT Hz reading rather than falling back to 50 Hz.
+  it('the captured pre-pbtStepHz IC-7300 payload is the legacy case: no PBT Hz reading', () => {
+    const result = toSpectrumAuthority(freshPbtOnlyIc7300State(), IC7300_CAPABILITIES);
+    expect(result).not.toBeNull();
+    expect(result?.pbtInnerHz).toBeNull();
+    expect(result?.pbtOuterHz).toBeNull();
+    expect(result?.ifShiftHz).toBeNull();
+  });
+
+  it.each(['main.pbtInner', 'main.pbtOuter'] as const)(
+    'hides PBT-derived shift when %s was never observed (MOR-1649)', (path) => {
+      const result = toSpectrumAuthority(
+        withStatus(freshPbtOnlyIc7300State(), path, undefined), IC7300_STEPPED_CAPABILITIES,
+      );
+
+      expect(result?.ifShiftHz).toBeNull();
+    });
+
+  // MOR-2425/R40 overturns the STALE half of MOR-1649: a derived held value holds.
+  it.each(['main.pbtInner', 'main.pbtOuter'] as const)(
+    'keeps the PBT-derived shift when %s is held (stale)', (path) => {
+      const result = toSpectrumAuthority(
+        withStatus(freshPbtOnlyIc7300State(), path, stale), IC7300_STEPPED_CAPABILITIES,
+      );
+
+      expect(result?.ifShiftHz).toBe(0);
+    });
+
+  it('keeps native FTX-1-style IF shift gated by its own raw observation (MOR-1649)', () => {
+    const nativeCaps = caps({
+      capabilities: ['scope', 'dual_rx', 'filter_width', 'data_mode', 'if_shift'],
+    });
+    const nativeState = state({ main: { ...receiver(14_074_000), ifShift: 250 } });
+
+    expect(toSpectrumAuthority(nativeState, nativeCaps)?.ifShiftHz).toBe(250);
+    expect(toSpectrumAuthority(withStatus(nativeState, 'main.ifShift', undefined), nativeCaps)?.ifShiftHz)
+      .toBeNull();
+  });
+
+  // MOR-3677: the authority carries the modeFilter group's FilterWidthDisplay
+  // (the spectrum chip's source) next to filterWidthHz, but the DIGEST takes
+  // only the display's state KIND — a held-stale known reading must not churn
+  // the digest every freshness tick, while a state change must reach it.
+  it('mirrors the modeFilter filterWidthDisplay, known with the observed hz', () => {
+    expect(toSpectrumAuthority(state(), caps())?.filterWidthDisplay)
+      .toEqual({ state: 'known', hz: 2400, stale: false });
+  });
+
+  it('the digest carries the display state kind but not the stale flag (MOR-3677)', () => {
+    const freshResult = toSpectrumAuthority(state(), caps());
+    const heldResult = toSpectrumAuthority(withStatus(state(), 'main.filterWidth', stale), caps());
+    expect(heldResult?.filterWidthDisplay).toEqual({ state: 'known', hz: 2400, stale: true });
+    expect(heldResult?.filterWidthHz).toBe(2400);
+    expect(heldResult?.digest).toBe(freshResult?.digest);
+  });
+
+  it('a display state change reaches the digest, and radio-default drops filterWidthHz (MOR-3677)', () => {
+    // The PR1 wire leaf rides in through the same defensive cast the
+    // derivation uses; its FieldStatus row is what the derivation reads.
+    const main = {
+      ...receiver(14_074_000), filterWidth: null, filterWidthRadioDefault: true,
+    } as unknown as ReturnType<typeof receiver>;
+    const s = {
+      ...state({ main }),
+      fieldStatus: {
+        ...state().fieldStatus,
+        'main.filterWidthRadioDefault': freshStatus('main.filterWidthRadioDefault'),
+      },
+    } as ServerState;
+    const result = toSpectrumAuthority(s, caps());
+    expect(result?.filterWidthDisplay).toEqual({ state: 'radio-default' });
+    expect(result?.filterWidthHz).toBeNull();
+    expect(result?.rule).toBeNull();
+    expect(result?.digest).not.toBe(toSpectrumAuthority(state(), caps())?.digest);
+  });
+});
+
+describe('MOR-1409 A06a1 deterministic filter-width snapping', () => {
+  const rule = (config: FilterModeConfig) =>
+    toSpectrumAuthority(state(), caps({ filterConfig: { USB: config } }))!.rule;
+
+  it('snaps tables to the nearest exact entry and resolves ties low', () => {
+    const table = rule(TABLE_RULE);
+    expect(snapSpectrumFilterWidth(1700, table)).toBe(1800);
+    expect(snapSpectrumFilterWidth(1500, table)).toBe(1200);
+    expect(snapSpectrumFilterWidth(-1, table)).toBe(300);
+    expect(snapSpectrumFilterWidth(99_999, table)).toBe(3000);
+  });
+
+  it('snaps segments from each hzMin, across gaps, with deterministic tie-low', () => {
+    const segments = rule(SEGMENT_RULE);
+    expect(snapSpectrumFilterWidth(624, segments)).toBe(600);
+    expect(snapSpectrumFilterWidth(626, segments)).toBe(600);
+    expect(snapSpectrumFilterWidth(550, segments)).toBe(500);
+    expect(snapSpectrumFilterWidth(575, segments)).toBe(600);
+    expect(snapSpectrumFilterWidth(75, segments)).toBe(50);
+    expect(snapSpectrumFilterWidth(9_999, segments)).toBe(3600);
+    const offset = rule({
+      defaults: [275], fixed: false, minHz: 75, maxHz: 275,
+      segments: [{ hzMin: 75, hzMax: 275, stepHz: 50, indexMin: 0 }],
+    });
+    expect(snapSpectrumFilterWidth(100, offset)).toBe(75);
+  });
+
+  it('snaps simple steps from the resolved minimum and rejects invalid inputs', () => {
+    const step = rule(STEP_RULE);
+    expect(snapSpectrumFilterWidth(299, step)).toBe(250);
+    expect(snapSpectrumFilterWidth(300, step)).toBe(250);
+    expect(snapSpectrumFilterWidth(301, step)).toBe(350);
+    expect(snapSpectrumFilterWidth(Number.NaN, step)).toBeNull();
+    expect(snapSpectrumFilterWidth(1000, null)).toBeNull();
+    expect(snapSpectrumFilterWidth(1000, { kind: 'step', minHz: 0, maxHz: 10, stepHz: 0 })).toBeNull();
+  });
+});
+
+describe('MOR-1409 A06a1 decoder and purity boundary', () => {
+  it('keeps wire receiver, mode, span and pixels unchanged', () => {
+    const buffer = scopeWire({ sourceId: 'scope', epoch: 3, receiver: 1, viewStartHz: 14_000_000, viewEndHz: 14_350_000, pixels: new Uint8Array([255]) });
+    const parsed = ingressScopeFrame(buffer, { source: 'radio', sourceId: 'scope', epoch: 3, mode: 2 });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error(parsed.reason);
+    expect(parsed.frame).toEqual({ source: 'radio', sourceId: 'scope', epoch: 3, receiver: 1,
+      seq: 0, sentAtMs: null, viewStartHz: 14_000_000, viewEndHz: 14_350_000,
+      coverageStartHz: 14_000_000, coverageEndHz: 14_350_000, width: 1, outOfRange: false,
+      pixels: new Uint8Array([0xff]) });
+    expect(parsed.geometry.mode).toBe(2);
+  });
+
+  it('keeps frame/pixel/runtime/store/transport inputs outside the selector permission path', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/lib/runtime/adapters/scope-adapter.ts'), 'utf8');
+    const selector = source.slice(source.indexOf('export function toSpectrumAuthority'));
+    expect(selector).toMatch(/toSpectrumAuthority\(\s*state[^,]*,\s*caps/);
+    expect(selector).not.toMatch(/ScopeFrame|pixels|Uint8Array|FrontendRuntime|radio\.svelte|transport|sendCommand/);
+  });
+});
+
+function wireBuffer(bytes: readonly number[]): ArrayBuffer { return Uint8Array.from(bytes).buffer; }
+
+describe('MOR-2326 typed scope geometry and authority boundaries', () => {
+  it('preserves captured OOR metadata as a distinct display state without pixels', () => {
+    const parsed = ingressScopeFrame(wireBuffer(fixtures.outOfRange), { source: 'radio', sourceId: 'scope', epoch: 3 });
+    expect(parsed.ok).toBe(true); if (!parsed.ok) throw new Error(parsed.reason);
+    expect(parsed.frame).toMatchObject({ outOfRange: true, viewStartHz: 144_000_000, viewEndHz: 148_000_000, pixels: null });
+    expect(parsed.geometry).toMatchObject({ outOfRange: true, hasPixels: false });
+    const candidate = parsed.geometry;
+    expect(candidate).toMatchObject({ outOfRange: true, view: { startHz: 144_000_000, endHz: 148_000_000 }, hasPixels: false });
+    expect(resolveLcdSpectrumFrame(candidate, { source: 'hardware', receiver: 'SUB' }).state).toBe('out-of-range');
+    expect(resolveLcdSpectrumFrame({ ...parsed.geometry, freshness: 'stale' },
+      { source: 'hardware', receiver: 'SUB' }).state).toBe('ghost');
+  });
+
+  it.each([['radio', 'hardware'], ['audio_fft', 'audio-fft']] as const)(
+    'projects nominal %s bytes without normalization or copying', (source, displaySource) => {
+      const buffer = scopeWire({ source, sourceId: 'scope', receiver: 0 });
+      const parsed = ingressScopeFrame(buffer, { source, sourceId: 'scope', epoch: 3 });
+      expect(parsed.ok).toBe(true); if (!parsed.ok) throw new Error(parsed.reason);
+      const result = resolveLcdSpectrumFrame(parsed.geometry, { source: displaySource, receiver: 'MAIN' });
+      expect(result).toEqual({ state: 'live', geometry: parsed.geometry });
+      expect(parsed.geometry).toMatchObject({ source, receiver: 0, freshness: 'fresh',
+        view: { startHz: 14_000_000, endHz: 14_100_000 } });
+      expect(parsed.frame.pixels).toEqual(new Uint8Array([0, 64, 128, 255]));
+      expect(Object.isFrozen(parsed.frame)).toBe(true);
+      if (result.state === 'ghost') throw new Error(result.reason);
+      expect(result.geometry).toBe(parsed.geometry);
+      expect(parsed.frame.pixels!.buffer).toBe(buffer);
+      expect(SCOPE_FRAME_SILENCE_MS).toBe(500);
+    });
+
+  it.each([0, 65_535])('keeps wire sequence %i diagnostic independently of session identity', seq => {
+    const buffer = wireBuffer(fixtures.radio); new DataView(buffer).setUint32(12, seq, true);
+    const parsed = parseCurrentScopeFrame(buffer, { source: 'radio', sourceId: 'scope', epoch: 3 });
+    expect(parsed.ok).toBe(true); if (!parsed.ok) throw new Error(parsed.reason);
+    expect(parsed.frame.seq).toBe(seq); expect(parsed.frame.epoch).toBe(7);
+  });
+
+  it.each(['source', 'receiver', 'provider', 'transport epoch', 'demand', 'transport state'] as const)(
+    'invalidates %s geometry without retaining the deleted evidence envelope', async boundary => {
+      const binary = new Set<(buffer: ArrayBuffer) => void>();
+      const states = new Set<(state: string) => void>();
+      const sessions = new Set<(event: { state: string; epoch: number }) => void>();
+      let state = 'disconnected'; let epoch = 1;
+      const transition = (next: string) => { state = next; for (const f of states) f(next); for (const f of sessions) f({ state, epoch }); };
+      const channel = { get state() { return state; }, get sessionEpoch() { return epoch; },
+        sendRaw: () => true, onMessage: () => () => {},
+        connect: () => transition('connecting'), disconnect: () => transition('disconnected'),
+        onBinary: (f: (buffer: ArrayBuffer) => void) => { binary.add(f); return () => binary.delete(f); },
+        onStateChange: (f: (state: string) => void) => { states.add(f); return () => states.delete(f); },
+        onSessionTransition: (f: (event: { state: string; epoch: number }) => void) => { sessions.add(f); return () => sessions.delete(f); } };
+      const controller = new ScopeController(() => channel as never);
+      controller.stream('hardware').setSource('radio', 'scope-1');
+      controller.setFrameAuthority({ source: 'hardware', receiver: 0, providerGeneration: 7 });
+      const stream = controller.stream('hardware'); const geometry = vi.fn(); stream.geometry.subscribe(geometry);
+      const handle = await controller.hardwareScopeDriver.start(); transition('connected');
+      for (const f of binary) f(wireBuffer(fixtures.radio));
+      expect(geometry.mock.lastCall?.[0]).toMatchObject({ freshness: 'fresh', receiver: 0 });
+      if (boundary === 'source') controller.setFrameAuthority({ source: 'audio_fft', receiver: 0, providerGeneration: 7 });
+      if (boundary === 'receiver') controller.setFrameAuthority({ source: 'hardware', receiver: 1, providerGeneration: 7 });
+      if (boundary === 'provider') controller.setFrameAuthority({ source: 'hardware', receiver: 0, providerGeneration: 8 });
+      if (boundary === 'transport epoch') { epoch += 1; transition('connected'); }
+      if (boundary === 'demand') await controller.hardwareScopeDriver.stop(handle);
+      if (boundary === 'transport state') transition('reconnecting');
+      expect(geometry.mock.lastCall?.[0]).toBeNull();
+      await controller.hardwareScopeDriver.stop(handle);
+    });
+});

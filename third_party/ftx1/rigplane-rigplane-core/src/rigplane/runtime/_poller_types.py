@@ -1,0 +1,1540 @@
+"""Shared command types and CommandQueue for radio pollers.
+
+These types are used by both the web layer (``web.radio_poller``) and
+backend pollers (e.g. ``backends.yaesu_cat.poller``).  Keeping them in
+a neutral module avoids backend → web import cycles.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any, Literal, TypeAlias
+
+from rigplane.core.command_dispatch import DispatchRadio, prepare_command_intent
+from rigplane.core.exceptions import CommandError
+from rigplane.core.state_pipeline_contracts import (
+    CommandIntent,
+    CommandSource,
+    FieldPath,
+)
+from rigplane.runtime.controller_authority import ControllerAuthority, ControllerTicket
+
+__all__ = [
+    "Command",
+    "CommandQueue",
+    "CommandQueueEntry",
+    "LEGACY_COMMAND_NAMES",
+    "execute_positive_tx_queue_entry",
+    "validate_command_queue_entry_currency",
+    "canonicalize_level_command",
+    "execute_command_queue_entry",
+    # -- command dataclasses (alphabetical) --
+    "DisableScope",
+    "EnableScope",
+    "MemoryClear",
+    "MemoryToVfo",
+    "MemoryWrite",
+    "PttOff",
+    "PttOn",
+    "QuickDualWatch",
+    "QuickDwTrigger",
+    "QuickSplit",
+    "QuickSplitTrigger",
+    "ResetFilterWidth",
+    "ScanSetDfSpan",
+    "ScanSetResume",
+    "ScanStart",
+    "ScanStop",
+    "SelectVfo",
+    "SendCiv",
+    "SetAcc1ModLevel",
+    "SetAfLevel",
+    "SetAfMute",
+    "SetAgc",
+    "SetAgcTimeConstant",
+    "SetAntenna1",
+    "SetAntenna2",
+    "SetApf",
+    "SetAttenuator",
+    "SetAudioPeakFilter",
+    "SetAutoNotch",
+    "SetBand",
+    "SetBreakIn",
+    "SetBreakInDelay",
+    "SetBsr",
+    "SetCivOutputAnt",
+    "SetCivTransceive",
+    "SetCompressor",
+    "SetCompressorLevel",
+    "SetCwPitch",
+    "SetDashRatio",
+    "SetData1ModInput",
+    "SetData2ModInput",
+    "SetData3ModInput",
+    "SetDataMode",
+    "SetDataOffModInput",
+    "SetDialLock",
+    "SetDigiSel",
+    "SetDigiselShift",
+    "SetDriveGain",
+    "SetDualWatch",
+    "SetFilter",
+    "SetFilterShape",
+    "SetFilterWidth",
+    "SetFreq",
+    "SetVfoFreq",
+    "SetIfShift",
+    "SetIpPlus",
+    "SetKeySpeed",
+    "SetLanModLevel",
+    "SetMainSubTracking",
+    "SetManualNotch",
+    "SetManualNotchWidth",
+    "SetMemoryContents",
+    "SetMemoryMode",
+    "SetMicGain",
+    "SetMode",
+    "SetMonitor",
+    "SetMonitorGain",
+    "SetNarrow",
+    "SetNB",
+    "SetNBLevel",
+    "SetNR",
+    "SetNRLevel",
+    "SetNbDepth",
+    "SetNbWidth",
+    "SetNotchFilter",
+    "SetPbtInner",
+    "SetPbtOuter",
+    "SetPower",
+    "SetPowerstat",
+    "SetPreamp",
+    "SetQuickDualWatch",
+    "SetQuickSplit",
+    "SetRefAdjust",
+    "SetRepeaterTone",
+    "SetRepeaterTsql",
+    "SetRfGain",
+    "SetRitFrequency",
+    "SetRitStatus",
+    "SetRitTxStatus",
+    "SetRxAntenna",
+    "SetRxAntennaAnt1",
+    "SetRxAntennaAnt2",
+    "SetScopeCenterType",
+    "SetScopeDual",
+    "SetScopeDuringTx",
+    "SetScopeEdge",
+    "SetScopeFixedEdge",
+    "SetScopeHold",
+    "SetScopeMode",
+    "SetScopeRbw",
+    "SetScopeRef",
+    "SetScopeSpeed",
+    "SetScopeSpan",
+    "SetScopeVbw",
+    "SetSplit",
+    "SetSquelch",
+    "SetSsbTxBandwidth",
+    "SetSystemDate",
+    "SetSystemTime",
+    "SetTunerStatus",
+    "SetTuningStep",
+    "SetTwinPeak",
+    "SetUsbModLevel",
+    "SetUtcOffset",
+    "SetVox",
+    "SetVoxDelay",
+    "SetVoxGain",
+    "SetAntiVoxGain",
+    "SetXfcStatus",
+    "SwitchScopeReceiver",
+    "VfoEqualize",
+    "VfoSwap",
+]
+
+
+# ------------------------------------------------------------------
+# Command types
+# ------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SetFreq:
+    freq: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetVfoFreq:
+    """Fixed slot write, guarded by the identity captured when editing began."""
+
+    freq: int
+    receiver: int
+    slot: str
+    expected_active_slot: str
+    provider_generation: int
+
+    def __post_init__(self) -> None:
+        for name in ("freq", "receiver", "provider_generation"):
+            if type(getattr(self, name)) is not int:
+                raise ValueError(f"{name} must be an integer")
+        if not 0 <= self.freq <= 9_999_999_999 or self.provider_generation < 0:
+            raise ValueError("frequency or provider generation out of range")
+        if self.receiver != 0 or self.slot not in ("A", "B"):
+            raise ValueError("direct frequency requires receiver 0 and slot A/B")
+        if self.expected_active_slot not in ("A", "B"):
+            raise ValueError("expected_active_slot must be A/B")
+
+
+@dataclass(frozen=True, slots=True)
+class SetMode:
+    mode: str
+    filter_width: int | None = None
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SendCiv:
+    command: int
+    sub: int | None = None
+    data: bytes = b""
+
+
+@dataclass(frozen=True, slots=True)
+class SetFilter:
+    filter_num: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetFilterWidth:
+    width: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ResetFilterWidth:
+    """Return the width to the radio's own default (MOR-2535).
+
+    Carries no target value: the radio resolves its mode-dependent default
+    itself, so there is nothing to coalesce or confirm against — the width
+    arrives through the ordinary post-write readback of the
+    ``freq_mode.filter_width`` field.
+    """
+
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetFilterShape:
+    shape: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetPower:
+    """Set TX RF power.
+
+    The ``unit`` tag disambiguates the level scale between backends:
+
+    - ``"raw_255"`` (default) — Icom CI-V scale, integer 0-255.
+    - ``"watts"`` — Yaesu CAT scale, integer watts (PC command, 0-999).
+
+    Each backend's poller verifies the unit matches its expected scale and
+    rejects mismatches with a clear ``ValueError``. The default keeps existing
+    Icom call sites unchanged (no migration churn).
+    """
+
+    level: int
+    unit: Literal["raw_255", "watts"] = "raw_255"
+
+
+@dataclass(frozen=True, slots=True)
+class SetRfGain:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetAfLevel:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetSquelch:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetNB:
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetNR:
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetDigiSel:
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetIpPlus:
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetAttenuator:
+    db: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetPreamp:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetPbtInner:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetPbtOuter:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetIfShift:
+    offset: int  # signed Hz
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetNRLevel:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetNBLevel:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetAutoNotch:
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetManualNotch:
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetNarrow:
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetNotchFilter:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetAgcTimeConstant:
+    value: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetCwPitch:
+    value: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetKeySpeed:
+    speed: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetBreakIn:
+    mode: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetApf:
+    mode: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetTwinPeak:
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetDriveGain:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class ScanStart:
+    scan_type: int = (
+        0x01  # 0x01=programmed, 0x02=P2, 0x03=ΔF, 0x12=fine, 0x22=mem, 0x23=sel_mem
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ScanStop:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ScanSetDfSpan:
+    span: int  # 0xA1=±5k, 0xA2=±10k, 0xA3=±20k, 0xA4=±50k, 0xA5=±100k, 0xA6=±500k, 0xA7=±1M
+
+
+@dataclass(frozen=True, slots=True)
+class ScanSetResume:
+    mode: int  # 0xD0=OFF, 0xD1=5s, 0xD2=10s, 0xD3=15s
+
+
+@dataclass(frozen=True, slots=True)
+class SetDataMode:
+    mode: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetMicGain:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetVox:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetTunerStatus:
+    """0=OFF, 1=ON, 2=tune."""
+
+    value: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetCompressorLevel:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetMonitor:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetMonitorGain:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetDialLock:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetAgc:
+    mode: int  # 1=FAST, 2=MID, 3=SLOW
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetRitStatus:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetRitTxStatus:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetRitFrequency:
+    freq: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetSplit:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PttOn:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class PttOff:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class SetBand:
+    band: int  # CI-V band code: 0x00=160m, 0x01=80m, ... 0x09=6m
+
+
+@dataclass(frozen=True, slots=True)
+class SelectVfo:
+    vfo: str
+
+
+@dataclass(frozen=True, slots=True)
+class VfoSwap:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class VfoEqualize:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class EnableScope:
+    policy: str = "fast"
+
+
+@dataclass(frozen=True, slots=True)
+class DisableScope:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class SwitchScopeReceiver:
+    receiver: int  # 0=MAIN, 1=SUB
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeDuringTx:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeCenterType:
+    center_type: int  # 0-2
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeFixedEdge:
+    edge: int
+    start_hz: int
+    end_hz: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeDual:
+    dual: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeMode:
+    mode: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeSpan:
+    span: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeSpeed:
+    speed: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeRef:
+    ref: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeHold:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeEdge:
+    """Select fixed-edge number (1-4)."""
+
+    edge: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeVbw:
+    """Set scope VBW (Video Bandwidth): narrow=True for narrow."""
+
+    narrow: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetScopeRbw:
+    """Set scope RBW (Resolution Bandwidth): 0=wide, 1=mid, 2=narrow."""
+
+    rbw: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetPowerstat:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetAntenna1:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetAntenna2:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetRxAntennaAnt1:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetRxAntennaAnt2:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetSystemDate:
+    year: int
+    month: int
+    day: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetSystemTime:
+    hour: int
+    minute: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetAcc1ModLevel:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetUsbModLevel:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetLanModLevel:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetDualWatch:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetCompressor:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetMainSubTracking:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetSsbTxBandwidth:
+    value: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetManualNotchWidth:
+    value: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetBreakInDelay:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetVoxGain:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetAntiVoxGain:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetVoxDelay:
+    level: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetNbDepth:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetNbWidth:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetDashRatio:
+    value: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetRepeaterTone:
+    """TX-policy classification token for ``set_func TONE`` (rigctld).
+
+    No dispatch arm executes it: the rigctld TX-policy seat builds it to
+    classify the intent.
+    """
+
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetRepeaterTsql:
+    """TX-policy classification token for ``set_func TSQL`` (rigctld).
+
+    No dispatch arm executes it: the rigctld TX-policy seat builds it to
+    classify the intent.
+    """
+
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetRxAntenna:
+    antenna: int  # 1 or 2
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetMemoryMode:
+    channel: int
+    group: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryWrite:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryToVfo:
+    channel: int
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryClear:
+    channel: int
+    group: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SetMemoryContents:
+    mem: Any  # MemoryChannel dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class SetBsr:
+    bsr: Any  # BandStackRegister dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class SetDataOffModInput:
+    source: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetData1ModInput:
+    source: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetData2ModInput:
+    source: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetData3ModInput:
+    source: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetAudioPeakFilter:
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetRefAdjust:
+    value: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetCivTransceive:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetCivOutputAnt:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetAfMute:
+    on: bool
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetDigiselShift:
+    level: int
+    receiver: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SetTuningStep:
+    step: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetXfcStatus:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetUtcOffset:
+    hours: int
+    minutes: int
+    is_negative: bool
+
+
+@dataclass(frozen=True, slots=True)
+class QuickSplit:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class QuickDualWatch:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class SetQuickSplit:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetQuickDualWatch:
+    on: bool
+
+
+@dataclass(frozen=True, slots=True)
+class QuickDwTrigger:
+    """Emulate the physical [DUAL-W] long-press:
+    equalize MAIN→SUB, then enable Dual Watch.
+    Composite of `0x07 0xB1` + `0x07 0xC1`.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class QuickSplitTrigger:
+    """Emulate the physical [SPLIT] long-press:
+    equalize MAIN→SUB, then enable Split.
+    Composite of `0x07 0xB1` + `0x0F 0x01`.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class Speak:
+    """Trigger voice synthesizer: 0=all, 1=freq+S, 2=mode."""
+
+    mode: int = 0
+
+
+Command: TypeAlias = (
+    CommandIntent
+    | SetFreq
+    | SetVfoFreq
+    | SetMode
+    | SendCiv
+    | SetFilter
+    | SetFilterShape
+    | SetFilterWidth
+    | ResetFilterWidth
+    | SetPower
+    | SetRfGain
+    | SetAfLevel
+    | SetSquelch
+    | SetNB
+    | SetNR
+    | SetDigiSel
+    | SetIpPlus
+    | SetAttenuator
+    | SetPreamp
+    | SetPbtInner
+    | SetPbtOuter
+    | SetIfShift
+    | SetNRLevel
+    | SetNBLevel
+    | SetAutoNotch
+    | SetManualNotch
+    | SetNarrow
+    | SetNotchFilter
+    | SetAgcTimeConstant
+    | SetCwPitch
+    | SetKeySpeed
+    | SetBreakIn
+    | SetApf
+    | SetTwinPeak
+    | SetDriveGain
+    | ScanStart
+    | ScanStop
+    | ScanSetDfSpan
+    | ScanSetResume
+    | SetDataMode
+    | SetMicGain
+    | SetVox
+    | SetCompressorLevel
+    | SetMonitor
+    | SetMonitorGain
+    | SetDialLock
+    | SetAgc
+    | SetRitStatus
+    | SetRitTxStatus
+    | SetRitFrequency
+    | SetSplit
+    | PttOn
+    | PttOff
+    | SetBand
+    | SelectVfo
+    | VfoSwap
+    | VfoEqualize
+    | EnableScope
+    | DisableScope
+    | SwitchScopeReceiver
+    | SetScopeDuringTx
+    | SetScopeCenterType
+    | SetScopeEdge
+    | SetScopeFixedEdge
+    | SetScopeDual
+    | SetScopeMode
+    | SetScopeSpan
+    | SetScopeSpeed
+    | SetScopeRef
+    | SetScopeHold
+    | SetScopeVbw
+    | SetScopeRbw
+    | SetPowerstat
+    | SetAntenna1
+    | SetAntenna2
+    | SetRxAntennaAnt1
+    | SetRxAntennaAnt2
+    | SetSystemDate
+    | SetSystemTime
+    | SetAcc1ModLevel
+    | SetUsbModLevel
+    | SetLanModLevel
+    | SetDualWatch
+    | SetCompressor
+    | SetMainSubTracking
+    | SetSsbTxBandwidth
+    | SetManualNotchWidth
+    | SetBreakInDelay
+    | SetVoxGain
+    | SetAntiVoxGain
+    | SetVoxDelay
+    | SetNbDepth
+    | SetNbWidth
+    | SetDashRatio
+    | SetRepeaterTone
+    | SetRepeaterTsql
+    | SetRxAntenna
+    | SetMemoryMode
+    | MemoryWrite
+    | MemoryToVfo
+    | MemoryClear
+    | SetMemoryContents
+    | SetBsr
+    | SetDataOffModInput
+    | SetData1ModInput
+    | SetData2ModInput
+    | SetData3ModInput
+    | SetAudioPeakFilter
+    | SetDigiselShift
+    | SetRefAdjust
+    | SetCivTransceive
+    | SetCivOutputAnt
+    | SetAfMute
+    | SetTunerStatus
+    | SetTuningStep
+    | SetXfcStatus
+    | SetUtcOffset
+    | QuickSplit
+    | QuickDualWatch
+    | SetQuickSplit
+    | SetQuickDualWatch
+    | QuickDwTrigger
+    | QuickSplitTrigger
+    | Speak
+)
+
+
+def canonicalize_level_command(
+    command: Command,
+    radio: DispatchRadio,
+    *,
+    command_id: str | None = None,
+    source: CommandSource = "websocket",
+    session_id: str | None = None,
+) -> Command:
+    match command:
+        case SetAfLevel(level=level, receiver=receiver):
+            name = "set_af_level"
+        case SetRfGain(level=level, receiver=receiver):
+            name = "set_rf_gain"
+        case SetSquelch(level=level, receiver=receiver):
+            name = "set_squelch"
+        case _:
+            return command
+    return prepare_command_intent(
+        radio,
+        name,
+        {"level": level, "receiver": receiver},
+        source=source,
+        command_id=command_id,
+        session_id=session_id,
+    )
+
+
+# The canonical command name each legacy dataclass is the enqueued form of.
+# It is the only thing a legacy command declares about its own read-after-
+# write: the field paths come from ``core/command_service.py:
+# expected_observations_for_command`` (descriptor-backed names such as
+# ``set_att`` carry their target from ``CommandDescriptor.target`` instead).
+# ``web/radio_poller.py: RadioPoller._request_post_write_readback`` is the
+# consumer.
+#
+# A ``Set*`` dispatch arm absent from here gets no readback;
+# ``tests/test_post_write_readback_one_path.py`` enumerates the arms and
+# fails on any that is neither listed here nor classified there.
+LEGACY_COMMAND_NAMES: dict[type, str] = {
+    SetFreq: "set_freq",
+    SetVfoFreq: "set_vfo_freq",
+    SetMode: "set_mode",
+    SetFilter: "set_filter",
+    SetFilterWidth: "set_filter_width",
+    ResetFilterWidth: "reset_filter_width",
+    SetFilterShape: "set_filter_shape",
+    SetDataMode: "set_data_mode",
+    SetAttenuator: "set_att",
+    SetPreamp: "set_preamp",
+    SetNB: "set_nb",
+    SetNR: "set_nr",
+    SetNBLevel: "set_nb_level",
+    SetNRLevel: "set_nr_level",
+    SetAutoNotch: "set_auto_notch",
+    SetManualNotch: "set_manual_notch",
+    SetNarrow: "set_narrow",
+    SetManualNotchWidth: "set_manual_notch_width",
+    SetNotchFilter: "set_notch_filter",
+    SetTwinPeak: "set_twin_peak",
+    SetAgcTimeConstant: "set_agc_time_constant",
+    SetDigiSel: "set_digisel",
+    SetIpPlus: "set_ip_plus",
+    SetPbtInner: "set_pbt_inner",
+    SetPbtOuter: "set_pbt_outer",
+    SetRitFrequency: "set_rit_frequency",
+    SetRitStatus: "set_rit_status",
+    SetRitTxStatus: "set_rit_tx_status",
+    SetBreakInDelay: "set_break_in_delay",
+    SetPower: "set_rf_power",
+    SetPowerstat: "set_powerstat",
+    SetSplit: "set_split",
+    # MOR-2425 PR-1b.
+    SetAgc: "set_agc",
+    SetTunerStatus: "set_tuner_status",
+    SetMicGain: "set_mic_gain",
+    SetCompressor: "set_compressor",
+    SetCompressorLevel: "set_compressor_level",
+    SetMonitor: "set_monitor",
+    SetMonitorGain: "set_monitor_gain",
+    SetVox: "set_vox",
+    SetVoxGain: "set_vox_gain",
+    SetAntiVoxGain: "set_anti_vox_gain",
+    SetVoxDelay: "set_vox_delay",
+    # MOR-2425 PR-3: the CW keyer trio and the ten scope-display leaves
+    # folded off the two bespoke confirms in ``web/radio_poller.py``.
+    SetCwPitch: "set_cw_pitch",
+    SetKeySpeed: "set_key_speed",
+    SetBreakIn: "set_break_in",
+    SetScopeDuringTx: "set_scope_during_tx",
+    SetScopeCenterType: "set_scope_center_type",
+    SetScopeEdge: "set_scope_edge",
+    SetScopeVbw: "set_scope_vbw",
+    SetScopeDual: "set_scope_dual",
+    SetScopeMode: "set_scope_mode",
+    SetScopeSpan: "set_scope_span",
+    SetScopeSpeed: "set_scope_speed",
+    SetScopeRef: "set_scope_ref",
+    SetScopeHold: "set_scope_hold",
+}
+
+
+# ------------------------------------------------------------------
+# CommandQueue
+# ------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class CommandQueueEntry:
+    command: Command | None
+    future: asyncio.Future[Any] | None = None
+    command_id: str | None = None
+    source: CommandSource | None = None
+    session_id: str | None = None
+    command_service: Any | None = None
+    expires_at_monotonic: float | None = None
+    provider_generation: int | None = None
+    connection_generation: object | None = None
+    positive_tx_ready: asyncio.Future[None] | None = None
+    positive_tx_submission: asyncio.Task[Any] | None = None
+    controller_ticket: ControllerTicket | None = None
+
+
+def validate_command_queue_entry_currency(
+    entry: CommandQueueEntry,
+    *,
+    now: float,
+    provider_generation: int | None,
+    connection_generation: object | None,
+    session_is_live: Callable[[str], bool],
+    require_connection_generation: bool = False,
+) -> None:
+    """Reject a captured dispatch envelope after any causal input moved."""
+    if entry.expires_at_monotonic is not None and now >= entry.expires_at_monotonic:
+        raise CommandError("queued command expired before dispatch")
+    if entry.session_id is not None and not session_is_live(entry.session_id):
+        raise CommandError("queued command session is no longer active")
+    if (
+        entry.provider_generation is not None
+        and entry.provider_generation != provider_generation
+    ):
+        raise CommandError("queued command provider generation changed")
+    if require_connection_generation and entry.connection_generation is None:
+        raise CommandError("queued command connection generation is missing")
+    if (
+        entry.connection_generation is not None
+        and entry.connection_generation != connection_generation
+    ):
+        raise CommandError("queued command connection generation changed")
+    if entry.controller_ticket is not None:
+        entry.controller_ticket.authority.validate(entry.controller_ticket)
+
+
+async def execute_positive_tx_queue_entry(entry: CommandQueueEntry) -> None:
+    """Release one pre-registered positive transition and join its wire result."""
+    ready, submission = entry.positive_tx_ready, entry.positive_tx_submission
+    if ready is None or submission is None:
+        raise CommandError("positive TX queue entry is incomplete")
+    if ready.cancelled():
+        raise CommandError("positive TX queue entry was cancelled")
+    if not ready.done():
+        ready.set_result(None)
+    owner = asyncio.current_task()
+    cancelling = owner.cancelling() if owner is not None else 0
+    try:
+        receipt = await asyncio.shield(submission)
+    except asyncio.CancelledError as exc:
+        if owner is not None and owner.cancelling() > cancelling:
+            raise
+        raise CommandError("positive TX admission was revoked") from exc
+    outcome = getattr(receipt, "outcome", None)
+    if getattr(outcome, "value", outcome) != "accepted":
+        raise CommandError("positive TX admission was rejected")
+    await receipt.wait_settlement()
+
+
+async def execute_command_queue_entry(
+    entry: CommandQueueEntry,
+    execute: Callable[[CommandQueueEntry], Awaitable[Any]],
+) -> None:
+    """Keep the operation owned until its leaf and cancellation cleanup finish."""
+    reply = entry.future
+    if reply is not None and reply.cancelled():
+        submission = entry.positive_tx_submission
+        if submission is not None and not submission.done():
+            submission.cancel()
+            await asyncio.gather(submission, return_exceptions=True)
+        return
+
+    async def invoke() -> Any:
+        if reply is not None and reply.cancelled():
+            return None
+        return await execute(entry)
+
+    owner = asyncio.current_task()
+    cancelling = owner.cancelling() if owner is not None else 0
+    child = asyncio.create_task(invoke())
+
+    def cancel_request_leaf(done: asyncio.Future[Any]) -> None:
+        if done.cancelled() and not child.done() and not child.cancelling():
+            child.cancel()
+
+    reply_cancel_callback: Callable[[asyncio.Future[Any]], None] | None = None
+    if (
+        reply is not None
+        and entry.positive_tx_ready is None
+        and entry.positive_tx_submission is None
+        and isinstance(entry.command, CommandIntent)
+        and entry.command.source == "rigctld"
+        and entry.command.name in ("set_split_freq", "set_split_mode")
+    ):
+        reply_cancel_callback = cancel_request_leaf
+        reply.add_done_callback(reply_cancel_callback)
+    try:
+        result = await asyncio.shield(child)
+    except asyncio.CancelledError:
+        if owner is not None and owner.cancelling() > cancelling:
+            if reply_cancel_callback is None or not child.cancelling():
+                child.cancel()
+            while not child.done():
+                try:
+                    await asyncio.shield(child)
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if not child.cancelled():
+                child.exception()
+            if reply is not None and not reply.done():
+                reply.cancel()
+            submission = entry.positive_tx_submission
+            if submission is not None and not submission.done():
+                submission.cancel()
+                await asyncio.gather(submission, return_exceptions=True)
+            raise
+        if reply is not None and not reply.done():
+            reply.cancel()
+    except Exception as exc:
+        submission = entry.positive_tx_submission
+        if submission is not None and not submission.done():
+            submission.cancel()
+            await asyncio.gather(submission, return_exceptions=True)
+        if reply is not None and not reply.done():
+            reply.set_exception(exc)
+        raise
+    else:
+        if reply is not None and not reply.done():
+            reply.set_result(result)
+    finally:
+        if reply is not None and reply_cancel_callback is not None:
+            reply.remove_done_callback(reply_cancel_callback)
+
+
+@dataclass(slots=True)
+class _CommandQueueSegment:
+    kind: Literal["coalesced", "ordered"]
+    ptt: list[CommandQueueEntry] = field(default_factory=list)
+    dedup: dict[type | tuple[str, FieldPath | None], CommandQueueEntry] = field(
+        default_factory=dict,
+    )
+    ordered: list[CommandQueueEntry] = field(default_factory=list)
+
+    @classmethod
+    def coalesced(cls) -> "_CommandQueueSegment":
+        return cls(kind="coalesced")
+
+    @classmethod
+    def ordered_entry(cls, entry: CommandQueueEntry) -> "_CommandQueueSegment":
+        return cls(kind="ordered", ordered=[entry])
+
+    @property
+    def has_commands(self) -> bool:
+        return bool(self.ptt or self.dedup or self.ordered)
+
+    def entries(self) -> list[CommandQueueEntry]:
+        if self.kind == "ordered":
+            return list(self.ordered)
+        entries: list[CommandQueueEntry] = []
+        entries.extend(self.ptt)
+        entries.extend(self.dedup.values())
+        return entries
+
+
+class CommandQueue:
+    def __init__(self) -> None:
+        self._segments: list[_CommandQueueSegment] = []
+        self._notify: asyncio.Event = asyncio.Event()
+        # MOR-1013: ids of the control sessions currently connected. An entry
+        # outlives its author, and the poller keys on behalf of a session it
+        # cannot otherwise see (decision D1-a), so the queue that carries the
+        # entry from ingress to drain carries the liveness record too.
+        # ``None`` until the first registration: a queue no session ever
+        # registered on knows nothing and must not answer "gone" for ids it was
+        # never told about. Once any session registers the set is authoritative
+        # even when empty — that is the every-session-gone case, not ignorance.
+        self._live_sessions: set[str] | None = None
+        self._capture_connection_generation: Callable[[], object | None] | None = None
+        self._controller: ControllerAuthority | None = None
+
+    def bind_controller(self, controller: ControllerAuthority) -> None:
+        if self._controller is not None and self._controller is not controller:
+            raise RuntimeError("command queue controller is already bound")
+        self._controller = controller
+
+    def _controller_ticket(self, cmd: Command | None) -> ControllerTicket | None:
+        # Negative safety work never grants a controlling seat.  A raw
+        # frame that ends a transmission over send_civ — PTT off
+        # (``1C 00 00``) or the voice TX memory stop (``28 00 00``) —
+        # is the same negative work as the typed PttOff (MOR-3384);
+        # the raw tuner off stays captured, like the typed
+        # set_tuner_status 0.  The import stays local: tx_interlock
+        # imports this module's command dataclasses at load time.
+        from rigplane.runtime.tx_interlock import (
+            is_exact_raw_transmission_end_frame,
+            send_civ_frame,
+        )
+
+        if self._controller is None or isinstance(cmd, PttOff):
+            return None
+        if isinstance(cmd, SendCiv):
+            frame = send_civ_frame(cmd.command, cmd.sub, cmd.data)
+            if frame is not None and is_exact_raw_transmission_end_frame(frame):
+                return None
+        return self._controller.capture()
+
+    def bind_connection_generation(self, capture: Callable[[], object | None]) -> None:
+        """Bind the sole consumer-owned connection identity source."""
+        if self._capture_connection_generation is not None:
+            raise RuntimeError("command queue connection generation is already bound")
+        self._capture_connection_generation = capture
+
+    def unbind_connection_generation(
+        self, capture: Callable[[], object | None]
+    ) -> None:
+        """Release the connection identity source owned by a retired consumer."""
+        if self._capture_connection_generation is not capture:
+            raise RuntimeError(
+                "command queue connection generation is bound to another consumer"
+            )
+        self._capture_connection_generation = None
+
+    def capture_connection_generation(self) -> object:
+        """Capture one required dispatch identity for a managed enqueue."""
+        capture = self._capture_connection_generation
+        if capture is None:
+            raise RuntimeError("command queue connection generation is not bound")
+        generation = capture()
+        if generation is None:
+            raise RuntimeError("command queue connection generation is unavailable")
+        return generation
+
+    def register_session(self, session_id: str) -> None:
+        """Mark a control session live for as long as it stays connected."""
+        if self._live_sessions is None:
+            self._live_sessions = set()
+        self._live_sessions.add(session_id)
+
+    def unregister_session(self, session_id: str) -> None:
+        """Mark a control session gone; must run on every teardown path."""
+        if self._live_sessions is not None:
+            self._live_sessions.discard(session_id)
+
+    def session_is_live(self, session_id: str) -> bool:
+        """Whether ``session_id`` still has a connected control session."""
+        return self._live_sessions is None or session_id in self._live_sessions
+
+    def _coalesced_tail(self) -> _CommandQueueSegment:
+        if self._segments and self._segments[-1].kind == "coalesced":
+            return self._segments[-1]
+        segment = _CommandQueueSegment.coalesced()
+        self._segments.append(segment)
+        return segment
+
+    def put(
+        self,
+        cmd: Command | None,
+        *,
+        command_id: str | None = None,
+        source: CommandSource | None = None,
+        session_id: str | None = None,
+        command_service: Any | None = None,
+        expires_at_monotonic: float | None = None,
+        provider_generation: int | None = None,
+        connection_generation: object | None = None,
+    ) -> None:
+        controller_ticket = self._controller_ticket(cmd)
+        entry = CommandQueueEntry(
+            cmd,
+            command_id=command_id,
+            source=source,
+            session_id=session_id,
+            command_service=command_service,
+            expires_at_monotonic=expires_at_monotonic,
+            provider_generation=provider_generation,
+            connection_generation=connection_generation,
+            controller_ticket=controller_ticket,
+        )
+        segment = self._coalesced_tail()
+        if isinstance(cmd, (PttOn, PttOff)):
+            segment.ptt.append(entry)
+        else:
+            key = (
+                (cmd.name, cmd.target) if isinstance(cmd, CommandIntent) else type(cmd)
+            )
+            segment.dedup[key] = entry
+        self._notify.set()
+
+    def put_ordered(
+        self,
+        cmd: Command | None,
+        *,
+        future: asyncio.Future[Any] | None = None,
+        command_id: str | None = None,
+        source: CommandSource | None = None,
+        session_id: str | None = None,
+        command_service: Any | None = None,
+        expires_at_monotonic: float | None = None,
+        provider_generation: int | None = None,
+        connection_generation: object | None = None,
+        positive_tx_ready: asyncio.Future[None] | None = None,
+        positive_tx_submission: asyncio.Task[Any] | None = None,
+    ) -> CommandQueueEntry:
+        controller_ticket = self._controller_ticket(cmd)
+        entry = CommandQueueEntry(
+            cmd,
+            future=future,
+            command_id=command_id,
+            source=source,
+            session_id=session_id,
+            command_service=command_service,
+            expires_at_monotonic=expires_at_monotonic,
+            provider_generation=provider_generation,
+            connection_generation=connection_generation,
+            positive_tx_ready=positive_tx_ready,
+            positive_tx_submission=positive_tx_submission,
+            controller_ticket=controller_ticket,
+        )
+        self._segments.append(_CommandQueueSegment.ordered_entry(entry))
+        self._notify.set()
+        if future is not None:
+
+            def remove_cancelled(reply: asyncio.Future[Any]) -> None:
+                # Preserve the legacy final drain's pending-unkey eligibility.
+                if reply.cancelled() and not isinstance(entry.command, PttOff):
+                    self.remove_pending(entry)
+
+            future.add_done_callback(remove_cancelled)
+        return entry
+
+    @property
+    def pending_count(self) -> int:
+        return sum(
+            len(segment.ptt) + len(segment.dedup) + len(segment.ordered)
+            for segment in self._segments
+        )
+
+    def take_entry(self) -> CommandQueueEntry | None:
+        """Claim one pending entry in the existing segment and PTT order."""
+        while self._segments:
+            segment = self._segments[0]
+            if segment.ordered:
+                entry = segment.ordered.pop(0)
+            elif segment.ptt:
+                entry = segment.ptt.pop(0)
+            elif segment.dedup:
+                entry = segment.dedup.pop(next(iter(segment.dedup)))
+            else:
+                self._segments.pop(0)
+                continue
+            if not segment.has_commands:
+                self._segments.pop(0)
+            if not self.has_commands:
+                self._notify.clear()
+            return entry
+        self._notify.clear()
+        return None
+
+    def remove_pending(self, entry: CommandQueueEntry) -> bool:
+        """Remove only this still-pending identity, without completing its reply."""
+        for segment_index, segment in enumerate(self._segments):
+            for entries in (segment.ordered, segment.ptt):
+                for index, pending in enumerate(entries):
+                    if pending is entry:
+                        del entries[index]
+                        if not segment.has_commands:
+                            del self._segments[segment_index]
+                        if not self.has_commands:
+                            self._notify.clear()
+                        return True
+            for key, pending in segment.dedup.items():
+                if pending is entry:
+                    del segment.dedup[key]
+                    if not segment.has_commands:
+                        del self._segments[segment_index]
+                    if not self.has_commands:
+                        self._notify.clear()
+                    return True
+        return False
+
+    def drain(self) -> list[Command]:
+        return [entry.command for entry in self.drain_entries()]
+
+    def drain_entries(self) -> list["CommandQueueEntry"]:
+        self._notify.clear()
+        segments = self._segments
+        self._segments = []
+        entries: list[CommandQueueEntry] = []
+        for segment in segments:
+            entries.extend(segment.entries())
+        return entries
+
+    @property
+    def has_commands(self) -> bool:
+        return any(segment.has_commands for segment in self._segments)
+
+    async def wait(self, timeout: float | None = None) -> None:
+        try:
+            await asyncio.wait_for(self._notify.wait(), timeout=timeout)
+        except (TimeoutError, asyncio.TimeoutError):
+            pass

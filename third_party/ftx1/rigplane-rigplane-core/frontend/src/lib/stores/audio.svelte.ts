@@ -1,0 +1,115 @@
+// Audio state — volume, mute, RX/TX bridge
+import { RX_AF_LEVEL_MAX } from '../audio/rx-player';
+
+let audioState = $state({
+  rxEnabled: false,
+  txEnabled: false,
+  // Browser AF level in percent, 0..RX_AF_LEVEL_MAX * 100; 100 is unity,
+  // the level RxPlayer starts at (MOR-4210).
+  volume: 100,
+  muted: false,
+  micEnabled: false,
+  bridgeRunning: false,
+  // MOR-3753: a requested browser-audio stream the server refused (or that
+  // died mid-stream) stays visible on the status-bar chip after stopRx/stopTx
+  // cleared the demand — demand alone would read "idle, all fine". Latched
+  // only by those failure paths; cleared by an explicit stop or a new
+  // attempt (startRx/startTx), which supersedes it. Never set while idle.
+  rxError: false,
+  txError: false,
+  // MOR-1791: the server reported it cannot decode Opus, so browser TX runs
+  // on the PCM16 capture path instead. A working state, not a fault — it is
+  // surfaced as a quiet status hint, never as a modal or a blocking error.
+  txCodecFallback: false,
+});
+
+export interface RxAudioTargetSnapshot {
+  readonly muted: boolean;
+  readonly rxEnabled: boolean;
+}
+
+export type RxAudioTargetSubscriber = (next: RxAudioTargetSnapshot) => void;
+const rxAudioTargetSubscribers = new Set<RxAudioTargetSubscriber>();
+
+export function getRxAudioTargetSnapshot(): RxAudioTargetSnapshot {
+  return Object.freeze({
+    muted: audioState.muted,
+    rxEnabled: audioState.rxEnabled,
+  });
+}
+
+function notifyRxAudioTargetSubscribers(): void {
+  const snapshot = getRxAudioTargetSnapshot();
+  for (const subscriber of rxAudioTargetSubscribers) {
+    try {
+      subscriber(snapshot);
+    } catch (error) {
+      console.warn('RX audio target subscriber failed', error);
+    }
+  }
+}
+
+export function subscribeRxAudioTarget(subscriber: RxAudioTargetSubscriber): () => void {
+  rxAudioTargetSubscribers.add(subscriber);
+  try {
+    subscriber(getRxAudioTargetSnapshot());
+  } catch (error) {
+    rxAudioTargetSubscribers.delete(subscriber);
+    throw error;
+  }
+  let active = true;
+  return () => {
+    if (!active) return;
+    active = false;
+    rxAudioTargetSubscribers.delete(subscriber);
+  };
+}
+
+export function getAudioState(): typeof audioState {
+  return audioState;
+}
+
+export function setVolume(v: number): void {
+  audioState.volume = Math.max(0, Math.min(RX_AF_LEVEL_MAX * 100, Math.round(v)));
+}
+
+export function toggleMute(): void {
+  audioState.muted = !audioState.muted;
+  notifyRxAudioTargetSubscribers();
+}
+
+export function setMuted(v: boolean): void {
+  if (audioState.muted === v) return;
+  audioState.muted = v;
+  notifyRxAudioTargetSubscribers();
+}
+
+export function setRxEnabled(v: boolean): void {
+  if (audioState.rxEnabled === v) return;
+  audioState.rxEnabled = v;
+  notifyRxAudioTargetSubscribers();
+}
+
+export function setTxEnabled(v: boolean): void {
+  audioState.txEnabled = v;
+}
+
+export function setMicEnabled(v: boolean): void {
+  audioState.micEnabled = v;
+}
+
+export function setBridgeRunning(v: boolean): void {
+  audioState.bridgeRunning = v;
+}
+
+export function setRxError(v: boolean): void {
+  audioState.rxError = v;
+}
+
+export function setTxError(v: boolean): void {
+  audioState.txError = v;
+}
+
+export function setTxCodecFallback(v: boolean): void {
+  audioState.txCodecFallback = v;
+}

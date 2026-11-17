@@ -1,0 +1,936 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { ScopeController } from '$lib/runtime/scope-controller.svelte';
+import { PresentationResourceHost } from '$lib/runtime/resource-host';
+import { ManagedAppTxHarness } from '$lib/runtime/tx-controller/__tests__/support/managed-app-tx-harness';
+import type { ControlSessionSnapshot } from '$lib/runtime/frontend-runtime';
+import type { ServerState } from '$lib/types/state';
+import type { ContinuousScalarBinding, ContinuousScalarRendererLease } from '../../../primitives/scalar/continuous-scalar.svelte';
+import stateFixture from '$lib/runtime/adapters/__tests__/fixtures/ic7300-state.json';
+import capsFixture from '$lib/runtime/adapters/__tests__/fixtures/ic7300-capabilities.json';
+import ftx1StateJson from '$lib/runtime/adapters/__tests__/fixtures/ftx1-state-unobserved-leaves.json';
+import ftx1CapsJson from '$lib/runtime/adapters/__tests__/fixtures/ftx1-capabilities.json';
+import {
+  FTX1_STATE,
+  FTX1_STATE_FULLY_UNOBSERVED,
+} from '$lib/runtime/adapters/__tests__/fixtures/ftx1-profile';
+import { resetCommandLifecycle } from '$lib/stores/commands.svelte';
+import { hasEverConnected } from '$lib/stores/connection.svelte';
+
+const txHarness = new ManagedAppTxHarness({ stale: true });
+import { mount, unmount, flushSync } from 'svelte';
+
+vi.stubGlobal('ResizeObserver', class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+});
+
+vi.mock('$lib/transport/ws-client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('$lib/transport/ws-client')>(),
+  getControlSession: () => ({ state: 'connected' as const, epoch: 7 }),
+  sendCommand: () => true,
+}));
+
+const scalarCapture = vi.hoisted(() => ({
+  bindingsByLease: new WeakMap<object, ContinuousScalarBinding>(),
+}));
+
+vi.mock('../../../primitives/scalar/continuous-scalar.svelte', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../primitives/scalar/continuous-scalar.svelte')>();
+  return {
+    ...actual,
+    createContinuousScalar: (...args: Parameters<typeof actual.createContinuousScalar>) => {
+      const binding = actual.createContinuousScalar(...args);
+      const observed: ContinuousScalarBinding = {
+        get view() { return binding.view; },
+        attachRenderer() {
+          const lease = binding.attachRenderer();
+          scalarCapture.bindingsByLease.set(lease, observed);
+          return lease;
+        },
+        cancel: (reason) => binding.cancel(reason),
+        destroy: () => binding.destroy(),
+      };
+      return observed;
+    },
+  };
+});
+
+vi.mock('../../../component-kits/activation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../component-kits/activation')>();
+  const renderer = await import('../../controls/value-control/__tests__/ExternalScalarRendererFixture.svelte');
+  return {
+    ...actual,
+    getSelectedScalarAppearance: () => ({ name: 'App persistence probe', hbar: renderer.default }),
+  };
+});
+
+vi.mock('../../../components/spectrum/SpectrumPanel.svelte', async () => {
+  const stub = await import('./SpectrumPanelStub.svelte');
+  return { default: stub.default };
+});
+
+vi.mock('../../../lib/local-extensions/LocalExtensionsHost.svelte', async () => {
+  const stub = await import('./SpectrumPanelStub.svelte');
+  return { default: stub.default };
+});
+
+vi.mock('$lib/stores/layout.svelte', () => ({
+  useLcdLayout: vi.fn(() => false),
+  getLayoutMode: vi.fn(() => 'standard'),
+  cycleLayoutMode: vi.fn(),
+  setLayoutMode: vi.fn(),
+}));
+
+// Only the resolver is faked; `loadSkin` stays real so the App-mount test
+// below still exercises the actual lazy entrypoint → RadioLayout path
+// (MOR-1060).
+vi.mock('../../../skins/registry', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../skins/registry')>(),
+  resolveSkinId: vi.fn(() => 'desktop-v2'),
+}));
+
+vi.mock('../../../lib/media/media-session', () => ({
+  initMediaSession: vi.fn(),
+  destroyMediaSession: vi.fn(),
+}));
+
+vi.mock('../../../lib/runtime/frontend-runtime', () => ({
+  get presentationResources() { return rt.resources; },
+  runtime: {
+    get state() { return rt.state; },
+    onTxAudioDied: () => () => {},
+    get caps() { return rt.caps; },
+    subscribeControlAuthority(handler: (publication: unknown) => void) {
+      handler({
+        state: rt.state, caps: rt.caps, session: { state: 'connected', epoch: 7 },
+        rxAudioTarget: Object.freeze({ muted: false, rxEnabled: false }),
+      });
+      return () => {};
+    },
+    connectionStatus: 'disconnected',
+    controlSession: Object.freeze({ state: 'connected', epoch: 7 }) satisfies ControlSessionSnapshot,
+    radioPowerOn: null,
+    connection: { status: 'disconnected', radioPowerOn: null },
+    audio: { rxEnabled: false, txEnabled: false, volume: 50, muted: false },
+    connectionAudio: false,
+    system: { identifyFrequency: vi.fn(async () => ({ stations: [] })) },
+    // MOR-1312 slice 12B: see the `$lib/runtime` mock below for why these
+    // are fixed, honest "never observed" defaults.
+    defaultScopeStatus: {
+      source: null, available: false, resourceSelected: false, demand: 0,
+      lifecycle: 'inactive', transport: 'disconnected', frameSeen: false,
+    },
+    get scope() { return rt.scope; },
+    bootstrap: vi.fn(async () => vi.fn()),
+  },
+}));
+
+// MOR-1235: `state` is a live getter over a mutable holder (default `null`,
+// reset per test) so a test can put a REAL `ptt` on the runtime state and
+// prove the meters dock ignores it in favour of the App TX authority.
+const rt = vi.hoisted(() => ({ state: null as unknown,
+  caps: null as unknown,
+  scope: null as unknown as ScopeController, resources: null as unknown as PresentationResourceHost<unknown>,
+  evidenceListeners: 0,
+}));
+
+vi.mock('$lib/runtime', () => ({
+  get presentationResources() { return rt.resources; },
+  runtime: {
+    get state() { return rt.state; },
+    get caps() { return rt.caps; },
+    subscribeControlAuthority(handler: (publication: unknown) => void) {
+      handler({
+        state: rt.state, caps: rt.caps, session: { state: 'connected', epoch: 7 },
+        rxAudioTarget: Object.freeze({ muted: false, rxEnabled: false }),
+      });
+      return () => {};
+    },
+    controlSession: Object.freeze({ state: 'connected', epoch: 7 }) satisfies ControlSessionSnapshot,
+    subscribeControlSession: () => () => {},
+    connectionStatus: 'disconnected',
+    radioPowerOn: null,
+    connection: { status: 'disconnected', radioPowerOn: null },
+    audio: { rxEnabled: false, txEnabled: false, volume: 50, muted: false },
+    connectionAudio: false,
+    system: { identifyFrequency: vi.fn(async () => ({ stations: [] })) },
+    // MOR-1312 slice 12B: `SemanticRadioSurfaces` now also reads
+    // `runtime.defaultScopeStatus` / `runtime.scope.hardwareScopeConnected`
+    // for the scope-display snapshot (the FIFTH adapter argument). `caps` is
+    // `null` here, so `toRadioViewModel` returns `null` regardless — these
+    // are fixed, honest "never observed" defaults, not exercised behavior.
+    defaultScopeStatus: {
+      source: null, available: false, resourceSelected: false, demand: 0,
+      lifecycle: 'inactive', transport: 'disconnected', frameSeen: false,
+    },
+    get scope() { return rt.scope; },
+  },
+}));
+
+vi.mock('$lib/stores/connection.svelte', () => ({
+  getConnectionStatus: vi.fn(() => ({ connected: false })),
+  getWsConnected: vi.fn(() => false),
+  hasEverConnected: vi.fn(() => false),
+  getRadioPowerOn: vi.fn(() => null),
+  getRadioStatus: vi.fn(() => 'disconnected'),
+  getRadioLinkState: vi.fn(() => 'disconnected'),
+  isScopeConnected: vi.fn(() => false),
+  isAudioConnected: vi.fn(() => false),
+  getRigConnected: vi.fn(() => false),
+  getRadioReady: vi.fn(() => false),
+  getRadioHealth: vi.fn(() => null),
+  // Under the fast pool's ``isolate: false`` this hoisted mock is shared
+  // module-wide; scope-controller.svelte (loaded by a sibling fast-pool
+  // test) imports the real ``markScopeFrame``, so it must be stubbed here
+  // or that sibling throws "No markScopeFrame export". See issue #771.
+  markScopeFrame: vi.fn(),
+}));
+
+vi.mock('$lib/stores/tuning.svelte', () => ({
+  applyModeDefault: vi.fn(),
+}));
+
+import RadioLayout from './fixtures/HostedRadioLayoutFixture.svelte';
+import App from '../../../App.svelte';
+import { hasLiveAudioFromState } from '../layout-utils';
+import { isValidServerState, radio } from '$lib/stores/radio.svelte';
+import { resolveSkinId, type SkinId } from '../../../skins/registry';
+
+// ---------------------------------------------------------------------------
+// hasLiveAudioFromState
+// ---------------------------------------------------------------------------
+
+describe('hasLiveAudioFromState', () => {
+  it('returns false when radioState is null', () => {
+    expect(hasLiveAudioFromState(null)).toBe(false);
+  });
+
+  it('returns true when capabilities.audio is true', () => {
+    expect(hasLiveAudioFromState({ capabilities: { audio: true } })).toBe(true);
+  });
+
+  it('returns false when capabilities.audio is false', () => {
+    expect(hasLiveAudioFromState({ capabilities: { audio: false } })).toBe(false);
+  });
+
+  it('returns false when capabilities object is empty', () => {
+    expect(hasLiveAudioFromState({ capabilities: {} })).toBe(false);
+  });
+
+  it('returns false when capabilities key is missing', () => {
+    expect(hasLiveAudioFromState({ other: true })).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// RadioLayout component
+// ---------------------------------------------------------------------------
+
+// RadioLayout is mounted without App.svelte, so the shared harness supplies
+// the managed server projection. The partial mock preserves the real provider
+// for the App-mount test below.
+vi.mock('$lib/runtime/tx-controller/managed-app-host', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/runtime/tx-controller/managed-app-host')>();
+  return {
+    ...actual,
+    getManagedAppTxController: () => txHarness.controller,
+  };
+});
+
+vi.mock('$lib/stores/capabilities.svelte', () => ({
+  hasTx: vi.fn(() => true),
+  hasDualReceiver: vi.fn(() => false),
+  hasAudio: vi.fn(() => false),
+  hasSpectrum: vi.fn(() => true),
+  hasAnyScope: vi.fn(() => true),
+  isAudioFftScope: vi.fn(() => false),
+  hasAudioFft: vi.fn(() => false),
+  getScopeSource: vi.fn(() => null),
+  hasCapability: vi.fn(() => false),
+  vfoLabel: vi.fn((slot: 'A' | 'B') => (slot === 'A' ? 'MAIN' : 'SUB')),
+  receiverLabel: vi.fn((id: 'MAIN' | 'SUB') => id),
+  getCapabilities: vi.fn(() => rt.caps ?? ({ freqRanges: [], modes: [], filters: [] })),
+  setCapabilities: vi.fn(),
+  getAgcModes: vi.fn(() => [0, 1, 2, 3]),
+  getAgcLabels: vi.fn(() => ({ 0: 'OFF', 1: 'FAST', 2: 'MID', 3: 'SLOW' })),
+  getSupportedModes: vi.fn(() => ['USB', 'LSB', 'CW', 'AM', 'FM']),
+  getSupportedFilters: vi.fn(() => ['FIL1', 'FIL2', 'FIL3']),
+  getAttValues: vi.fn(() => [0, 10, 20]),
+  getAttLabels: vi.fn(() => ({ 0: '0dB', 10: '10dB', 20: '20dB' })),
+  getPreValues: vi.fn(() => [0, 1, 2]),
+  getPreLabels: vi.fn(() => ({ 0: 'OFF', 1: 'PRE1', 2: 'PRE2' })),
+  getKeyboardConfig: vi.fn(() => null),
+  getVfoScheme: vi.fn(() => 'ab'),
+  getAntennaCount: vi.fn(() => 1),
+  getSmeterCalibration: vi.fn(() => null),
+  getSmeterRedline: vi.fn(() => null),
+  getMeterCalibration: vi.fn(() => null),
+  getMeterRedline: vi.fn(() => null),
+  getControlRange: vi.fn(() => ({ min: 0, max: 255 })),
+}));
+
+import { getScopeSource, hasAnyScope, hasAudioFft, hasDualReceiver, hasSpectrum } from '$lib/stores/capabilities.svelte';
+import { sdrTestLayout } from '../../../presentation/layouts/declarations';
+import { readWorkspace } from '../../../presentation/workspace/contract';
+import { resolveSurfacePlan, SURFACE_PLAN_CONTEXT_KEY, type SurfacePlan } from '../../../presentation/workspace/resolution';
+
+let components: ReturnType<typeof mount>[] = [];
+
+/**
+ * MOR-1313 — an id no layout manifest is registered under, so nothing is
+ * declared and every legacy twin renders. It is the only way to reach the
+ * legacy VFO/TX branch now that both families sharing this shell resolve fully
+ * semantic, and it exercises the fail-safe direction of the suppression rule.
+ */
+const UNDECLARED = 'no-such-layout' as SkinId;
+
+function mountLayout(skinId: SkinId = 'desktop-v2', plan?: SurfacePlan) {
+  const t = document.createElement('div');
+  document.body.appendChild(t);
+  const component = mount(RadioLayout, { target: t, props: { skinId }, context: plan ? new Map([[SURFACE_PLAN_CONTEXT_KEY, () => plan]]) : undefined });
+  flushSync();
+  components.push(component);
+  return t;
+}
+
+beforeEach(() => {
+  resetCommandLifecycle();
+  // Nothing in this file resets mocks between tests, and the link-fault
+  // cases below flip this one; restore its module-level default.
+  vi.mocked(hasEverConnected).mockReturnValue(false);
+  txHarness.reset({ stale: true });
+  components = [];
+  radio.current = null;
+  rt.state = null;
+  rt.caps = null;
+  rt.scope = new ScopeController(() => { throw new Error('Routing fixture has no selected transport'); });
+  rt.resources = new PresentationResourceHost('routing');
+  rt.evidenceListeners = 0;
+  for (const source of ['hardware', 'audio_fft'] as const) {
+    const geometry = rt.scope.stream(source).geometry;
+    const subscribe = geometry.subscribe;
+    vi.spyOn(geometry, 'subscribe').mockImplementation(fn => {
+      rt.evidenceListeners++; const stop = subscribe(fn);
+      return () => { stop(); rt.evidenceListeners--; };
+    });
+  }
+  vi.mocked(hasDualReceiver).mockReturnValue(false);
+  vi.mocked(getScopeSource).mockReturnValue(null);
+  vi.mocked(hasSpectrum).mockReturnValue(true);
+  vi.mocked(hasAnyScope).mockReturnValue(true);
+  vi.mocked(hasAudioFft).mockReturnValue(false);
+  vi.mocked(resolveSkinId).mockReturnValue('desktop-v2');
+  // JSDOM defaults to 0x0 — force desktop dimensions so isMobile stays false
+  Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1440 });
+  Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: 900 });
+});
+
+afterEach(async () => {
+  await Promise.all(components.map(c => unmount(c)));
+  expect(rt.evidenceListeners).toBe(0);
+  expect(rt.resources.snapshot('hardware-scope').demand).toBe(0);
+  expect(txHarness.listenerCount()).toBe(0);
+  await rt.resources.teardown();
+  document.body.innerHTML = '';
+  // Hygiene WITHIN this file. It runs in the `isolated` pool
+  // (`vite.config.ts`), so these holders cannot leak into another file — but
+  // they are module-level and shared by every `it` here, so a non-null `state`
+  // or a keyed authority left behind by one test would be read by the next one
+  // that does not set its own. Reset on the way OUT as well as the way in.
+  rt.state = null;
+  rt.caps = null;
+  scalarCapture.bindingsByLease = new WeakMap();
+  txHarness.reset({ stale: true });
+  resetCommandLifecycle();
+});
+
+describe('RadioLayout structure', () => {
+  it.each(['desktop-v2', 'sdr-test'] as const)(
+    'mounts one StatusBar-managed TOT consumer through the App-root facade for %s',
+    (skinId) => {
+      const t = mountLayout(skinId);
+
+      // The fixed-height StatusBar owns only the compact readout/trigger. The
+      // full editor is deliberately absent until that trigger opens its
+      // popover; its interaction contract is exercised separately.
+      expect(t.querySelectorAll('[data-testid="managed-tot-status"]')).toHaveLength(1);
+      expect(t.querySelectorAll('[data-testid="managed-tot-control"]')).toHaveLength(0);
+      // The shell, its semantic RX/TX surface, and the StatusBar readout are
+      // the three presentation consumers of the single injected App-root
+      // controller — no layout-local authority is introduced.
+      expect(txHarness.listenerCount()).toBe(3);
+      expect(txHarness.trace()).toEqual([]);
+    },
+  );
+
+  it('renders the SDR branch from its skinId prop', () => {
+    const t = mountLayout('sdr-test');
+    expect(t.querySelector('.radio-layout.sdr-test')).not.toBeNull();
+  });
+
+  it('discriminates the Standard outer grid from the SDR desktop face', () => {
+    const standard = mountLayout('desktop-v2');
+    const sdr = mountLayout('sdr-test');
+
+    expect(standard.querySelector('.radio-layout.desktop-control-face.standard-face')).not.toBeNull();
+    expect(standard.querySelector('.radio-layout.sdr-test')).toBeNull();
+    expect(sdr.querySelector('.radio-layout.desktop-control-face.sdr-test')).not.toBeNull();
+    expect(sdr.querySelector('.radio-layout.standard-face')).toBeNull();
+  });
+
+  it('renders the root .radio-layout element', () => {
+    const t = mountLayout();
+    expect(t.querySelector('.radio-layout')).not.toBeNull();
+  });
+
+  it('renders .receiver-deck', () => {
+    const t = mountLayout();
+    expect(t.querySelector('.receiver-deck')).not.toBeNull();
+  });
+
+  it('renders .content-row', () => {
+    const t = mountLayout();
+    expect(t.querySelector('.content-row')).not.toBeNull();
+  });
+
+  it('renders .left-sidebar inside .content-left', () => {
+    const t = mountLayout();
+    expect(t.querySelector('.content-left .left-sidebar')).not.toBeNull();
+  });
+
+  it('renders .right-sidebar inside .content-right', () => {
+    const t = mountLayout();
+    expect(t.querySelector('.content-right .right-sidebar')).not.toBeNull();
+  });
+
+  it('renders .center-column and .spectrum-slot in the center area', () => {
+    const t = mountLayout();
+    const center = t.querySelector('.center-column');
+    expect(center).not.toBeNull();
+    expect(center?.querySelector('.spectrum-slot')).not.toBeNull();
+  });
+
+  it('renders the SpectrumPanel stub inside the spectrum slot', () => {
+    const t = mountLayout();
+    expect(t.querySelector('.spectrum-panel-stub')).not.toBeNull();
+  });
+
+  // MOR-1341: `desktop-v2` (the default here) now declares a `meters` zone
+  // and retires `.bottom-dock` — see the suppression matrix in
+  // `semantic-desktop-migration.component.test.ts`.
+  it('renders .bottom-dock for a layout that declares no meters zone', () => {
+    const t = mountLayout(UNDECLARED);
+    expect(t.querySelector('.bottom-dock')).not.toBeNull();
+  });
+
+  // MOR-1313: `desktop-v2` resolves through its layout manifest now, so the
+  // receiver deck hosts the semantic surfaces. An undeclared layout gets an
+  // EMPTY deck since MOR-2728 — see `UNDECLARED` below and the full
+  // suppression matrix in `semantic-desktop-migration.component.test.ts`.
+  it('wraps desktop-v2 in one host outside its receiver deck', () => {
+    const t = mountLayout();
+    const host = t.querySelector('[data-testid="semantic-radio-surfaces"]');
+    const deck = t.querySelector('.receiver-deck');
+    expect(host).not.toBeNull();
+    expect(host?.contains(deck)).toBe(true);
+    expect(deck?.querySelector('[data-testid="semantic-radio-surfaces"]')).toBeNull();
+    expect(t.querySelector('.vfo-header')).toBeNull();
+  });
+
+  // MOR-2728: the undeclared-layout branch and its legacy `<VfoHeader>` are
+  // deleted — an undeclared id renders an empty receiver deck, never a
+  // resurrected legacy twin.
+  it('renders an empty receiver deck, with no legacy .vfo-header, for an undeclared layout', () => {
+    const t = mountLayout(UNDECLARED);
+    expect(t.querySelector('.receiver-deck')).not.toBeNull();
+    expect(t.querySelector('.receiver-deck .vfo-header')).toBeNull();
+  });
+
+  // MOR-2425 C-R3: `getWsConnected` is mocked false for this whole file, so
+  // without the "has been up at least once" guard every branch this shell
+  // renders would mount already veiled — which is what a page load looks
+  // like before the WS opens.
+  it.each(['desktop-v2', 'sdr-test', UNDECLARED] as const)(
+    'does not veil %s before the first connect, though the WS is down',
+    (skinId) => {
+      const t = mountLayout(skinId);
+      expect(t.querySelector('.radio-layout')?.hasAttribute('data-link-fault')).toBe(false);
+    },
+  );
+
+  it.each(['desktop-v2', 'sdr-test', UNDECLARED] as const)(
+    'veils %s as ws-down once the WS has been up and gone down again',
+    (skinId) => {
+      vi.mocked(hasEverConnected).mockReturnValue(true);
+      const t = mountLayout(skinId);
+      expect(t.querySelector('.radio-layout')?.getAttribute('data-link-fault')).toBe('ws-down');
+    },
+  );
+});
+
+describe('Band instrument placement', () => {
+  it('sdr-test renders grouped choice then entry exactly once', () => {
+    rt.state = structuredClone(stateFixture);
+    rt.caps = structuredClone(capsFixture);
+    const t = mountLayout('sdr-test');
+    const choices = t.querySelectorAll('[data-testid="band-choices"]');
+    const entries = t.querySelectorAll('[data-testid="band-entry"]');
+    const grid = t.querySelector('[data-testid="band-control-grid"]');
+    expect(choices).toHaveLength(1);
+    expect(entries).toHaveLength(1);
+    expect(grid).toBeNull();
+    expect(t.querySelector('[data-field="frequencyEntry"]')).toBeNull();
+    expect(choices[0]!.compareDocumentPosition(entries[0]!) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+  });
+
+  it('places semantic HAM controls without the retired inline entry in the Standard upper BAND selector', () => {
+    rt.state = structuredClone(stateFixture);
+    rt.caps = structuredClone(capsFixture);
+    const t = mountLayout('desktop-v2');
+    const upper = t.querySelector('.left-sidebar [data-panel-id="band"]');
+    expect(upper).not.toBeNull();
+    expect([...upper!.querySelectorAll('.band-tab')].map((tab) => tab.textContent?.trim()))
+      .toEqual(['HAM', 'LW/MW', 'SWL']);
+    expect(upper!.querySelector('[data-testid="band-choices-compact"]')).not.toBeNull();
+    expect(upper!.querySelector('[data-testid="band-entry"]')).toBeNull();
+    expect(t.querySelector('[data-testid="band-surface"]')).toBeNull();
+    expect(t.querySelector('[data-testid="band-control-grid"]')).toBeNull();
+  });
+});
+
+// MOR-1369 (v3-rework S6b-1) — the SpectrumPanel `hideScopeControls`
+// suppression channel. `RadioLayout` reuses the SAME `declared` set the
+// MOR-1364 (S6-pre) channel already derives (no second derivation), so this
+// is the pass-through half of that channel, proven at the boundary
+// (`SpectrumPanelStub`'s `data-hide-scope-controls`); the SpectrumToolbar
+// half (which controls are fact-backed vs client-side view options, per the
+// S10 boundary doc) is proven directly in `SpectrumToolbar.component.test.ts`.
+//
+// MOR-1370 (S6b-2) graduates the flip: `desktop-v2` now REALLY declares a
+// `scope-controls` zone, so the synthetic probe manifest this describe used
+// to register is retired in favour of the real manifest — the same
+// graduation `semantic-desktop-migration.component.test.ts`'s `ZONES`
+// literal recorded for S7/S8/S9.
+describe('SpectrumPanel hideScopeControls channel (MOR-1369 S6b-1, MOR-1370 S6b-2)', () => {
+  it('passes hideScopeControls=true on real desktop-v2, which declares the scope-controls zone', () => {
+    const t = mountLayout('desktop-v2');
+    const stub = t.querySelector('.spectrum-panel-stub');
+    expect(stub?.getAttribute('data-hide-scope-controls')).toBe('true');
+  });
+
+  it('stays false on an undeclared layout (fail-safe direction)', () => {
+    const t = mountLayout(UNDECLARED);
+    const stub = t.querySelector('.spectrum-panel-stub');
+    expect(stub?.getAttribute('data-hide-scope-controls')).toBe('false');
+  });
+});
+
+// MOR-1486 ruling B (owner, session 19) — RadioLayout owns the
+// `applyModeDefault()` mode-follow driver (the `$effect` above), so it must
+// NOT hide the AUTO toggle: an operator here can re-enable mode-follow and
+// it will actually keep following. Contrast with MobileRadioLayout, which
+// has no driver and explicitly hides the toggle (see
+// `MobileRadioLayout.component.svelte.test.ts`).
+describe('SpectrumPanel hideAutoStepToggle channel (MOR-1486 ruling B)', () => {
+  it('never hides the AUTO toggle — RadioLayout owns the mode-follow driver', () => {
+    const t = mountLayout('desktop-v2');
+    const stub = t.querySelector('.spectrum-panel-stub');
+    expect(stub?.getAttribute('data-hide-auto-step-toggle')).toBe('false');
+  });
+});
+
+describe('App presentation selection', () => {
+  type RendererNode = HTMLButtonElement & { readonly rendererLease: ContinuousScalarRendererLease };
+
+  it('keeps the actual hosted instruments alive across a Standard to SDR switch', async () => {
+    vi.mocked(resolveSkinId).mockReturnValue('desktop-v2');
+    vi.mocked(hasAudioFft).mockReturnValue(true);
+    const liveCaps = {
+      ...structuredClone(capsFixture),
+      capabilities: [...capsFixture.capabilities, 'vfo_equalize'],
+      breakInChoices: [{ value: 0, label: 'OFF' }, { value: 1, label: 'SEMI' }, { value: 2, label: 'FULL' }],
+    };
+    const liveState = {
+      ...structuredClone(stateFixture),
+      micGain: 128, keySpeed: 24,
+      fieldStatus: {
+        ...stateFixture.fieldStatus,
+        micGain: {
+          storePath: 'global.operator_controls.mic_gain', observed: true,
+          freshness: 'fresh', availability: 'available', lastObservedMonotonic: 1,
+        },
+        keySpeed: {
+          storePath: 'global.cw.key_speed', observed: true,
+          freshness: 'fresh', availability: 'available', lastObservedMonotonic: 1,
+        },
+      },
+    } as unknown as ServerState;
+    rt.state = liveState;
+    rt.caps = liveCaps;
+    radio.current = liveState;
+
+    const t = document.createElement('div');
+    document.body.appendChild(t);
+    const component = mount(App, { target: t });
+    flushSync();
+    components.push(component);
+
+    await vi.waitFor(() => {
+      flushSync();
+      expect(t.querySelector('.radio-layout.standard-face')).not.toBeNull();
+    });
+
+    expect(resolveSkinId).toHaveBeenLastCalledWith({
+      capabilities: liveCaps,
+      layoutPreference: 'standard',
+      isMobile: false,
+      hasAnyScope: true,
+    });
+    const semanticHost = t.querySelector('[data-testid="semantic-radio-surfaces"]');
+    const globalHost = t.querySelector('[data-testid="app-global-host"]');
+    const standardTx = t.querySelector('[data-testid="standard-tx-controls"]');
+    expect(t.querySelector('[data-testid="rx-tx-key"]')
+      ?.closest('[data-panel-id="semantic-rx-tx"]')).not.toBeNull();
+    expect(standardTx?.closest('[data-panel-id="semantic-rx-tx"]')).not.toBeNull();
+    expect(t.querySelector('[data-testid="cw-keyer-rx-mode"]')?.textContent).toContain('USB');
+    expect(t.querySelector('[data-testid="cw-keyer-break-in-off"]')).toBeNull();
+    expect(t.querySelector('[data-testid="cw-keyer-break-in-semi"]')?.textContent).toContain('SEMI');
+    expect(t.querySelector('[data-testid="cw-keyer-break-in-full"]')?.textContent).toContain('FULL');
+    const pitch = t.querySelector('[data-testid="cw-keyer-pitchHz"]')!;
+    const speed = t.querySelector('[data-testid="cw-keyer-keyerSpeed"]')!;
+    const rxMode = t.querySelector('[data-testid="cw-keyer-rx-mode"]')!;
+    const breakIn = t.querySelector('[data-testid="cw-keyer-break-in"]')!;
+    expect(rxMode.compareDocumentPosition(pitch) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(pitch.compareDocumentPosition(speed) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(speed.compareDocumentPosition(breakIn) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    const pitchRenderer = pitch.querySelector<HTMLElement>('[data-external-scalar-renderer]');
+    const speedRenderer = speed.querySelector<HTMLElement>('[data-external-scalar-renderer]');
+    expect(pitchRenderer?.dataset.compact).toBe('false');
+    expect(speedRenderer?.dataset.compact).toBe('false');
+    expect(pitchRenderer?.dataset.variant).toBe('hardware-illuminated');
+    expect(speedRenderer?.dataset.variant).toBe('hardware-illuminated');
+    expect(t.querySelector('[aria-label="TX level settings"]')).toBeNull();
+    const micSettings = t.querySelector<HTMLButtonElement>('[aria-label="MIC GAIN settings"]');
+    expect(micSettings?.getAttribute('aria-expanded')).toBe('false');
+    micSettings?.click();
+    flushSync();
+    expect(micSettings?.getAttribute('aria-expanded')).toBe('true');
+    expect(t.querySelector('[data-testid="standard-tx-settings-popover"]')).not.toBeNull();
+    expect(t.querySelector('[data-testid="standard-tx-controls"]')
+      ?.closest('[data-panel-id="semantic-rx-tx"]')).not.toBeNull();
+    expect(t.querySelector('[data-panel-id="semantic-tx-aux"]')).toBeNull();
+    const oldMic = t.querySelector<RendererNode>(
+      '[data-testid="tx-aux-micGain"] [data-external-scalar-renderer]',
+    );
+    const oldKeyerSpeed = t.querySelector<RendererNode>(
+      '[data-testid="cw-keyer-keyerSpeed"] [data-external-scalar-renderer]',
+    );
+    if (oldMic === null) throw new Error('Standard did not render the external MIC probe');
+    if (oldKeyerSpeed === null) throw new Error('Standard did not render the Keyer Speed seat');
+    const oldLease = oldMic.rendererLease;
+    const micBinding = scalarCapture.bindingsByLease.get(oldLease);
+    const oldKeyerSpeedLease = oldKeyerSpeed.rendererLease;
+    const keyerSpeedBinding = scalarCapture.bindingsByLease.get(oldKeyerSpeedLease);
+    const txController = txHarness.controller;
+    const txListeners = txHarness.listenerCount();
+    const releasedAudioDemand: number[] = [];
+    const release = rt.resources.release.bind(rt.resources);
+    vi.spyOn(rt.resources, 'release').mockImplementation((lease) => {
+      const released = release(lease);
+      releasedAudioDemand.push(rt.resources.snapshot('audio-fft').demand);
+      return released;
+    });
+
+    expect(semanticHost).not.toBeNull();
+    expect(globalHost).not.toBeNull();
+    expect(micBinding).toBeDefined();
+    expect(keyerSpeedBinding).toBeDefined();
+    expect(t.querySelectorAll('[data-testid="cw-keyer-keyerSpeed"]')).toHaveLength(1);
+    expect(rt.resources.snapshot('audio-fft').demand).toBeGreaterThan(0);
+    const beforeDisplay = oldMic.dataset.display;
+    const beforeKeyerSpeedDisplay = oldKeyerSpeed.dataset.display;
+    oldMic.click();
+    oldKeyerSpeed.click();
+    flushSync();
+    const pendingEvidence = {
+      requested: oldMic.dataset.requested,
+      phase: oldMic.dataset.phase,
+    };
+    expect(
+      oldMic.dataset.display !== beforeDisplay || pendingEvidence.requested !== '',
+    ).toBe(true);
+    expect(pendingEvidence.requested).not.toBe('');
+    const keyerSpeedPendingEvidence = {
+      requested: oldKeyerSpeed.dataset.requested,
+      phase: oldKeyerSpeed.dataset.phase,
+    };
+    expect(
+      oldKeyerSpeed.dataset.display !== beforeKeyerSpeedDisplay
+      || keyerSpeedPendingEvidence.requested !== ''
+    ).toBe(true);
+    expect(keyerSpeedPendingEvidence.requested).not.toBe('');
+    expect(txHarness.trace()).toEqual([]);
+
+    vi.mocked(resolveSkinId).mockReturnValue('sdr-test');
+    window.innerWidth = 500;
+    window.dispatchEvent(new Event('resize'));
+    flushSync();
+    await vi.waitFor(() => {
+      flushSync();
+      expect(t.querySelector('.radio-layout.sdr-test')).not.toBeNull();
+    });
+
+    const newMic = t.querySelector<RendererNode>(
+      '[data-testid="tx-aux-micGain"] [data-external-scalar-renderer]',
+    )!;
+    const newKeyerSpeed = t.querySelector<RendererNode>(
+      '[data-testid="cw-keyer-keyerSpeed"] [data-external-scalar-renderer]',
+    )!;
+    expect(t.querySelector('.radio-layout.standard-face')).toBeNull();
+    expect(t.querySelectorAll('[data-testid="semantic-radio-surfaces"]')).toHaveLength(1);
+    expect(t.querySelector('[data-testid="semantic-radio-surfaces"]')).toBe(semanticHost);
+    expect(t.querySelectorAll('[data-testid="rx-tx-surface"]')).toHaveLength(1);
+    expect(t.querySelectorAll('[data-testid="vfo-ops"]')).toHaveLength(1);
+    expect(t.querySelectorAll('[data-testid="app-global-host"]')).toHaveLength(1);
+    expect(t.querySelector('[data-testid="app-global-host"]')).toBe(globalHost);
+    expect(scalarCapture.bindingsByLease.get(newMic.rendererLease)).toBe(micBinding);
+    expect(scalarCapture.bindingsByLease.get(newKeyerSpeed.rendererLease)).toBe(keyerSpeedBinding);
+    expect(newMic.rendererLease).not.toBe(oldLease);
+    expect(newKeyerSpeed.rendererLease).not.toBe(oldKeyerSpeedLease);
+    expect(oldLease.key({ key: 'ArrowRight', fine: false })).toBe(false);
+    expect(oldKeyerSpeedLease.key({ key: 'ArrowRight', fine: false })).toBe(false);
+    expect(t.querySelectorAll('[data-testid="cw-keyer-keyerSpeed"]')).toHaveLength(1);
+    expect({
+      requested: newKeyerSpeed.dataset.requested,
+      phase: newKeyerSpeed.dataset.phase,
+    }).toEqual(keyerSpeedPendingEvidence);
+    expect({
+      requested: newMic.dataset.requested,
+      phase: newMic.dataset.phase,
+    }).toEqual(pendingEvidence);
+    expect(txHarness.controller).toBe(txController);
+    expect(txHarness.listenerCount()).toBe(txListeners);
+    expect(txHarness.trace()).toEqual([]);
+    expect(rt.resources.snapshot('audio-fft').demand).toBeGreaterThan(0);
+    expect(releasedAudioDemand.every((demand) => demand > 0)).toBe(true);
+  });
+});
+
+// MOR-1341: `desktop-v2` (this file's `mountLayout()` default) now suppresses
+// `.bottom-dock` via its `meters` zone declaration. MOR-1346 gave `sdr-test`
+// one too, so `UNDECLARED` is now the layout that exercises the dock's OWN
+// behaviour.
+describe('Bottom dock MetersDockPanel', () => {
+  it('renders the unified meters dock panel inside .bottom-dock', () => {
+    const t = mountLayout(UNDECLARED);
+    const dock = t.querySelector('.bottom-dock');
+    expect(dock).not.toBeNull();
+    expect(dock?.querySelector('[data-testid="meters-dock-panel"]')).not.toBeNull();
+  });
+});
+
+/**
+ * MOR-1235 — the discriminating pair. The dock's TX chrome must follow the
+ * App TX controller (the same source as the authoritative AppGlobalHost lamp),
+ * NOT `radioState.ptt`. Each case sets the two to OPPOSITE values, so routing
+ * the prop back to `ptt` flips both assertions.
+ */
+describe('meters dock TX chrome follows the App TX authority (MOR-1235)', () => {
+  const txTag = (t: HTMLElement) => t.querySelector('.bottom-dock .dock-tx-state');
+
+  it('shows TX when the authority is keyed while radioState.ptt reads false', () => {
+    rt.state = { active: 'MAIN', ptt: false, main: { sMeter: 120 } };
+    txHarness.emitServerSnapshot({ observedPtt: 'on' });
+    const t = mountLayout(UNDECLARED);
+    expect(txTag(t)?.getAttribute('data-active')).toBe('true');
+    expect(txTag(t)?.textContent).toBe('TX');
+  });
+
+  it('shows RX when the authority is idle while radioState.ptt reads true', () => {
+    rt.state = { active: 'MAIN', ptt: true, main: { sMeter: 120 } };
+    txHarness.emitServerSnapshot({ observedPtt: 'off' });
+    const t = mountLayout(UNDECLARED);
+    expect(txTag(t)?.getAttribute('data-active')).toBe('false');
+    expect(txTag(t)?.textContent).toBe('RX');
+  });
+
+  it('fails closed: an uncertain authority shows TX even with ptt false', () => {
+    rt.state = { active: 'MAIN', ptt: false, main: { sMeter: 120 } };
+    txHarness.emitServerSnapshot({ observedPtt: 'off', releaseRequired: true });
+    const t = mountLayout(UNDECLARED);
+    expect(txTag(t)?.getAttribute('data-active')).toBe('true');
+  });
+});
+
+// MOR-2728: the legacy `VfoHeader` deck and its undeclared-layout branch are
+// deleted; `semantic-desktop-migration.component.test.ts` and
+// `RadioLayout.command-bus-migration.isolated.test.ts` pin the deck renders
+// no legacy twin.
+
+describe('RadioLayout with radioState', () => {
+  const sampleState = {
+    revision: 1,
+    updatedAt: '2026-03-18T00:00:00Z',
+    active: 'MAIN',
+    ptt: false,
+    split: false,
+    dualWatch: false,
+    tunerStatus: 0,
+    main: {
+      freqHz: 14074000,
+      mode: 'USB',
+      filter: 1,
+      dataMode: 0,
+      sMeter: 120,
+      att: 0,
+      preamp: 0,
+      nb: false,
+      nr: false,
+      afLevel: 128,
+      rfGain: 100,
+      squelch: 0,
+    },
+    sub: {
+      freqHz: 7074000,
+      mode: 'LSB',
+      filter: 1,
+      dataMode: 0,
+      sMeter: 60,
+      att: 0,
+      preamp: 0,
+      nb: false,
+      nr: false,
+      afLevel: 128,
+      rfGain: 100,
+      squelch: 0,
+    },
+    connection: { rigConnected: true, radioReady: true, controlConnected: true },
+  };
+
+  it('renders without errors given a full radioState', () => {
+    radio.current = sampleState as any;
+    const t = mountLayout();
+    expect(t.querySelector('.radio-layout')).not.toBeNull();
+  });
+
+  it('renders MetersDockPanel in the bottom dock for a layout with no meters zone', () => {
+    radio.current = sampleState as any;
+    const t = mountLayout(UNDECLARED);
+    expect(t.querySelector('.bottom-dock [data-testid="meters-dock-panel"]')).not.toBeNull();
+  });
+});
+
+
+describe('SDR hardware scope snippet routing (MOR-2358; MOR-2545 PR2 extends hosting to desktop-v2)', () => {
+  it.each([
+    ['sdr-test', 'hardware', true, true],
+    ['desktop-v2', 'hardware', true, true],
+    ['sdr-test', 'audio_fft', true, false],
+    ['sdr-test', null, true, false],
+    ['sdr-test', 'hardware', false, false],
+    [UNDECLARED, 'hardware', true, false],
+  ] as const)('%s / %s / spectrum %s selects hosted placement %s', (skin, source, spectrum, expected) => {
+    vi.mocked(getScopeSource).mockReturnValue(source);
+    vi.mocked(hasSpectrum).mockReturnValue(spectrum);
+    const target = mountLayout(skin);
+    const stub = target.querySelector('.spectrum-panel-stub'); expect(stub).not.toBeNull();
+    expect(stub?.getAttribute('data-has-scope-controls')).toBe(String(expected));
+    expect(stub?.getAttribute('data-hide-scope-controls')).toBe(String(skin !== UNDECLARED));
+  });
+
+  it('keeps declaration-derived suppression when the workspace subtracts scope controls', () => {
+    vi.mocked(getScopeSource).mockReturnValue('hardware');
+    const plan = resolveSurfacePlan(sdrTestLayout, readWorkspace({ version: 1, visibleSurfaces: { 'scope-controls': [] } }).workspace);
+    const target = mountLayout('sdr-test', plan);
+    const stub = target.querySelector('.spectrum-panel-stub');
+    expect(stub?.getAttribute('data-has-scope-controls')).toBe('true');
+    expect(stub?.getAttribute('data-hide-scope-controls')).toBe('true');
+  });
+});
+
+describe('MOR-2513 — an all-unobserved payload never prints a fabricated reading', () => {
+  it('renders no null/NaN/undefined text and no fabricated 0.000.000 frequency', () => {
+    // Every leaf that carries a fieldStatus entry goes null with
+    // observed:false (txTarget keeps its in-band unknown-status object) —
+    // the payload shape a freshly connected FTX-1 with nothing observed
+    // produces. Connection, health and revision counters keep their
+    // delivered values.
+    const unobserved = structuredClone(stateFixture) as unknown as ServerState;
+    for (const [path, status] of Object.entries(unobserved.fieldStatus ?? {})) {
+      if (status) status.observed = false;
+      if (path === 'txTarget') continue;
+      const parts = path.split('.');
+      let holder: Record<string, unknown> | null = unobserved as unknown as Record<string, unknown>;
+      for (const part of parts.slice(0, -1)) {
+        const next: unknown = holder?.[part];
+        holder = typeof next === 'object' && next !== null
+          ? next as Record<string, unknown> : null;
+        if (holder === null) break;
+      }
+      if (holder !== null) holder[parts[parts.length - 1]] = null;
+    }
+    rt.state = unobserved;
+    radio.current = unobserved;
+    rt.caps = capsFixture;
+
+    const t = mountLayout('desktop-v2');
+    flushSync();
+    const text = t.textContent ?? '';
+    for (const forbidden of ['null', 'NaN', 'undefined', '0.000']) {
+      expect(text, `rendered text must not contain ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+});
+
+// MOR-2513 bench regression: the REAL FTX-1 payload (108 unobserved-null
+// leaves, dual-receiver ab_shared, SUB att/preamp undeclared) rendered NO
+// radio surfaces at 86187ed3 because ingestion silently dropped it —
+// `ftx1-state-unobserved-leaves.json` is that exact `/api/v1/state` body.
+// The ingestion seam is asserted here through the real validator (the
+// stores' own test file additionally drives the real `setRadioState`);
+// the mount itself proves the composition the bench lost: both receivers'
+// VFO rows and no null/NaN/undefined text.
+describe('MOR-2513 — the live FTX-1 payload mounts the default desktop composition', () => {
+  const mountFtx1 = (state: typeof FTX1_STATE): HTMLElement => {
+    expect(isValidServerState(state)).toBe(true);
+    vi.mocked(hasDualReceiver).mockReturnValue(true);
+    rt.state = state;
+    radio.current = state;
+    // `validIdentity` requires the caps/state pair to name one provider
+    // generation; the capabilities capture (backend 60d05a42) predates the
+    // state capture (86187ed3), so it is aligned to the state's.
+    rt.caps = { ...ftx1CapsJson, providerGeneration: ftx1StateJson.providerGeneration };
+    return mountLayout('desktop-v2');
+  };
+
+  it('renders ten fixed VFO rows across MAIN and SUB instrument sections', () => {
+    const t = mountFtx1(FTX1_STATE);
+    expect(ftx1StateJson.main.dataMode).toBeNull();
+    expect(ftx1StateJson.sub.att).toBeNull();
+    expect(t.querySelectorAll('[data-receiver-instrument="MAIN"]')).toHaveLength(1);
+    expect(t.querySelectorAll('[data-receiver-instrument="SUB"]')).toHaveLength(1);
+    // MOR-2509: tray, receiver, main, under, and the DSP row that the ftx1
+    // fixture backs — five per receiver here; a radio without DSP facts draws four.
+    expect(t.querySelectorAll('[data-vfo-row]')).toHaveLength(10);
+  });
+
+  it('prints no null/NaN/undefined text from the null leaves', () => {
+    const t = mountFtx1(FTX1_STATE);
+    flushSync();
+    const text = t.textContent ?? '';
+    for (const forbidden of ['null', 'NaN', 'undefined']) {
+      expect(text, `rendered text must not contain ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it('still mounts all ten fixed VFO rows with every nullable leaf null', () => {
+    const t = mountFtx1(FTX1_STATE_FULLY_UNOBSERVED);
+    expect(t.querySelectorAll('[data-vfo-row]')).toHaveLength(10);
+    const text = t.textContent ?? '';
+    for (const forbidden of ['null', 'NaN', 'undefined']) {
+      expect(text, `rendered text must not contain ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+});

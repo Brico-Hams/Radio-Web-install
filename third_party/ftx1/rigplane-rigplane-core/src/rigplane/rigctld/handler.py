@@ -1,0 +1,3631 @@
+"""Rigctld command handler — dispatches parsed commands to IcomRadio.
+
+Responsibilities:
+- Command dispatch table (long_cmd → async handler method)
+- Read-only gate (reject set commands with RPRT -22)
+- RadioState-first reads
+- Error translation (rigplane exceptions → Hamlib error codes)
+
+This module receives RigctldCommand from protocol.py and returns
+RigctldResponse. It calls IcomRadio methods but knows nothing about
+TCP or wire format.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections.abc import Callable, Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+from ..commands import build_civ_frame
+from ..core.acquisition_scheduler import AcquisitionStatus, EnsureFreshResult
+from ..core.command_service import (
+    CommandExecutionInvalidatedError,
+    CommandExecutionResult,
+    CommandService,
+    CommandServiceResult,
+    PendingOverlay,
+    command_intent_from_request,
+    resolve_power_level_target,
+)
+from ..core.exceptions import (
+    CommandError,
+    CommandRejectedError,
+    ReceiverNotSelectedError,
+)
+from ..runtime.controller_authority import ControllerAuthority, ControllerError
+from ..core.radio_protocol import (
+    AttenuatorStepsCapable,
+    RelativeVfoFrequencyWritable,
+    RelativeVfoModeWritable,
+    RelativeVfoReadbackCapable,
+)
+from ..audio.route import apply_wsjtx_data_mod_input, profile_data_mode_count
+from ..core.state_diagnostics import StateDiagnosticsRecorder
+from ..core.state_pipeline_contracts import (
+    CommandIntent,
+    FieldPath,
+    Observation,
+    SourceMetadata,
+)
+from ..core.state_store import FreshnessState, StateStore, StateSnapshot
+from ..core.tx_interlock_contract import (
+    TxInterlockCommandFamily,
+    TxInterlockDisposition,
+)
+from ..core.tx_safety import (
+    BACKEND_MAX_KEY_DOWN_SECONDS,
+    TxOutcome,
+    TxReleaseReason,
+)
+from ..exceptions import ConnectionError, TimeoutError as RigplaneTimeoutError
+from ..radio_protocol import StateModelCapable, StateModelService, StateStoreCapable
+from ..radio_state import RadioState, ReceiverState
+from ..runtime import _poller_types as tx_commands  # noqa: TID251
+from ..runtime import tx_interlock
+from ..runtime._dual_rx_runtime import require_receiver_for_profile
+from ..runtime.callable_support import split_tx_routes_unselected_selector
+from ..runtime.managed_tx_authority import ManagedTxAuthority
+from ..runtime.managed_tx_ingress import bind_managed_tx, refuse_key_without_owner
+from ..runtime.managed_tx_submission import (
+    ManagedKeyRefused,
+    ManagedKeySetupError,
+    execute_managed_ptt,
+    execute_managed_tuner,
+)
+from ..types import Mode
+from .contract import (  # noqa: TID251
+    CIV_TO_HAMLIB_MODE,
+    HAMLIB_MODE_MAP,
+    HamlibError,
+    RigctldCommand,
+    RigctldConfig,
+    RigctldResponse,
+)
+from .utils import get_mode_reader  # noqa: TID251
+
+if TYPE_CHECKING:
+    from ..radio_protocol import Radio
+    from ..runtime.managed_tx_authority import ManagedTxAuthority
+
+from ..capabilities import CAP_METERS, CAP_RIT
+from .routing import (  # noqa: TID251
+    _format_normalized_or_raw_float,
+    _format_raw_scaled_float,
+    _format_strength,
+    create_routing,
+)
+
+__all__ = ["RigctldHandler"]
+
+logger = logging.getLogger(__name__)
+_RIGCTLD_SESSION_ID: ContextVar[str | None] = ContextVar(
+    "rigctld_session_id",
+    default=None,
+)
+_RIGCTLD_PROVIDER_GENERATION: ContextVar[int | None] = ContextVar(
+    "rigctld_provider_generation",
+    default=None,
+)
+_RIGCTLD_PREDECESSOR: ContextVar[asyncio.Future[None] | None] = ContextVar(
+    "rigctld_predecessor",
+    default=None,
+)
+_RIGCTLD_PTT_SUBMISSION: ContextVar[asyncio.Task[Any] | None] = ContextVar(
+    "rigctld_ptt_submission", default=None
+)
+_RIGCTLD_PTT_READY: ContextVar[asyncio.Future[None] | None] = ContextVar(
+    "rigctld_ptt_ready", default=None
+)
+
+
+# ---------------------------------------------------------------------------
+# IC-7610 hardcoded dump_state (hamlib protocol v0 positional format)
+# ---------------------------------------------------------------------------
+# hamlib netrigctl.c parses dump_state as POSITIONAL bare values via atol/sscanf.
+# NO 'key: value' pairs — just bare numbers/strings, one per list entry.
+#
+# Mode bits (RIG_MODE_*): AM=0x01 CW=0x02 USB=0x04 LSB=0x08 RTTY=0x10
+#                          FM=0x20 WFM=0x40 CWR=0x80 RTTYR=0x100
+# 0x1ff = all nine modes above
+#
+# has_get_level (32-bit):
+#   RIG_LEVEL_PREAMP(0x1) | RIG_LEVEL_ATT(0x2) | RIG_LEVEL_AF(0x8)
+#   | RIG_LEVEL_RF(0x10) | RIG_LEVEL_NR(0x100) | RIG_LEVEL_CWPITCH(0x800)
+#   | RIG_LEVEL_RFPOWER(0x1000) | RIG_LEVEL_MICGAIN(0x2000)
+#   | RIG_LEVEL_KEYSPD(0x4000) | RIG_LEVEL_COMP(0x10000)
+#   | RIG_LEVEL_RAWSTR(0x04000000) | RIG_LEVEL_SWR(0x10000000)
+#   | RIG_LEVEL_STRENGTH(0x40000000)
+#   = 0x5401791B
+#   (NB, MONITOR_GAIN, RFPOWER_METER, COMP_METER, ID_METER, VD_METER use
+#    64-bit level bits above bit 31 and are handled but not declared here)
+#
+# has_get_func (32-bit):
+#   RIG_FUNC_NB(0x2) | RIG_FUNC_COMP(0x4) | RIG_FUNC_VOX(0x8)
+#   | RIG_FUNC_TONE(0x10) | RIG_FUNC_TSQL(0x20) | RIG_FUNC_ANF(0x100)
+#   | RIG_FUNC_NR(0x200) | RIG_FUNC_APF(0x800) | RIG_FUNC_MON(0x1000)
+#   | RIG_FUNC_LOCK(0x10000)
+#   = 0x00011B3E
+_IC7610_DUMP_STATE: list[str] = [
+    "0",  # protocol version
+    "3078",  # rig model (IC-7610)
+    "1",  # ITU region
+    "100000.000000 60000000.000000 0x1ff -1 -1 0x3 0xf",  # RX range
+    "0 0 0 0 0 0 0",  # end of RX ranges
+    "1800000.000000 60000000.000000 0x1ff 5000 100000 0x3 0xf",  # TX range
+    "0 0 0 0 0 0 0",  # end of TX ranges
+    "0x1ff 1",  # tuning step (all modes, 1 Hz)
+    "0 0",  # end of tuning steps
+    "0x1ff 3000",  # filter: wide 3000 Hz
+    "0x1ff 2400",  # filter: normal 2400 Hz
+    "0x1ff 1800",  # filter: narrow 1800 Hz
+    "0 0",  # end of filters
+    "9999",  # max_rit (±9999 Hz, CI-V 0x21)
+    "9999",  # max_xit (±9999 Hz, shared register)
+    "0",  # max_ifshift
+    "0",  # announces
+    "12 20 0",  # preamp (dB values, 0-terminated)
+    "6 12 18 0",  # attenuator (dB values, 0-terminated)
+    "0x00011B3E",  # has_get_func
+    "0x00011B3E",  # has_set_func
+    "0x5401791B",  # has_get_level
+    "0x0001791B",  # has_set_level
+    "0",  # has_get_parm
+    "0",  # has_set_parm
+]
+
+
+# ---------------------------------------------------------------------------
+# Level and function
+# ---------------------------------------------------------------------------
+# Level and function lookup tables
+# ---------------------------------------------------------------------------
+
+# Levels that return raw/255.0 as float (0.0-1.0)
+_GET_LEVEL_FLOAT: dict[str, str] = {
+    "AF": "get_af_level",
+    "RF": "get_rf_gain",
+    "SQL": "get_squelch",
+    "NR": "get_nr_level",
+    "NB": "get_nb_level",
+    "COMP": "get_compressor_level",
+    "MICGAIN": "get_mic_gain",
+    "MONITOR_GAIN": "get_monitor_gain",
+    "RFPOWER_METER": "get_power_meter",
+    "COMP_METER": "get_comp_meter",
+    "ID_METER": "get_id_meter",
+    "VD_METER": "get_vd_meter",
+}
+
+# Levels that return an integer value as-is (WPM, Hz)
+_GET_LEVEL_INT: dict[str, str] = {
+    "KEYSPD": "get_key_speed",
+    "CWPITCH": "get_cw_pitch",
+}
+
+# Writable float levels: hamlib 0.0-1.0 → raw 0-255
+_SET_LEVEL_FLOAT: dict[str, str] = {
+    "AF": "set_af_level",
+    "RF": "set_rf_gain",
+    "SQL": "set_squelch",
+    "NR": "set_nr_level",
+    "NB": "set_nb_level",
+    "COMP": "set_compressor_level",
+    "MICGAIN": "set_mic_gain",
+    "MONITOR_GAIN": "set_monitor_gain",
+}
+
+# Preamp: level index → dB (matches dump_state "12 20 0")
+_PREAMP_IDX_TO_DB: list[int] = [0, 12, 20]
+
+
+def _preamp_index_to_db(index: object) -> int | None:
+    if (
+        not isinstance(index, int)
+        or isinstance(index, bool)
+        or not 0 <= index < len(_PREAMP_IDX_TO_DB)
+    ):
+        return None
+    return _PREAMP_IDX_TO_DB[index]
+
+
+def _preamp_db_to_index(value: float) -> int:
+    db = round(value)
+    return min(
+        range(len(_PREAMP_IDX_TO_DB)),
+        key=lambda i: abs(_PREAMP_IDX_TO_DB[i] - db),
+    )
+
+
+# Functions: hamlib name → get/set method names
+_FUNC_GET: dict[str, str] = {
+    "NB": "get_nb",
+    "NR": "get_nr",
+    "COMP": "get_compressor",
+    "VOX": "get_vox",
+    "TONE": "get_repeater_tone",
+    "TSQL": "get_repeater_tsql",
+    "ANF": "get_auto_notch",
+    "LOCK": "get_dial_lock",
+    "MON": "get_monitor",
+    "APF": "get_audio_peak_filter",
+}
+
+_FUNC_SET: dict[str, str] = {
+    "NB": "set_nb",
+    "NR": "set_nr",
+    "COMP": "set_compressor",
+    "VOX": "set_vox",
+    "TONE": "set_repeater_tone",
+    "TSQL": "set_repeater_tsql",
+    "ANF": "set_auto_notch",
+    "LOCK": "set_dial_lock",
+    "MON": "set_monitor",
+    "APF": "set_audio_peak_filter",
+}
+
+# Filter number → approximate passband in Hz (IC-7610 USB defaults)
+_FILTER_TO_PASSBAND: dict[int, int] = {1: 3000, 2: 2400, 3: 1800}
+
+
+def _filter_to_passband(filt: int | None) -> int:
+    """Convert IC-7610 filter number to passband Hz (0 = radio default)."""
+    if filt is None:
+        return 0
+    return _FILTER_TO_PASSBAND.get(filt, 0)
+
+
+def _passband_to_filter(passband_hz: int) -> int | None:
+    """Convert passband in Hz to the nearest IC-7610 filter number."""
+    if passband_hz <= 0:
+        return None
+    if passband_hz >= 2800:
+        return 1
+    if passband_hz >= 2000:
+        return 2
+    return 3
+
+
+def _split_mode_values(
+    mode: object, filter_num: object, data_mode: object
+) -> tuple[str, str]:
+    """Format an unselected-VFO mode tuple as ``(mode, passband)`` lines.
+
+    Same display mapping as ``get_mode``: the DATA sub-mode (an int on
+    the way in, never narrowed to bool) selects the packet-mode label.
+    """
+    mode_str = _mode_to_hamlib_str(mode)
+    filt = None if filter_num is None else int(filter_num)
+    data = 0 if data_mode is None else int(data_mode)
+    if data:
+        if mode_str == "USB":
+            mode_str = "PKTUSB"
+        elif mode_str == "LSB":
+            mode_str = "PKTLSB"
+        elif mode_str == "RTTY":
+            mode_str = "PKTRTTY"
+    return mode_str, str(_filter_to_passband(filt))
+
+
+# The supervisor took the request: a lease is ours (key), or a durable OFF is
+# owed and will be retried until the rig confirms it (unkey). Anything else and
+# nothing reached the wire.
+_TX_ACCEPTED = frozenset({TxOutcome.ACCEPTED, TxOutcome.IDEMPOTENT})
+
+# MOR-1904: the key-down bound for a key THIS seat issued on an unmanaged rig.
+# Serial/USB Icom, Yaesu CAT and rigctld-client arm no supervisor (MOR-1219,
+# MOR-1190) and ``release_session_tx`` deliberately writes nothing on them at
+# socket close, so before this a client that keyed and then died left the
+# transmitter up with no bound anywhere. A damage bound and nothing more: it
+# decides nothing about who may transmit and holds no privileged unkey surface
+# (MOR-1175). Duration is MOR-1220's, imported and never re-spelled.
+_KEY_DOWN_BACKSTOP_SECONDS: float = BACKEND_MAX_KEY_DOWN_SECONDS
+# Coarse on purpose: the tick only re-reads RF truth already in this seat and
+# sends no CI-V.
+_KEY_DOWN_BACKSTOP_TICK_SECONDS: float = 0.25
+
+
+@dataclass(frozen=True, slots=True)
+class _RigctldTxPolicyClassification:
+    command: object
+    disposition: TxInterlockDisposition
+    family: TxInterlockCommandFamily | None
+
+
+_LEVEL_POLICY_COMMANDS: dict[str, str] = dict(
+    zip(
+        "RFPOWER AF RF SQL NR NB COMP MICGAIN MONITOR_GAIN KEYSPD CWPITCH PREAMP ATT NOTCHF IFSHIFT".split(),
+        "SetPower SetAfLevel SetRfGain SetSquelch SetNRLevel SetNBLevel SetCompressorLevel SetMicGain SetMonitorGain SetKeySpeed SetCwPitch SetPreamp SetAttenuator SetNotchFilter SetIfShift".split(),
+        strict=True,
+    )
+)
+_FUNC_POLICY_COMMANDS: dict[str, str] = dict(
+    zip(
+        "NB NR COMP VOX TONE TSQL ANF LOCK MON APF AGC".split(),
+        "SetNB SetNR SetCompressor SetVox SetRepeaterTone SetRepeaterTsql SetAutoNotch SetDialLock SetMonitor SetAudioPeakFilter SetAgc".split(),
+        strict=True,
+    )
+)
+
+
+def _classify_rigctld_tx_intent(
+    intent: CommandIntent,
+) -> _RigctldTxPolicyClassification:
+    """Map one material rigctld intent into the canonical typed TX policy."""
+    params = intent.params
+    command: tx_commands.Command
+    if intent.name in ("set_freq", "set_split_freq"):
+        command = tx_commands.SetFreq(int(params["freq_hz"]))
+    elif intent.name in ("set_mode", "set_split_mode"):
+        command = tx_commands.SetMode(str(params["mode"]))
+    elif intent.name == "set_ptt":
+        command = tx_commands.PttOn() if bool(params["ptt"]) else tx_commands.PttOff()
+    elif intent.name in ("set_rit", "set_xit"):
+        command = tx_commands.SetRitFrequency(int(params["hz"]))
+    elif intent.name == "set_vfo":
+        command = tx_commands.SelectVfo(str(params["vfo"]))
+    elif intent.name == "set_split_vfo":
+        command = tx_commands.SetSplit(bool(params["on"]))
+    elif intent.name == "send_raw":
+        command = tx_commands.SendCiv(command=0)
+    elif intent.name == "set_level":
+        level = str(params["level"]).upper()
+        command_type = _LEVEL_POLICY_COMMANDS.get(level)
+        if command_type is None:
+            raise ValueError(f"unmapped rigctld TX policy intent: set_level {level!r}")
+        command = getattr(tx_commands, command_type)(params["value"])
+    elif intent.name == "set_func":
+        func = str(params["func"]).upper()
+        on = bool(params["on"])
+        if func == "TUNER":
+            command = tx_commands.SetTunerStatus(1 if on else 0)
+        elif func == "SPLIT":
+            command = tx_commands.SetSplit(on)
+        else:
+            command_type = _FUNC_POLICY_COMMANDS.get(func)
+            if command_type is None:
+                raise ValueError(
+                    f"unmapped rigctld TX policy intent: set_func {func!r}"
+                )
+            command = getattr(tx_commands, command_type)(on)
+    else:
+        raise ValueError(f"unmapped rigctld TX policy intent: {intent.name!r}")
+
+    metadata = tx_interlock.get_tx_interlock_command_family_metadata(command)
+    return _RigctldTxPolicyClassification(
+        command=command,
+        disposition=tx_interlock.classify_tx_interlock(command),
+        family=None if metadata is None else metadata.family,
+    )
+
+
+def _ok() -> RigctldResponse:
+    return RigctldResponse(error=HamlibError.OK)
+
+
+def _err(code: HamlibError) -> RigctldResponse:
+    return RigctldResponse(error=code)
+
+
+def _terminal_lifecycle_state(
+    result: CommandServiceResult, intent: CommandIntent
+) -> str | None:
+    """Return the last lifecycle state recorded for ``intent`` in ``result``."""
+
+    for event in reversed(result.lifecycle_events):
+        if event.command_id == intent.id:
+            return str(event.state)
+    return None
+
+
+# Terminal lifecycle states that are evidence the write was actually carried
+# out: the executor ran to completion and the command was still the live one
+# when it did (``acknowledged``), or a readback has since confirmed it.
+_APPLIED_LIFECYCLE_STATES: frozenset[str] = frozenset(
+    {"acknowledged", "confirmed", "reconciled"}
+)
+
+# Truthful Hamlib answers for the terminal states that mean "not applied".
+# Anything not named here is a write whose fate we cannot vouch for, which is
+# reported as a rejection rather than as success.
+_UNAPPLIED_LIFECYCLE_ERRORS: dict[str, HamlibError] = {
+    "timed_out": HamlibError.ETIMEOUT,
+}
+
+
+def _mode_to_hamlib_str(mode: object) -> str:
+    """Normalize backend mode values to a hamlib-compatible string."""
+    if isinstance(mode, Mode):
+        return str(CIV_TO_HAMLIB_MODE.get(mode.value, mode.name))
+    if isinstance(mode, str):
+        name = mode.upper()
+        native_packet_modes = {"DATA-U": "PKTUSB", "DATA-L": "PKTLSB"}
+        if name in native_packet_modes:
+            return native_packet_modes[name]
+        core_mode = Mode.__members__.get(name)
+        return (
+            name if core_mode is None else CIV_TO_HAMLIB_MODE.get(core_mode.value, name)
+        )
+    name = getattr(mode, "name", None)
+    if isinstance(name, str):
+        return _mode_to_hamlib_str(name)
+    value = getattr(mode, "value", None)
+    if isinstance(value, int):
+        return str(CIV_TO_HAMLIB_MODE.get(value, "USB"))
+    return str(mode).upper()
+
+
+@dataclass(frozen=True, slots=True)
+class _RigctldCommandFailure(Exception):
+    error: HamlibError
+
+
+@dataclass(slots=True)
+class _RigctldCommandExecutor:
+    handler: "RigctldHandler"
+    predecessor: asyncio.Future[None] | None = None
+
+    async def _wait_predecessor(self) -> None:
+        if self.predecessor is not None:
+            await asyncio.shield(self.predecessor)
+
+    async def _execute_managed_ptt(
+        self,
+        intent: CommandIntent,
+    ) -> CommandExecutionResult:
+        authority = self.handler._managed_tx_authority
+        assert authority is not None
+        on = bool(intent.params["ptt"])
+        owner = intent.params.get("session_id")
+        if not isinstance(owner, str) or not owner:
+            raise _RigctldCommandFailure(HamlibError.EACCESS)
+
+        submission = _RIGCTLD_PTT_SUBMISSION.get()
+        ready = _RIGCTLD_PTT_READY.get()
+        queue = self.handler._command_queue
+        assert queue is not None
+        try:
+            await execute_managed_ptt(
+                authority=authority,
+                queue=queue,
+                owner=owner,
+                on=on,
+                submission=submission,
+                ready=ready,
+                source="rigctld",
+                provider_generation=self.handler._provider_generation_capture(),
+            )
+        except ManagedKeyRefused as exc:
+            raise _RigctldCommandFailure(HamlibError.ERJCTED) from exc
+        except ManagedKeySetupError as exc:
+            raise _RigctldCommandFailure(HamlibError.EINTERNAL) from exc
+        except (CommandError, ControllerError) as exc:
+            # A refused key (MOR-3537: e.g. the radio transmits a TX no owner
+            # keyed) is a rejection, not an I/O failure.
+            raise _RigctldCommandFailure(HamlibError.ERJCTED) from exc
+        except Exception as exc:
+            raise _RigctldCommandFailure(HamlibError.EIO) from exc
+        return CommandExecutionResult()
+
+    async def _execute_managed_tuner(
+        self, intent: CommandIntent
+    ) -> CommandExecutionResult:
+        """Normalize the one in-scope rigctld function into the shared leaf."""
+        queue = self.handler._command_queue
+        assert queue is not None
+        raw_session = intent.params.get("session_id")
+        session_id = None if raw_session is None else str(raw_session)
+        loop = asyncio.get_running_loop()
+        timeout = intent.timeout or self.handler._config.command_timeout
+        try:
+            await execute_managed_tuner(
+                radio=self.handler._radio,
+                queue=queue,
+                source="rigctld",
+                session_id=session_id,
+                command_id=intent.id,
+                on=bool(intent.params["on"]),
+                expires_at_monotonic=loop.time() + timeout,
+                connection_generation=queue.capture_connection_generation(),
+                provider_generation=self.handler._provider_generation_capture(),
+            )
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            raise _RigctldCommandFailure(HamlibError.ETIMEOUT) from exc
+        except CommandError as exc:
+            raise _RigctldCommandFailure(HamlibError.ERJCTED) from exc
+        return CommandExecutionResult()
+
+    async def _execute_managed_split_write(
+        self, intent: CommandIntent
+    ) -> CommandExecutionResult:
+        queue = self.handler._command_queue
+        assert queue is not None
+        loop = asyncio.get_running_loop()
+        completion: asyncio.Future[None] = loop.create_future()
+        timeout = intent.timeout or self.handler._config.command_timeout
+        expires_at = loop.time() + timeout
+        queue.put_ordered(
+            intent,
+            future=completion,
+            command_id=intent.id,
+            source=intent.source,
+            session_id=intent.params.get("session_id"),
+            expires_at_monotonic=expires_at,
+            provider_generation=self.handler._provider_generation_capture(),
+            connection_generation=queue.capture_connection_generation(),
+        )
+        try:
+            await asyncio.wait_for(
+                completion, timeout=max(0.0, expires_at - loop.time())
+            )
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            raise _RigctldCommandFailure(HamlibError.ETIMEOUT) from exc
+        except CommandRejectedError as exc:
+            raise _RigctldCommandFailure(HamlibError.ERJCTED) from exc
+        except ControllerError as exc:
+            raise _RigctldCommandFailure(HamlibError.EACCESS) from exc
+        except CommandError as exc:
+            raise _RigctldCommandFailure(HamlibError.ENAVAIL) from exc
+        finally:
+            if not completion.done():
+                completion.cancel()
+            await asyncio.gather(completion, return_exceptions=True)
+        return CommandExecutionResult()
+
+    async def execute(self, intent: CommandIntent) -> CommandExecutionResult:
+        controller = getattr(self.handler._radio, "_controller_authority", None)
+        # The unkey exemption mirrors the ingress gate: neither the typed
+        # PttOff nor a raw frame that ends a transmission takes a
+        # controller ticket.
+        safety_off = (
+            intent.name == "set_ptt" and intent.params.get("ptt") is False
+        ) or (
+            intent.name == "send_raw"
+            and tx_interlock.is_exact_raw_transmission_end_frame(
+                intent.params["frame_bytes"]
+            )
+        )
+        ticket = (
+            controller.capture()
+            if isinstance(controller, ControllerAuthority) and not safety_off
+            else None
+        )
+
+        def validate_controller() -> None:
+            if ticket is not None:
+                ticket.authority.validate(ticket)
+
+        managed = self.handler._managed_tx_authority is not None
+        if managed and intent.name == "set_ptt":
+            return await self._execute_managed_ptt(intent)
+        if (
+            managed
+            and intent.name == "set_func"
+            and str(intent.params["func"]).upper() == "TUNER"
+        ):
+            return await self._execute_managed_tuner(intent)
+        if (
+            managed
+            and intent.name == "set_func"
+            and str(intent.params["func"]).upper() == "VOX"
+            and bool(intent.params["on"])
+            and isinstance(self.handler._managed_tx_authority, ManagedTxAuthority)
+            and (
+                self.handler._managed_tx_authority.held_by_other(
+                    intent.params.get("session_id")
+                )
+                or self.handler._managed_tx_authority.radio_tx_refusal_nowait()
+                is not None
+            )
+        ):
+            # MOR-3534: VOX arms keying; another owner's TX refuses it, and so
+            # does a TX the radio reports while no owner holds TX (MOR-3537).
+            # The owner is the connection id the rigctld server minted.
+            raise _RigctldCommandFailure(HamlibError.ERJCTED)
+        if managed and intent.name in ("set_split_freq", "set_split_mode"):
+            capability = (
+                RelativeVfoFrequencyWritable
+                if intent.name == "set_split_freq"
+                else RelativeVfoModeWritable
+            )
+            if not isinstance(self.handler._radio, capability):
+                raise _RigctldCommandFailure(HamlibError.ENAVAIL)
+            await self._wait_predecessor()
+            if ticket is not None:
+                ticket.authority.validate(ticket)
+            return await self._execute_managed_split_write(intent)
+        if managed and intent.name == "send_raw":
+            # A raw TX-family frame is refused by payload alone —
+            # regardless of the observed RF state, and without consulting
+            # the authority.  An unparseable frame fails closed.
+            if (
+                tx_interlock.classify_raw_civ_frame_tx_family(
+                    intent.params["frame_bytes"]
+                )
+                is not False
+            ):
+                raise _RigctldCommandFailure(HamlibError.ERJCTED)
+
+        if not managed:
+            classification = _classify_rigctld_tx_intent(intent)
+            if (
+                classification.disposition is TxInterlockDisposition.BLOCK
+                # An exact raw de-key skips the RF-state refusal, as the
+                # typed PttOff always does: a raw unkey must never get
+                # harder because the observed PTT read TX or went stale
+                # (MOR-3378).  Managed mode above still refuses it.
+                and not (
+                    intent.name == "send_raw"
+                    and tx_interlock.is_exact_raw_dekey_frame(
+                        intent.params["frame_bytes"]
+                    )
+                )
+                and self.handler._has_canonical_state_store
+                and self.handler._resolve_rigctld_rf_state()
+                is not tx_interlock.RfState.RX
+            ):
+                raise _RigctldCommandFailure(HamlibError.ERJCTED)
+        await self._wait_predecessor()
+        if ticket is not None:
+            ticket.authority.validate(ticket)
+        params = intent.params
+        if intent.name == "set_freq":
+            await self.handler._radio.set_freq(
+                int(params["freq_hz"]),
+                receiver=int(params.get("receiver", 0)),
+            )
+        elif intent.name == "set_mode":
+            receiver = int(params.get("receiver", 0))
+            mode = str(params["mode"])
+            filter_width = params.get("filter_width")
+            if filter_width is not None:
+                filter_width = int(filter_width)
+            if receiver == 0:
+                await self.handler._radio.set_mode(
+                    mode,
+                    filter_width=filter_width,
+                )
+            else:
+                await self.handler._radio.set_mode(
+                    mode,
+                    filter_width=filter_width,
+                    receiver=receiver,
+                )
+            if bool(params.get("packet_mode", False)):
+                await self.handler._apply_packet_data_mode(
+                    receiver=receiver, filter_width=filter_width
+                )
+            elif str(params.get("mode", "")).upper() in ("USB", "LSB"):
+                await self.handler._apply_plain_ssb_data_off(receiver=receiver)
+        elif intent.name == "set_ptt":
+            # The owner identity rides on the intent, not on the handler's
+            # context var: the ingress recorded it there, ``CommandService``
+            # already matches overlays on it, and it survives an executor that
+            # is ever awaited from a task other than the one that parsed the
+            # command.
+            raised_by = params.get("session_id")
+            await self.handler._route_ptt(
+                bool(params["ptt"]),
+                session_id=None if raised_by is None else str(raised_by),
+            )
+        elif intent.name == "set_rit":
+            hz = int(params["hz"])
+            await self.handler._radio.set_rit_frequency(hz)
+            await self.handler._radio.set_rit_status(hz != 0)
+        elif intent.name == "set_xit":
+            hz = int(params["hz"])
+            await self.handler._radio.set_rit_frequency(hz)
+            await self.handler._radio.set_rit_tx_status(hz != 0)
+        elif intent.name == "set_vfo":
+            error = await self.handler._execute_set_vfo(str(params["vfo"]))
+            if error is not HamlibError.OK:
+                raise _RigctldCommandFailure(error)
+        elif intent.name == "set_level":
+            error = await self.handler._execute_set_level(
+                str(params["level"]),
+                float(params["value"]),
+                receiver=int(params.get("receiver", 0)),
+                vfo_arg=None
+                if params.get("vfo_arg") is None
+                else str(params["vfo_arg"]),
+                power_native=(
+                    None
+                    if params.get("power_native") is None
+                    else int(params["power_native"])
+                ),
+            )
+            if error is not HamlibError.OK:
+                raise _RigctldCommandFailure(error)
+        elif intent.name == "set_func":
+            error = await self.handler._execute_set_func(
+                str(params["func"]),
+                bool(params["on"]),
+                receiver=int(params.get("receiver", 0)),
+                vfo_arg=None
+                if params.get("vfo_arg") is None
+                else str(params["vfo_arg"]),
+            )
+            if error is not HamlibError.OK:
+                raise _RigctldCommandFailure(error)
+        elif intent.name == "set_split_vfo":
+            error = await self.handler._execute_set_split_vfo(
+                bool(params["on"]),
+                str(params["tx_vfo"]),
+            )
+            if error is not HamlibError.OK:
+                raise _RigctldCommandFailure(error)
+        elif intent.name == "set_split_freq":
+            return await self.handler._execute_set_split_freq(
+                int(params["freq_hz"]), before_set=validate_controller
+            )
+        elif intent.name == "set_split_mode":
+            return await self.handler._execute_set_split_mode(
+                int(params["mode"]),
+                filter_width=params.get("filter_width"),
+                data=params.get("data"),
+                before_set=validate_controller,
+            )
+        elif intent.name == "send_raw":
+            send_fn = getattr(self.handler._radio, "_send_civ_raw", None)
+            if send_fn is None:
+                raise _RigctldCommandFailure(HamlibError.ENIMPL)
+            frame_bytes = params["frame_bytes"]
+            # A timeout here is deliberately NOT swallowed (MOR-1882): the
+            # radio never answered, so there is no evidence the raw frame was
+            # applied. Letting it propagate gives the command a ``timed_out``
+            # terminal lifecycle and the client an ``RPRT -5``, where the old
+            # empty-but-successful response claimed a write that may never
+            # have landed.
+            resp = await send_fn(frame_bytes)
+            if resp is None:
+                return CommandExecutionResult(details={"values": []})
+            raw = _civ_frame_to_bytes(resp)
+            hex_str = " ".join(f"{b:02X}" for b in raw)
+            return CommandExecutionResult(details={"values": [hex_str]})
+        else:
+            raise ValueError(f"unsupported rigctld command intent: {intent.name!r}")
+
+        return CommandExecutionResult()
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectedField:
+    path: str
+    value: Any
+    quality: tuple[str, ...] = ()
+
+
+@dataclass(slots=True)
+class _RigctldProjection:
+    """Snapshot plus scoped pending overlays for one rigctld session."""
+
+    snapshot: StateSnapshot
+    overlays: dict[str, Any]
+    aliases: dict[str, tuple[FieldPath, ...]]
+
+    def covers(self, paths: Sequence[FieldPath]) -> bool:
+        return all(self.value(path) is not None for path in paths)
+
+    def value(self, *paths: FieldPath) -> _ProjectedField | None:
+        for path in paths:
+            key = str(path)
+            if key in self.overlays:
+                return _ProjectedField(path=key, value=self.overlays[key])
+        for path in paths:
+            newest = None
+            for candidate in self.aliases.get(str(path), (path,)):
+                try:
+                    field = self.snapshot.field(candidate)
+                except KeyError:
+                    continue
+                if field.freshness is not FreshnessState.FRESH:
+                    continue
+                if (
+                    newest is None
+                    or field.last_observed_monotonic > newest.last_observed_monotonic
+                ):
+                    newest = field
+            if newest is not None:
+                return _ProjectedField(
+                    path=str(path), value=newest.value, quality=newest.quality
+                )
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Raw CI-V helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_raw_hex(args: tuple[str, ...]) -> bytes:
+    """Parse hex bytes from hamlib 'w' command args.
+
+    Supports two input formats:
+    - Space-separated tokens: args = ("FE", "FE", "98", "E0", "03", "FD")
+    - Backslash-escaped single arg: args = ("\\xFE\\xFE\\x98\\xE0\\x03\\xFD",)
+    """
+    if len(args) == 1 and "\\x" in args[0]:
+        # Backslash-escaped: \xFE\xFE\x98\xE0\x03\xFD
+        raw = args[0]
+        result = bytearray()
+        i = 0
+        while i < len(raw):
+            if raw[i : i + 2] == "\\x":
+                result.append(int(raw[i + 2 : i + 4], 16))
+                i += 4
+            else:
+                raise ValueError(f"Unexpected char at position {i} in {raw!r}")
+        return bytes(result)
+    # Space-separated hex tokens: FE FE 98 E0 03 FD
+    return bytes(int(h, 16) for h in args)
+
+
+def _is_raw_transmission_end_args(args: tuple[str, ...]) -> bool:
+    """True when ``w`` command args parse to exactly one transmission-end frame.
+
+    Parses with the same :func:`_parse_raw_hex` the ``w`` handler uses.
+    An argument that does not parse does not end a transmission, so the
+    controller gate keeps capturing it and ``_cmd_send_raw`` still
+    answers EINVAL.
+    """
+    try:
+        frame_bytes = _parse_raw_hex(args)
+    except (ValueError, IndexError):
+        return False
+    return tx_interlock.is_exact_raw_transmission_end_frame(frame_bytes)
+
+
+def _civ_frame_to_bytes(frame: Any) -> bytes:
+    """Reconstruct raw CI-V frame bytes from a parsed CivFrame."""
+    return bytes(
+        build_civ_frame(
+            frame.to_addr,
+            frame.from_addr,
+            frame.command,
+            sub=frame.sub,
+            data=frame.data if frame.data else None,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Handler
+# ---------------------------------------------------------------------------
+
+
+class RigctldHandler:
+    """Dispatches parsed rigctld commands to IcomRadio.
+
+    Args:
+        radio: Connected IcomRadio instance.
+        config: Server configuration (read_only, cache_ttl, etc.).
+    """
+
+    def __init__(
+        self,
+        radio: "Radio",
+        config: RigctldConfig,
+        *,
+        state_store: StateStore | None = None,
+        state_model_service: StateModelService | None = None,
+        managed_tx_authority: ManagedTxAuthority | None = None,
+        command_queue: tx_commands.CommandQueue | None = None,
+        command_service: CommandService | None = None,
+    ) -> None:
+        supplied = (
+            managed_tx_authority is not None,
+            command_queue is not None,
+            command_service is not None,
+        )
+        if any(supplied) and not all(supplied):
+            raise ValueError(
+                "managed authority, command queue, and service must be supplied together"
+            )
+        self._managed_tx_authority = managed_tx_authority
+        self._command_queue = command_queue
+        self._radio = radio
+        self._config = config
+        self._state_diagnostics = getattr(radio, "_state_diagnostics", None)
+        # Hamlib-protocol concept: TX VFO label tracked across S/s commands.
+        # Not radio state (CI-V has no per-VFO TX-routing register on most
+        # Icoms — the split-TX target is a radio-side fact: the unselected
+        # slot on single-RX, whatever ``split_tx_target`` names on dual-RX).
+        # Initial value mirrors the Hamlib default ("VFOA"). Updated by
+        # ``_cmd_set_split_vfo`` on every ``S`` request; never routed to
+        # the radio. (Issue #1345; MOR-3754.)
+        self._split_tx_vfo_by_session: dict[str | None, Literal["VFOA", "VFOB"]] = {}
+        # MOR-1904: one outstanding key-down bound, never a per-session dict —
+        # the rig has one PTT, so a second session's key supersedes the first's
+        # deadline rather than adding a slot that nothing prunes.
+        self._key_down_backstop_task: asyncio.Task[None] | None = None
+        self._key_down_backstop_token: int = 0
+        self._key_down_backstop_session: str | None = None
+        self._routing = create_routing(radio, getattr(config, "max_power_w", 100.0))
+        if state_store is None and isinstance(radio, StateStoreCapable):
+            state_store = radio.state_store
+        self._has_canonical_state_store = isinstance(state_store, StateStore)
+        if not isinstance(state_store, StateStore):
+            # Non-canonical, non-decaying fallback (MOR-432): used only when the
+            # radio exposes no StateStore. Freshness decay requires a wired,
+            # running StateFreshnessService over the store; this bare store has
+            # none, so it never ages fields to STALE. The production rigctld
+            # delivery path injects the radio's canonical store (with the
+            # server-driven freshness service) via ``state_store``.
+            state_store = StateStore()
+        self._state_store = state_store
+        self._provider_generation_capture: Callable[[], int] = lambda: (
+            self._state_store.provider_generation
+        )
+        if state_model_service is None and isinstance(radio, StateModelCapable):
+            state_model_service = radio.state_model_service
+        if not isinstance(state_model_service, StateModelService):
+            state_model_service = None
+        self._state_model_service = state_model_service
+        self._install_routing_state_observer()
+        self._command_executor = _RigctldCommandExecutor(self)
+        self._command_service = (
+            CommandService(
+                executor=self._command_executor,
+                state_store=state_store,
+                state_model_service=self._state_model_service,
+            )
+            if command_service is None
+            else command_service
+        )
+
+    def bind_provider_generation(self, capture: Callable[[], int]) -> None:
+        """Bind the server-owned provider token capture for request ingress."""
+        self._provider_generation_capture = capture
+
+    def _resolve_rigctld_rf_state(self) -> tx_interlock.RfState:
+        """Resolve strict, generation-bound RF truth for hard-block writes."""
+        return tx_interlock.resolve_rf_state(self._state_store.snapshot())
+
+    def _defer_write_gate(self, intent: CommandIntent) -> RigctldResponse | None:
+        """Decide a DEFER-classified write's fate before it can touch state.
+
+        Superseded design (MOR-1881, owner ruling 2026-08-17): holding a
+        DEFER write in a shared lane blocks the rigctld connection in-band,
+        which measurably delayed a same-connection PTT OFF by up to two
+        seconds — a straight violation of the hard safety barrier this
+        programme protects, and the reason that design was rejected on
+        review evidence (PR #2755).
+
+        This gate is called by each ``_cmd_set_*`` handler BEFORE
+        :meth:`CommandService.execute`, not from inside the injected
+        executor — ``CommandService.execute`` records an optimistic pending
+        overlay and emits "accepted"/"queued" lifecycle events before the
+        executor ever runs, so a write refused *inside* the executor would
+        still have already told our own state model (and therefore our own
+        UI) that the write was in flight. Returning a terminal response here
+        means a dropped write never reaches any of that.
+
+        Two outcomes when the disposition is DEFER (``None`` for everything
+        else — RX, non-DEFER, or no canonical store to check against):
+
+        * **Known TX** — silently skip the write and answer ``RPRT 0``,
+          mirroring hamlib's own core (``rig_set_mode``,
+          ``rig_set_split_vfo``, ``rig_set_split_mode``, and the
+          ``set_freq`` RX-VFO skip, all in hamlib's ``src/rig.c``), written
+          there to avoid breaking WSJT-X: any non-zero RPRT mid-sequence
+          drives ``TransceiverBase::offline()`` -> ``shutdown()``, which
+          itself sends a PTT-off and, on a repeat, opens a modal error
+          dialog. This seat already made the identical trade once for a
+          policy-declined unkey — see :meth:`_route_ptt`'s docstring.
+          Web's seat can refuse with a reason envelope because it talks to
+          our own UI, which has vocabulary for "not now"; a third-party
+          hamlib client on this wire protocol does not, so this seat
+          behaves like the radio's own front panel: transmit and the
+          button press is simply ignored, and the rig "beeps" only in our
+          logs (operator-visible feedback in the web UI is MOR-1890).
+          A known-TX drop is a bounded, self-clearing policy state — it
+          ends the moment the operator unkeys — which is why it may
+          honestly report success. UNKNOWN below may not: it is a fault of
+          unbounded duration, not a condition that resolves on its own.
+        * **Unknown/stale RF truth** — truthful refusal, unchanged from
+          before this design and from what BLOCK-classified families still
+          do inside the executor.
+        """
+        classification = _classify_rigctld_tx_intent(intent)
+        if (
+            classification.disposition is not TxInterlockDisposition.DEFER
+            or not self._has_canonical_state_store
+        ):
+            return None
+        rf_state = self._resolve_rigctld_rf_state()
+        if rf_state is tx_interlock.RfState.RX:
+            return None
+        if rf_state is tx_interlock.RfState.UNKNOWN:
+            return _err(HamlibError.ERJCTED)
+        # A client that polls and re-issues a write while transmitting (e.g.
+        # every fast-poll tick) can hit this repeatedly; bounding that is not
+        # cheap without new state, so this logs once per drop, unbounded.
+        logger.warning(
+            "rigctld: dropped %s while transmitting — radio state unchanged",
+            intent.name,
+        )
+        return _ok()
+
+    async def _execute_write(self, intent: CommandIntent) -> CommandServiceResult:
+        """Run one material write and report only the outcome we actually have.
+
+        This seat answers ``RPRT 0`` for a write the radio never saw in
+        exactly one case: the deliberate pre-send policy drop in
+        :meth:`_defer_write_gate` (known TX, MOR-1881's owner ruling). That
+        exception is bounded — it ends the moment the operator unkeys — and it
+        is taken *before* this method is entered, so nothing here can widen
+        it. Any write that gets this far was sent, and its terminal result is
+        reported truthfully (MOR-1882):
+
+        * **Timeout** — ``ETIMEOUT``, with the ``timed_out`` terminal
+          lifecycle :class:`CommandService` emits on the way past.
+        * **Invalidation / supersession** — the backend call completed but
+          this command was no longer the live one when it did (a newer
+          command took its place, the provider generation changed under it,
+          or another seat failed it), so nothing may be claimed about the
+          radio's state. Reported as ``ERJCTED`` rather than as the
+          ``EINTERNAL`` this used to fall through to: it is a real terminal
+          outcome, not a bug in us.
+        * **Any other non-applied terminal state** — reported rather than
+          discarded. Only the applied states let the caller answer
+          ``RPRT 0``: ``acknowledged`` (the executor completed while this
+          command was still live) and the confirmed/reconciled states a
+          readback can promote it to.
+
+        The truthful codes travel as :class:`_RigctldCommandFailure` so every
+        write path shares the one mapping in :meth:`execute`, rather than each
+        ``_cmd_set_*`` inventing its own.
+
+        Note on evidence: what counts as an ACK is a property of the backend
+        beneath the executor, not of this seat. The provider-owned
+        readback seam (:class:`PhysicalWriteReadbackCapable`, MOR-1779) cannot
+        strengthen that here: it only correlates commands dispatched through
+        the observation poller's queue, which rigctld writes deliberately do
+        not use, and waiting on a poll cycle in-band is what MOR-1881 measured
+        as a 2 s delay to a same-connection unkey. Closing that gap means
+        routing rigctld writes through the correlated queue without holding
+        the socket — post-beta work, tracked separately.
+        """
+        try:
+            result = await self._command_service.execute(
+                intent,
+                executor=_RigctldCommandExecutor(
+                    self,
+                    predecessor=_RIGCTLD_PREDECESSOR.get(),
+                ),
+            )
+        except CommandExecutionInvalidatedError as exc:
+            logger.warning(
+                "rigctld: %s was invalidated in flight (%s) — reporting failure",
+                intent.name,
+                exc,
+            )
+            raise _RigctldCommandFailure(HamlibError.ERJCTED) from exc
+        state = _terminal_lifecycle_state(result, intent)
+        if state in _APPLIED_LIFECYCLE_STATES:
+            return result
+        logger.warning(
+            "rigctld: %s ended in terminal state %r — not reporting success",
+            intent.name,
+            state,
+        )
+        raise _RigctldCommandFailure(
+            _UNAPPLIED_LIFECYCLE_ERRORS.get(str(state), HamlibError.ERJCTED)
+        )
+
+    def _packet_data_mode_value(self) -> int | bool:
+        value = self._config.wsjtx_data_mode
+        if value is None:
+            return True
+        if value > profile_data_mode_count(self._radio):
+            return True
+        return int(value)
+
+    async def _apply_packet_data_mode(
+        self, *, receiver: int = 0, filter_width: int | None = None
+    ) -> int | bool:
+        data_mode = self._packet_data_mode_value()
+        await apply_wsjtx_data_mod_input(
+            self._radio,
+            data_mode=data_mode,
+            source=self._config.wsjtx_data_mod_input,
+        )
+        profile = getattr(self._radio, "profile", None)
+        cmd_map = getattr(profile, "command_map", None)
+        if (
+            receiver == 0
+            and filter_width is not None
+            and callable(getattr(type(self._radio), "set_data_mode_with_filter", None))
+            and cmd_map is not None
+            and cmd_map._has_value_variants("set_data_mode")
+        ):
+            # Some Icom DATA variants include a filter. Carry the explicit M
+            # passband through that second write instead of resetting it.
+            setter = getattr(self._radio, "set_data_mode_with_filter")
+            await setter(data_mode, filter_width=filter_width)
+        elif receiver == 0:
+            await self._radio.set_data_mode(data_mode)
+        else:
+            await self._radio.set_data_mode(data_mode, receiver=receiver)
+        return data_mode
+
+    async def _supports_data_mode(self) -> bool:
+        """Whether this radio implements the DATA-mode command.
+
+        Consults the generic capability mechanism
+        (:meth:`Radio.supports_command`) with a name-only query — the
+        ``receiver`` keyword only admits level commands, so it is never
+        passed here. ``False`` means no DATA operation (e.g. Yaesu CAT,
+        which has the method but reports no command). Radios predating
+        ``supports_command`` fall back to the method's presence.
+        """
+        supports = getattr(self._radio, "supports_command", None)
+        if callable(supports):
+            result = supports("set_data_mode")
+            if hasattr(result, "__await__"):
+                result = await result
+            return bool(result)
+        return callable(getattr(self._radio, "set_data_mode", None))
+
+    async def _apply_plain_ssb_data_off(self, *, receiver: int = 0) -> bool:
+        """Clear DATA for a plain USB/LSB mode change when supported.
+
+        Never skipped on profile routing flags: the selected-slot path
+        reuses cached ``radio_state`` DATA that may be stale, so the
+        explicit OFF is the truth. Returns whether a clear was issued.
+        """
+        if not await self._supports_data_mode():
+            return False
+        if receiver == 0:
+            await self._radio.set_data_mode(False)
+            # ACK does not refresh canonical DATA truth. A following client
+            # must observe the clear rather than the previous packet mode.
+            if await self._radio.get_data_mode():
+                raise _RigctldCommandFailure(HamlibError.ENAVAIL)
+        else:
+            await self._radio.set_data_mode(False, receiver=receiver)
+        return True
+
+    def _radio_state(self, *, require_ready: bool = True) -> RadioState | None:
+        if require_ready and getattr(self._radio, "radio_ready", None) is False:
+            raise RigplaneTimeoutError("Radio is not ready for mirror reads")
+        state = getattr(self._radio, "radio_state", None)
+        return state if isinstance(state, RadioState) else None
+
+    def _main_receiver_state(self) -> ReceiverState | None:
+        state = self._radio_state(require_ready=False)
+        if state is None or state.main.freq <= 0:
+            return None
+        self._radio_state()
+        return state.main
+
+    def _session_id(self) -> str | None:
+        return _RIGCTLD_SESSION_ID.get()
+
+    def _receiver_id(self, receiver: int) -> str:
+        return "sub" if receiver == 1 else "main"
+
+    def _split_tx_vfo(self) -> Literal["VFOA", "VFOB"]:
+        return self._split_tx_vfo_by_session.get(self._session_id(), "VFOA")
+
+    def _set_split_tx_vfo(self, tx_vfo: Literal["VFOA", "VFOB"]) -> None:
+        self._split_tx_vfo_by_session[self._session_id()] = tx_vfo
+
+    def _legacy_receiver_id(self, receiver_id: str) -> str | None:
+        if receiver_id == "main":
+            return "0"
+        if receiver_id == "sub":
+            return "1"
+        return None
+
+    def _path_aliases(self, path: FieldPath) -> tuple[FieldPath, ...]:
+        aliases = [path]
+        if path.scope.value != "receiver":
+            return (path,)
+        receiver_id = path.receiver_id
+        if receiver_id is None:
+            return (path,)
+        legacy_receiver = self._legacy_receiver_id(receiver_id)
+        if legacy_receiver is None:
+            return (path,)
+        if path.slot is not None and path.slot.value == "active":
+            aliases.append(
+                FieldPath.active(legacy_receiver, path.family.value, path.name)
+            )
+            aliases.append(
+                FieldPath.receiver(legacy_receiver, path.family.value, path.name)
+            )
+        elif path.scope.value == "receiver":
+            aliases.append(
+                FieldPath.receiver(legacy_receiver, path.family.value, path.name)
+            )
+        return tuple(aliases)
+
+    def _freq_path(self, receiver: int) -> FieldPath:
+        return FieldPath.active(self._receiver_id(receiver), "freq_mode", "freq_hz")
+
+    def _mode_path(self, receiver: int) -> FieldPath:
+        return FieldPath.active(self._receiver_id(receiver), "freq_mode", "mode")
+
+    def _filter_num_path(self, receiver: int) -> FieldPath:
+        # The CI-V filter NUMBER (1/2/3), distinct from the decoded
+        # ``filter_width`` (Hz). ``_filter_to_passband`` maps the NUMBER, so the
+        # rigctld passband and the set_mode readback overlay must use this key,
+        # not the Hz one. The former ``_filter_path``/``filter_width``
+        # projection was removed: it fed Hz into a NUMBER->Hz map and collapsed
+        # every width to 0. (MOR-895, pro#1200.)
+        return FieldPath.active(self._receiver_id(receiver), "freq_mode", "filter_num")
+
+    def _data_mode_path(self, receiver: int) -> FieldPath:
+        return FieldPath.active(self._receiver_id(receiver), "freq_mode", "data_mode")
+
+    def _active_slot_path(self, receiver: int = 0) -> FieldPath:
+        return FieldPath.active_slot(self._receiver_id(receiver))
+
+    def _active_receiver_path(self) -> FieldPath:
+        return FieldPath.global_("slow_state", "active")
+
+    def _rit_freq_path(self) -> FieldPath:
+        return FieldPath.global_("operator_controls", "rit_freq")
+
+    def _level_path(self, level: str, *, receiver: int) -> FieldPath | None:
+        if level == "STRENGTH":
+            return FieldPath.receiver(self._receiver_id(receiver), "meters", "s_meter")
+        if level == "RFPOWER":
+            return FieldPath.global_("operator_controls", "power_level")
+        if level == "SWR":
+            return FieldPath.global_("meters", "swr")
+        if level == "RFPOWER_METER":
+            return FieldPath.global_("meters", "power")
+        if level == "COMP_METER":
+            return FieldPath.global_("meters", "comp")
+        if level == "ID_METER":
+            return FieldPath.global_("meters", "id")
+        if level == "VD_METER":
+            return FieldPath.global_("meters", "vd")
+        names = {
+            "AF": "af_level",
+            "RF": "rf_gain",
+            "SQL": "squelch",
+            "NR": "nr_level",
+            "NB": "nb_level",
+            "COMP": "compressor_level",
+            "MICGAIN": "mic_gain",
+            "MONITOR_GAIN": "monitor_gain",
+            "KEYSPD": "key_speed",
+            "CWPITCH": "cw_pitch",
+            "PREAMP": "preamp",
+            "ATT": "att",
+        }
+        name = names.get(level)
+        if name is None:
+            return None
+        return FieldPath.receiver(
+            self._receiver_id(receiver), "operator_controls", name
+        )
+
+    def _func_path(self, func: str, *, receiver: int) -> FieldPath:
+        # TONE/TSQL live in the store under the radio-concept names the
+        # state pipeline publishes (``repeater_tone`` / ``repeater_tsql``).
+        name = {"TONE": "repeater_tone", "TSQL": "repeater_tsql"}.get(
+            func, func.lower()
+        )
+        return FieldPath.receiver(
+            self._receiver_id(receiver),
+            "operator_toggles",
+            name,
+        )
+
+    def _project_fields(self, paths: Sequence[FieldPath]) -> _RigctldProjection:
+        snapshot = self._state_store.snapshot()
+        aliases = {str(path): self._path_aliases(path) for path in paths}
+        projected = self._command_service.project_pending_values(
+            source="rigctld",
+            session_id=self._session_id(),
+            paths=tuple(
+                candidate
+                for path_aliases in aliases.values()
+                for candidate in path_aliases
+            ),
+        )
+        overlays: dict[str, Any] = {}
+        for key, candidates in aliases.items():
+            for candidate in candidates:
+                if candidate in projected:
+                    overlays[key] = projected[candidate]
+                    break
+        return _RigctldProjection(snapshot=snapshot, overlays=overlays, aliases=aliases)
+
+    def _ensure_fresh(
+        self, paths: Sequence[FieldPath], *, reason: str
+    ) -> EnsureFreshResult | None:
+        """Request freshness synchronously for ``paths`` (fire-and-queue).
+
+        The :class:`~rigplane.core.radio_protocol.StateModelService` contract
+        is synchronous: ``ensure_fresh`` enqueues acquisition and returns at
+        once without awaiting the backend read. This handler therefore calls
+        it inline and never awaits the result. A service whose ``ensure_fresh``
+        is a coroutine violates that contract, so it is skipped here (returning
+        ``None``) rather than awaited — the caller falls through to its normal
+        StateStore re-projection / readback path. ``cache_ttl <= 0`` disables
+        freshness entirely. On an ``UNAVAILABLE`` result a diagnostic is
+        recorded; in all cases the caller re-projects the StateStore (see
+        :meth:`_project_with_freshness`) and reads back on a miss, because the
+        request being queued does not mean the field is fresh yet.
+        """
+        service = self._state_model_service
+        if service is None or self._config.cache_ttl <= 0:
+            return None
+        if asyncio.iscoroutinefunction(service.ensure_fresh):
+            return None
+        result = service.ensure_fresh(
+            tuple(sorted(paths, key=str)),
+            max_age=self._config.cache_ttl,
+            priority="user",
+            reason=reason,
+        )
+        status = getattr(result, "status", None)
+        status_value = getattr(status, "value", str(status))
+        if status_value == "unavailable" and isinstance(
+            self._state_diagnostics, StateDiagnosticsRecorder
+        ):
+            self._state_diagnostics.record(
+                "acquisition_unavailable",
+                "rigctld.handler",
+                reason=reason,
+                paths=[str(path) for path in paths],
+                message=getattr(result, "message", ""),
+            )
+        return result
+
+    def _project_with_freshness(
+        self,
+        paths: Sequence[FieldPath],
+        *,
+        reason: str,
+    ) -> _RigctldProjection:
+        projection = self._project_fields(paths)
+        self._ensure_fresh(paths, reason=reason)
+        if not projection.covers(paths):
+            projection = self._project_fields(paths)
+        return projection
+
+    def _freshness_result_allows_compat_default(
+        self, result: EnsureFreshResult | object | None
+    ) -> bool:
+        if result is None:
+            return True
+        status = getattr(result, "status", None)
+        if status is None:
+            return True
+        status_value = getattr(status, "value", str(status))
+        return status_value == AcquisitionStatus.UNAVAILABLE.value
+
+    def _install_routing_state_observer(self) -> None:
+        if self._routing is None:
+            return
+        set_observer = getattr(self._routing, "set_state_observer", None)
+        if callable(set_observer):
+            set_observer(self._record_routed_state_sample)
+
+    def _record_routed_state_sample(self, path: FieldPath, value: object) -> None:
+        self._record_state_sample(
+            path,
+            value,
+            source="hamlib_response",
+            max_age=self._config.cache_ttl,
+        )
+
+    def _project_routed_level(
+        self,
+        level: str,
+        *,
+        receiver: int,
+    ) -> RigctldResponse | None:
+        if self._routing is None:
+            return None
+        state_path_for_level = getattr(self._routing, "state_path_for_level", None)
+        format_state_level = getattr(self._routing, "format_state_level", None)
+        if not callable(state_path_for_level) or not callable(format_state_level):
+            return None
+        path = state_path_for_level(level, receiver=receiver)
+        if not isinstance(path, FieldPath):
+            return None
+        projection = self._project_with_freshness(
+            (path,),
+            reason=f"rigctld.get_level.{level.lower()}",
+        )
+        projected = projection.value(path)
+        if projected is None:
+            return None
+        response = format_state_level(level, projected.value)
+        return response if isinstance(response, RigctldResponse) else None
+
+    def _project_routed_func(
+        self,
+        func: str,
+        *,
+        receiver: int,
+    ) -> RigctldResponse | None:
+        if self._routing is None:
+            return None
+        state_path_for_func = getattr(self._routing, "state_path_for_func", None)
+        format_state_func = getattr(self._routing, "format_state_func", None)
+        if not callable(state_path_for_func) or not callable(format_state_func):
+            return None
+        path = state_path_for_func(func, receiver=receiver)
+        if not isinstance(path, FieldPath):
+            return None
+        projection = self._project_with_freshness(
+            (path,),
+            reason=f"rigctld.get_func.{func.lower()}",
+        )
+        projected = projection.value(path)
+        if projected is None:
+            return None
+        if projected.value is None:
+            # Observed-but-not-known (FTX-1 CT codes 3/4/5, MOR-2572): no
+            # bool to project. Formatting would answer bool(None)=0 — an
+            # invented OFF — and the live fallback below would echo the same
+            # invention back into the store, so answer "not available".
+            return _err(HamlibError.ENAVAIL)
+        response = format_state_func(func, projected.value)
+        return response if isinstance(response, RigctldResponse) else None
+
+    def _record_state_sample(
+        self,
+        path: FieldPath | str,
+        value: Any,
+        *,
+        source: Literal["hamlib_response"],
+        max_age: float | None = None,
+    ) -> None:
+        provider_generation = _RIGCTLD_PROVIDER_GENERATION.get()
+        if provider_generation is None:
+            return
+        self._state_store.apply(
+            Observation(
+                path=FieldPath.parse(path) if isinstance(path, str) else path,
+                value=value,
+                source=SourceMetadata(
+                    source=source,
+                    provider="rigctld",
+                    command_source="rigctld",
+                ),
+                timestamp_monotonic=time.monotonic(),
+                max_age=max_age,
+                provider_generation=provider_generation,
+            )
+        )
+
+    def _record_pending_overlay(
+        self,
+        path: FieldPath | str,
+        value: Any,
+        *,
+        command_id: str,
+    ) -> None:
+        self._command_service.record_pending_overlay(
+            PendingOverlay(
+                source="rigctld",
+                session_id=self._session_id(),
+                command_id=command_id,
+                path=FieldPath.parse(path) if isinstance(path, str) else path,
+                value=value,
+                expires_at_monotonic=time.monotonic() + 2.0,
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Public entry point
+    # ------------------------------------------------------------------
+
+    async def execute(
+        self,
+        cmd: RigctldCommand,
+        *,
+        session_id: str | None = None,
+        predecessor: asyncio.Future[None] | None = None,
+        ptt_submission: asyncio.Task[Any] | None = None,
+        ptt_ready: asyncio.Future[None] | None = None,
+    ) -> RigctldResponse:
+        """Execute a parsed rigctld command and return the response.
+
+        Args:
+            cmd: Parsed command from the client.
+
+        Returns:
+            Response to send back.
+        """
+        provider_token = _RIGCTLD_PROVIDER_GENERATION.set(
+            self._provider_generation_capture()
+        )
+        token = _RIGCTLD_SESSION_ID.set(session_id)
+        predecessor_token = _RIGCTLD_PREDECESSOR.set(predecessor)
+        submission_token = _RIGCTLD_PTT_SUBMISSION.set(ptt_submission)
+        ready_token = _RIGCTLD_PTT_READY.set(ptt_ready)
+        # Read-only gate
+        try:
+            controller = getattr(self._radio, "_controller_authority", None)
+            if isinstance(controller, ControllerAuthority) and (
+                cmd.is_set or cmd.long_cmd == "send_raw"
+            ):
+                # ``safety_off`` is the unkey exemption: the typed ``T 0``
+                # and a raw frame that ends a transmission (PTT off,
+                # voice TX memory stop) need no controller seat.
+                safety_off = (
+                    cmd.long_cmd == "set_ptt" and cmd.args and cmd.args[0] == "0"
+                ) or (
+                    cmd.long_cmd == "send_raw"
+                    and _is_raw_transmission_end_args(cmd.args)
+                )
+                if not safety_off:
+                    try:
+                        controller.capture()
+                    except ControllerError:
+                        return _err(HamlibError.EACCESS)
+            if self._config.read_only and (cmd.is_set or cmd.long_cmd == "send_raw"):
+                logger.debug("read-only: rejecting command %s", cmd.long_cmd)
+                return _err(HamlibError.EACCESS)
+
+            handler_fn = self._DISPATCH.get(cmd.long_cmd)
+            if handler_fn is None:
+                logger.debug("unimplemented command: %s", cmd.long_cmd)
+                return _err(HamlibError.ENIMPL)
+
+            try:
+                if not cmd.is_set and predecessor is not None:
+                    await asyncio.shield(predecessor)
+                response = cast(RigctldResponse, await handler_fn(self, cmd))
+                if isinstance(self._state_diagnostics, StateDiagnosticsRecorder):
+                    self._state_diagnostics.record(
+                        "rigctld_delivery_trigger",
+                        "rigctld.handler",
+                        command=cmd.long_cmd,
+                        is_set=cmd.is_set,
+                        error=int(response.error),
+                    )
+                return response
+            except ConnectionError:
+                logger.warning("I/O error executing %s", cmd.long_cmd)
+                return _err(HamlibError.EIO)
+            except (RigplaneTimeoutError, TimeoutError, asyncio.TimeoutError):
+                logger.warning("Timeout executing %s", cmd.long_cmd)
+                return _err(HamlibError.ETIMEOUT)
+            except _RigctldCommandFailure as exc:
+                logger.debug(
+                    "rigctld command %s failed with %s",
+                    cmd.long_cmd,
+                    exc.error,
+                )
+                return _err(exc.error)
+            except ValueError:
+                logger.warning("Invalid value in %s", cmd.long_cmd)
+                return _err(HamlibError.EINVAL)
+            except CommandRejectedError:
+                # The radio positively refused the command (e.g. a CI-V NAK)
+                # — a real terminal outcome, not a bug in this seat. Mapped
+                # narrowly: other CommandError subclasses (e.g.
+                # BackgroundSendDropped, a local cap) stay on EINTERNAL.
+                logger.warning("rigctld: %s refused by the radio", cmd.long_cmd)
+                return _err(HamlibError.ERJCTED)
+            except ReceiverNotSelectedError:
+                # MOR-3591: the target receiver is not the selected one and
+                # has no per-receiver address, so Core refused it before the
+                # wire (never switching the selection) — a refusal, not an
+                # internal error.
+                logger.warning(
+                    "rigctld: %s refused: receiver not selected", cmd.long_cmd
+                )
+                return _err(HamlibError.ERJCTED)
+            except Exception:
+                logger.exception("Internal error executing %s", cmd.long_cmd)
+                return _err(HamlibError.EINTERNAL)
+        finally:
+            _RIGCTLD_PTT_READY.reset(ready_token)
+            _RIGCTLD_PTT_SUBMISSION.reset(submission_token)
+            _RIGCTLD_PREDECESSOR.reset(predecessor_token)
+            _RIGCTLD_SESSION_ID.reset(token)
+            _RIGCTLD_PROVIDER_GENERATION.reset(provider_token)
+
+    async def release_session_tx(self, session_id: str) -> None:
+        """Hand back any managed TX lease ``session_id`` still holds.
+
+        The TCP server calls this when a client connection ends, however it
+        ends. Without it a WSJT-X that drops mid-over leaves its lease standing
+        until the max key-down watchdog expires: the rig does come off the air,
+        but far later than it needs to, and until then no other client can key.
+
+        Unmanaged radios are left completely alone — no legacy ``set_ptt(False)``
+        is invented here. rigctld has never written to the rig on disconnect,
+        and starting now would de-key an over some *other* ingress is running.
+
+        Fail-soft by construction: this runs on the teardown path of a socket
+        that is already gone, so there is nobody left to report an error to,
+        and raising would only skip the rest of that teardown. On an
+        unmanaged radio nothing *here* de-keys it, and MOR-1220's backstop
+        bounds only keys the web poller itself issued. What does cover a
+        rigctld-issued key is this handler's own key-down bound (MOR-1904,
+        :meth:`_arm_key_down_backstop`), which deliberately outlives this
+        teardown: the socket going away is not evidence the rig came off the
+        air, so the bound, not the disconnect, is what ends the over. Full
+        managed arming remains ticketed — MOR-1219 (serial Icom) and MOR-1190
+        (Yaesu CAT, rigctld-client).
+        """
+        try:
+            if self._managed_tx_authority is not None:
+                await self._managed_tx_authority.owner_disconnect(session_id)
+                return
+            managed = bind_managed_tx(self._radio, "rigctld", session_id)
+            if managed is None:
+                return
+            await managed.set_ptt(False, reason=TxReleaseReason.CLIENT_DISCONNECTED)
+        except Exception:
+            logger.warning(
+                "rigctld: managed TX release for session %s failed",
+                session_id,
+                exc_info=True,
+            )
+
+    # ------------------------------------------------------------------
+    # Frequency commands
+    # ------------------------------------------------------------------
+
+    async def _cmd_get_freq(self, cmd: RigctldCommand) -> RigctldResponse:
+        try:
+            target = self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+
+        receiver = self._receiver_index_for(target)
+        path = self._freq_path(receiver)
+        projection = self._project_with_freshness((path,), reason="rigctld.get_freq")
+        projected = projection.value(path)
+        if projected is not None:
+            return RigctldResponse(values=[str(int(projected.value))])
+
+        # Per-VFO routing for VFOB on dual-RX: read SUB receiver state directly.
+        # StateStore projections are canonical when present; RadioState remains
+        # a compatibility fallback until runtime observation delivery owns SUB.
+        # Mirror answers go to this client only — an untimestamped mirror
+        # value is never written into the canonical store.
+        if receiver == 1:
+            state = self._radio_state()
+            if state is not None:
+                if state.sub.freq <= 0:
+                    return _err(HamlibError.ETIMEOUT)
+                return RigctldResponse(values=[str(state.sub.freq)])
+            # State unavailable. For an EXPLICIT VFOB request under chk_vfo=1
+            # surface ENIMPL rather than silently returning MAIN data labelled
+            # as VFOB (issue #1355). For implicit/legacy requests (vfo_arg
+            # is None or "currVFO") the legacy MAIN fall-through is more
+            # forgiving and remains the documented behaviour.
+            if cmd.vfo_arg == "VFOB":
+                return _err(HamlibError.ENIMPL)
+
+        main_state = self._main_receiver_state()
+        if main_state is not None:
+            return RigctldResponse(values=[str(main_state.freq)])
+        freq = await self._radio.get_freq()
+        self._record_state_sample(
+            path,
+            freq,
+            source="hamlib_response",
+            max_age=self._config.cache_ttl,
+        )
+        return RigctldResponse(values=[str(freq)])
+
+    async def _cmd_set_freq(self, cmd: RigctldCommand) -> RigctldResponse:
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        try:
+            freq = int(float(cmd.args[0]))
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+        try:
+            target = self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+
+        receiver = self._receiver_index_for(target)
+        intent = command_intent_from_request(
+            "set_freq",
+            {"freq": freq, "receiver": receiver},
+            source="rigctld",
+            command_id=f"rigctld-set-freq-{time.monotonic_ns()}",
+            session_id=self._session_id(),
+        )
+        if self._managed_tx_authority is None:
+            dropped = self._defer_write_gate(intent)
+            if dropped is not None:
+                return dropped
+        await self._execute_write(intent)
+        return _ok()
+
+    # ------------------------------------------------------------------
+    # Mode commands
+    # ------------------------------------------------------------------
+
+    async def _cmd_get_mode(self, cmd: RigctldCommand) -> RigctldResponse:
+        try:
+            target = self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+
+        receiver = self._receiver_index_for(target)
+        mode_path = self._mode_path(receiver)
+        # The rigctld passband maps a filter NUMBER (1/2/3), so the projection
+        # reads ``filter_num``. ``filter_width`` (decoded Hz) is deliberately
+        # NOT projected here: it is the wrong type for ``_filter_to_passband``
+        # and feeding it collapsed every width to 0. (MOR-895, pro#1200.)
+        filter_num_path = self._filter_num_path(receiver)
+        data_mode_path = self._data_mode_path(receiver)
+        projection = self._project_with_freshness(
+            (mode_path, filter_num_path, data_mode_path),
+            reason="rigctld.get_mode",
+        )
+        projected_mode = projection.value(mode_path)
+        projected_filter_num = projection.value(filter_num_path)
+        projected_data_mode = projection.value(data_mode_path)
+        if (
+            projected_mode is not None
+            and projected_filter_num is not None
+            and projected_data_mode is not None
+        ):
+            mode_str = _mode_to_hamlib_str(projected_mode.value)
+            filter_num_value = projected_filter_num.value
+            passband = _filter_to_passband(
+                None if filter_num_value is None else int(filter_num_value)
+            )
+            # Preserve the int sub-mode (0-3); never narrow to bool. Only its
+            # truthiness drives the packet-mode label below.
+            data_mode: int = (
+                int(projected_data_mode.value)
+                if projected_data_mode.value is not None
+                else 0
+            )
+            if data_mode:
+                if mode_str == "USB":
+                    mode_str = "PKTUSB"
+                elif mode_str == "LSB":
+                    mode_str = "PKTLSB"
+                elif mode_str == "RTTY":
+                    mode_str = "PKTRTTY"
+            return RigctldResponse(values=[mode_str, str(passband)])
+
+        # Per-VFO routing for VFOB on dual-RX: read SUB receiver state directly.
+        if receiver == 1:
+            state = self._radio_state()
+            if state is not None:
+                sub = state.sub
+                if sub.freq <= 0:
+                    return _err(HamlibError.ETIMEOUT)
+                mode_str = _mode_to_hamlib_str(sub.mode)
+                passband = _filter_to_passband(sub.filter)
+                data_mode = sub.data_mode
+                # get_mode is a READ: it must NOT mutate the canonical
+                # StateStore. Writing display semantics back here clobbered
+                # the CI-V-owned ``filter_width`` (Hz) with a filter NUMBER
+                # and ``data_mode`` (int 0-3) with a bool, corrupting
+                # /api/v1/state on every WSJT-X poll. (MOR-895, pro#1200.)
+                if data_mode:
+                    if mode_str == "USB":
+                        mode_str = "PKTUSB"
+                    elif mode_str == "LSB":
+                        mode_str = "PKTLSB"
+                    elif mode_str == "RTTY":
+                        mode_str = "PKTRTTY"
+                return RigctldResponse(values=[mode_str, str(passband)])
+            # State unavailable. For an EXPLICIT VFOB request under chk_vfo=1
+            # surface ENIMPL rather than silently returning MAIN data labelled
+            # as VFOB (issue #1355). For implicit/legacy requests (vfo_arg
+            # is None or "currVFO") the legacy MAIN fall-through is more
+            # forgiving and remains the documented behaviour.
+            if cmd.vfo_arg == "VFOB":
+                return _err(HamlibError.ENIMPL)
+
+        # get_mode is a READ path: project the radio's mode/filter/data_mode
+        # for the rigctld response WITHOUT writing anything back into the
+        # canonical StateStore. The earlier write-backs here stored a filter
+        # NUMBER into the Hz-typed ``filter_width`` key and a bool into the
+        # int-typed ``data_mode`` key, and (last-writer-wins) overwrote the
+        # correct CI-V 0x26/0x1A observations that drive the web UI — so a
+        # read-only WSJT-X ``get_mode`` poll blanked DATA mode and collapsed
+        # the IF width to ~1. (MOR-895, pro#1200.)
+        main_state = self._main_receiver_state()
+        if main_state is not None:
+            mode_str = _mode_to_hamlib_str(main_state.mode)
+            passband = _filter_to_passband(main_state.filter)
+            data_mode = main_state.data_mode
+        else:
+            get_mode = get_mode_reader(self._radio, _mode_to_hamlib_str)
+            if get_mode is None:
+                return _err(HamlibError.ENIMPL)
+            mode_str, filt = await get_mode()
+            passband = _filter_to_passband(filt)
+            # Fetch data mode alongside mode to keep them in sync.
+            try:
+                data_mode = await self._radio.get_data_mode()
+            except Exception:
+                logger.debug(
+                    "get_data_mode failed, preserving last projected value",
+                    exc_info=True,
+                )
+                data_mode = False
+
+        # Map DATA overlays to packet modes where hamlib expects them.
+        if data_mode:
+            if mode_str == "USB":
+                mode_str = "PKTUSB"
+            elif mode_str == "LSB":
+                mode_str = "PKTLSB"
+            elif mode_str == "RTTY":
+                mode_str = "PKTRTTY"
+
+        return RigctldResponse(values=[mode_str, str(passband)])
+
+    async def _cmd_set_mode(self, cmd: RigctldCommand) -> RigctldResponse:
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        requested_mode = cmd.args[0].upper()
+        if requested_mode not in HAMLIB_MODE_MAP:
+            return _err(HamlibError.EINVAL)
+        civ_val = HAMLIB_MODE_MAP[requested_mode]
+        try:
+            mode = Mode(civ_val)
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+        base_mode_str = CIV_TO_HAMLIB_MODE.get(mode.value, "USB")
+        passband_hz = 0
+        if len(cmd.args) >= 2:
+            try:
+                passband_hz = int(cmd.args[1])
+            except ValueError:
+                return _err(HamlibError.EINVAL)
+        filter_width = _passband_to_filter(passband_hz)
+        packet_modes = {"PKTUSB", "PKTLSB", "PKTRTTY"}
+
+        try:
+            target = self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+
+        # Per-VFO routing for VFOB on dual-RX: dispatch to SUB receiver and
+        # skip the MAIN-only pending/cache + read-back sync (those track MAIN).
+        # Gate on _receiver_index_for so single-RX active_slot="B" falls through
+        # to the MAIN path (slot selection is via set_vfo_slot, not receiver=).
+        if self._receiver_index_for(target) == 1:
+            intent = command_intent_from_request(
+                "set_mode",
+                {
+                    "mode": base_mode_str,
+                    "filter_width": filter_width,
+                    "receiver": 1,
+                    "packet_mode": requested_mode in packet_modes,
+                },
+                source="rigctld",
+                command_id=f"rigctld-set-mode-{time.monotonic_ns()}",
+                session_id=self._session_id(),
+            )
+            if self._managed_tx_authority is None:
+                dropped = self._defer_write_gate(intent)
+                if dropped is not None:
+                    return dropped
+            await self._execute_write(intent)
+            # ``filter_width`` (the local var) is a filter NUMBER, so the
+            # readback overlay belongs on ``filter_num`` — that is the key the
+            # get_mode projection now reads for the passband. (MOR-895.)
+            if filter_width is not None:
+                self._record_pending_overlay(
+                    self._filter_num_path(1),
+                    filter_width,
+                    command_id=intent.id,
+                )
+            if requested_mode in packet_modes:
+                self._record_pending_overlay(
+                    self._data_mode_path(1),
+                    True,
+                    command_id=intent.id,
+                )
+            elif requested_mode in ("USB", "LSB") and await self._supports_data_mode():
+                self._record_pending_overlay(
+                    self._data_mode_path(1),
+                    False,
+                    command_id=intent.id,
+                )
+            return _ok()
+
+        intent = command_intent_from_request(
+            "set_mode",
+            {
+                "mode": base_mode_str,
+                "filter_width": filter_width,
+                "receiver": 0,
+                "packet_mode": requested_mode in packet_modes,
+            },
+            source="rigctld",
+            command_id=f"rigctld-set-mode-{time.monotonic_ns()}",
+            session_id=self._session_id(),
+        )
+        if self._managed_tx_authority is None:
+            dropped = self._defer_write_gate(intent)
+            if dropped is not None:
+                return dropped
+        await self._execute_write(intent)
+        # ``filter_width`` (the local var) is a filter NUMBER, so the readback
+        # overlay belongs on ``filter_num`` — that is the key the get_mode
+        # projection now reads for the passband. (MOR-895.)
+        if filter_width is not None:
+            self._record_pending_overlay(
+                self._filter_num_path(0),
+                filter_width,
+                command_id=intent.id,
+            )
+        if requested_mode in packet_modes:
+            self._record_pending_overlay(
+                self._data_mode_path(0),
+                True,
+                command_id=intent.id,
+            )
+        elif requested_mode in ("USB", "LSB") and await self._supports_data_mode():
+            self._record_pending_overlay(
+                self._data_mode_path(0),
+                False,
+                command_id=intent.id,
+            )
+
+        # DATA is set explicitly for packet modes (True) and cleared for
+        # plain SSB (False); all other non-packet modes keep prior behavior
+        # with no DATA operation (MOR-3750).
+        if requested_mode in packet_modes:
+            # Read-back sync: keep next get_mode deterministic for CAT clients.
+            # Some radios acknowledge set-data quickly but reflect packet mode
+            # with a short delay. We wait briefly to reduce client-side stalls.
+            synced = False
+            data_mode = self._packet_data_mode_value()
+            get_mode = get_mode_reader(self._radio, _mode_to_hamlib_str)
+            if get_mode is not None:
+                for _ in range(5):
+                    try:
+                        read_mode, _ = await get_mode()
+                        read_data = await self._radio.get_data_mode()
+                        if read_mode in (base_mode_str, requested_mode) and read_data:
+                            # Read-back confirmed on the radio. Do NOT promote
+                            # the rigctld filter NUMBER / data-mode bool into the
+                            # canonical StateStore: ``filter_width`` there is Hz
+                            # and ``data_mode`` is the int sub-mode (0-3). The
+                            # session-scoped pending overlays already give this
+                            # CAT client a deterministic read-back; the real
+                            # CI-V 0x26/0x1A observations remain the canonical
+                            # source the web UI reads. (MOR-895, pro#1200.)
+                            synced = True
+                            break
+                    except Exception:
+                        logger.debug("rigctld: sync poll failed", exc_info=True)
+                    await asyncio.sleep(0.05)
+
+            logger.debug("set_mode(%s): DATA%s selected", requested_mode, data_mode)
+            if not synced:
+                logger.debug(
+                    "set_mode(%s): packet read-back not fully synced yet; "
+                    "scoped pending overlays remain active",
+                    requested_mode,
+                )
+
+        return _ok()
+
+    # ------------------------------------------------------------------
+    # PTT commands
+    # ------------------------------------------------------------------
+
+    async def _cmd_get_ptt(self, cmd: RigctldCommand) -> RigctldResponse:
+        # Validate VFO arg (rejects ``t VFOB`` on single-RX, unknown labels).
+        # The Icom radio exposes a single global PTT state — there is no
+        # per-VFO PTT register — so the answer is the same for VFOA / VFOB
+        # / currVFO once the request is accepted. (See PR #1349 / issue
+        # #1344 for the rationale.)
+        try:
+            self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+
+        ptt_path = FieldPath.global_("tx_state", "ptt")
+        projection = self._project_with_freshness((ptt_path,), reason="rigctld.get_ptt")
+        projected = projection.value(ptt_path)
+        if projected is not None:
+            return RigctldResponse(values=[str(int(bool(projected.value)))])
+
+        state = self._radio_state()
+        if state is not None:
+            # MOR-1900: answer the client from the legacy mirror, but never
+            # publish that answer as canonical truth. ``RadioState.ptt``
+            # defaults to ``False`` and the mirror carries no observation
+            # time for it at all, so recording it here stamped a possibly
+            # never-observed "not transmitting" with ``time.monotonic()`` —
+            # i.e. as an observation made now. ``_resolve_rigctld_rf_state``
+            # does not filter by source, so that sample was indistinguishable
+            # from real RF truth and could hand the TX interlock a fabricated
+            # RX, letting a DEFER-classified write through while the PA may
+            # be keyed. A missing or stale canonical field must stay that
+            # way, so the interlock refuses instead of acting on a
+            # manufactured sample. The diagnostic keeps the fallback visible:
+            # a silent miss must not read as coverage.
+            if isinstance(self._state_diagnostics, StateDiagnosticsRecorder):
+                self._state_diagnostics.record(
+                    "rigctld_ptt_mirror_fallback",
+                    "rigctld.handler",
+                    path=str(ptt_path),
+                    value=bool(state.ptt),
+                )
+            return RigctldResponse(values=[str(int(state.ptt))])
+        return RigctldResponse(values=["0"])
+
+    def _arm_key_down_backstop(self, session_id: str | None) -> None:
+        """Start the bound for a key this seat just wrote to an unmanaged rig.
+
+        Called only from below the successful ``set_ptt(True)``: a key that
+        raised never reached the rig and started no over. Reaching that write
+        with ``on`` true also proves the rig is unmanaged — ``bind_managed_tx``
+        answered ``None`` and ``refuse_key_without_owner`` did not raise, which
+        together leave no supervisor — so no backend probe is repeated here.
+        The ticker exists only while a bound does, so idle costs nothing.
+        """
+        token = self._void_key_down_backstop()
+        self._key_down_backstop_session = session_id
+        # The arm instant is the causal reference the RX veto is measured
+        # against, not just the base of the deadline. See
+        # :meth:`_ptt_observed_after`.
+        self._key_down_backstop_task = asyncio.get_running_loop().create_task(
+            self._run_key_down_backstop(token, time.monotonic())
+        )
+
+    def _ptt_observed_after(self, armed_at: float) -> bool:
+        """Was the PTT truth behind an ``RX`` read observed *after* ``armed_at``?
+
+        The veto has to be causal, not merely fresh. Our own key does not make
+        the last PTT observation stale — it makes it **wrong**: the observation
+        predates the command, still carries the pre-key ``ptt=False``, and stays
+        FRESH for its whole TTL (MOR-1892, ``core/command_service.py``, and the
+        confirmation it added is fire-and-queue, so it cannot land inside the
+        first tick). A veto that asked only "is RF RX?" would therefore void
+        every bound within a tick of arming on exactly the rigs whose PTT *is*
+        observable — the serial IC-7300 this exists for among them — and leave
+        the bound alive only where there is no RF truth at all. That is the
+        inverse of the intent, so ``RX`` may veto only once it rests on an
+        observation this seat's key could have caused.
+
+        :meth:`_resolve_rigctld_rf_state` discards the observation time, so the
+        causal half is read here from the same field it has already validated —
+        a sibling read of one snapshot, not a new consumer of RF state.
+        Both sides must share a clock domain. Every path that stamps this
+        field in production reads ``time.monotonic()`` — ``observation_adapter``
+        is the common one, not the only one — which is the clock the arm reads.
+        A source stamping *behind* that clock reads as "not after the arm" and
+        never vetoes, leaving the bound alive: the safe direction. A source
+        stamping *ahead* of it would restore the defect this method exists to
+        prevent, so a new observation source for this field must stamp on
+        ``time.monotonic()``. ``clock_domain`` cannot police that here — it is
+        ``None`` on the CI-V and Yaesu paths, so a check against it would be
+        vacuous.
+        """
+        try:
+            field = self._state_store.snapshot().field(
+                FieldPath.global_("tx_state", "ptt")
+            )
+        except KeyError:
+            return False
+        return field.last_observed_monotonic > armed_at
+
+    def _void_key_down_backstop(self) -> int:
+        """Invalidate any outstanding bound and return the fresh token.
+
+        The token is what a task still in flight checks; cancellation is the
+        fast path. A task must never cancel itself — the fire calls this on
+        its own way to the write.
+        """
+        self._key_down_backstop_token += 1
+        task, self._key_down_backstop_task = self._key_down_backstop_task, None
+        self._key_down_backstop_session = None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+        return self._key_down_backstop_token
+
+    def stop_key_down_backstop(self) -> None:
+        """Drop an outstanding bound at server stop, loudly.
+
+        Cancel rather than fire, so shutdown gains no write path it did not
+        have. The warning is the honest record that what shutdown leaves
+        behind is the very condition this bound exists for.
+        """
+        if self._key_down_backstop_task is None:
+            return
+        logger.warning(
+            "rigctld: shutdown cancelled an outstanding key-down bound for session %s",
+            self._key_down_backstop_session,
+        )
+        self._void_key_down_backstop()
+
+    async def _run_key_down_backstop(self, token: int, armed_at: float) -> None:
+        """Tick until the deadline, then force the unkey nobody else will.
+
+        Two vetoes, checked every tick rather than once at expiry. The token
+        answers "is this still the live bound?" — any PTT write of either
+        polarity from any session bumps it. Observed RX answers "is this still
+        our over?", the only positive evidence available without a lease: the
+        rig came off the air by some route, so what we would end is no longer
+        what we started. RF truth decays, so that veto must latch when it is
+        seen rather than be re-read at expiry.
+
+        ``UNKNOWN`` fires, and what earns that is decay **after a successful
+        arm** — not a rig that never had RF truth. ``PttOn`` is BLOCK-classified
+        (``_RigctldCommandExecutor.execute``), so against a canonical store the
+        key is already refused unless RF reads ``RX``: a rig with no PTT field
+        never reaches an arm at all. Two routes do reach it. The common one is
+        decay: the field we did observe goes STALE mid-over — polling stops,
+        the link degrades, the provider generation turns over — and the
+        resolver drops to ``UNKNOWN`` with the rig still keyed. The other is a
+        seat with no canonical store, where ``_has_canonical_state_store`` is
+        false, the BLOCK gate is skipped entirely, and a key is accepted at
+        ``rf=unknown`` and arms; not how the server wires this today, but the
+        branch is live. Voiding on either would discard the bound at precisely
+        the moment nothing else is watching. Still strictly safer
+        than the accepted precedent: MOR-1220 fires with no RF check whatever,
+        so this adds a veto and removes none.
+
+        The write re-enters :meth:`_route_ptt`, byte-identical to a client
+        ``T 0``, so a rig that somehow became managed in between stays the
+        supervisor's to decide (MOR-1175). One attempt, no retry, no re-arm.
+        It goes straight to the backend rather than through
+        :class:`CommandService`, so unlike every other write this seat makes it
+        emits no lifecycle event and asks for no MOR-1892 re-observation of the
+        field it wrote; on a rig with no RF truth nothing else observes PTT
+        either, so a forced unkey leaves no trace in state at all.
+        """
+        deadline = armed_at + _KEY_DOWN_BACKSTOP_SECONDS
+        while True:
+            if self._key_down_backstop_token != token:
+                return
+            rf_state = self._resolve_rigctld_rf_state()
+            if rf_state is tx_interlock.RfState.RX and self._ptt_observed_after(
+                armed_at
+            ):
+                logger.debug(
+                    "rigctld: observed RX voided the key-down bound (session %s)",
+                    self._key_down_backstop_session,
+                )
+                self._void_key_down_backstop()
+                return
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(_KEY_DOWN_BACKSTOP_TICK_SECONDS)
+
+        session_id = self._key_down_backstop_session
+        # Unreachable today: no ``await`` separates this from the loop check
+        # above and the disarm bumps the token synchronously, so nothing can
+        # invalidate the bound in between. Load-bearing the moment an ``await``
+        # appears between the two checks; not covered by any test until then.
+        if self._key_down_backstop_token != token:
+            return
+        logger.error(
+            "rigctld: max key-down (%gs) exceeded on an unmanaged radio keyed "
+            "by session %s; forcing unkey (rf=%s)",
+            _KEY_DOWN_BACKSTOP_SECONDS,
+            session_id,
+            rf_state.value,
+        )
+        self._void_key_down_backstop()
+        try:
+            await self._route_ptt(False, session_id=session_id)
+        except Exception:
+            logger.error(
+                "rigctld: forced unkey failed for session %s", session_id, exc_info=True
+            )
+
+    async def _route_ptt(self, on: bool, *, session_id: str | None) -> None:
+        """Key or unkey the rig, through the supervisor when the rig has one.
+
+        A rigctld connection id is a lease-bearing owner identity (MOR-1014):
+        the TCP server mints it once per accepted socket and
+        :meth:`release_session_tx` gives the lease back when that socket goes,
+        so a lease taken here is always releasable.
+
+        Three outcomes, deliberately asymmetric between key and unkey.
+
+        **No facade to bind.** Either the rig is unmanaged — serial/USB Icom
+        (legacy, full arm pending MOR-1219), Yaesu CAT, or rigctld-client
+        (legacy, full arm pending MOR-1190) — in which case the key below arms
+        this seat's own key-down bound (MOR-1904), the only thing bounding a
+        rigctld-issued key on any of them — and
+        the legacy write below is byte-identical to what rigctld has always
+        sent — or the request carries no owner. On a managed
+        rig an ownerless KEY is refused, because falling through would key with
+        no lease, no owner and no watchdog: the unsupervised bypass management
+        exists to close. An ownerless UNKEY still writes, because an unkey
+        refused for lacking an owner strands a keyed transmitter, and nothing
+        on this path may ever do that.
+
+        **Facade bound, key declined.** ``BUSY`` / ``NOT_READY`` /
+        ``RADIO_NOT_OFF`` — the rig is not ours and nothing reached the wire, so
+        the answer has to be an RPRT error. ``RPRT 0`` for a key that never
+        happened tells WSJT-X it is transmitting when it is not.
+
+        **Facade bound, unkey declined.** ``STALE``: nothing is keyed, or the
+        lease belongs to somebody else. This answers ``RPRT 0`` and writes
+        nothing, and both halves are the decision, not an oversight. Nothing is
+        written because rigctld holds no privileged surface (MOR-1175): a raw
+        ``set_ptt(False)`` here would be precisely the unsupervised bypass the
+        facade exists to close, taking another owner's transmission down behind
+        the supervisor's back and leaving that owner's lease — and its
+        watchdog — believing the rig is still keyed. ``RPRT 0`` because the
+        command *was* processed and the supervisor declined it by policy, while
+        WSJT-X reads a nonzero RPRT mid-sequence as a hard rig-control failure.
+        The corner this leaves — a rig keyed by an owner rigctld cannot reach —
+        is bounded by that owner's own teardown and by the max key-down
+        watchdog, which is exactly where MOR-1175 put it.
+        """
+        managed = bind_managed_tx(self._radio, "rigctld", session_id)
+        if managed is None:
+            if on and refuse_key_without_owner(self._radio, "rigctld", session_id):
+                logger.warning(
+                    "rigctld: refusing PTT ON — this radio is managed and the "
+                    "request carries no releasable owner (session_id=%r)",
+                    session_id,
+                )
+                raise _RigctldCommandFailure(HamlibError.EACCESS)
+            await self._radio.set_ptt(on)
+            # MOR-1904, below the write and never in a ``finally``: an unkey
+            # that RAISED left the rig keyed and must not drop the bound.
+            if on:
+                self._arm_key_down_backstop(session_id)
+            else:
+                self._void_key_down_backstop()
+            return
+        transition = await managed.set_ptt(on)
+        if transition.outcome in _TX_ACCEPTED:
+            return
+        if on:
+            logger.warning(
+                "rigctld: managed TX rejected PTT ON: %s", transition.outcome
+            )
+            raise _RigctldCommandFailure(HamlibError.ERJCTED)
+        logger.warning(
+            "rigctld: managed TX declined the unkey (%s) — the lease is not "
+            "this session's and rigctld does not force; reporting RPRT 0",
+            transition.outcome,
+        )
+
+    async def _cmd_set_ptt(self, cmd: RigctldCommand) -> RigctldResponse:
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        try:
+            on = bool(int(cmd.args[0]))
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+        # Validate VFO arg — radio PTT is global so the VFO label is honoured
+        # only insofar as it must name a receiver this profile actually has.
+        try:
+            self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            commit_failure = getattr(_RIGCTLD_PTT_READY.get(), "commit_failure", None)
+            if commit_failure is None or commit_failure():
+                return _err(HamlibError.EVFO)
+        await self._execute_write(
+            command_intent_from_request(
+                "set_ptt",
+                {"on": on},
+                source="rigctld",
+                command_id=f"rigctld-set-ptt-{time.monotonic_ns()}",
+                session_id=self._session_id(),
+            )
+        )
+        return _ok()
+
+    # ------------------------------------------------------------------
+    # VFO commands
+    # ------------------------------------------------------------------
+
+    def _profile_vfo_info(self) -> tuple[int, str] | None:
+        """Return (receiver_count, vfo_scheme) when the radio exposes a
+        real profile, else ``None``.
+
+        Safely handles mocked radios: ``AsyncMock.profile`` auto-generates
+        sub-attributes which are not usable integers/strings.
+        """
+        profile = getattr(self._radio, "profile", None)
+        if profile is None:
+            return None
+        rc = getattr(profile, "receiver_count", None)
+        scheme = getattr(profile, "vfo_scheme", None)
+        if isinstance(rc, int) and isinstance(scheme, str):
+            return rc, scheme
+        return None
+
+    def _active_vfo_name(self) -> str:
+        """Return ``"VFOA"`` or ``"VFOB"`` reflecting current radio state.
+
+        Dual-RX: maps ``global.slow_state.active`` (``MAIN``/``SUB``) → VFOA/VFOB.
+        1-Rx: maps ``radio_state.main.active_slot`` (``A``/``B``) → VFOA/VFOB.
+        Falls back to ``VFOA`` when state is missing or profile is unknown.
+        """
+        info = self._profile_vfo_info()
+        if info is not None and info[0] >= 2:
+            path = self._active_receiver_path()
+            projection = self._project_fields((path,))
+            active = projection.value(path)
+            if active is not None:
+                return "VFOB" if str(active.value).upper() == "SUB" else "VFOA"
+            state = self._radio_state(require_ready=False)
+            if state is None:
+                return "VFOA"
+            return "VFOB" if state.active == "SUB" else "VFOA"
+        projection = self._project_fields((self._active_slot_path(),))
+        active_slot = projection.value(self._active_slot_path())
+        if active_slot is not None:
+            return "VFOB" if str(active_slot.value).upper() == "B" else "VFOA"
+        state = self._radio_state(require_ready=False)
+        if info is None or state is None:
+            return "VFOA"
+        return "VFOB" if state.main.active_slot == "B" else "VFOA"
+
+    def _project_active_vfo_name(self) -> str | None:
+        """Return active VFO from fresh StateStore projection only."""
+
+        info = self._profile_vfo_info()
+        if info is not None and info[0] >= 2:
+            path = self._active_receiver_path()
+            projection = self._project_with_freshness((path,), reason="rigctld.get_vfo")
+            active = projection.value(path)
+            if active is None:
+                return None
+            return "VFOB" if str(active.value).upper() == "SUB" else "VFOA"
+        path = self._active_slot_path()
+        projection = self._project_with_freshness((path,), reason="rigctld.get_vfo")
+        active_slot = projection.value(path)
+        if active_slot is None:
+            return None
+        return "VFOB" if str(active_slot.value).upper() == "B" else "VFOA"
+
+    def _receiver_index_for(self, target: Literal["VFOA", "VFOB"]) -> int:
+        """Map a resolved VFO target to a backend receiver index.
+
+        Dual-RX profiles (``receiver_count >= 2``) honour the per-VFO
+        routing introduced in #1344 — ``VFOB`` -> ``receiver=1``.
+
+        Single-RX profiles only have ``receiver=0``; per-VFO state is
+        selected via ``set_vfo_slot("A"/"B")`` on the *same* receiver
+        (issue #1354). ``_active_vfo_name`` may legitimately return
+        ``VFOB`` on single-RX when ``state.main.active_slot == "B"`` —
+        the slot is already selected, so the caller must still route
+        the I/O to ``receiver=0`` rather than to a non-existent
+        ``receiver=1``.
+        """
+        info = self._profile_vfo_info()
+        if info is not None and info[0] >= 2:
+            return 1 if target == "VFOB" else 0
+        return 0
+
+    def _require_vfo_receiver(self, target: Literal["VFOA", "VFOB"]) -> None:
+        """Refuse SUB (``VFOB``) routing when the profile has no second receiver.
+
+        MOR-2484: the VFO-name parsing stays protocol-local, but the
+        receiver refusal goes through the runtime seat
+        (:func:`require_receiver_for_profile`), the same seat the web
+        enqueue gate uses. The seat's ``CommandError`` maps back to
+        ``ValueError`` so callers keep their per-consumer ``EVFO`` reply.
+        """
+        if target != "VFOB":
+            return
+        profile = getattr(self._radio, "profile", None)
+        if profile is None or self._profile_vfo_info() is None:
+            # No usable profile object to validate against (mock or
+            # profile-less radios): keep the protocol-local refusal.
+            raise ValueError("VFOB requested on single-receiver profile (info=None)")
+        try:
+            require_receiver_for_profile(profile, 1, operation="rigctld vfo routing")
+        except CommandError as exc:
+            raise ValueError(str(exc)) from exc
+
+    def _resolve_target_vfo(self, vfo_arg: str | None) -> Literal["VFOA", "VFOB"]:
+        """Map a Hamlib VFO arg to the canonical VFO name for routing.
+
+        Used by handlers that need per-VFO routing (freq, mode, PTT) when
+        the client sends a leading VFO token under ``chk_vfo=1``.
+
+        Returns:
+            ``"VFOA"`` if the request targets MAIN (or no arg / ``currVFO``
+            and the active receiver is MAIN). ``"VFOB"`` if the request
+            targets SUB.
+
+        Raises:
+            ValueError: ``vfo_arg`` is unrecognised, OR the SUB receiver
+                is refused by the runtime seat (single-receiver profile).
+                Callers map this to ``HamlibError.EVFO``.
+        """
+        if vfo_arg is None or vfo_arg == "currVFO":
+            return cast(Literal["VFOA", "VFOB"], self._active_vfo_name())
+        if vfo_arg == "VFOA":
+            return "VFOA"
+        if vfo_arg == "VFOB":
+            self._require_vfo_receiver("VFOB")
+            return "VFOB"
+        raise ValueError(f"Unknown VFO arg: {vfo_arg!r}")
+
+    def _validate_global_vfo_arg(self, vfo_arg: str | None) -> None:
+        if vfo_arg is None or vfo_arg in {"currVFO", "VFOA"}:
+            return
+        if vfo_arg == "VFOB":
+            self._require_vfo_receiver("VFOB")
+            return
+        raise ValueError(f"Unknown VFO arg: {vfo_arg!r}")
+
+    async def _cmd_get_vfo(self, cmd: RigctldCommand) -> RigctldResponse:
+        active_vfo = self._project_active_vfo_name()
+        if active_vfo is None:
+            # The active-VFO projection is not fresh yet (or absent). On a CAT
+            # client's FIRST connect this fires before the first state poll has
+            # landed. Returning ``RPRT -6`` (EIO) here makes WSJT-X surface
+            # "Rig Control Error" / OOB / freq 0.000.000 until a retry. When the
+            # profile advertises VFO capability we instead answer with the
+            # default/main active VFO (``_active_vfo_name`` falls back to
+            # ``VFOA``) so the client gets a valid answer and proceeds; a
+            # subsequent poll corrects it. (MOR-895, pro#1200; OOB rel. #1199.)
+            #
+            # NOTE: this only relaxes ``get_vfo``. ``chk_vfo`` is independent
+            # (it keys off ``_profile_vfo_info`` directly) and is unchanged. For
+            # a non-VFO rig (no profile VFO info) ``_active_vfo_name`` already
+            # returns the legacy ``VFOA`` default and never fabricates a VFO for
+            # a capability the rig lacks, so both cases share one answer.
+            self._radio_state()
+            return RigctldResponse(values=[self._active_vfo_name()])
+        return RigctldResponse(values=[active_vfo])
+
+    async def _cmd_set_vfo(self, cmd: RigctldCommand) -> RigctldResponse:
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        vfo = cmd.args[0].upper()
+        params: dict[str, object] = {"vfo": vfo}
+        info = self._profile_vfo_info()
+        if info is not None:
+            params["receiver_count"] = info[0]
+        intent = command_intent_from_request(
+            "set_vfo",
+            params,
+            source="rigctld",
+            command_id=f"rigctld-set-vfo-{time.monotonic_ns()}",
+            session_id=self._session_id(),
+        )
+        if self._managed_tx_authority is None:
+            dropped = self._defer_write_gate(intent)
+            if dropped is not None:
+                return dropped
+        await self._execute_write(intent)
+        return _ok()
+
+    async def _execute_set_vfo(self, vfo: str) -> HamlibError:
+        info = self._profile_vfo_info()
+        # Backwards-compat: unknown VFO names or profile-less radios → no-op
+        if vfo not in ("VFOA", "VFOB") or info is None:
+            return HamlibError.OK
+        rc, _ = info
+        # Issue #1172: route by capability, not by string-overloaded
+        # ``set_vfo``.  Dual-RX rigs use ``select_receiver`` (the
+        # Transceiver→Receiver tier from #1170); single-RX rigs use
+        # ``set_vfo_slot`` for the per-receiver A/B switch.  Both are
+        # part of the public protocol surface (``ReceiverBankCapable`` /
+        # ``VfoSlotCapable``) so the legacy MAIN/SUB↔A/B mapping that
+        # used to live here is gone.
+        if rc >= 2:
+            select_receiver = getattr(self._radio, "select_receiver", None)
+            if select_receiver is not None:
+                target = "MAIN" if vfo == "VFOA" else "SUB"
+                try:
+                    await select_receiver(target)
+                except CommandError as exc:
+                    logger.debug("rigctld: set_vfo %s rejected: %s", vfo, exc)
+                    return HamlibError.ERJCTED
+                return HamlibError.OK
+            target = "MAIN" if vfo == "VFOA" else "SUB"
+        else:
+            set_vfo_slot = getattr(self._radio, "set_vfo_slot", None)
+            if set_vfo_slot is not None:
+                slot = "A" if vfo == "VFOA" else "B"
+                try:
+                    await set_vfo_slot(slot)
+                except CommandError as exc:
+                    logger.debug("rigctld: set_vfo %s rejected: %s", vfo, exc)
+                    return HamlibError.ERJCTED
+                return HamlibError.OK
+            target = "A" if vfo == "VFOA" else "B"
+        # Issue #1189: legacy backends (e.g. SerialMockRadio,
+        # 3rd-party Radio implementers) predate ``ReceiverBankCapable`` /
+        # ``VfoSlotCapable`` and only expose the legacy ``set_vfo``
+        # overload.  Fall back to it so ``V VFOA`` / ``V VFOB`` actually
+        # reach the radio instead of returning a silent ``RPRT 0``.  The
+        # ``DeprecationWarning`` from ``IcomRadio.set_vfo`` (#1187) is
+        # intentional — it signals migration.
+        legacy_set_vfo = getattr(self._radio, "set_vfo", None)
+        if legacy_set_vfo is None:
+            return HamlibError.ENAVAIL
+        await legacy_set_vfo(target)
+        return HamlibError.OK
+
+    # ------------------------------------------------------------------
+    # Level commands
+    # ------------------------------------------------------------------
+
+    async def _cmd_get_level(self, cmd: RigctldCommand) -> RigctldResponse:
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        level = cmd.args[0].upper()
+
+        # Validate the (optional) leading VFO label up-front — even for
+        # globally-scoped levels, an unknown label or VFOB on a single-RX
+        # profile must error before any radio call (issue #1345).
+        try:
+            target = self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        # Single-RX profiles only have receiver=0; per-VFO state is selected
+        # via set_vfo_slot, not receiver= (issue #1354).
+        receiver = self._receiver_index_for(target)
+
+        if self._routing is not None:
+            routed_projection = self._project_routed_level(level, receiver=receiver)
+            if routed_projection is not None:
+                return routed_projection
+            return await self._routing.get_level(level, vfo=cmd.vfo_arg)
+
+        all_levels = (
+            {
+                "STRENGTH",
+                "RFPOWER",
+                "SWR",
+                "PREAMP",
+                "ATT",
+                "KEYSPD",
+                "CWPITCH",
+                "RFPOWER_METER",
+                "COMP_METER",
+                "ID_METER",
+                "VD_METER",
+            }
+            | set(_GET_LEVEL_FLOAT)
+            | set(_GET_LEVEL_INT)
+        )
+        if level not in all_levels:
+            return _err(HamlibError.EINVAL)
+        level_path = self._level_path(level, receiver=receiver)
+        if level_path is not None:
+            projection = self._project_with_freshness(
+                (level_path,),
+                reason=f"rigctld.get_level.{level.lower()}",
+            )
+            projected = projection.value(level_path)
+            if projected is not None:
+                if level == "STRENGTH":
+                    if "calibrated" in projected.quality:
+                        return RigctldResponse(values=[str(int(projected.value))])
+                    return RigctldResponse(
+                        values=[_format_strength(projected.value, raw_divisor=241.0)]
+                    )
+                if level == "RFPOWER":
+                    return RigctldResponse(
+                        values=[
+                            _format_normalized_or_raw_float(
+                                projected.value,
+                                raw_divisor=255.0,
+                            )
+                        ]
+                    )
+                if level == "SWR":
+                    return RigctldResponse(values=[f"{float(projected.value):.6f}"])
+                if level in {"RFPOWER_METER", "COMP_METER", "ID_METER", "VD_METER"}:
+                    return RigctldResponse(values=[f"{float(projected.value):.6f}"])
+                if level in {"AF", "RF", "SQL"}:
+                    return RigctldResponse(
+                        values=[
+                            _format_normalized_or_raw_float(
+                                projected.value,
+                                raw_divisor=255.0,
+                            )
+                        ]
+                    )
+                if level in _GET_LEVEL_FLOAT:
+                    return RigctldResponse(
+                        values=[
+                            _format_raw_scaled_float(
+                                projected.value,
+                                raw_divisor=255.0,
+                            )
+                        ]
+                    )
+                if level == "PREAMP":
+                    db = _preamp_index_to_db(projected.value)
+                    if db is None:
+                        return _err(HamlibError.ENAVAIL)
+                    return RigctldResponse(values=[str(db)])
+                return RigctldResponse(values=[str(projected.value)])
+        # STRENGTH — per-receiver on dual-RX. VFOB reads SUB s_meter
+        # directly from RadioState until runtime observations own SUB meters.
+        # Mirror answers go to this client only — an untimestamped mirror
+        # value is never written into the canonical store.
+        if level == "STRENGTH":
+            if receiver == 1:
+                state = self._radio_state()
+                if state is not None:
+                    raw = state.sub.s_meter
+                    if raw == 0 and state.sub.freq <= 0:
+                        return _err(HamlibError.ETIMEOUT)
+                    return RigctldResponse(
+                        values=[str(round((raw / 241.0) * 114.0 - 54.0))]
+                    )
+                if CAP_METERS in self._radio.capabilities:
+                    raw = await self._radio.get_s_meter(receiver=1)
+                    self._record_state_sample(
+                        self._level_path(level, receiver=receiver) or "",
+                        raw,
+                        source="hamlib_response",
+                        max_age=self._config.cache_ttl,
+                    )
+                    return RigctldResponse(
+                        values=[str(round((raw / 241.0) * 114.0 - 54.0))]
+                    )
+                return _err(HamlibError.ENIMPL)
+            main_state = self._main_receiver_state()
+            if main_state is not None:
+                raw = main_state.s_meter
+                return RigctldResponse(
+                    values=[str(round((raw / 241.0) * 114.0 - 54.0))]
+                )
+            if CAP_METERS not in self._radio.capabilities:
+                return _err(HamlibError.ENIMPL)
+            raw = await self._radio.get_s_meter()
+            self._record_state_sample(
+                self._level_path(level, receiver=receiver) or "",
+                raw,
+                source="hamlib_response",
+                max_age=self._config.cache_ttl,
+            )
+            # IC-7610 S-meter: 0→S0(−54 dB), 120→S9(0 dB), 241→S9+60 dB
+            return RigctldResponse(values=[str(round((raw / 241.0) * 114.0 - 54.0))])
+
+        # RFPOWER — prefer RadioState, then meter call
+        if level == "RFPOWER":
+            main_state = self._main_receiver_state()
+            state = self._radio_state()
+            if state is not None and main_state is not None:
+                raw_power = state.power_level / 255.0
+                return RigctldResponse(values=[f"{raw_power:.6f}"])
+            if CAP_METERS not in self._radio.capabilities:
+                return _err(HamlibError.ENIMPL)
+            raw = await self._radio.get_rf_power()
+            self._record_state_sample(
+                self._level_path(level, receiver=receiver) or "",
+                raw,
+                source="hamlib_response",
+                max_age=self._config.cache_ttl,
+            )
+            return RigctldResponse(values=[f"{raw / 255.0:.6f}"])
+
+        # SWR — meter call. ``get_swr`` already returns a calibrated
+        # ratio (>= 1.0) per ``MetersCapable``; pass the float through
+        # without re-mapping (issue #1173).
+        if level == "SWR":
+            if CAP_METERS not in self._radio.capabilities:
+                return _err(HamlibError.ENIMPL)
+            swr = float(await self._radio.get_swr())
+            self._record_state_sample(
+                self._level_path(level, receiver=receiver) or "",
+                swr,
+                source="hamlib_response",
+                max_age=self._config.cache_ttl,
+            )
+            return RigctldResponse(values=[f"{swr:.6f}"])
+
+        if level in {"RFPOWER_METER", "COMP_METER", "ID_METER", "VD_METER"}:
+            method = getattr(self._radio, _GET_LEVEL_FLOAT[level])
+            value = float(await method())
+            self._record_state_sample(
+                self._level_path(level, receiver=receiver) or "",
+                value,
+                source="hamlib_response",
+                max_age=self._config.cache_ttl,
+            )
+            return RigctldResponse(values=[f"{value:.6f}"])
+
+        # Simple 0-255 → 0.0-1.0 float levels
+        if level in _GET_LEVEL_FLOAT:
+            method = getattr(self._radio, _GET_LEVEL_FLOAT[level])
+            # NB / NR are per-receiver on dual-RX Icoms — pass receiver=
+            # when targeting SUB. Other levels are radio-global.
+            if level in ("NB", "NR") and receiver == 1:
+                raw = await method(receiver=receiver)
+            else:
+                raw = await method()
+            self._record_state_sample(
+                self._level_path(level, receiver=receiver) or "",
+                raw,
+                source="hamlib_response",
+                max_age=self._config.cache_ttl,
+            )
+            return RigctldResponse(values=[f"{raw / 255.0:.6f}"])
+
+        # Integer levels (WPM, Hz)
+        if level in _GET_LEVEL_INT:
+            val = await getattr(self._radio, _GET_LEVEL_INT[level])()
+            self._record_state_sample(
+                self._level_path(level, receiver=receiver) or "",
+                val,
+                source="hamlib_response",
+                max_age=self._config.cache_ttl,
+            )
+            return RigctldResponse(values=[str(val)])
+
+        # PREAMP — returns dB (0, 12, 20)
+        if level == "PREAMP":
+            idx = await self._radio.get_preamp()
+            db = _preamp_index_to_db(idx)
+            if db is None:
+                return _err(HamlibError.ENAVAIL)
+            self._record_state_sample(
+                self._level_path(level, receiver=receiver) or "",
+                idx,
+                source="hamlib_response",
+                max_age=self._config.cache_ttl,
+            )
+            return RigctldResponse(values=[str(db)])
+
+        if level == "ATT":
+            db = await self._radio.get_attenuator_level()
+            self._record_state_sample(
+                self._level_path(level, receiver=receiver) or "",
+                db,
+                source="hamlib_response",
+                max_age=self._config.cache_ttl,
+            )
+            return RigctldResponse(values=[str(db)])
+
+        return _err(HamlibError.EINVAL)
+
+    async def _cmd_set_level(self, cmd: RigctldCommand) -> RigctldResponse:
+        if len(cmd.args) < 2:
+            return _err(HamlibError.EINVAL)
+        level = cmd.args[0].upper()
+        try:
+            value = float(cmd.args[1])
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+
+        # Validate the (optional) leading VFO label up-front (issue #1345).
+        try:
+            target = self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        # Single-RX profiles only have receiver=0; per-VFO state is selected
+        # via set_vfo_slot, not receiver= (issue #1354).
+        receiver = self._receiver_index_for(target)
+        params: dict[str, Any] = {
+            "level": level,
+            "value": value,
+            "receiver": receiver,
+            "vfo_arg": cmd.vfo_arg,
+        }
+        if level == "PREAMP" and self._routing is None:
+            params["preamp"] = _preamp_db_to_index(value)
+        # RFPOWER resolves ONCE here, inside intent construction: the same
+        # shared call produces the wire byte (``power_native``) and the
+        # admitted readback (``power_level``) the pending overlay expects,
+        # so a whole-watt radio (MOR-4352) never answers a readback the
+        # write did not store.
+        power_facts: dict[str, Any] = {}
+        if level == "RFPOWER":
+            profile = getattr(self._radio, "profile", None)
+            power_facts = {
+                "power_native_unit": getattr(
+                    self._radio, "native_power_unit", "raw_255"
+                ),
+                "power_max_watts": getattr(profile, "max_watts", None),
+                "power_min_watts": getattr(profile, "min_watts", None),
+                "power_write_quantum": getattr(profile, "power_write_quantum", None),
+            }
+        await self._execute_write(
+            command_intent_from_request(
+                "set_level",
+                params,
+                source="rigctld",
+                command_id=f"rigctld-set-level-{time.monotonic_ns()}",
+                session_id=self._session_id(),
+                **power_facts,
+            )
+        )
+        return _ok()
+
+    def _attenuator_db_steps(self) -> tuple[int, ...] | None:
+        """Legal attenuator dB steps the radio publishes, or ``None``.
+
+        Anything a radio or test double returns that is not a non-empty
+        sequence of plain ints yields ``None`` so the caller forwards the
+        unsnapped value.
+        """
+        steps = (
+            self._radio.attenuator_db_steps()
+            if isinstance(self._radio, AttenuatorStepsCapable)
+            else None
+        )
+        if not isinstance(steps, (tuple, list)) or not steps:
+            return None
+        if any(isinstance(step, bool) or not isinstance(step, int) for step in steps):
+            return None
+        return tuple(steps)
+
+    async def _execute_set_level(
+        self,
+        level: str,
+        value: float,
+        *,
+        receiver: int,
+        vfo_arg: str | None,
+        power_native: int | None = None,
+    ) -> HamlibError:
+        if self._routing is not None:
+            return HamlibError(
+                (await self._routing.set_level(level, value, vfo=vfo_arg)).error
+            )
+
+        if level == "RFPOWER":
+            # Hamlib publishes RFPOWER on the normalized 0.0-1.0 domain; an
+            # out-of-range client value (``L RFPOWER 1.5``) answers EINVAL
+            # here with no radio call instead of scaling to an off-band raw
+            # level (MOR-2480). The raw byte was resolved ONCE when the
+            # intent was built (``power_native``, MOR-4352) — the same
+            # resolution the pending readback expectation came from; the
+            # resolver below only serves an intent that reached this seat
+            # without one.
+            if not 0.0 <= value <= 1.0:
+                return HamlibError.EINVAL
+            native = power_native
+            if native is None:
+                profile = getattr(self._radio, "profile", None)
+                native, _admitted = resolve_power_level_target(
+                    value,
+                    power_native_unit=getattr(
+                        self._radio, "native_power_unit", "raw_255"
+                    ),
+                    power_max_watts=getattr(profile, "max_watts", None),
+                    power_min_watts=getattr(profile, "min_watts", None),
+                    power_write_quantum=getattr(profile, "power_write_quantum", None),
+                )
+            await self._radio.set_rf_power(int(native))
+            return HamlibError.OK
+
+        if level in _SET_LEVEL_FLOAT:
+            raw = max(0, min(255, round(value * 255)))
+            method = getattr(self._radio, _SET_LEVEL_FLOAT[level])
+            # NB / NR are per-receiver on dual-RX Icoms.
+            if level in ("NB", "NR") and receiver == 1:
+                await method(raw, receiver=receiver)
+            else:
+                await method(raw)
+            return HamlibError.OK
+
+        if level == "KEYSPD":
+            await self._radio.set_key_speed(round(value))
+            return HamlibError.OK
+
+        if level == "CWPITCH":
+            await self._radio.set_cw_pitch(round(value))
+            return HamlibError.OK
+
+        if level == "PREAMP":
+            await self._radio.set_preamp(_preamp_db_to_index(value))
+            return HamlibError.OK
+
+        if level == "ATT":
+            # Nearest legal dB from the radio's published steps; an exact
+            # tie between two steps snaps to the larger one. A radio that
+            # publishes no steps gets the rounded dB unsnapped — the
+            # radio (or its downstream service) decides.
+            steps = self._attenuator_db_steps()
+            db = round(value)
+            if steps is not None:
+                db = min(steps, key=lambda step: (abs(step - db), -step))
+            await self._radio.set_attenuator_level(db)
+            return HamlibError.OK
+
+        return HamlibError.EINVAL
+
+    # ------------------------------------------------------------------
+    # Function commands
+    # ------------------------------------------------------------------
+
+    async def _cmd_get_func(self, cmd: RigctldCommand) -> RigctldResponse:
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        func = cmd.args[0].upper()
+
+        # Validate the (optional) leading VFO label (issue #1345).
+        try:
+            target = self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        # Single-RX profiles only have receiver=0; per-VFO state is selected
+        # via set_vfo_slot, not receiver= (issue #1354).
+        receiver = self._receiver_index_for(target)
+
+        if self._routing is not None:
+            routed_projection = self._project_routed_func(func, receiver=receiver)
+            if routed_projection is not None:
+                return routed_projection
+            # Live reads get the RESOLVED receiver's label — "VFOB" once
+            # the handler resolved receiver 1, the raw label otherwise.
+            routed_vfo = "VFOB" if receiver == 1 else cmd.vfo_arg
+            return await self._routing.get_func(func, vfo=routed_vfo)
+
+        if func not in _FUNC_GET:
+            return _err(HamlibError.EINVAL)
+        func_path = self._func_path(func, receiver=receiver)
+        projection = self._project_with_freshness(
+            (func_path,),
+            reason=f"rigctld.get_func.{func.lower()}",
+        )
+        projected = projection.value(func_path)
+        if projected is not None:
+            if projected.value is None:
+                # Observed-but-not-known (FTX-1 CT codes 3/4/5, MOR-2572):
+                # answer "not available" instead of bool(None)=0, and do
+                # NOT fall through to a live read — the fallback would
+                # record an invented False over the published None.
+                return _err(HamlibError.ENAVAIL)
+            return RigctldResponse(values=[str(int(bool(projected.value)))])
+        method = getattr(self._radio, _FUNC_GET[func])
+        # NB / NR are per-receiver on dual-RX Icoms.  Other funcs are
+        # radio-global — VFO arg is validated above but ignored.
+        if func in ("NB", "NR") and receiver == 1:
+            result = await method(receiver=receiver)
+        else:
+            result = await method()
+        self._record_state_sample(
+            func_path,
+            bool(result),
+            source="hamlib_response",
+            max_age=self._config.cache_ttl,
+        )
+        # APF returns AudioPeakFilter int enum (0=off); others return bool
+        return RigctldResponse(values=[str(int(bool(result)))])
+
+    async def _cmd_set_func(self, cmd: RigctldCommand) -> RigctldResponse:
+        if len(cmd.args) < 2:
+            return _err(HamlibError.EINVAL)
+        func = cmd.args[0].upper()
+        try:
+            on = bool(int(cmd.args[1]))
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+
+        # Validate the (optional) leading VFO label (issue #1345).
+        try:
+            target = self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        # Single-RX profiles only have receiver=0; per-VFO state is selected
+        # via set_vfo_slot, not receiver= (issue #1354).
+        receiver = self._receiver_index_for(target)
+        intent = command_intent_from_request(
+            "set_func",
+            {
+                "func": func,
+                "on": on,
+                "receiver": receiver,
+                "vfo_arg": cmd.vfo_arg,
+            },
+            source="rigctld",
+            command_id=f"rigctld-set-func-{time.monotonic_ns()}",
+            session_id=self._session_id(),
+        )
+        if self._managed_tx_authority is None:
+            dropped = self._defer_write_gate(intent)
+            if dropped is not None:
+                return dropped
+        await self._execute_write(intent)
+        return _ok()
+
+    async def _execute_set_func(
+        self,
+        func: str,
+        on: bool,
+        *,
+        receiver: int,
+        vfo_arg: str | None,
+    ) -> HamlibError:
+        if self._routing is not None:
+            # Write and read agree on the resolved receiver: with SUB
+            # active and no VFO token the write lands on SUB (MOR-2111 R4).
+            routed_vfo = "VFOB" if receiver == 1 else vfo_arg
+            return HamlibError(
+                (await self._routing.set_func(func, on, vfo=routed_vfo)).error
+            )
+
+        if func not in _FUNC_SET:
+            return HamlibError.EINVAL
+        if func == "APF":
+            # APF takes an int mode: 0=off, 1=soft
+            await self._radio.set_audio_peak_filter(1 if on else 0)
+        elif func in ("NB", "NR") and receiver == 1:
+            # Per-receiver NB / NR on dual-RX.
+            await getattr(self._radio, _FUNC_SET[func])(on, receiver=receiver)
+        else:
+            await getattr(self._radio, _FUNC_SET[func])(on)
+        return HamlibError.OK
+
+    # ------------------------------------------------------------------
+    # Split VFO commands
+    # ------------------------------------------------------------------
+
+    async def _cmd_get_split_vfo(self, cmd: RigctldCommand) -> RigctldResponse:
+        # Validate the (optional) leading VFO label. Split is a global
+        # CI-V concept on Icom — the answer is the same for VFOA / VFOB —
+        # but the request must still name a receiver this profile has.
+        try:
+            self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        read_split = getattr(self._radio, "read_split", None)
+        if callable(read_split):
+            try:
+                observed = await read_split()
+            except (CommandError, RigplaneTimeoutError):
+                return _err(HamlibError.ENAVAIL)
+            if isinstance(observed, bool):
+                return RigctldResponse(
+                    values=[str(int(observed)), self._split_tx_vfo()]
+                )
+        split_path = FieldPath.global_("tx_state", "split")
+        projection = self._project_with_freshness(
+            (split_path,),
+            reason="rigctld.get_split_vfo",
+        )
+        projected = projection.value(split_path)
+        if projected is not None:
+            split = bool(projected.value)
+        else:
+            # Mirror answers go to this client only — an untimestamped
+            # mirror value is never written into the canonical store.
+            state = self._radio_state()
+            split = state.split if state is not None else False
+        # ``_split_tx_vfo`` is handler-local Hamlib-protocol state, set by
+        # the most recent ``S`` command (issue #1345 — fixes #1319 finding
+        # #2 where this used to leak the active VFO instead of TX_VFO).
+        return RigctldResponse(values=[str(int(split)), self._split_tx_vfo()])
+
+    async def _cmd_set_split_vfo(self, cmd: RigctldCommand) -> RigctldResponse:
+        # Validate the (optional) leading VFO label first — VFOB on a
+        # single-RX profile must error before any radio call.
+        try:
+            self._resolve_target_vfo(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        # Args after vfo_arg strip: <split 0|1> <tx_vfo>
+        if len(cmd.args) < 2:
+            return _ok()
+        try:
+            on = bool(int(cmd.args[0]))
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+        tx_vfo = cmd.args[1].upper()
+        intent = command_intent_from_request(
+            "set_split_vfo",
+            {"on": on, "tx_vfo": tx_vfo},
+            source="rigctld",
+            command_id=f"rigctld-set-split-vfo-{time.monotonic_ns()}",
+            session_id=self._session_id(),
+        )
+        if self._managed_tx_authority is None:
+            dropped = self._defer_write_gate(intent)
+            if dropped is not None:
+                return dropped
+        await self._execute_write(intent)
+        return _ok()
+
+    async def _execute_set_split_vfo(self, on: bool, tx_vfo: str) -> HamlibError:
+        set_split = getattr(self._radio, "set_split", None)
+        if set_split is not None:
+            await set_split(on)
+        # Record the requested TX VFO for the next ``s`` (get_split_vfo)
+        # query — Hamlib protocol expects the TX VFO label round-trip
+        # (issue #1345). Validate the label so a malformed request never
+        # poisons the cached value.
+        #
+        # The label is protocol bookkeeping only and is never routed to
+        # the radio: on Icom the split-TX target is a radio-side fact,
+        # so honouring Hamlib's VFOB by switching the operator's RX
+        # selection would move the listener, not the transmitter
+        # (MOR-3754).
+        if tx_vfo in ("VFOA", "VFOB"):
+            self._set_split_tx_vfo(cast(Literal["VFOA", "VFOB"], tx_vfo))
+        return HamlibError.OK
+
+    # ------------------------------------------------------------------
+    # Split TX frequency / mode commands (profile-declared selector-01
+    # routing: single-RX unselected A/B slot, or dual-RX split_tx_target)
+    # ------------------------------------------------------------------
+
+    def _validate_split_tx_vfo_arg(self, vfo_arg: str | None) -> None:
+        """Validate the split-TX role label independently of RX routing."""
+        if vfo_arg is None or vfo_arg in ("currVFO", "VFOA", "VFOB"):
+            return
+        raise ValueError(f"Unknown VFO arg: {vfo_arg!r}")
+
+    def _split_tx_needs_dual_rx_routing(self) -> bool:
+        """Keep undeclared dual-RX targets unavailable at the protocol boundary."""
+        info = self._profile_vfo_info()
+        if info is None or info[0] < 2:
+            return False
+        profile = getattr(self._radio, "profile", None)
+        if profile is not None and split_tx_routes_unselected_selector(profile):
+            return False
+        # Native MAIN/SUB relative escape (MOR-3754): an undeclared
+        # dual-RX ``split_tx_target`` is admissible only when the radio
+        # has an explicit native routing strategy (``create_routing``
+        # returns one — Yaesu CAT today; None for Icom) AND structurally
+        # implements the relative read/write contract. Structural
+        # conformance alone is not admission: Icom implements these
+        # methods too, and an unknown dual-RX Icom profile stays ENIMPL
+        # here. Each command still re-checks its own capability before
+        # touching the radio.
+        if self._routing is not None and isinstance(
+            self._radio,
+            (
+                RelativeVfoReadbackCapable,
+                RelativeVfoFrequencyWritable,
+                RelativeVfoModeWritable,
+            ),
+        ):
+            return False
+        return True
+
+    async def _cmd_get_split_freq(self, cmd: RigctldCommand) -> RigctldResponse:
+        try:
+            self._validate_split_tx_vfo_arg(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        if self._split_tx_needs_dual_rx_routing():
+            return _err(HamlibError.ENIMPL)
+        read_relative_vfo = getattr(self._radio, "read_relative_vfo", None)
+        if read_relative_vfo is None:
+            return _err(HamlibError.ENIMPL)
+        try:
+            unselected = await read_relative_vfo(selected=False)
+        except CommandError:
+            return _err(HamlibError.ENAVAIL)
+        return RigctldResponse(values=[str(int(unselected.freq_hz))])
+
+    async def _cmd_set_split_freq(self, cmd: RigctldCommand) -> RigctldResponse:
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        try:
+            freq = int(float(cmd.args[0]))
+        except (ValueError, OverflowError):
+            return _err(HamlibError.EINVAL)
+        try:
+            self._validate_split_tx_vfo_arg(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        if self._split_tx_needs_dual_rx_routing():
+            return _err(HamlibError.ENIMPL)
+        intent = command_intent_from_request(
+            "set_split_freq",
+            {"freq_hz": freq},
+            source="rigctld",
+            command_id=f"rigctld-set-split-freq-{time.monotonic_ns()}",
+            session_id=self._session_id(),
+            timeout=self._config.command_timeout,
+        )
+        if self._managed_tx_authority is None:
+            dropped = self._defer_write_gate(intent)
+            if dropped is not None:
+                return dropped
+        await self._execute_write(intent)
+        return _ok()
+
+    async def _execute_set_split_freq(
+        self,
+        freq_hz: int,
+        *,
+        before_set: Callable[[], None] | None = None,
+    ) -> CommandExecutionResult:
+        if not isinstance(self._radio, RelativeVfoFrequencyWritable):
+            raise _RigctldCommandFailure(HamlibError.ENAVAIL)
+        try:
+            await self._radio.write_relative_vfo_frequency(
+                freq_hz, selected=False, before_set=before_set
+            )
+        except CommandRejectedError:
+            raise
+        except ControllerError as exc:
+            raise _RigctldCommandFailure(HamlibError.EACCESS) from exc
+        except CommandError as exc:
+            raise _RigctldCommandFailure(HamlibError.ENAVAIL) from exc
+        return CommandExecutionResult()
+
+    async def _cmd_get_split_mode(self, cmd: RigctldCommand) -> RigctldResponse:
+        try:
+            self._validate_split_tx_vfo_arg(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        if self._split_tx_needs_dual_rx_routing():
+            return _err(HamlibError.ENIMPL)
+        read_relative_vfo = getattr(self._radio, "read_relative_vfo", None)
+        if read_relative_vfo is None:
+            return _err(HamlibError.ENIMPL)
+        try:
+            unselected = await read_relative_vfo(selected=False)
+        except CommandError:
+            return _err(HamlibError.ENAVAIL)
+        mode_str, passband = _split_mode_values(
+            unselected.mode, unselected.filter_num, unselected.data_mode
+        )
+        return RigctldResponse(values=[mode_str, passband])
+
+    async def _cmd_set_split_mode(self, cmd: RigctldCommand) -> RigctldResponse:
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        requested_mode = cmd.args[0].upper()
+        if requested_mode not in HAMLIB_MODE_MAP:
+            return _err(HamlibError.EINVAL)
+        civ_val = HAMLIB_MODE_MAP[requested_mode]
+        try:
+            mode = Mode(civ_val)
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+        passband_hz = 0
+        if len(cmd.args) >= 2:
+            try:
+                passband_hz = int(cmd.args[1])
+            except ValueError:
+                return _err(HamlibError.EINVAL)
+        filter_width = _passband_to_filter(passband_hz)
+        packet_modes = {"PKTUSB", "PKTLSB", "PKTRTTY"}
+        try:
+            self._validate_split_tx_vfo_arg(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        if self._split_tx_needs_dual_rx_routing():
+            return _err(HamlibError.ENIMPL)
+        intent = command_intent_from_request(
+            "set_split_mode",
+            {
+                "mode": mode.value,
+                "filter_width": filter_width,
+                "data": (
+                    True
+                    if requested_mode in packet_modes
+                    else False
+                    if requested_mode in ("USB", "LSB")
+                    else None
+                ),
+            },
+            source="rigctld",
+            command_id=f"rigctld-set-split-mode-{time.monotonic_ns()}",
+            session_id=self._session_id(),
+            timeout=self._config.command_timeout,
+        )
+        if self._managed_tx_authority is None:
+            dropped = self._defer_write_gate(intent)
+            if dropped is not None:
+                return dropped
+        await self._execute_write(intent)
+        return _ok()
+
+    async def _execute_set_split_mode(
+        self,
+        mode: int,
+        *,
+        filter_width: int | None,
+        data: bool | int | None,
+        before_set: Callable[[], None] | None = None,
+    ) -> CommandExecutionResult:
+        if not isinstance(self._radio, RelativeVfoModeWritable):
+            raise _RigctldCommandFailure(HamlibError.ENAVAIL)
+        try:
+            await self._radio.write_relative_vfo_mode(
+                mode,
+                selected=False,
+                filter_width=filter_width,
+                data=data,
+                before_set=before_set,
+            )
+        except CommandRejectedError:
+            raise
+        except ControllerError as exc:
+            raise _RigctldCommandFailure(HamlibError.EACCESS) from exc
+        except CommandError as exc:
+            raise _RigctldCommandFailure(HamlibError.ENAVAIL) from exc
+        return CommandExecutionResult()
+
+    # ------------------------------------------------------------------
+    # RIT
+    # ------------------------------------------------------------------
+
+    async def _read_rit_frequency_into_store(self, path: FieldPath) -> bool:
+        read = getattr(self._radio, "get_rit_frequency", None)
+        if not callable(read):
+            return False
+        value = await read()
+        if not isinstance(value, int) or isinstance(value, bool):
+            return False
+        self._record_state_sample(
+            path,
+            value,
+            source="hamlib_response",
+            max_age=self._config.cache_ttl,
+        )
+        return True
+
+    async def _project_rit_frequency_response(self, *, reason: str) -> RigctldResponse:
+        path = self._rit_freq_path()
+        projection = self._project_fields((path,))
+        freshness_result = self._ensure_fresh((path,), reason=reason)
+        if not projection.covers((path,)):
+            projection = self._project_fields((path,))
+        projected = projection.value(path)
+        if projected is None:
+            if callable(getattr(self._radio, "get_rit_frequency", None)):
+                if not await self._read_rit_frequency_into_store(path):
+                    return _err(HamlibError.EIO)
+                projection = self._project_fields((path,))
+                projected = projection.value(path)
+            elif self._freshness_result_allows_compat_default(freshness_result):
+                return RigctldResponse(values=["0"])
+            else:
+                return _err(HamlibError.EIO)
+        if projected is None:
+            return _err(HamlibError.EIO)
+        return RigctldResponse(values=[str(int(projected.value))])
+
+    async def _cmd_get_rit(self, cmd: RigctldCommand) -> RigctldResponse:
+        # Validate the (optional) leading VFO label. Most Icom radios
+        # expose a single global RIT register (CI-V 0x21 0x00) — the
+        # answer is the same for VFOA / VFOB. Hamlib clients tolerate
+        # this. Per-VFO RIT would require a RadioState extension; out of
+        # scope for #1345 (tracked as a follow-up under epic #1341).
+        try:
+            self._validate_global_vfo_arg(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        return await self._project_rit_frequency_response(reason="rigctld.get_rit")
+
+    async def _cmd_set_rit(self, cmd: RigctldCommand) -> RigctldResponse:
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        try:
+            hz = int(cmd.args[0])
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+        if CAP_RIT not in self._radio.capabilities:
+            return _err(HamlibError.ENIMPL)
+        intent = command_intent_from_request(
+            "set_rit",
+            {"hz": hz},
+            source="rigctld",
+            command_id=f"rigctld-set-rit-{time.monotonic_ns()}",
+            session_id=self._session_id(),
+        )
+        if self._managed_tx_authority is None:
+            dropped = self._defer_write_gate(intent)
+            if dropped is not None:
+                return dropped
+        await self._execute_write(intent)
+        return _ok()
+
+    async def _cmd_get_xit(self, cmd: RigctldCommand) -> RigctldResponse:
+        # IC-7610 shares one RIT/XIT frequency register (CI-V 0x21 0x00).
+        # Return the same value as get_rit.
+        try:
+            self._validate_global_vfo_arg(cmd.vfo_arg)
+        except ValueError:
+            return _err(HamlibError.EVFO)
+        return await self._project_rit_frequency_response(reason="rigctld.get_xit")
+
+    async def _cmd_set_xit(self, cmd: RigctldCommand) -> RigctldResponse:
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        try:
+            hz = int(cmd.args[0])
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+        if CAP_RIT not in self._radio.capabilities:
+            return _err(HamlibError.ENIMPL)
+        intent = command_intent_from_request(
+            "set_xit",
+            {"hz": hz},
+            source="rigctld",
+            command_id=f"rigctld-set-xit-{time.monotonic_ns()}",
+            session_id=self._session_id(),
+        )
+        if self._managed_tx_authority is None:
+            dropped = self._defer_write_gate(intent)
+            if dropped is not None:
+                return dropped
+        await self._execute_write(intent)
+        return _ok()
+
+    # ------------------------------------------------------------------
+    # Info / control commands
+    # ------------------------------------------------------------------
+
+    async def _cmd_dump_state(self, cmd: RigctldCommand) -> RigctldResponse:
+        values = list(
+            self._routing.dump_state()
+            if self._routing is not None
+            else _IC7610_DUMP_STATE
+        )
+        # Hamlib's protocol-0 default omits targetable_vfo, causing its split
+        # API to fall back to ordinary F/M instead of our native I/X handlers.
+        # Advertise only the server's frequency/mode routing bits. The native
+        # handlers retain profile capability checks and fail closed when a
+        # backend cannot perform the requested operation.
+        values[0] = "1"
+        values.extend(("targetable_vfo=0x3", "done"))
+        return RigctldResponse(values=values)
+
+    async def _cmd_dump_caps(self, cmd: RigctldCommand) -> RigctldResponse:
+        return await self._cmd_dump_state(cmd)
+
+    async def _cmd_get_info(self, cmd: RigctldCommand) -> RigctldResponse:
+        if self._routing is not None:
+            return RigctldResponse(values=[self._routing.get_info()])
+        # R59/MOR-2425: a radio that does not name itself is reported to the
+        # client as unspecified rather than as an IC-7610. ``Radio.model``
+        # (``core/radio_protocol.py``) is declared ``str``; this fallback
+        # covers a radio object with no ``model``, or an empty one.
+        raw_model = getattr(self._radio, "model", None)
+        model = raw_model if isinstance(raw_model, str) and raw_model else "unspecified"
+        return RigctldResponse(values=[f"Icom {model} (rigplane)"])
+
+    async def _cmd_chk_vfo(self, cmd: RigctldCommand) -> RigctldResponse:
+        """Hamlib chk_vfo handshake.
+
+        Returns ``"1"`` for dual-RX profiles (advertises ``vfo_opt``
+        support); ``"0"`` for single-RX (legacy behaviour).
+
+        Re-enabled in Variant A 5/5 (#1346) after the full ``vfo_opt``
+        stack landed: parser support (#1343), per-VFO routing for
+        freq/mode/PTT (#1344), per-VFO split/RIT/level/func (#1345).
+        Variant B's unconditional ``"0"`` (PR #1340) is now correctly
+        superseded.
+        """
+        info = self._profile_vfo_info()
+        dual = info is not None and info[0] >= 2
+        return RigctldResponse(values=["1" if dual else "0"])
+
+    async def _cmd_get_powerstat(self, cmd: RigctldCommand) -> RigctldResponse:
+        # Hamlib calls this during NET rigctl startup and treats failures as
+        # "rig power is off". Some radios do not answer the underlying
+        # power-status CI-V query over LAN even while normal CAT reads work, so
+        # expose the server's reachable state instead of blocking on the rig.
+        return RigctldResponse(values=["1"])
+
+    async def _cmd_quit(self, cmd: RigctldCommand) -> RigctldResponse:
+        # Return OK; server.py detects cmd_echo == "quit" and closes the connection
+        return RigctldResponse(values=[], error=HamlibError.OK, cmd_echo="quit")
+
+    # ------------------------------------------------------------------
+    # Power conversion (WSJT-X needs these)
+    # ------------------------------------------------------------------
+
+    _MAX_POWER_W: int = 100  # IC-7610 max power
+
+    async def _cmd_power2mw(self, cmd: RigctldCommand) -> RigctldResponse:
+        """Convert normalized power (0.0-1.0) to milliwatts.
+
+        Args from rigctl: power_float freq mode (freq/mode ignored).
+        """
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        try:
+            power = float(cmd.args[0])
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+        mw = int(power * self._MAX_POWER_W * 1000)
+        return RigctldResponse(values=[str(mw)])
+
+    async def _cmd_mw2power(self, cmd: RigctldCommand) -> RigctldResponse:
+        """Convert milliwatts to normalized power (0.0-1.0).
+
+        Args from rigctl: mw freq mode (freq/mode ignored).
+        """
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+        try:
+            mw = float(cmd.args[0])
+        except ValueError:
+            return _err(HamlibError.EINVAL)
+        power = mw / (self._MAX_POWER_W * 1000)
+        return RigctldResponse(values=[f"{power:.6f}"])
+
+    async def _cmd_get_lock_mode(self, cmd: RigctldCommand) -> RigctldResponse:
+        """Get lock mode — always unlocked."""
+        return RigctldResponse(values=["0"])
+
+    # ------------------------------------------------------------------
+    # Raw CI-V
+    # ------------------------------------------------------------------
+    # Raw CI-V passthrough (hamlib 'w' command)
+    # ------------------------------------------------------------------
+
+    async def _cmd_send_raw(self, cmd: RigctldCommand) -> RigctldResponse:
+        """Send raw CI-V bytes to the radio and return the raw response.
+
+        Input: space-separated hex tokens or a single backslash-escaped hex string.
+        Output: space-separated uppercase hex bytes of the radio's response,
+                or an empty response when the radio answers nothing at all.
+                A frame that times out is an error (``ETIMEOUT``), not an
+                empty success — see :meth:`_execute_write` (MOR-1882).
+        """
+        if not cmd.args:
+            return _err(HamlibError.EINVAL)
+
+        try:
+            frame_bytes = _parse_raw_hex(cmd.args)
+        except (ValueError, IndexError):
+            return _err(HamlibError.EINVAL)
+
+        result = await self._execute_write(
+            command_intent_from_request(
+                "send_raw",
+                {"frame_bytes": frame_bytes},
+                source="rigctld",
+                command_id=f"rigctld-send-raw-{time.monotonic_ns()}",
+                session_id=self._session_id(),
+            )
+        )
+        details = result.executor_result.details or {}
+        values = details.get("values", [])
+        return RigctldResponse(values=list(values))
+
+    # ------------------------------------------------------------------
+    # Dispatch table (populated after method definitions)
+    # ------------------------------------------------------------------
+
+    _DISPATCH: dict[str, Any] = {}  # filled below
+
+
+# Build the dispatch table after the class is defined so all methods exist.
+RigctldHandler._DISPATCH = {
+    "get_freq": RigctldHandler._cmd_get_freq,
+    "set_freq": RigctldHandler._cmd_set_freq,
+    "get_mode": RigctldHandler._cmd_get_mode,
+    "set_mode": RigctldHandler._cmd_set_mode,
+    "get_ptt": RigctldHandler._cmd_get_ptt,
+    "set_ptt": RigctldHandler._cmd_set_ptt,
+    "get_vfo": RigctldHandler._cmd_get_vfo,
+    "set_vfo": RigctldHandler._cmd_set_vfo,
+    "get_level": RigctldHandler._cmd_get_level,
+    "set_level": RigctldHandler._cmd_set_level,
+    "get_func": RigctldHandler._cmd_get_func,
+    "set_func": RigctldHandler._cmd_set_func,
+    "get_split_vfo": RigctldHandler._cmd_get_split_vfo,
+    "set_split_vfo": RigctldHandler._cmd_set_split_vfo,
+    "get_split_freq": RigctldHandler._cmd_get_split_freq,
+    "set_split_freq": RigctldHandler._cmd_set_split_freq,
+    "get_split_mode": RigctldHandler._cmd_get_split_mode,
+    "set_split_mode": RigctldHandler._cmd_set_split_mode,
+    "get_rit": RigctldHandler._cmd_get_rit,
+    "set_rit": RigctldHandler._cmd_set_rit,
+    "get_xit": RigctldHandler._cmd_get_xit,
+    "set_xit": RigctldHandler._cmd_set_xit,
+    "dump_state": RigctldHandler._cmd_dump_state,
+    "dump_caps": RigctldHandler._cmd_dump_caps,
+    "get_info": RigctldHandler._cmd_get_info,
+    "chk_vfo": RigctldHandler._cmd_chk_vfo,
+    "get_powerstat": RigctldHandler._cmd_get_powerstat,
+    "quit": RigctldHandler._cmd_quit,
+    "power2mW": RigctldHandler._cmd_power2mw,
+    "mW2power": RigctldHandler._cmd_mw2power,
+    "get_lock_mode": RigctldHandler._cmd_get_lock_mode,
+    "send_raw": RigctldHandler._cmd_send_raw,
+}

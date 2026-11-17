@@ -1,0 +1,598 @@
+/**
+ * MOR-1262 decomposition slice 2A — `meters` fact-group adapter derivation.
+ *
+ * Companion to `radio-view-model-adapter.test.ts` (MOR-1065), whose RF-gain
+ * cases pass a TX authority and therefore receive meters. That suite owns a
+ * source-normalized legacy digest; this focused suite owns exact meter-source
+ * projection. `tx-aux-adapter.test.ts` remains outside this group's fanout.
+ *
+ * The first describe block is the SAFETY block (invariant R9, MOR-1235): the
+ * discriminating pair proves the group's TX truth comes from the App TX
+ * authority and from nowhere else — sever it and route `state.ptt` back in,
+ * and both halves go red in opposite directions.
+ */
+import { describe, expect, it } from 'vitest';
+import type { Capabilities } from '$lib/types/capabilities';
+import type { FieldStatus, ServerState } from '$lib/types/state';
+import { validateRadioViewModel, type RadioViewModel } from '../../../../semantic/radio-view-model';
+import { projectBarMeters, projectSwrMeter } from '../../../../semantic/bar-meter-projector';
+import { toRadioViewModel, type MetersTxAuthority } from '../radio-view-model-adapter';
+import { editState } from '../../../transport/__tests__/support/state-edit';
+
+function caps(overrides: Partial<Capabilities> = {}): Capabilities {
+  return {
+    model: 'fixture', scope: true, audio: true, tx: true, capabilities: ['scope', 'audio', 'tx'],
+    stateContractVersion: 1, providerGeneration: 1,
+    receivers: 1, vfoScheme: 'single', freqRanges: [], modes: [], filters: [],
+    audioConfig: { sampleRate: 48000, channels: 1, codecs: ['pcm16'] },
+    webrtc: { available: false, enabled: false },
+    txBands: [{ start: 14000000, end: 14350000, name: '20m' }],
+    scopeSource: 'hardware', audioFftAvailable: false, ...overrides,
+  } as Capabilities;
+}
+
+const fresh: FieldStatus = {
+  storePath: 'x', observed: true, freshness: 'fresh', availability: 'available',
+  lastObservedMonotonic: 0,
+};
+const stale: FieldStatus = {
+  storePath: 'x', observed: true, freshness: 'stale', availability: 'stale',
+  lastObservedMonotonic: 0,
+};
+const METER_PATHS = [
+  'main.sMeter', 'sub.sMeter', 'powerMeter', 'swrMeter', 'alcMeter',
+  'compMeter', 'vdMeter', 'idMeter',
+] as const;
+
+/** The RX authority: positively observed OFF with zero TX risk. */
+const RX: MetersTxAuthority = { radioTx: 'off', txRisk: 'none' };
+/** The TX authority: the transmitter is confirmed on. */
+const TX: MetersTxAuthority = { radioTx: 'on', txRisk: 'confirmed-on' };
+
+function meterState(overrides: Partial<ServerState> = {}): ServerState {
+  return {
+    stateContractVersion: 1, providerGeneration: 1,
+    active: 'MAIN', split: false, dualWatch: false, ptt: false,
+    txTarget: { status: 'known', receiver: 'MAIN', slot: null, frequencyHz: 14195000 },
+    main: {
+      freqHz: 14195000, mode: 'USB', filter: 1, dataMode: 0, att: 0, preamp: 0,
+      nb: false, nr: false, afLevel: 1, rfGain: 1, squelch: 0, sMeter: 120,
+    },
+    powerMeter: 0.6, swrMeter: 20, alcMeter: 40, compMeter: 10, vdMeter: 200, idMeter: 80,
+    fieldStatus: {
+      active: fresh, split: fresh, dualWatch: fresh, txTarget: fresh,
+      'main.freqHz': fresh, 'main.mode': fresh, 'main.filter': fresh,
+      ...Object.fromEntries(METER_PATHS.map((path) => [path, fresh])),
+    },
+    ...overrides,
+  } as ServerState;
+}
+
+function model(
+  state: ServerState | null, capabilities: Capabilities | null, tx?: MetersTxAuthority | null,
+): RadioViewModel {
+  const view = toRadioViewModel(state, capabilities, tx);
+  expect(view).not.toBeNull();
+  return validateRadioViewModel(view);
+}
+
+describe('meters TX truth comes from the App TX authority (R9 / MOR-1235)', () => {
+  // ── The discriminating pair ─────────────────────────────────────────────
+  it('reads TX-active from the authority even while radioState.ptt is stale FALSE', () => {
+    const view = model(meterState({ ptt: false }), caps(), TX);
+    const meters = view.meters!;
+    expect(meters.rfState).toBe('transmitting');
+    expect(meters.power.relevant).toBe(true);
+    expect(meters.swr.relevant).toBe(true);
+    expect(meters.alc.relevant).toBe(true);
+    expect(meters.compression.relevant).toBe(true);
+    expect(meters.drainCurrent.relevant).toBe(true);
+    // ...and the RX meter is the one that steps aside.
+    expect(meters.signal.relevant).toBe(false);
+  });
+
+  it('reads RX from the authority even while radioState.ptt is stale TRUE', () => {
+    const view = model(meterState({ ptt: true }), caps(), RX);
+    const meters = view.meters!;
+    expect(meters.rfState).toBe('receiving');
+    expect(meters.power.relevant).toBe(false);
+    expect(meters.swr.relevant).toBe(false);
+    expect(meters.alc.relevant).toBe(false);
+    expect(meters.compression.relevant).toBe(false);
+    expect(meters.drainCurrent.relevant).toBe(false);
+    expect(meters.signal.relevant).toBe(true);
+  });
+
+  it('fails closed on an uncertain authority: the TX fault meters stay relevant', () => {
+    const view = model(meterState({ ptt: false }), caps(), { radioTx: 'off', txRisk: 'uncertain' });
+    expect(view.meters!.rfState).toBe('uncertain');
+    expect(view.meters!.swr.relevant).toBe(true);
+    expect(view.meters!.alc.relevant).toBe(true);
+    expect(view.meters!.signal.relevant).toBe(false);
+  });
+
+  it('fails closed on an unobserved RF state', () => {
+    const view = model(meterState(), caps(), { radioTx: 'unknown', txRisk: 'none' });
+    expect(view.meters!.rfState).toBe('unknown');
+    expect(view.meters!.power.relevant).toBe(true);
+  });
+
+  it('emits NO meters group without an authority snapshot — never a ptt-derived guess', () => {
+    for (const tx of [undefined, null]) {
+      const view = model(meterState({ ptt: true }), caps(), tx);
+      expect(view.meters).toBeUndefined();
+      expect(Object.keys(view)).not.toContain('meters');
+    }
+  });
+});
+
+describe('canonical meter source identity (MOR-2400)', () => {
+  it('emits the already-qualified generation, scope, receiver, and closed path for all seven meters', () => {
+    const meters = model(meterState(), caps(), TX).meters!;
+    expect(Object.fromEntries(
+      (['signal', 'power', 'swr', 'alc', 'compression', 'drainVoltage', 'drainCurrent'] as const)
+        .map((field) => [field, meters[field].source]),
+    )).toEqual({
+      signal: { providerGeneration: 1, scope: 'receiver', receiver: 'MAIN', path: 'main.sMeter' },
+      power: { providerGeneration: 1, scope: 'radio', receiver: null, path: 'powerMeter' },
+      swr: { providerGeneration: 1, scope: 'radio', receiver: null, path: 'swrMeter' },
+      alc: { providerGeneration: 1, scope: 'radio', receiver: null, path: 'alcMeter' },
+      compression: { providerGeneration: 1, scope: 'radio', receiver: null, path: 'compMeter' },
+      drainVoltage: { providerGeneration: 1, scope: 'radio', receiver: null, path: 'vdMeter' },
+      drainCurrent: { providerGeneration: 1, scope: 'radio', receiver: null, path: 'idMeter' },
+    });
+  });
+
+  it('follows the active signal receiver and keeps its source for stale evidence too (R29)', () => {
+    const dualCaps = caps({
+      receivers: 2, vfoScheme: 'main_sub',
+      capabilities: ['scope', 'audio', 'tx', 'dual_rx'],
+    });
+    const onSub = meterState({
+      active: 'SUB',
+      sub: { freqHz: 7100000, mode: 'LSB', filter: 1, sMeter: 60 } as ServerState['main'],
+    });
+    expect(model(onSub, dualCaps, RX).meters!.signal.source).toEqual({
+      providerGeneration: 1, scope: 'receiver', receiver: 'SUB', path: 'sub.sMeter',
+    });
+
+    // A stale leaf still carries a real observed value (R29), so its source
+    // identity is retained just like a current one — only a genuinely
+    // unresolved evidence state (see the next test) drops it.
+    const state = meterState();
+    const fieldStatus = Object.fromEntries(METER_PATHS.map((path) => [path, stale]));
+    const meters = model({ ...state, fieldStatus }, caps(), TX).meters!;
+    for (const field of [
+      meters.signal, meters.power, meters.swr, meters.alc, meters.compression,
+      meters.drainVoltage, meters.drainCurrent,
+    ]) expect(field.source).not.toBeNull();
+  });
+
+  it('emits null source for every field that was never observed', () => {
+    const state = meterState();
+    const neverObserved = { ...fresh, observed: false };
+    const fieldStatus = Object.fromEntries(METER_PATHS.map((path) => [path, neverObserved]));
+    const meters = model({ ...state, fieldStatus }, caps(), TX).meters!;
+    for (const field of [
+      meters.signal, meters.power, meters.swr, meters.alc, meters.compression,
+      meters.drainVoltage, meters.drainCurrent,
+    ]) expect(field.source).toBeNull();
+  });
+
+  it.each([
+    [['calibrated'], { kind: 'engineering', unit: 'db' }],
+    [['uncalibrated'], { kind: 'raw' }],
+    [[], { kind: 'unknown' }],
+    [['calibrated', 'calibrated'], { kind: 'unknown' }],
+    [['calibrated', 'uncalibrated'], { kind: 'unknown' }],
+    [['driver-note', 'calibrated'], { kind: 'engineering', unit: 'db' }],
+    [[3], { kind: 'unknown' }],
+  ] as const)('derives the station signal domain from strict quality evidence %#', (quality, domain) => {
+    const state = meterState();
+    state.fieldStatus!['main.sMeter'] = {
+      ...fresh, quality: quality as unknown as string[],
+    };
+    expect(model(state, caps(), RX).meters!.signal.domain).toEqual(domain);
+  });
+
+  it('keeps the calibrated domain for a stale meter (R29 — meterField parity with the projector)', () => {
+    const state = meterState();
+    state.fieldStatus!['main.sMeter'] = { ...stale, quality: ['calibrated'] };
+    expect(model(state, caps(), RX).meters!.signal.domain).toEqual({ kind: 'engineering', unit: 'db' });
+  });
+
+  it('still drops the domain to unknown when the meter was never observed', () => {
+    const state = meterState();
+    state.fieldStatus!['main.sMeter'] = { ...fresh, observed: false, quality: ['calibrated'] };
+    expect(model(state, caps(), RX).meters!.signal.domain).toEqual({ kind: 'unknown' });
+  });
+
+  it('maps calibrated quality to each meter field\'s canonical engineering unit', () => {
+    const state = meterState();
+    state.fieldStatus = Object.fromEntries(Object.entries(state.fieldStatus!).map(([path, status]) => [
+      path, METER_PATHS.includes(path as typeof METER_PATHS[number])
+        ? { ...status, quality: ['calibrated'] } : status,
+    ]));
+    const meters = model(state, caps(), TX).meters!;
+    const keys = [
+      'signal', 'power', 'swr', 'alc', 'compression', 'drainVoltage', 'drainCurrent',
+    ] as const;
+    expect(Object.fromEntries(keys.map((key) => [key, meters[key].domain]))).toEqual({
+      signal: { kind: 'engineering', unit: 'db' }, power: { kind: 'engineering', unit: 'w' },
+      swr: { kind: 'engineering', unit: 'ratio' }, alc: { kind: 'engineering', unit: 'normalized' },
+      compression: { kind: 'engineering', unit: 'db' }, drainVoltage: { kind: 'engineering', unit: 'v' },
+      drainCurrent: { kind: 'engineering', unit: 'a' },
+    });
+  });
+});
+
+describe('target meter display provenance (MOR-2359)', () => {
+  const targets = [['power', 'powerMeter'], ['swr', 'swrMeter'], ['alc', 'alcMeter']] as const;
+  const observed = { ...fresh, lastObservedMonotonic: 310658.42975425 };
+  const capabilities = caps();
+  function stateWith(status: Partial<FieldStatus> = {}): ServerState {
+    return meterState({
+      fieldStatus: { ...meterState().fieldStatus,
+        ...Object.fromEntries(targets.map(([, path]) => [path, { ...observed, ...status }])),
+      },
+    });
+  }
+  it.each(targets)('projects current/stale/never-observed independently for %s', (meter, path) => {
+    const state = stateWith();
+    expect(model(state, capabilities, TX).meters![meter].display).toEqual({ state: 'current', value: state[path] });
+    for (const status of [{ freshness: 'stale' }, { availability: 'stale' }] as const) {
+      expect(model(stateWith(status), capabilities, TX).meters![meter].display).toEqual({ state: 'stale', value: state[path] });
+    }
+    expect(model(stateWith({ observed: false }), capabilities, TX).meters![meter].display)
+      .toEqual({ state: 'unknown', reason: 'not-observed' });
+    expect(model({ ...state, fieldStatus: {} }, capabilities, TX).meters).toBeUndefined();
+  });
+  it.each(targets)('preserves valid zero and rejects invalid %s scalars', (meter, path) => {
+    expect(model({ ...stateWith(), [path]: 0 }, capabilities, TX).meters![meter].display)
+      .toEqual({ state: 'current', value: 0 });
+    for (const value of [NaN, Infinity, null, '1', false]) {
+      expect(model({ ...stateWith(), [path]: value }, capabilities, TX).meters![meter].display)
+        .toEqual({ state: 'unknown', reason: 'invalid-value' });
+    }
+    expect(model({ ...stateWith(), [path]: undefined }, capabilities, TX).meters![meter].display)
+      .toEqual({ state: 'unknown', reason: 'invalid-value' });
+    expect(model(stateWith(), { ...capabilities, tx: false }, TX).meters![meter].display)
+      .toEqual({ state: 'unsupported' });
+  });
+  it('requires observation markers and matching identity but not active receiver freshness', () => {
+    for (const lastObservedMonotonic of [null, undefined, NaN, Infinity, -1]) {
+      expect(model(stateWith({ lastObservedMonotonic }), capabilities, TX).meters!.power.display)
+        .toEqual({ state: 'unknown', reason: 'invalid-evidence' });
+    }
+    for (const providerGeneration of [undefined, 2]) {
+      expect(model({ ...stateWith(), providerGeneration }, capabilities, TX).meters!.power.display)
+        .toEqual({ state: 'unknown', reason: 'identity-unresolved' });
+    }
+    const state = stateWith();
+    state.fieldStatus!.active = { ...stale, observed: false };
+    expect(model(state, capabilities, TX).meters!.power.display).toEqual({ state: 'current', value: 0.6 });
+  });
+  it('changes no strict meter facts across RF authority states', () => {
+    for (const tx of [RX, TX, { radioTx: 'off', txRisk: 'uncertain' }, { radioTx: 'unknown', txRisk: 'none' }] as const) {
+      for (const status of [{}, { freshness: 'stale', availability: 'stale' }, { observed: false }] as const) {
+        const state = stateWith(status);
+        const meters = model(state, capabilities, tx).meters!;
+        const relevant = meters.rfState !== 'receiving';
+        for (const [meter, path] of targets) {
+          const { display, ...strict } = meters[meter];
+          expect(display).toBeDefined();
+          // R29: a stale leaf is still operational — only a leaf that was
+          // never observed at all degrades the reading.
+          const operational = status.observed !== false;
+          expect(strict).toEqual({
+            presence: 'present',
+            reading: operational ? { status: 'known', value: state[path] } : { status: 'unknown' },
+            availability: { structural: true, operational }, relevant,
+            domain: { kind: 'unknown' },
+            source: operational
+              ? { providerGeneration: 1, scope: 'radio', receiver: null, path }
+              : null,
+          });
+        }
+        for (const meter of ['signal', 'compression', 'drainVoltage', 'drainCurrent'] as const) {
+          expect(meters[meter]).not.toHaveProperty('display');
+        }
+      }
+    }
+  });
+});
+
+describe('meters evidence gate and per-meter derivation (MOR-1262 slice 2A)', () => {
+  it('emits no meters when capabilities are absent', () => {
+    expect(toRadioViewModel(meterState(), null, RX)).toBeNull();
+  });
+
+  it('emits no meters when the radio has reported no meter at all', () => {
+    const bare = meterState({
+      powerMeter: undefined, swrMeter: undefined, alcMeter: undefined,
+      compMeter: undefined, vdMeter: undefined, idMeter: undefined,
+      main: { freqHz: 14195000, mode: 'USB', filter: 1 } as ServerState['main'],
+    });
+    bare.fieldStatus = {};
+    expect(model(bare, caps(), RX).meters).toBeUndefined();
+  });
+
+  it('emits the group once a single meter is reported', () => {
+    const one = meterState({
+      powerMeter: undefined, swrMeter: undefined, alcMeter: undefined,
+      compMeter: undefined, idMeter: undefined,
+      main: { freqHz: 14195000, mode: 'USB', filter: 1 } as ServerState['main'],
+    });
+    expect(model(one, caps(), RX).meters?.drainVoltage.reading).toEqual({ status: 'known', value: 200 });
+  });
+
+  it('reports known readings for every reported meter', () => {
+    const meters = model(meterState(), caps(), TX).meters!;
+    expect(meters.signal.reading).toEqual({ status: 'known', value: 120 });
+    expect(meters.power.reading).toEqual({ status: 'known', value: 0.6 });
+    expect(meters.swr.reading).toEqual({ status: 'known', value: 20 });
+    expect(meters.alc.reading).toEqual({ status: 'known', value: 40 });
+    expect(meters.compression.reading).toEqual({ status: 'known', value: 10 });
+    expect(meters.drainVoltage.reading).toEqual({ status: 'known', value: 200 });
+    expect(meters.drainCurrent.reading).toEqual({ status: 'known', value: 80 });
+  });
+
+  it('marks TX meters structurally absent on a receive-only radio, never known', () => {
+    const meters = model(meterState(), caps({ tx: false, capabilities: ['scope', 'audio'] }), RX).meters!;
+    for (const field of [meters.power, meters.swr, meters.alc, meters.compression, meters.drainCurrent]) {
+      expect(field.availability).toEqual({ structural: false, operational: false });
+      expect(field.reading).toEqual({ status: 'unknown' });
+    }
+    // The S-meter and the supply rail are not TX facts and survive.
+    expect(meters.signal.availability.structural).toBe(true);
+    expect(meters.drainVoltage.availability.structural).toBe(true);
+  });
+
+  it('keeps a declared meter without a raw reading empty', () => {
+    const meters = model(meterState({ alcMeter: undefined }), caps(), TX).meters!;
+    expect(meters.alc).toEqual({
+      presence: 'present',
+      reading: { status: 'unknown' }, availability: { structural: true, operational: false }, relevant: true,
+      display: { state: 'unknown', reason: 'invalid-value' }, domain: { kind: 'unknown' }, source: null,
+    });
+  });
+
+  it('keeps a stale meter\'s reading known and its structural/operational availability true (R29)', () => {
+    const meters = model(meterState({
+      fieldStatus: { ...meterState().fieldStatus, swrMeter: stale },
+    }), caps(), TX).meters!;
+    expect(meters.swr).toEqual({
+      presence: 'present',
+      reading: { status: 'known', value: 20 }, availability: { structural: true, operational: true }, relevant: true,
+      display: { state: 'stale', value: 20 }, domain: { kind: 'unknown' },
+      source: { providerGeneration: 1, scope: 'radio', receiver: null, path: 'swrMeter' },
+    });
+  });
+
+  it('follows the active receiver for the S-meter, with its own field status', () => {
+    const dualCaps = caps({
+      receivers: 2, vfoScheme: 'main_sub',
+      capabilities: ['scope', 'audio', 'tx', 'dual_rx'],
+    });
+    const onSub = meterState({
+      active: 'SUB',
+      sub: { freqHz: 7100000, mode: 'LSB', filter: 1, sMeter: 60 } as ServerState['main'],
+    });
+    expect(model(onSub, dualCaps, RX).meters!.signal.reading).toEqual({ status: 'known', value: 60 });
+    const staleSub = meterState({
+      active: 'SUB',
+      sub: { freqHz: 7100000, mode: 'LSB', filter: 1, sMeter: 60 } as ServerState['main'],
+      fieldStatus: { ...meterState().fieldStatus, 'sub.sMeter': stale },
+    });
+    // R29: a stale S-meter still carries its last observed value.
+    expect(model(staleSub, dualCaps, RX).meters!.signal.reading).toEqual({ status: 'known', value: 60 });
+  });
+
+  it.each(METER_PATHS.filter((path) => path !== 'sub.sMeter'))(
+    'withdraws %s when its own declaration status is absent', (path) => {
+      const state = meterState();
+      const fieldStatus = { ...state.fieldStatus };
+      delete fieldStatus[path];
+      const meters = model({ ...state, fieldStatus }, caps(), TX).meters!;
+      const field = path === 'main.sMeter' ? meters.signal
+        : path === 'powerMeter' ? meters.power
+          : path === 'swrMeter' ? meters.swr
+            : path === 'alcMeter' ? meters.alc
+              : path === 'compMeter' ? meters.compression
+                : path === 'vdMeter' ? meters.drainVoltage : meters.drainCurrent;
+      expect(field.reading).toEqual({ status: 'unknown' });
+      expect(field.availability).toEqual({ structural: false, operational: false });
+    },
+  );
+
+  it.each(METER_PATHS.filter((path) => path !== 'sub.sMeter'))(
+    'keeps stale %s structurally present and operational, with its value retained (R29)', (path) => {
+      const state = meterState({
+        fieldStatus: { ...meterState().fieldStatus, [path]: stale },
+      });
+      const meters = model(state, caps(), TX).meters!;
+      const field = path === 'main.sMeter' ? meters.signal
+        : path === 'powerMeter' ? meters.power
+          : path === 'swrMeter' ? meters.swr
+            : path === 'alcMeter' ? meters.alc
+              : path === 'compMeter' ? meters.compression
+                : path === 'vdMeter' ? meters.drainVoltage : meters.drainCurrent;
+      const rawValue = path === 'main.sMeter' ? state.main!.sMeter : state[path];
+      expect(field.reading).toEqual({ status: 'known', value: rawValue });
+      expect(field.availability).toEqual({ structural: true, operational: true });
+    },
+  );
+
+  it.each([
+    ['provider mismatch', { providerGeneration: 2 }],
+    ['contract mismatch', { stateContractVersion: 2 }],
+  ] as const)('%s fences every canonical reading without removing shells', (_label, capabilityOverride) => {
+    const meters = model(meterState(), caps(capabilityOverride), TX).meters!;
+    for (const field of [
+      meters.signal, meters.power, meters.swr, meters.alc, meters.compression,
+      meters.drainVoltage, meters.drainCurrent,
+    ]) {
+      expect(field.reading).toEqual({ status: 'unknown' });
+      expect(field.availability).toEqual({ structural: true, operational: false });
+    }
+  });
+
+  it.each([undefined, NaN, Infinity, -1])(
+    'rejects invalid observation marker %s for every canonical reading', (lastObservedMonotonic) => {
+      const state = meterState();
+      const fieldStatus = Object.fromEntries(METER_PATHS.map((path) => [
+        path, { ...fresh, lastObservedMonotonic },
+      ]));
+      const meters = model({ ...state, fieldStatus }, caps(), TX).meters!;
+      expect([
+        meters.signal, meters.power, meters.swr, meters.alc, meters.compression,
+        meters.drainVoltage, meters.drainCurrent,
+      ].every((field) => field.reading.status === 'unknown')).toBe(true);
+    },
+  );
+
+  it('preserves valid zero for all seven canonical readings', () => {
+    const state = meterState({
+      main: { ...meterState().main, sMeter: 0 },
+      powerMeter: 0, swrMeter: 0, alcMeter: 0, compMeter: 0, vdMeter: 0, idMeter: 0,
+    });
+    const meters = model(state, caps(), TX).meters!;
+    expect([
+      meters.signal, meters.power, meters.swr, meters.alc, meters.compression,
+      meters.drainVoltage, meters.drainCurrent,
+    ].map((field) => field.reading)).toEqual(Array(7).fill({ status: 'known', value: 0 }));
+  });
+
+  it('keeps an unresolved dual active receiver as an unknown supported signal shell', () => {
+    const state = meterState({
+      fieldStatus: { ...meterState().fieldStatus, active: { ...fresh, observed: false } },
+      sub: { ...meterState().main, sMeter: 60 },
+    });
+    const dualCaps = caps({
+      receivers: 2, vfoScheme: 'main_sub',
+      capabilities: ['scope', 'audio', 'tx', 'dual_rx'],
+    });
+    expect(model(state, dualCaps, RX).meters!.signal).toEqual({
+      presence: 'present',
+      reading: { status: 'unknown' },
+      availability: { structural: true, operational: false },
+      relevant: true,
+      domain: { kind: 'unknown' },
+      source: null,
+    });
+  });
+
+  it('does not select raw SUB signal when SUB is structurally non-operational', () => {
+    const state = meterState({
+      active: 'SUB',
+      sub: { ...meterState().main, sMeter: 60 },
+    });
+    const signal = model(state, caps({ receivers: 2, vfoScheme: 'main_sub' }), RX).meters!.signal;
+    expect(signal).toEqual({
+      presence: 'present',
+      reading: { status: 'unknown' },
+      availability: { structural: true, operational: false },
+      relevant: true,
+      domain: { kind: 'unknown' },
+      source: null,
+    });
+  });
+
+  it('ignores a stray raw SUB signal outside the canonical single-receiver topology', () => {
+    const state = meterState({
+      active: 'SUB',
+      main: { freqHz: 14195000, mode: 'USB', filter: 1 } as ServerState['main'],
+      sub: { ...meterState().main, sMeter: 60 },
+      powerMeter: undefined, swrMeter: undefined, alcMeter: undefined,
+      compMeter: undefined, vdMeter: undefined, idMeter: undefined,
+    });
+    state.fieldStatus = { 'sub.sMeter': fresh };
+    expect(model(state, caps(), RX).meters).toBeUndefined();
+  });
+
+  it('degrades a malformed raw value (wrong JS type) to unknown rather than coercing', () => {
+    const meters = model(meterState({
+      compMeter: 'ten' as unknown as number,
+    }), caps(), TX).meters!;
+    expect(meters.compression.reading).toEqual({ status: 'unknown' });
+  });
+
+  it('emits a validator-clean model carrying the meters group (round-trip proof)', () => {
+    const view = model(meterState(), caps(), TX);
+    expect(JSON.parse(JSON.stringify(view))).toEqual(view);
+  });
+
+  it('leaves the pre-2A families untouched when meters are present', () => {
+    const view = model(meterState(), caps(), TX);
+    expect(view.topologyId).toBe('1/single');
+    expect(view.txAux).toBeUndefined();
+  });
+});
+
+
+describe('served meter presence (MOR-2425 / T201)', () => {
+  const entries = [
+    ['signal', 'main.sMeter'], ['power', 'powerMeter'], ['swr', 'swrMeter'],
+    ['alc', 'alcMeter'], ['compression', 'compMeter'], ['drainVoltage', 'vdMeter'],
+    ['drainCurrent', 'idMeter'],
+  ] as const;
+  it.each(entries)('separates %s declaration, current presence, and reading', (key, path) => {
+    for (const availability of ['undeclared', 'unavailable', 'missing', 'available', 'stale', undefined] as const) {
+      const state = meterState({ main: { ...meterState().main, sMeter: 0 },
+        powerMeter: 0, swrMeter: 0, alcMeter: 0, compMeter: 0, vdMeter: 0, idMeter: 0 });
+      if (availability === undefined) delete state.fieldStatus![path];
+      else state.fieldStatus![path] = { ...fresh, availability,
+        observed: availability === 'available' || availability === 'stale',
+        freshness: availability === 'stale' ? 'stale' : 'fresh' };
+      const field = model(state, caps(), TX).meters![key];
+      const presence = availability === undefined || availability === 'undeclared'
+        ? 'absent' : availability === 'unavailable' ? 'unavailable' : 'present';
+      const operational = availability === 'available' || availability === 'stale';
+      expect(field.presence).toBe(presence);
+      expect(field.availability).toEqual({ structural: presence !== 'absent', operational });
+      expect(field.reading).toEqual(operational ? { status: 'known', value: 0 } : { status: 'unknown' });
+    }
+  });
+  it.each(entries)('requires an OWN status for %s declaration', (key, path) => {
+    const state = meterState();
+    delete state.fieldStatus![path];
+    Object.setPrototypeOf(state.fieldStatus!, { [path]: fresh });
+    expect(model(state, caps(), TX).meters![key].presence).toBe('absent');
+  });
+  it('keeps a declared missing raw value as an empty shell', () => {
+    const field = model(meterState({ alcMeter: undefined }), caps(), TX).meters!.alc;
+    expect(field.presence).toBe('present');
+    expect(field.availability).toEqual({ structural: true, operational: false });
+    expect(field.reading).toEqual({ status: 'unknown' });
+  });
+});
+
+
+it('preserves IC-7300-shaped RX, unobserved TX, observed zero, held stale and served discard', () => {
+  // MOR-4213: each pass is a new delivery (a new snapshot), as the client builds it.
+  let state = meterState({ compressorOn: true, powerMeter: 0, swrMeter: 0, alcMeter: 0, compMeter: 0 });
+  state = editState(state, (s) => { s.fieldStatus!.compressorOn = fresh; });
+  const capabilities = caps({ model: 'IC-7300', capabilities: ['scope', 'audio', 'tx', 'compressor'] });
+  for (const [availability, observed, tx] of [
+    ['unavailable', false, RX], ['missing', false, TX], ['available', true, TX],
+    ['stale', true, RX], ['unavailable', false, RX],
+  ] as const) {
+    state = editState(state, (s) => {
+      for (const path of ['powerMeter', 'swrMeter', 'alcMeter', 'compMeter']) {
+        s.fieldStatus![path] = { ...fresh, availability, observed, quality: ['calibrated'],
+          freshness: availability === 'stale' ? 'stale' : 'fresh' };
+      }
+    });
+    const view = model(state, capabilities, tx);
+    const projected = [...projectBarMeters(view), projectSwrMeter(view)!];
+    expect(projected).toHaveLength(6);
+    expect(projectSwrMeter(view)).toMatchObject({ presence: availability === 'unavailable'
+      ? 'unavailable' : 'present', observed: observed && tx === TX });
+    const visible = ['signal', ...projected.filter(p => p.presence !== 'unavailable').map(p => p.key)];
+    expect(visible).toHaveLength(availability === 'unavailable' ? 3 : 7);
+    for (const key of ['power', 'swr', 'alc', 'compression'] as const) {
+      expect(view.meters![key].reading).toEqual(observed
+        ? { status: 'known', value: 0 } : { status: 'unknown' });
+    }
+  }
+});

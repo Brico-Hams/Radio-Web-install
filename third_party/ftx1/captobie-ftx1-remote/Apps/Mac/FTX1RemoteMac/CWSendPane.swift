@@ -1,0 +1,371 @@
+import FTX1CW
+import FTX1Core
+import SwiftUI
+
+/// The CW window's send pane (v2): macro buttons, a log of what's queued,
+/// keying and sent, and a line to type into (Return queues it). A macro
+/// fills the line rather than sending, so it can be edited first. Driven by
+/// `CWSender`. Views that read `hub.rigState` are their own small structs
+/// so the rig's polling doesn't re-render the log.
+struct CWSendPane: View {
+    @EnvironmentObject private var sender: CWSender
+    @State private var line = ""
+    /// Kept so a macro can leave the cursor at the end of the line: macOS
+    /// otherwise selects the whole field on focus, and the next keystroke
+    /// would replace the message.
+    @State private var lineSelection: TextSelection?
+    @State private var note: String?
+    @State private var isEditingMacros = false
+    @FocusState private var isLineFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            macroRow
+            Divider()
+            CWSendLog(items: sender.items)
+            Divider()
+            CWSendStatus(note: note)
+            inputRow
+        }
+        .sheet(isPresented: $isEditingMacros) {
+            CWMacroEditor(macros: $sender.macros)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Text("common.send").font(.headline)
+            CWKeyerControls()
+            Spacer()
+            CWMonitorToggle()
+            // Icons alone when the titles don't fit (longer translations).
+            ViewThatFits(in: .horizontal) {
+                actionButtons.labelStyle(.titleAndIcon)
+                actionButtons.labelStyle(.iconOnly)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: 12) {
+            Button {
+                isEditingMacros = true
+            } label: {
+                Label("cwSendPane.macros", systemImage: "square.grid.3x2")
+            }
+            .help("cwSendPane.editTheMacroButtons")
+            Button {
+                sender.clearLog()
+            } label: {
+                Label("common.clear", systemImage: "trash")
+            }
+            .help("cwSendPane.clearWhatsBeenSent")
+            .disabled(!sender.items.contains { !$0.isWaiting })
+            Button(role: .destructive) {
+                sender.stop()
+            } label: {
+                Label("common.stop", systemImage: "stop.fill")
+            }
+            .keyboardShortcut(.cancelAction)
+            .help("cwSendPane.stopKeyingNowAnd")
+            .disabled(!sender.canStop)
+        }
+        .lineLimit(1)
+    }
+
+    private var macroRow: some View {
+        HStack(spacing: 8) {
+            ForEach(Array(sender.macros.enumerated()), id: \.element.id) { index, macro in
+                Button(macro.label) {
+                    insert(macro)
+                }
+                .modifier(MacroShortcut(index: index))
+                .help(index < 9 ? Text("cwSendPane.putInSendLineShortcut \(macro.text) \(index + 1)") : Text("cwSendPane.putInSendLine \(macro.text)"))
+            }
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+    }
+
+    private var inputRow: some View {
+        HStack(spacing: 8) {
+            TextField("common.typeALineAnd", text: $line, selection: $lineSelection)
+                .font(.system(.body, design: .monospaced))
+                .focused($isLineFocused)
+                .onSubmit(submit)
+                .onChange(of: line) { old, new in
+                    if !new.isEmpty { note = nil }
+                    // Capitals as typed, like Their call; this runs again
+                    // for the uppercased value, which changes nothing.
+                    let uppercased = new.uppercased()
+                    guard uppercased != new else { return }
+                    let caret = UppercaseEdit.caretOffset(old: old, typed: new)
+                    line = uppercased
+                    DispatchQueue.main.async {
+                        lineSelection = UppercaseEdit.selection(in: line, at: caret)
+                    }
+                }
+            Button("common.send", action: submit)
+                .disabled(line.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .textFieldStyle(.roundedBorder)
+        .padding(.horizontal)
+        .padding(.bottom, 10)
+    }
+
+    /// Adds a macro's text to the send line (after a space if there's
+    /// already something there) and puts the cursor at the end.
+    private func insert(_ macro: CWMacro) {
+        switch sender.text(for: macro) {
+        case .failure(let problem):
+            note = problem.message
+        case .success(let text):
+            let current = line.trimmingCharacters(in: .whitespaces)
+            line = current.isEmpty ? text : current + " " + text
+            note = nil
+            isLineFocused = true
+            // After focus lands, or its select-all would win.
+            DispatchQueue.main.async {
+                lineSelection = TextSelection(insertionPoint: line.endIndex)
+            }
+        }
+    }
+
+    private func submit() {
+        guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        note = sender.enqueue(line)
+        if note == nil { line = "" }
+        isLineFocused = true
+    }
+}
+
+/// ⌘1…⌘9 for the first nine macros.
+private struct MacroShortcut: ViewModifier {
+    let index: Int
+
+    func body(content: Content) -> some View {
+        if index < 9 {
+            content.keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+        } else {
+            content
+        }
+    }
+}
+
+/// The Monitor switch: a local sidetone at the rig's speed and pitch, for
+/// hearing what's sent when the rig is remote (`CWMonitor`).
+private struct CWMonitorToggle: View {
+    @EnvironmentObject private var monitor: CWMonitor
+
+    var body: some View {
+        Toggle("common.monitor", isOn: $monitor.isEnabled)
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help("cwSendPane.playASidetoneOn")
+    }
+}
+
+/// Keyer speed, break-in and the keyer memory slot. Reads `hub.rigState`.
+private struct CWKeyerControls: View {
+    @EnvironmentObject private var hub: HubService
+    @EnvironmentObject private var sender: CWSender
+
+    var body: some View {
+        HStack(spacing: 10) {
+            let wpm = hub.rigState.cwSpeedWpm
+            HStack(spacing: 4) {
+                Text(wpm.map { "\($0) WPM" } ?? "– WPM")
+                    .monospacedDigit()
+                    .frame(minWidth: 56, alignment: .trailing)
+                Stepper("common.keyerSpeed", onIncrement: {
+                    hub.send(.setCWSpeed(wpm: min((wpm ?? 20) + 1, 60)))
+                }, onDecrement: {
+                    hub.send(.setCWSpeed(wpm: max((wpm ?? 20) - 1, 4)))
+                })
+                .labelsHidden()
+                .disabled(wpm == nil)
+            }
+            .help("cwSendPane.theRigsKeyerSpeed")
+
+            Toggle("BK-IN", isOn: Binding(
+                get: { hub.rigState.breakIn ?? false },
+                set: { hub.send(.setBreakIn($0)) }
+            ))
+            .toggleStyle(.button)
+            .disabled(hub.rigState.breakIn == nil)
+            .help("cwSendPane.breakInTheRig")
+
+            Picker("common.memory", selection: $sender.slot) {
+                ForEach(1...5, id: \.self) { Text("common.memoryX \($0)").tag($0) }
+            }
+            .labelsHidden()
+            .fixedSize()
+            .disabled(sender.isSending)
+            .help("cwSendPane.theRigsCwText")
+        }
+        // Natural width, one line: squeezed, BK-IN collapsed to a sliver.
+        .lineLimit(1)
+        .fixedSize()
+    }
+}
+
+/// One line under the log: what's blocking sending, what the rig is doing,
+/// or the last problem queueing something. Reads `hub.rigState`.
+private struct CWSendStatus: View {
+    @EnvironmentObject private var hub: HubService
+    @EnvironmentObject private var sender: CWSender
+    let note: String?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let note {
+                Label(note, systemImage: "exclamationmark.triangle")
+            } else if let activity = sender.activity {
+                ProgressView().controlSize(.small)
+                Text(activity)
+            } else if let block = sender.block {
+                Label("common.cantSend \(block.message)", systemImage: "exclamationmark.triangle")
+                if block == .breakInOff {
+                    Button("common.turnOnBkIn") { hub.send(.setBreakIn(true)) }
+                        .controlSize(.small)
+                }
+            } else if let wpm = hub.rigState.cwSpeedWpm {
+                Text("common.readyMemoryWpm \(wpm) \(sender.slot)")
+            } else {
+                Text("common.readyMemoryRigKeyer \(sender.slot)")
+            }
+            Spacer()
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+    }
+}
+
+/// Queued, keying and sent lines, newest at the bottom.
+private struct CWSendLog: View {
+    let items: [CWSendItem]
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 4) {
+                if items.isEmpty {
+                    Text("common.linesYouSendAppear")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(items) { item in
+                    CWSendRow(item: item)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding()
+        }
+        .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+}
+
+private struct CWSendRow: View {
+    let item: CWSendItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: symbol)
+                    .foregroundStyle(color)
+                    .frame(width: 16)
+                Text(item.displayText)
+                    .font(.system(size: 16, design: .monospaced))
+                    .foregroundStyle(item.state == .queued || item.state == .stopped ? .secondary : .primary)
+                    .textSelection(.enabled)
+                if item.state == .sending, item.chunks.count > 1 {
+                    Text("\(item.sentChunks + 1)/\(item.chunks.count)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            if case .failed(let reason) = item.state {
+                Text(reason).font(.caption).foregroundStyle(.red).padding(.leading, 24)
+            }
+            if !item.dropped.isEmpty {
+                Text("common.leftOutTheKeyer \(item.dropped)")
+                    .font(.caption).foregroundStyle(.secondary).padding(.leading, 24)
+            }
+        }
+    }
+
+    private var symbol: String {
+        switch item.state {
+        case .queued: "clock"
+        case .sending: "dot.radiowaves.right"
+        case .sent: "checkmark"
+        case .stopped: "stop.circle"
+        case .failed: "exclamationmark.triangle"
+        }
+    }
+
+    private var color: Color {
+        switch item.state {
+        case .queued, .stopped: .secondary
+        case .sending: .orange
+        case .sent: .green
+        case .failed: .red
+        }
+    }
+}
+
+/// Edits the macro buttons: label and text, add/remove, restore defaults.
+private struct CWMacroEditor: View {
+    @Binding var macros: [CWMacro]
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("common.cwMacros").font(.title3.bold())
+            Text("cwSendPane.placeholdersMycallAndMygrid")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            List {
+                ForEach($macros) { $macro in
+                    HStack {
+                        TextField("common.label", text: $macro.label)
+                            .frame(width: 90)
+                        TextField("common.text", text: $macro.text)
+                            .font(.system(.body, design: .monospaced))
+                        Button {
+                            macros.removeAll { $0.id == macro.id }
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("cwSendPane.removeThisMacro")
+                    }
+                }
+                .onMove { macros.move(fromOffsets: $0, toOffset: $1) }
+            }
+            .textFieldStyle(.roundedBorder)
+            .frame(minHeight: 260)
+            HStack {
+                Button("cwSendPane.add") {
+                    macros.append(CWMacro(label: "New", text: ""))
+                }
+                Button("common.restoreDefaults") {
+                    macros = CWMacro.defaults
+                }
+                Spacer()
+                Button("common.done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding()
+        .frame(width: 620)
+    }
+}

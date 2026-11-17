@@ -1,0 +1,5 @@
+* Tweaked sun calculations, added tests by atsunatsu (#241)
+* Overhauled sources import, added HTTP status by wty2019wty (#242)
+* Localized AMSAT status screen for Chinese by atsunatsu (#245)
+* Extracted hardcoded UI strings to resources by TianhengZhuang (#247)
+* Added AMSAT satellite status reports submission by atsunatsu (#248)

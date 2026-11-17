@@ -1,0 +1,559 @@
+/**
+ * MOR-1309 — the semantic antenna surface wired into `SemanticRadioSurfaces`.
+ *
+ * `semantic/__tests__/AntennaSurface.test.ts` proves what the surface does with
+ * a view model. This file proves what only the composed tree can prove, using
+ * the REAL command bus, the REAL adapter and the REAL surface — only the
+ * transport/runtime/authority SEAMS are spied:
+ *
+ *   (a) MOUNTING CANON (MOR-1304 ruling). The surface is control-bearing and
+ *       the dual composition's only layout (`dual-receiver-cockpit.ts`)
+ *       declares no `antenna` zone, so it must NOT appear in the
+ *       DUAL composition — bare OR through `zoned()`, which renders bare for a
+ *       surface the ACTIVE layout has not declared and is therefore not
+ *       permission. The pin below
+ *       renders `strips="dual"` with a view model that DOES carry the antenna
+ *       group; a fixture that cannot see the surface would make it vacuous.
+ *   (b) SAFETY, end to end: while the App-owned TX authority reports the
+ *       transmitter keyed — or its RF state unknown — a forced click on a port
+ *       reaches NO command. The gate is pinned at the transport seam, past both
+ *       the disabled attribute and the surface's own handler.
+ *   (c) The port intents route to the SHIPPED antenna commands, not a v3 fork.
+ *   (d) The structural gate: a single-port radio renders the pre-1309 shape.
+ *
+ * Isolated pool by name (`*.component.test.ts`), per the MOR-1272 doctrine.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushSync, mount, unmount } from 'svelte';
+// @ts-expect-error -- Svelte does not publish types for its reactive test harness.
+import { proxy } from 'svelte/internal/client';
+import type { Capabilities } from '$lib/types/capabilities';
+import type { ServerState } from '$lib/types/state';
+import type { ManagedAppTxController } from '$lib/runtime/tx-controller/managed-app-host';
+import type { ControlSessionSnapshot } from '$lib/runtime/frontend-runtime';
+import type { RxAudioTargetSnapshot } from '$lib/stores/audio.svelte';
+
+
+const h = vi.hoisted(() => ({
+  state: null as unknown,
+  caps: null as unknown,
+  controlSession: { state: 'connected', epoch: 1 } as ControlSessionSnapshot,
+  authoritySubscribers: new Set<(next: {
+    state: unknown; caps: unknown; session: ControlSessionSnapshot;
+    rxAudioTarget: RxAudioTargetSnapshot;
+  }) => void>(),
+  txController: null as ManagedAppTxController | null,
+  audio: { muted: false, rxEnabled: true, volume: 42 },
+  audioConnected: true,
+}));
+
+vi.mock('$lib/transport/ws-client', () => ({ sendCommand: vi.fn() }));
+vi.mock('$lib/stores/radio.svelte', () => ({
+  getActiveReceiver: vi.fn(() => {
+    const state = h.state as ServerState | null;
+    return state?.active === 'SUB' ? state.sub ?? null : state?.main ?? null;
+  }),
+  getRadioState: vi.fn(() => h.state as ServerState | null),
+  patchActiveReceiver: vi.fn(), patchRadioState: vi.fn(), patchReceiver: vi.fn(),
+}));
+// Partial, not wholesale: the Standard/SDR replacement row below mounts the
+// REAL `RadioLayout`, which reads several more of this store's selectors
+// (`getKeyboardConfig`, `hasAnyScope`, …). Only the four this file steers are
+// replaced.
+vi.mock('$lib/stores/capabilities.svelte', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/stores/capabilities.svelte')>();
+  return {
+    ...actual,
+    getCapabilities: vi.fn(() => h.caps as Capabilities | null),
+    getControlRange: vi.fn(() => null),
+    getSmeterCalibration: vi.fn(() => null),
+    getSmeterRedline: vi.fn(() => null),
+  };
+});
+vi.mock('$lib/runtime/commands/radio-intents', async () => {
+  const { sendCommand } = await import('$lib/transport/ws-client');
+  return { dispatchRadioIntent: ({ name, params }: { name: string; params: Record<string, unknown> }) => sendCommand(name, params) };
+});
+vi.mock('$lib/audio/audio-manager', () => ({
+  audioManager: {
+    get rxEnabled() { return true; },
+    startRx: vi.fn(), stopRx: vi.fn(), setRxVolume: vi.fn(), setAudioConfig: vi.fn(),
+  },
+}));
+vi.mock('$lib/runtime/frontend-runtime', () => ({
+  runtime: {
+    onTxAudioDied: () => () => {},
+    get state() { return h.state; },
+    get caps() { return h.caps; },
+    get controlSession() { return h.controlSession; },
+    subscribeControlAuthority(handler: (typeof h.authoritySubscribers extends Set<infer T> ? T : never)) {
+      h.authoritySubscribers.add(handler);
+      handler({
+        state: h.state, caps: h.caps, session: h.controlSession,
+        rxAudioTarget: Object.freeze({ muted: h.audio.muted, rxEnabled: h.audio.rxEnabled }),
+      });
+      return () => { h.authoritySubscribers.delete(handler); };
+    },
+    get audio() { return h.audio; },
+    get connectionAudio() { return h.audioConnected; },
+    get rxEnabled() { return true; },
+    setVolume: vi.fn(), setMuted: vi.fn(), setRxLive: vi.fn(), setRxVolume: vi.fn(),
+    // MOR-1312 slice 12B (rebase fix): the wiring now also hands the adapter
+    // a scope-display snapshot (the FIFTH argument). This file tests
+    // antenna, so this stays on its pre-1312 path regardless of these values.
+    get defaultScopeStatus() {
+      return {
+        source: null, available: false, resourceSelected: false, demand: 0,
+        lifecycle: 'inactive', transport: 'disconnected', frameSeen: false,
+      };
+    },
+    get scope() { return { hardwareScopeConnected: false }; },
+  },
+}));
+vi.mock('$lib/runtime', async () => ({
+  runtime: (await import('$lib/runtime/frontend-runtime')).runtime,
+}));
+vi.mock('$lib/runtime/tx-controller/managed-app-host', () => ({
+  getManagedAppTxController: () => h.txController,
+}));
+vi.mock('$lib/runtime/adapters/mod-input-tx-guard.svelte', () => ({
+  deriveModInputTxGuardProps: () => ({ visible: false, sourceLabel: 'MIC' }),
+  getModInputTxGuardHandlers: () => ({ onSetLan: vi.fn(), onDismiss: vi.fn() }),
+}));
+
+import { sendCommand } from '$lib/transport/ws-client';
+import SemanticRadioSurfaces from '../SemanticRadioSurfaces.svelte';
+import HostedRadioLayoutFixture from '../../layout/__tests__/fixtures/HostedRadioLayoutFixture.svelte';
+import type { SkinId } from '../../../skins/registry';
+import { ManagedAppTxHarness } from '$lib/runtime/tx-controller/__tests__/support/managed-app-tx-harness';
+import { makeAntennaHandlers } from '$lib/runtime/commands/panel-commands';
+
+const TRANSMITTING = { intent: 'transmit', observedPtt: 'on' } as const;
+const RF_UNKNOWN = { observedPtt: 'unknown' } as const;
+
+const fresh = { storePath: 'x', observed: true, freshness: 'fresh', availability: 'available' };
+const slot = (freqHz: number) => ({ freqHz, mode: 'USB', filterNum: 1, dataMode: 0 });
+
+function liveState(over: Partial<ServerState> = {}): ServerState {
+  const paths = [
+    'active', 'split', 'dualWatch', 'txTarget', 'txAntenna', 'rxAntenna1', 'rxAntenna2',
+    'tunerStatus',
+  ];
+  for (const rx of ['main', 'sub']) {
+    paths.push(`${rx}.freqHz`, `${rx}.mode`, `${rx}.filter`, `${rx}.activeSlot`);
+    for (const v of ['vfoA', 'vfoB']) {
+      paths.push(`${rx}.${v}.freqHz`, `${rx}.${v}.mode`, `${rx}.${v}.filterNum`);
+    }
+  }
+  const receiver = (hz: number) => ({
+    ...slot(hz), vfoA: slot(hz), vfoB: slot(hz + 50000), activeSlot: 'A', filter: 1,
+  });
+  return {
+    providerGeneration: 1,
+    active: 'MAIN', split: false, dualWatch: false, ptt: false,
+    txAntenna: 1, rxAntenna1: false, rxAntenna2: false, tunerStatus: 0,
+    txTarget: { status: 'known', receiver: 'MAIN', slot: 'A', frequencyHz: 14250000 },
+    main: receiver(14250000), sub: receiver(14300000),
+    ...over,
+    fieldStatus: Object.fromEntries(paths.map((p) => [p, fresh])),
+  } as unknown as ServerState;
+}
+
+const liveCaps = (antennas: number, tags: readonly string[]): Capabilities => ({
+  providerGeneration: 1,
+  model: 'fixture', scope: false, audio: false, tx: true,
+  capabilities: tags, antennas,
+  receivers: 2, vfoScheme: 'main_sub', freqRanges: [], modes: [], filters: [],
+  audioConfig: { sampleRate: 48000, channels: 1, codecs: ['pcm16'] },
+  webrtc: { available: false, enabled: false },
+  txBands: [{ start: 14000000, end: 14350000, name: '20m' }],
+  scopeSource: null, audioFftAvailable: false,
+} as unknown as Capabilities);
+
+const ANTENNA_TAGS = ['tx', 'dual_rx', 'rx_antenna', 'tuner'] as const;
+
+let target: HTMLDivElement;
+let component: ReturnType<typeof mount> | null = null;
+let txHarness: ManagedAppTxHarness;
+
+function render(props: { strips?: 'single' | 'dual' } = {}): void {
+  target = document.createElement('div');
+  document.body.appendChild(target);
+  component = mount(SemanticRadioSurfaces, { target, props });
+  flushSync();
+}
+
+/** Republishes the CURRENT `h` fixture through every retained runtime authority
+ *  subscriber — the same shape `semantic-band-wiring`/`semantic-dsp-wiring` use.
+ *  Deliberately does NOT flush: the before-flush rows below invoke between this
+ *  call and Svelte's next render. */
+function publishAuthority(): void {
+  for (const subscriber of h.authoritySubscribers) {
+    subscriber({
+      state: h.state, caps: h.caps, session: h.controlSession,
+      rxAudioTarget: Object.freeze({ muted: h.audio.muted, rxEnabled: h.audio.rxEnabled }),
+    });
+  }
+}
+
+/** Mounts the REAL `RadioLayout` above one mounted `SemanticRadioSurfaces`
+ *  through the shared hosted fixture, and returns the mutable props so a test
+ *  can replace the face without remounting the tree (the
+ *  `semantic-rf-front-end-wiring` recipe). */
+function renderHosted(skinId: SkinId): { skinId: SkinId } {
+  target = document.createElement('div');
+  document.body.appendChild(target);
+  const props = proxy<{ skinId: SkinId }>({ skinId });
+  component = mount(HostedRadioLayoutFixture, { target, props });
+  flushSync();
+  return props;
+}
+
+/** A click that does NOT flush — the only way to invoke between an authority
+ *  or managed-TX change and Svelte's next render. */
+function clickWithoutFlush(node: HTMLElement): void {
+  node.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+}
+
+const q = <T extends HTMLElement>(sel: string) => target.querySelector(sel) as T | null;
+const el = (id: string) => q<HTMLElement>(`[data-testid="antenna-${id}"]`);
+const btn = (id: string) => q<HTMLButtonElement>(`[data-testid="antenna-${id}"]`);
+/** Past the `disabled` attribute, so a handler/command guard is proven alone. */
+function forceClick(node: HTMLElement): void {
+  node.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  flushSync();
+}
+
+beforeEach(() => {
+  txHarness = new ManagedAppTxHarness();
+  h.txController = txHarness.controller;
+  h.state = liveState();
+  h.caps = liveCaps(2, ANTENNA_TAGS);
+  vi.mocked(sendCommand).mockClear();
+});
+
+afterEach(() => {
+  if (component) unmount(component);
+  component = null;
+  expect(h.authoritySubscribers.size).toBe(0);
+  expect(txHarness.listenerCount()).toBe(0);
+  expect(txHarness.trace()).toEqual([]);
+  document.body.innerHTML = '';
+});
+
+/* ── (a) the mounting canon ────────────────────────────────────── */
+
+describe('the antenna surface never mounts in the dual composition (MOR-1304 canon)', () => {
+  /**
+   * MUTATION KILLED: mounting this surface in the cockpit, bare or through
+   * `zoned()`. It renders focusable controls and `dual-receiver-cockpit.ts`
+   * declares no `antenna` zone, so `zoneOwning()` returns null and `zoned`
+   * renders BARE —
+   * outside every declared zone, breaking the MOR-1069 invariant that every
+   * focusable control sits inside a declared zone with rx-tx last in the tab
+   * order. The view model here DOES carry the group (asserted below), so this
+   * pin cannot pass because the fixture is blind — the failure mode that made
+   * `DualReceiverCockpit.component.test.ts` non-discriminating.
+   */
+  it('renders NO antenna surface in the dual composition, zoned or unzoned', () => {
+    render({ strips: 'single' });
+    expect(el('surface')).not.toBeNull();
+    unmount(component!);
+    component = null;
+    document.body.innerHTML = '';
+
+    render({ strips: 'dual' });
+    expect(el('surface')).toBeNull();
+    const sharedAntenna = target.querySelectorAll('[data-indicator-fact="antenna"]');
+    expect(sharedAntenna).toHaveLength(1);
+    expect(sharedAntenna[0]?.textContent).toContain('ANT 1');
+  });
+
+  /**
+   * The same claim stated as a DIFFERENCE, which is what MOR-1069 actually
+   * cares about: carrying the antenna group must not add one focusable control
+   * to the cockpit. Asserting "nothing outside a zone" outright would fail for
+   * reasons this slice does not own (a standalone mount resolves no surface
+   * plan, so every optional surface renders bare here) and would therefore be
+   * a broken pin rather than a strict one.
+   */
+  it('adds no focusable control to the cockpit compared with a single-port radio', () => {
+    const controls = () => [...target
+      .querySelectorAll<HTMLElement>('button, input, select, [tabindex]')]
+      .map((node) => node.dataset.testid ?? node.tagName);
+
+    h.caps = liveCaps(1, ANTENNA_TAGS);
+    render({ strips: 'dual' });
+    const withoutGroup = controls();
+    unmount(component!);
+    component = null;
+    document.body.innerHTML = '';
+
+    h.caps = liveCaps(2, ANTENNA_TAGS);
+    render({ strips: 'dual' });
+    expect(controls()).toEqual(withoutGroup);
+  });
+
+  it('renders it bare in the single composition, outside every zone', () => {
+    render();
+    expect(el('surface')!.closest('[data-zone-id]')).toBeNull();
+  });
+});
+
+/* ── (d) the structural gate ───────────────────────────────────── */
+
+describe('the surface mounts only when the view model carries the group', () => {
+  // MUTATION KILLED: mounting unconditionally — a single-port radio would gain
+  // an antenna panel with nothing to switch between.
+  it('renders no antenna surface for a radio declaring one TX port', () => {
+    h.caps = liveCaps(1, ANTENNA_TAGS);
+    render();
+    expect(el('surface')).toBeNull();
+  });
+
+  it('omits RX-ANT for a multi-port radio that does not declare the capability', () => {
+    h.caps = liveCaps(2, ['tx', 'tuner']);
+    render();
+    expect(el('surface')).not.toBeNull();
+    expect(el('rx-toggle')).toBeNull();
+  });
+});
+
+/* ── (c) the shipped command vocabulary ────────────────────────── */
+
+describe('the antenna intents reach the shipped command vocabulary', () => {
+  it('composes the shipped antenna handler factory', () => {
+    const handlers = makeAntennaHandlers() as Record<string, unknown>;
+    for (const name of ['onSelectAnt1', 'onSelectAnt2', 'onToggleRxAnt']) {
+      expect(typeof handlers[name]).toBe('function');
+    }
+  });
+
+  it('routes a port pick to the shipped set_antenna command for that port', () => {
+    render();
+    btn('port-2')!.click();
+    flushSync();
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith('set_antenna_2', { on: false });
+  });
+
+  it('routes an RX-ANT toggle to the shipped RX-antenna command', () => {
+    render();
+    btn('rx-toggle')!.click();
+    flushSync();
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith('set_rx_antenna_ant1', { on: true });
+  });
+});
+
+/* ── (b) the under-power gate, pinned at the transport seam ────── */
+
+describe('no antenna command leaves the tree while the transmitter is not idle', () => {
+  // MUTATION KILLED (end to end, past `disabled` AND past the surface handler):
+  // inverting or dropping the under-power gate. This is the whole point of the
+  // slice — a relay switched under power damages the radio.
+  it.each([
+    ['transmitting', TRANSMITTING, 'a TX session is already in progress; the radio is already transmitting'],
+    ['RF-state unconfirmed', RF_UNKNOWN, 'Waiting for the transmitter to confirm it is off'],
+  ] as const)('sends nothing on a forced port click while %s', (_label, snapshot, sentence) => {
+      txHarness.emitServerSnapshot(snapshot);
+      render();
+      forceClick(btn('port-2')!);
+      forceClick(btn('rx-toggle')!);
+      expect(sendCommand).not.toHaveBeenCalled();
+      expect(btn('port-2')!.disabled).toBe(true);
+      // MOR-2691: the removed `antenna-blocked` element is gone; the catalog
+      // sentence is on the disabled controls' `title`, built off the same
+      // block codes the gate uses.
+      expect(el('blocked')).toBeNull();
+      expect(btn('port-2')!.title).toBe(sentence);
+      expect(btn('rx-toggle')!.title).toBe(sentence);
+    },
+  );
+
+  // MUTATION KILLED: letting an UNOBSERVED tunerStatus fall through to "idle"
+  // (MOR-1295 §3). The ATU fact is `txAux.atu` — this pin proves the LIVE
+  // adapter path produces the not-ready state, not just a hand-built fixture.
+  it('sends nothing while the live tunerStatus was never observed', () => {
+    h.state = liveState({ tunerStatus: undefined } as Partial<ServerState>);
+    render();
+    // MOR-2691: the reason is the disabled control's `title`, as a catalog
+    // sentence — the removed `antenna-blocked` list was the only ATU text.
+    expect(btn('port-2')!.title).toBe('Waiting for the tuner to confirm it is idle');
+    forceClick(btn('port-2')!);
+    expect(sendCommand).not.toHaveBeenCalled();
+  });
+
+  // The gate must open again — a surface that can never switch is not a gate.
+  it('sends the command once the authority reports a positively receiving radio', () => {
+    txHarness.emitServerSnapshot(TRANSMITTING);
+    render();
+    forceClick(btn('port-2')!);
+    expect(sendCommand).not.toHaveBeenCalled();
+    txHarness.emitServerSnapshot({ intent: 'rx', observedPtt: 'off' });
+    flushSync();
+    btn('port-2')!.click();
+    flushSync();
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith('set_antenna_2', { on: false });
+  });
+});
+
+/* ── (e) MOR-2425: the persistent host, LIVE ───────────────────── */
+
+/** One ATU publication, same session and generation as `liveState()`, with the
+ *  `tunerStatus` field's own status line replaced. */
+function withTunerStatus(value: unknown, status: unknown): ServerState {
+  const state = liveState({ tunerStatus: value } as Partial<ServerState>) as unknown as {
+    fieldStatus: Record<string, unknown>;
+  };
+  return {
+    ...state, fieldStatus: { ...state.fieldStatus, tunerStatus: status },
+  } as unknown as ServerState;
+}
+
+describe('the persistent host admits on CURRENT facts, not on rendered props', () => {
+  // MUTATION KILLED: reading the managed-TX snapshot from the reactive `tx`
+  // prop instead of calling `readTx()` at the moment of invocation. A gesture
+  // landing between a same-session TX transition and Svelte's next render
+  // would then throw the relay on pre-transition truth.
+  it('refuses both controls invoked after a TX change but before the flush', () => {
+    render();
+    const port = btn('port-2')!;
+    const rx = btn('rx-toggle')!;
+    expect(port.disabled).toBe(false);
+
+    txHarness.emitServerSnapshot(TRANSMITTING);
+    clickWithoutFlush(port);
+    clickWithoutFlush(rx);
+    expect(sendCommand).not.toHaveBeenCalled();
+
+    flushSync();
+    expect(port.disabled).toBe(true);
+  });
+
+  // MUTATION KILLED: retaining only the identity tuple (or only the rendered
+  // `view` prop) instead of every authority publication. All three rows keep
+  // the session epoch, provider generation and antenna structure fixed, so an
+  // identity-keyed cache would never see them.
+  it.each([
+    ['tuning', 2, fresh],
+    ['never observed', undefined, { ...fresh, observed: false }],
+  ] as const)(
+    'refuses both controls after a same-session ATU %s publication, before the flush',
+    (_label, value, status) => {
+      render();
+      const port = btn('port-2')!;
+      const rx = btn('rx-toggle')!;
+      expect(port.disabled).toBe(false);
+
+      h.state = withTunerStatus(value, status);
+      publishAuthority();
+      clickWithoutFlush(port);
+      clickWithoutFlush(rx);
+      expect(sendCommand).not.toHaveBeenCalled();
+
+      // …and the retained publication is what closed the gate: the seat the
+      // host owns reads it back as unavailable on the next render.
+      flushSync();
+      expect(port.disabled).toBe(true);
+      expect(rx.disabled).toBe(true);
+    },
+  );
+
+  // MOR-2425/R40: a HELD idle ATU publication carries a reading, so it admits.
+  it('admits both controls after a same-session HELD idle ATU publication', () => {
+    render();
+    const port = btn('port-2')!;
+    const rx = btn('rx-toggle')!;
+
+    h.state = withTunerStatus(0, { ...fresh, freshness: 'stale', availability: 'stale' });
+    publishAuthority();
+    clickWithoutFlush(port);
+    clickWithoutFlush(rx);
+    expect(sendCommand).toHaveBeenCalledTimes(2);
+
+    flushSync();
+    expect(port.disabled).toBe(false);
+    expect(rx.disabled).toBe(false);
+  });
+
+  /**
+   * The two guards are DIFFERENT guards, and this row proves it in both
+   * directions from one publication — the trap the census named: mutating the
+   * store without publishing lets the HOST refuse (vacuous), and publishing
+   * without mutating proves nothing about the handler.
+   *
+   * MUTATION KILLED: folding the shipped `makeAntennaHandlers` destination-
+   * evidence check into host admission, or dropping it.
+   */
+  it('emits under host admission and still refuses at the shipped handler alone', () => {
+    render();
+
+    // Admission side, stated first: this exact gesture DOES reach the transport.
+    btn('port-2')!.click();
+    flushSync();
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith('set_antenna_2', { on: false });
+    vi.mocked(sendCommand).mockClear();
+
+    // Same session, same generation, same antenna structure — only ANT 2's own
+    // RX override stops being a known boolean. Mutated AND published.
+    h.state = liveState({ rxAntenna2: undefined } as Partial<ServerState>);
+    publishAuthority();
+    flushSync();
+
+    // Host admission is still open: no blocked reason, the port still enabled.
+    expect(btn('port-2')!.title).toBe('');
+    expect(btn('port-2')!.disabled).toBe(false);
+    forceClick(btn('port-2')!);
+    expect(sendCommand).not.toHaveBeenCalled();
+
+    // …and the RX-ANT toggle, whose evidence this publication left intact,
+    // reaches the shipped command from the SAME host admission.
+    btn('rx-toggle')!.click();
+    flushSync();
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith('set_rx_antenna_ant1', { on: true });
+  });
+});
+
+describe('one mounted host outlives replacing the Standard face with the SDR face', () => {
+  const grouped = () => target.querySelectorAll('[data-testid="antenna-surface"]');
+  const independent = () => target.querySelectorAll('[data-testid="antenna-control-grid"]');
+  const seats = () => [
+    target.querySelectorAll('[data-testid="antenna-ports"]').length,
+    target.querySelectorAll('[data-testid="antenna-rx"]').length,
+  ];
+
+  // MUTATION KILLED: mounting the host inside a face-specific branch, or
+  // handing each face its own owner. Either way the seats below would be
+  // replaced with the face rather than outliving it. MOR-2691 note: the old
+  // identity pin read the `blockedId` off the removed `antenna-blocked`
+  // element, so the surviving-owner claim now pins on the authority
+  // subscription count and the seat arrangement, and on a still-routed
+  // command below.
+  it('arranges the seats independently on Standard, grouped on SDR, and back', () => {
+    const props = renderHosted('desktop-v2');
+    const subscribers = h.authoritySubscribers.size;
+
+    expect(independent()).toHaveLength(1);
+    expect(grouped()).toHaveLength(0);
+    expect(seats()).toEqual([1, 1]);
+    expect(btn('port-2')!.getAttribute('aria-describedby')).toBeNull();
+
+    props.skinId = 'sdr-test';
+    flushSync();
+    expect(grouped()).toHaveLength(1);
+    expect(independent()).toHaveLength(0);
+    expect(seats()).toEqual([1, 1]);
+    expect(h.authoritySubscribers.size).toBe(subscribers);
+
+    props.skinId = 'desktop-v2';
+    flushSync();
+    expect(independent()).toHaveLength(1);
+    expect(grouped()).toHaveLength(0);
+    expect(seats()).toEqual([1, 1]);
+    expect(h.authoritySubscribers.size).toBe(subscribers);
+
+    // The seats the third face rendered still reach the shipped command.
+    btn('port-2')!.click();
+    flushSync();
+    expect(sendCommand).toHaveBeenCalledExactlyOnceWith('set_antenna_2', { on: false });
+  });
+});

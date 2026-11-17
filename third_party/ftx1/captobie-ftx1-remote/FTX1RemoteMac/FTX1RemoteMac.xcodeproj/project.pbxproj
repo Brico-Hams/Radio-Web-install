@@ -1,0 +1,817 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		17BAC8813002926B00096320 /* FTX1Core in Frameworks */ = {isa = PBXBuildFile; productRef = 17BAC8803002926B00096320 /* FTX1Core */; };
+		17BAC8833002927800096320 /* FTX1Core in Frameworks */ = {isa = PBXBuildFile; productRef = 17BAC8823002927800096320 /* FTX1Core */; };
+		29AF84D3927F05B25A265368 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 31616DA851DD82F6D38CED9E /* Sparkle */; };
+		392190C1DE2BA02639B8A586 /* FTX1Core in Frameworks */ = {isa = PBXBuildFile; productRef = 3102B10EC9D493C0A039A314 /* FTX1Core */; };
+		C4A1D0E2F3B45A6978C0D101 /* CWKit in Frameworks */ = {isa = PBXBuildFile; productRef = C4A1D0E2F3B45A6978C0D102 /* CWKit */; };
+		D1A0B0C0E0F0A1B2C3D4E504 /* rigctld in Embed Helpers */ = {isa = PBXBuildFile; fileRef = D1A0B0C0E0F0A1B2C3D4E500 /* rigctld */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		D1A0B0C0E0F0A1B2C3D4E505 /* COPYING in Hamlib Licences */ = {isa = PBXBuildFile; fileRef = D1A0B0C0E0F0A1B2C3D4E501 /* COPYING */; };
+		D1A0B0C0E0F0A1B2C3D4E506 /* COPYING.LIB in Hamlib Licences */ = {isa = PBXBuildFile; fileRef = D1A0B0C0E0F0A1B2C3D4E502 /* COPYING.LIB */; };
+		D1A0B0C0E0F0A1B2C3D4E507 /* LICENSE in Hamlib Licences */ = {isa = PBXBuildFile; fileRef = D1A0B0C0E0F0A1B2C3D4E503 /* LICENSE */; };
+		D7C3A1F0B2E4459C8A6E0101 /* FTX1CW in Frameworks */ = {isa = PBXBuildFile; productRef = D7C3A1F0B2E4459C8A6E0102 /* FTX1CW */; };
+		D7C3A1F0B2E4459C8A6E0103 /* FTX1CW in Frameworks */ = {isa = PBXBuildFile; productRef = D7C3A1F0B2E4459C8A6E0104 /* FTX1CW */; };
+		E2D7A9F14C3B4A5D8E6F0201 /* FTX1Digi in Frameworks */ = {isa = PBXBuildFile; productRef = E2D7A9F14C3B4A5D8E6F0202 /* FTX1Digi */; };
+		EFD383E8E3E34549ADEF876D /* FT8Kit in Frameworks */ = {isa = PBXBuildFile; productRef = C28A82548BE9440A9A9565E9 /* FT8Kit */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		D1A0B0C0E0F0A1B2C3D4E508 /* Embed Helpers */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Helpers;
+			dstSubfolderSpec = 1;
+			files = (
+				D1A0B0C0E0F0A1B2C3D4E504 /* rigctld in Embed Helpers */,
+			);
+			name = "Embed Helpers";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D1A0B0C0E0F0A1B2C3D4E509 /* Hamlib Licences */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Hamlib;
+			dstSubfolderSpec = 7;
+			files = (
+				D1A0B0C0E0F0A1B2C3D4E505 /* COPYING in Hamlib Licences */,
+				D1A0B0C0E0F0A1B2C3D4E506 /* COPYING.LIB in Hamlib Licences */,
+				D1A0B0C0E0F0A1B2C3D4E507 /* LICENSE in Hamlib Licences */,
+			);
+			name = "Hamlib Licences";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		17BAC8453002901F00096320 /* FTX1RemoteMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FTX1RemoteMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		17BAC857300290B900096320 /* FTX1RemoteiOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FTX1RemoteiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		17E1082A30029E6900B5CC40 /* FTX1RemoteiOS-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "FTX1RemoteiOS-Info.plist"; sourceTree = "<group>"; };
+		A0A54F5E7FAA6A595412584B /* FTX1RemoteiPad-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "FTX1RemoteiPad-Info.plist"; sourceTree = "<group>"; };
+		B4C1E2A030029E6900B5CC41 /* FTX1RemoteMac-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "FTX1RemoteMac-Info.plist"; sourceTree = "<group>"; };
+		C71D270EF71B146CA854B371 /* FTX1RemoteiPad.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FTX1RemoteiPad.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D1A0B0C0E0F0A1B2C3D4E500 /* rigctld */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = rigctld; sourceTree = "<group>"; };
+		D1A0B0C0E0F0A1B2C3D4E501 /* COPYING */ = {isa = PBXFileReference; lastKnownFileType = text; path = COPYING; sourceTree = "<group>"; };
+		D1A0B0C0E0F0A1B2C3D4E502 /* COPYING.LIB */ = {isa = PBXFileReference; lastKnownFileType = text; path = COPYING.LIB; sourceTree = "<group>"; };
+		D1A0B0C0E0F0A1B2C3D4E503 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		17BAC8473002901F00096320 /* ../Apps/Mac/FTX1RemoteMac */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ../Apps/Mac/FTX1RemoteMac;
+			sourceTree = "<group>";
+		};
+		17BAC858300290B900096320 /* ../Apps/iOS/FTX1RemoteiOS */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ../Apps/iOS/FTX1RemoteiOS;
+			sourceTree = "<group>";
+		};
+		44A65C5A18FBBF3DCB465FF0 /* ../Apps/iPad/FTX1RemoteiPad */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ../Apps/iPad/FTX1RemoteiPad;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		17BAC8423002901F00096320 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				17BAC8813002926B00096320 /* FTX1Core in Frameworks */,
+				EFD383E8E3E34549ADEF876D /* FT8Kit in Frameworks */,
+				D7C3A1F0B2E4459C8A6E0101 /* FTX1CW in Frameworks */,
+				E2D7A9F14C3B4A5D8E6F0201 /* FTX1Digi in Frameworks */,
+				29AF84D3927F05B25A265368 /* Sparkle in Frameworks */,
+				C4A1D0E2F3B45A6978C0D101 /* CWKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		17BAC854300290B900096320 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				17BAC8833002927800096320 /* FTX1Core in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8668B408DE6049C8BE5CD211 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				392190C1DE2BA02639B8A586 /* FTX1Core in Frameworks */,
+				D7C3A1F0B2E4459C8A6E0103 /* FTX1CW in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		17BAC83C3002901F00096320 = {
+			isa = PBXGroup;
+			children = (
+				17E1082A30029E6900B5CC40 /* FTX1RemoteiOS-Info.plist */,
+				A0A54F5E7FAA6A595412584B /* FTX1RemoteiPad-Info.plist */,
+				B4C1E2A030029E6900B5CC41 /* FTX1RemoteMac-Info.plist */,
+				17BAC8473002901F00096320 /* ../Apps/Mac/FTX1RemoteMac */,
+				17BAC858300290B900096320 /* ../Apps/iOS/FTX1RemoteiOS */,
+				44A65C5A18FBBF3DCB465FF0 /* ../Apps/iPad/FTX1RemoteiPad */,
+				D1A0B0C0E0F0A1B2C3D4E50A /* hamlib */,
+				17BAC87F3002926B00096320 /* Frameworks */,
+				17BAC8463002901F00096320 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		17BAC8463002901F00096320 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				17BAC8453002901F00096320 /* FTX1RemoteMac.app */,
+				17BAC857300290B900096320 /* FTX1RemoteiOS.app */,
+				C71D270EF71B146CA854B371 /* FTX1RemoteiPad.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		17BAC87F3002926B00096320 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		D1A0B0C0E0F0A1B2C3D4E50A /* hamlib */ = {
+			isa = PBXGroup;
+			children = (
+				D1A0B0C0E0F0A1B2C3D4E500 /* rigctld */,
+				D1A0B0C0E0F0A1B2C3D4E501 /* COPYING */,
+				D1A0B0C0E0F0A1B2C3D4E502 /* COPYING.LIB */,
+				D1A0B0C0E0F0A1B2C3D4E503 /* LICENSE */,
+			);
+			name = hamlib;
+			path = ../Vendor/hamlib;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		17BAC8443002901F00096320 /* FTX1RemoteMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 17BAC8503002902000096320 /* Build configuration list for PBXNativeTarget "FTX1RemoteMac" */;
+			buildPhases = (
+				17BAC8413002901F00096320 /* Sources */,
+				17BAC8423002901F00096320 /* Frameworks */,
+				17BAC8433002901F00096320 /* Resources */,
+				D1A0B0C0E0F0A1B2C3D4E508 /* Embed Helpers */,
+				D1A0B0C0E0F0A1B2C3D4E509 /* Hamlib Licences */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				17BAC8473002901F00096320 /* ../Apps/Mac/FTX1RemoteMac */,
+			);
+			name = FTX1RemoteMac;
+			packageProductDependencies = (
+				17BAC8803002926B00096320 /* FTX1Core */,
+				C28A82548BE9440A9A9565E9 /* FT8Kit */,
+				D7C3A1F0B2E4459C8A6E0102 /* FTX1CW */,
+				E2D7A9F14C3B4A5D8E6F0202 /* FTX1Digi */,
+				31616DA851DD82F6D38CED9E /* Sparkle */,
+				C4A1D0E2F3B45A6978C0D102 /* CWKit */,
+			);
+			productName = FTX1RemoteMac;
+			productReference = 17BAC8453002901F00096320 /* FTX1RemoteMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+		17BAC856300290B900096320 /* FTX1RemoteiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 17BAC85F300290BA00096320 /* Build configuration list for PBXNativeTarget "FTX1RemoteiOS" */;
+			buildPhases = (
+				17BAC853300290B900096320 /* Sources */,
+				17BAC854300290B900096320 /* Frameworks */,
+				17BAC855300290B900096320 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				17BAC858300290B900096320 /* ../Apps/iOS/FTX1RemoteiOS */,
+			);
+			name = FTX1RemoteiOS;
+			packageProductDependencies = (
+				17BAC8823002927800096320 /* FTX1Core */,
+			);
+			productName = FTX1RemoteiOS;
+			productReference = 17BAC857300290B900096320 /* FTX1RemoteiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		EF52BE3282FEFB5D07FE9272 /* FTX1RemoteiPad */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 297676D4F83B06586607F32D /* Build configuration list for PBXNativeTarget "FTX1RemoteiPad" */;
+			buildPhases = (
+				4500F2CAB31AA04C86301930 /* Sources */,
+				8668B408DE6049C8BE5CD211 /* Frameworks */,
+				75FC7719DE6EB22855C00F82 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				44A65C5A18FBBF3DCB465FF0 /* ../Apps/iPad/FTX1RemoteiPad */,
+			);
+			name = FTX1RemoteiPad;
+			packageProductDependencies = (
+				3102B10EC9D493C0A039A314 /* FTX1Core */,
+				D7C3A1F0B2E4459C8A6E0104 /* FTX1CW */,
+			);
+			productName = FTX1RemoteiPad;
+			productReference = C71D270EF71B146CA854B371 /* FTX1RemoteiPad.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		17BAC83D3002901F00096320 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					17BAC8443002901F00096320 = {
+						CreatedOnToolsVersion = 26.6;
+						LastSwiftMigration = 2660;
+					};
+					17BAC856300290B900096320 = {
+						CreatedOnToolsVersion = 26.6;
+						LastSwiftMigration = 2660;
+					};
+					EF52BE3282FEFB5D07FE9272 = {
+						CreatedOnToolsVersion = 26.6;
+						LastSwiftMigration = 2660;
+					};
+				};
+			};
+			buildConfigurationList = 17BAC8403002901F00096320 /* Build configuration list for PBXProject "FTX1RemoteMac" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				de,
+				es,
+				fr,
+				it,
+			);
+			mainGroup = 17BAC83C3002901F00096320;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				17BAC87E3002922C00096320 /* XCLocalSwiftPackageReference "../../ftx1-remote" */,
+				1706E508306344A10003F4FE /* XCRemoteSwiftPackageReference "Sparkle" */,
+				C4A1D0E2F3B45A6978C0D103 /* XCRemoteSwiftPackageReference "cwdecode" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 17BAC8463002901F00096320 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				17BAC8443002901F00096320 /* FTX1RemoteMac */,
+				17BAC856300290B900096320 /* FTX1RemoteiOS */,
+				EF52BE3282FEFB5D07FE9272 /* FTX1RemoteiPad */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		17BAC8433002901F00096320 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		17BAC855300290B900096320 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		75FC7719DE6EB22855C00F82 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		17BAC8413002901F00096320 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		17BAC853300290B900096320 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4500F2CAB31AA04C86301930 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		04DBE2AE0368B1D667372430 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 10;
+				DEVELOPMENT_TEAM = 9MAKNY2JX8;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "FTX1RemoteiPad-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "FTX1 Remote";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "FTX1 Remote connects to your Mac or Raspberry Pi to control the radio.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "FTX1 Remote sends your voice to the radio while you hold PTT.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.9;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ftx1remote.FTX1RemoteiPad;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		0FACA0AB4D1CC8A02D265C35 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 10;
+				DEVELOPMENT_TEAM = 9MAKNY2JX8;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "FTX1RemoteiPad-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "FTX1 Remote";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "FTX1 Remote connects to your Mac or Raspberry Pi to control the radio.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "FTX1 Remote sends your voice to the radio while you hold PTT.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.9;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ftx1remote.FTX1RemoteiPad;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		17BAC84E3002902000096320 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		17BAC84F3002902000096320 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		17BAC8513002902000096320 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 11;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				ENABLE_RESOURCE_ACCESS_LOCATION = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "FTX1RemoteMac-Info.plist";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "FTX1 Remote needs to accept connections from your iPhone/iPad to control the radio remotely.";
+				INFOPLIST_KEY_NSLocationUsageDescription = "FTX1 Remote fills in your APRS beacon position when you ask it to.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "FTX1 Remote fills in your APRS beacon position when you ask it to.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "FTX1 Remote uses audio from the selected input device to draw a waterfall display of receive audio.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.13;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ftx1remote.FTX1RemoteMac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		17BAC8523002902000096320 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 11;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = YES;
+				ENABLE_RESOURCE_ACCESS_LOCATION = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "FTX1RemoteMac-Info.plist";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "FTX1 Remote needs to accept connections from your iPhone/iPad to control the radio remotely.";
+				INFOPLIST_KEY_NSLocationUsageDescription = "FTX1 Remote fills in your APRS beacon position when you ask it to.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "FTX1 Remote fills in your APRS beacon position when you ask it to.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "FTX1 Remote uses audio from the selected input device to draw a waterfall display of receive audio.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.13;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ftx1remote.FTX1RemoteMac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		17BAC860300290BA00096320 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 6;
+				DEVELOPMENT_TEAM = 9MAKNY2JX8;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "FTX1RemoteiOS-Info.plist";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "FTX1 Remote connects to your Mac or Raspberry Pi to control the radio.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "FTX1 Remote sends your voice to the radio while you hold PTT.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.9;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ftx1remote.FTX1RemoteiOS;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		17BAC861300290BA00096320 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 6;
+				DEVELOPMENT_TEAM = 9MAKNY2JX8;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "FTX1RemoteiOS-Info.plist";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "FTX1 Remote connects to your Mac or Raspberry Pi to control the radio.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "FTX1 Remote sends your voice to the radio while you hold PTT.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.9;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ftx1remote.FTX1RemoteiOS;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		17BAC8403002901F00096320 /* Build configuration list for PBXProject "FTX1RemoteMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				17BAC84E3002902000096320 /* Debug */,
+				17BAC84F3002902000096320 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		17BAC8503002902000096320 /* Build configuration list for PBXNativeTarget "FTX1RemoteMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				17BAC8513002902000096320 /* Debug */,
+				17BAC8523002902000096320 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		17BAC85F300290BA00096320 /* Build configuration list for PBXNativeTarget "FTX1RemoteiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				17BAC860300290BA00096320 /* Debug */,
+				17BAC861300290BA00096320 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		297676D4F83B06586607F32D /* Build configuration list for PBXNativeTarget "FTX1RemoteiPad" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				04DBE2AE0368B1D667372430 /* Debug */,
+				0FACA0AB4D1CC8A02D265C35 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		17BAC87E3002922C00096320 /* XCLocalSwiftPackageReference "../../ftx1-remote" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../ftx1-remote";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		1706E508306344A10003F4FE /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.10.0;
+			};
+		};
+		C4A1D0E2F3B45A6978C0D103 /* XCRemoteSwiftPackageReference "cwdecode" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/captobie/cwdecode";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.2.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		17BAC8803002926B00096320 /* FTX1Core */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 17BAC87E3002922C00096320 /* XCLocalSwiftPackageReference "../../ftx1-remote" */;
+			productName = FTX1Core;
+		};
+		17BAC8823002927800096320 /* FTX1Core */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 17BAC87E3002922C00096320 /* XCLocalSwiftPackageReference "../../ftx1-remote" */;
+			productName = FTX1Core;
+		};
+		3102B10EC9D493C0A039A314 /* FTX1Core */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 17BAC87E3002922C00096320 /* XCLocalSwiftPackageReference "../../ftx1-remote" */;
+			productName = FTX1Core;
+		};
+		31616DA851DD82F6D38CED9E /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1706E508306344A10003F4FE /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+		C28A82548BE9440A9A9565E9 /* FT8Kit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 17BAC87E3002922C00096320 /* XCLocalSwiftPackageReference "../../ftx1-remote" */;
+			productName = FT8Kit;
+		};
+		C4A1D0E2F3B45A6978C0D102 /* CWKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C4A1D0E2F3B45A6978C0D103 /* XCRemoteSwiftPackageReference "cwdecode" */;
+			productName = CWKit;
+		};
+		D7C3A1F0B2E4459C8A6E0102 /* FTX1CW */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 17BAC87E3002922C00096320 /* XCLocalSwiftPackageReference "../../ftx1-remote" */;
+			productName = FTX1CW;
+		};
+		D7C3A1F0B2E4459C8A6E0104 /* FTX1CW */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 17BAC87E3002922C00096320 /* XCLocalSwiftPackageReference "../../ftx1-remote" */;
+			productName = FTX1CW;
+		};
+		E2D7A9F14C3B4A5D8E6F0202 /* FTX1Digi */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 17BAC87E3002922C00096320 /* XCLocalSwiftPackageReference "../../ftx1-remote" */;
+			productName = FTX1Digi;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 17BAC83D3002901F00096320 /* Project object */;
+}

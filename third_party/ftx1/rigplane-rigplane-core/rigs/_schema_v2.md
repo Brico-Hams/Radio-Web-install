@@ -1,0 +1,632 @@
+# Rig Configuration Schema v2
+
+Declarative rig profiles for rigplane. Goal: **zero radio-dependent logic in code**.
+Adding a new radio = writing one TOML file.
+
+## Architecture: 4 Layers
+
+```
+Layer 0: PROTOCOL     — how to talk to the radio (CI-V / Kenwood CAT / SDRplay API / ...)
+Layer 1: CAPABILITIES — what the radio can do (feature tags)
+Layer 2: CONTROLS     — how each feature looks in the UI (style, values, ranges)
+Layer 3: RULES        — how features interact (constraints, mutex, dependencies)
+```
+
+Plus cross-cutting sections: METERS, VFO, MODES, BANDS, TONES, SPECTRUM.
+
+---
+
+## Layer 0: Protocol
+
+```toml
+[radio]
+id = "unique_id"             # Internal identifier
+model = "IC-7610"            # Display name
+manufacturer = "Icom"        # "Icom" | "Yaesu" | "Kenwood" | "Xiegu" | "Lab599" | "SDRplay" | ...
+civ_addr = 0x98              # CI-V address (CI-V protocol only)
+xiegu_model_id = 0x6200      # Xiegu only: value bytes of the 0x1D 0x19 model-ID
+                             # reply as one integer (0x6200 = reply `62 00`).
+                             # Discovery maps the reply back to the profile
+                             # through this field; omit on non-Xiegu rigs.
+default_baud = 115200        # Serial baud rate
+receiver_count = 2           # 1 or 2 — number of simultaneous receivers in one transceiver
+transceiver_count = 1        # 1 or 2 — number of independent transceivers (defaults to 1;
+                             # set to 2 for dual-transceiver rigs like Yaesu FTX-1)
+has_lan = true
+has_wifi = false
+has_ethernet = false
+
+[protocol]
+type = "civ"                 # Protocol type (see below)
+variant = "standard"         # Protocol variant/extensions
+```
+
+### Audio Policy
+
+```toml
+[audio]
+codec_preference = ["PCM_2CH_16BIT", "PCM_1CH_16BIT"]  # RX codec names from AudioCodec
+tx_codec = "PCM_1CH_16BIT"                             # TX codec name from AudioCodec
+default_sample_rate_hz = 48000
+supported_sample_rates_hz = [8000, 12000, 16000, 24000, 48000]
+sample_rate_by_codec = { PCM_2CH_16BIT = 48000, PCM_1CH_16BIT = 48000 }
+browser_rx_transport = "auto"                          # auto | pcm | opus
+browser_rx_transcode_to_opus = true                    # Browser consumer policy only
+```
+
+Codec names must match `AudioCodec`. Sample rates must be positive supported
+audio rates from `8000`, `12000`, `16000`, `24000`, or `48000`. For direct Icom
+LAN profiles, Opus must not be used as the radio-native default; browser Opus is
+only a consumer/web transport policy.
+
+`codec_preference`, `tx_codec`, `default_sample_rate_hz`, and
+`sample_rate_by_codec` feed the LAN audio stream resolver. Explicit runtime
+codec and sample-rate choices still win over profile defaults. Profile defaults
+must come from pass-only radio evidence, preferably a `rigplane audio probe`
+artifact captured with enough cooldown for radios that reject rapid LAN audio
+session churn.
+
+### Protocol Types
+
+| Type | Format | Radios | Notes |
+|------|--------|--------|-------|
+| `civ` | Binary frames, `FE FE ... FD` | Icom, Xiegu | Standard CI-V |
+| `civ` + variant `yaesu_enhanced` | Binary CI-V + Yaesu extensions | Yaesu FTX-1, FT-710 | CI-V framing, different sub-commands |
+| `civ` + variant `xiegu` | Binary CI-V, IC-705 subset | Xiegu X6100/X6200 | Limited command set |
+| `kenwood_cat` | ASCII text, semicolon-terminated | Lab599 TX-500, Kenwood TS-890S | `FA00014200000;` format |
+| `kenwood_cat` + variant `lab599` | ASCII + Lab599 extensions | Lab599 TX-500 MP | Extended command set |
+| `sdrplay_api` | Native C API, USB | SDRplay RSPdx/RSP1x | No serial/socket protocol |
+| `hamlib` | rigctld TCP text | Any hamlib-supported rig | Abstraction via rigctld |
+
+### Protocol Command Map (for non-CI-V)
+
+```toml
+[protocol.commands]
+get_freq_a = "FA;"
+set_freq_a = "FA{freq11};"
+# Template variables: {freq11}, {mode1}, {val}, {vfo}
+```
+
+CI-V radios don't need this — commands are inferred from CI-V sub-commands.
+
+### CI-V Wire Command Map (`[commands]`)
+
+```toml
+[commands]
+get_freq = [0x03]
+ptt_on   = [0x1C, 0x00, 0x01]
+```
+
+Each entry is a tuple of CI-V wire bytes. `profiles/rig_loader.py:
+RigConfig.to_command_map` builds a `CommandMap` from these entries;
+`commands/_frame.py: _build_from_map` decodes one entry into a frame.
+
+**The tuple contract (Q7,
+`docs/plans/2026-08-29-profile-driven-command-bytes.md` §8.1):** a tuple
+holds every constant byte of the frame — command, sub-command, and any
+further constant bytes, whether those are extended menu addressing, a
+selector byte, or a constant payload byte. Only a value the caller
+supplies at the call site (e.g. a level to encode) is appended on top of
+the tuple.
+
+One existing command may instead declare complete wire tuples selected by a
+semantic integer value:
+
+```toml
+[commands]
+set_data_mode = { bytes = [0x1A, 0x06], value_variants = { "0" = [0x1A, 0x06, 0x00, 0x00], "1" = [0x1A, 0x06, 0x01, 0x01] } }
+```
+
+The inline descriptor contains exactly `bytes` and `value_variants`. The base
+and every variant are non-empty arrays of bytes; the variant table is
+non-empty, uses canonical decimal integer keys, has unique values, and every
+variant strictly extends the base prefix. `RigConfig.to_command_map` carries
+the variant table without adding command names. `_build_from_map` selects a
+complete variant only for builders that pass a semantic value, rejects an
+undeclared value, and does not combine a selected variant with appended data.
+Legacy byte-array entries keep their existing append behavior.
+
+Every CI-V profile in `rigs/` that declares `ptt_on`/`ptt_off` carries the
+full three-byte prefix, payload byte included —
+`ptt_on = [0x1C, 0x00, 0x01]`, `ptt_off = [0x1C, 0x00, 0x00]` — so
+`commands/ptt.py: ptt_on`/`ptt_off`'s `cmd_map` branch appends no payload
+byte of its own; the tuple already carries it.
+`tests/test_command_map_integration.py: TestPttWireContractAcrossProfiles`
+pins this: it builds `ptt_on`/`ptt_off` against every such profile's map
+and its hardcoded fallback and requires the two frames identical, ending
+in the explicit payload byte.
+
+**Declared-absent (MOR-2005 step 4a, D1/D2 —
+`docs/plans/2026-08-29-profile-driven-command-bytes.md` §8.1):**
+
+```toml
+[commands]
+get_dual_watch = { absent = "IC-7300 Full Manual (A7292-4EX), no dual-watch item" }
+```
+
+This spelling records that a named authority — a manual, a wfview rig
+definition, a live-hardware capture — confirms the radio does not have the
+command, and, per D2, records that source in the TOML itself so "verified
+on hardware" and "taken from a manual" stay distinguishable by reading the
+file. It parses to `commands/command_spec.py: AbsentCommandSpec`; the
+`absent` value is the only key allowed in the dict and must be a non-empty
+string.
+
+An entry using this spelling is excluded from `RadioProfile.command_names`
+and from the `CommandMap` `to_command_map` builds, and is recorded instead
+in `RadioProfile.absent_command_names`
+(`tests/test_rig_loader.py: TestAbsentCommandSemantics`,
+`tests/test_command_spec.py: TestAbsentCommandSpec`). This makes "declared
+absent" representable and distinguishable from "neither declared nor
+declared absent" — D1's states (2) and (3). The refusal policy that acts
+on that distinction is a later step (plan §4 Step 4): as of this schema
+addition, `RadioProfile.supports_command` returns `False` for both states
+alike, and no shipped `rigs/*.toml` uses this spelling yet
+(`tests/test_rig_loader.py: TestNoShippedProfileUsesAbsentSpellingYet`).
+
+### Expected Identity (`[identity]`, MOR-3064)
+
+```toml
+[identity]
+expected_ids = ["94"]      # CI-V: uppercase payload hex after the 19 00 echo
+# expected_ids = ["0840"]  # Yaesu CAT: four-digit ID payload, no ID/semicolon
+```
+
+Optional top-level section parsed by `profiles/rig_loader.py:
+_parse_identity` into `RigConfig.expected_identity_ids` and carried by
+`RigConfig.to_profile` into `RadioProfile.expected_identity_ids` — an
+immutable tuple of opaque strings, spelling and case preserved exactly as
+the caller's backend canonically answers.
+
+These are protocol-native response tokens. They are **not** `civ_addr`
+(the CI-V bus address in `[radio]`), not `hamlib_model_id` (the Hamlib
+rig_model integer), and not firmware versions: `"94"` is the payload hex
+of the CI-V 19 00 identity echo, `"0840"` the four-digit ID payload a
+Yaesu radio returns — both happen to resemble numbers, and leading zeros
+must survive, which is one reason they stay strings.
+
+Validation is shape only: `expected_ids` must be an array of non-empty
+strings with no leading, trailing, or internal whitespace and no control
+characters, no duplicates, and no coercion from integers, booleans, or a
+bare string. An empty array is allowed and means explicitly unverified
+identity configuration. Absence of the section loads the same `()`
+tuple, so identity stays unverified and existing profiles keep loading
+unchanged; how future vendor identity gates act on these tokens is a
+later change. Callers supply their backend's canonical form; the profile
+type does not normalize it.
+
+---
+
+## Write checks (`[probe]`, MOR-4464 B)
+
+Optional top-level section declaring the named write checks; absent `[probe]`
+loads an empty `RigConfig.probe_checks`. Checks are profile DATA: they name
+entries of a closed table of settings in `profiles/probe_checks.py` (`TABLE`)
+and values, never bytes or command names. B1a ships the table, the loader and
+the judge only; the CLI (`rigplane probe --checks`), the engine and the
+send-time integration come in B1b/B1c.
+
+```toml
+[[probe.checks]]
+id = "synth-split"                # slug, unique per profile
+title = "Synthetic cross-band split"     # customer words, ASCII
+explain_what = "Sets VFO-A and VFO-B and switches split on for a moment."
+explain_after = "Puts both VFOs and split back exactly as they are now."
+warnings = []                     # optional extra customer lines, ASCII
+witness = ["freq_a", "freq_b"]    # entries read before and after the check
+
+[[probe.checks.preconditions]]    # all must hold before the first write
+entry = "info"
+equals = "..."                    # the reply that allows the check
+
+[[probe.checks.steps]]            # write | read | ask
+kind = "write"
+entry = "freq_b"
+value = 145000000                 # CI-V 26: value = ["USB", 0, 1]
+# receiver = "sub"                # CI-V only, on entries the profile routes via 0x29
+
+[[probe.checks.steps]]
+kind = "ask"
+question = "Does the display show TX on VFO-B?"
+
+[[probe.checks.restore]]          # one entry: its read before, its write after
+entry = "freq_b"
+# rehearse = false                # optional: skip the no-op rehearsal
+```
+
+The loader rejects unknown keys; customer text is non-empty ASCII. At load
+each named entry is compiled against this profile's own commands (CAT read
+and write templates, CI-V command bytes, `[vfo]` swap code, `[cmd29]` routes,
+`[modes]`): an entry the profile does not declare is "not available", a
+declared template of another shape is a load error. Mode values are the
+profile's mode names; digital-voice modes (CI-V DV/DD, Yaesu C4FM) are not in
+any mode domain; the CI-V DATA field runs 0..`[data_mode].count`. The
+selected VFO is written only through `25 00`/`26 00` (`03`/`04` stay
+read-only: `05`/`06` cannot put DATA back). `vfo_exchange` comes from
+`[vfo].swap_ab`, or from `swap_main_sub` only where `25/26 01` is the
+physical SUB (`split_tx_target = "sub_receiver"`), and only where every
+frequency and mode it changes is writable on this radio; `[0xB0]` and
+`[0x07, 0xB0]` are the same swap.
+
+Every step's bytes are built by the entry's encoder and judged at load by
+the same function the engine runs again right before writing (checks carry
+no bytes): the bytes must parse back to the
+same entry and form (one CAT command ending in its only `;`; CI-V at most one
+`29 <rx>` wrapper and a value that uses every remaining byte), and a write
+needs restore items for every entry it changes on its receiver (`vfo_exchange`
+changes frequency and mode of both VFOs). Not having RF power above its
+original value is an engine run-time rule (B1b).
+
+---
+
+## Layer 1: Capabilities
+
+```toml
+[capabilities]
+features = [
+    "attenuator", "preamp", "nb", "nr", "notch", "apf",
+    "tx", "split", "vox", "compressor", ...
+]
+```
+
+Feature tags are the **single source of truth** for UI rendering.
+If `"digisel"` is not in features → UI doesn't show DIGI-SEL control.
+
+### Standard Feature Tags
+
+**Receiver:** audio, dual_rx, dual_watch, af_level, rf_gain, squelch
+**RF Front End:** attenuator, preamp, digisel, ip_plus, lna
+**Antenna:** antenna, rx_antenna, antenna_select
+**DSP/Noise:** nb, nr, notch, apf, twin_peak
+**Filter:** pbt, filter_width, filter_shape
+**TX:** tx, split, vox, compressor, monitor, drive_gain, ssb_tx_bw
+**CW:** cw, break_in
+**RIT/XIT:** rit, xit
+**Tuner:** tuner
+**Metering:** meters
+**Scope:** scope
+**Tone:** repeater_tone, tsql, dtcs
+**Data:** data_mode, c4fm
+**System:** power_control, dial_lock, scan, bsr, main_sub_tracking, memory_channels
+**SDR-specific:** agc, bias_tee, hdr_mode, sample_rate
+**Audio:** audio_eq
+
+---
+
+## Layer 2: Controls
+
+Each control has a `style` that determines UI rendering.
+
+### Control Styles
+
+| Style | UI Component | Example |
+|-------|-------------|---------|
+| `toggle` | ON/OFF switch or button | ATT on IC-7300, Preamp on TX-500 |
+| `stepped` | −/dropdown/+ stepper or segmented buttons | ATT on IC-7610 (16 values) |
+| `selector` | Dropdown or button group | Preamp (OFF/P1/P2), AGC (FAST/MID/SLOW) |
+| `slider` | Horizontal slider + value | RF Power, AF Gain |
+| `level_is_toggle` | Slider where 0=OFF | NB/NR on Yaesu (0=disabled) |
+| `toggle_with_level` | Toggle + slider | NB with ON/OFF + depth |
+| `continuous` | Free-range slider | SDR filter width (50-10000 Hz) |
+| `per_mode` | Changes with current mode | Filter widths (SSB vs CW) |
+| `multi_band` | Multi-slider EQ | 3-band audio EQ on TX-500 |
+
+### Examples
+
+```toml
+[controls.attenuator]
+style = "stepped"
+values = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45]
+unit = "dB"
+default = 0
+
+[controls.nb]
+style = "level_is_toggle"    # 0 = OFF, 1-10 = ON at level
+range = [0, 10]
+default = 0
+implicit_off_below = 1       # Values < 1 mean OFF
+
+[controls.filter_width]
+style = "per_mode"
+
+[controls.filter_width.ssb]
+widths_hz = [300, 400, 600, 850, ..., 4000]
+
+[controls.filter_width.cw]
+widths_hz = [50, 100, 150, ..., 4000]
+
+[controls.lna]
+style = "selector"
+values = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+default = 0
+[controls.lna.gain_tables]   # Per-band gain reduction (dB)
+"0-12MHz" = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27]
+"420-1000MHz" = [0, 7, 10, 13, 16, 19, 22, 25, 31, 34]
+```
+
+### Narrow-state filter-width variant (MOR-4428)
+
+On `table_index` radios (Yaesu SH), the same width code can map to a
+different Hz value depending on the NARROW state. A per-mode rule may
+declare the narrow variant alongside the wide table:
+
+```toml
+[filters.width.SSB]
+defaults = [2400, 1800, 500]
+table = [2400, 2600, 3000, 3200, 4000]
+narrow_table = [1500, 1800, 2000]
+```
+
+While NARROW is on, an SH code maps through `narrow_table` instead of
+`table`. The backend reads the narrow state
+(`get_narrow`/`get_narrow_sub`) before mapping SH in both the width read
+and the width write — but only for modes whose rule declares the
+variant; modes without one issue no extra narrow query.
+
+Loader rules (`rig_loader.py: _validate_filter_narrow_variant`): a narrow
+variant is rejected unless `[filters].encoding` is `"table_index"`, the
+rule is not `fixed`, the rule has a non-empty `table`, `narrow_table` is
+non-empty and strictly increasing, and the profile declares the narrow read (`[commands].get_narrow`, plus
+`get_narrow_sub` on a multi-receiver profile). Absent narrow data keeps
+today's single-table behavior.
+
+### Per-table wire-code bases (MOR-4433)
+
+The narrow and wide tables may sit at DIFFERENT code ranges of one code
+space (FT-991A SH table: SSB narrow codes 01-09 but wide codes 09-21, CW
+narrow 01-10 but wide 10-17). A per-mode rule may therefore declare the
+wide table's base alongside it:
+
+```toml
+[filters.width.SSB]
+table = [1800, 1950, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800, 2900, 3000, 3200]
+narrow_table = [200, 400, 600, 850, 1100, 1350, 1500, 1650, 1800]
+first_code = 9          # the wide table counts from code 09
+narrow_first_code = 1   # the narrow table counts from code 01
+```
+
+Both fields are optional: an absent field falls back to the profile-level
+`[filters] first_code`, which is the behavior every pre-MOR-4433 profile
+keeps. The backend resolves the base for the table in effect (narrow
+state first, as for the table itself) in both the width read and the
+width write; a code outside the active table's range keeps today's
+out-of-table handling.
+
+Loader rules (`rig_loader.py: _validate_filter_table_first_codes`): the
+fields need `[filters].encoding` `"table_index"`, are rejected on a
+`fixed` rule, `first_code` needs a `table`, `narrow_first_code` needs a
+`narrow_table`, each present value must be a non-negative integer, and
+each present base must sit above `[filters].radio_default_code` (the same
+below-the-table rule the profile-level `first_code` follows).
+
+### RF power write quantum
+
+`[controls.rf_power]` may declare `write_quantum_w` — the fixed watt lattice
+a raw_255 (CI-V) radio stores RF power on (MOR-4352, measured on the Xiegu
+G7250: `W = floor(raw * max_w / 255)` on write, `raw = floor(W * 255 / max_w)`
+on read). With the field declared, a normalized power request resolves to
+the target whole watt and is written as the smallest raw byte whose stored
+watt reads back as that value, so the exact-readback contract holds; the
+declared `raw_min..raw_max` band clamps the watt range. Radios without the
+field (or watts-native CAT radios) keep the direct raw encoding.
+
+```toml
+[controls.rf_power]
+raw_min = 12          # the readable band, both ends measured
+raw_max = 255
+write_quantum_w = 1   # the radio stores whole watts
+```
+
+Loader rules: `write_quantum_w` must be a positive number, is valid only on
+`[controls.rf_power]`, requires the legacy `raw_min`/`raw_max` band (not an
+explicit domain), and requires a valid `[power].max_watts` — the implied
+watt range is derived from the two together.
+
+---
+
+## Layer 3: Rules
+
+Declarative constraints between controls. Each rule has a `kind`.
+
+### Rule Kinds
+
+| Kind | Meaning | Example |
+|------|---------|---------|
+| `mutex` | Mutually exclusive (A active → B off) | ATT ↔ PREAMP |
+| `disables` | Feature A disables feature B | DIGI-SEL → PREAMP disabled |
+| `requires` | Feature A needs feature B | Dual Watch needs Dual RX |
+| `value_limit` | Limit values by condition | HDR mode only < 2 MHz |
+| `auto_set` | Auto-set value when condition met | ATT > 0 → PREAMP = 0 |
+
+### Examples
+
+```toml
+# Mutual exclusion
+[[rules]]
+kind = "mutex"
+fields = ["attenuator", "preamp"]
+
+# Feature disables another
+[[rules]]
+kind = "disables"
+when_active = "digisel"
+disables = ["preamp"]
+reason = "DIGI-SEL overrides preamp"
+
+# Dependency
+[[rules]]
+kind = "requires"
+feature = "dual_watch"
+requires = ["dual_rx"]
+
+# Conditional value limit
+[[rules]]
+kind = "value_limit"
+when = "frequency > 2000000"
+field = "hdr_mode"
+force = false
+reason = "HDR mode only available below 2 MHz"
+```
+
+### Rule Evaluation
+
+**Backend** (`rules_engine.py`):
+1. On SET command: check all rules → reject if violated → return error + reason
+2. On auto_set: execute side effect (set B when A changes)
+
+**Frontend** (`rules-engine.ts`):
+1. On state change: evaluate rules → disable/grey out controls
+2. Show tooltip with `reason` on disabled controls
+
+---
+
+## Meters
+
+Two meter types: `linear` (simple scaling) and `lookup` (calibration table).
+
+```toml
+[meters.s_meter]
+type = "lookup"
+unit = "dBm"
+[[meters.s_meter.calibration]]
+raw = [0, 12, 27, ..., 255]
+actual_db = [-54, -48, -42, ..., 60]
+redline_raw = 130
+
+[meters.power]
+type = "linear"
+raw_max = 255
+max_watts = 100
+unit = "W"
+
+[meters.signal_level]
+type = "computed"        # Calculated in software (SDR)
+unit = "dBFS"
+```
+
+---
+
+## VFO Schemes
+
+The public contract models a radio as `Transceiver → Receiver → VFO` (see
+`.claude/architecture/protocol.md` "Receiver tier"). The TOML `[vfo]` block
+declares how per-receiver and per-slot operations are routed on the wire.
+
+| Scheme | Receivers | VFOs | Radios |
+|--------|-----------|------|--------|
+| `main_sub` | 2 | 2 (MAIN/SUB receiver-level; no per-receiver A/B — the IC-7610 has none, MOR-2467) | IC-7610 (cmd29), IC-9700 (no cmd29; receiver-select via `0x07 0xD0/0xD1`) |
+| `ab` | 1 | 2 | IC-7300, IC-705, TX-500 (A/B, select+send) |
+| `ab_shared` | 2 | 1 | FTX-1 (2 rx share VFO set) |
+| `single` | 1 | 1 | RSPdx (SDR, tuner only) |
+
+### Fields
+
+Parsed by `src/rigplane/rig_loader.py:575-605` into
+`RadioProfile` (`src/rigplane/profiles.py:150-198`). Landed in #710.
+
+| Field | Type | Example | When required |
+|-------|------|---------|---------------|
+| `scheme` | `str` | `"main_sub"`, `"ab"`, `"ab_shared"`, `"single"` | always |
+| `main_select` | `list[int]` (CI-V bytes) | `[0xD0]` | `scheme = "main_sub"` |
+| `sub_select`  | `list[int]` | `[0xD1]` | `scheme = "main_sub"` |
+| `swap_main_sub`  | `list[int]` | `[0xB0]` | dual-RX rigs that support MAIN↔SUB swap |
+| `equal_main_sub` | `list[int]` | `[0xB1]` | dual-RX rigs that support MAIN=SUB equalize |
+| `swap_ab`  | `list[int]` | `[0xB0]` (single byte) or `[0x07, 0xB0]` | rigs with per-receiver VFO A↔B swap |
+| `equal_ab` | `list[int]` | `[0xA0]` or `[0x07, 0xA0]` | rigs with per-receiver VFO A=B equalize |
+| `vfo_a_select` (planned — #712/#715) | `list[int]` | `[0x07, 0x00]` | per-receiver VFO-A slot-select byte codes; planned for rigs that need explicit slot routing in addition to receiver selection |
+| `vfo_b_select` (planned — #712/#715) | `list[int]` | `[0x07, 0x01]` | per-receiver VFO-B slot-select byte codes; not yet present in `RadioProfile` (parallel PR) |
+
+### Example — dual-RX (IC-7610 / IC-9700 pattern)
+
+```toml
+[vfo]
+scheme = "main_sub"
+main_select   = [0xD0]
+sub_select    = [0xD1]
+swap_main_sub = [0xB0]   # MAIN ↔ SUB
+equal_main_sub = [0xB1]  # MAIN = SUB
+# Per-receiver A/B slot routing is NOT part of `main_sub` (MOR-2467): the
+# IC-7610 presents exactly two receiver-level VFOs, MAIN and SUB, with no
+# A/B slots. `swap_ab`/`equal_ab` here would only apply to a hypothetical
+# future rig that declares slot wiring in addition to receiver selection.
+```
+
+### Example — single-RX (IC-7300 / IC-705 pattern)
+
+```toml
+[vfo]
+scheme = "ab"
+swap_ab  = [0xB0]   # VFO A ↔ B
+equal_ab = [0xA0]   # VFO A = B
+```
+
+### CAT split value maps
+
+`[vfo.split]` is parsed into `RigConfig.split` (`SplitSpec`) by
+`src/rigplane/profiles/rig_loader.py: _parse_split`. The existing
+`get_split` / `set_split` CAT command templates define the wire verbs and
+the `state` field. The split spec maps that field to and from booleans.
+Omitting the section (or either map) uses write values off/on = `"0"`/`"1"`
+and read values `"0"`/`"1"` = off/on (the `ST` encoding). An explicitly supplied write map must contain
+exactly `off` and `on`, with distinct non-empty string values. A read map
+must map non-empty string keys to `off` or `on` and cover both states.
+
+```toml
+[vfo.split]
+write_map = { off = "2", on = "3" }
+read_map = { "0" = "off", "1" = "on" }
+```
+
+For Yaesu CAT `scheme = "ab"`, `FA`/`FB` templates can address A/B directly
+without `get_vfo_select` / `set_vfo_select`. Those commands determine whether
+slot reading and selection are available. `get_active_receiver` returns
+receiver index zero for a single receiver; it does not report an A/B slot.
+The `vfo_swap`, `vfo_a_to_b`, and `vfo_b_to_a` command templates supply swap
+and directional copies. See `tests/test_yaesu_split_vfo_profile.py` for the
+non-product fixture, maps, missing selection and simulator roundtrip cases.
+
+### Deprecated legacy keys
+
+The flat keys `swap` and `equal` conflate MAIN↔SUB with VFO A↔B — the same
+`0xB0` byte means different things depending on `scheme`.  They are still
+accepted:
+
+- When `scheme = "main_sub"`: `swap` → `swap_main_sub`, `equal` → `equal_main_sub`.
+- Otherwise: `swap` → `swap_ab`, `equal` → `equal_ab`.
+
+Loading a rig that uses them emits a `DeprecationWarning` once per file
+(`src/rigplane/rig_loader.py:600-606`). Migrate to the explicit keys.
+
+---
+
+## Implementation Roadmap
+
+### Phase 1: Schema + Parser (backend)
+- Parse new TOML fields (controls, rules, meters, protocol)
+- Validate against schema
+- Expose via `/api/v1/capabilities` endpoint
+
+### Phase 2: Rules Engine (backend + frontend)
+- `rules_engine.py`: evaluate rules on SET commands
+- `rules-engine.ts`: evaluate rules for UI state
+
+### Phase 3: Control Renderer (frontend)
+- Style → component mapping
+- Auto-render controls from TOML definition
+
+### Phase 4: Protocol Abstraction (backend)
+- Abstract Radio Protocol → protocol-specific adapter
+- CI-V adapter (current), Kenwood CAT adapter, SDRplay adapter
+
+---
+
+## Compatibility Matrix
+
+| Radio | Protocol | ATT | Preamp | NB/NR | Filters | VFO | Meters | Scope |
+|-------|----------|-----|--------|-------|---------|-----|--------|-------|
+| IC-7610 | CI-V | 16-step | OFF/P1/P2 | toggle+level | FIL1/2/3 | main_sub | lookup | CI-V stream |
+| IC-7300 | CI-V | ON/OFF | OFF/P1 | toggle+level | FIL1/2/3 | ab | lookup | CI-V stream |
+| FTX-1 | CI-V (Yaesu) | 4-step | OFF/P1/P2 | level_is_toggle | per_mode | ab_shared | lookup | Yaesu format |
+| X6200 | CI-V (Xiegu) | ON/OFF | OFF/P1/P2 | toggle+level | continuous | ab | linear | SDR internal |
+| TX-500 | Kenwood CAT | ON/OFF | ON/OFF | toggle+level | 4 discrete | ab | lookup | none |
+| RSPdx | SDRplay API | 10-step | LNA states | software | continuous | single | computed | native SDR |

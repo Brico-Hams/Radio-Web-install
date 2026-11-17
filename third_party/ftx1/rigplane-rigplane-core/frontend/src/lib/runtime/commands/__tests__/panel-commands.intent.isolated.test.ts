@@ -1,0 +1,3593 @@
+/**
+ * ISOLATED POOL (MOR-1272 naming convention): this file module-scope-mocks
+ * `$lib/state/field-status` (plus six store/transport modules). Under the
+ * `fast` project's `isolate: false`, the SUT's own import of
+ * `../props/panel-props` cached a `panel-props` instance bound to that mock
+ * in the shared worker module cache, and sibling files importing the real
+ * `panel-props` later in the same worker inherited it — the intermittent
+ * "No getFieldAvailability export is defined on the mock" failures in
+ * `panel-props.test.ts` / `rf-front-end-adapter.test.ts` (2026-08-10).
+ */
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Capabilities, FilterModeConfig } from '$lib/types/capabilities';
+import type { ServerState } from '$lib/types/state';
+import type { ScopeSpanControl } from '$lib/runtime/scope-controller.svelte';
+import { FTX1_CAPABILITIES } from '../../adapters/__tests__/fixtures/ftx1-profile';
+import { FIXTURE_NARROW_CAPABILITIES } from '../../adapters/__tests__/fixtures/fixture-narrow-profile';
+import { resolveFilterModeConfig } from '../../props/panel-props';
+import narrowWidthSeamJson from '../../../transport/__tests__/fixtures/narrow-width-seam.json';
+
+const h = vi.hoisted(() => ({
+  spanStep: vi.fn(),
+  state: null as ServerState | null,
+  unavailable: new Set<string>(),
+  caps: {
+    capabilities: ['pbt'],
+    controls: {
+      pbt_inner: { raw_min: 0, raw_max: 255, raw_center: 128, display_min: -1200, display_max: 1200 },
+    },
+  } as Record<string, unknown> | null,
+  sendCommand: vi.fn((
+    _name: string,
+    _params: Record<string, unknown>,
+    _id?: string,
+  ) => true),
+  patchActiveReceiver: vi.fn(),
+  patchRadioState: vi.fn(),
+  patchReceiver: vi.fn(),
+  rxEnabled: false,
+  /** `runtime.audio.volume`: the browser AF level in percent. */
+  volume: 100,
+  setMuted: vi.fn(),
+  setRxLive: vi.fn(),
+  setRxVolume: vi.fn(),
+  setVolume: vi.fn(),
+  setAudioConfig: vi.fn(),
+}));
+
+vi.mock('$lib/transport/ws-client', () => ({
+  getControlSession: vi.fn(() => ({ state: 'connected', epoch: 31 })),
+  onCommandDelivery: vi.fn(() => () => undefined),
+  onControlSessionTransition: vi.fn(() => () => undefined),
+  sendCommand: h.sendCommand,
+}));
+
+vi.mock('$lib/stores/radio.svelte', () => ({
+  getActiveReceiver: vi.fn(() => {
+    if (!h.state) return null;
+    return h.state.active === 'SUB' ? h.state.sub ?? null : h.state.main ?? null;
+  }),
+  getRadioState: vi.fn(() => h.state),
+  isRadioFieldAvailable: vi.fn((path: string) => h.state !== null && !h.unavailable.has(path)),
+  patchActiveReceiver: h.patchActiveReceiver,
+  patchRadioState: h.patchRadioState,
+  patchReceiver: h.patchReceiver,
+}));
+
+vi.mock('$lib/state/field-status', () => ({
+  getFieldStatus: vi.fn((_state: ServerState | null, path: string) =>
+    h.unavailable.has(path)
+      ? { storePath: path, observed: true, freshness: 'stale', availability: 'stale' }
+      : h.state?.fieldStatus?.[path]),
+  isFieldAvailable: vi.fn((_state: ServerState | null, path: string) =>
+    h.state !== null && !h.unavailable.has(path)),
+  // MOR-4434: the production narrow reads use the fresh-only gate, so the
+  // mock carries it with the real predicate over the mocked statuses: fresh
+  // entries pass, the stale entries above (and missing ones) read unknown.
+  isFieldFreshlyObserved: vi.fn((_state: ServerState | null, path: string) => {
+    const status = h.unavailable.has(path)
+      ? { observed: true, freshness: 'stale', availability: 'stale' }
+      : h.state?.fieldStatus?.[path] as { observed?: boolean; freshness?: string; availability?: string } | undefined;
+    return status?.observed === true && status.freshness === 'fresh'
+      && status.availability === 'available';
+  }),
+}));
+
+vi.mock('$lib/stores/capabilities.svelte', () => ({
+  getCapabilities: vi.fn(() => h.caps),
+  capabilitiesMatchGeneration: vi.fn((providerGeneration: unknown) =>
+    Number.isSafeInteger(providerGeneration)
+    && h.caps?.stateContractVersion === 1
+    && h.caps?.providerGeneration === providerGeneration),
+  getControlRange: vi.fn((name: string) =>
+    (h.caps?.controls as Record<string, unknown> | undefined)?.[name] ?? null),
+}));
+
+vi.mock('$lib/runtime/frontend-runtime', () => ({
+  runtime: {
+    scope: { spanControl: { spanHz: 100000, step: h.spanStep } satisfies ScopeSpanControl },
+    get rxEnabled() { return h.rxEnabled; },
+    get audio() { return { volume: h.volume }; },
+    setMuted: h.setMuted,
+    setRxLive: h.setRxLive,
+    setRxVolume: h.setRxVolume,
+    setVolume: h.setVolume,
+  },
+}));
+
+vi.mock('$lib/audio/audio-manager', () => ({
+  audioManager: { setAudioConfig: h.setAudioConfig },
+}));
+
+vi.mock('$lib/stores/tuning.svelte', () => ({
+  getTuningStep: vi.fn(() => 1_000),
+}));
+
+import {
+  makeAgcHandlers,
+  makeAntennaHandlers,
+  makeAudioRoutingHandlers,
+  makeBandHandlers,
+  makeCwPanelHandlers,
+  makeDspHandlers,
+  makeFilterHandlers,
+  makeModeHandlers,
+  makePresetHandlers,
+  makeRfFrontEndHandlers,
+  makeRitXitHandlers,
+  makeRxAudioHandlers,
+  makeScanHandlers,
+  makeScopeControlsHandlers,
+  makeSystemHandlers,
+  makeTxHandlers,
+  makeVfoHandlers,
+  makeVoxHandlers,
+  makeKeyboardHandlers,
+  dispatchKeyboardRadioAction,
+} from '../panel-commands';
+import { resetSharedTuningAccumulatorForTests } from '../tuning-accumulator';
+import {
+  acknowledgeCommand,
+  failCommand,
+  getCommandLifecycles,
+  resetCommandLifecycle,
+} from '$lib/stores/commands.svelte';
+import { setPendingFocus } from '$lib/radio/pending-focus';
+import { measuredPbtHzToRaw, measuredPbtRawToHz } from '$lib/radio/filter-controls';
+
+/** MOR-2513: the wire leaf is nullable; the accumulator scenarios below run
+ * against a confirmed frequency — throw (never fabricate) otherwise. */
+function observedFreq(): number {
+  const freq = h.state?.main?.freqHz;
+  if (typeof freq !== 'number') throw new Error('fixture main.freqHz observed');
+  return freq;
+}
+
+const freshStatus = {
+  storePath: 'x', observed: true, freshness: 'fresh', availability: 'available',
+} as const;
+
+function state(active: 'MAIN' | 'SUB' = 'MAIN'): ServerState {
+  const receiver = {
+    freqHz: 14_074_000,
+    mode: 'USB',
+    filter: 2,
+    dataMode: 1,
+    filterWidth: 2400,
+    filterShape: 1,
+    pbtInner: 128,
+    pbtOuter: 128,
+    ifShift: 0,
+    att: 0,
+    preamp: 0,
+    agc: 2,
+    agcTimeConstant: 4,
+    digisel: false,
+    ipplus: false,
+    afLevel: 50 / 255,
+    rfGain: 128,
+    squelch: 0,
+    nb: false,
+    nbLevel: 3,
+    nr: false,
+    nrLevel: 68,
+    autoNotch: false,
+    manualNotch: false,
+    manualNotchWidth: 1,
+    // notchFilter (MOR-1548): reclassified receiver-scoped, matching
+    // manualNotchWidth above.
+    notchFilter: 64,
+    apfTypeLevel: 1,
+    twinPeakFilter: false,
+    sMeter: 0,
+  };
+  return {
+    stateContractVersion: 1,
+    providerGeneration: 31,
+    active,
+    main: { ...receiver },
+    sub: { ...receiver, freqHz: 7_100_000 },
+    ritOn: false,
+    ritTx: true,
+    ritFreq: 300,
+    nbDepth: 4,
+    nbWidth: 2,
+    powerLevel: 0.5,
+    split: false,
+    dualWatch: false,
+    mainSubTracking: false,
+    micGain: 128,
+    tunerStatus: 1,
+    voxOn: false,
+    voxGain: 50,
+    antiVoxGain: 25,
+    voxDelay: 4,
+    compressorOn: true,
+    compressorLevel: 44,
+    monitorOn: false,
+    monitorGain: 72,
+    driveGain: 80,
+    cwPitch: 600,
+    keySpeed: 24,
+    breakIn: 2,
+    breakInDelay: 64,
+    dashRatio: 0,
+    txAntenna: 1,
+    rxAntenna1: false,
+    rxAntenna2: true,
+    scanning: false,
+    scanType: 0x22,
+    scanResumeMode: 2,
+    fieldStatus: {
+      active: freshStatus,
+      'main.freqHz': { ...freshStatus, storePath: 'main.freqHz', lastObservedMonotonic: 1 },
+      'sub.freqHz': { ...freshStatus, storePath: 'sub.freqHz', lastObservedMonotonic: 1 },
+      'main.dataMode': freshStatus,
+      'sub.dataMode': freshStatus,
+      data1ModInput: freshStatus,
+    },
+  } as unknown as ServerState;
+}
+
+function oneReceiverAbState(): ServerState {
+  const current = state();
+  const main = {
+    ...current.main,
+    vfoA: { freqHz: 14_074_000, mode: 'USB', filterNum: 2, dataMode: 1 },
+    vfoB: { freqHz: 7_074_000, mode: 'CW', filterNum: 1, dataMode: 0 },
+    activeSlot: 'A',
+    unselectedVfo: { freqHz: 7_074_000, mode: 'CW', filterNum: 1, dataMode: 0 },
+  };
+  return { ...current, active: 'MAIN', main, sub: main } as ServerState;
+}
+
+function exactCalls(): Array<[string, Record<string, unknown>]> {
+  return h.sendCommand.mock.calls.map(([name, params]) => [name, params]);
+}
+
+function expectIntentTransport(): void {
+  for (const call of h.sendCommand.mock.calls) {
+    expect(call[2]).toEqual(expect.any(String));
+    expect(call).toHaveLength(3);
+  }
+  expect(getCommandLifecycles()).toHaveLength(h.sendCommand.mock.calls.length);
+}
+
+describe('MOR-1409 A03a/A03b1 canonical receive-control intent handlers', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h.state = state();
+    h.unavailable.clear();
+    h.caps = {
+      capabilities: [
+        'pbt', 'agc', 'rit', 'xit', 'nr', 'nb', 'notch', 'af_level',
+        'tx', 'tuner', 'vox', 'compressor', 'monitor', 'drive_gain', 'audio',
+        'cw', 'break_in', 'apf', 'twin_peak', 'rx_antenna',
+        'split', 'dual_rx', 'dual_watch', 'main_sub_tracking',
+        'bsr', 'preamp', 'attenuator', 'ip_plus', 'scan', 'vfo_swap', 'vfo_equalize',
+      ],
+      stateContractVersion: 1,
+      providerGeneration: 31,
+      receivers: 2,
+      antennas: 2,
+      vfoScheme: 'main_sub',
+      modes: ['USB', 'CW'],
+      filters: ['FIL1', 'FIL2', 'FIL3'],
+      dataModeCount: 3,
+      dataModeInputs: [0, 1, 2, 3, 4, 5].map(value => ({ value, label: String(value) })),
+      preValues: [0, 1, 2],
+      attValues: [0, 6, 12],
+      agcModes: [1, 2, 3],
+      controls: {
+        pbt_inner: { raw_min: 0, raw_max: 255, raw_center: 128, display_min: -1200, display_max: 1200 },
+        nb_depth: { raw_min: 0, raw_max: 9, raw_center: 0, display_min: 1, display_max: 10 },
+      },
+      audioFftAvailable: true,
+    };
+    h.sendCommand.mockClear();
+    h.patchActiveReceiver.mockClear();
+    h.patchRadioState.mockClear();
+    h.patchReceiver.mockClear();
+    h.rxEnabled = false;
+    h.volume = 100;
+    h.setMuted.mockClear();
+    h.setRxLive.mockClear();
+    h.setRxVolume.mockClear();
+    h.setVolume.mockClear();
+    h.setAudioConfig.mockClear();
+  });
+
+  afterEach(() => {
+    resetCommandLifecycle();
+    localStorage.clear();
+    vi.useRealTimers();
+  });
+
+  it('keeps audio routing local with exact storage, finite-gain, and restore semantics', () => {
+    localStorage.clear();
+    const handlers = makeAudioRoutingHandlers();
+
+    expect(handlers.restoreFromStorage()).toEqual({
+      focus: 'both',
+      split_stereo: false,
+      main_gain_db: 0,
+      sub_gain_db: 0,
+    });
+    expect(h.setAudioConfig).not.toHaveBeenCalled();
+
+    handlers.onFocusChange('sub');
+    handlers.onSplitStereoChange(true);
+    handlers.onChannelGainChange('main', Number.NaN);
+    handlers.onChannelGainChange('sub', -3);
+
+    expect(h.setAudioConfig.mock.calls).toEqual([
+      [{ focus: 'sub' }],
+      [{ split_stereo: true }],
+      [{ main_gain_db: 0 }],
+      [{ sub_gain_db: -3 }],
+    ]);
+    expect(localStorage.getItem('icom.audio.focus')).toBe('sub');
+    expect(localStorage.getItem('icom.audio.split_stereo')).toBe('1');
+    expect(localStorage.getItem('icom.audio.main_gain_db')).toBe('0');
+    expect(localStorage.getItem('icom.audio.sub_gain_db')).toBe('-3');
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(h.patchReceiver).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+
+    localStorage.setItem('icom.audio.focus', 'invalid');
+    localStorage.setItem('icom.audio.split_stereo', '0');
+    localStorage.setItem('icom.audio.main_gain_db', 'not-finite');
+    localStorage.setItem('icom.audio.sub_gain_db', '2');
+    h.setAudioConfig.mockClear();
+
+    expect(handlers.restoreFromStorage()).toEqual({
+      focus: 'both',
+      split_stereo: false,
+      main_gain_db: 0,
+      sub_gain_db: 2,
+    });
+    expect(h.setAudioConfig).toHaveBeenCalledExactlyOnceWith({
+      split_stereo: false,
+      sub_gain_db: 2,
+    });
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('routes mode, DATA mode, and MOD input through exact lifecycle envelopes without Store writes', () => {
+    makeModeHandlers().onModeChange('CW');
+    makeModeHandlers().onDataModeChange(2);
+    makeModeHandlers().onModInputChange(5);
+
+    expect(exactCalls()).toEqual([
+      ['set_mode', { mode: 'CW', receiver: 0 }],
+      ['set_data_mode', { mode: 2, receiver: 0 }],
+      ['set_data1_mod_input', { source: 5 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('routes both preset callbacks through exact frequency-then-mode lifecycle records', () => {
+    const preset = makePresetHandlers();
+    preset.onPresetSelect(14_074_000, 'USB', 2);
+    preset.onFreqPreset(7_074_000, 'CW');
+
+    expect(exactCalls()).toEqual([
+      ['set_freq', { freq: 14_074_000, receiver: 0 }],
+      ['set_mode', { mode: 'USB', filter: 2, receiver: 0 }],
+      ['set_freq', { freq: 7_074_000, receiver: 0 }],
+      ['set_mode', { mode: 'CW', filter: 1, receiver: 0 }],
+    ]);
+    expectIntentTransport();
+  });
+
+  it('routes AGC and the complete shared RIT/XIT family through typed lifecycle without Store writes', () => {
+    makeAgcHandlers().onAgcModeChange(3);
+    const rit = makeRitXitHandlers();
+    rit.onRitToggle();
+    rit.onXitToggle();
+    rit.onRitOffsetChange(450);
+    rit.onXitOffsetChange(-325);
+    rit.onClear();
+
+    expect(exactCalls()).toEqual([
+      ['set_agc', { mode: 3, receiver: 0 }],
+      ['set_rit_status', { on: true }],
+      ['set_rit_tx_status', { on: false }],
+      ['set_rit_frequency', { freq: 450 }],
+      ['set_rit_frequency', { freq: -325 }],
+      ['set_rit_frequency', { freq: 0 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('preserves the complete DSP conversions and notch command order on typed lifecycle', () => {
+    const dsp = makeDspHandlers();
+    dsp.onNrModeChange(1);
+    dsp.onNrLevelChange(8);
+    dsp.onNbToggle(true);
+    dsp.onNbLevelChange(7);
+    dsp.onNotchModeChange('off');
+    dsp.onNotchFreqChange(96);
+    dsp.onNbDepthChange(6);
+    dsp.onNbWidthChange(4);
+    dsp.onManualNotchWidthChange(2);
+    dsp.onAgcTimeChange(5);
+
+    expect(exactCalls()).toEqual([
+      ['set_nr', { on: true, receiver: 0 }],
+      ['set_nr_level', { level: 136, receiver: 0 }],
+      ['set_nb', { on: true, receiver: 0 }],
+      ['set_nb_level', { level: 7, receiver: 0 }],
+      ['set_auto_notch', { on: false, receiver: 0 }],
+      ['set_manual_notch', { on: false, receiver: 0 }],
+      ['set_notch_filter', { value: 96, receiver: 0 }],
+      ['set_nb_depth', { level: 5 }],
+      ['set_nb_width', { level: 4 }],
+      ['set_manual_notch_width', { value: 2, receiver: 0 }],
+      ['set_agc_time_constant', { value: 5, receiver: 0 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('keeps band/preset on the known physical receiver without inspecting A/B frequency topology', () => {
+    h.state = state('SUB');
+    makeBandHandlers().onBandSelect('60m', 5_357_000);
+    makeBandHandlers().onBandSelect('20m', 14_225_000, 5);
+    makePresetHandlers().onPresetSelect(7_074_000, 'CW', 1);
+
+    expect(exactCalls()).toEqual([
+      ['set_freq', { freq: 5_357_000, receiver: 1 }],
+      ['set_band', { band: 5 }],
+      ['set_freq', { freq: 7_074_000, receiver: 1 }],
+      ['set_mode', { mode: 'CW', filter: 1, receiver: 1 }],
+    ]);
+    expectIntentTransport();
+  });
+
+  it('mutes through the server monitor MUTE and unmutes only while the server says it is on (MOR-2583)', () => {
+    const rxAudio = makeRxAudioHandlers();
+    rxAudio.onMonitorModeChange('mute');
+    rxAudio.onMonitorModeChange('local');
+    rxAudio.onAfLevelChange(0.42);
+
+    // MUTE is one server command, never a client-side AF zero-write; the
+    // fixture state carries no `monitorMute.on`, so leaving MUTE restores
+    // nothing — a client that never muted must not unmute stale levels.
+    expect(exactCalls()).toEqual([
+      ['set_monitor_mute', { on: true }],
+      ['set_af_level', { level: 0.42, receiver: 0, level_unit: 'normalized' }],
+    ]);
+    expectIntentTransport();
+    expect(h.setMuted).toHaveBeenNthCalledWith(1, true);
+    expect(h.setMuted).toHaveBeenNthCalledWith(2, false);
+    expect(h.setRxLive).toHaveBeenNthCalledWith(1, false);
+    expect(h.setRxLive).toHaveBeenNthCalledWith(2, false);
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    h.rxEnabled = true;
+    rxAudio.onAfLevelChange(0.37);
+    expect(h.setRxVolume).toHaveBeenCalledWith(0.37);
+    expect(h.setVolume).toHaveBeenCalledWith(37);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('unmutes through the server monitor MUTE when the server says it is on (MOR-2583)', () => {
+    h.state = { ...state(), monitorMute: { on: true, savedAf: { main: 50 / 255 } } };
+    const rxAudio = makeRxAudioHandlers();
+    for (const mode of ['local', 'radio', 'live']) {
+      h.sendCommand.mockClear();
+      resetCommandLifecycle();
+      rxAudio.onMonitorModeChange(mode);
+      expect(exactCalls()).toEqual([['set_monitor_mute', { on: false }]]);
+    }
+    expectIntentTransport();
+  });
+
+  it('rejects invalid normalized AF input before radio lifecycle or transport', () => {
+    const rxAudio = makeRxAudioHandlers();
+    for (const level of [-0.01, 1.01, 10, Number.NaN, Number.POSITIVE_INFINITY]) {
+      rxAudio.onAfLevelChange(level);
+    }
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('rejects invalid browser-local AF input before any local or radio effect', () => {
+    h.rxEnabled = true;
+    const rxAudio = makeRxAudioHandlers();
+    for (const level of [-0.01, 2.01, 10, Number.NaN, Number.POSITIVE_INFINITY]) {
+      rxAudio.onAfLevelChange(level);
+    }
+
+    expect(h.setRxVolume).not.toHaveBeenCalled();
+    expect(h.setVolume).not.toHaveBeenCalled();
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('accepts exact normalized AF endpoints unchanged on radio and browser-local paths', () => {
+    const rxAudio = makeRxAudioHandlers();
+    rxAudio.onAfLevelChange(0);
+    rxAudio.onAfLevelChange(1);
+
+    expect(exactCalls()).toEqual([
+      ['set_af_level', { level: 0, receiver: 0, level_unit: 'normalized' }],
+      ['set_af_level', { level: 1, receiver: 0, level_unit: 'normalized' }],
+    ]);
+    expectIntentTransport();
+
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    h.rxEnabled = true;
+    rxAudio.onAfLevelChange(0);
+    rxAudio.onAfLevelChange(1);
+    expect(h.setRxVolume).toHaveBeenNthCalledWith(1, 0);
+    expect(h.setRxVolume).toHaveBeenNthCalledWith(2, 1);
+    expect(h.setVolume).toHaveBeenNthCalledWith(1, 0);
+    expect(h.setVolume).toHaveBeenNthCalledWith(2, 100);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('lets the browser-local AF level reach the makeup-gain range up to 2 (MOR-4210)', () => {
+    h.rxEnabled = true;
+    const rxAudio = makeRxAudioHandlers();
+    rxAudio.onAfLevelChange(1.5);
+    rxAudio.onAfLevelChange(2);
+    expect(h.setRxVolume).toHaveBeenNthCalledWith(1, 1.5);
+    expect(h.setRxVolume).toHaveBeenNthCalledWith(2, 2);
+    expect(h.setVolume).toHaveBeenNthCalledWith(1, 150);
+    expect(h.setVolume).toHaveBeenNthCalledWith(2, 200);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('mutes through the server command regardless of the observed AF level (MOR-2583)', () => {
+    const rxAudio = makeRxAudioHandlers();
+    for (const level of [-0.01, 1.01, 10, Number.NaN, Number.POSITIVE_INFINITY]) {
+      h.state = state();
+      h.state!.main!.afLevel = level;
+      h.sendCommand.mockClear();
+      resetCommandLifecycle();
+      rxAudio.onMonitorModeChange('mute');
+      expect(exactCalls()).toEqual([['set_monitor_mute', { on: true }]]);
+    }
+
+    expect(h.setMuted).toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(1);
+  });
+
+  it('routes the complete CW factory through exact non-PTT lifecycle without optimistic truth', () => {
+    const cw = makeCwPanelHandlers();
+    cw.onCwPitchChange(700);
+    cw.onKeySpeedChange(28);
+    cw.onBreakInToggle();
+    cw.onBreakInModeChange(1);
+    cw.onApfChange(2);
+    cw.onTwinPeakToggle();
+    cw.onAutoTune();
+    cw.onWpmChange(32);
+    cw.onBreakInDelayChange(75);
+    cw.onSidetonePitchChange(650);
+    cw.onSidetoneLevelChange(44);
+    cw.onReversePaddleToggle();
+
+    expect(exactCalls()).toEqual([
+      ['set_cw_pitch', { value: 700 }],
+      ['set_key_speed', { speed: 28 }],
+      ['set_break_in', { mode: 0 }],
+      ['set_break_in', { mode: 1 }],
+      ['set_apf', { mode: 2, receiver: 0 }],
+      ['set_twin_peak', { on: true, receiver: 0 }],
+      ['cw_auto_tune', {}],
+      ['set_key_speed', { speed: 32 }],
+      ['set_break_in_delay', { level: 75 }],
+      ['set_cw_pitch', { value: 650 }],
+      ['set_monitor_gain', { level: 44 }],
+      ['set_dash_ratio', { ratio: -1 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('refuses CW auto-tune when the RX analysis source is unavailable', () => {
+    h.caps = {
+      capabilities: ['cw', 'audio'], audioFftAvailable: false,
+      receivers: 2, vfoScheme: 'main_sub',
+    };
+
+    makeCwPanelHandlers().onAutoTune();
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('requires the audio tag and observed active RX frequency for CW auto-tune', () => {
+    h.caps = {
+      capabilities: ['cw'], audioFftAvailable: true,
+      receivers: 2, vfoScheme: 'main_sub',
+    };
+    makeCwPanelHandlers().onAutoTune();
+
+    h.caps = {
+      capabilities: ['cw', 'audio'], audioFftAvailable: true,
+      receivers: 2, vfoScheme: 'main_sub',
+    };
+    h.unavailable.add('main.freqHz');
+    makeCwPanelHandlers().onAutoTune();
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('routes complete TX auxiliaries without PTT coupling or optimistic truth', () => {
+    const tx = makeTxHandlers();
+    tx.onRfPowerChange(0.42);
+    tx.onMicGainChange(200);
+    tx.onAtuToggle();
+    tx.onAtuTune();
+    tx.onVoxToggle();
+    tx.onCompToggle();
+    tx.onCompLevelChange(33);
+    tx.onMonToggle();
+    tx.onMonLevelChange(99);
+    tx.onDriveGainChange(100);
+
+    expect(exactCalls()).toEqual([
+      ['set_rf_power', { level: 0.42, level_unit: 'normalized' }],
+      ['set_mic_gain', { level: 200 }],
+      ['set_tuner_status', { value: 0 }],
+      ['set_tuner_status', { value: 2 }],
+      ['set_vox', { on: true }],
+      ['set_compressor', { on: false }],
+      ['set_compressor_level', { level: 33 }],
+      ['set_monitor', { on: true }],
+      ['set_monitor_gain', { level: 99 }],
+      ['set_drive_gain', { level: 100 }],
+    ]);
+    expectIntentTransport();
+    expect(exactCalls().map(([name]) => name)).not.toContain('ptt');
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  // MOR-2475 PR-2: once a surface's notch slider carries the published
+  // display unit, `onNotchFreqChange` must encode display -> raw through the
+  // same `resolveControlContract(caps, 'manual_notch_freq')` the view-model
+  // adapter decodes with; the backend (`web/handlers/control.py`'s
+  // `_notch_position_from_param`) admits only raw positions the radio's
+  // domain decodes, or the documented raw 0-255 wire code otherwise.
+  describe('manual-notch frequency command encoding (MOR-2475)', () => {
+    const FTX1_MANUAL_NOTCH_FREQ = {
+      mapping: 'linear',
+      raw_min: 1, raw_max: 320, raw_step: 1, raw_origin: 1,
+      display_min: '10', display_max: '3200', display_step: '10', display_origin: '10',
+      display_unit: 'Hz', quantization: 'reject', restoration: 'exact',
+    };
+
+    it('dispatches the slider value verbatim when no domain is published (Icom pin)', () => {
+      const dsp = makeDspHandlers();
+      dsp.onNotchFreqChange(96);
+      expect(exactCalls()).toEqual([['set_notch_filter', { value: 96, receiver: 0 }]]);
+      expectIntentTransport();
+    });
+
+    it('encodes display Hz to the raw code through the published domain (FTX-1)', () => {
+      h.caps = {
+        ...h.caps,
+        receivers: 1,
+        controls: { manual_notch_freq: FTX1_MANUAL_NOTCH_FREQ },
+      };
+      h.state = state();
+      h.state.main!.manualNotchFreq = 160;
+      const dsp = makeDspHandlers();
+      dsp.onNotchFreqChange(1600);
+      expect(exactCalls()).toEqual([['set_notch_filter', { value: 160, receiver: 0 }]]);
+      expectIntentTransport();
+    });
+
+    it.each([1601, 9, 3201])('refuses to dispatch off-domain display value %i', (value) => {
+      h.caps = {
+        ...h.caps,
+        receivers: 1,
+        controls: { manual_notch_freq: FTX1_MANUAL_NOTCH_FREQ },
+      };
+      h.state = state();
+      h.state.main!.manualNotchFreq = 160;
+      const dsp = makeDspHandlers();
+      dsp.onNotchFreqChange(value);
+      expect(exactCalls()).toEqual([]);
+    });
+  });
+
+  // MOR-2475 PR-6: `onNbDepthChange` encodes display -> wire through
+  // `resolveControlContract(caps, 'nb_depth')`, the same contract the
+  // readback decodes with. The harness caps publish the IC-7610's own
+  // `controls.nb_depth` shape (raw 0-9, display 1-10), so the encoding pins
+  // the shipped 1..10 -> 0..9 offset; a declared-but-unusable entry carries
+  // no scale and must refuse rather than fall back to a hardcoded one.
+  describe('NB-depth command encoding (MOR-2475)', () => {
+    it.each([[1, 0], [6, 5], [10, 9]] as const)(
+      'encodes display %i to wire %i through the published domain',
+      (display, wire) => {
+        makeDspHandlers().onNbDepthChange(display);
+        expect(exactCalls()).toEqual([['set_nb_depth', { level: wire }]]);
+        expectIntentTransport();
+      },
+    );
+
+    it('refuses when the declared nb_depth entry carries no usable scale', () => {
+      h.caps = {
+        ...h.caps,
+        controls: { nb_depth: {} },
+      };
+      h.state = state();
+      makeDspHandlers().onNbDepthChange(6);
+      expect(exactCalls()).toEqual([]);
+    });
+
+    it('refuses when no nb_depth control is published at all', () => {
+      h.caps = { ...h.caps, controls: {} };
+      h.state = state();
+      makeDspHandlers().onNbDepthChange(6);
+      expect(exactCalls()).toEqual([]);
+    });
+  });
+
+  it('marks only bounded normalized RF-power UI values', () => {
+    const tx = makeTxHandlers();
+    tx.onRfPowerChange(0);
+    tx.onRfPowerChange(0.5);
+    tx.onRfPowerChange(1);
+    for (const invalid of [-0.01, 1.01, Number.NaN, Number.POSITIVE_INFINITY]) {
+      tx.onRfPowerChange(invalid);
+    }
+
+    expect(exactCalls()).toEqual([
+      ['set_rf_power', { level: 0, level_unit: 'normalized' }],
+      ['set_rf_power', { level: 0.5, level_unit: 'normalized' }],
+      ['set_rf_power', { level: 1, level_unit: 'normalized' }],
+    ]);
+    expectIntentTransport();
+  });
+
+  it('sends the RF power the user set unchanged on every band, whatever the slider scale (MOR-3634)', () => {
+    // IC-9700 band rows: 2 m 100 W, 70 cm 75 W, 23 cm 10 W, flat maximum 100 W.
+    // The slider scale follows the band, but nothing between the slider and the
+    // wire may change the value the user set: no clamp, no rescale.
+    const current = state();
+    for (const [powerUnit, freqHz] of [
+      ['raw_255', 145_000_000], ['raw_255', 435_000_000], ['raw_255', 1_296_000_000],
+      ['watts', 435_000_000], ['watts', 1_296_000_000], ['watts', 14_074_000],
+    ] as const) {
+      h.sendCommand.mockClear();
+      h.state = { ...current, main: { ...current.main, freqHz } } as ServerState;
+      h.caps = {
+        ...h.caps,
+        maxPowerW: 100,
+        powerUnit,
+        txBands: [
+          { name: '2m', start: 144_000_000, end: 148_000_000, maxPowerW: 100 },
+          { name: '70cm', start: 430_000_000, end: 450_000_000, maxPowerW: 75 },
+          { name: '23cm', start: 1_240_000_000, end: 1_300_000_000, maxPowerW: 10 },
+        ],
+      };
+      const tx = makeTxHandlers();
+      tx.onRfPowerChange(0.9);
+      tx.onRfPowerChange(1);
+      expect(exactCalls(), `${powerUnit} ${freqHz}`).toEqual([
+        ['set_rf_power', { level: 0.9, level_unit: 'normalized' }],
+        ['set_rf_power', { level: 1, level_unit: 'normalized' }],
+      ]);
+    }
+  });
+
+  it('preserves exact antenna and scan command names and params without Store truth', () => {
+    const antenna = makeAntennaHandlers();
+    antenna.onSelectAnt1();
+    antenna.onSelectAnt2();
+    antenna.onToggleRxAnt();
+    const scan = makeScanHandlers();
+    scan.onScanStart(0x22);
+    scan.onScanStop();
+    scan.onDfSpanChange(25_000);
+    scan.onResumeChange(0xd2);
+
+    expect(exactCalls()).toEqual([
+      ['set_antenna_1', { on: false }],
+      ['set_antenna_2', { on: true }],
+      ['set_rx_antenna_ant1', { on: true }],
+      ['scan_start', { type: 0x22 }],
+      ['scan_stop', {}],
+      ['scan_set_df_span', { span: 25_000 }],
+      ['scan_set_resume', { mode: 0xd2 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('dispatches all explicit scan commands with scan capability and no observed scan state', () => {
+    h.state = null;
+    const scan = makeScanHandlers();
+    scan.onScanStart(0x22);
+    scan.onScanStop();
+    scan.onDfSpanChange(25_000);
+    scan.onResumeChange(0xd2);
+
+    expect(exactCalls()).toEqual([
+      ['scan_start', { type: 0x22 }],
+      ['scan_stop', {}],
+      ['scan_set_df_span', { span: 25_000 }],
+      ['scan_set_resume', { mode: 0xd2 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for stale or malformed CW, TX, and antenna-derived inputs', () => {
+    h.unavailable.add('breakIn');
+    makeCwPanelHandlers().onBreakInToggle();
+    h.unavailable.add('main.twinPeakFilter');
+    makeCwPanelHandlers().onTwinPeakToggle();
+    h.unavailable.add('tunerStatus');
+    makeTxHandlers().onAtuToggle();
+    h.unavailable.add('voxOn');
+    makeTxHandlers().onVoxToggle();
+    h.unavailable.add('txAntenna');
+    makeAntennaHandlers().onToggleRxAnt();
+    makeTxHandlers().onRfPowerChange(Number.NaN);
+    makeScanHandlers().onScanStart(1.5);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('accepts one-RX MAIN CW facts but rejects impossible physical SUB without reading VFO slots', () => {
+    h.state = oneReceiverAbState();
+    h.caps = {
+      capabilities: ['cw', 'apf', 'twin_peak'], receivers: 1, antennas: 1, vfoScheme: 'ab',
+    };
+    makeCwPanelHandlers().onApfChange(2);
+    expect(exactCalls()).toEqual([['set_apf', { mode: 2, receiver: 0 }]]);
+    expectIntentTransport();
+
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    h.state = { ...oneReceiverAbState(), active: 'SUB' } as ServerState;
+    makeCwPanelHandlers().onApfChange(2);
+    makeCwPanelHandlers().onAutoTune();
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('fails closed for stale derived inputs, unsupported DSP, and impossible one-RX physical SUB', () => {
+    h.unavailable.add('ritOn');
+    h.unavailable.add('main.autoNotch');
+    makeRitXitHandlers().onRitToggle();
+    makeDspHandlers().onNotchModeChange('auto');
+
+    h.state = { ...oneReceiverAbState(), active: 'SUB' } as ServerState;
+    h.caps = { capabilities: ['agc', 'rit', 'xit', 'nr', 'nb', 'notch', 'af_level'], receivers: 1, vfoScheme: 'ab' };
+    makeAgcHandlers().onAgcModeChange(2);
+    makeBandHandlers().onBandSelect('60m', 5_357_000);
+    makeRxAudioHandlers().onAfLevelChange(0.5);
+
+    h.state = state();
+    h.unavailable.clear();
+    h.caps = { capabilities: [], receivers: 2, vfoScheme: 'main_sub' };
+    makeDspHandlers().onNrModeChange(1);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('routes mode/filter/RF-front-end/DSP/AF/band writes on a single-receiver radio although active is structurally unobservable (MOR-1418)', () => {
+    h.caps = {
+      capabilities: ['agc', 'rit', 'nr', 'nb', 'preamp', 'af_level', 'bsr'],
+      receivers: 1,
+      vfoScheme: 'ab',
+    };
+    h.state = oneReceiverAbState();
+    h.unavailable.add('active');
+
+    makeModeHandlers().onModeChange('CW');
+    makeFilterHandlers().onFilterChange(3);
+    makeRfFrontEndHandlers().onPreChange(1);
+    makeAgcHandlers().onAgcModeChange(2);
+    makeDspHandlers().onNbToggle(true);
+    makeRxAudioHandlers().onAfLevelChange(0.5);
+    makeBandHandlers().onBandSelect('20m', 14_225_000, 5);
+    makeRitXitHandlers().onRitToggle();
+
+    expect(exactCalls()).toEqual([
+      ['set_mode', { mode: 'CW', receiver: 0 }],
+      ['set_filter', { filter: 3, receiver: 0 }],
+      ['set_preamp', { level: 1, receiver: 0 }],
+      ['set_agc', { mode: 2, receiver: 0 }],
+      ['set_nb', { on: true, receiver: 0 }],
+      ['set_af_level', { level: 0.5, receiver: 0, level_unit: 'normalized' }],
+      ['set_band', { band: 5 }],
+      ['set_rit_status', { on: true }],
+    ]);
+    expectIntentTransport();
+  });
+
+  it('still requires observed active on dual-receiver radios even after the single-RX bypass (no regression, MOR-1418)', () => {
+    h.caps = {
+      capabilities: ['agc', 'rit', 'nr', 'nb', 'preamp', 'af_level', 'bsr', 'dual_rx'],
+      receivers: 2,
+      vfoScheme: 'main_sub',
+    };
+    h.state = state();
+    h.unavailable.add('active');
+
+    makeModeHandlers().onModeChange('CW');
+    makeFilterHandlers().onFilterChange(3);
+    makeRfFrontEndHandlers().onPreChange(1);
+    makeAgcHandlers().onAgcModeChange(2);
+    makeDspHandlers().onNbToggle(true);
+    makeRxAudioHandlers().onAfLevelChange(0.5);
+    makeBandHandlers().onBandSelect('20m', 14_225_000, 5);
+    makeRitXitHandlers().onRitToggle();
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('routes VFO slot selection on a single-receiver radio although active is structurally unobservable (MOR-1423)', () => {
+    h.caps = {
+      capabilities: ['split', 'tx', 'vox'], receivers: 1, vfoScheme: 'ab',
+      stateContractVersion: 1, providerGeneration: 31,
+    };
+    h.state = oneReceiverAbState();
+    h.unavailable.add('active');
+
+    makeVfoHandlers().onVfoSelect('MAIN', 'B');
+
+    expect(exactCalls()).toEqual([['set_vfo', { vfo: 'B' }]]);
+    expectIntentTransport();
+  });
+
+  it('still requires observed active on dual-receiver radios for VFO slot selection (no regression, MOR-1423)', () => {
+    h.unavailable.add('active');
+
+    makeVfoHandlers().onVfoSelect('MAIN', 'B');
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('routes keyboard-delegated radio actions on a single-receiver radio although active is structurally unobservable (MOR-1423)', () => {
+    h.caps = {
+      capabilities: ['rit'], receivers: 1, vfoScheme: 'ab',
+      stateContractVersion: 1, providerGeneration: 31,
+    };
+    h.state = oneReceiverAbState();
+    h.unavailable.add('active');
+
+    expect(dispatchKeyboardRadioAction({ action: 'toggle_rit' })).toBe(true);
+
+    expect(exactCalls()).toEqual([['set_rit_status', { on: true }]]);
+    expectIntentTransport();
+  });
+
+  it('still requires observed active on dual-receiver radios for keyboard-delegated radio actions (no regression, MOR-1423)', () => {
+    h.unavailable.add('active');
+
+    expect(dispatchKeyboardRadioAction({ action: 'toggle_rit' })).toBe(true);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('rejects pending physical SUB on one-RX A/B Selected/Unselected topology', () => {
+    h.caps = { capabilities: ['pbt'], receivers: 1, vfoScheme: 'ab' };
+    h.state = oneReceiverAbState();
+    setPendingFocus('SUB');
+
+    makeModeHandlers().onModeChange('CW');
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('accepts pending MAIN without interpreting one-RX A/B Selected/Unselected as SUB', () => {
+    h.caps = { capabilities: ['pbt'], receivers: 1, vfoScheme: 'ab' };
+    h.state = oneReceiverAbState();
+    setPendingFocus('MAIN');
+
+    makeModeHandlers().onModeChange('CW');
+
+    expect(exactCalls()).toEqual([['set_mode', { mode: 'CW', receiver: 0 }]]);
+    expectIntentTransport();
+  });
+
+  it('accepts pending physical SUB only with dual-RX capabilities and fresh target mode', () => {
+    h.caps = { capabilities: ['pbt'], receivers: 2, vfoScheme: 'main_sub' };
+    h.state = state();
+    setPendingFocus('SUB');
+
+    makeModeHandlers().onModeChange('CW');
+
+    expect(exactCalls()).toEqual([['set_mode', { mode: 'CW', receiver: 1 }]]);
+    expectIntentTransport();
+  });
+
+  it('rejects pending physical SUB when its state or fresh mode field is absent', () => {
+    h.caps = { capabilities: ['pbt'], receivers: 2, vfoScheme: 'main_sub' };
+    h.state = { ...state(), sub: null } as unknown as ServerState;
+    setPendingFocus('SUB');
+    makeModeHandlers().onModeChange('CW');
+
+    h.state = state();
+    h.unavailable.add('sub.mode');
+    setPendingFocus('SUB');
+    makeModeHandlers().onModeChange('CW');
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('routes every RF front-end family through exact lifecycle envelopes without Store writes', () => {
+    const rf = makeRfFrontEndHandlers();
+    rf.onAttChange(12);
+    rf.onPreChange(2);
+    rf.onRfGainChange(111);
+    rf.onSquelchChange(23);
+    rf.onDigiSelToggle(true);
+    rf.onIpPlusToggle(false);
+
+    expect(exactCalls()).toEqual([
+      ['set_attenuator', { db: 12, receiver: 0 }],
+      ['set_preamp', { level: 2, receiver: 0 }],
+      ['set_rf_gain', { level: 111, receiver: 0 }],
+      ['set_squelch', { level: 23, receiver: 0 }],
+      ['set_digisel', { on: true, receiver: 0 }],
+      ['set_ip_plus', { on: false, receiver: 0 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('accepts one-RX MAIN with A/B Selected/Unselected without inferring physical SUB', () => {
+    h.caps = { capabilities: ['pbt'], receivers: 1, vfoScheme: 'ab' };
+    h.state = oneReceiverAbState();
+
+    makeRfFrontEndHandlers().onPreChange(1);
+
+    expect(exactCalls()).toEqual([['set_preamp', { level: 1, receiver: 0 }]]);
+    expectIntentTransport();
+  });
+
+  it('rejects impossible one-RX physical SUB even when a normalized sub alias exists', () => {
+    h.caps = { capabilities: ['pbt'], receivers: 1, vfoScheme: 'ab' };
+    h.state = { ...oneReceiverAbState(), active: 'SUB' } as ServerState;
+
+    makeRfFrontEndHandlers().onPreChange(1);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('accepts fresh physical SUB only on a dual-receiver topology', () => {
+    h.caps = { capabilities: ['pbt'], receivers: 2, vfoScheme: 'main_sub' };
+    h.state = state('SUB');
+
+    makeRfFrontEndHandlers().onIpPlusToggle(true);
+
+    expect(exactCalls()).toEqual([['set_ip_plus', { on: true, receiver: 1 }]]);
+    expectIntentTransport();
+  });
+
+  it('fails closed for invalid receiver identity and every stale RF target field', () => {
+    const rf = makeRfFrontEndHandlers();
+    h.state = { ...state(), active: 'B' } as unknown as ServerState;
+    rf.onAttChange(6);
+
+    h.state = state();
+    h.unavailable.add('main.att');
+    rf.onAttChange(6);
+    h.unavailable.add('main.preamp');
+    rf.onPreChange(1);
+    h.unavailable.add('main.rfGain');
+    rf.onRfGainChange(100);
+    h.unavailable.add('main.squelch');
+    rf.onSquelchChange(20);
+    h.unavailable.add('main.digisel');
+    rf.onDigiSelToggle(true);
+    h.unavailable.add('main.ipplus');
+    rf.onIpPlusToggle(true);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('fails closed instead of constructing malformed RF intent envelopes', () => {
+    const rf = makeRfFrontEndHandlers();
+    rf.onAttChange(1.5);
+    rf.onPreChange(Number.NaN);
+    rf.onRfGainChange(Number.POSITIVE_INFINITY);
+    rf.onSquelchChange(2.25);
+    rf.onDigiSelToggle('true' as unknown as boolean);
+    rf.onIpPlusToggle(1 as unknown as boolean);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('preserves debounced filter command order without optimistic filter values', () => {
+    // MOR-2500: the PBT writes need a declared lattice step; with one, the
+    // same 100/-100 Hz values land on the 2400 Hz width's lattice.
+    h.caps = {
+      ...h.caps,
+      filterConfig: { USB: { pbtStepHz: 50 } },
+    } as unknown as Record<string, unknown>;
+    const filter = makeFilterHandlers();
+    filter.onFilterChange(3);
+    filter.onFilterWidthChange(1800);
+    filter.onFilterShapeChange(2);
+    filter.onFilterPresetChange(1, 2800);
+    vi.advanceTimersByTime(200);
+    filter.onFilterDefaults([3000, 2400, 1800]);
+    filter.onPbtInnerChange(100);
+    filter.onPbtOuterChange(-100);
+    filter.onPbtReset();
+
+    expect(exactCalls()).toEqual([
+      ['set_filter', { filter: 3, receiver: 0 }],
+      ['set_filter_shape', { shape: 2, receiver: 0 }],
+      ['set_filter_width', { width: 1800, receiver: 0 }],
+      ['set_filter', { filter: 1, receiver: 0 }],
+      ['set_filter_width', { width: 2800, receiver: 0 }],
+      ['set_filter', { filter: 2, receiver: 0 }],
+      ['set_filter', { filter: 1, receiver: 0 }],
+      ['set_filter_width', { width: 3000, receiver: 0 }],
+      ['set_filter_width', { width: 2400, receiver: 0 }],
+      ['set_filter', { filter: 3, receiver: 0 }],
+      ['set_filter_width', { width: 1800, receiver: 0 }],
+      ['set_filter', { filter: 2, receiver: 0 }],
+      ['set_pbt_inner', { value: 138, receiver: 0 }],
+      ['set_pbt_outer', { value: 117, receiver: 0 }],
+      ['set_pbt_inner', { value: 128, receiver: 0 }],
+      ['set_pbt_outer', { value: 128, receiver: 0 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+  });
+
+  /**
+   * MOR-1291 (handler-level no-command assertion). A radio can declare the
+   * `pbt` capability tag without declaring a usable `controls.pbt_inner`
+   * range (or with a malformed one). Before this fix, `makeFilterHandlers`'s
+   * PBT/IF-shift handlers inlined their own `pbtHzToRaw`/`pbtRange`
+   * duplicate, which silently fell back to an IC-7610-shaped default
+   * (rawCenter 128, ±1200 Hz) and dispatched a plausible-looking
+   * `set_pbt_inner`/`set_pbt_outer` command regardless. An unavailable
+   * control must never emit a backend command — every PBT-touching handler
+   * must instead produce NO command at all.
+   */
+  it('emits no command from any PBT/IF-shift handler when caps declares pbt but carries no usable pbt_inner range', () => {
+    h.caps = { ...h.caps, controls: {} } as Record<string, unknown>;
+    const filter = makeFilterHandlers();
+
+    filter.onPbtInnerChange(100);
+    filter.onPbtOuterChange(-100);
+    filter.onPbtReset();
+    filter.onIfShiftChange(300);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('emits no command from any PBT/IF-shift handler when the declared pbt_inner range is malformed (division-by-zero guard)', () => {
+    h.caps = {
+      ...h.caps,
+      controls: {
+        pbt_inner: { raw_min: 0, raw_max: 255, raw_center: 128, display_min: -1200, display_max: 0 },
+      },
+    } as Record<string, unknown>;
+    const filter = makeFilterHandlers();
+
+    filter.onPbtInnerChange(100);
+    filter.onPbtOuterChange(-100);
+    filter.onPbtReset();
+    filter.onIfShiftChange(300);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('fails closed when receiver identity or required observed values are unavailable', () => {
+    h.state = null;
+    makeModeHandlers().onModeChange('AM');
+    makeFilterHandlers().onFilterChange(2);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+
+    h.state = state('SUB');
+    h.unavailable.add('active');
+    makeModeHandlers().onDataModeChange(1);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('does not manufacture MOD-input groups from a stale DATA-mode reading', () => {
+    h.unavailable.add('main.dataMode');
+    makeModeHandlers().onModInputChange(5);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('routes the complete VFO family through exact typed lifecycle without Store truth', () => {
+    const vfo = makeVfoHandlers();
+    vfo.onSwap();
+    vfo.onEqual();
+    vfo.onSplitToggle();
+    vfo.onMainVfoClick();
+    expect(localStorage.getItem('icom.audio.focus')).toBe('main');
+    vfo.onSubVfoClick();
+    expect(localStorage.getItem('icom.audio.focus')).toBe('sub');
+    vfo.onVfoSelect('SUB', 'B');
+    vfo.onMainFreqChange(14_100_000);
+    vfo.onSubFreqChange(7_100_000);
+    // MOR-1425 review B1: onMainFreqChange and this onFreqChange(_, 0) call
+    // both target receiver 0, mid-burst (no timer advance) — this
+    // onFreqChange call carries no `kind`, so it defaults to 'jump': an
+    // ABSOLUTE target that must land EXACTLY, immediately, and unpaced,
+    // clearing the still-hot onMainFreqChange burst rather than accumulating
+    // a delta onto it (the accumulator's own behavior is covered separately
+    // in `tuning-accumulator.test.ts` and the MOR-1425 tests below).
+    vfo.onFreqChange(18_100_000, 0);
+    vfo.onModeChange('CW', 1);
+    vfo.onFilterChange(3, 0);
+    vfo.onDualWatchToggle(true);
+    vfo.onTrackingToggle(true);
+
+    expect(exactCalls()).toEqual([
+      ['vfo_swap', {}],
+      ['vfo_equalize', {}],
+      ['set_split', { on: true }],
+      ['set_vfo', { vfo: 'MAIN' }],
+      ['set_vfo', { vfo: 'SUB' }],
+      ['set_vfo', { vfo: 'SUB' }],
+      ['set_vfo', { vfo: 'B' }],
+      ['set_freq', { freq: 14_100_000, receiver: 0 }],
+      ['set_freq', { freq: 7_100_000, receiver: 1 }],
+      ['set_freq', { freq: 18_100_000, receiver: 0 }],
+      ['set_mode', { mode: 'CW', receiver: 1 }],
+      ['set_filter', { filter: 3, receiver: 0 }],
+      ['set_dual_watch', { on: true }],
+      ['set_main_sub_tracking', { on: true }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(h.patchReceiver).not.toHaveBeenCalled();
+    expect(h.setAudioConfig).toHaveBeenNthCalledWith(1, { focus: 'main' });
+    expect(h.setAudioConfig).toHaveBeenNthCalledWith(2, { focus: 'sub' });
+    expect(h.setAudioConfig).toHaveBeenNthCalledWith(3, { focus: 'sub' });
+  });
+
+  it('gates blind VFO primitives by their exact declared tags across panel and keyboard paths', () => {
+    h.unavailable.add('active');
+    h.unavailable.add('main.freqHz');
+    h.unavailable.add('main.mode');
+    h.unavailable.add('main.activeSlot');
+    h.unavailable.add('main.vfoA.freqHz');
+    h.unavailable.add('main.vfoB.freqHz');
+
+    for (const [tags, expected] of [
+      [[], []],
+      [['vfo_swap'], [['vfo_swap', {}]]],
+      [['vfo_equalize'], [['vfo_equalize', {}]]],
+      [['vfo_swap', 'vfo_equalize'], [['vfo_swap', {}], ['vfo_equalize', {}]]],
+    ] as const) {
+      h.caps = { ...h.caps!, capabilities: tags };
+      h.sendCommand.mockClear();
+      resetCommandLifecycle();
+      makeVfoHandlers().onSwap();
+      makeVfoHandlers().onEqual();
+      expect(exactCalls()).toEqual(expected);
+
+      h.sendCommand.mockClear();
+      resetCommandLifecycle();
+      expect(dispatchKeyboardRadioAction({ action: 'vfo_swap' })).toBe(true);
+      expect(dispatchKeyboardRadioAction({ action: 'vfo_equalize' })).toBe(true);
+      expect(exactCalls()).toEqual(expected);
+    }
+
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    h.caps = { ...h.caps!, capabilities: ['vfo_swap', 'vfo_equalize'], providerGeneration: 99 };
+    makeVfoHandlers().onSwap();
+    expect(dispatchKeyboardRadioAction({ action: 'vfo_equalize' })).toBe(true);
+    h.caps = { ...h.caps!, providerGeneration: 31, receivers: 1, vfoScheme: 'main_sub' };
+    makeVfoHandlers().onEqual();
+    expect(dispatchKeyboardRadioAction({ action: 'vfo_swap' })).toBe(true);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(h.setAudioConfig).not.toHaveBeenCalled();
+  });
+
+  it('preserves pending mode focus and local audio focus without patching radio truth', () => {
+    const panel = document.createElement('div');
+    panel.scrollIntoView = vi.fn();
+    const query = vi.spyOn(document, 'querySelector').mockReturnValue(panel);
+
+    makeVfoHandlers().onSubModeClick();
+    makeModeHandlers().onModeChange('CW');
+
+    expect(exactCalls()).toEqual([
+      ['set_vfo', { vfo: 'SUB' }],
+      ['set_mode', { mode: 'CW', receiver: 1 }],
+    ]);
+    expectIntentTransport();
+    expect(h.setAudioConfig).toHaveBeenCalledExactlyOnceWith({ focus: 'sub' });
+    expect(localStorage.getItem('icom.audio.focus')).toBe('sub');
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(panel.scrollIntoView).toHaveBeenCalled();
+    query.mockRestore();
+  });
+
+  it('keeps physical MAIN orthogonal to one-RX A/B Selected/Unselected topology', () => {
+    h.state = oneReceiverAbState();
+    h.caps = {
+      capabilities: ['split', 'tx', 'vox', 'vfo_swap', 'vfo_equalize'], receivers: 1, vfoScheme: 'ab',
+      stateContractVersion: 1, providerGeneration: 31,
+    };
+    const vfo = makeVfoHandlers();
+    vfo.onVfoSelect('MAIN', 'B');
+    vfo.onSwap();
+    vfo.onEqual();
+    vfo.onMainFreqChange(14_101_000);
+
+    expect(exactCalls()).toEqual([
+      ['set_vfo', { vfo: 'B' }],
+      ['vfo_swap', {}],
+      ['vfo_equalize', {}],
+      ['set_freq', { freq: 14_101_000, receiver: 0 }],
+    ]);
+    expectIntentTransport();
+
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    vfo.onSubVfoClick();
+    vfo.onVfoSelect('SUB', 'A');
+    vfo.onSubFreqChange(7_101_000);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(h.setAudioConfig).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('writes the captured fixed A/B slot without selecting it', () => {
+    h.state = oneReceiverAbState();
+    h.state.fieldStatus = {
+      ...h.state.fieldStatus,
+      'main.activeSlot': { ...freshStatus, storePath: 'main.activeSlot' },
+    };
+    h.caps = {
+      capabilities: ['vfo_freq_direct'], receivers: 1, vfoScheme: 'ab',
+      stateContractVersion: 1, providerGeneration: 31,
+      freqRanges: [{ start: 30_000, end: 74_800_000, label: 'HF' }],
+    };
+
+    const lifecycle = makeVfoHandlers().onDirectFrequencyChange({
+      frequencyHz: 7_075_000, receiver: 'MAIN', slot: 'B', expectedActiveSlot: 'A',
+      providerGeneration: 31, sessionEpoch: 31,
+    });
+
+    expect(lifecycle).toMatchObject({ name: 'set_vfo_freq', status: 'pending' });
+    expect(exactCalls()).toEqual([['set_vfo_freq', {
+      freq: 7_075_000, receiver: 0, slot: 'B', expected_active_slot: 'A', provider_generation: 31,
+    }]]);
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(h.patchReceiver).not.toHaveBeenCalled();
+  });
+
+  it('refuses direct slot writes after any captured authority changes', () => {
+    const request = {
+      frequencyHz: 7_075_000, receiver: 'MAIN' as const, slot: 'B' as const,
+      expectedActiveSlot: 'A' as const, providerGeneration: 31, sessionEpoch: 31,
+    };
+    const reset = () => {
+      h.state = oneReceiverAbState();
+      h.state.fieldStatus = { ...h.state.fieldStatus,
+        'main.activeSlot': { ...freshStatus, storePath: 'main.activeSlot' } };
+      h.caps = { capabilities: ['vfo_freq_direct'], receivers: 1, vfoScheme: 'ab',
+        stateContractVersion: 1, providerGeneration: 31,
+        freqRanges: [{ start: 30_000, end: 74_800_000, label: 'HF' }] };
+      h.sendCommand.mockClear(); resetCommandLifecycle(); h.unavailable.clear();
+    };
+    const refuse = (mutate: () => void) => {
+      reset(); mutate();
+      expect(makeVfoHandlers().onDirectFrequencyChange(request)).toBeNull();
+      expect(h.sendCommand).not.toHaveBeenCalled();
+    };
+    refuse(() => { h.state!.main!.activeSlot = 'B'; });
+    refuse(() => { h.state = { ...h.state!, providerGeneration: 32 }; });
+    refuse(() => { h.caps = { ...h.caps!, capabilities: [] }; });
+    refuse(() => { h.unavailable.add('main.activeSlot'); });
+    refuse(() => { h.caps = { ...h.caps!, vfoScheme: 'main_sub' }; });
+    refuse(() => { h.caps = { ...h.caps!, receivers: 2 }; });
+  });
+
+  it('MOR-1425: a burst of rapid steps within one round trip accumulates onto the pending target, not the stale confirmed value', () => {
+    const vfo = makeVfoHandlers();
+    const confirmed = observedFreq(); // 14_074_000, unchanged for the whole burst
+    const step = 1_000;
+    // Every gesture computes its target off the STILL-CONFIRMED value, the
+    // exact MOR-1425 mechanism (the presentation layer's `freq` prop does
+    // not advance until the round trip completes).
+    for (let i = 1; i <= 5; i++) vfo.onMainFreqChange(confirmed + step);
+
+    // First step is an immediate, unpaced cold start.
+    expect(h.sendCommand).toHaveBeenCalledTimes(1);
+    expect(exactCalls()[0]).toEqual(['set_freq', { freq: confirmed + step, receiver: 0 }]);
+
+    // The remaining 4 steps accumulate and flush once, paced.
+    vi.advanceTimersByTime(60);
+    expect(h.sendCommand).toHaveBeenCalledTimes(2);
+    expect(exactCalls().at(-1)).toEqual(['set_freq', { freq: confirmed + 5 * step, receiver: 0 }]);
+    // MOR-1425 invariant: never an optimistic patch — the display stays
+    // last-confirmed radio truth throughout the whole burst.
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(h.patchReceiver).not.toHaveBeenCalled();
+  });
+
+  it('MOR-2513: onMainFreqChange computes no step from a null (unobserved) frequency', () => {
+    h.state = { ...h.state!, main: { ...h.state!.main!, freqHz: null } };
+    h.state.fieldStatus = { ...h.state.fieldStatus,
+      'main.freqHz': { ...freshStatus, storePath: 'main.freqHz', observed: false } };
+    h.sendCommand.mockClear();
+    makeVfoHandlers().onMainFreqChange(14_100_000);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('MOR-1435: legacy band/preset select emits the exact target and clears the hot burst (no stray follow-up frame)', () => {
+    resetSharedTuningAccumulatorForTests();
+    // The two MOR-1435 legacy paths: `makeBandHandlers`' bandless fallback
+    // and `makePresetHandlers`' select. Both must emit the exact target
+    // AND clear a still-hot paced flush from a preceding tuning burst —
+    // a direct `set_freq` dispatch would leave the pending flush armed,
+    // emitting one stray follow-up frame within ≤60 ms of the write.
+    const selectCases: Array<[string, () => void]> = [
+      ['bandless band select', () => { makeBandHandlers().onBandSelect('60m', 5_357_000); }],
+      ['preset select', () => { makePresetHandlers().onPresetSelect(7_074_000, 'CW', 1); }],
+    ];
+    for (const [label, select] of selectCases) {
+      resetSharedTuningAccumulatorForTests();
+      h.sendCommand.mockClear();
+      resetCommandLifecycle();
+      const vfo = makeVfoHandlers();
+      const confirmed = observedFreq();
+      const step = 1_000;
+      // Hot burst: first step sent cold, second accumulates and is paced
+      // (held, not sent) — the flush timer is armed at the moment of select.
+      vfo.onMainFreqChange(confirmed + step);
+      vfo.onMainFreqChange(confirmed + step);
+      expect(h.sendCommand, `${label}: burst precondition`).toHaveBeenCalledTimes(1);
+
+      h.sendCommand.mockClear();
+      resetCommandLifecycle();
+      select();
+
+      expect(exactCalls(), `${label}: exact target`).toEqual(
+        label === 'preset select'
+          ? [['set_freq', { freq: 7_074_000, receiver: 0 }], ['set_mode', { mode: 'CW', filter: 1, receiver: 0 }]]
+          : [['set_freq', { freq: 5_357_000, receiver: 0 }]],
+      );
+
+      // No stray follow-up frame: the pre-select paced flush must never fire.
+      vi.advanceTimersByTime(60);
+      expect(exactCalls(), `${label}: no stray frame`).toHaveLength(
+        label === 'preset select' ? 2 : 1,
+      );
+    }
+  });
+
+  it('MOR-1435: BSR band select cancels a hot burst before set_band (no stray set_freq frame)', () => {
+    resetSharedTuningAccumulatorForTests();
+    const vfo = makeVfoHandlers();
+    const confirmed = observedFreq();
+    vfo.onMainFreqChange(confirmed + 1_000);
+    vfo.onMainFreqChange(confirmed + 1_000);
+    expect(h.sendCommand).toHaveBeenCalledTimes(1);
+
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    makeBandHandlers().onBandSelect('20m', 14_225_000, 5);
+    expect(exactCalls()).toEqual([['set_band', { band: 5 }]]);
+
+    vi.advanceTimersByTime(60);
+    expect(exactCalls()).toHaveLength(1);
+  });
+
+  it('MOR-1425: a contradictory confirmed frequency mid-burst resets accumulation to the new truth', () => {
+    // Driven through the real wiring (not the low-level accumulator
+    // directly) so this fails if the accumulator is ever un-wired from
+    // `onMainFreqChange` — the previous version of this test asserted only
+    // the LAST emitted value, which a naive direct-dispatch (no burst
+    // logic at all) would also have produced, since every call here
+    // computes its own target off the freq it was given. The call COUNT
+    // below is what actually depends on the accumulator being live: the
+    // 2nd gesture must be paced (held, not sent) until the 3rd gesture's
+    // contradiction both resets AND cancels it.
+    const vfo = makeVfoHandlers();
+    const confirmed = observedFreq();
+    vfo.onMainFreqChange(confirmed + 1_000); // cold, immediate: target C+1_000
+    vfo.onMainFreqChange(confirmed + 1_000); // hot, accumulates to C+2_000, paced (NOT sent yet)
+    expect(h.sendCommand).toHaveBeenCalledTimes(1);
+
+    // The operator turned the physical knob: a new confirmed frequency the
+    // accumulator's own pending sequence did not predict.
+    const physical = confirmed + 500_000;
+    h.state = { ...h.state!, main: { ...h.state!.main!, freqHz: physical } };
+    vfo.onMainFreqChange(physical + 1_000);
+
+    // The reset step is itself a cold start: immediate, carrying a target
+    // measured from the NEW physical truth — and it must be the ONLY
+    // second call: without the accumulator, the 2nd gesture above would
+    // already have been sent immediately, making this the THIRD call.
+    expect(h.sendCommand).toHaveBeenCalledTimes(2);
+    expect(exactCalls().at(-1)).toEqual(['set_freq', { freq: physical + 1_000, receiver: 0 }]);
+
+    // The pre-reset paced flush must never fire and emit a stray 3rd call.
+    vi.advanceTimersByTime(60);
+    expect(h.sendCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it('MOR-1864: associates delayed accepted echoes by exact target and marker across a reversal', () => {
+    const vfo = makeVfoHandlers();
+    const start = observedFreq();
+    const setObservation = (frequency: number, marker: number) => {
+      h.state = {
+        ...h.state!,
+        main: { ...h.state!.main!, freqHz: frequency },
+        fieldStatus: {
+          ...h.state!.fieldStatus,
+          'main.freqHz': {
+            ...freshStatus, storePath: 'main.freqHz', lastObservedMonotonic: marker,
+          },
+        },
+      };
+    };
+    const acknowledgeLatest = () => {
+      const command = getCommandLifecycles().at(-1)!;
+      acknowledgeCommand(command.id, command.originalEpoch, command.originalEpoch);
+    };
+
+    vfo.onMainFreqChange(start + 1_000); // R -> S+1
+    expect(getCommandLifecycles()[0]?.params).toEqual({ freq: start + 1_000, receiver: 0 });
+    acknowledgeLatest();
+    vi.advanceTimersByTime(250);
+    vfo.onMainFreqChange(start - 1_000); // L -> net S
+    vi.advanceTimersByTime(0);
+    acknowledgeLatest();
+
+    setObservation(start + 1_000, 2); // delayed echo of the older, obsolete R
+    vi.advanceTimersByTime(250);
+    vfo.onMainFreqChange(start + 2_000); // R -> net S+1, never S+2
+    vi.advanceTimersByTime(0);
+    acknowledgeLatest();
+
+    setObservation(start, 3); // delayed echo of L
+    vi.advanceTimersByTime(250);
+    vfo.onMainFreqChange(start - 1_000); // L -> net S
+    vi.advanceTimersByTime(0);
+
+    expect(exactCalls().filter(([name]) => name === 'set_freq')).toEqual([
+      ['set_freq', { freq: start + 1_000, receiver: 0 }],
+      ['set_freq', { freq: start, receiver: 0 }],
+      ['set_freq', { freq: start + 1_000, receiver: 0 }],
+      ['set_freq', { freq: start, receiver: 0 }],
+    ]);
+    expect(getCommandLifecycles()[0]?.locallyObsolete).toBe(true);
+  });
+
+  it('MOR-1864: preserves all 70 delayed alternating pairs without target drift', () => {
+    const vfo = makeVfoHandlers();
+    const start = observedFreq();
+    const observed = (frequency: number, marker: number) => {
+      h.state = {
+        ...h.state!, main: { ...h.state!.main!, freqHz: frequency },
+        fieldStatus: { ...h.state!.fieldStatus, 'main.freqHz': {
+          ...freshStatus, storePath: 'main.freqHz', lastObservedMonotonic: marker,
+        } },
+      };
+    };
+
+    for (let index = 0; index < 140; index++) {
+      if (index > 0) vi.advanceTimersByTime(250);
+      if (index >= 2) observed(index % 2 === 0 ? start + 1_000 : start, index);
+      const shown = observedFreq();
+      vfo.onMainFreqChange(shown + (index % 2 === 0 ? 1_000 : -1_000));
+      vi.advanceTimersByTime(0);
+      const command = getCommandLifecycles().at(-1)!;
+      acknowledgeCommand(command.id, command.originalEpoch, command.originalEpoch);
+    }
+
+    expect(exactCalls().filter(([name]) => name === 'set_freq').map(([, params]) => params.freq))
+      .toEqual(Array.from({ length: 140 }, (_, index) => index % 2 === 0 ? start + 1_000 : start));
+  });
+
+  it('MOR-1864/MOR-4393: stale TTL preserves a known marker; an own pending-send readback continues the burst', () => {
+    const vfo = makeVfoHandlers();
+    const start = observedFreq();
+    vfo.onMainFreqChange(start + 1_000);
+    h.state = { ...h.state!, fieldStatus: { ...h.state!.fieldStatus, 'main.freqHz': {
+      ...freshStatus, storePath: 'main.freqHz', freshness: 'stale', availability: 'stale',
+      lastObservedMonotonic: 1, quality: ['confirmed'],
+    } } };
+    vfo.onMainFreqChange(start + 1_000);
+    vi.advanceTimersByTime(60);
+    expect(exactCalls().at(-1)).toEqual(['set_freq', { freq: start + 2_000, receiver: 0 }]);
+
+    // The latest target is still merely pending, yet the lifecycle-backed
+    // association matches it: the readback exactly equals this burst's own
+    // in-burst send, and an own sent value is intrinsically
+    // indistinguishable from its echo (see `acceptedTuningTarget`). The next
+    // press accumulates onto the pending target and waits for the pace
+    // rather than cold re-emitting; the radio still lands on the same
+    // start + 3_000.
+    h.state = { ...h.state!, main: { ...h.state!.main!, freqHz: start + 2_000 }, fieldStatus: {
+      ...h.state!.fieldStatus, 'main.freqHz': {
+        ...freshStatus, storePath: 'main.freqHz', lastObservedMonotonic: 2,
+      },
+    } };
+    const count = h.sendCommand.mock.calls.length;
+    vfo.onMainFreqChange(start + 3_000);
+    expect(h.sendCommand).toHaveBeenCalledTimes(count);
+    vi.advanceTimersByTime(60);
+    expect(exactCalls().at(-1)).toEqual(['set_freq', { freq: start + 3_000, receiver: 0 }]);
+  });
+
+  it('MOR-1864: explicit A/B selection fences an already queued old-slot flush', () => {
+    h.state = oneReceiverAbState();
+    h.state = { ...h.state, fieldStatus: { ...h.state.fieldStatus,
+      'main.freqHz': { ...freshStatus, storePath: 'main.freqHz', lastObservedMonotonic: 1 },
+      'main.activeSlot': { ...freshStatus, storePath: 'main.activeSlot', lastObservedMonotonic: 1 },
+    } };
+    h.caps = { ...h.caps!, receivers: 1, vfoScheme: 'ab' };
+    const vfo = makeVfoHandlers();
+    const start = observedFreq();
+    vfo.onMainFreqChange(start + 1_000);
+    vfo.onMainFreqChange(start + 1_000);
+    vfo.onVfoSelect('MAIN', 'B');
+    vi.advanceTimersByTime(60);
+    expect(exactCalls()).toEqual([
+      ['set_freq', { freq: start + 1_000, receiver: 0 }],
+      ['set_vfo', { vfo: 'B' }],
+    ]);
+  });
+
+  it('MOR-1864/MOR-4393: pre-burst records stay unassociated; a failed send echo cold-resets', () => {
+    const vfo = makeVfoHandlers();
+    const start = observedFreq();
+    const setObservation = (frequency: number, marker: number) => {
+      h.state = { ...h.state!, main: { ...h.state!.main!, freqHz: frequency }, fieldStatus: {
+        ...h.state!.fieldStatus, 'main.freqHz': {
+          ...freshStatus, storePath: 'main.freqHz', lastObservedMonotonic: marker,
+        },
+      } };
+    };
+
+    // Same fake-clock millisecond as the later burst anchor: registry order,
+    // not timestamp alone, keeps this accepted historical target out. The
+    // value start + 500 was never sent BY THIS BURST, so the MOR-4393 send
+    // ledger does not claim it either — the change stays foreign.
+    vfo.onFreqChange(start + 500, 0, 'jump');
+    let record = getCommandLifecycles().at(-1)!;
+    acknowledgeCommand(record.id, record.originalEpoch, record.originalEpoch);
+    // The historical command predates this burst, unlike a live jump anchor.
+    resetSharedTuningAccumulatorForTests();
+    vfo.onMainFreqChange(start + 1_000);
+    setObservation(start + 500, 2);
+    vfo.onMainFreqChange(start + 1_500);
+    expect(exactCalls().at(-1)).toEqual(['set_freq', { freq: start + 1_500, receiver: 0 }]);
+
+    // A failed record stays excluded from association (`acceptedTuningTarget`
+    // matches pending/acknowledged/confirmed in-burst targets only): the
+    // NAKed write was refused, so its value reappearing reads as a foreign
+    // change and the next press cold-resets onto it with an immediate emit.
+    // (The MOR-4393 send ledger that used to continue the burst here is
+    // gone: one association mechanism.)
+    record = getCommandLifecycles().at(-1)!;
+    failCommand(record.id, record.originalEpoch, record.originalEpoch, 'NAK');
+    setObservation(start + 1_500, 3);
+    const count = h.sendCommand.mock.calls.length;
+    vfo.onMainFreqChange(start + 2_500);
+    expect(h.sendCommand).toHaveBeenCalledTimes(count + 1);
+    expect(exactCalls().at(-1)).toEqual(['set_freq', { freq: start + 2_500, receiver: 0 }]);
+  });
+
+  it('MOR-4393: a delayed pre-release echo stays on the burst while its send is still pending', () => {
+    const vfo = makeVfoHandlers();
+    const start = observedFreq();
+    // A paced drag: two absolute moves, nothing acknowledged yet — the
+    // slow-link shape where the older send's association is unavailable.
+    vfo.onFreqChange(start + 1_000, 0, 'drag');
+    vfo.onFreqChange(start + 5_000, 0, 'drag');
+    vi.advanceTimersByTime(60); // paced flush emits start + 5_000
+    // Release lands an absolute jump; the still-live burst keeps its anchor.
+    vfo.onFreqChange(start + 10_000, 0);
+    // The delayed echo of the FIRST drag send arrives with the next +1 kHz
+    // step, read off observed (not burst-displayed) truth.
+    h.state = { ...h.state!, main: { ...h.state!.main!, freqHz: start + 1_000 }, fieldStatus: {
+      ...h.state!.fieldStatus, 'main.freqHz': {
+        ...freshStatus, storePath: 'main.freqHz', lastObservedMonotonic: 2,
+      },
+    } };
+    const count = h.sendCommand.mock.calls.length;
+    vfo.onMainFreqChange(start + 2_000);
+    // Hot continuation: no immediate cold re-emit of the stale echo + step;
+    // the paced flush lands on release + one step, never back on the echo.
+    expect(h.sendCommand).toHaveBeenCalledTimes(count);
+    vi.advanceTimersByTime(60);
+    expect(exactCalls().at(-1)).toEqual(['set_freq', { freq: start + 11_000, receiver: 0 }]);
+  });
+
+  it('MOR-4393: an absolute release after steps keeps earlier burst targets associable', () => {
+    const vfo = makeVfoHandlers();
+    const start = observedFreq();
+    // Two keyboard steps, both acknowledged at once (fast link): the burst
+    // carries no paced-drag flag, so the absolute release below cannot reuse
+    // the drag carve-out and starts a fresh association window on the head.
+    vfo.onMainFreqChange(start + 1_000);
+    vfo.onMainFreqChange(start + 1_000);
+    vi.advanceTimersByTime(60);
+    for (const command of getCommandLifecycles()) {
+      acknowledgeCommand(command.id, command.originalEpoch, command.originalEpoch);
+    }
+    // Absolute release (entry dialog / spectrum click shape).
+    vfo.onFreqChange(start + 50_000, 0);
+    // The delayed echo of the FIRST step send arrives with the next +1 kHz
+    // step, read off observed truth.
+    h.state = { ...h.state!, main: { ...h.state!.main!, freqHz: start + 1_000 }, fieldStatus: {
+      ...h.state!.fieldStatus, 'main.freqHz': {
+        ...freshStatus, storePath: 'main.freqHz', lastObservedMonotonic: 2,
+      },
+    } };
+    const count = h.sendCommand.mock.calls.length;
+    vfo.onMainFreqChange(start + 2_000);
+    // The echo matches an earlier target of the same live gesture, so the
+    // step accumulates onto the release target instead of cold-resetting
+    // onto the stale echo.
+    expect(h.sendCommand).toHaveBeenCalledTimes(count);
+    vi.advanceTimersByTime(60);
+    expect(exactCalls().at(-1)).toEqual(['set_freq', { freq: start + 51_000, receiver: 0 }]);
+  });
+
+  it('spectrum jump followed by keyboard up before readback continues from the jump target', () => {
+    h.state = { ...h.state!, main: { ...h.state!.main!, freqHz: 7_047_500 }, fieldStatus: {
+      ...h.state!.fieldStatus, 'main.freqHz': {
+        ...freshStatus, storePath: 'receiver.0.active.freq_mode.freq_hz', lastObservedMonotonic: 1,
+      },
+    } };
+    makeVfoHandlers().onFreqChange(7_128_000, 0);
+    expect(observedFreq()).toBe(7_047_500); // No radio echo or confirmed-state patch.
+    expect(dispatchKeyboardRadioAction({ action: 'tune', params: { direction: 'up' } })).toBe(true);
+    vi.advanceTimersByTime(60);
+    expect(exactCalls()).toEqual([
+      ['set_freq', { freq: 7_128_000, receiver: 0 }],
+      ['set_freq', { freq: 7_129_000, receiver: 0 }],
+    ]);
+    expect(h.patchReceiver).not.toHaveBeenCalled();
+    expect(observedFreq()).toBe(7_047_500);
+  });
+
+  it("MOR-1425 review B1: onFreqChange(freq, receiver, 'step') opts a relative gesture into the accumulate path instead of the 'jump' default", () => {
+    const vfo = makeVfoHandlers();
+    const confirmed = observedFreq();
+    // Two 'step' gestures at the SAME receiver, mid-burst: the media-key /
+    // spectrum-wheel shape (fixed increment off confirmed truth), not an
+    // arbitrary absolute target.
+    vfo.onFreqChange(confirmed + 1_000, 0, 'step'); // cold, immediate
+    vfo.onFreqChange(confirmed + 1_000, 0, 'step'); // hot, accumulates, paced
+    expect(h.sendCommand).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(60);
+    expect(h.sendCommand).toHaveBeenCalledTimes(2);
+    expect(exactCalls().at(-1)).toEqual(['set_freq', { freq: confirmed + 2_000, receiver: 0 }]);
+  });
+
+  it('shares one fail-closed VOX toggle and routes standalone VOX controls through lifecycle', () => {
+    const vox = makeVoxHandlers();
+    vox.onVoxToggle();
+    makeTxHandlers().onVoxToggle();
+    vox.onVoxGainChange(77);
+    vox.onAntiVoxGainChange(12);
+    vox.onVoxDelayChange(5);
+
+    expect(exactCalls()).toEqual([
+      ['set_vox', { on: true }],
+      ['set_vox', { on: true }],
+      ['set_vox_gain', { level: 77 }],
+      ['set_anti_vox_gain', { level: 12 }],
+      ['set_vox_delay', { level: 5 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for mismatched generation, stale toggles, invalid topology and malformed VFO/VOX inputs', () => {
+    const vfo = makeVfoHandlers();
+    const vox = makeVoxHandlers();
+    h.caps = { ...h.caps!, providerGeneration: 99 };
+    vfo.onSplitToggle();
+    vfo.onMainVfoClick();
+    vox.onVoxToggle();
+
+    h.caps = { ...h.caps!, providerGeneration: 31 };
+    h.unavailable.add('split');
+    h.unavailable.add('voxOn');
+    h.unavailable.add('voxGain');
+    h.unavailable.add('antiVoxGain');
+    h.unavailable.add('voxDelay');
+    vfo.onSplitToggle();
+    vox.onVoxToggle();
+    vfo.onVfoSelect('B' as unknown as 'MAIN', 'A');
+    vfo.onVfoSelect('MAIN', 'C' as unknown as 'A');
+    vfo.onFreqChange(14_100_000, undefined as unknown as 0);
+    vfo.onMainFreqChange(Number.NaN);
+    vfo.onModeChange('', 0);
+    vfo.onFilterChange(1.5, 0);
+    vox.onVoxGainChange(1.5);
+    vox.onAntiVoxGainChange(Number.NaN);
+    vox.onVoxDelayChange(Number.POSITIVE_INFINITY);
+    vox.onVoxGainChange(10);
+    vox.onAntiVoxGainChange(10);
+    vox.onVoxDelayChange(10);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(h.setAudioConfig).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('delegates exactly the A03d1a keyboard radio families through typed non-optimistic intent', () => {
+    const actions = [
+      { action: 'tune', params: { direction: 'up' } },
+      { action: 'band_select', params: { index: 3 } },
+      { action: 'mode_select', params: { mode: 'CW' } },
+      { action: 'cycle_data_mode' },
+      { action: 'cycle_filter', params: { direction: 'narrower' } },
+      { action: 'cycle_preamp' }, { action: 'cycle_att' }, { action: 'cycle_agc' },
+      { action: 'toggle_nr' }, { action: 'toggle_nb' },
+      { action: 'toggle_auto_notch' }, { action: 'toggle_ip_plus' },
+    ];
+
+    for (const action of actions) expect(dispatchKeyboardRadioAction(action)).toBe(true);
+
+    expect(exactCalls()).toEqual([
+      ['set_freq', { freq: 14_075_000, receiver: 0 }],
+      ['set_band', { band: 3 }],
+      ['set_mode', { mode: 'CW', receiver: 0 }],
+      ['set_data_mode', { mode: 2, receiver: 0 }],
+      ['set_filter', { filter: 3, receiver: 0 }],
+      ['set_preamp', { level: 1, receiver: 0 }],
+      ['set_attenuator', { db: 6, receiver: 0 }],
+      ['set_agc', { mode: 3, receiver: 0 }],
+      ['set_nr', { on: true, receiver: 0 }],
+      ['set_nb', { on: true, receiver: 0 }],
+      ['set_auto_notch', { on: true, receiver: 0 }],
+      ['set_ip_plus', { on: true, receiver: 0 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('delegates the complete A03d1b RIT, audio, monitor, and VFO keyboard families through typed intents', () => {
+    (h.state!.main as { rfGain: number }).rfGain = 128 / 255;
+    const actions = [
+      { action: 'toggle_rit' }, { action: 'toggle_xit' }, { action: 'clear_rit_xit' },
+      { action: 'adjust_af_level', params: { direction: 'up' } },
+      { action: 'adjust_rf_gain', params: { direction: 'down' } },
+      { action: 'toggle_monitor' }, { action: 'toggle_split' }, { action: 'vfo_swap' },
+      { action: 'vfo_equalize' }, { action: 'switch_active_vfo' },
+      { action: 'set_active_vfo', params: { vfo: 'MAIN' } },
+    ];
+
+    for (const action of actions) expect(dispatchKeyboardRadioAction(action)).toBe(true);
+
+    expect(exactCalls()).toEqual([
+      ['set_rit_status', { on: true }],
+      ['set_rit_tx_status', { on: false }],
+      ['set_rit_frequency', { freq: 0 }],
+      ['set_af_level', { level: 50 / 255 + 0.05, receiver: 0, level_unit: 'normalized' }],
+      ['set_rf_gain', { level: Math.round((128 / 255 - 0.05) * 255), receiver: 0 }],
+      ['set_monitor', { on: true }], ['set_split', { on: true }],
+      ['vfo_swap', {}], ['vfo_equalize', {}],
+      ['set_vfo', { vfo: 'SUB' }], ['set_vfo', { vfo: 'MAIN' }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(h.setAudioConfig).toHaveBeenNthCalledWith(1, { focus: 'sub' });
+    expect(h.setAudioConfig).toHaveBeenNthCalledWith(2, { focus: 'main' });
+  });
+
+  it('delegates keyboard dial and scope controls only from known generation-bound scope metadata', () => {
+    h.caps = {
+      ...h.caps!,
+      scope: true,
+      capabilities: [...(h.caps!.capabilities as string[]), 'dial_lock', 'scope'],
+      // MOR-3694: the IC-705/IC-7300 declared REF range (-20..+20, 0.5 dB).
+      ref_min_db: -20,
+      ref_max_db: 20,
+      ref_step_db: 0.5,
+    };
+    h.state = {
+      ...h.state!,
+      dialLock: false,
+      scopeControls: { span: 7, refDb: -20, hold: false, dual: false, speed: 0 },
+    } as ServerState;
+
+    const actions = [
+      { action: 'toggle_dial_lock' },
+      { action: 'scope_span_step', params: { direction: 'up' } },
+      { action: 'scope_ref_step', params: { direction: 'down' } },
+      { action: 'scope_toggle_hold' },
+      { action: 'scope_toggle_dual' },
+      { action: 'scope_toggle_fst' },
+    ];
+
+    for (const action of actions) expect(dispatchKeyboardRadioAction(action)).toBe(true);
+
+    expect(exactCalls()).toEqual([
+      ['set_dial_lock', { on: true }],
+      // At the declared floor the down-step stays at -20 (clamped to the
+      // radio's own range, not the old hard-coded -30).
+      ['set_scope_ref', { ref: -20 }],
+      ['set_scope_hold', { on: true }],
+      ['set_scope_dual', { dual: true }],
+      ['set_scope_speed', { speed: 1 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for keyboard dial and scope defaults, stale metadata, bad ranges, and impossible dual topology', () => {
+    h.caps = { ...h.caps!, scope: true, capabilities: [...(h.caps!.capabilities as string[]), 'dial_lock', 'scope'] };
+    h.state = {
+      ...h.state!,
+      dialLock: 'false',
+      scopeControls: { span: 8, refDb: 1.5, hold: 'no', dual: false, speed: 3 },
+    } as unknown as ServerState;
+
+    for (const action of [
+      { action: 'toggle_dial_lock' },
+      { action: 'scope_span_step', params: { direction: 'sideways' } },
+      { action: 'scope_ref_step', params: { direction: 'up' } },
+      { action: 'scope_toggle_hold' }, { action: 'scope_toggle_fst' },
+    ]) expect(dispatchKeyboardRadioAction(action)).toBe(true);
+
+    h.state = oneReceiverAbState();
+    h.state = { ...h.state, dialLock: false, scopeControls: { span: 0, refDb: 10, hold: false, dual: false, speed: 2 } } as ServerState;
+    h.caps = {
+      ...h.caps!,
+      receivers: 1,
+      vfoScheme: 'ab',
+      ref_min_db: -20,
+      ref_max_db: 20,
+      ref_step_db: 0.5,
+    };
+    expect(dispatchKeyboardRadioAction({ action: 'scope_toggle_dual' })).toBe(true);
+    expect(dispatchKeyboardRadioAction({ action: 'scope_span_step', params: { direction: 'down' } })).toBe(true);
+    expect(dispatchKeyboardRadioAction({ action: 'scope_ref_step', params: { direction: 'up' } })).toBe(true);
+    expect(dispatchKeyboardRadioAction({ action: 'scope_toggle_fst' })).toBe(true);
+    expect(exactCalls()).toEqual([
+      // 10 is inside the IC-705-style declared range: the up-step goes to
+      // 15 on the 5 dB grid, beyond the old hard-coded +10 ceiling.
+      ['set_scope_ref', { ref: 15 }],
+      ['set_scope_speed', { speed: 0 }],
+    ]);
+    expectIntentTransport();
+
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    h.unavailable.add('scopeControls.span');
+    expect(dispatchKeyboardRadioAction({ action: 'scope_span_step', params: { direction: 'up' } })).toBe(true);
+    h.unavailable.clear();
+    h.caps = { ...h.caps!, scope: false };
+    expect(dispatchKeyboardRadioAction({ action: 'scope_toggle_hold' })).toBe(true);
+    h.caps = { ...h.caps!, scope: true, capabilities: (h.caps!.capabilities as string[]).filter((name) => name !== 'dial_lock') };
+    expect(dispatchKeyboardRadioAction({ action: 'toggle_dial_lock' })).toBe(true);
+    h.caps = { ...h.caps!, providerGeneration: 99 };
+    expect(dispatchKeyboardRadioAction({ action: 'toggle_dial_lock' })).toBe(true);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('rejects malformed scope direction and every out-of-range observed REF step value', () => {
+    h.caps = {
+      ...h.caps!,
+      scope: true,
+      capabilities: [...(h.caps!.capabilities as string[]), 'scope'],
+      ref_min_db: -20,
+      ref_max_db: 20,
+      ref_step_db: 0.5,
+    };
+    h.state = { ...h.state!, scopeControls: { span: 3, refDb: 0, hold: false, dual: false, speed: 1 } } as ServerState;
+    expect(dispatchKeyboardRadioAction({ action: 'scope_span_step', params: { direction: 'sideways' } })).toBe(true);
+    for (const span of [-1, 8, 1.5]) {
+      h.state = { ...h.state!, scopeControls: { span, refDb: 0, hold: false, dual: false, speed: 1 } } as ServerState;
+      expect(dispatchKeyboardRadioAction({ action: 'scope_span_step', params: { direction: 'up' } })).toBe(true);
+    }
+    // MOR-3694: a readback outside the declared range (-20..+20) never
+    // computes a step — including the -22 the old offset grid produced.
+    for (const refDb of [-35, -22, 21]) {
+      h.state = { ...h.state!, scopeControls: { span: 3, refDb, hold: false, dual: false, speed: 1 } } as ServerState;
+      expect(dispatchKeyboardRadioAction({ action: 'scope_ref_step', params: { direction: 'up' } })).toBe(true);
+    }
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+
+    // An off-grid or half-dB readback INSIDE the declared range steps onto
+    // the 5 dB grid (the pre-fix code refused every non-integer readback).
+    // Up from -4.5 lands on the grid point ABOVE it (0), the same bucket
+    // rule as -4 up → 0; down from -4.5 would give -5 (SpectrumToolbar's
+    // "steps REF from a half-dB readback" case pins that direction).
+    h.sendCommand.mockClear();
+    for (const [refDb, expected] of [[15, 20], [1.5, 5], [-4, 0], [-4.5, 0], [19, 20]] as const) {
+      h.state = { ...h.state!, scopeControls: { span: 3, refDb, hold: false, dual: false, speed: 1 } } as ServerState;
+      expect(dispatchKeyboardRadioAction({ action: 'scope_ref_step', params: { direction: 'up' } })).toBe(true);
+      expect(h.sendCommand).toHaveBeenLastCalledWith('set_scope_ref', { ref: expected }, expect.any(String));
+    }
+    expect(exactCalls()).toEqual([
+      ['set_scope_ref', { ref: 20 }],
+      ['set_scope_ref', { ref: 5 }],
+      ['set_scope_ref', { ref: 0 }],
+      ['set_scope_ref', { ref: 0 }],
+      ['set_scope_ref', { ref: 20 }],
+    ]);
+    expectIntentTransport();
+  });
+
+  it('fails closed for scope REF commands when no range is declared (MOR-3694)', () => {
+    h.caps = { ...h.caps!, scope: true, capabilities: [...(h.caps!.capabilities as string[]), 'scope'] };
+    h.state = { ...h.state!, scopeControls: { span: 3, refDb: 0, hold: false, dual: false, speed: 1 } } as ServerState;
+
+    makeScopeControlsHandlers().onRefChange(0);
+    expect(dispatchKeyboardRadioAction({ action: 'scope_ref_step', params: { direction: 'up' } })).toBe(true);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('dispatches set_scope_ref only inside the declared range, from a half-dB readback', () => {
+    h.caps = {
+      ...h.caps!,
+      scope: true,
+      capabilities: [...(h.caps!.capabilities as string[]), 'scope'],
+      ref_min_db: -20,
+      ref_max_db: 20,
+      ref_step_db: 0.5,
+    };
+    h.state = { ...h.state!, scopeControls: { span: 3, refDb: -4.5, hold: false, dual: false, speed: 1 } } as ServerState;
+
+    makeScopeControlsHandlers().onRefChange(-5);
+    expect(exactCalls()).toEqual([['set_scope_ref', { ref: -5 }]]);
+    expectIntentTransport();
+
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    // The -22 the IC-705 received four times never dispatches; nor does a
+    // non-integer proposal or one beyond the declared ceiling.
+    for (const ref of [-22, 21, 0.5]) makeScopeControlsHandlers().onRefChange(ref);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('contains hostile parameters for each recognized dial and scope action before any effect', () => {
+    const getter = vi.fn(() => { throw new Error('getter executed'); });
+    const hostile = Object.defineProperty({}, 'direction', { enumerable: true, get: getter });
+    for (const action of [
+      'toggle_dial_lock', 'scope_span_step', 'scope_ref_step', 'scope_toggle_hold',
+      'scope_toggle_dual', 'scope_toggle_fst',
+    ]) {
+      expect(() => dispatchKeyboardRadioAction({ action, params: hostile })).not.toThrow();
+      expect(dispatchKeyboardRadioAction({ action, params: hostile })).toBe(true);
+    }
+    expect(getter).not.toHaveBeenCalled();
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('steps keyboard RF gain in raw units so up then down restores the exact raw value (MOR-1676 part R)', () => {
+    // 128/255 read back, published 0..255 domain: 5% of 255 rounds to 13.
+    (h.state!.main as { rfGain: number }).rfGain = 128 / 255;
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_rf_gain', params: { direction: 'up' } })).toBe(true);
+    expect(exactCalls()).toEqual([['set_rf_gain', { level: 141, receiver: 0 }]]);
+    expectIntentTransport();
+
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    (h.state!.main as { rfGain: number }).rfGain = 141 / 255;
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_rf_gain', params: { direction: 'down' } })).toBe(true);
+    expect(exactCalls()).toEqual([['set_rf_gain', { level: 128, receiver: 0 }]]);
+    expectIntentTransport();
+
+    // Clamp at the top: 255 up stays 255; every dispatched level is an integer.
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    (h.state!.main as { rfGain: number }).rfGain = 1;
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_rf_gain', params: { direction: 'up' } })).toBe(true);
+    expect(exactCalls()).toEqual([['set_rf_gain', { level: 255, receiver: 0 }]]);
+    expectIntentTransport();
+    for (const [, params] of exactCalls()) {
+      expect(Number.isInteger((params as { level: number }).level)).toBe(true);
+    }
+  });
+
+  it('clamps only known normalized keyboard AF/RF readings and keeps active runtime AF local', () => {
+    (h.state!.main as { afLevel: number; rfGain: number }).afLevel = 0.98;
+    (h.state!.main as { afLevel: number; rfGain: number }).rfGain = 0.02;
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_af_level', params: { direction: 'up' } })).toBe(true);
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_rf_gain', params: { direction: 'down' } })).toBe(true);
+    expect(exactCalls()).toEqual([
+      ['set_af_level', { level: 1, receiver: 0, level_unit: 'normalized' }],
+      ['set_rf_gain', { level: 0, receiver: 0 }],
+    ]);
+    expectIntentTransport();
+
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+    h.rxEnabled = true;
+    h.volume = 2;
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_af_level', params: { direction: 'down' } })).toBe(true);
+    expect(h.setRxVolume).toHaveBeenCalledWith(0);
+    expect(h.setVolume).toHaveBeenCalledWith(0);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+
+    h.rxEnabled = false;
+    (h.state!.main as { rfGain: number }).rfGain = 128;
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_rf_gain', params: { direction: 'up' } })).toBe(true);
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_rf_gain', params: { direction: 'sideways' } })).toBe(true);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  // MOR-4210: LIVE shortcuts step the browser volume, which runs past unity
+  // into makeup gain; the radio AF reading must not replace it.
+  it('steps the LIVE browser volume from its own reading, up to the browser maximum', () => {
+    h.rxEnabled = true;
+    h.volume = 150;
+    (h.state!.main as { afLevel: number }).afLevel = 0.5;
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_af_level', params: { delta: 5 } })).toBe(true);
+    expect(h.setRxVolume).toHaveBeenLastCalledWith(1.5 + 5 / 255);
+    expect(h.setVolume).toHaveBeenLastCalledWith(152);
+
+    h.volume = 198;
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_af_level', params: { direction: 'up' } })).toBe(true);
+    expect(h.setRxVolume).toHaveBeenLastCalledWith(2);
+    expect(h.setVolume).toHaveBeenLastCalledWith(200);
+
+    h.volume = 150;
+    expect(dispatchKeyboardRadioAction({ action: 'adjust_af_level', params: { direction: 'down' } })).toBe(true);
+    expect(h.setRxVolume.mock.lastCall?.[0]).toBeCloseTo(1.45, 12);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('rejects impossible one-receiver SUB selection without changing local audio while retaining MAIN with A/B facts', () => {
+    h.state = oneReceiverAbState();
+    h.caps = { ...h.caps!, receivers: 1, vfoScheme: 'ab' };
+    expect(dispatchKeyboardRadioAction({ action: 'switch_active_vfo' })).toBe(true);
+    expect(dispatchKeyboardRadioAction({ action: 'set_active_vfo', params: { vfo: 'SUB' } })).toBe(true);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(h.setAudioConfig).not.toHaveBeenCalled();
+
+    expect(dispatchKeyboardRadioAction({ action: 'set_active_vfo', params: { vfo: 'MAIN' } })).toBe(true);
+    expect(exactCalls()).toEqual([['set_vfo', { vfo: 'MAIN' }]]);
+    expectIntentTransport();
+    expect(h.setAudioConfig).toHaveBeenCalledExactlyOnceWith({ focus: 'main' });
+  });
+
+  it('toggles only a fresh observed active receiver on a declared dual-RX MAIN/SUB topology (MOR-1601)', () => {
+    const refuse = () => {
+      expect(dispatchKeyboardRadioAction({ action: 'switch_active_vfo' })).toBe(true);
+      expect(h.sendCommand).not.toHaveBeenCalled();
+      expect(h.setAudioConfig).not.toHaveBeenCalled();
+      expect(getCommandLifecycles()).toHaveLength(0);
+    };
+
+    h.unavailable.add('active');
+    refuse();
+    h.unavailable.clear();
+    h.state = { ...state(), fieldStatus: {} } as ServerState;
+    refuse();
+    h.state = {
+      ...state(),
+      fieldStatus: { active: { ...freshStatus, observed: false } },
+    } as ServerState;
+    refuse();
+    h.state = {
+      ...state(),
+      fieldStatus: { active: { ...freshStatus, freshness: 'stale' } },
+    } as ServerState;
+    refuse();
+    h.state = {
+      ...state(),
+      fieldStatus: { active: { storePath: 'active', observed: true, freshness: 'fresh' } },
+    } as unknown as ServerState;
+    refuse();
+    h.state = { ...state(), active: 'UNKNOWN' as never };
+    refuse();
+    h.state = { ...state(), providerGeneration: 32 };
+    refuse();
+    h.state = state();
+    h.caps = { ...h.caps!, capabilities: (h.caps!.capabilities as string[]).filter((cap) => cap !== 'dual_rx') };
+    refuse();
+    h.caps = { ...h.caps!, capabilities: [...(h.caps!.capabilities as string[]), 'dual_rx'], receivers: 1, vfoScheme: 'ab' };
+    h.state = oneReceiverAbState();
+    refuse();
+
+    h.caps = {
+      ...h.caps!, receivers: 2, vfoScheme: 'main_sub', providerGeneration: 31,
+      capabilities: [...(h.caps!.capabilities as string[]), 'dual_rx'],
+    };
+    h.state = state('MAIN');
+    expect(dispatchKeyboardRadioAction({ action: 'switch_active_vfo' })).toBe(true);
+    h.state = state('SUB');
+    expect(dispatchKeyboardRadioAction({ action: 'switch_active_vfo' })).toBe(true);
+
+    expect(exactCalls()).toEqual([
+      ['set_vfo', { vfo: 'SUB' }],
+      ['set_vfo', { vfo: 'MAIN' }],
+    ]);
+    expectIntentTransport();
+    expect(h.setAudioConfig).toHaveBeenNthCalledWith(1, { focus: 'sub' });
+    expect(h.setAudioConfig).toHaveBeenNthCalledWith(2, { focus: 'main' });
+  });
+
+  it('contains hostile params for every newly recognized keyboard action without touching radio or audio state', () => {
+    const actions = [
+      'toggle_rit', 'toggle_xit', 'clear_rit_xit', 'adjust_af_level', 'adjust_rf_gain',
+      'toggle_monitor', 'toggle_split', 'vfo_swap', 'vfo_equalize', 'switch_active_vfo', 'set_active_vfo',
+    ];
+    const getter = vi.fn(() => { throw new Error('getter executed'); });
+    const hostile = Object.defineProperty({}, 'vfo', { enumerable: true, get: getter });
+
+    for (const action of actions) {
+      expect(() => dispatchKeyboardRadioAction({ action, params: hostile })).not.toThrow();
+      expect(dispatchKeyboardRadioAction({ action, params: hostile })).toBe(true);
+    }
+    expect(getter).not.toHaveBeenCalled();
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(h.setAudioConfig).not.toHaveBeenCalled();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for invalid keyboard input while leaving deferred and local actions to their current owner', () => {
+    h.unavailable.add('main.freqHz');
+    expect(dispatchKeyboardRadioAction({ action: 'tune', params: { direction: 'up' } })).toBe(true);
+    h.unavailable.clear();
+    h.caps = { ...h.caps!, providerGeneration: 99 };
+    expect(dispatchKeyboardRadioAction({ action: 'cycle_preamp' })).toBe(true);
+    h.caps = { ...h.caps!, providerGeneration: 31, receivers: 1, vfoScheme: 'ab' };
+    h.state = { ...oneReceiverAbState(), active: 'SUB' } as ServerState;
+    expect(dispatchKeyboardRadioAction({ action: 'toggle_nr' })).toBe(true);
+    h.state = oneReceiverAbState();
+    (h.state.main as any).preamp = 99;
+    expect(dispatchKeyboardRadioAction({ action: 'cycle_preamp' })).toBe(true);
+    expect(dispatchKeyboardRadioAction({ action: 'cycle_filter', params: { direction: 'sideways' } })).toBe(true);
+    h.unavailable.add('ritOn');
+    expect(dispatchKeyboardRadioAction({ action: 'toggle_rit' })).toBe(true);
+    h.unavailable.clear();
+    expect(dispatchKeyboardRadioAction({ action: 'scope_toggle_hold' })).toBe(true);
+    expect(dispatchKeyboardRadioAction({ action: 'open_filter_settings' })).toBe(false);
+    expect(dispatchKeyboardRadioAction({ action: 'ptt_on' })).toBe(false);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('handles null params and non-positive observed tuning frequencies without emitting', () => {
+    expect(() => dispatchKeyboardRadioAction({ action: 'tune', params: null as unknown as Record<string, unknown> })).not.toThrow();
+    expect(dispatchKeyboardRadioAction({ action: 'tune', params: null as unknown as Record<string, unknown> })).toBe(true);
+    expect(dispatchKeyboardRadioAction({ action: 'toggle_nr', params: null as unknown as Record<string, unknown> })).toBe(true);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+
+    for (const frequency of [0, -500]) {
+      (h.state!.main as any).freqHz = frequency;
+      expect(dispatchKeyboardRadioAction({ action: 'tune', params: { deltaHz: 1_000 } })).toBe(true);
+      expect(dispatchKeyboardRadioAction({ action: 'band_select', params: { index: 3 } })).toBe(true);
+    }
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('handles hostile keyboard params without reading accessors or reflecting deferred actions', () => {
+    const getter = vi.fn(() => { throw new Error('getter executed'); });
+    const accessor = Object.defineProperty({}, 'direction', { enumerable: true, get: getter });
+    const prototypeTrap = new Proxy({}, { getPrototypeOf: () => { throw new Error('prototype trap executed'); } });
+    const ownKeysTrap = new Proxy({}, { ownKeys: () => { throw new Error('ownKeys trap executed'); } });
+    const descriptorTrap = new Proxy({}, {
+      ownKeys: () => ['direction'],
+      getOwnPropertyDescriptor: () => { throw new Error('descriptor trap executed'); },
+    });
+    const dataGet = vi.fn(() => { throw new Error('data get trap executed'); });
+    const dataProxy = new Proxy({ direction: 'up' }, { get: dataGet });
+    const invalid = [null, [], 1, 'up', accessor, prototypeTrap, ownKeysTrap, descriptorTrap];
+
+    for (const params of invalid) {
+      expect(() => dispatchKeyboardRadioAction({ action: 'tune', params: params as Record<string, unknown> })).not.toThrow();
+      expect(dispatchKeyboardRadioAction({ action: 'tune', params: params as Record<string, unknown> })).toBe(true);
+    }
+    expect(getter).not.toHaveBeenCalled();
+    expect(dispatchKeyboardRadioAction({ action: 'toggle_rit', params: prototypeTrap as Record<string, unknown> })).toBe(true);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+
+    const nullPrototype = Object.assign(Object.create(null) as Record<string, unknown>, { direction: 'up' });
+    // MOR-1425 review B5: 'tune' now shares ONE accumulator across calls
+    // (fixed from the pre-review bug where each call got independent
+    // state) — advance past the quiet window between calls so these three
+    // are independent cold starts, not one accumulating burst.
+    expect(dispatchKeyboardRadioAction({ action: 'tune', params: { direction: 'up' } })).toBe(true);
+    vi.advanceTimersByTime(4_500);
+    expect(dispatchKeyboardRadioAction({ action: 'tune', params: nullPrototype })).toBe(true);
+    vi.advanceTimersByTime(4_500);
+    expect(dispatchKeyboardRadioAction({ action: 'tune', params: dataProxy })).toBe(true);
+    expect(dataGet).not.toHaveBeenCalled();
+    expect(exactCalls()).toEqual([
+      ['set_freq', { freq: 14_075_000, receiver: 0 }],
+      ['set_freq', { freq: 14_075_000, receiver: 0 }],
+      ['set_freq', { freq: 14_075_000, receiver: 0 }],
+    ]);
+    expectIntentTransport();
+  });
+
+  it('keeps a one-receiver MAIN with A/B and Unselected facts valid for keyboard tuning', () => {
+    h.state = oneReceiverAbState();
+    h.caps = { ...h.caps!, receivers: 1, vfoScheme: 'ab' };
+
+    expect(dispatchKeyboardRadioAction({ action: 'tune', params: { deltaHz: 500 } })).toBe(true);
+
+    expect(exactCalls()).toEqual([['set_freq', { freq: 14_074_500, receiver: 0 }]]);
+    expectIntentTransport();
+  });
+
+  it('turns auto-notch off without changing the independently observed manual-notch state', () => {
+    (h.state!.main as any).autoNotch = true;
+    (h.state!.main as any).manualNotch = true;
+
+    expect(dispatchKeyboardRadioAction({ action: 'toggle_auto_notch' })).toBe(true);
+
+    expect(exactCalls()).toEqual([['set_auto_notch', { on: false, receiver: 0 }]]);
+    expectIntentTransport();
+  });
+
+  // MOR-1409 A15: this file carried ~18 source-text assertions of the form
+  // "the compatibility bus declares no logic of its own", plus three
+  // identity-parity tests against its re-exports. The bus is deleted, so all
+  // of them are subsumed by the pin below — the terminal form of the same
+  // claim, and the only form a regrown shim cannot satisfy.
+  it('leaves no compatibility bus for canonical ownership to leak back into', () => {
+    expect(existsSync(resolve(process.cwd(), 'src/components-v2/wiring/command-bus.ts'))).toBe(false);
+  });
+
+  it('keeps raw transport out of migrated blocks and Store writers out of their implementation', () => {
+    const panelSource = readFileSync(resolve(process.cwd(), 'src/lib/runtime/commands/panel-commands.ts'), 'utf8');
+    const assignedNames = [
+      'makeAgcHandlers', 'makeBandHandlers', 'makeDspHandlers', 'makeFilterHandlers',
+      'makeModeHandlers', 'makePresetHandlers', 'makeRfFrontEndHandlers',
+      'makeRitXitHandlers', 'makeRxAudioHandlers', 'makeCwPanelHandlers',
+      'makeTxHandlers', 'makeAntennaHandlers', 'makeScanHandlers',
+      'makeVfoHandlers', 'makeVoxHandlers', 'makeAudioRoutingHandlers',
+    ];
+
+    for (const [index, name] of assignedNames.entries()) {
+      const start = panelSource.indexOf(`export function ${name}`);
+      const nextStarts = assignedNames
+        .slice(index + 1)
+        .map((next) => panelSource.indexOf(`export function ${next}`, start + 1))
+        .filter((next) => next >= 0);
+      const genericNext = panelSource.indexOf('\nexport function ', start + 1);
+      const end = Math.min(...[genericNext, ...nextStarts].filter((next) => next >= 0));
+      const block = panelSource.slice(start, end);
+      expect(block).not.toMatch(/\b(?:patchActiveReceiver|patchRadioState|patchReceiver|sendCommand)\s*\(/);
+    }
+    const a03aNames = '';
+    for (const name of [
+      'set_attenuator', 'set_preamp', 'set_rf_gain',
+      'set_squelch', 'set_digisel', 'set_ip_plus',
+    ]) {
+      expect(a03aNames).not.toContain(`'${name}'`);
+    }
+    expect(panelSource).toContain('export function makeRfFrontEndHandlers');
+    const rfStart = panelSource.indexOf('export function makeRfFrontEndHandlers');
+    const rfEnd = panelSource.indexOf('\nexport function ', rfStart + 1);
+    const rfBlock = panelSource.slice(rfStart, rfEnd);
+    expect(rfBlock).not.toMatch(/\b(?:freqHz|activeSlot|vfoA|vfoB|unselectedVfo)\b/);
+    expect(panelSource).not.toContain('A03A_INTENT_NAMES');
+    expect(panelSource).not.toMatch(/\bfunction cmd\s*\(/);
+    expect(panelSource).not.toContain("from '$lib/transport/ws-client'");
+
+    for (const name of [
+      'set_agc', 'set_agc_time_constant', 'set_rit_status', 'set_rit_tx_status',
+      'set_rit_frequency', 'set_band', 'set_freq', 'set_mode', 'set_nr',
+      'set_nr_level', 'set_nb', 'set_nb_level', 'set_auto_notch',
+      'set_manual_notch', 'set_notch_filter', 'set_nb_depth', 'set_nb_width',
+      'set_manual_notch_width', 'set_af_level',
+    ]) {
+      expect(a03aNames).not.toContain(`'${name}'`);
+    }
+
+    for (const name of [
+      'set_antenna_1', 'set_antenna_2', 'set_rx_antenna_ant1', 'set_rx_antenna_ant2',
+      'scan_start', 'scan_stop', 'scan_set_df_span', 'scan_set_resume',
+      'set_cw_pitch', 'set_key_speed', 'set_break_in', 'set_apf', 'set_twin_peak',
+      'cw_auto_tune', 'set_break_in_delay', 'set_monitor_gain', 'set_dash_ratio',
+      'set_rf_power', 'set_mic_gain', 'set_tuner_status', 'set_vox', 'set_compressor',
+      'set_compressor_level', 'set_monitor', 'set_drive_gain',
+      'set_vfo', 'vfo_swap', 'vfo_equalize', 'set_split', 'set_dual_watch',
+      'set_main_sub_tracking',
+    ]) {
+      expect(a03aNames).not.toContain(`'${name}'`);
+    }
+
+    for (const factory of ['makeBandHandlers', 'makePresetHandlers']) {
+      const start = panelSource.indexOf(`export function ${factory}`);
+      const end = panelSource.indexOf('\nexport function ', start + 1);
+      expect(panelSource.slice(start, end)).not.toMatch(/\b(?:activeSlot|vfoA|vfoB|unselectedVfo)\b/);
+    }
+    for (const factory of ['makeCwPanelHandlers', 'makeTxHandlers', 'makeAntennaHandlers', 'makeScanHandlers']) {
+      const start = panelSource.indexOf(`export function ${factory}`);
+      const end = panelSource.indexOf('\nexport function ', start + 1);
+      const block = panelSource.slice(start, end);
+      expect(block).not.toMatch(/\bcmd\s*\(/);
+      expect(block).not.toMatch(/\b(?:activeSlot|vfoA|vfoB|unselectedVfo)\b/);
+      expect(block).toContain('dispatchRadioIntent');
+    }
+    expect(panelSource).not.toContain('onKeyerTypeChange');
+    expect(panelSource).not.toContain('set_keyer_type');
+    expect(panelSource).toContain('export function makeVfoHandlers');
+    expect(panelSource).toContain('export function makeVoxHandlers');
+    for (const canonical of [
+      'makeSystemHandlers', 'makeScopeControlsHandlers', 'makeKeyboardHandlers',
+    ]) {
+      expect(panelSource).toContain(`export function ${canonical}`);
+    }
+    for (const action of [
+      'toggle_dial_lock', 'scope_span_step', 'scope_ref_step', 'scope_toggle_hold',
+      'scope_toggle_dual', 'scope_toggle_fst',
+    ]) {
+      expect(panelSource).toContain(`'${action}'`);
+    }
+    expect(panelSource).not.toContain('export function makeMeterHandlers');
+    expect(panelSource.match(/function toggleVox/g)).toHaveLength(1);
+    expect(panelSource.match(/onVoxToggle:\s*toggleVox/g)).toHaveLength(2);
+    expect(panelSource).not.toMatch(/dispatchRadioIntent\(\{\s*name:\s*['"]ptt(?:_on|_off)?['"]/);
+  });
+});
+
+describe('MOR-2500 twin-PBT writers on the measured lattice', () => {
+  // The radio snaps twin-PBT writes onto a lattice: step per mode
+  // (`filterConfig[mode].pbtStepHz`), span +/-floor(width/(2*step))*step of
+  // the CURRENT filter width (+/-1800 Hz at 3600, only +/-100 at 250). These pins hold the WRITE path
+  // (`makeFilterHandlers`' PBT family) to that lattice: the current edges
+  // are read with `measuredPbtRawToHz` and written with
+  // `measuredPbtHzToRaw`, one resolution of the mode + dataMode of the
+  // ACTIVE receiver (mirroring `radio-view-model-adapter.ts`), and a mode
+  // with no step -- FM, or a legacy payload no mode of which declares one
+  // -- refuses BEFORE the wire.
+  beforeEach(() => {
+    h.state = state();
+    h.caps = {
+      capabilities: ['pbt'],
+      stateContractVersion: 1,
+      providerGeneration: 31,
+      receivers: 2,
+      vfoScheme: 'main_sub',
+      controls: {
+        pbt_inner: { raw_min: 0, raw_max: 255, raw_center: 128, display_min: -1200, display_max: 1200 },
+      },
+      filterConfig: {
+        USB: { pbtStepHz: 50 },
+        AM: { pbtStepHz: 200 },
+        FM: { fixed: true, defaults: [15000] },
+      },
+    } as unknown as Record<string, unknown>;
+    h.unavailable.clear();
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+  });
+
+  afterEach(() => resetCommandLifecycle());
+
+  function usbEdgesState(): ServerState {
+    return {
+      ...h.state!,
+      main: { ...h.state!.main!, filterWidth: 3600, pbtInner: 160, pbtOuter: 96 },
+    } as ServerState;
+  }
+
+  function dispatchedPbtRaws(): { inner: number; outer: number } {
+    const inner = h.sendCommand.mock.calls
+      .find(([name]) => name === 'set_pbt_inner')?.[1].value as number;
+    const outer = h.sendCommand.mock.calls
+      .find(([name]) => name === 'set_pbt_outer')?.[1].value as number;
+    return { inner, outer };
+  }
+
+  it('moves an asymmetric passband without collapsing its width (MOR-2500 acceptance)', () => {
+    h.state = usbEdgesState();
+    // On the lattice (filter 3600, step 50): raw 160 reads +450 Hz and raw
+    // 96 reads -450 Hz -- a 900 Hz passband. The old write path fed these
+    // raws into `mapIfShiftToPbt` as if they were Hz and dispatched a 100 Hz
+    // passband (raws 163/157).
+    const widthBefore = measuredPbtRawToHz(160, 3600, 50)! - measuredPbtRawToHz(96, 3600, 50)!;
+    expect(widthBefore).toBe(900);
+
+    makeFilterHandlers().onIfShiftChange(300);
+
+    const { inner, outer } = dispatchedPbtRaws();
+    expect(inner).toBe(180);
+    expect(outer).toBe(117);
+    expect(measuredPbtRawToHz(inner, 3600, 50)! - measuredPbtRawToHz(outer, 3600, 50)!)
+      .toBe(widthBefore);
+  });
+
+  it('snaps an off-lattice requested shift to the nearest expressible whole-step shift', () => {
+    h.state = usbEdgesState();
+    // 310 Hz is between the +300 and +350 lattice shifts; the nearest
+    // expressible one is +300, the same raws as the acceptance case.
+    makeFilterHandlers().onIfShiftChange(310);
+
+    const { inner, outer } = dispatchedPbtRaws();
+    expect(inner).toBe(180);
+    expect(outer).toBe(117);
+  });
+
+  it('clamps an out-of-reach shift at the passband span instead of narrowing the passband', () => {
+    h.state = usbEdgesState();
+    // Edges at +/-450 Hz of a 3600 Hz filter: the top edge can only reach
+    // +1800, so the requested +1500 shift clamps to +1350. The width stays
+    // 900 Hz -- the SHIFT is clamped, never one edge alone.
+    makeFilterHandlers().onIfShiftChange(1500);
+
+    const { inner, outer } = dispatchedPbtRaws();
+    expect(inner).toBe(254);
+    expect(outer).toBe(191);
+    expect(measuredPbtRawToHz(inner, 3600, 50)! - measuredPbtRawToHz(outer, 3600, 50)!).toBe(900);
+  });
+
+  it('writes the nearest reachable lattice raw for a Hz edge value (onPbtInner/onPbtOuter)', () => {
+    h.state = usbEdgesState();
+    const filter = makeFilterHandlers();
+    // +1500 Hz at filter 3600 is reachable on the lattice (raw 233); the
+    // old proportional `pbtHzToRaw` saturated it to the unreachable raw 255.
+    filter.onPbtInnerChange(1500);
+    filter.onPbtOuterChange(1500);
+    filter.onPbtInnerChange(-1500);
+
+    expect(exactCalls()).toEqual([
+      ['set_pbt_inner', { value: 233, receiver: 0 }],
+      ['set_pbt_outer', { value: 233, receiver: 0 }],
+      ['set_pbt_inner', { value: 22, receiver: 0 }],
+    ]);
+    expectIntentTransport();
+  });
+
+  it('resets both edges to the lattice centre', () => {
+    h.state = usbEdgesState();
+    makeFilterHandlers().onPbtReset();
+
+    expect(exactCalls()).toEqual([
+      ['set_pbt_inner', { value: 128, receiver: 0 }],
+      ['set_pbt_outer', { value: 128, receiver: 0 }],
+    ]);
+    expectIntentTransport();
+  });
+
+  it('takes the 200 Hz AM step from the mode, not a hardcoded 50 Hz one', () => {
+    h.state = {
+      ...h.state!,
+      main: { ...h.state!.main!, mode: 'AM', dataMode: 0, filterWidth: 9000 },
+    } as ServerState;
+    // On the AM lattice (9000 Hz width, 200 Hz step: 45 positions, centre
+    // raw 128): +150 Hz snaps to +200 Hz, raw 133. A 50 Hz step would put
+    // +150 Hz at raw 132 on the wrong grid.
+    makeFilterHandlers().onPbtInnerChange(150);
+
+    expect(exactCalls()).toEqual([['set_pbt_inner', { value: 133, receiver: 0 }]]);
+    expect(measuredPbtHzToRaw(150, 9000, 200)).toBe(133);
+  });
+
+  it('refuses every PBT write in a mode with no twin PBT (FM): no command leaves the handlers', () => {
+    h.state = {
+      ...h.state!,
+      main: { ...h.state!.main!, mode: 'FM', dataMode: 0, filterWidth: 9000 },
+    } as ServerState;
+    const filter = makeFilterHandlers();
+    filter.onPbtInnerChange(100);
+    filter.onPbtOuterChange(-100);
+    filter.onPbtReset();
+    filter.onIfShiftChange(300);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('refuses every PBT write when no mode declares a step (legacy payload without pbtStepHz)', () => {
+    h.caps = {
+      ...h.caps,
+      filterConfig: {
+        USB: { defaults: [3000, 2400, 1800], fixed: false, minHz: 50, maxHz: 3600, stepHz: 50 },
+      },
+    } as unknown as Record<string, unknown>;
+    const filter = makeFilterHandlers();
+    filter.onPbtInnerChange(100);
+    filter.onPbtOuterChange(-100);
+    filter.onPbtReset();
+    filter.onIfShiftChange(300);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it("resolves the SUB receiver's own mode and width when SUB is active", () => {
+    const base = state('SUB');
+    h.state = {
+      ...base,
+      sub: { ...base.sub!, mode: 'AM', dataMode: 0, filterWidth: 9000 },
+    } as ServerState;
+    // MAIN stays USB/3600 where +150 Hz maps to raw 138; SUB's own AM/9000
+    // lattice maps it to raw 133.
+    makeFilterHandlers().onPbtInnerChange(150);
+
+    expect(exactCalls()).toEqual([['set_pbt_inner', { value: 133, receiver: 1 }]]);
+  });
+
+  it('keeps the native if_shift branch byte-for-byte: Hz offset straight to set_if_shift', () => {
+    h.caps = { ...h.caps, capabilities: ['if_shift', 'pbt'] } as Record<string, unknown>;
+    makeFilterHandlers().onIfShiftChange(300);
+
+    expect(exactCalls()).toEqual([['set_if_shift', { offset: 300, receiver: 0 }]]);
+    expectIntentTransport();
+  });
+});
+
+describe('MOR-1409 A03e canonical system, scope, and local keyboard ownership', () => {
+  beforeEach(() => {
+    h.state = state();
+    h.caps = {
+      capabilities: ['scope', 'dual_rx', 'dial_lock', 'power_control'],
+      scope: true,
+      // MOR-3694: the REF range the real IC-7300 fixture publishes; without
+      // it onRefChange fails closed and the scope vocabulary below would
+      // lose its set_scope_ref entry.
+      ref_min_db: -20,
+      ref_max_db: 20,
+      ref_step_db: 0.5,
+      stateContractVersion: 1,
+      providerGeneration: 31,
+      receivers: 2,
+      vfoScheme: 'main_sub',
+      modes: [], filters: [], dataModeCount: 0, preValues: [], attValues: [], agcModes: [],
+    };
+    h.state = {
+      ...h.state,
+      dialLock: false,
+      scopeControls: {
+        mode: 1, edge: 2, span: 3, speed: 1, hold: false, refDb: -5,
+        dual: false, receiver: 0, duringTx: false, centerType: 1, vbwNarrow: false,
+        rbw: 1, fixedEdge: { rangeIndex: 0, edge: 1, startHz: 1, endHz: 2 },
+      },
+    } as ServerState;
+    h.unavailable.clear();
+    h.sendCommand.mockClear();
+    h.patchRadioState.mockClear();
+    resetCommandLifecycle();
+  });
+
+  afterEach(() => resetCommandLifecycle());
+
+  it('emits the exact system and full scope vocabulary through one non-optimistic typed lifecycle each', () => {
+    const system = makeSystemHandlers();
+    const scope = makeScopeControlsHandlers();
+    system.onDialLock(true);
+    system.onPowerOff();
+    scope.onModeChange(0); scope.onEdgeChange(1); scope.onSpanChange(7); scope.onSpeedChange(2);
+    scope.onHoldChange(true); scope.onRefChange(10); scope.onDualChange(true); scope.onReceiverChange(1);
+    scope.onDuringTxChange(true); scope.onCenterTypeChange(2); scope.onVbwChange(true); scope.onRbwChange(2);
+    expect(exactCalls()).toEqual([
+      ['set_dial_lock', { on: true }], ['set_powerstat', { on: false }],
+      ['set_scope_mode', { mode: 0 }], ['set_scope_edge', { edge: 1 }],
+      ['set_scope_speed', { speed: 2 }], ['set_scope_hold', { on: true }], ['set_scope_ref', { ref: 10 }],
+      ['set_scope_dual', { dual: true }], ['switch_scope_receiver', { receiver: 1 }],
+      ['set_scope_during_tx', { on: true }], ['set_scope_center_type', { center_type: 2 }],
+      ['set_scope_vbw', { narrow: true }], ['set_scope_rbw', { rbw: 2 }],
+    ]);
+    expectIntentTransport();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(h.state?.dialLock).toBe(false);
+    expect(h.state?.scopeControls).toMatchObject({
+      mode: 1, edge: 2, span: 3, speed: 1, hold: false, refDb: -5,
+      dual: false, receiver: 0, duringTx: false, centerType: 1, vbwNarrow: false, rbw: 1,
+    });
+  });
+
+  it('fails system controls closed on stale generations, absent capabilities, unavailable or unknown dial truth', () => {
+    const system = makeSystemHandlers();
+    h.caps = { ...h.caps!, providerGeneration: 99 };
+    system.onDialLock(true); system.onPowerOff();
+    h.caps = { ...h.caps!, providerGeneration: 31, capabilities: [] };
+    system.onDialLock(true); system.onPowerOff();
+    h.caps = { ...h.caps!, capabilities: ['dial_lock', 'power_control'] };
+    h.unavailable.add('dialLock');
+    system.onDialLock(true);
+    h.unavailable.clear();
+    h.state = { ...h.state!, dialLock: 'no' } as unknown as ServerState;
+    system.onDialLock(true);
+    system.onDialLock(1 as unknown as boolean);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+
+  });
+
+  it('rejects every invalid current or proposed scope domain and unavailable exact leaves', () => {
+    const scope = makeScopeControlsHandlers();
+    const calls = () => {
+      scope.onModeChange(4); scope.onEdgeChange(0); scope.onSpanChange(1.5);
+      scope.onSpeedChange(3); scope.onHoldChange(1 as unknown as boolean);
+      scope.onRefChange(-31); scope.onDualChange(1 as unknown as boolean);
+      scope.onReceiverChange(2); scope.onDuringTxChange('yes' as unknown as boolean);
+      scope.onCenterTypeChange(-1); scope.onVbwChange(0 as unknown as boolean); scope.onRbwChange(3);
+    };
+    calls();
+    h.state = { ...h.state!, scopeControls: { ...h.state!.scopeControls!, mode: 1.5 } } as ServerState;
+    scope.onModeChange(1);
+    h.unavailable.add('scopeControls.span');
+    scope.onSpanChange(4);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('requires generation-bound agreed hardware scope and exact physical SUB evidence', () => {
+    const scope = makeScopeControlsHandlers();
+    h.caps = { ...h.caps!, providerGeneration: 99 };
+    scope.onSpanChange(4);
+    h.caps = { ...h.caps!, providerGeneration: 31, scope: false };
+    scope.onHoldChange(true);
+    h.caps = { ...h.caps!, scope: true, capabilities: ['dual_rx'] };
+    scope.onRbwChange(2);
+
+    h.state = oneReceiverAbState();
+    h.state = { ...h.state, providerGeneration: 31, scopeControls: {
+      mode: 1, edge: 2, span: 3, speed: 1, hold: false, refDb: -5,
+      dual: false, receiver: 0, duringTx: false, centerType: 1, vbwNarrow: false,
+      rbw: 1, fixedEdge: { rangeIndex: 0, edge: 1, startHz: 1, endHz: 2 },
+    } } as ServerState;
+    h.caps = { ...h.caps!, capabilities: ['scope'], receivers: 1, vfoScheme: 'ab' };
+    scope.onReceiverChange(0);
+    scope.onReceiverChange(1);
+    scope.onDualChange(true);
+    expect(exactCalls()).toEqual([['switch_scope_receiver', { receiver: 0 }]]);
+    expectIntentTransport();
+  });
+});
+
+const A06_SEGMENTS: FilterModeConfig = {
+  defaults: [3000, 2400, 1800], fixed: false, minHz: 50, maxHz: 3600,
+  segments: [
+    { hzMin: 50, hzMax: 500, stepHz: 50, indexMin: 0 },
+    { hzMin: 600, hzMax: 3600, stepHz: 100, indexMin: 10 },
+  ],
+};
+const A06_TABLE: FilterModeConfig = {
+  defaults: [2400, 1800, 300], fixed: false,
+  table: [300, 600, 1200, 1800, 2400, 3000],
+};
+const A06_STEP: FilterModeConfig = {
+  defaults: [3050, 1750, 550], fixed: false, minHz: 250, maxHz: 3550, stepHz: 100,
+};
+
+function a06State(active: 'MAIN' | 'SUB' = 'MAIN'): ServerState {
+  const current = state(active);
+  const paths = [
+    'active', 'main.mode', 'main.filterWidth', 'main.dataMode',
+    'sub.mode', 'sub.filterWidth', 'sub.dataMode',
+  ];
+  return {
+    ...current,
+    fieldStatus: Object.fromEntries(paths.map((path) => [path, { ...freshStatus, storePath: path }])),
+  } as ServerState;
+}
+
+function a06Caps(rule: FilterModeConfig = A06_SEGMENTS): Capabilities {
+  return {
+    model: 'fixture', scope: true, audio: true, tx: true,
+    capabilities: ['filter_width', 'data_mode', 'dual_rx'],
+    stateContractVersion: 1, providerGeneration: 31,
+    receivers: 2, vfoScheme: 'main_sub', freqRanges: [], modes: ['USB'], filters: ['FIL1'],
+    filterConfig: { USB: rule },
+    audioConfig: { sampleRate: 48_000, channels: 1, codecs: ['pcm16'] },
+    webrtc: { available: false, enabled: false }, txBands: [],
+  };
+}
+
+describe('MOR-1409 A06a1 synchronous final filter-width authority', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h.state = a06State();
+    h.caps = a06Caps() as unknown as Record<string, unknown>;
+    h.unavailable.clear();
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+  });
+
+  afterEach(() => {
+    resetCommandLifecycle();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['segmented', A06_SEGMENTS, 2400],
+    ['table', A06_TABLE, 1800],
+    ['simple-step', A06_STEP, 1750],
+  ] as const)('commits one exact synchronous %s intent with no timer', (_name, rule, width) => {
+    h.caps = a06Caps(rule) as unknown as Record<string, unknown>;
+    makeFilterHandlers().onFilterWidthCommit(width, 0, 31);
+
+    expect(exactCalls()).toEqual([['set_filter_width', { width, receiver: 0 }]]);
+    expectIntentTransport();
+    // The one timer belongs to the existing command-lifecycle timeout. The
+    // new handler itself stays synchronous and owns no debounce/timer.
+    expect(vi.getTimerCount()).toBe(1);
+    const source = readFileSync(resolve(process.cwd(), 'src/lib/runtime/commands/panel-commands.ts'), 'utf8');
+    const commitBlock = source.slice(source.indexOf('onFilterWidthCommit:'), source.indexOf('onFilterShapeChange:'));
+    expect(commitBlock).not.toContain('setTimeout');
+    expect(h.patchActiveReceiver).not.toHaveBeenCalled();
+    expect(h.patchRadioState).not.toHaveBeenCalled();
+    expect(h.patchReceiver).not.toHaveBeenCalled();
+  });
+
+  it('accepts the valid observed dual-SUB physical receiver exactly once', () => {
+    h.state = a06State('SUB');
+    makeFilterHandlers().onFilterWidthCommit(2400, 1, 31);
+
+    expect(exactCalls()).toEqual([['set_filter_width', { width: 2400, receiver: 1 }]]);
+    expectIntentTransport();
+  });
+
+  it('retains the legacy delayed handler independently of the synchronous member', () => {
+    const handlers = makeFilterHandlers();
+    handlers.onFilterWidthChange(1800);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(199);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(exactCalls()).toEqual([['set_filter_width', { width: 1800, receiver: 0 }]]);
+  });
+
+  it('commits filter width on a single-receiver radio although active is structurally unobservable (MOR-1418)', () => {
+    h.caps = {
+      ...a06Caps(), receivers: 1, vfoScheme: 'ab', capabilities: ['filter_width', 'data_mode'],
+    } as unknown as Record<string, unknown>;
+    h.state = a06State();
+    h.unavailable.add('active');
+
+    makeFilterHandlers().onFilterWidthCommit(2400, 0, 31);
+
+    expect(exactCalls()).toEqual([['set_filter_width', { width: 2400, receiver: 0 }]]);
+    expectIntentTransport();
+  });
+
+  it('still requires observed active on dual-receiver radios for filter-width commit (no regression, MOR-1418)', () => {
+    h.caps = a06Caps() as unknown as Record<string, unknown>;
+    h.state = a06State();
+    h.unavailable.add('active');
+
+    makeFilterHandlers().onFilterWidthCommit(2400, 0, 31);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('rejects unsafe generations, mismatched epochs, stale identity, and target disagreement', () => {
+    const commit = (generation: number, receiver: 0 | 1 = 0) =>
+      makeFilterHandlers().onFilterWidthCommit(2400, receiver, generation);
+    commit(-1); commit(Number.MAX_SAFE_INTEGER + 1); commit(30);
+    h.caps = { ...a06Caps(), providerGeneration: 32 } as unknown as Record<string, unknown>;
+    commit(31);
+    h.caps = a06Caps() as unknown as Record<string, unknown>;
+    h.unavailable.add('active'); commit(31);
+    h.unavailable.clear(); commit(31, 1);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('rejects every impossible SUB topology and absent physical SUB state', () => {
+    h.state = a06State('SUB');
+    const attempt = () => makeFilterHandlers().onFilterWidthCommit(2400, 1, 31);
+    for (const caps of [
+      { ...a06Caps(), capabilities: ['filter_width', 'data_mode'] },
+      { ...a06Caps(), receivers: 1, vfoScheme: 'ab' },
+      { ...a06Caps(), receivers: 1 },
+      { ...a06Caps(), vfoScheme: 'single' },
+    ]) {
+      h.caps = caps as unknown as Record<string, unknown>; attempt();
+    }
+    h.caps = a06Caps() as unknown as Record<string, unknown>;
+    h.state = { ...a06State('SUB'), sub: null } as unknown as ServerState;
+    attempt();
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  // MOR-1576: this used to also require fresh positive `main.filterWidth`
+  // (both unavailable and value 0/NaN cases) — that was a receiver-identity
+  // proxy check, not a functional need, since the write never reads a
+  // confirmed prior `filterWidth`; it resolves the quantization rule from
+  // `mode`/`dataMode` alone and validates the passed `width` PARAMETER
+  // (see the separate "rejects ... unsafe candidates" case below, which
+  // still covers `attempt(0)`/`attempt(NaN)` on the parameter itself).
+  it('requires fresh current mode and supported DATA facts; filterWidth observation is no longer required', () => {
+    const attempt = () => makeFilterHandlers().onFilterWidthCommit(2400, 0, 31);
+    for (const path of ['main.mode', 'main.dataMode']) {
+      h.unavailable.add(path); attempt(); h.unavailable.clear();
+    }
+    for (const [field, value] of [
+      ['mode', ''], ['dataMode', -1],
+    ] as const) {
+      h.state = { ...a06State(), main: { ...a06State().main, [field]: value } } as ServerState;
+      attempt();
+    }
+    // main.filterWidth unavailable/stale no longer blocks the commit.
+    h.state = a06State();
+    h.unavailable.add('main.filterWidth');
+    attempt();
+    h.unavailable.clear();
+    h.state = a06State();
+    h.caps = { ...a06Caps(), capabilities: ['filter_width'] } as unknown as Record<string, unknown>;
+    h.unavailable.add('main.dataMode');
+    attempt();
+    expect(exactCalls()).toEqual([
+      ['set_filter_width', { width: 2400, receiver: 0 }],
+      ['set_filter_width', { width: 2400, receiver: 0 }],
+    ]);
+  });
+
+  // MOR-1576 review (B2): the removed `positiveSafeInteger(currentWidth)`
+  // check used to reject `main.filterWidth === 0` even though it's fresh
+  // and observed (0 isn't positive). Pin the behavior change directly:
+  // an observed-but-zero `filterWidth` no longer blocks the commit, since
+  // the write never reads it — only `mode`/`dataMode` (to resolve the
+  // quantization rule) and the passed `width` PARAMETER matter now.
+  it('dispatches even when observed main.filterWidth is 0 (MOR-1576: removed the positiveSafeInteger(currentWidth) proxy check)', () => {
+    h.state = { ...a06State(), main: { ...a06State().main, filterWidth: 0 } } as ServerState;
+
+    makeFilterHandlers().onFilterWidthCommit(2400, 0, 31);
+
+    expect(exactCalls()).toEqual([['set_filter_width', { width: 2400, receiver: 0 }]]);
+  });
+
+  it('rejects missing capability, unresolved/fixed/default-only rules and unsafe candidates', () => {
+    const attempt = (width: number = 2400) => makeFilterHandlers().onFilterWidthCommit(width, 0, 31);
+    h.caps = { ...a06Caps(), capabilities: ['data_mode'] } as unknown as Record<string, unknown>; attempt();
+    h.caps = { ...a06Caps(), filterConfig: {} } as unknown as Record<string, unknown>; attempt();
+    h.caps = a06Caps({ defaults: [2400], fixed: true, table: [2400] }) as unknown as Record<string, unknown>; attempt();
+    h.caps = a06Caps({ defaults: [2400], fixed: false, minHz: 50, maxHz: 3600 }) as unknown as Record<string, unknown>; attempt();
+    h.caps = a06Caps() as unknown as Record<string, unknown>;
+    attempt(0); attempt(Number.NaN); attempt(Number.MAX_SAFE_INTEGER + 1);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { defaults: [], fixed: false, table: [] },
+    { defaults: [], fixed: false, table: [300, 300, 600] },
+    { defaults: [], fixed: false, table: [600, 300] },
+    { defaults: [], fixed: false, minHz: 400, maxHz: 2400, table: [300, 600, 2400] },
+    { defaults: [], fixed: false, table: [300, 600], segments: A06_SEGMENTS.segments },
+  ] as FilterModeConfig[])('rejects malformed table metadata %#', (rule) => {
+    h.caps = a06Caps(rule) as unknown as Record<string, unknown>;
+    makeFilterHandlers().onFilterWidthCommit(600, 0, 31);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('rejects table nonmembers even inside its numeric bounds', () => {
+    h.caps = a06Caps(A06_TABLE) as unknown as Record<string, unknown>;
+    makeFilterHandlers().onFilterWidthCommit(2000, 0, 31);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ...A06_SEGMENTS, segments: [] },
+    { ...A06_SEGMENTS, segments: [{ hzMin: 0, hzMax: 500, stepHz: 50, indexMin: 0 }] },
+    { ...A06_SEGMENTS, segments: [{ hzMin: 500, hzMax: 50, stepHz: 50, indexMin: 0 }] },
+    { ...A06_SEGMENTS, segments: [{ hzMin: 50, hzMax: 525, stepHz: 50, indexMin: 0 }] },
+    { ...A06_SEGMENTS, segments: [
+      { hzMin: 50, hzMax: 500, stepHz: 50, indexMin: 0 },
+      { hzMin: 500, hzMax: 3600, stepHz: 100, indexMin: 10 },
+    ] },
+    { ...A06_SEGMENTS, segments: [
+      { hzMin: 50, hzMax: 500, stepHz: 50, indexMin: 5 },
+      { hzMin: 600, hzMax: 3600, stepHz: 100, indexMin: 4 },
+    ] },
+    { ...A06_SEGMENTS, minHz: 100 },
+    { ...A06_SEGMENTS, maxHz: 3500 },
+  ] as FilterModeConfig[])('rejects malformed segment metadata %#', (rule) => {
+    h.caps = a06Caps(rule) as unknown as Record<string, unknown>;
+    makeFilterHandlers().onFilterWidthCommit(300, 0, 31);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('rejects segment gaps and hzMin-relative misalignment', () => {
+    makeFilterHandlers().onFilterWidthCommit(550, 0, 31);
+    makeFilterHandlers().onFilterWidthCommit(625, 0, 31);
+    h.caps = a06Caps({
+      defaults: [275], fixed: false, minHz: 75, maxHz: 275,
+      segments: [{ hzMin: 75, hzMax: 275, stepHz: 50, indexMin: 0 }],
+    }) as unknown as Record<string, unknown>;
+    makeFilterHandlers().onFilterWidthCommit(100, 0, 31);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { ...A06_STEP, minHz: 0 }, { ...A06_STEP, maxHz: 100 },
+    { ...A06_STEP, stepHz: 0 }, { ...A06_STEP, stepHz: 1.5 },
+  ] as FilterModeConfig[])('rejects malformed simple-step metadata %#', (rule) => {
+    h.caps = a06Caps(rule) as unknown as Record<string, unknown>;
+    makeFilterHandlers().onFilterWidthCommit(200, 0, 31);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('anchors simple-step alignment at the resolved minimum', () => {
+    h.caps = a06Caps(A06_STEP) as unknown as Record<string, unknown>;
+    makeFilterHandlers().onFilterWidthCommit(300, 0, 31);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * MOR-4434: the commit and debounce paths validate against the
+ * NARROW-selected table. Widths, requests and admitted widths come from the
+ * shared seam document
+ * `../../transport/__tests__/fixtures/narrow-width-seam.json` (Python
+ * companion: `tests/web/test_narrow_width_seam.py`, which replays the same
+ * requests through the real handler + CAT sim and checks the drift); the
+ * rule is the producer-shaped fixture from `fixture-narrow-profile`. These
+ * cases drive the commit/debounce paths from the document's states, assert
+ * the emitted commands equal its requests, and pin each admitted width as
+ * a member of the active table.
+ */
+interface SeamExchange {
+  state: { mode: string; narrow: boolean | null; filterWidth: number };
+  request: { width: number; receiver: number };
+  reply: { width: number; receiver: number; admitted_width?: number };
+}
+interface NarrowWidthSeam {
+  cases: { wide: SeamExchange; narrow: SeamExchange; unknown: SeamExchange };
+}
+const SEAM = narrowWidthSeamJson as unknown as NarrowWidthSeam;
+// The rule is the producer output for the single-RX fixture, pinned by
+// tests/test_filter_width_admitted_width.py against the server serializer.
+const NARROW_RULE: FilterModeConfig = structuredClone(
+  FIXTURE_NARROW_CAPABILITIES.filterConfig!.SSB!,
+);
+
+/** The SSB rule plus explicit wide bounds beside its narrow variant (P2). */
+const BOUNDED_NARROW_RULE: FilterModeConfig = { ...NARROW_RULE, minHz: 2400, maxHz: 4000 };
+
+function narrowCaps(): Record<string, unknown> {
+  return {
+    ...a06Caps(NARROW_RULE),
+    receivers: 1,
+    vfoScheme: 'ab',
+    capabilities: ['filter_width'],
+  } as unknown as Record<string, unknown>;
+}
+
+function narrowState(narrow: boolean | null): ServerState {
+  const base = a06State();
+  return {
+    ...base,
+    main: { ...base.main, narrow },
+    fieldStatus: {
+      ...base.fieldStatus,
+      'main.narrow': { ...freshStatus, storePath: 'main.narrow' },
+    },
+  } as ServerState;
+}
+
+describe('MOR-4434 narrow-selected filter-width table', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h.caps = narrowCaps();
+    h.state = narrowState(true);
+    h.unavailable.clear();
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+  });
+
+  afterEach(() => {
+    resetCommandLifecycle();
+    vi.useRealTimers();
+  });
+
+  it('commits a narrow-only width unquantized-to-wide when narrow is observed on', () => {
+    makeFilterHandlers().onFilterWidthCommit(SEAM.cases.narrow.request.width, 0, 31);
+
+    expect(exactCalls()).toEqual([['set_filter_width', SEAM.cases.narrow.request]]);
+    expectIntentTransport();
+  });
+
+  it('refuses a wide-only width while narrow is on', () => {
+    makeFilterHandlers().onFilterWidthCommit(SEAM.cases.wide.request.width, 0, 31);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('refuses a narrow-only width while narrow is observed off', () => {
+    h.state = narrowState(false);
+
+    makeFilterHandlers().onFilterWidthCommit(SEAM.cases.narrow.request.width, 0, 31);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('refuses a narrow-only width while narrow is unobserved, keeping today behavior', () => {
+    h.unavailable.add('main.narrow');
+
+    makeFilterHandlers().onFilterWidthCommit(SEAM.cases.narrow.request.width, 0, 31);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('refuses a narrow-only width while narrow has no reading at all', () => {
+    // `a06State` carries no narrow leaf: neither observed nor stale, so the
+    // wide table applies exactly as for an unobserved reading.
+    h.state = a06State();
+
+    makeFilterHandlers().onFilterWidthCommit(SEAM.cases.narrow.request.width, 0, 31);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('commits a wide width while narrow is unobserved', () => {
+    h.unavailable.add('main.narrow');
+
+    makeFilterHandlers().onFilterWidthCommit(SEAM.cases.wide.request.width, 0, 31);
+
+    expect(exactCalls()).toEqual([['set_filter_width', SEAM.cases.wide.request]]);
+    expectIntentTransport();
+  });
+
+  it('debounces a narrow-only width to the wire unquantized while narrow is on', () => {
+    makeFilterHandlers().onFilterWidthChange(SEAM.cases.narrow.request.width);
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(200);
+
+    expect(exactCalls()).toEqual([['set_filter_width', SEAM.cases.narrow.request]]);
+  });
+
+  it('the documented admitted widths sit in the document rule active table', () => {
+    const caps = narrowCaps() as unknown as Capabilities;
+    for (const key of ['wide', 'narrow'] as const) {
+      const exchange = SEAM.cases[key];
+      const rule = resolveFilterModeConfig(caps, exchange.state.mode, 0, exchange.state.narrow);
+      expect(rule?.table).toContain(exchange.reply.admitted_width);
+    }
+    expect(SEAM.cases.unknown.reply).toEqual({
+      width: SEAM.cases.unknown.request.width,
+      receiver: SEAM.cases.unknown.request.receiver,
+    });
+  });
+
+  it('commits a narrow-only width with no narrow capability tag (spectrum agrees)', () => {
+    // P2: the commit path never gated on the tag; fails if one is added.
+    // The spectrum half is pinned in `filter-narrow-consumers.test.ts`.
+    expect((narrowCaps() as unknown as Capabilities).capabilities).not.toContain('narrow');
+
+    makeFilterHandlers().onFilterWidthCommit(SEAM.cases.narrow.request.width, 0, 31);
+
+    expect(exactCalls()).toEqual([['set_filter_width', SEAM.cases.narrow.request]]);
+    expectIntentTransport();
+  });
+
+  it('resolves an explicit-bounds rule from the selected table on commit', () => {
+    // P2: a rule carrying wide minHz/maxHz beside its narrow variant commits
+    // a narrow-only width while narrow is on and refuses a wide-only one.
+    // Fails if activeFilterTableConfig keeps the wide bounds on the narrow
+    // table (validResolvedFilterWidth rejects the mismatch).
+    h.caps = {
+      ...narrowCaps(),
+      filterConfig: { USB: BOUNDED_NARROW_RULE },
+    };
+
+    makeFilterHandlers().onFilterWidthCommit(SEAM.cases.narrow.request.width, 0, 31);
+
+    expect(exactCalls()).toEqual([['set_filter_width', SEAM.cases.narrow.request]]);
+    expectIntentTransport();
+
+    h.sendCommand.mockClear();
+    makeFilterHandlers().onFilterWidthCommit(4000, 0, 31);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * MOR-1518 (live IC-7300 bench): dragging the Filter Width slider mid-drag
+ * emitted raw, unaligned values (1050/2150/3150 Hz) straight onto the wire.
+ * Each is a multiple of the WRONG segment's step — the slider's own fixed
+ * step assumption (50 Hz, `A06_SEGMENTS`'s lower segment) rather than the
+ * 100 Hz step that actually governs 600-3600 Hz where these values fall
+ * (`rigs/ic7300.toml`) — so the backend's `filter_hz_to_index`
+ * (`src/rigplane/commands/_codec.py`) correctly rejected them with "Filter
+ * width N is not aligned to N Hz steps" — three sticky error toasts per
+ * drag.
+ *
+ * `onFilterWidthChange` (the slider's own debounced handler,
+ * `FilterSurface.svelte`'s raw `<input type="range">` and `FilterPanel`'s
+ * table-mode slider both call it), `onFilterPresetChange` (the settings
+ * modal's per-filter direct-entry slider), and `onFilterDefaults` (restore-
+ * defaults) are the three `set_filter_width` dispatch sites that carry a
+ * caller-supplied width rather than an already-legal radio-observed one —
+ * this suite pins each of them to the resolved rule's OWN nearest legal
+ * value, never the raw input.
+ */
+describe('MOR-1518 client-side filter-width quantization at command emission', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h.state = a06State();
+    h.caps = a06Caps() as unknown as Record<string, unknown>;
+    h.unavailable.clear();
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+  });
+
+  afterEach(() => {
+    resetCommandLifecycle();
+    vi.useRealTimers();
+  });
+
+  // 1050/2150/3150 are each an EXACT midpoint between two legal 100 Hz-step
+  // values (e.g. 1050 sits exactly between 1000 and 1100) — tie-break
+  // prefers the LOWER value, aligned with `scope-adapter.ts`'s
+  // `snapSpectrumFilterWidth` (see `filter-controls.ts`'s
+  // `snapWithinSegment` doc comment).
+  it.each([
+    [1050, 1000],
+    [2150, 2100],
+    [3150, 3100],
+  ])('quantizes onFilterWidthChange(%i) to the nearest legal segment value (%i)', (raw, expected) => {
+    makeFilterHandlers().onFilterWidthChange(raw);
+    vi.advanceTimersByTime(200);
+
+    expect(exactCalls()).toEqual([['set_filter_width', { width: expected, receiver: 0 }]]);
+  });
+
+  it('snaps a value inside the 500-600 Hz segment gap to the nearer edge (boundary crossing)', () => {
+    makeFilterHandlers().onFilterWidthChange(520);
+    vi.advanceTimersByTime(200);
+    makeFilterHandlers().onFilterWidthChange(580);
+    vi.advanceTimersByTime(200);
+
+    expect(exactCalls()).toEqual([
+      ['set_filter_width', { width: 500, receiver: 0 }],
+      ['set_filter_width', { width: 600, receiver: 0 }],
+    ]);
+  });
+
+  it('leaves an already-legal width completely untouched', () => {
+    makeFilterHandlers().onFilterWidthChange(1800);
+    vi.advanceTimersByTime(200);
+
+    expect(exactCalls()).toEqual([['set_filter_width', { width: 1800, receiver: 0 }]]);
+  });
+
+  it('quantizes the modal preset (direct-entry) path the same way as the slider', () => {
+    // Active filter is 2 (`a06State`'s fixture); targeting preset slot 1
+    // makes the handler's own pre-existing filter-switch dance (select 1,
+    // write its width, restore 2) fire around the width write — the MOR-1518
+    // assertion is that the WIDTH itself is quantized (1000, not the raw
+    // 1050 — an exact tie between 1000/1100, tie-break prefers lower), not
+    // the unrelated filter-switch sequencing.
+    makeFilterHandlers().onFilterPresetChange(1, 1050);
+    vi.advanceTimersByTime(200);
+
+    expect(exactCalls()).toEqual([
+      ['set_filter', { filter: 1, receiver: 0 }],
+      ['set_filter_width', { width: 1000, receiver: 0 }],
+      ['set_filter', { filter: 2, receiver: 0 }],
+    ]);
+  });
+
+  it('quantizes restore-defaults widths too, even though profile defaults are normally already legal', () => {
+    // Active filter is already 1 (matches `defaults[0]`'s slot). A
+    // deliberately-misaligned "defaults" array proves `onFilterDefaults` is
+    // not exempt just because real profile defaults are pre-validated; the
+    // trailing `set_filter` restore is `onFilterDefaults`'s own pre-existing
+    // behavior, unrelated to this fix. 1050 is an exact tie between 1000 and
+    // 1100 — tie-break prefers lower.
+    const withFilter1 = a06State();
+    h.state = { ...withFilter1, main: { ...withFilter1.main, filter: 1 } } as ServerState;
+    makeFilterHandlers().onFilterDefaults([1050]);
+
+    expect(exactCalls()).toEqual([
+      ['set_filter_width', { width: 1000, receiver: 0 }],
+      ['set_filter', { filter: 1, receiver: 0 }],
+    ]);
+  });
+
+  it('quantizes against a SECOND, differently-stepped mode rule on the same fixture set (data-driven, not IC-7300-specific)', () => {
+    h.caps = {
+      ...a06Caps(A06_STEP), // minHz: 250, maxHz: 3550, stepHz: 100
+    } as unknown as Record<string, unknown>;
+    makeFilterHandlers().onFilterWidthChange(1836);
+    vi.advanceTimersByTime(200);
+
+    // Anchored at minHz=250, not a tie: floor((1836-250)/100)=15 -> lower
+    // 1750, upper 1850; 1836 is closer to 1850 (bounded-lower=86 >
+    // upper-bounded=14) -> 1850.
+    expect(exactCalls()).toEqual([['set_filter_width', { width: 1850, receiver: 0 }]]);
+  });
+
+  it('passes the value through UNCHANGED (no fabricated ceiling) when the mode has no declared width rule at all', () => {
+    // F1 (verify round 1): pre-MOR-1518 the dispatch path applied NO clamp
+    // when a mode had no declared filterConfig entry — raw value straight to
+    // the wire. `quantizeFilterWidthToRule` must keep that exact behavior
+    // rather than imposing this module's own IC-7610-shaped 50 Hz default
+    // grid on a radio/mode that declared nothing.
+    h.caps = { ...a06Caps(), filterConfig: {} } as unknown as Record<string, unknown>;
+    makeFilterHandlers().onFilterWidthChange(1055);
+    vi.advanceTimersByTime(200);
+
+    expect(exactCalls()).toEqual([['set_filter_width', { width: 1055, receiver: 0 }]]);
+  });
+});
+
+/**
+ * MOR-1576 review (B1, PR #2489 BLOCKED finding) — relaxing `onFilterDefaults`
+ * off `knownActiveReceiver('filterWidth')` opened a partial-command +
+ * uncaught-throw path it didn't have before. `quantizeFilterWidthToRule`
+ * passes non-finite input straight through (`filter-controls.ts`'s first
+ * guard, `if (!Number.isFinite(value)) return value;` — see the "no declared
+ * width rule at all" case just above), and `dispatchRadioIntent` THROWS on a
+ * non-safe-integer width. `FilterPanel.svelte`'s `factoryDefaults` falls
+ * back to `Array.from({length}, () => filterWidth)` when `filterConfig` has
+ * no `defaults` array, and `filterWidth` is `Number.NaN` whenever
+ * `main.filterWidth` is unobserved (`panel-props.ts`'s `toFilterProps`) —
+ * exactly the radios that motivated this whole ticket (x6100/tx500 declare
+ * no width tables; several FTX-1 modes resolve no rule at all). Before this
+ * fix, `onFilterDefaults`'s loop would dispatch `set_filter` to bracket into
+ * a non-active slot BEFORE reaching the invalid width and throwing —
+ * leaving the radio parked on the wrong filter slot with the restoring
+ * `set_filter` back to the real active filter never reached.
+ */
+describe('MOR-1576 (review B1) — onFilterDefaults validates the whole array before dispatching anything', () => {
+  beforeEach(() => {
+    h.state = a06State();
+    h.caps = a06Caps() as unknown as Record<string, unknown>;
+    h.unavailable.clear();
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+  });
+
+  it('emits ZERO frames — no partial set_filter bracket, no throw — when a quantized default resolves non-finite', () => {
+    // No declared width rule for the current mode, so
+    // `quantizeFilterWidthToRule` passes `NaN` straight through.
+    // `a06State()`'s active filter is 2 (non-FIL1): the pre-fix loop would
+    // have dispatched `set_filter{filter:1}` to bracket into slot 1 before
+    // ever validating `defaults[0]`.
+    h.caps = { ...a06Caps(), filterConfig: {} } as unknown as Record<string, unknown>;
+    expect(() =>
+      makeFilterHandlers().onFilterDefaults([Number.NaN, 2400, 1800]),
+    ).not.toThrow();
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('still dispatches normally when every quantized default is a valid positive safe integer', () => {
+    // All three already sit on the default A06_SEGMENTS grid (no
+    // quantization needed) — active filter is 2 (a06State's fixture).
+    expect(() =>
+      makeFilterHandlers().onFilterDefaults([3000, 1800, 2400]),
+    ).not.toThrow();
+
+    expect(exactCalls()).toEqual([
+      ['set_filter', { filter: 1, receiver: 0 }],
+      ['set_filter_width', { width: 3000, receiver: 0 }],
+      ['set_filter_width', { width: 1800, receiver: 0 }],
+      ['set_filter', { filter: 3, receiver: 0 }],
+      ['set_filter_width', { width: 2400, receiver: 0 }],
+      ['set_filter', { filter: 2, receiver: 0 }],
+    ]);
+  });
+});
+
+/**
+ * MOR-1679 — the FTX-1 filter-width write path against CAT 2508-C
+ * Table 5, on the GENERATED capabilities fixture (`ftx1-profile.ts`).
+ * Pins the emitted intent: `set_filter_width` with the table Hz and
+ * the ACTIVE receiver, on the real handler layer.
+ */
+describe('MOR-1679 FTX-1 Table 5 filter-width write path', () => {
+  function ftx1State(mode: string, active: 'MAIN' | 'SUB' = 'MAIN'): ServerState {
+    const current = a06State(active);
+    const paths = ['active', 'main.mode', 'main.filterWidth', 'sub.mode', 'sub.filterWidth'];
+    return {
+      ...current,
+      fieldStatus: Object.fromEntries(paths.map((path) => [path, { ...freshStatus, storePath: path }])),
+      main: { ...current.main, mode, dataMode: 0, filterWidth: 2400 },
+      sub: { ...current.sub, mode, dataMode: 0, filterWidth: 2400 },
+    } as ServerState;
+  }
+
+  function ftx1Caps(): Capabilities {
+    return { ...FTX1_CAPABILITIES, stateContractVersion: 1, providerGeneration: 31 } as unknown as Capabilities;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h.unavailable.clear();
+    h.caps = ftx1Caps() as unknown as Record<string, unknown>;
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+  });
+
+  afterEach(() => {
+    resetCommandLifecycle();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    ['USB', 3200],
+    ['USB', 2450],
+    ['DATA-U', 50],
+    ['CW-L', 4000],
+  ] as const)('onFilterWidthChange(%s, %i) dispatches the table Hz for the MAIN receiver unchanged',
+    (mode, width) => {
+      h.state = ftx1State(mode);
+      makeFilterHandlers().onFilterWidthChange(width);
+      vi.advanceTimersByTime(200);
+
+      expect(exactCalls()).toEqual([['set_filter_width', { width, receiver: 0 }]]);
+      expectIntentTransport();
+    },
+  );
+
+  it('routes the write to the SUB receiver when SUB is active', () => {
+    h.state = ftx1State('USB', 'SUB');
+    makeFilterHandlers().onFilterWidthChange(3200);
+    vi.advanceTimersByTime(200);
+
+    expect(exactCalls()).toEqual([['set_filter_width', { width: 3200, receiver: 1 }]]);
+    expectIntentTransport();
+  });
+
+  it.each([
+    [3050],
+    [4500],
+  ])('the synchronous commit authority rejects the off-table width %i entirely', (width) => {
+    h.state = ftx1State('USB');
+    makeFilterHandlers().onFilterWidthCommit(width, 0, 31);
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('the synchronous commit authority accepts a Table 5 entry for the active receiver', () => {
+    h.state = ftx1State('USB');
+    makeFilterHandlers().onFilterWidthCommit(3200, 0, 31);
+
+    expect(exactCalls()).toEqual([['set_filter_width', { width: 3200, receiver: 0 }]]);
+    expectIntentTransport();
+  });
+});
+
+
+/**
+ * MOR-2535 follow-up — `onFilterWidthReset`, the width row's radio-default
+ * reset dispatch site (the `onPbtReset` shape): it emits `reset_filter_width`
+ * {receiver} ONLY when the connected profile carries the derived
+ * `filter_width_radio_default` capability, and it is NOT state-backed — no
+ * draft, no pending target, no lifecycle waiting for a value; the slider
+ * moves when the post-write readback arrives.
+ */
+describe('MOR-2535 onFilterWidthReset radio-default reset intent', () => {
+  const RADIO_DEFAULT_CAPS = () => ({
+    ...a06Caps(),
+    capabilities: ['filter_width', 'data_mode', 'dual_rx', 'filter_width_radio_default'],
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h.state = a06State();
+    h.caps = RADIO_DEFAULT_CAPS() as unknown as Record<string, unknown>;
+    h.unavailable.clear();
+    h.sendCommand.mockClear();
+    resetCommandLifecycle();
+  });
+
+  afterEach(() => {
+    resetCommandLifecycle();
+    vi.useRealTimers();
+  });
+
+  it('dispatches reset_filter_width {receiver: 0} when the capability is present', () => {
+    makeFilterHandlers().onFilterWidthReset();
+
+    expect(exactCalls()).toEqual([['reset_filter_width', { receiver: 0 }]]);
+    expectIntentTransport();
+    // Synchronous and timer-free: no debounce, no pending-target machinery.
+    expect(vi.getTimerCount()).toBe(1); // the command-lifecycle timeout only
+  });
+
+  it('forwards the SUB receiver when SUB is active', () => {
+    h.state = a06State('SUB');
+    makeFilterHandlers().onFilterWidthReset();
+
+    expect(exactCalls()).toEqual([['reset_filter_width', { receiver: 1 }]]);
+    expectIntentTransport();
+  });
+
+  it('dispatches nothing without the capability — the lease-reset path keeps the gesture', () => {
+    h.caps = a06Caps() as unknown as Record<string, unknown>;
+    makeFilterHandlers().onFilterWidthReset();
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+
+  it('dispatches nothing when the active receiver is unobserved on a dual-RX radio', () => {
+    h.unavailable.add('active');
+    makeFilterHandlers().onFilterWidthReset();
+
+    expect(h.sendCommand).not.toHaveBeenCalled();
+    expect(getCommandLifecycles()).toHaveLength(0);
+  });
+});
+
+
+it('keyboard span uses the subscription owner without a radio command', () => {
+  h.caps = { ...a06Caps(), capabilities: ['scope', 'dual_rx'] } as unknown as Record<string, unknown>;
+  h.state = a06State();
+  h.unavailable.clear();
+  h.spanStep.mockReset();
+  h.sendCommand.mockClear();
+  resetCommandLifecycle();
+  dispatchKeyboardRadioAction({ action: 'scope_span_step', params: { direction: 'up' } });
+  expect(h.spanStep).toHaveBeenCalledExactlyOnceWith(1);
+  expect(h.sendCommand).not.toHaveBeenCalled();
+});

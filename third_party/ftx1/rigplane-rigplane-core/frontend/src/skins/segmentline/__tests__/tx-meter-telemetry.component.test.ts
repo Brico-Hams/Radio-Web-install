@@ -1,0 +1,98 @@
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
+import { mount, unmount, flushSync } from 'svelte';
+// @ts-expect-error -- Svelte does not publish types for its reactive test harness.
+import { proxy } from 'svelte/internal/client';
+import type { DisplayObservation, MeterRfState } from '../../../semantic/radio-view-model';
+import { projectPeerSplitDisplay, type PeerSplitDisplayModel } from '../../../semantic/radio-display-model';
+import { topologyFixtures, withMeters } from '../../../semantic/fixtures/topologies';
+import PeerSplitDisplay from '../PeerSplitDisplay.svelte';
+import DominantUnifiedDisplay from '../DominantUnifiedDisplay.svelte';
+import CenterstageDisplay from '../CenterstageDisplay.svelte';
+import PanadapterDisplay from '../PanadapterDisplay.svelte';
+
+const variants = [PeerSplitDisplay, DominantUnifiedDisplay, CenterstageDisplay, PanadapterDisplay];
+const names = ['peer-split', 'dominant-unified', 'centerstage', 'panadapter'];
+const targets = ['PWR', 'SWR', 'ALC'];
+function model(rf: MeterRfState, relevant: boolean, observation: DisplayObservation<number>, structural = true) {
+  const view = withMeters(topologyFixtures['2/main_sub'], rf);
+  for (const key of ['power', 'swr', 'alc'] as const) view.meters![key] = {
+    availability: { structural, operational: true }, reading: { status: 'known', value: 87.654 },
+    relevant, display: observation,
+  };
+  return projectPeerSplitDisplay(view);
+}
+const observations = [{ state: 'current', value: 12.345 }, { state: 'stale', value: 87.654 },
+  { state: 'unknown', reason: 'not-observed' }] as const;
+function slot(root: HTMLElement, label: string): HTMLElement | undefined {
+  return [...root.querySelectorAll('small')].find((node) => node.textContent === label)?.parentElement ?? undefined;
+}
+for (const [index, Component] of variants.entries()) describe(names[index], () => {
+  for (const structural of [false, true]) for (const rf of ['receiving', 'transmitting', 'uncertain', 'unknown'] as MeterRfState[])
+    for (const relevant of [false, true]) for (const observation of observations) {
+      it(`${structural}/${rf}/${relevant}/${observation.state}`, () => {
+        const root = document.createElement('div');
+        document.body.append(root);
+        const component = mount(Component, { target: root, props: { model: model(rf, relevant, observation, structural) } });
+        flushSync();
+        try {
+          for (const label of targets) {
+            const el = slot(root, label);
+            if (!structural) {
+              if (Component === PanadapterDisplay) expect(el).toBeUndefined();
+              else expect(el?.dataset.state).toBe('unsupported');
+              continue;
+            }
+            expect(el).toBeDefined();
+            const idle = rf === 'receiving' && !relevant;
+            // MOR-2425 (R29/R32): stale shows its own digits, same as current;
+            // idle and never-observed are an empty scale — no text token.
+            // MOR-2540: the ' ?' indeterminate cue is gone as well.
+            const expected = idle || observation.state === 'unknown' ? ''
+              : `${Number(observation.value.toFixed(2))}`;
+            expect(el!.textContent?.trim()).toBe(`${label} ${expected}`.trim());
+            const description = el!.getAttribute('aria-label') ?? '';
+            expect(description).toContain(label);
+            // The raw untruncated reading (87.654) never reaches the name;
+            // the formatted value does, for current and stale alike.
+            expect(description).not.toContain('87.654');
+            // MOR-2705 part 4b: idle names only the label.
+            if (idle) expect(description).toBe(label);
+            // MOR-2705 part 2 (coordinator ruling): no status word in an
+            // accessible name — neither 'No reading' nor the 'RF relevance
+            // indeterminate' cue ("indeterminate" means "unknown").
+            expect(description).not.toContain('No reading');
+            expect(description).not.toContain('indeterminate');
+            // An unknown observation names only the label, the same as unread.
+            if (!idle && observation.state === 'unknown') expect(description).toBe(label);
+            // MOR-2705 part 4b: current and stale name the value alike —
+            // no 'Stale observation', no 'Current observation' status word.
+            if (!idle && observation.state === 'stale') expect(description).toBe(`${label}: 87.65`);
+            if (!idle && observation.state === 'current') expect(description).toBe(`${label}: 12.35`);
+          }
+          expect(root.querySelectorAll('button,input,select,textarea')).toHaveLength(0);
+        } finally { unmount(component); root.remove(); }
+      });
+    }
+  it('retains the same slots through current → idle → stale → unknown → zero and preserves unrelated text', () => {
+    const props: { model: PeerSplitDisplayModel } = proxy({ model: model('transmitting', true, observations[0]) });
+    const root = document.createElement('div'); document.body.append(root);
+    const component = mount(Component, { target: root, props }); flushSync();
+    try {
+      const nodes = targets.map((label) => slot(root, label)!);
+      const other = ['VD', 'ID', 'COMP'].map((label) => slot(root, label)!.textContent);
+      for (const [rf, relevant, observation, text] of [
+        ['receiving', false, observations[0], ''], ['transmitting', true, observations[1], '87.65'],
+        ['transmitting', true, observations[2], ''], ['transmitting', true, { state: 'current', value: 0 }, '0'],
+      ] as const) {
+        props.model = model(rf, relevant, observation); flushSync();
+        expect(nodes.every((node, i) => node === slot(root, targets[i]) && node.isConnected)).toBe(true);
+        expect(nodes.map((node) => node.textContent?.trim())).toEqual(targets.map((label) => `${label} ${text}`.trim()));
+        expect(['VD', 'ID', 'COMP'].map((label) => slot(root, label)!.textContent)).toEqual(other);
+      }
+    } finally { unmount(component); root.remove(); }
+  });
+});
+
+
+beforeEach(() => { vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} }); });
+afterEach(() => { vi.unstubAllGlobals(); });
